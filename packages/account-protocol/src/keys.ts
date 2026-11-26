@@ -4,7 +4,7 @@
 // opening functions of this package.
 
 import { ed25519, x25519 } from "@noble/curves/ed25519.js";
-import { checkLength, equalBytes } from "./bytes.ts";
+import { checkLength, copy, equalBytes } from "./bytes.ts";
 import { fail } from "./errors.ts";
 import { deriveSealKeyPair } from "./hpke.ts";
 
@@ -25,7 +25,7 @@ function checkEd25519(bytes: Uint8Array, what: string): Uint8Array {
   if (!equalBytes(point.toBytes(), bytes)) fail("bad_key", `${what}: not the canonical encoding`);
   if (point.isSmallOrder() || !point.isTorsionFree())
     fail("bad_key", `${what}: not of prime order`);
-  return bytes.slice();
+  return copy(bytes);
 }
 
 /** RFC 8032 verification with its strict decoding (not ZIP-215), so a signature has one form. */
@@ -60,7 +60,7 @@ function checkX25519(bytes: Uint8Array, what: string): Uint8Array {
   } catch {
     fail("bad_key", `${what}: of small order`);
   }
-  return bytes.slice();
+  return copy(bytes);
 }
 
 /** The session key's public half: what the account service checks session requests against. */
@@ -77,7 +77,7 @@ export class SessionPublicKey {
   }
 
   get bytes(): Uint8Array {
-    return this.#bytes.slice();
+    return copy(this.#bytes);
   }
 
   equals(other: SessionPublicKey): boolean {
@@ -99,7 +99,7 @@ export class ListPublicKey {
   }
 
   get bytes(): Uint8Array {
-    return this.#bytes.slice();
+    return copy(this.#bytes);
   }
 
   equals(other: ListPublicKey): boolean {
@@ -121,7 +121,7 @@ export class SealPublicKey {
   }
 
   get bytes(): Uint8Array {
-    return this.#bytes.slice();
+    return copy(this.#bytes);
   }
 
   equals(other: SealPublicKey): boolean {
@@ -143,7 +143,7 @@ export class GatewayDeviceKey {
   }
 
   get bytes(): Uint8Array {
-    return this.#bytes.slice();
+    return copy(this.#bytes);
   }
 
   equals(other: GatewayDeviceKey): boolean {
@@ -175,7 +175,7 @@ export class SessionSecretKey {
 
   /** `random` is 32 bytes from the system's random source. */
   static fromSeed(random: Uint8Array): SessionSecretKey {
-    return new SessionSecretKey(checkLength(random, 32, "a session key's seed").slice());
+    return new SessionSecretKey(copy(checkLength(random, 32, "a session key's seed")));
   }
 }
 
@@ -196,7 +196,7 @@ export class ListSecretKey {
 
   /** `random` is 32 bytes from the system's random source. */
   static fromSeed(random: Uint8Array): ListSecretKey {
-    return new ListSecretKey(checkLength(random, 32, "a list key's seed").slice());
+    return new ListSecretKey(copy(checkLength(random, 32, "a list key's seed")));
   }
 }
 

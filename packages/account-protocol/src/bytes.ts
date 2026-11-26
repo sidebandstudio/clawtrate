@@ -16,6 +16,14 @@ export function utf8(text: string): Uint8Array {
   return encoder.encode(text);
 }
 
+/**
+ * An owned copy as a plain `Uint8Array`. `slice()` is not used for this: on a Node buffer,
+ * which callers may pass, it returns a view that shares the caller's memory.
+ */
+export function copy(bytes: Uint8Array): Uint8Array {
+  return new Uint8Array(bytes);
+}
+
 export function concat(...parts: Uint8Array[]): Uint8Array {
   let length = 0;
   for (const part of parts) length += part.length;
@@ -100,7 +108,7 @@ export class Writer {
 
   fixed(bytes: Uint8Array, length: number, what: string): this {
     if (bytes.length !== length) fail("malformed", `${what} must be ${length} bytes`);
-    this.#parts.push(bytes.slice());
+    this.#parts.push(copy(bytes));
     return this;
   }
 
@@ -108,7 +116,7 @@ export class Writer {
     if (bytes.length < min) fail("malformed", `${what} is too short`);
     if (bytes.length > max) fail("too_large", `${what} is over ${max} bytes`);
     this.u16(bytes.length);
-    this.#parts.push(bytes.slice());
+    this.#parts.push(copy(bytes));
     return this;
   }
 
@@ -139,7 +147,7 @@ export class Reader {
 
   #take(length: number, what: string): Uint8Array {
     if (this.#bytes.length - this.#at < length) fail("malformed", `${what} is cut short`);
-    const out = this.#bytes.slice(this.#at, this.#at + length);
+    const out = copy(this.#bytes.subarray(this.#at, this.#at + length));
     this.#at += length;
     return out;
   }
@@ -173,12 +181,12 @@ export class Reader {
 
   u32(): number {
     const b = this.#take(4, "a number");
-    return new DataView(b.buffer).getUint32(0);
+    return new DataView(b.buffer, b.byteOffset, b.byteLength).getUint32(0);
   }
 
   u64(what: string): number {
     const b = this.#take(8, what);
-    const value = new DataView(b.buffer).getBigUint64(0);
+    const value = new DataView(b.buffer, b.byteOffset, b.byteLength).getBigUint64(0);
     if (value > BigInt(Number.MAX_SAFE_INTEGER)) fail("bad_time", `${what} is out of range`);
     return Number(value);
   }
@@ -210,7 +218,7 @@ export class Reader {
 
   /** The bytes read so far. */
   before(): Uint8Array {
-    return this.#bytes.slice(0, this.#at);
+    return copy(this.#bytes.subarray(0, this.#at));
   }
 
   end(): void {

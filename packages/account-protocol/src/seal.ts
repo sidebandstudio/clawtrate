@@ -6,7 +6,7 @@
 import { xchacha20poly1305 } from "@noble/ciphers/chacha.js";
 import { hkdf } from "@noble/hashes/hkdf.js";
 import { sha256 } from "@noble/hashes/sha2.js";
-import { checkLength, concat, Reader, utf8, Writer } from "./bytes.ts";
+import { checkLength, concat, copy, Reader, utf8, Writer } from "./bytes.ts";
 import { fail } from "./errors.ts";
 import { hpkeOpen, hpkeSeal } from "./hpke.ts";
 import {
@@ -69,7 +69,7 @@ export class ListSecret {
   static fromBytes(random: Uint8Array, epoch: number): ListSecret {
     if (!Number.isInteger(epoch) || epoch < 0 || epoch > 0xffffffff)
       fail("bad_argument", "epoch out of range");
-    return new ListSecret(checkLength(random, 32, "a list secret").slice(), epoch);
+    return new ListSecret(copy(checkLength(random, 32, "a list secret")), epoch);
   }
 }
 
@@ -222,6 +222,7 @@ export function rotateListSecret(
   if (!connector.publicKey.equals(state.connectorKey))
     fail("not_permitted", "only the connector rotates the secret");
   const devices = state.devices();
+  if (devices.length === 0) fail("bad_target", "no device is left to seal the secret to");
   checkLength(random, 32 * devices.length, "the random bytes for each device");
   const context = state.context;
   const writer = new Writer().label(LABEL.listSecret);

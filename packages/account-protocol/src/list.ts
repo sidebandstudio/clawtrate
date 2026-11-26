@@ -3,7 +3,7 @@
 // current member. `ListState` is what a verifier knows after each entry: who is a member, who
 // was removed and how, and every key the list has ever held.
 
-import { checkLength, concat, equalBytes, hex, Reader, taggedHash, Writer } from "./bytes.ts";
+import { checkLength, concat, copy, equalBytes, hex, Reader, taggedHash, Writer } from "./bytes.ts";
 import { fail } from "./errors.ts";
 import { ListPublicKey, signList, verifyEd25519, type ListSecretKey } from "./keys.ts";
 import { LABEL, TAG } from "./labels.ts";
@@ -211,6 +211,12 @@ function seenKeys(device: DeviceRecord): string[] {
   ];
 }
 
+/** A member as a caller gets it: its own copy, so changing it can't change the state. */
+function detach(member: Member): Member {
+  const device = member.device && { ...member.device, tlsPin: copy(member.device.tlsPin) };
+  return { ...member, device };
+}
+
 /** What a list says after a given entry. Immutable: `append` returns a new state. */
 export class ListState {
   readonly #data: StateData;
@@ -221,8 +227,8 @@ export class ListState {
 
   get context(): ListContext {
     return {
-      gatewayId: this.#data.context.gatewayId.slice(),
-      accountId: this.#data.context.accountId.slice(),
+      gatewayId: copy(this.#data.context.gatewayId),
+      accountId: copy(this.#data.context.accountId),
     };
   }
 
@@ -237,12 +243,12 @@ export class ListState {
 
   /** The hash of the latest entry. The next entry's `prev`. */
   get head(): Uint8Array {
-    return this.#data.head.slice();
+    return copy(this.#data.head);
   }
 
   /** The current members, the connector first, in the order they were added. */
   members(): Member[] {
-    return [...this.#data.members.values()];
+    return [...this.#data.members.values()].map(detach);
   }
 
   /** The current device members (everything but the connector). */
@@ -251,11 +257,13 @@ export class ListState {
   }
 
   member(key: ListPublicKey): Member | undefined {
-    return this.#data.members.get(hex(key.bytes));
+    const member = this.#data.members.get(hex(key.bytes));
+    return member && detach(member);
   }
 
   removal(key: ListPublicKey): Removal | undefined {
-    return this.#data.removed.get(hex(key.bytes));
+    const removal = this.#data.removed.get(hex(key.bytes));
+    return removal && { ...removal, member: detach(removal.member) };
   }
 
   /** The current members whose entry `key` signed: what removing `key` offers to remove too. */

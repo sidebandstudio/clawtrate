@@ -306,6 +306,24 @@ describe("removing and putting back", () => {
   });
 });
 
+describe("what a caller is given", () => {
+  it("is its own copy: changing it doesn't change the state", () => {
+    const { state, mac } = threeDevices();
+    const before = toHexPin(state.member(mac.device.listKey)!.device!.tlsPin);
+    state.member(mac.device.listKey)!.device!.tlsPin.fill(0);
+    state.devices()[1]!.device!.tlsPin.fill(0);
+    state.head.fill(0);
+    state.context.gatewayId.fill(0);
+    expect(toHexPin(state.member(mac.device.listKey)!.device!.tlsPin)).toBe(before);
+    expect(state.head).not.toEqual(fill(32, 0));
+    expect(state.context.gatewayId).toEqual(CONTEXT.gatewayId);
+  });
+});
+
+function toHexPin(bytes: Uint8Array): string {
+  return Buffer.from(bytes).toString("hex");
+}
+
 describe("bounds", () => {
   it(`holds at most ${MAX_MEMBERS} devices`, () => {
     const world = makeWorld();
@@ -438,6 +456,24 @@ describe("the list secret", () => {
           world.secret,
         ),
       "decrypt_failed",
+    );
+  });
+
+  it("has nothing to rotate to when no device is left", () => {
+    const { state, world, gateway, mac, phone } = threeDevices();
+    let empty = state;
+    for (const device of [gateway, mac, phone])
+      empty = signRemoval(world.connector, empty, device.device.listKey).state;
+    expect(empty.devices()).toHaveLength(0);
+    expectCode(
+      () =>
+        rotateListSecret(
+          world.connector,
+          empty,
+          ListSecret.fromBytes(fill(32, 9), 1),
+          new Uint8Array(0),
+        ),
+      "bad_target",
     );
   });
 

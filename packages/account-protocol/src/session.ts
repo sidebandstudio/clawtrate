@@ -10,8 +10,9 @@ import { LABEL, TAG } from "./labels.ts";
 import { MAX_AUDIENCE_BYTES, MAX_BODY_BYTES, MAX_PATH_BYTES, SESSION_SKEW_MS } from "./limits.ts";
 
 /**
- * The service's origin: `https://host[:port]` in lowercase, or `http:` only on loopback, for a
- * service run locally in tests. A path is printable ASCII with no space.
+ * The service's origin: `https://host[:port]` in lowercase, where the host is a DNS name or an
+ * IPv4 address (an IPv6 literal is not accepted), or `http:` only on loopback, for a service run
+ * locally in tests. A path is printable ASCII with no space.
  */
 const AUDIENCE =
   /^(https:\/\/[0-9a-z.-]+|http:\/\/(127\.0\.0\.1|localhost|\[::1\]))(:[1-9][0-9]{0,4})?$/;

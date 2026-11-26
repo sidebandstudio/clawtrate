@@ -106,7 +106,7 @@ The HPKE plaintext in a confirmation: `u32` epoch, `bytes[32]` list secret, `var
 
 **Sealed with the list secret**: `u8` version 1, `u8` kind (1 the list, 2 the card, 3 an entry), `u32` epoch, `bytes[24]` nonce, then the XChaCha20-Poly1305 ciphertext with its 16-byte tag. The key is HKDF-SHA256 of the secret, no salt, `info` the `list seal key` tag, 32 bytes. The associated data is the `list sealed` tag, the 30-byte header, the gateway id and the account id.
 
-**Session request**: `label`, `text` audience (the service's origin, `https://host[:port]` in lowercase, or `http:` on loopback only), `bytes[32]` session key, `bytes[32]` the service's challenge, `u64` the device's time in milliseconds, `u8` method (1 GET, 2 POST, 3 PUT, 4 DELETE), `text` path (`/` then printable ASCII, up to 512 bytes), `bytes[32]` `taggedHash(session body, body)`, `sig(session key)`.
+**Session request**: `label`, `text` audience (the service's origin, `https://host[:port]` in lowercase with a DNS name or IPv4 address as host, no IPv6 literal, or `http:` on loopback only), `bytes[32]` session key, `bytes[32]` the service's challenge, `u64` the device's time in milliseconds, `u8` method (1 GET, 2 POST, 3 PUT, 4 DELETE), `text` path (`/` then printable ASCII, up to 512 bytes), `bytes[32]` `taggedHash(session body, body)`, `sig(session key)`.
 
 ## The list
 

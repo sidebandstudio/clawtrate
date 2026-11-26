@@ -1,7 +1,7 @@
 // What every object is bound to (a gateway and an account) and what the list holds about a
 // device. Both are encoded the same way wherever they appear.
 
-import { checkLength, equalBytes, type Reader, type Writer } from "./bytes.ts";
+import { checkLength, copy, equalBytes, type Reader, type Writer } from "./bytes.ts";
 import { fail } from "./errors.ts";
 import { GatewayDeviceKey, ListPublicKey, SealPublicKey } from "./keys.ts";
 import { MAX_NAME_BYTES } from "./limits.ts";
@@ -14,8 +14,8 @@ export interface ListContext {
 
 export function checkContext(context: ListContext): ListContext {
   return {
-    gatewayId: checkLength(context.gatewayId, 16, "a gateway id").slice(),
-    accountId: checkLength(context.accountId, 16, "an account id").slice(),
+    gatewayId: copy(checkLength(context.gatewayId, 16, "a gateway id")),
+    accountId: copy(checkLength(context.accountId, 16, "an account id")),
   };
 }
 

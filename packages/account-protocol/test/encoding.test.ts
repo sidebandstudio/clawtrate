@@ -2,6 +2,7 @@
 // clock or a random source, keep global state, or put a secret in an error.
 
 import { readdirSync, readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import { inspect } from "node:util";
 import { ed25519 } from "@noble/curves/ed25519.js";
 import { describe, expect, it, vi } from "vitest";
@@ -22,7 +23,16 @@ import { Reader, Writer } from "../src/bytes.ts";
 import { LABEL, TAG } from "../src/labels.ts";
 import { MAX_CARD_BYTES, MAX_LIST_BYTES } from "../src/seal.ts";
 import { MAX_ENTRY_BYTES } from "../src/list.ts";
-import { assembleGenesis, signCard, signGenesis } from "../src/index.ts";
+import {
+  assembleGenesis,
+  openCard,
+  sealCard,
+  signCard,
+  signGenesis,
+  signSessionRequest,
+  verifyList,
+  verifySessionRequest,
+} from "../src/index.ts";
 import { CONTEXT, expectCode, fill, fromHex, makeDevice, toHex } from "./helpers.ts";
 
 // Signatures and key checks are quick alone; on a loaded machine a test can take seconds.
@@ -210,7 +220,7 @@ function sourceFiles(): string[] {
   const dir = new URL("../src/", import.meta.url);
   return readdirSync(dir)
     .filter((name) => name.endsWith(".ts"))
-    .map((name) => new URL(name, dir).pathname);
+    .map((name) => fileURLToPath(new URL(name, dir)));
 }
 
 describe("what the package never does", () => {
@@ -232,5 +242,63 @@ describe("the bounds the README states", () => {
     expect(MAX_CARD_BYTES).toBe(2297);
     expect(MAX_LIST_BYTES).toBe(468_994);
     expect(MAX_ENTRY_BYTES).toBe(456);
+  });
+});
+
+describe("bytes from a Node Buffer", () => {
+  // A Buffer is a Uint8Array whose slices share memory and whose bytes may sit at an offset in a
+  // larger pool; the package must read and keep the same values as from a plain array.
+  const inPool = (bytes: Uint8Array) => {
+    const pool = Buffer.alloc(bytes.length + 7, 0xee);
+    pool.set(bytes, 7);
+    return pool.subarray(7);
+  };
+
+  it("decode to the same values", () => {
+    const connector = ListSecretKey.fromSeed(fill(32, 9));
+    const device = makeDevice(1);
+    const fields = { context: CONTEXT, connectorKey: connector.publicKey, device: device.device };
+    const { entry, state } = assembleGenesis(
+      fields,
+      signGenesis(connector, fields),
+      signGenesis(device.listKey, fields),
+    );
+    expect(verifyList(CONTEXT, [inPool(entry)]).head).toEqual(state.head);
+    const card = signCard(connector, {
+      gatewayId: CONTEXT.gatewayId,
+      serial: 7,
+      tlsPin: fill(32, 1),
+      addresses: [{ host: "a.example", port: 443 }],
+      name: "Gateway",
+    });
+    expect(verifyCard(inPool(card)).serial).toBe(7);
+  });
+
+  it("are copied, so clearing the caller's buffer changes nothing kept", () => {
+    const seed = Buffer.alloc(32, 0x21);
+    const key = SessionSecretKey.fromSeed(seed);
+    seed.fill(0);
+    const fields = {
+      audience: "https://a.dev",
+      challenge: fill(32, 1),
+      method: "GET",
+      path: "/",
+      body: new Uint8Array(0),
+    } as const;
+    const request = signSessionRequest(key, { ...fields, issuedAtMs: 1 });
+    expect(verifySessionRequest(request, { ...fields, nowMs: 1 }).equals(key.publicKey)).toBe(true);
+
+    const secretBytes = Buffer.alloc(32, 0x22);
+    const secret = ListSecret.fromBytes(secretBytes, 0);
+    const sealed = sealCard(secret, CONTEXT, fill(40, 3), fill(24, 4));
+    secretBytes.fill(0);
+    expect(openCard(secret, CONTEXT, sealed)).toEqual(fill(40, 3));
+
+    const publicBytes = Buffer.from(key.publicKey.bytes);
+    const publicKey = SessionPublicKey.fromBytes(publicBytes);
+    publicBytes.fill(0);
+    expect(publicKey.equals(key.publicKey)).toBe(true);
+    publicKey.bytes.fill(0);
+    expect(publicKey.equals(key.publicKey)).toBe(true);
   });
 });
