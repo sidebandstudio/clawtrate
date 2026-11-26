@@ -109,9 +109,10 @@ function kindOf(text: string): NotRunKind {
  * `run_status` or a `chat` status is not: the gateway sends those for a message it then fails
  * before any run of it starts (an unknown model, OpenClaw 2026.10.6).
  */
-function startSeen(
+export function startSeen(
   run: Pick<
     Run,
+    | "startSaid"
     | "reportedStartAt"
     | "steps"
     | "text"
@@ -124,6 +125,8 @@ function startSeen(
   >,
 ): boolean {
   return (
+    // An event said so where nothing else of the run keeps it: one after the run's end, say.
+    run.startSaid === true ||
     run.reportedStartAt !== null ||
     run.steps.length > 0 ||
     // Steps it had that were dropped at their bound.
@@ -161,6 +164,7 @@ export function neverRan(
     | "closedCards"
     | "omittedSteps"
     | "ending"
+    | "startSaid"
   >,
 ): boolean {
   if (run.state !== "failed" || run.error?.quiet === true) return false;

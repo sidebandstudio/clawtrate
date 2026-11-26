@@ -16,6 +16,7 @@ import {
 import { projectArgs, projectDetails } from "./actions.ts";
 import { asRecord, liveTextFromChatMessage, type RawRecord } from "./mapping.ts";
 import { filePathsOf } from "./file-paths.ts";
+import { startSeen } from "./not-run.ts";
 import { capId, digestOf, extendDigest, jsonLength, sameDigest, type Digest } from "./bounds.ts";
 import {
   MAX_CLOSED_CARDS_PER_RUN,
@@ -507,6 +508,13 @@ export type Run = {
    * of its events. Kept through every history merge (`not-run.ts`).
    */
   ranInHistory?: true;
+  /**
+   * An event of the run said it started where none of its other fields keeps it: one that came
+   * after the run's end (a lifecycle error saying the provider started, after the `chat` error), or
+   * an attempt's error saying the provider started. Evidence that a run started is kept whatever
+   * order it came in (`not-run.ts`, #686).
+   */
+  startSaid?: true;
   /**
    * The anchor the run's next reasoning block is numbered from: `t.<toolCallId>`
    * of the latest tool call, `c` when a history window began inside the run
@@ -1629,13 +1637,23 @@ export function registerRunAlias(
  * by rows under a run id the page has not shown before. A steer's user row is followed by
  * the rows of the run it was sent into, which came before it, and an ordinary turn's by
  * rows under the send's own id: neither pairs. Nor does a failure's row, whose place proves nothing.
+ *
+ * A place pairs only when no other message could own those rows: the page reaches the task's
+ * start (`windowCut` false), no message before has no key, and every earlier send on it has rows
+ * of its own. Two quick sends can put the first one's reply after the second's prompt: that reply
+ * is then paired by a key or the gateway's own pairing, or by nothing, never by its place (#686).
  */
 export function historyQueuePairs(
   messages: unknown,
+  windowCut = false,
 ): Array<[gatewayRunId: string, clientRunId: string]> {
   const pairs: Array<[string, string]> = [];
+  if (windowCut) return pairs;
   // Run ids the page has shown so far, sends and their rows alike.
   const seen = new Set<string>();
+  // Sends on the page with no rows of their own yet, and whether a message with no key came before.
+  const waiting = new Set<string>();
+  let unkeyed = false;
   let sendId: string | null = null;
   for (const entry of Array.isArray(messages) ? messages : []) {
     const message = asRecord(entry);
@@ -1643,7 +1661,10 @@ export function historyQueuePairs(
     if (message.role === "user") {
       const key = rowIdempotencyKey(message);
       sendId = key?.endsWith(":user") ? key.slice(0, -":user".length) : null;
-      if (sendId) seen.add(sendId);
+      if (sendId) {
+        seen.add(sendId);
+        waiting.add(sendId);
+      } else unkeyed = true;
       continue;
     }
     const runId = str(meta(message).runId);
@@ -1654,7 +1675,12 @@ export function historyQueuePairs(
     const failure =
       (message.role === "custom" && message.customType === RUN_FAILED_BEFORE_REPLY) ||
       str(message.stopReason) === "error";
-    if (sendId && runId !== sendId && !seen.has(runId) && !failure) pairs.push([runId, sendId]);
+    const alone = !unkeyed && waiting.size === 1;
+    if (sendId && runId !== sendId && !seen.has(runId) && !failure && alone) {
+      pairs.push([runId, sendId]);
+      waiting.delete(sendId);
+    }
+    waiting.delete(runId);
     seen.add(runId);
     sendId = null;
   }
@@ -1838,7 +1864,12 @@ export function applyQuestionRequested(
   if (existing && existing.status !== "pending") return activity;
   if (!existing && questionSettled(activity, id)) return activity;
   const known = runId ? findRun(activity, runId) : undefined;
-  if (known && isTerminal(known.state)) return activity;
+  // An ended run takes no question; that one was asked still says it started.
+  if (known && isTerminal(known.state))
+    return noteLateStart(activity, known, (run) => ({
+      ...run,
+      pendingCards: [...run.pendingCards, { id, kind: "question", since: null }],
+    }));
   if (
     !existing &&
     activity.questions.filter((question) => question.status === "pending").length >=
@@ -2128,7 +2159,14 @@ export function applyChatEvent(
   if (existing && isTerminal(existing.state)) {
     // An end this client only inferred gives way to the end the gateway sends.
     const ends = state === "final" || state === "aborted" || state === "error";
-    if (existing.outcomeKnown || !ends) return activity;
+    if (existing.outcomeKnown || !ends) {
+      // Reply text after the end still says the run started.
+      const text =
+        state === "delta" || state === "final"
+          ? (projectedText ?? contentText(asRecord(payload.message)?.content))
+          : "";
+      return noteLateStart(activity, existing, (run) => ({ ...run, text: text || run.text }));
+    }
     activity = replaceRun(activity, reopenInferred(existing));
   }
   let next = ensureRun(activity, runId, ctx);
@@ -2188,23 +2226,8 @@ export function applyAgentEvent(
   // not taken as loss; loss is the connection-level frame gap.
   if (existing && seq !== null && existing.lastSeq !== null && seq <= existing.lastSeq)
     return { activity };
-  const replacement = stream === "tool" && data.phase === "result" && data.replace === true;
-  if (existing && isTerminal(existing.state) && !replacement) {
-    // An end this client only inferred gives way to the end the gateway sends.
-    const ends = stream === "lifecycle" && (data.phase === "end" || data.phase === "error");
-    if (existing.outcomeKnown || !ends) return { activity };
-    activity = replaceRun(activity, reopenInferred(existing));
-  }
-
-  let next = ensureRun(activity, runId, ctx);
   const ts = num(payload.ts) ?? ctx.now;
-  next = updateRun(next, runId, (run) => {
-    if (seq !== null && (run.lastSeq === null || seq > run.lastSeq)) run = { ...run, lastSeq: seq };
-    // The model answered again: a retry it was waiting on is over.
-    if (run.retry && (stream === "assistant" || stream === "thinking" || stream === "tool")) {
-      const { retry: _over, ...rest } = run;
-      run = rest;
-    }
+  const apply = (run: Run, ctx: EngineContext): Run => {
     switch (stream) {
       case "lifecycle":
         return applyLifecycle(run, data, ts, ctx);
@@ -2233,8 +2256,44 @@ export function applyAgentEvent(
       default:
         return run;
     }
+  };
+  const replacement = stream === "tool" && data.phase === "result" && data.replace === true;
+  if (existing && isTerminal(existing.state) && !replacement) {
+    // An end this client only inferred gives way to the end the gateway sends.
+    const ends = stream === "lifecycle" && (data.phase === "end" || data.phase === "error");
+    if (existing.outcomeKnown || !ends)
+      return {
+        activity: noteLateStart(activity, existing, (run) =>
+          apply(run, { ...ctx, raw: new RawTable() }),
+        ),
+      };
+    activity = replaceRun(activity, reopenInferred(existing));
+  }
+
+  let next = ensureRun(activity, runId, ctx);
+  next = updateRun(next, runId, (run) => {
+    if (seq !== null && (run.lastSeq === null || seq > run.lastSeq)) run = { ...run, lastSeq: seq };
+    // The model answered again: a retry it was waiting on is over.
+    if (run.retry && (stream === "assistant" || stream === "thinking" || stream === "tool")) {
+      const { retry: _over, ...rest } = run;
+      run = rest;
+    }
+    return apply(run, ctx);
   });
   return { activity: next };
+}
+
+/**
+ * An event an ended run takes nothing more from may still show the run started (`startSeen`): a
+ * lifecycle error saying the provider started, arriving after the `chat` error, or a step, reply
+ * text, a preamble or a card arriving after the end. The run keeps that (`startSaid`): evidence
+ * that it started is never lost to the order events came in (#686). The event is tried on a copy,
+ * as if the run were still going, with a raw table of its own, so nothing else of it is kept.
+ */
+function noteLateStart(activity: TaskActivity, run: Run, apply: (run: Run) => Run): TaskActivity {
+  if (run.startSaid || startSeen(run)) return activity;
+  if (!startSeen(apply({ ...run, state: "running" }))) return activity;
+  return replaceRun(activity, { ...run, startSaid: true });
 }
 
 function applyLifecycle(run: Run, data: RawRecord, ts: number, ctx: EngineContext): Run {
@@ -2290,6 +2349,8 @@ function applyLifecycle(run: Run, data: RawRecord, ts: number, ctx: EngineContex
         return {
           ...run,
           attemptErrors: [...run.attemptErrors, message].slice(-MAX_ATTEMPT_ERRORS),
+          // The attempt reached the provider: the run started, whatever ends it.
+          ...(data.providerStarted === true ? { startSaid: true as const } : {}),
         };
       }
       run = { ...run, ending: endingOf(data, run.ending) };

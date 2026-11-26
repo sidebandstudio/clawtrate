@@ -8,15 +8,20 @@
 import { describe, expect, it } from "vitest";
 import { mapHistory, mergeSessionRow } from "../src/mapping.ts";
 import {
+  applyAgentEvent,
+  applyChatEvent,
+  applyQuestionRequested,
+  emptyActivity,
   historyQueuePairs,
   mergeHistoryRuns,
   newRun,
   RawTable,
   runsFromHistory,
+  type TaskActivity,
 } from "../src/runs.ts";
 import { neverRan, neverStarted, notRunCause, MAX_NOT_RUN_WORDS } from "../src/not-run.ts";
 import { fromActivity, WaitingIndex } from "../src/waiting.ts";
-import { agentEvent, grantingGateway, KEY, openTask } from "./client-harness.ts";
+import { agentEvent, grantingGateway, KEY, openTask, questionRecord } from "./client-harness.ts";
 import { sleep, until, type FakeGateway } from "./fake-gateway.ts";
 
 const OTHER = "agent:otto:weekly-report";
@@ -758,6 +763,21 @@ describe("#686: the mark is the newest run's, never the latest-written failure's
     ).toEqual([["gateway-b", "b"]]);
   });
 
+  it("a page that doesn't reach the task's start pairs nothing by place", () => {
+    const rows = [
+      { ...userRow("b", "and this"), __openclaw: { id: "u-b", seq: 2, idempotencyKey: "b:user" } },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Done." }],
+        stopReason: "stop",
+        __openclaw: { id: "r-x", seq: 3, runId: "gateway-x" },
+      },
+    ];
+    expect(historyQueuePairs(rows)).toEqual([["gateway-x", "b"]]);
+    // An earlier message above the page may be the one those rows answer.
+    expect(historyQueuePairs(rows, true)).toEqual([]);
+  });
+
   it("the merge keeps history's word that a live failure never ran; a later reply row overrides it", () => {
     const ctx = { sessionKey: KEY, now: T0 + 1_000, raw: new RawTable() };
     // Live: the run failed with the gateway's words, nothing seen of a start.
@@ -887,6 +907,74 @@ describe("#686: a failure sits only under the message its run is known to have s
     expect(textOf(transcript().items, failed.anchorItemId)).toBe("first");
     client.stop();
   });
+
+  /** Two quick sends; A ran from the gateway's queue under an id of its own and answered after B's prompt. */
+  async function aRepliesAfterB(options: { aFromChannel: boolean }) {
+    const gateway = gatewayWith([{ key: KEY, agentId: "otto", updatedAt: T0 - 60_000 }]);
+    const { client, transcript } = await openTask({ gateway });
+    const first = options.aFromChannel ? "channel-a" : client.sendMessage(KEY, "first");
+    if (!options.aFromChannel) {
+      await until(() => transcript().runs[0]?.bound === true);
+      // The gateway names the pairing of A's two ids.
+      gateway.emit("sessions.changed", {
+        sessionKey: KEY,
+        runId: "gateway-a",
+        clientRunId: first,
+        phase: "start",
+      });
+      await until(() => transcript().queueAliases["gateway-a"] === first);
+    }
+    // B goes in behind A, as a turn of its own.
+    const second = client.sendMessage(KEY, "second", { mode: "queue" });
+    await until(() => transcript().runs.find((run) => run.id === second)?.bound === true);
+    const unkeyed = {
+      role: "user",
+      content: "first",
+      timestamp: T0,
+      __openclaw: { id: "u-ch", seq: 1 },
+    };
+    gateway.handlers["chat.history"] = () => ({
+      messages: [
+        options.aFromChannel ? unkeyed : userRow(first, "first"),
+        userRow(second, "second"),
+        replyRow("gateway-a"),
+        failedRow(second),
+      ],
+      hasMore: false,
+    });
+    gateway.emit("session.message", { sessionKey: KEY, messageSeq: 4 });
+    await until(() => transcript().items.length >= 3 && transcript().outbox.length === 0);
+    return { client, transcript, first, second };
+  }
+
+  it("A, B, A's reply, B's failure: B's failure stays under B, and A's reply under A", async () => {
+    const { client, transcript, first, second } = await aRepliesAfterB({ aFromChannel: false });
+    const failed = transcript().runs.find((run) => run.id === second)!;
+    expect(failed.state).toBe("failed");
+    expect(neverRan(failed)).toBe(true);
+    // Keyed to B's own row: Try again sends B.
+    expect(failed.anchorKeyed).toBe(true);
+    expect(textOf(transcript().items, failed.anchorItemId)).toBe("second");
+    // A's reply is A's, by the gateway's own pairing, not B's by its place.
+    expect(transcript().queueAliases["gateway-a"]).toBe(first);
+    const answered = transcript().runs.find((run) => run.id === first)!;
+    expect(answered.state).toBe("completed");
+    expect(textOf(transcript().items, answered.anchorItemId)).toBe("first");
+    client.stop();
+  });
+
+  it("the same with A's key missing: nothing pairs by place, and B's failure stays B's", async () => {
+    const { client, transcript, second } = await aRepliesAfterB({ aFromChannel: true });
+    expect(transcript().queueAliases).toEqual({});
+    const failed = transcript().runs.find((run) => run.id === second)!;
+    expect(neverRan(failed)).toBe(true);
+    expect(textOf(transcript().items, failed.anchorItemId)).toBe("second");
+    // A's reply is tied to no message: drawn where it falls, never what Try again sends.
+    const answered = transcript().runs.find((run) => run.id === "gateway-a")!;
+    expect(answered.state).toBe("completed");
+    expect(answered.anchorKeyed).toBeUndefined();
+    client.stop();
+  });
 });
 
 describe("only a run that started sends these, so each says it ran (#686)", () => {
@@ -953,5 +1041,107 @@ describe("only a run that started sends these, so each says it ran (#686)", () =
       { ending: { stopReason: null, timeoutPhase: null, providerStarted: true, status: "error" } },
     ];
     for (const evidence of evidences) expect(neverRan({ ...bare, ...evidence })).toBe(false);
+  });
+
+  it("the chat error, then the lifecycle error saying the provider started, or the reverse: it ran", async () => {
+    // The lifecycle error as an attempt's (the gateway may go on) and as the run's settled end.
+    for (const settled of [{}, { executionSettled: true }]) {
+      for (const chatFirst of [true, false]) {
+        const gateway = gatewayWith([{ key: KEY, agentId: "otto", updatedAt: T0 - 60_000 }]);
+        const { client, transcript } = await openTask({ gateway });
+        const id = client.sendMessage(KEY, "hello");
+        await until(() => transcript().runs[0]?.bound === true);
+        const chatError = () =>
+          gateway.emit("chat", {
+            runId: id,
+            sessionKey: KEY,
+            seq: 3,
+            state: "error",
+            errorMessage: "provider down",
+          });
+        const lifecycleError = () =>
+          gateway.emit(
+            "agent",
+            agentEvent(id, 2, "lifecycle", {
+              phase: "error",
+              error: "provider down",
+              providerStarted: true,
+              ...settled,
+            }),
+          );
+        if (chatFirst) {
+          chatError();
+          await until(() => transcript().runs[0]?.state === "failed");
+          lifecycleError();
+        } else {
+          lifecycleError();
+          chatError();
+        }
+        await until(() => transcript().runs[0]?.state === "failed");
+        await sleep(20);
+        const run = transcript().runs[0]!;
+        expect(neverRan(run), `chat first: ${chatFirst}, ${JSON.stringify(settled)}`).toBe(false);
+        client.stop();
+      }
+    }
+  });
+
+  it("each kind of evidence arriving after the run's end still counts; a model choice does not", () => {
+    const ctx = { sessionKey: KEY, now: T0 + 1_000, raw: new RawTable() };
+    // A run ended by the gateway's `chat` error, nothing reported started.
+    const ended = (): TaskActivity => ({
+      ...emptyActivity,
+      runs: [
+        {
+          ...newRun("r", { state: "running", origin: "local", bound: true }, T0),
+          state: "failed",
+          outcomeKnown: true,
+          endedAt: T0 + 300,
+          error: { message: "provider down", kind: null },
+        },
+      ],
+    });
+    const agent = (stream: string, data: Record<string, unknown>) =>
+      applyAgentEvent(ended(), { runId: "r", seq: 5, stream, ts: T0 + 400, data }, ctx).activity;
+    const late: Array<[string, TaskActivity]> = [
+      ["lifecycle start", agent("lifecycle", { phase: "start", startedAt: T0 + 10 })],
+      ["provider started", agent("lifecycle", { phase: "end", providerStarted: true })],
+      ["card", agent("lifecycle", { phase: "waiting-approval", approvalId: "ap-1" })],
+      ["step", agent("tool", { phase: "start", toolCallId: "t1", name: "read", args: {} })],
+      ["reasoning", agent("thinking", { delta: "Looking at it" })],
+      ["reply text", agent("assistant", { delta: "Here" })],
+      [
+        "preamble",
+        agent("item", { kind: "preamble", itemId: "p1", phase: "update", progressText: "First" }),
+      ],
+      [
+        "chat reply text",
+        applyChatEvent(
+          ended(),
+          { runId: "r", sessionKey: KEY, seq: 6, state: "delta" },
+          "Here it is",
+          ctx,
+        ),
+      ],
+      [
+        "question",
+        applyQuestionRequested(ended(), { ...questionRecord("q1", "r"), status: "pending" }, ctx),
+      ],
+    ];
+    for (const [kind, activity] of late) {
+      const run = activity.runs[0]!;
+      expect(neverRan(run), kind).toBe(false);
+      // Only the evidence is kept: the ended run takes nothing else of the event.
+      expect(run.steps, kind).toEqual([]);
+      expect(run.text, kind).toBe("");
+      expect(run.state, kind).toBe("failed");
+    }
+    // What the gateway sends for a message it then fails says nothing after the end either.
+    for (const quiet of [
+      agent("lifecycle", { phase: "model", model: "nope/dev-1" }),
+      agent("lifecycle", { phase: "end", providerStarted: false }),
+      agent("run_status", { phase: "queued" }),
+    ])
+      expect(neverRan(quiet.runs[0]!)).toBe(true);
   });
 });

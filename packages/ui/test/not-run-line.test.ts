@@ -2,13 +2,19 @@
 // words, and the ways forward, each kind as the gateway says it; nothing it didn't say.
 
 import {
+  attachmentsCut,
   emptyActivity,
+  enforceState,
+  historyQueuePairs,
   mapHistory,
   mergeHistoryRuns,
   newRun,
   RawTable,
+  registerRunAlias,
   runsFromHistory,
+  throughRunAliases,
   type Run,
+  type TaskActivity,
   type Transcript,
 } from "@clawtrate/core";
 import { describe, expect, it } from "vitest";
@@ -26,7 +32,7 @@ import {
   notRunWords,
   type RunEnding,
 } from "../src/live.ts";
-import { messageTextOf, retryPlan } from "../src/LiveTurn.tsx";
+import { messageReplyOf, messageTextOf, retryPlan } from "../src/LiveTurn.tsx";
 
 const KEY = "agent:otto:disk-space";
 
@@ -314,6 +320,139 @@ describe("#686: a not-run line sits only under the message its run is known to h
       kind: "again",
       messageId: "msg-1",
     });
+  });
+
+  it("words alone go again only when the message is known to have had no files", () => {
+    const { transcript } = reloaded([
+      userRow("run-a", "Back up the photos.", 1),
+      failedRow("run-a", 2),
+    ]);
+    const failed = transcript.runs.find((each) => each.id === "run-a")!;
+    const file = (name: string) => ({ fileName: name, mimeType: "image/jpeg", sizeBytes: 1 });
+    // Two later messages with twenty files each fill the page's list of files.
+    const later = [3, 4].map((n) => ({
+      id: `later-${n}`,
+      role: "user" as const,
+      timestamp: T0 + n,
+      blocks: [{ kind: "text" as const, text: `Batch ${n}` }],
+      model: null,
+      attachments: Array.from({ length: 20 }, (_, i) => file(`p${n}-${i}.jpg`)),
+    }));
+    const kept = (anchorFiles: number) => {
+      const items = [
+        ...transcript.items.map((item) =>
+          item.id === failed.anchorItemId && anchorFiles > 0
+            ? { ...item, attachments: Array.from({ length: anchorFiles }, (_, i) => file(`a${i}`)) }
+            : item,
+        ),
+        ...later,
+      ];
+      const state = enforceState({ transcripts: { [KEY]: { ...transcript, items } } } as never);
+      return (state as unknown as { transcripts: Record<string, Transcript> }).transcripts[KEY]!;
+    };
+    // Known to have had none, though the list is full: its words go again.
+    expect(retryPlan(failed, kept(0))).toMatchObject({ kind: "text", text: "Back up the photos." });
+    // Its files cut from the list: whether it had any isn't known, so no Try again.
+    const trimmed = kept(1);
+    expect(trimmed.items.find((item) => item.id === failed.anchorItemId)?.attachments).toEqual([]);
+    expect(retryPlan(failed, trimmed)).toEqual({ kind: "files-unknown" });
+    // A full list of cut paths (eight, `MAX_CUT_PATHS`) may have let the one for its files go.
+    const full = Array.from({ length: 8 }, (_, i) => `blocks[${i}].text`);
+    expect(attachmentsCut({ cut: full })).toBe(true);
+    expect(attachmentsCut({ cut: full.slice(1) })).toBe(false);
+  });
+
+  it("a reply goes again as a reply only for a run known by its key", () => {
+    const { transcript } = reloaded([userRow("run-a", "Back up the photos.", 1)]);
+    const withParent = {
+      ...transcript,
+      items: transcript.items.map((item) => ({
+        ...item,
+        replyTo: { id: "parent", text: null, sender: null },
+      })),
+    } as Transcript;
+    const run: Run = {
+      ...newRun("run-a", { state: "failed", origin: "history", bound: true }, T0),
+      anchorItemId: transcript.items[0]!.id,
+    };
+    expect(messageReplyOf(run, withParent)).toBe("parent");
+    // Drawn under it by place only: no Try again, so no parent goes anywhere.
+    expect(retryPlan(run, withParent)).toBeNull();
+    expect(retryPlan({ ...run, anchorKeyed: true }, withParent)).toEqual({
+      kind: "text",
+      text: "Back up the photos.",
+      replyToId: "parent",
+    });
+  });
+
+  /** History read as the client reads it: the gateway's own pairings, then the page's. */
+  function readAsClient(rows: unknown[], named: Record<string, string>) {
+    const ctx = { raw: new RawTable(), sessionKey: KEY, now: T0 + 10_000 };
+    let activity: TaskActivity = { ...emptyActivity, queueAliases: named };
+    for (const [gateway, client] of historyQueuePairs(rows))
+      activity = registerRunAlias(activity, gateway, client);
+    const { messages } = throughRunAliases(rows, null, activity.queueAliases);
+    return {
+      ...emptyActivity,
+      sessionKey: KEY,
+      status: "ready",
+      items: mapHistory(messages),
+      runs: runsFromHistory(messages, null, ctx),
+      error: null,
+      hasMore: false,
+    } as Transcript;
+  }
+
+  it("A, B, A's reply, B's failure: B's failure under B with its Try again, A's reply under A", () => {
+    // A ran from the gateway's queue under an id of its own, which the gateway paired with A.
+    const transcript = readAsClient(
+      [
+        userRow("run-a", "Back up the photos.", 1),
+        userRow("run-b", "And the notes.", 2),
+        replyRow("gateway-a", 3),
+        failedRow("run-b", 4),
+      ],
+      { "gateway-a": "run-a" },
+    );
+    const b = transcript.runs.find((each) => each.id === "run-b")!;
+    expect(endingOf(b)?.kind).toBe("not-run");
+    expect(b.anchorItemId).toBe(itemOf(transcript, "And the notes."));
+    expect(retryPlan(b, transcript)).toMatchObject({ kind: "text", text: "And the notes." });
+    const a = transcript.runs.find((each) => each.id === "run-a")!;
+    expect(a.state).toBe("completed");
+    expect(a.anchorItemId).toBe(itemOf(transcript, "Back up the photos."));
+  });
+
+  it("the same with keys missing: nothing pairs by place, and what no key ties has no Try again", () => {
+    // A from a channel, no key, and no pairing named: B's failure is still B's own.
+    const aUnkeyed = readAsClient(
+      [
+        userRow(null, "Back up the photos.", 1),
+        userRow("run-b", "And the notes.", 2),
+        replyRow("gateway-a", 3),
+        failedRow("run-b", 4),
+      ],
+      {},
+    );
+    const b = aUnkeyed.runs.find((each) => each.id === "run-b")!;
+    expect(endingOf(b)?.kind).toBe("not-run");
+    expect(retryPlan(b, aUnkeyed)).toMatchObject({ kind: "text", text: "And the notes." });
+    expect(aUnkeyed.runs.find((each) => each.id === "gateway-a")?.anchorKeyed).toBeUndefined();
+    // Neither keyed: B's failure is tied to no message, so it is an earlier one's, with no Try again.
+    const neither = readAsClient(
+      [
+        userRow(null, "Back up the photos.", 1),
+        userRow(null, "And the notes.", 2),
+        replyRow("gateway-a", 3),
+        failedRow("run-b", 4),
+      ],
+      {},
+    );
+    const unmatched = neither.runs.find((each) => each.id === "run-b")!;
+    expect(endingOf(unmatched)?.kind).toBe("not-run");
+    expect(unmatched.anchorItemId).toBeNull();
+    expect(retryPlan(unmatched, neither)).toBeNull();
+    expect(forEarlierMessage(unmatched, neither)).toBe(true);
   });
 
   it("only a keyed anchor decides what Try again sends, wherever the card is drawn", () => {

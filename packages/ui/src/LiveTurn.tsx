@@ -5,6 +5,7 @@
 // messages between bots are the cards' own (./cards).
 
 import {
+  attachmentsCut,
   isTerminal,
   type Bot,
   type OutgoingMessage,
@@ -214,12 +215,15 @@ function keyedAnchor(run: Run, transcript: Transcript) {
  * - `text`: only history has it, and it was words alone;
  * - `files-gone`: only history has it, and it had files this device no longer holds: no Try
  *   again, and the line says to send it again with them;
+ * - `files-unknown`: only history has it, and history's list of its files was cut to its bound, so
+ *   whether it had any isn't known: no Try again, and the line says to send it again with any;
  * - null: no message is known to have started the run.
  */
 export type RetryPlan =
   | { kind: "again"; messageId: string }
   | { kind: "text"; text: string; replyToId: string | null }
   | { kind: "files-gone" }
+  | { kind: "files-unknown" }
   | null;
 
 export function retryPlan(run: Run, transcript: Transcript): RetryPlan {
@@ -228,15 +232,21 @@ export function retryPlan(run: Run, transcript: Transcript): RetryPlan {
   const anchor = keyedAnchor(run, transcript);
   if (!anchor) return null;
   if ((anchor.attachments?.length ?? 0) > 0) return { kind: "files-gone" };
+  // Words alone go again only when the message is known to have had no files.
+  if (attachmentsCut(anchor)) return { kind: "files-unknown" };
   const text = messageTextOf(run, transcript);
   return text ? { kind: "text", text, replyToId: messageReplyOf(run, transcript) } : null;
 }
 
-/** The message a run's own message replied to, from the outbox or from history's reference. */
+/**
+ * The message a run's own message replied to, from the outbox or from history's reference on the
+ * run's message. Try again sends it only through `retryPlan`, which first requires that message
+ * known by its key: a parent is never taken from a message the run is only drawn under (#686).
+ */
 export function messageReplyOf(run: Run, transcript: Transcript): string | null {
   const outgoing = transcript.outbox.find((message) => message.id === run.messageId);
   if (outgoing) return outgoing.replyToId ?? null;
-  return keyedAnchor(run, transcript)?.replyTo?.id ?? null;
+  return transcript.items.find((item) => item.id === run.anchorItemId)?.replyTo?.id ?? null;
 }
 
 /**
@@ -400,6 +410,8 @@ export function RunEnding({
   const also =
     ending.kind === "turn-limit" ? stoppedWithLines(run, (key) => botOfSession(bots, key)) : [];
   const retry = retryPlan(run, transcript);
+  // What Try again sends, when there is one.
+  const resend = retry?.kind === "again" || retry?.kind === "text" ? retry : null;
   const requestId = run.requestId ?? null;
   const raw = run.error?.raw;
   const showRaw = (open: boolean) => {
@@ -472,10 +484,13 @@ export function RunEnding({
           with its files.
         </p>
       )}
-      {((retry && retry.kind !== "files-gone") ||
-        requestId ||
-        raw ||
-        (notRun?.ways.length ?? 0) > 0) && (
+      {retry?.kind === "files-unknown" && (
+        <p className="turn-error-reason" data-testid="retry-files-unknown">
+          This device can't tell whether this message had files. To try again, send it again with
+          any files it had.
+        </p>
+      )}
+      {(resend || requestId || raw || (notRun?.ways.length ?? 0) > 0) && (
         <div className="turn-error-actions">
           {notRun?.ways.map((way) => (
             <button
@@ -488,7 +503,7 @@ export function RunEnding({
               {way === "model" ? "Change model" : "Change account"}
             </button>
           ))}
-          {retry && retry.kind !== "files-gone" && (
+          {resend && (
             <button
               type="button"
               className="button"
@@ -499,15 +514,19 @@ export function RunEnding({
                 // Otherwise only history has it, and it was words alone (`retryPlan`). A reply
                 // goes again as a reply to the same message.
                 const again =
-                  retry.kind === "again"
-                    ? bridge.invoke({ type: "sendAgain", key: taskKey, messageId: retry.messageId })
+                  resend.kind === "again"
+                    ? bridge.invoke({
+                        type: "sendAgain",
+                        key: taskKey,
+                        messageId: resend.messageId,
+                      })
                     : bridge.invoke({
                         type: "sendMessage",
                         key: taskKey,
-                        text: retry.text,
+                        text: resend.text,
                         mode: "auto",
                         attachmentIds: [],
-                        ...(retry.replyToId ? { replyToId: retry.replyToId } : {}),
+                        ...(resend.replyToId ? { replyToId: resend.replyToId } : {}),
                       });
                 void again.catch((error: unknown) =>
                   setRetryError(error instanceof Error ? error.message : String(error)),
