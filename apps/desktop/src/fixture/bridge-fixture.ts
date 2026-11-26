@@ -156,6 +156,7 @@ export const SCENES = [
   "pairing-full",
   "access-narrowed",
   "access-offer",
+  "pairing-code",
   "device-request",
   "devices-asking",
   "device-notice",
@@ -243,7 +244,6 @@ function pairing(): ClawtrateState {
           "5d2a90c4-1b7e-4f0a-9c3d-2e8f6a1b0c55",
         ).note,
         requestedScopes: ["operator.read"],
-        code: DEVICE_CODE,
       },
     },
   };
@@ -404,6 +404,16 @@ function scene(name: SceneName, now: number): { initial: ClawtrateState; steps: 
         steps: [],
       };
     // A device paired read-only before full control, offered it once (§6).
+    // The waiting device's screen with its own code (§5); the other pairing scenes have none.
+    case "pairing-code": {
+      const waiting = pairing();
+      return {
+        initial: withConnection(waiting, {
+          pairing: { ...waiting.connection.pairing!, code: DEVICE_CODE },
+        }),
+        steps: [],
+      };
+    }
     case "device-request":
       return {
         initial: {

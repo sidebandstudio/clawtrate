@@ -87,7 +87,7 @@ for (const size of SIZES.filter((each) => each.name === "1440" || each.phone)) {
       });
 
       test("F-550: the waiting device's code", async ({ page }) => {
-        await openFixture(page, "scene=pairing", theme);
+        await openFixture(page, "scene=pairing-code", theme);
         const code = page.getByTestId("pairing-code");
         await expect(code).toContainText(CODE);
         await settle(page);

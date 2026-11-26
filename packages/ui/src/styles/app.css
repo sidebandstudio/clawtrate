@@ -3269,6 +3269,12 @@ textarea {
   letter-spacing: 0.06em;
 }
 
+/* The code whose decision is under way stays marked while the others wait with it. */
+.button.device-code[aria-pressed="true"] {
+  box-shadow: inset 0 0 0 1px var(--accent);
+  color: var(--text);
+}
+
 .b-confirm .device-outcome {
   color: var(--text);
 }
