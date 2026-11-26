@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { createBridgeSession } from "../src/bridge.ts";
-import { ClawtrateClient, MAX_SESSION_PAGES, REQUESTED_SCOPES } from "../src/client.ts";
+import {
+  ClawtrateClient,
+  defaultApprovalInstructions,
+  MAX_SESSION_PAGES,
+  REQUESTED_SCOPES,
+} from "../src/client.ts";
 import {
   deferred,
   FakeGateway,
@@ -168,10 +173,27 @@ describe("pairing instructions (A3)", () => {
     expect(client.state.connection.pairing?.approveCommand).toBe(
       "openclaw devices approve req-123",
     );
-    expect(client.state.connection.pairing?.approveNote).toMatch(
-      /^On the computer running OpenClaw, approve this device in OpenClaw's own page under Devices/,
+    expect(client.state.connection.pairing?.approveNote).toBe(
+      "On the computer running OpenClaw, open OpenClaw's page (http://127.0.0.1 and the gateway's port), go to Settings › Devices and approve this device. If that page asks to approve the browser first, or that computer has no browser, run this there instead.",
     );
     client.stop();
+  });
+
+  it("names the page's address from a ws:// address's port, and says when the page can't be used", () => {
+    expect(defaultApprovalInstructions("ws://openclaw-box.lan:18789", "req-1")).toEqual({
+      command: "openclaw devices approve req-1",
+      note: "On the computer running OpenClaw, open http://127.0.0.1:18789, go to Settings › Devices and approve this device. If that page asks to approve the browser first, or that computer has no browser, run this there instead.",
+    });
+    // A setup connection keeps no request id: the pending list, with the same limits.
+    expect(defaultApprovalInstructions("ws://127.0.0.1:19001", "")).toEqual({
+      command: "openclaw devices list",
+      note: "On the computer running OpenClaw, open http://127.0.0.1:19001, go to Settings › Devices and approve this device. If that page asks to approve the browser first, or that computer has no browser, find it with this there instead.",
+    });
+    // No port written, or no ws:// address: the port isn't known here.
+    for (const url of ["wss://gateway.example.com", "ws://openclaw-box.lan", "not an address"])
+      expect(defaultApprovalInstructions(url, "req-1").note, url).toContain(
+        "open OpenClaw's page (http://127.0.0.1 and the gateway's port),",
+      );
   });
 });
 

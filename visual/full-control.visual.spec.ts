@@ -35,7 +35,7 @@ for (const size of SIZES.filter((each) => each.name === "1440" || each.phone)) {
           "Send messages and stop runs",
           "Decide what a bot asks to run",
           "Answer a bot's questions",
-          "Change the gateway's settings, bots and accounts",
+          "Change the gateway's settings and accounts, install plugins, and run commands on its computer",
           "Approve and remove other devices",
         ]);
         await settle(page);

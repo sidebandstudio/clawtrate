@@ -130,7 +130,7 @@ describe("scope step-up (B1, F-002)", () => {
       approveCommand: "openclaw devices approve up-1",
     });
     expect(client.state.connection.upgrade.approveNote).toMatch(
-      /^On the computer running OpenClaw, approve this device in OpenClaw's own page under Devices/,
+      /^On the computer running OpenClaw, open .*, go to Settings › Devices and approve this device\. If that page asks to approve the browser first, or that computer has no browser, run this there instead\.$/,
     );
 
     wait.resolve({

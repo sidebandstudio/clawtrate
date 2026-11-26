@@ -535,7 +535,7 @@ Each quote is from `docs/decisions.md`, `docs/design/setup.md` or `docs/parity.m
 
    > "A device starts read-only: every `connect` requests exactly `operator.read` … `operator.admin` and the narrower `operator.sessions.*` scopes are never requested."
 
-   Replacement: "**Scopes, once, at the first pairing.** A first pairing asks for `operator.read`, `operator.write`, `operator.approvals`, `operator.questions`, `operator.admin` and `operator.pairing`, after the consent line, because the product owner decided approvals defeat the purpose ("Approvals are genuine nightmare and defeat the entire purpose of this."). The gateway's confirmed grant is the limit, and a reconnect asks for exactly that. A narrower grant is kept and reported, and nothing asks again by itself. The narrower `operator.sessions.*` scopes are never requested."
+   Replacement: "**Scopes, once, at the first pairing.** A first pairing asks for `operator.read`, `operator.write`, `operator.approvals`, `operator.questions`, `operator.admin` and `operator.pairing`, after the consent line, because the product owner decided that repeated approvals defeat the purpose. The gateway's confirmed grant is the limit, and a reconnect asks for exactly that. A narrower grant is kept and reported, and nothing asks again by itself. The narrower `operator.sessions.*` scopes are never requested."
 
 2. **Requested is not granted**:
 
@@ -603,7 +603,7 @@ Each quote is from `docs/decisions.md`, `docs/design/setup.md` or `docs/parity.m
 
     Replacement: "a setup code gives the device what it asks for, up to the code's ceiling: all six for a full code; read, write, approvals and questions for a limited one."
 
-**The change to `AGENTS.md`, approved by the product owner.** It was made in setup PR 1 (#318), not in this design, and replaced again on 2026-11-25 (`docs/decisions.md`, "One pairing, with everything"), when the six became the default. It replaced "Request the smallest operator scopes a feature needs, and keep a read-only connection useful." Because #318 puts full access behind a flag that is off, `AGENTS.md` now reads:
+**The change to `AGENTS.md`, approved by the product owner.** It was made in setup PR 1 (#318), not in this design, and replaced again on 2026-11-25 (`docs/decisions.md`, "One pairing, with everything"), when the six became the default. It replaced "Request the smallest operator scopes a feature needs, and keep a read-only connection useful." Because #318 put full access behind a flag that was off, `AGENTS.md` read, until 2026-11-25:
 
 > "First pairings request read access by default. Ask once for the six standard operator scopes (read, write, approvals, questions, admin and pairing) only when the person starts an eligible first pairing and the host allows writes, reports secure credential storage and has full-access pairing enabled. Explain full control before connecting. Treat the gateway's confirmed grant as the limit, and request only the scopes this device holds when it reconnects. Keep read-only connections useful. Changing an existing connection's grant requires the person's consent and the gateway's approval policy. Use the least authority each feature needs, and ask for no additional scope without a documented reason and explicit approval. Provider credentials stay on the gateway."
 

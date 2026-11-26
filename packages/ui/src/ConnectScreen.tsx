@@ -15,6 +15,7 @@ import {
 import {
   useEffect,
   useRef,
+  useId,
   useState,
   type CSSProperties,
   type FormEvent,
@@ -27,7 +28,7 @@ import { copyText, selectContents, type CopyResult } from "./clipboard.ts";
 import { useForget } from "./forget.ts";
 import { FullControlConsent } from "./FullControl.tsx";
 import { gatewayLabel, gatewayTitle } from "./format.ts";
-import { BackIcon, CheckIcon, CopyIcon, EyeIcon } from "./icons.tsx";
+import { BackIcon, CheckIcon, CopyIcon } from "./icons.tsx";
 import { SetupFlow, type SetupView } from "./setup/Setup.tsx";
 
 export const PRODUCT_NAME = "Clawtrate";
@@ -163,7 +164,8 @@ const SCOPE_WORDS: Record<string, string> = {
   "operator.write": "Send messages and stop runs",
   "operator.approvals": "Decide what a bot asks to run",
   "operator.questions": "Answer a bot's questions",
-  "operator.admin": "Change the gateway's settings, bots and accounts",
+  "operator.admin":
+    "Change the gateway's settings and accounts, install plugins, and run commands on its computer",
   "operator.pairing": "Approve and remove other devices",
 };
 
@@ -208,7 +210,6 @@ function PairingPanel({ connection }: { connection: ConnectionState }) {
       <ul className="scopes" aria-label="This device asks to">
         {pairing.requestedScopes.map((scope) => (
           <li key={scope} data-scope={scope}>
-            <EyeIcon />
             {SCOPE_WORDS[scope] ?? scope}
           </li>
         ))}
@@ -255,6 +256,7 @@ function ConnectForm({ connection, info }: { connection: ConnectionState; info: 
   const full = info.fullControl === true && protectedGatewayUrl(url);
   // Plain ws:// to another computer: said before Connect, so before any token goes.
   const plain = plainRemoteGatewayUrl(url);
+  const warningId = useId();
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
@@ -306,6 +308,7 @@ function ConnectForm({ connection, info }: { connection: ConnectionState; info: 
             placeholder="Gateway address"
             autoComplete="off"
             spellCheck={false}
+            aria-describedby={plain ? warningId : undefined}
           />
         </label>
         <label className="field">
@@ -331,12 +334,16 @@ function ConnectForm({ connection, info }: { connection: ConnectionState; info: 
             </button>
           </div>
         )}
-        {plain && (
-          <p className="form-warning" role="note" data-testid="plain-address-warning">
-            This address would send the gateway token and your conversations without encryption. Use
-            a secure address (wss://) if the gateway has one.
-          </p>
-        )}
+        {/* Always there, so a screen reader announces the warning when it appears. */}
+        <div aria-live="polite">
+          {plain && (
+            <p className="form-warning" id={warningId} data-testid="plain-address-warning">
+              This connection isn't protected: unless the network between the two computers protects
+              it, anyone on the path can read it, the gateway token included, and take over the
+              session. Use a secure address (wss://) if the gateway has one.
+            </p>
+          )}
+        </div>
         {full && <FullControlConsent />}
         <div className="actions">
           <button
@@ -345,6 +352,7 @@ function ConnectForm({ connection, info }: { connection: ConnectionState; info: 
             data-variant="primary"
             data-size="lg"
             disabled={busy}
+            aria-describedby={plain ? warningId : undefined}
           >
             {busy ? "Connecting…" : "Connect a gateway"}
           </button>
@@ -369,7 +377,7 @@ function ConnectForm({ connection, info }: { connection: ConnectionState; info: 
             : info.readOnly
               ? "It asks for read access only."
               : // Why there is no single ask here: full control's token is kept only in secure storage.
-                "This device has no secure storage for a full-control pairing, so it asks for read access only."}
+                "This build of Clawtrate doesn't keep its credentials in the system's secure storage, so it asks for read access only."}
         </p>
       </form>
     </section>

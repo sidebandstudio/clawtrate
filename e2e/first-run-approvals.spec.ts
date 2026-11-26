@@ -87,45 +87,63 @@ async function firstRun(
     resume: false,
   });
   const { client } = runtime;
-  await client.connect({ url, token });
   let deviceId = "";
-  await expect.poll(() => (deviceId = client.state.connection.deviceId ?? "")).not.toBe("");
   const approvals: string[][] = [];
-  const approved = new Set<string>();
-  const approveWaiting = async () => {
-    for (const request of await pendingFor(instance, deviceId)) {
-      if (!request.requestId || approved.has(request.requestId)) continue;
-      approved.add(request.requestId);
-      approvals.push([...(request.scopes ?? [])].sort());
-      const out = await openInstance(instance).runner.run([
-        "devices",
-        "approve",
-        request.requestId,
-      ]);
-      if (out.status !== 0) throw new Error(`could not approve ${request.requestId}`);
+  try {
+    await client.connect({ url, token });
+    await expect.poll(() => (deviceId = client.state.connection.deviceId ?? "")).not.toBe("");
+    const approved = new Set<string>();
+    const approveWaiting = async () => {
+      for (const request of await pendingFor(instance, deviceId)) {
+        if (!request.requestId || approved.has(request.requestId)) continue;
+        approved.add(request.requestId);
+        approvals.push([...(request.scopes ?? [])].sort());
+        const out = await openInstance(instance).runner.run([
+          "devices",
+          "approve",
+          request.requestId,
+        ]);
+        if (out.status !== 0) throw new Error(`could not approve ${request.requestId}`);
+      }
+    };
+    await expect
+      .poll(async () => (await approveWaiting(), client.state.connection.status), {
+        timeout: 60_000,
+      })
+      .toBe("connected");
+    const key = `agent:otto:e2e-first-run-${randomBytes(3).toString("hex")}`;
+    client.openSession(key);
+    await expect
+      .poll(() => client.state.transcripts[key]?.status, { timeout: 30_000 })
+      .toBe("ready");
+    client.sendMessage(key, "Hello from a first run.");
+    await expect
+      .poll(
+        async () => {
+          await approveWaiting();
+          return client.state.transcripts[key]?.runs.at(-1)?.state;
+        },
+        { timeout: 60_000 },
+      )
+      .toBe("completed");
+    expect(client.state.transcripts[key]!.items.some((item) => item.role === "assistant")).toBe(
+      true,
+    );
+    // Nothing is left waiting for the owner once the conversation works.
+    expect(await pendingFor(instance, deviceId)).toEqual([]);
+  } catch (error) {
+    // A first run that failed leaves nothing running and nothing on the gateway: its client is
+    // stopped, its pending request refused and its device removed, then the failure stands.
+    client.stop();
+    if (deviceId) {
+      const runner = openInstance(instance).runner;
+      for (const request of await pendingFor(instance, deviceId).catch(() => []))
+        if (request.requestId) await runner.run(["devices", "reject", request.requestId]);
+      await runner.run(["devices", "remove", deviceId]);
     }
-  };
-  await expect
-    .poll(async () => (await approveWaiting(), client.state.connection.status), {
-      timeout: 60_000,
-    })
-    .toBe("connected");
-  const key = `agent:otto:e2e-first-run-${randomBytes(3).toString("hex")}`;
-  client.openSession(key);
-  await expect.poll(() => client.state.transcripts[key]?.status, { timeout: 30_000 }).toBe("ready");
-  client.sendMessage(key, "Hello from a first run.");
-  await expect
-    .poll(
-      async () => {
-        await approveWaiting();
-        return client.state.transcripts[key]?.runs.at(-1)?.state;
-      },
-      { timeout: 60_000 },
-    )
-    .toBe("completed");
-  expect(client.state.transcripts[key]!.items.some((item) => item.role === "assistant")).toBe(true);
-  // Nothing is left waiting for the owner once the conversation works.
-  expect(await pendingFor(instance, deviceId)).toEqual([]);
+    rmSync(dataDir, { recursive: true, force: true });
+    throw error;
+  }
   return {
     approvals,
     client,

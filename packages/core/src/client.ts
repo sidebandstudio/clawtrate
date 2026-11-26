@@ -1200,20 +1200,30 @@ function isMissingScope(error: unknown): boolean {
 
 export { validateGatewayUrl };
 
-export function defaultApprovalInstructions(_url: string, requestId: string): ApprovalInstructions {
-  // The approval that needs no terminal comes first: OpenClaw's own page lists the pending
-  // device under Devices (OpenClaw 2026.10.6 and 2026.11.10, docs/web/control-ui/connect-and-pair.md).
-  // The command is the gateway's own fallback. Without a request id (a setup connection keeps
-  // none), the gateway's pending-devices list.
+export function defaultApprovalInstructions(url: string, requestId: string): ApprovalInstructions {
+  // OpenClaw's own page approves a device in one click at Settings › Devices (`/settings/devices`
+  // in 2026.10.6 and 2026.11.10, docs/web/urls.md), but only from a browser on the gateway's
+  // computer that its default local policy lets in; otherwise the page itself asks for a command
+  // to approve the browser. So the command stays, for where the page can't be used. Without a
+  // request id (a setup connection keeps none), the gateway's pending-devices list.
+  const where = `On the computer running OpenClaw, open ${pageAddress(url)}, go to Settings › Devices and approve this device. If that page asks to approve the browser first, or that computer has no browser,`;
   if (requestId === "")
-    return {
-      command: "openclaw devices list",
-      note: "On the computer running OpenClaw, approve this device in OpenClaw's own page under Devices, or find it in this list there.",
-    };
+    return { command: "openclaw devices list", note: `${where} find it with this there instead.` };
   return {
     command: `openclaw devices approve ${requestId}`,
-    note: "On the computer running OpenClaw, approve this device in OpenClaw's own page under Devices, or run this there.",
+    note: `${where} run this there instead.`,
   };
+}
+
+/** OpenClaw's page on the gateway's own computer: the port is known only from a `ws://` address. */
+function pageAddress(url: string): string {
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol === "ws:" && parsed.port) return `http://127.0.0.1:${parsed.port}`;
+  } catch {
+    // An address that doesn't parse names no port.
+  }
+  return "OpenClaw's page (http://127.0.0.1 and the gateway's port)";
 }
 
 export class GatewayNotAllowedError extends Error {

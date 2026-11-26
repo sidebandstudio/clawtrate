@@ -421,8 +421,8 @@ describe("pairing instructions (A3)", () => {
       approvalInstructionsFor(null)(DEV_GATEWAY_URL, "req-1"),
     ]) {
       expect(instructions.command).toBe("openclaw devices approve req-1");
-      expect(instructions.note).toBe(
-        "On the computer running OpenClaw, approve this device in OpenClaw's own page under Devices, or run this there.",
+      expect(instructions.note).toMatch(
+        /^On the computer running OpenClaw, open .*, go to Settings › Devices and approve this device\. If that page asks to approve the browser first, or that computer has no browser, run this there instead\.$/,
       );
     }
   });
