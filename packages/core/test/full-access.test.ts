@@ -211,7 +211,7 @@ describe("full access, with no switch", () => {
   });
 
   it("a plain ws:// address on another computer is warned about, and a first pairing there asks for read", async () => {
-    for (const url of ["ws://gateway.example", "ws://192.168.1.20:18789", "ws://[2001:db8::1]"])
+    for (const url of ["ws://gateway.example", "ws://openclaw-box.lan:18789", "ws://[2001:db8::1]"])
       expect(plainRemoteGatewayUrl(url), url).toBe(true);
     for (const url of [
       "wss://gateway.example",
@@ -225,7 +225,7 @@ describe("full access, with no switch", () => {
       expect(plainRemoteGatewayUrl(url), url).toBe(false);
     const gateway = grantingGateway();
     const { client, storage } = fullClient(gateway);
-    const plain = "ws://192.168.1.20:18789";
+    const plain = "ws://openclaw-box.lan:18789";
     await client.start();
     await client.connect({ url: plain, token: SHARED });
     await until(() => client.state.connection.status === "connected");

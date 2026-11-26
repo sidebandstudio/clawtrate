@@ -46,7 +46,7 @@ for (const size of SIZES.filter((each) => each.name === "1440" || each.phone)) {
         page,
       }) => {
         await openFixture(page, "scene=connect", theme);
-        await page.getByPlaceholder("Gateway address").fill("ws://192.168.1.20:18789");
+        await page.getByPlaceholder("Gateway address").fill("ws://openclaw-box.lan:18789");
         await expect(page.getByTestId("plain-address-warning")).toBeVisible();
         await settle(page);
         await expect(page).toHaveScreenshot(`connect-plain-ws-${theme}-${size.name}.png`);

@@ -74,7 +74,7 @@ describe("the consent line on the address form", () => {
     const warning =
       "This address would send the gateway token and your conversations without encryption.";
     for (const info of [base, { ...base, fullControl: true }]) {
-      const html = form(info, "ws://192.168.1.20:18789");
+      const html = form(info, "ws://openclaw-box.lan:18789");
       expect(html).toContain(warning);
       // Above the button: the person reads it before Connect sends anything.
       expect(html.indexOf(warning)).toBeLessThan(html.indexOf('<div class="actions">'));

@@ -5,7 +5,7 @@
   - region "Connect to your gateway":
     - heading "Connect to your gateway" [level=2]
     - text: Gateway address
-    - textbox "Gateway address": ws://192.168.1.20:18789
+    - textbox "Gateway address": ws://openclaw-box.lan:18789
     - text: Gateway token, for pairing
     - textbox "Gateway token, for pairing"
     - note: This address would send the gateway token and your conversations without encryption. Use a secure address (wss://) if the gateway has one.
