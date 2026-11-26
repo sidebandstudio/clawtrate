@@ -120,6 +120,7 @@ function startSeen(
     | "suspendedCards"
     | "closedCards"
     | "omittedSteps"
+    | "ending"
   >,
 ): boolean {
   return (
@@ -127,6 +128,9 @@ function startSeen(
     run.steps.length > 0 ||
     // Steps it had that were dropped at their bound.
     run.omittedSteps > 0 ||
+    // Its terminal lifecycle event says the provider started (both versions set it only once a
+    // model request was under way: a provider's assistant message, or a timeout during the prompt).
+    run.ending?.providerStarted === true ||
     run.text !== "" ||
     (run.preambles?.length ?? 0) > 0 ||
     run.pendingCards.length > 0 ||
@@ -156,11 +160,15 @@ export function neverRan(
     | "suspendedCards"
     | "closedCards"
     | "omittedSteps"
+    | "ending"
   >,
 ): boolean {
   if (run.state !== "failed" || run.error?.quiet === true) return false;
+  // A reply row of it in history: it ran, whatever an earlier read said. The gateway writes its
+  // "failed before reply" row only for a run with no reply row.
+  if (run.ranInHistory === true) return false;
   if (run.error?.beforeReply === true) return true;
-  return run.origin !== "history" && run.ranInHistory !== true && !startSeen(run);
+  return run.origin !== "history" && !startSeen(run);
 }
 
 /**

@@ -10117,6 +10117,13 @@ export class ClawtrateClient {
     this.noteMessageChange(payload);
     const row = sessionChangeRow(payload);
     const rowKey = row ? sessionRowKey(row) : null;
+    // A new input admitted: a failure after it may be that message's (`waiting.ts`, #686).
+    if (
+      row &&
+      rowKey &&
+      (row.hasActiveRun === true || row.status === "queued" || row.status === "running")
+    )
+      this.waiting.noteInput(rowKey);
     // Rows are kept under the id cap.
     const key = rowKey === null ? null : capId(rowKey, MAX_ID_CHARS);
     if (!row || !key) {

@@ -6,10 +6,16 @@
 // row (`status: "failed"`, `lastRunError`); 2026.11.10, failing it at dispatch, keeps neither.
 
 import { describe, expect, it } from "vitest";
-import { mergeSessionRow } from "../src/mapping.ts";
-import { RawTable, runsFromHistory } from "../src/runs.ts";
+import { mapHistory, mergeSessionRow } from "../src/mapping.ts";
+import {
+  historyQueuePairs,
+  mergeHistoryRuns,
+  newRun,
+  RawTable,
+  runsFromHistory,
+} from "../src/runs.ts";
 import { neverRan, neverStarted, notRunCause, MAX_NOT_RUN_WORDS } from "../src/not-run.ts";
-import { WaitingIndex } from "../src/waiting.ts";
+import { fromActivity, WaitingIndex } from "../src/waiting.ts";
 import { agentEvent, grantingGateway, KEY, openTask } from "./client-harness.ts";
 import { sleep, until, type FakeGateway } from "./fake-gateway.ts";
 
@@ -484,6 +490,8 @@ describe("an end the gateway marks not to show is no failure (#680)", () => {
     const frame = { sessionKey: KEY, runId: "r1", state: "error", errorMessage: QUIET };
     expect(index.onChat({ ...frame, suppressErrorNotice: true }, 1_000)).toBe(true);
     expect(index.failedAt(KEY)).toBeNull();
+    // The next message admitted (its row), then its error.
+    index.noteInput(KEY);
     index.onChat({ ...frame, runId: "r2" }, 2_000);
     expect(index.failedAt(KEY)).toBe(2_000);
   });
@@ -597,6 +605,7 @@ describe("the rules underneath", () => {
     index.onChat({ sessionKey: KEY, runId: "r2", state: "error" }, 2_000);
     index.onChat({ sessionKey: KEY, runId: "r3", state: "final" }, 3_000);
     expect(index.failedAt(KEY)).toBeNull();
+    index.noteInput(KEY);
     index.onChat({ sessionKey: KEY, runId: "r4", state: "error" }, 4_000);
     // The same run's lifecycle end, after its error, keeps it failed.
     index.onAgent(
@@ -615,6 +624,7 @@ describe("the rules underneath", () => {
     );
     // Its final, and no lifecycle end ever arrives.
     index.onChat({ sessionKey: KEY, runId: "r1", state: "final" }, 1_500);
+    index.noteInput(KEY);
     expect(index.onChat({ sessionKey: KEY, runId: "r2", state: "error" }, 2_000)).toBe(true);
     expect(index.failedAt(KEY)).toBe(2_000);
   });
@@ -633,9 +643,189 @@ describe("the rules underneath", () => {
       3_000,
     );
     expect(index.failedAt(KEY)).toBeNull();
-    // With no run going, a message failed before running is the task's latest outcome.
+    // A new message admitted, then failed before running: the task's latest outcome.
+    index.noteInput(KEY);
     expect(index.onChat({ sessionKey: KEY, runId: "r3", state: "error" }, 4_000)).toBe(true);
     expect(index.failedAt(KEY)).toBe(4_000);
+  });
+});
+
+describe("#686: the mark is the newest run's, never the latest-written failure's", () => {
+  it("(b) events only: A's error arriving after B ended well marks nothing; a new message's does", () => {
+    const index = new WaitingIndex();
+    // A and B admitted; B runs and ends well; then A's error arrives late.
+    index.noteInput(KEY);
+    index.onAgent(
+      { sessionKey: KEY, runId: "b", stream: "lifecycle", ts: 2_000, data: { phase: "start" } },
+      2_000,
+    );
+    index.onChat({ sessionKey: KEY, runId: "b", state: "final" }, 3_000);
+    expect(index.onChat({ sessionKey: KEY, runId: "a", state: "error" }, 3_100)).toBe(false);
+    expect(index.failedAt(KEY)).toBeNull();
+    // C admitted after B (the gateway's row says so first), then failed at dispatch: it marks.
+    index.noteInput(KEY);
+    expect(index.onChat({ sessionKey: KEY, runId: "c", state: "error" }, 4_000)).toBe(true);
+    expect(index.failedAt(KEY)).toBe(4_000);
+  });
+
+  it("(b) through the client: rows as both versions send them", async () => {
+    const gateway = gatewayWith([
+      { key: KEY, agentId: "otto", hasActiveRun: false, updatedAt: T0 },
+    ]);
+    const { client } = await openTask({ gateway, key: "agent:otto:elsewhere" });
+    // B's run, seen from start to final, then its done row.
+    gateway.emit("agent", {
+      ...agentEvent("b", 1, "lifecycle", { phase: "start" }),
+      ts: T0 + 2_000,
+    });
+    gateway.emit("chat", { runId: "b", sessionKey: KEY, seq: 2, state: "final" });
+    changed(gateway, "agent.input.settled", {
+      status: "done",
+      hasActiveRun: false,
+      lastRunId: "b",
+      startedAt: T0 + 2_000,
+      updatedAt: T0 + 3_000,
+    });
+    await until(() => task(client)?.status === "done");
+    // A's late dispatch error: no new input since B.
+    gateway.emit("chat", {
+      runId: "a",
+      sessionKey: KEY,
+      seq: 1,
+      state: "error",
+      errorMessage: "boom",
+    });
+    await sleep(50);
+    expect(task(client)?.status).toBe("done");
+    // C: admitted (its row), then failed at dispatch.
+    changed(gateway, "participants", {
+      status: "queued",
+      hasActiveRun: true,
+      updatedAt: T0 + 9_000,
+    });
+    gateway.emit("chat", {
+      runId: "c",
+      sessionKey: KEY,
+      seq: 1,
+      state: "error",
+      errorMessage: "boom",
+    });
+    changed(gateway, "chat.dispatch-error", { hasActiveRun: false, updatedAt: T0 + 9_000 });
+    await until(() => task(client)?.status === "failed");
+    client.stop();
+  });
+
+  it("a failure marker never pairs with the send before it by place; a queued turn's reply still does", () => {
+    const markerAfterB = [
+      userRow("a"),
+      { ...userRow("b", "and this"), __openclaw: { id: "u-b", seq: 2, idempotencyKey: "b:user" } },
+      // A's queued turn ran under an id of its own (2026.10.6), and failed before replying.
+      {
+        role: "custom",
+        customType: "run-failed-before-reply",
+        content: "Your request couldn't be completed.",
+        display: true,
+        timestamp: T0 + 900,
+        __openclaw: { id: "c-a", seq: 3, runId: "gateway-a" },
+      },
+    ];
+    expect(historyQueuePairs(markerAfterB)).toEqual([]);
+    // Nor an assistant row that ends in an error.
+    expect(
+      historyQueuePairs([
+        markerAfterB[0],
+        markerAfterB[1],
+        {
+          role: "assistant",
+          content: [],
+          stopReason: "error",
+          errorMessage: "boom",
+          __openclaw: { id: "e-a", seq: 3, runId: "gateway-a" },
+        },
+      ]),
+    ).toEqual([]);
+    // A queued turn's reply under its own id still pairs with its send.
+    expect(
+      historyQueuePairs([
+        markerAfterB[1],
+        {
+          role: "assistant",
+          content: [{ type: "text", text: "Done." }],
+          stopReason: "stop",
+          __openclaw: { id: "r-b", seq: 3, runId: "gateway-b" },
+        },
+      ]),
+    ).toEqual([["gateway-b", "b"]]);
+  });
+
+  it("the merge keeps history's word that a live failure never ran; a later reply row overrides it", () => {
+    const ctx = { sessionKey: KEY, now: T0 + 1_000, raw: new RawTable() };
+    // Live: the run failed with the gateway's words, nothing seen of a start.
+    const live = [
+      {
+        ...newRun("run-a", { state: "running", origin: "local", bound: true }, T0),
+        state: "failed" as const,
+        outcomeKnown: true,
+        error: { message: "boom", kind: null },
+      },
+    ];
+    const history = runsFromHistory(
+      [
+        userRow("run-a"),
+        {
+          role: "custom",
+          customType: "run-failed-before-reply",
+          content: "Your request couldn't be completed.",
+          display: true,
+          timestamp: T0 + 400,
+          __openclaw: { id: "c-a", seq: 2, runId: "run-a" },
+        },
+      ],
+      null,
+      ctx,
+    );
+    const [merged] = mergeHistoryRuns(live, history, ctx).runs;
+    expect(merged!.error).toMatchObject({ message: "boom", beforeReply: true });
+    expect(neverRan(merged!)).toBe(true);
+    // A later read with a reply row of the run: it ran.
+    expect(neverRan({ ...merged!, ranInHistory: true })).toBe(false);
+  });
+
+  it("(a) a followed task: A's failure row written after B started, B answered: no mark", () => {
+    const rows = [
+      userRow("run-a"),
+      {
+        ...userRow("run-b", "and this"),
+        __openclaw: { id: "u-run-b", seq: 2, idempotencyKey: "run-b:user" },
+        idempotencyKey: "run-b:user",
+      },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Done." }],
+        stopReason: "stop",
+        timestamp: T0 + 300,
+        __openclaw: { id: "a-b", seq: 3, runId: "run-b" },
+      },
+      // A's failure row, written after B started.
+      {
+        role: "custom",
+        customType: "run-failed-before-reply",
+        content: "Your request couldn't be completed.",
+        display: true,
+        timestamp: T0 + 900,
+        __openclaw: { id: "c-a", seq: 4, runId: "run-a" },
+      },
+    ];
+    const runs = runsFromHistory(rows, null, {
+      sessionKey: KEY,
+      now: T0 + 1_000,
+      raw: new RawTable(),
+    });
+    const items = mapHistory(rows);
+    expect(runs.find((run) => run.id === "run-a")?.state).toBe("failed");
+    expect(fromActivity({ runs, items }).failedAt).toBeNull();
+    // Without the order of the messages (no items), the failure row's later time would decide.
+    expect(fromActivity({ runs }).failedAt).not.toBeNull();
   });
 });
 
@@ -745,6 +935,7 @@ describe("only a run that started sends these, so each says it ran (#686)", () =
       suspendedCards: [],
       closedCards: [],
       omittedSteps: 0,
+      ending: null,
     };
     // Lifecycle `model` and `run_status` set these: the gateway sends them for a message it fails.
     expect(neverRan({ ...bare, model: "nope/dev-1", phase: "queued" } as Shown)).toBe(true);
@@ -758,6 +949,8 @@ describe("only a run that started sends these, so each says it ran (#686)", () =
       { closedCards: [{ ...card, reason: "resolved" as const }] },
       // Steps it had, dropped at their bound.
       { omittedSteps: 2 },
+      // The lifecycle error itself says the provider started.
+      { ending: { stopReason: null, timeoutPhase: null, providerStarted: true, status: "error" } },
     ];
     for (const evidence of evidences) expect(neverRan({ ...bare, ...evidence })).toBe(false);
   });
