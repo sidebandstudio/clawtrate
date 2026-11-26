@@ -114,7 +114,7 @@ export type ConnectionState = {
   canAdmin: boolean;
   /**
    * True while this device's pairing with the gateway is a full-control pairing, the six asked
-   * for once at its first pairing (`ClientOptions.fullAccess`). What it holds is `scopes`: a
+   * for once at its first pairing (docs/decisions.md, 2026-11-25). What it holds is `scopes`: a
    * narrower grant is kept, said, and never asked again by itself.
    */
   fullPairing: boolean;
