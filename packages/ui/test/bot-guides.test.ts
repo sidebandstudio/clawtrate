@@ -1,13 +1,15 @@
-// "How bots work in Clawtrate" (`BotGuides.tsx`): a change's answer is shown only on the
+// "Bots know how Clawtrate works" (`BotGuides.tsx`): a change's answer is shown only on the
 // gateway it was read from. When the connection moved while the change ran, the pane reads the
-// gateway now on screen again instead of keeping an answer it would never show.
-import type { BotGuidesAnswer } from "@clawtrate/core";
+// gateway now on screen again instead of keeping an answer it would never show. Each bot's row:
+// its words and its one action, and no row for a bot simply as Clawtrate keeps it.
+import type { BotGuidesAnswer, GuideFolder } from "@clawtrate/core";
 import { describe, expect, it } from "vitest";
-import { afterChange, forConnection, newBotsControl } from "../src/BotGuides.tsx";
+import { afterChange, forConnection, guideRow, removalConfirmed } from "../src/BotGuides.tsx";
 
 const read = (gatewayId: string | null, target: number): BotGuidesAnswer => ({
   folders: [],
   record: null,
+  unreadable: false,
   voicePlugin: false,
   errors: [],
   stamp: { gatewayId, target },
@@ -32,30 +34,94 @@ describe("a guides change's answer", () => {
   });
 });
 
-describe("New bots too", () => {
-  const base = { savesAtOnce: true, addable: false, turnedOffHere: false };
-  it("is the whole control with admin access", () => {
-    expect(newBotsControl({ ...base, admin: true, saved: false })).toEqual({
-      canChange: true,
-      note: null,
+describe("a bot's row", () => {
+  const folder = (over: Partial<GuideFolder>): GuideFolder => ({
+    bots: ["pip"],
+    state: "current",
+    replaceable: false,
+    moved: false,
+    long: false,
+    utf8: true,
+    missing: false,
+    refused: null,
+    changedText: null,
+    error: null,
+    ...over,
+  });
+  const row = (over: Partial<GuideFolder>, on = true, admin = true) =>
+    guideRow(folder(over), "Pip", on, admin);
+
+  it("is there only where the file isn't simply as Clawtrate keeps it", () => {
+    expect(row({ state: "current" })).toBeNull();
+    // Off: a bot without it, or one never known to have it, is simply off.
+    expect(row({ state: "none" }, false)).toBeNull();
+    expect(row({ state: "removed" }, false)).toBeNull();
+    expect(row({ state: "current" }, false)).toEqual({
+      words: "Still has Clawtrate's section.",
+      action: "remove",
     });
-    expect(
-      newBotsControl({ ...base, admin: true, savesAtOnce: false, addable: false, saved: true }),
-    ).toBeNull();
   });
 
-  it("can always be turned off without admin access, and not turned on", () => {
-    expect(newBotsControl({ ...base, admin: false, saved: true })).toEqual({
-      canChange: true,
-      note: "Turning it on again needs admin access.",
+  it("offers one action, and none that writes without admin access or to a file that isn't UTF-8", () => {
+    expect(row({ state: "removed" })).toEqual({
+      words: "Removed outside Clawtrate, so Clawtrate doesn't add it again by itself.",
+      action: "add",
     });
-    // Turned off from this view: it stays, unchangeable, saying why.
-    expect(newBotsControl({ ...base, admin: false, saved: false, turnedOffHere: true })).toEqual({
-      canChange: false,
-      note: "Turning it on needs admin access.",
+    expect(row({ state: "none", long: true })).toEqual({
+      words:
+        "Its instructions are long: with this section, the gateway may leave part of them out of Pip's prompt, so Clawtrate doesn't add it by itself.",
+      action: "add",
     });
-    // Off, and not turned off here: nothing to take back, so nothing is shown.
-    expect(newBotsControl({ ...base, admin: false, saved: false })).toBeNull();
-    expect(newBotsControl({ ...base, admin: false, savesAtOnce: false, saved: true })).toBeNull();
+    expect(row({ state: "older", long: true })?.action).toBe("update");
+    expect(row({ state: "changed", replaceable: true })?.action).toBe("replace");
+    expect(row({ state: "changed", moved: true })?.action).toBe("show");
+    expect(row({ state: "changed" })?.action).toBe("show");
+    // Off wins: a changed section is shown, never replaced.
+    expect(row({ state: "changed", replaceable: true }, false)?.action).toBe("show");
+    for (const state of ["removed", "none", "older"] as const)
+      expect(row({ state }, true, false)?.action ?? null, state).toBeNull();
+    expect(row({ state: "changed", replaceable: true }, true, false)?.action).toBe("show");
+    for (const state of ["none", "older"] as const)
+      expect(row({ state, utf8: false })).toEqual({
+        words:
+          "Pip's AGENTS.md isn't plain UTF-8 text, so Clawtrate can't change it. Save it as UTF-8 and Clawtrate can add, update or remove its section again.",
+        action: null,
+      });
+    expect(row({ state: "current", utf8: false }, false)?.action).toBeNull();
+    // A file that doesn't exist yet: the gateway makes it first; Add is the person's own choice.
+    expect(row({ state: "none", missing: true })).toEqual({
+      words:
+        "Pip's AGENTS.md doesn't exist yet. The gateway makes it on Pip's next run, and Clawtrate adds the section after that.",
+      action: "add",
+    });
+    // A write the gateway refused: said, with its reason, and not tried again by itself.
+    expect(row({ state: "none", refused: "Workspace document exceeds its write bound" })).toEqual({
+      words:
+        "The gateway refused Clawtrate's change to Pip's AGENTS.md, so Clawtrate doesn't try again by itself. The gateway said: Workspace document exceeds its write bound",
+      action: "add",
+    });
+    expect(row({ state: "none", missing: true }, false)).toBeNull();
+    expect(row({ state: null, error: "missing scope: operator.read" })).toEqual({
+      words: "Couldn't read its instructions file. missing scope: operator.read",
+      action: null,
+    });
+  });
+});
+
+describe("a row's Remove", () => {
+  const after = (folders: Partial<GuideFolder>[], errors: string[] = []): BotGuidesAnswer => ({
+    ...read("gw-a", 1),
+    folders: folders.map((f) => ({ bots: ["pip"], state: "none", ...f }) as GuideFolder),
+    errors,
+  });
+
+  it("is announced only when the file read back holds no section, or the bot is gone", () => {
+    expect(removalConfirmed(after([{ state: "none" }]), "pip")).toBe(true);
+    expect(removalConfirmed(after([{ state: "removed" }]), "pip")).toBe(true);
+    expect(removalConfirmed(after([]), "pip")).toBe(true);
+    // A section there in any shape, a file that couldn't be read, or an error: not announced.
+    for (const state of ["current", "older", "changed", null] as const)
+      expect(removalConfirmed(after([{ state }]), "pip"), String(state)).toBe(false);
+    expect(removalConfirmed(after([{ state: "none" }], ["pip: failed"]), "pip")).toBe(false);
   });
 });

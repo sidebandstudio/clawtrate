@@ -50,7 +50,6 @@ import { setUsageOpener } from "./usage/navigation.ts";
 import { setBotSettingsOpener } from "./bots/settings-request.ts";
 import { NewBot } from "./bots/NewBot.tsx";
 import { FullControlOffer } from "./FullControl.tsx";
-import { BotGuidesOffer } from "./BotGuides.tsx";
 import { DeleteBot } from "./bots/DeleteBot.tsx";
 import "./bots/bots.css";
 import { RoutinesView, ROUTINES_HOME, type RoutinesNav } from "./routines/RoutinesView.tsx";
@@ -906,11 +905,6 @@ export function Shell({
           bubbles={bubbles}
           onBubbles={onBubbles}
           top={railTop}
-          notice={
-            interactive && !info.readOnly ? (
-              <BotGuidesOffer onReview={() => onOpenSettings("conversation")} />
-            ) : null
-          }
           onOpenSettings={onOpenSettings}
           updating={updating}
           settingsKeys={mac ? "⌘," : "Ctrl+,"}
