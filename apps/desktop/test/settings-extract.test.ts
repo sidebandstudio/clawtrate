@@ -100,6 +100,50 @@ describe("the lexer", () => {
   });
 });
 
+describe("TLS, which local connect doesn't dial", () => {
+  // OpenClaw serves TLS exactly when `gateway.tls.enabled` is `true` in both versions
+  // (`loadGatewayTlsServerRuntime`); local connect dials `ws://` only, so only a file that
+  // certainly leaves it off is taken, and any other is TLS before any offer.
+  const withTls = (tls: string) =>
+    withGateway(
+      `{ mode: "local", port: 19555, tls: ${tls}, auth: { mode: "token", token: "${TOKEN}" } }`,
+    );
+  const found = { kind: "found", token: TOKEN, port: 19555 };
+
+  it.each([
+    ["on", `{ enabled: true }`],
+    [
+      "on, with its own certificate",
+      `{ enabled: true, certPath: "~/cert.pem", keyPath: "~/key.pem" }`,
+    ],
+    ["on, generating its certificate", `{ enabled: true, autoGenerate: true }`],
+    ["a variable OpenClaw fills in", `{ enabled: "\${OPENCLAW_TLS}" }`],
+    ["a string", `{ enabled: "true" }`],
+    ["a number", `{ enabled: 1 }`],
+    ["null", `{ enabled: null }`],
+    ["an object", `{ enabled: {} }`],
+    ["a bare true", `true`],
+    ["a bare string", `"on"`],
+    ["a bare null", `null`],
+    ["a list", `[]`],
+  ])("refuses TLS %s as TLS", (_, tls) => {
+    expect(extract(withTls(tls))).toEqual(refused("address", "tls"));
+  });
+
+  it.each([
+    ["off", `{ enabled: false }`],
+    ["off, with a certificate named", `{ enabled: false, certPath: "~/cert.pem" }`],
+    ["with no switch", `{}`],
+    ["with no switch, and a certificate named", `{ certPath: "~/cert.pem", autoGenerate: true }`],
+  ])("takes a file with TLS %s", (_, tls) => {
+    expect(extract(withTls(tls))).toEqual(found);
+  });
+
+  it("takes a file that names no TLS", () => {
+    expect(extract(tokenAuth(`{ mode: "token", token: "${TOKEN}" }`))).toEqual(found);
+  });
+});
+
 describe("what is taken from the settings", () => {
   it("takes a local gateway's literal token and port", () => {
     expect(extract(tokenAuth(`{ mode: "token", token: "${TOKEN}" }`))).toEqual({

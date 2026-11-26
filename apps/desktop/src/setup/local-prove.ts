@@ -5,6 +5,9 @@
 // what it defends against, and what it doesn't, is docs/decisions.md, "Local
 // connect's proof".
 //
+// First, the profile folder at its path is the one the settings were read from, by device and
+// inode (`FolderIdentity`): a folder put in its place since is refused ("replaced") before any
+// process is looked at.
 // (e) Every process holding the server end of exactly this connection is a
 //     process of this account, and at least one is found.
 // (f) One of them, the same process from the scan to the end of the check,
@@ -26,14 +29,19 @@
 import type { ProofRefusalKind } from "@clawtrate/core";
 import type { FileHandle } from "node:fs/promises";
 import { join } from "node:path";
-import { PROVED_OPENCLAW } from "./openclaw-pins.ts";
+import { OPENCLAW_PINS } from "./openclaw-pins.ts";
 import {
   guardHome,
   holdHome,
   READ_DEADLINE_MS,
   runHelper,
+  type FolderIdentity,
   type Opened,
 } from "./settings-reader.ts";
+
+export type { FolderIdentity };
+/** A folder identity as the reader writes it: device and inode, in plain decimal. */
+export const FOLDER_IDENTITY = /^(0|[1-9]\d{0,19}):(0|[1-9]\d{0,19})$/;
 
 const LOCK_LIMIT = 16 * 1024;
 const PACKAGE_LIMIT = 512 * 1024;
@@ -57,6 +65,7 @@ const FOUND_REFUSALS = [
   "module",
   "lock",
   "state",
+  "replaced",
 ] as const;
 /** And why the host refused what it was given. */
 export const PROVE_REFUSALS = [
@@ -77,6 +86,7 @@ export function refusalKind(why: ProveRefusal): ProofRefusalKind {
   if (["node", "module", "lock", "state", "named"].includes(why)) return "not-gateway";
   if (why === "pin" || why === "package") return "not-published";
   if (["denied", "failed", "helper", "path", "platform"].includes(why)) return "unchecked";
+  if (why === "replaced") return "replaced";
   return "folder";
 }
 export type Proof = { proved: true } | Refused;
@@ -86,6 +96,8 @@ export type ProveOptions = {
   home: string;
   /** The profile's folder under it, `.openclaw` or `.openclaw-<name>`. */
   folder: string;
+  /** That folder's identity as the settings were read from it: another folder there is refused. */
+  identity: FolderIdentity;
   /** The gateway's port, and this end's port of the connection to prove. */
   port: number;
   localPort: number;
@@ -128,6 +140,8 @@ export async function proveLocalGateway(options: ProveOptions): Promise<Proof> {
   if (platform !== "darwin") return no("platform");
   if (!usablePort(port) || !usablePort(localPort) || port === localPort) return no("path");
   if (!/^\.openclaw(-[a-z0-9][a-z0-9-]{0,63})?$/.test(folder)) return no("path");
+  const identity = FOLDER_IDENTITY.exec(options.identity);
+  if (!identity) return no("path");
   let checked;
   try {
     checked = guardHome(home, options.sandboxed);
@@ -140,7 +154,10 @@ export async function proveLocalGateway(options: ProveOptions): Promise<Proof> {
   try {
     // A sandboxed run's home must be private, as the reader's is.
     const command = checked ? "prove-private" : "prove";
-    const facts = await viaHelper(options.helper, held.handle, command, options);
+    const facts = await viaHelper(options.helper, held.handle, command, options, [
+      identity[1]!,
+      identity[2]!,
+    ]);
     return "why" in facts ? facts : judge(facts, join(home, folder), port);
   } finally {
     await held.handle.close();
@@ -152,7 +169,7 @@ function judge(facts: Facts, stateDir: string, port: number): Proof {
   if (facts.module) {
     const pkg = parsed(facts.pkg);
     const version = pkg?.name === "openclaw" && typeof pkg.version === "string" ? pkg.version : "";
-    const pins = Object.hasOwn(PROVED_OPENCLAW, version) ? PROVED_OPENCLAW[version]! : null;
+    const pins = Object.hasOwn(OPENCLAW_PINS, version) ? OPENCLAW_PINS[version]! : null;
     if (pins && pins[facts.module.suffix] !== facts.module.sha256) return no("pin");
   }
   const lock = parsed(facts.lock);
@@ -189,9 +206,16 @@ async function viaHelper(
   home: FileHandle,
   command: "prove" | "prove-private",
   options: ProveOptions,
+  identity: [dev: string, ino: string],
 ): Promise<Facts | Refused> {
   const limit = HEADER_LIMIT + LOCK_LIMIT + PACKAGE_LIMIT;
-  const args = [command, options.folder, String(options.port), String(options.localPort)];
+  const args = [
+    command,
+    options.folder,
+    String(options.port),
+    String(options.localPort),
+    ...identity,
+  ];
   const deadlineMs = options.deadlineMs ?? READ_DEADLINE_MS;
   const output = await runHelper(helper, home, args, limit, deadlineMs);
   if (!output) return no("helper");

@@ -13,12 +13,13 @@ export type SettingsProfile = "default" | "clawtrate";
 
 /**
  * Every refusal, by the design's failure rows (§8): `unreadable` too complex
- * or malformed, `address` a remote profile or an unusable port, `credential`
- * no literal token, a password that could win, or an unsupported auth mode.
+ * or malformed, `address` a remote profile, an unusable port, or TLS on (or
+ * not certainly off), `credential` no literal token, a password that could
+ * win, or an unsupported auth mode.
  */
 export const REFUSALS = {
   unreadable: ["complex", "malformed", "duplicate", "prototype", "include", "shape"],
-  address: ["remote", "port"],
+  address: ["remote", "port", "tls"],
   credential: [
     "no-token",
     "auth-mode",
@@ -183,6 +184,16 @@ export function extractSettings(text: string, profile: SettingsProfile): Extract
 
   const mode = own(gateway, "mode");
   if (mode !== undefined && mode !== "local") return refuse("address", "remote");
+  // Local connect dials plain `ws://` only. OpenClaw 2026.10.6 and 2026.11.10 serve TLS exactly
+  // when the loaded settings' `gateway.tls.enabled` is `true` (`loadGatewayTlsServerRuntime`),
+  // and nothing else turns it on: no variable, no gateway flag. So TLS is certainly off only
+  // with no `tls`, or a `tls` whose `enabled` is absent or `false`; anything else (`true`, a
+  // string a variable would fill in, any other value or shape) is TLS here, before any offer.
+  if (Object.hasOwn(gateway, "tls")) {
+    const tls = gateway.tls;
+    const enabled = isPlain(tls) ? own(tls, "enabled") : true;
+    if (enabled !== undefined && enabled !== false) return refuse("address", "tls");
+  }
   // The default only when the port is absent: null or any other value is refused, and so is a
   // port the file's own environment could override.
   const port = Object.hasOwn(gateway, "port") ? gateway.port : DEFAULT_PORTS[profile];

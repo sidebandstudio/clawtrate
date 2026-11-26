@@ -52,17 +52,21 @@ export type CantTellReason =
   | "read-only"
   /** Local connect: OpenClaw's settings file can't be used here (its form, its sign-in, its rights). */
   | "settings"
+  /** Local connect: OpenClaw's settings turn TLS on, or don't certainly leave it off; it dials `ws://` only. */
+  | "tls"
   | ProofRefusalKind;
 
 /**
  * Why local connect's proof refused a socket, by the check that failed: who holds the
  * connection (another account's process, or none yet); matching what is listening to this
  * account's OpenClaw profile (its lock, its state database, the process the lock names); this
- * version's native module, where the app has a pin for it; OpenClaw's profile folder; or the
+ * version's native module, where the app has a pin for it; OpenClaw's profile folder; that
+ * folder replaced since its settings were read (another device or inode at its path); or the
  * check itself. A refusal says which check failed and no more: it never claims what program
  * holds the port.
  */
-export type ProofRefusalKind = "holder" | "not-gateway" | "not-published" | "folder" | "unchecked";
+export type ProofRefusalKind =
+  "holder" | "not-gateway" | "not-published" | "folder" | "replaced" | "unchecked";
 
 /** Each refusal's words for the person, the same on a card and for a refused reconnect. */
 export const PROOF_REFUSAL_LINES: Record<ProofRefusalKind, (port: number | null) => string> = {
@@ -73,6 +77,8 @@ export const PROOF_REFUSAL_LINES: Record<ProofRefusalKind, (port: number | null)
     `Clawtrate couldn't check this version's module for what is listening at port ${port}.`,
   folder: (port) =>
     `OpenClaw's profile folder on this Mac can be changed by others, or isn't where Clawtrate expects it, so Clawtrate doesn't check what is listening at port ${port}.`,
+  replaced: (port) =>
+    `OpenClaw's profile folder on this Mac was replaced since Clawtrate read its settings, so Clawtrate doesn't check what is listening at port ${port}.`,
   unchecked: (port) => `Clawtrate couldn't check what is listening at port ${port} on this Mac.`,
 };
 

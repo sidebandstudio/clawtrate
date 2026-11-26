@@ -254,7 +254,7 @@ describe("a gateway set up through local connect", () => {
       await until(() => client.state.connection.error?.code === LOCAL_ROUTE_ONLY);
       expect(client.state.connection.error).toMatchObject({
         message: expect.stringMatching(
-          /through This computer.*No credential was sent\.$/,
+          /^This device is paired for This computer, .*No credential was sent\.$/,
         ) as unknown,
         hint: "Choose This computer to connect to it.",
       });
@@ -286,6 +286,44 @@ describe("a gateway set up through local connect", () => {
     await until(() => client.state.connection.error?.code === LOCAL_ROUTE_ONLY);
     await sleep(100);
     expect(gateway.connects).toHaveLength(0);
+    client.stop();
+  });
+
+  it("F-492: a token saved over another route goes on none of this route's sockets, and its first pairing replaces it", async () => {
+    // Saved through This computer when the profile folder was another one; found again since,
+    // with the folder put in its place, and connected on its own route.
+    const earlier = `${ROUTE}@1:1`;
+    const now = `${ROUTE}@1:2`;
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL, token: null, route: earlier }),
+      [tokenKey(URL)]: JSON.stringify({
+        ...JSON.parse(SAVED),
+        token: "earlier-device-token",
+        route: earlier,
+      }),
+    });
+    const gateway = readGateway();
+    const { host: app, plain } = host(gateway, storage);
+    const sockets = route(gateway, () => true);
+    const client = new ClawtrateClient(app, { ...FAST, localConnect: () => sockets.sockets });
+    await client.start({ resume: false });
+    await client.connect(
+      { url: URL, token: "settings-token" },
+      {
+        createSocket: sockets.sockets.createSocket,
+        prove: sockets.sockets.verify,
+        route: now,
+        consent: () => true,
+      },
+    );
+    await until(() => client.state.connection.status === "connected");
+    expect(JSON.stringify(gateway.connects)).not.toContain("earlier-device-token");
+    expect(JSON.stringify(gateway.connects[0])).toContain("settings-token");
+    // The pairing on this route replaces the other route's, and the gateway is saved with it.
+    await until(() => JSON.parse(storage.data.get(tokenKey(URL))!).route === now);
+    expect(JSON.parse(storage.data.get(tokenKey(URL))!).token).toBe("device-token");
+    await until(() => JSON.parse(storage.data.get("connection")!).route === now);
+    expect(plain).toHaveLength(0);
     client.stop();
   });
 
