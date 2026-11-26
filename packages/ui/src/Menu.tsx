@@ -65,7 +65,10 @@ export function Menu({
   style?: CSSProperties;
   /** Clicks on the trigger are the trigger's own; they do not count as outside. */
   trigger?: HTMLElement | null;
-  /** When set or changed, focus moves to the item at this index: after items are added in place. */
+  /**
+   * When set, focus moves to the item at this index: after items are added in place. Only as it
+   * is set, not as it changes after: rows that change above that item later never move focus.
+   */
   focusAt?: number;
   /** Escape goes here first; true when it was taken, and the menu stays open. */
   onEscape?: () => boolean;
@@ -96,8 +99,11 @@ export function Menu({
 
   // Both focus moves run as the entries change, in the same task, so a key pressed straight after
   // (Escape) finds focus in the menu.
+  const focusedAt = useRef<number | undefined>(undefined);
   useLayoutEffect(() => {
-    if (focusAt === undefined || !mayMoveFocus()) return;
+    const was = focusedAt.current;
+    focusedAt.current = focusAt;
+    if (focusAt === undefined || was !== undefined || !mayMoveFocus()) return;
     ref.current?.querySelectorAll<HTMLElement>(".menu-item")[focusAt]?.focus();
   }, [focusAt]);
 

@@ -243,6 +243,11 @@ export type ModelRefresh =
        * then and lists now. Nothing is named new then, since the cut hid some.
        */
       counts: { before: number; now: number } | null;
+      /**
+       * The menu showed the provider whole before, and this refresh left some of its models out at
+       * the bound: how many the menu shows of the ones the gateway lists now.
+       */
+      cut: { shown: number; now: number } | null;
       /** The gateway answered while still finding the provider's models (`pendingProviders`). */
       partial: boolean;
       /** The gateway's refresh of its catalogue failed (`refreshFailed`): try again. */
@@ -885,6 +890,10 @@ export function readModelRefresh(
         removed: named(removed),
         removedCount: removed.length,
         counts: cutBefore === null ? null : { before: cutBefore, now: rows.length },
+        cut:
+          cutBefore === null && shown.length < rows.length
+            ? { shown: shown.length, now: rows.length }
+            : null,
         outcome,
         configured,
         hostedList,

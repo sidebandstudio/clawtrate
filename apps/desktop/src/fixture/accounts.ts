@@ -604,6 +604,7 @@ function refreshCatalog(
     configured: false,
     hostedList: true,
     counts: null,
+    cut: null,
     partial: false,
     failed: false,
   };

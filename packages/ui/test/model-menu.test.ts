@@ -101,6 +101,7 @@ describe("F-588: Refresh in the Model menu", () => {
     configured: false,
     hostedList: true,
     counts: null,
+    cut: null,
     partial: false,
     failed: false,
     ...change,
@@ -171,6 +172,32 @@ describe("F-588: Refresh in the Model menu", () => {
         null,
       ),
     ).toBe("OpenRouter lists 140 models, as before. The gateway asked OpenRouter again.");
+  });
+
+  it("F-588: a whole list that grew past the menu's bound says how many the gateway lists and the menu shows, never that it is the same", () => {
+    const grew = done({ outcome: "ready", cut: { shown: 127, now: 128 } });
+    expect(refreshWords(grew, "Acme", null)).toBe("Acme lists 128 models; the menu shows 127.");
+    expect(refreshLines(refreshSentences(grew, "Acme", null), null)).toEqual({
+      line: "Acme lists 128 models; the menu shows 127.",
+      more: [],
+      label: "More",
+    });
+    expect(
+      refreshWords(
+        done({ added: ["m-127"], addedCount: 1, cut: { shown: 128, now: 140 } }),
+        "Acme",
+        null,
+      ),
+    ).toBe("New: m-127. Acme lists 140 models; the menu shows 128.");
+  });
+
+  it("F-588: a provider asked again whose models are all the config's says so first", () => {
+    const said = refreshSentences(done({ outcome: "ready", configured: true }), "Acme", null);
+    expect(refreshLines(said, null)).toEqual({
+      line: "Nothing new. Acme's models are the ones the gateway's config lists.",
+      more: ["The gateway asked Acme again, and its list is the same."],
+      label: "Why",
+    });
   });
 
   it("F-588: without the gateway's config nothing is said of its online model list", () => {
@@ -376,6 +403,7 @@ describe("F-588: Refresh in the Model menu", () => {
       configured: false,
       hostedList: true,
       counts: null,
+      cut: null,
       partial: false,
       failed: false,
     };

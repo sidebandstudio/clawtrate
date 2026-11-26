@@ -161,10 +161,12 @@ export function modelMenu(
   provider: string,
   model: string | null,
   held: CatalogModel[] | null,
+  /** Models a Refresh found no longer listed: not offered from View more's earlier answer. */
+  gone: ReadonlySet<string> = new Set(),
 ) {
   const picker = modelsOf(accounts, provider);
   const pickerIds = new Set(picker.map((m) => m.id));
-  const more = held ? held.filter((m) => !pickerIds.has(m.id)) : [];
+  const more = held ? held.filter((m) => !pickerIds.has(m.id) && !gone.has(m.id)) : [];
   const row: CatalogModel | undefined =
     picker.find((m) => m.id === model) ?? more.find((m) => m.id === model);
   return {
@@ -182,6 +184,9 @@ const count = (n: number) => n.toLocaleString("en-US");
  * OpenClaw's own page on updating, for every kind of install, a container's included
  * (`docs/install/updating.md` in the OpenClaw package).
  */
+
+/** A menu item's name, as a screen reader says it: its label, else its text. */
+const itemName = (item: HTMLElement) => item.getAttribute("aria-label") ?? item.textContent ?? "";
 
 /** Names in a sentence: "a", "a and b", "a, b and c", and "and 3 more" past the names given. */
 export function namesLine(names: string[], count: number): string {
@@ -254,6 +259,11 @@ export function refreshSentences(
     found.push(
       `${who} lists ${count(result.counts.now)} models now (${count(result.counts.before)} before).`,
     );
+  // A whole list this refresh left some of past the bound: the menu doesn't show all of it.
+  if (result.cut)
+    found.push(
+      `${who} lists ${count(result.cut.now)} models; the menu shows ${count(result.cut.shown)}.`,
+    );
   if (result.removedCount > 0)
     found.push(`No longer listed: ${namesLine(result.removed, result.removedCount)}.`);
   const changed = found.length > 0;
@@ -273,14 +283,17 @@ export function refreshSentences(
     say("unavailable", `The gateway couldn't get an answer from ${who}.`);
   if (result.failed) say("failed", "The gateway's refresh failed: try Refresh again.");
   else if (result.partial) say("pending", `The gateway is still looking for ${who}'s models.`);
-  else if (!changed && result.outcome === "ready")
+  else if (!changed && result.outcome === "ready") {
+    // Asked again, and every model it lists is the config's: that is the more specific reason.
+    if (result.configured)
+      say("configured", `${who}'s models are the ones the gateway's config lists.`);
     say(
       "same",
       result.counts
         ? `The gateway asked ${who} again.`
         : `The gateway asked ${who} again, and its list is the same.`,
     );
-  else if (!changed && result.outcome === null) {
+  } else if (!changed && result.outcome === null) {
     if (result.configured)
       say("configured", `${who}'s models are the ones the gateway's config lists.`);
     else {
@@ -463,7 +476,14 @@ export function ModelPair({
   /** The screen's polite announcer: what a Refresh found is said there once. */
   announce: (text: string) => void;
 }) {
-  const menu = modelMenu(accounts, provider, model, list.models);
+  // The picker's models when Refresh was pressed: one a refresh no longer lists is gone, and
+  // View more's answer from before it doesn't offer it again.
+  const [pressedIds, setPressedIds] = useState<string[]>([]);
+  const pickerNow = new Set(modelsOf(accounts, provider).map((m) => m.id));
+  const gone = new Set(
+    list.refresh?.status === "done" ? pressedIds.filter((id) => !pickerNow.has(id)) : [],
+  );
+  const menu = modelMenu(accounts, provider, model, list.models, gone);
   const who = providerName(provider);
   // An update under way or just ended takes the notice's place, as a quiet line.
   const updateRun = useUpdateRun();
@@ -499,19 +519,27 @@ export function ModelPair({
   const pairRef = useRef<HTMLDivElement>(null);
   const fieldRef = useRef<HTMLDivElement>(null);
   const saidFor = useRef<HeldRefresh | null>(null);
+  // The menu item a person last moved focus to, by its name: a focus event marks each move they
+  // make, and none comes when rows change under focus.
+  const focusedItem = useRef<string | null>(null);
   useEffect(() => {
     // Only a new answer is said: not the same one again when the words around it change.
     if (said === null || saidFor.current === found) return;
     saidFor.current = found;
     announce(said);
-    // Rows the answer added above it would otherwise take its place under focus; the line under
-    // it comes into view on a short screen.
-    const row = pairRef.current?.querySelector<HTMLElement>(
-      '[role="menu"] [role="menuitem"][aria-label="Refresh"]',
-    );
-    if (!row || !pairRef.current?.contains(document.activeElement)) return;
-    row.focus();
-    row.closest("li")?.nextElementSibling?.scrollIntoView?.({ block: "nearest" });
+    // Rows the answer added or removed above the item a person was on would otherwise put another
+    // under focus: focus goes back to that item, Refresh or one they moved to while it looked,
+    // and the line under Refresh comes into view on a short screen.
+    const items = [
+      ...(pairRef.current?.querySelectorAll<HTMLElement>('[role="menu"] .menu-item') ?? []),
+    ];
+    const item = items.find((each) => itemName(each) === focusedItem.current);
+    const active = document.activeElement;
+    const lost = !active || active === document.body;
+    if (!item || (!lost && !pairRef.current?.contains(active))) return;
+    item.focus();
+    if (focusedItem.current === "Refresh")
+      item.closest("li")?.nextElementSibling?.scrollIntoView?.({ block: "nearest" });
   }, [found, said, announce]);
   // On a phone the field and its buttons can open below the fold.
   useEffect(() => {
@@ -565,7 +593,11 @@ export function ModelPair({
             : {}),
         }
       : {}),
-    onSelect: () => list.lookAgain(),
+    onSelect: () => {
+      if (looking) return;
+      setPressedIds(menu.picker.map((m) => m.id));
+      list.lookAgain();
+    },
   });
   let section: SelectSection | undefined;
   if (held === null) rows.push({ label: "View more", expands: true, onSelect: () => list.ask() });
@@ -614,7 +646,15 @@ export function ModelPair({
   const levels = menu.row?.levels ?? [];
   return (
     <>
-      <div className="b-pair" ref={pairRef}>
+      <div
+        className="b-pair"
+        ref={pairRef}
+        onFocus={(event) => {
+          const item =
+            event.target instanceof HTMLElement ? event.target.closest(".menu-item") : null;
+          if (item instanceof HTMLElement) focusedItem.current = itemName(item);
+        }}
+      >
         <Select
           label="Model"
           value={model ?? placeholder ?? "Choose"}

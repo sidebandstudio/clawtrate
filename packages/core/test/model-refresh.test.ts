@@ -320,6 +320,25 @@ describe("F-588: Refresh in the Model menu", () => {
     client.stop();
   });
 
+  it("F-588: a whole list that grows past the menu's bound on this refresh says so, and is never called the same", async () => {
+    const fake = new AccountsGateway();
+    const { client } = await accountsClient({ gateway: fake });
+    const rows = (n: number) => Array.from({ length: n }, (_, i) => row(`m-${i}`));
+    const ask = () => client.refreshModels("acme", stampOn("gateway-a", client));
+    // 127 of Acme's beside Globex's one: the menu holds them all.
+    fake.refreshed = { acme: rows(MAX_CATALOG_MODELS - 1) };
+    expect(await ask()).toMatchObject({ counts: null, cut: null });
+    // One more: the menu keeps 127, and the result says the gateway lists more than it shows.
+    fake.refreshed = { acme: rows(MAX_CATALOG_MODELS) };
+    expect(await ask()).toMatchObject({
+      addedCount: 0,
+      removedCount: 0,
+      counts: null,
+      cut: { shown: MAX_CATALOG_MODELS - 1, now: MAX_CATALOG_MODELS },
+    });
+    client.stop();
+  });
+
   it("F-588: an answer that comes back after a switch to another gateway is dropped, and the rows stay", async () => {
     const fake = new AccountsGateway();
     const { client, accounts } = await accountsClient({ gateway: fake });

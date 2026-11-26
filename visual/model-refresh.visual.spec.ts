@@ -291,6 +291,60 @@ test.describe("F-588: Refresh in the Model menu", () => {
     await expect(menu(page).getByText(/note below/)).toHaveCount(0);
     await expect(page.getByTestId("openclaw-update")).toHaveCount(0);
   });
+  test("F-588: a model a refresh no longer lists isn't offered under View more's earlier answer either", async ({
+    page,
+  }) => {
+    await openMenu(page, `${SETTINGS}&refresh=gone`);
+    await menu(page).getByRole("menuitem", { name: "View more", exact: true }).click();
+    await expect(
+      menu(page).getByRole("menuitemradio", { name: "gpt-5.4", exact: true }),
+    ).toBeVisible();
+    await press(page);
+    await expect(
+      menu(page).getByText("No longer listed: gpt-5.5-mini.", { exact: true }),
+    ).toBeVisible();
+    await expect(
+      menu(page).getByRole("menuitemradio", { name: "gpt-5.5-mini", exact: true }),
+    ).toHaveCount(0);
+    // View more's other models stay.
+    await expect(
+      menu(page).getByRole("menuitemradio", { name: "gpt-5.4", exact: true }),
+    ).toBeVisible();
+  });
+
+  test("F-588: focus a person moved while Refresh looked stays where they put it", async ({
+    page,
+  }) => {
+    await openMenu(page, `${SETTINGS}&refresh=slow`);
+    await press(page);
+    await expect(refreshRow(page)).toHaveAccessibleDescription("Looking…");
+    await page.keyboard.press("End");
+    const last = menu(page).getByRole("menuitem", { name: /^Use another model/ });
+    await expect(last).toBeFocused();
+    await releaseRefresh(page);
+    await expect(
+      menu(page).getByText("New: gpt-6.2-sol and gpt-6.2-astra.", { exact: true }),
+    ).toBeVisible();
+    await page.waitForTimeout(200);
+    await expect(last).toBeFocused();
+  });
+
+  test("F-588: with View more open, a refresh that adds rows above it keeps focus on Refresh", async ({
+    page,
+  }) => {
+    await openMenu(page, `${SETTINGS}&refresh=new`);
+    await menu(page).getByRole("menuitem", { name: "View more", exact: true }).click();
+    await expect(
+      menu(page).getByRole("menuitemradio", { name: "gpt-5.4", exact: true }),
+    ).toBeFocused();
+    await press(page);
+    await expect(
+      menu(page).getByText("New: gpt-6.2-sol and gpt-6.2-astra.", { exact: true }),
+    ).toBeVisible();
+    await page.waitForTimeout(200);
+    await expect(refreshRow(page)).toBeFocused();
+  });
+
   test("F-588: New bot's Model menu has the same Refresh", async ({ page }) => {
     await openFixture(page, `scene=main&${OTTO_DISK}&access=admin&refresh=new`, "light");
     await page.keyboard.press("ControlOrMeta+n");
