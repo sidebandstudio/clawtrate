@@ -82,7 +82,8 @@ export function verifyCard(bytes: Uint8Array): Card {
   const signed = reader.before();
   const signature = reader.fixed(64, "signature");
   reader.end();
-  if (!verifyEd25519(connectorKey.bytes, signed, signature)) fail("bad_signature", "the card's signature does not verify");
+  if (!verifyEd25519(connectorKey.bytes, signed, signature))
+    fail("bad_signature", "the card's signature does not verify");
   return { gatewayId, serial, connectorKey, tlsPin, addresses, name };
 }
 
@@ -93,6 +94,8 @@ export function cardHash(bytes: Uint8Array): Uint8Array {
 
 /** Checks that a verified card is this list's: its gateway and its connector. */
 export function checkCardForList(card: Card, state: ListState): void {
-  if (!equalBytes(card.gatewayId, state.context.gatewayId)) fail("wrong_gateway", "the card is another gateway's");
-  if (!card.connectorKey.equals(state.connectorKey)) fail("card_mismatch", "the card is not the list's connector's");
+  if (!equalBytes(card.gatewayId, state.context.gatewayId))
+    fail("wrong_gateway", "the card is another gateway's");
+  if (!card.connectorKey.equals(state.connectorKey))
+    fail("card_mismatch", "the card is not the list's connector's");
 }

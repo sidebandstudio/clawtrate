@@ -84,7 +84,13 @@ function open(bytes: Uint8Array, step: number): { reader: Reader; context: ListC
 }
 
 function commitment(context: ListContext, device: DeviceRecord, nonce: Uint8Array): Uint8Array {
-  return taggedHash(TAG.commitment, context.gatewayId, context.accountId, encodeRecord(device), nonce);
+  return taggedHash(
+    TAG.commitment,
+    context.gatewayId,
+    context.accountId,
+    encodeRecord(device),
+    nonce,
+  );
 }
 
 interface Commit {
@@ -143,7 +149,12 @@ function readReveal(bytes: Uint8Array): Reveal {
 }
 
 /** What the words cover: both sides' keys and random values, the list's latest entry and the card's hash. */
-function transcriptHash(commit: Commit, answer: Answer, device: DeviceRecord, nonce: Uint8Array): Uint8Array {
+function transcriptHash(
+  commit: Commit,
+  answer: Answer,
+  device: DeviceRecord,
+  nonce: Uint8Array,
+): Uint8Array {
   return taggedHash(
     TAG.transcriptHash,
     commit.context.gatewayId,
@@ -162,7 +173,11 @@ function transcriptHash(commit: Commit, answer: Answer, device: DeviceRecord, no
 export function wordsFor(transcript: Uint8Array): Words {
   const h = taggedHash(TAG.words, checkLength(transcript, 32, "a transcript hash"));
   const bits = h[0]! * 2 ** 25 + h[1]! * 2 ** 17 + h[2]! * 2 ** 9 + h[3]! * 2 + (h[4]! >> 7);
-  return [WORDS[Math.floor(bits / 2 ** 22)]!, WORDS[Math.floor(bits / 2 ** 11) % 2048]!, WORDS[bits % 2048]!];
+  return [
+    WORDS[Math.floor(bits / 2 ** 22)]!,
+    WORDS[Math.floor(bits / 2 ** 11) % 2048]!,
+    WORDS[bits % 2048]!,
+  ];
 }
 
 /**
@@ -173,7 +188,11 @@ export function wordsFor(transcript: Uint8Array): Words {
  * divides 65,536) and is drawn again when it repeats one already used; the place takes one byte
  * below 250, taken modulo 5.
  */
-function fiveSets(transcript: Uint8Array, right: Words, decoySeed: Uint8Array): { sets: Words[]; rightIndex: number } {
+function fiveSets(
+  transcript: Uint8Array,
+  right: Words,
+  decoySeed: Uint8Array,
+): { sets: Words[]; rightIndex: number } {
   const stream = hkdf(sha256, decoySeed, transcript, utf8(TAG.decoys), 1024);
   let at = 0;
   const next = (bytes: number): number => {
@@ -205,7 +224,11 @@ function fiveSets(transcript: Uint8Array, right: Words, decoySeed: Uint8Array): 
 }
 
 /** Step 1, on N: the commitment to its record (all its public keys, its name and platform) and a random value. */
-export function joinCommit(device: JoiningDevice, context: ListContext, nonce: Uint8Array): Uint8Array {
+export function joinCommit(
+  device: JoiningDevice,
+  context: ListContext,
+  nonce: Uint8Array,
+): Uint8Array {
   const checked = checkContext(context);
   checkJoiningDevice(device);
   const value = commitment(checked, device.device, checkLength(nonce, 32, "a nonce"));
@@ -213,8 +236,10 @@ export function joinCommit(device: JoiningDevice, context: ListContext, nonce: U
 }
 
 function checkJoiningDevice(device: JoiningDevice): void {
-  if (!device.listKey.publicKey.equals(device.device.listKey)) fail("bad_argument", "the record's list key is not N's");
-  if (!device.sealKey.publicKey.equals(device.device.sealKey)) fail("bad_argument", "the record's seal key is not N's");
+  if (!device.listKey.publicKey.equals(device.device.listKey))
+    fail("bad_argument", "the record's list key is not N's");
+  if (!device.sealKey.publicKey.equals(device.device.sealKey))
+    fail("bad_argument", "the record's seal key is not N's");
 }
 
 function checkMember(member: JoinMember): void {
@@ -241,7 +266,13 @@ export function joinAnswer(member: JoinMember, commit: Uint8Array, nonce: Uint8A
 }
 
 /** N's checks on its own commit and A's answer, shared by steps 3 and 5. */
-function joiningSide(device: JoiningDevice, context: ListContext, nonce: Uint8Array, commit: Uint8Array, answer: Uint8Array) {
+function joiningSide(
+  device: JoiningDevice,
+  context: ListContext,
+  nonce: Uint8Array,
+  commit: Uint8Array,
+  answer: Uint8Array,
+) {
   checkJoiningDevice(device);
   const checked = checkContext(context);
   checkLength(nonce, 32, "a nonce");
@@ -252,7 +283,8 @@ function joiningSide(device: JoiningDevice, context: ListContext, nonce: Uint8Ar
   }
   const found = readAnswer(answer);
   expectContext(found.context, checked);
-  if (!equalBytes(found.commitment, ownCommit.commitment)) fail("transcript_mismatch", "an answer to another join");
+  if (!equalBytes(found.commitment, ownCommit.commitment))
+    fail("transcript_mismatch", "an answer to another join");
   const transcript = transcriptHash(ownCommit, found, device.device, nonce);
   const record = encodeRecord(device.device);
   const signed = start(STEP.reveal, checked)
@@ -280,7 +312,13 @@ export function joinReveal(
 }
 
 /** A's checks on every message so far, shared by steps 4 and 5. */
-function memberSide(member: JoinMember, commit: Uint8Array, answer: Uint8Array, reveal: Uint8Array, decoySeed: Uint8Array) {
+function memberSide(
+  member: JoinMember,
+  commit: Uint8Array,
+  answer: Uint8Array,
+  reveal: Uint8Array,
+  decoySeed: Uint8Array,
+) {
   checkMember(member);
   checkLength(decoySeed, 32, "a decoy seed");
   const state = member.state;
@@ -288,24 +326,35 @@ function memberSide(member: JoinMember, commit: Uint8Array, answer: Uint8Array, 
   expectContext(foundCommit.context, state.context);
   const foundAnswer = readAnswer(answer);
   expectContext(foundAnswer.context, state.context);
-  if (!foundAnswer.memberKey.equals(member.key.publicKey)) fail("transcript_mismatch", "not this member's answer");
-  if (!equalBytes(foundAnswer.commitment, foundCommit.commitment)) fail("transcript_mismatch", "an answer to another join");
-  if (!equalBytes(foundAnswer.listHead, state.head)) fail("bad_chain", "the list has changed since the answer");
-  if (!equalBytes(foundAnswer.cardHash, cardHash(member.card))) fail("card_mismatch", "the card has changed since the answer");
+  if (!foundAnswer.memberKey.equals(member.key.publicKey))
+    fail("transcript_mismatch", "not this member's answer");
+  if (!equalBytes(foundAnswer.commitment, foundCommit.commitment))
+    fail("transcript_mismatch", "an answer to another join");
+  if (!equalBytes(foundAnswer.listHead, state.head))
+    fail("bad_chain", "the list has changed since the answer");
+  if (!equalBytes(foundAnswer.cardHash, cardHash(member.card)))
+    fail("card_mismatch", "the card has changed since the answer");
   const found = readReveal(reveal);
   expectContext(found.context, state.context);
   if (!equalBytes(commitment(state.context, found.device, found.nonce), foundCommit.commitment)) {
     fail("commitment_mismatch", "the reveal does not open the commitment");
   }
   const transcript = transcriptHash(foundCommit, foundAnswer, found.device, found.nonce);
-  if (!equalBytes(found.transcriptHash, transcript)) fail("transcript_mismatch", "a reveal for another transcript");
+  if (!equalBytes(found.transcriptHash, transcript))
+    fail("transcript_mismatch", "a reveal for another transcript");
   if (!verifyEd25519(found.device.listKey.bytes, found.signed, found.signature)) {
     fail("bad_signature", "the reveal's signature does not verify");
   }
   state.requireNew(found.device);
   if (state.devices().length >= MAX_MEMBERS) fail("list_full", "the list holds its most members");
   const right = wordsFor(transcript);
-  return { commit: foundCommit, device: found.device, transcript, right, ...fiveSets(transcript, right, decoySeed) };
+  return {
+    commit: foundCommit,
+    device: found.device,
+    transcript,
+    right,
+    ...fiveSets(transcript, right, decoySeed),
+  };
 }
 
 /**
@@ -363,10 +412,17 @@ export function joinConfirm(
   checkLength(sealSeed, 32, "a seal seed");
   let reason: RefusalReason | null;
   if (pick === "none-match" || pick === "not-started") reason = pick;
-  else if (typeof pick === "object" && pick !== null && Number.isInteger(pick.set) && pick.set >= 0 && pick.set < 5) {
+  else if (
+    typeof pick === "object" &&
+    pick !== null &&
+    Number.isInteger(pick.set) &&
+    pick.set >= 0 &&
+    pick.set < 5
+  ) {
     reason = pick.set === side.rightIndex ? null : "wrong-set";
   } else fail("bad_argument", "a pick is a set from 0 to 4 or a refusal");
-  if (reason !== null) return { outcome: "refused", refusal: refusal(member.key, member.state, side.commit, reason) };
+  if (reason !== null)
+    return { outcome: "refused", refusal: refusal(member.key, member.state, side.commit, reason) };
 
   const { entry, state } = signAdd(member.key, member.state, side.device, side.transcript);
   const payload = new Writer()
@@ -427,7 +483,8 @@ export function joinFinish(
   const signed = reader.before();
   const signature = reader.fixed(64, "signature");
   reader.end();
-  if (!equalBytes(transcript, side.transcript)) fail("transcript_mismatch", "a confirmation of another join");
+  if (!equalBytes(transcript, side.transcript))
+    fail("transcript_mismatch", "a confirmation of another join");
   if (!verifyEd25519(side.answer.memberKey.bytes, signed, signature)) {
     fail("bad_signature", "the confirmation is not the answering member's");
   }
@@ -456,13 +513,20 @@ export function joinFinish(
   const secretBytes = inner.fixed(32, "list secret");
   const cardBytes = inner.bytes(1, MAX_CARD_BYTES, "card");
   inner.end();
-  if (!equalBytes(cardHash(cardBytes), side.answer.cardHash)) fail("card_mismatch", "not the card the words covered");
+  if (!equalBytes(cardHash(cardBytes), side.answer.cardHash))
+    fail("card_mismatch", "not the card the words covered");
   const card = verifyCard(cardBytes);
-  if (!equalBytes(card.gatewayId, side.context.gatewayId)) fail("wrong_gateway", "the card is another gateway's");
+  if (!equalBytes(card.gatewayId, side.context.gatewayId))
+    fail("wrong_gateway", "the card is another gateway's");
   return { secret: ListSecret.fromBytes(secretBytes, epoch), card, cardBytes, entry: entryBytes };
 }
 
-function refusal(key: ListSecretKey, state: ListState, commit: Commit, reason: RefusalReason): Uint8Array {
+function refusal(
+  key: ListSecretKey,
+  state: ListState,
+  commit: Commit,
+  reason: RefusalReason,
+): Uint8Array {
   const writer = new Writer().label(LABEL.refusal);
   writeContext(writer, state.context);
   const signed = writer
@@ -478,7 +542,11 @@ function refusal(key: ListSecretKey, state: ListState, commit: Commit, reason: R
  * A member refuses a join without a pick: "I didn't start this" before the sets are shown, or
  * a second join while one is open. Only a current device member can refuse.
  */
-export function refuseJoin(member: { readonly key: ListSecretKey; readonly state: ListState }, commit: Uint8Array, reason: RefusalReason): Uint8Array {
+export function refuseJoin(
+  member: { readonly key: ListSecretKey; readonly state: ListState },
+  commit: Uint8Array,
+  reason: RefusalReason,
+): Uint8Array {
   if (!REASONS.includes(reason)) fail("bad_argument", "unknown refusal reason");
   const role = member.state.requireMember(member.key.publicKey).role;
   if (role === "connector") fail("not_permitted", "a device refuses a join, not the connector");
@@ -510,8 +578,10 @@ export function verifyRefusal(state: ListState, bytes: Uint8Array): Refusal {
   const signed = reader.before();
   const signature = reader.fixed(64, "signature");
   reader.end();
-  if (!verifyEd25519(signer.bytes, signed, signature)) fail("bad_signature", "the refusal's signature does not verify");
+  if (!verifyEd25519(signer.bytes, signed, signature))
+    fail("bad_signature", "the refusal's signature does not verify");
   expectContext(context, state.context);
-  if (state.requireMember(signer).role === "connector") fail("not_permitted", "a device refuses a join, not the connector");
+  if (state.requireMember(signer).role === "connector")
+    fail("not_permitted", "a device refuses a join, not the connector");
   return { listHead, commitment: value, reason, signer };
 }

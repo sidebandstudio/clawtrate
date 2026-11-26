@@ -20,13 +20,22 @@ function labeledExtract(suite: Uint8Array, salt: Uint8Array, label: string, ikm:
   return extract(sha256, concat(VERSION, suite, utf8(label), ikm), salt);
 }
 
-function labeledExpand(suite: Uint8Array, prk: Uint8Array, label: string, info: Uint8Array, length: number) {
+function labeledExpand(
+  suite: Uint8Array,
+  prk: Uint8Array,
+  label: string,
+  info: Uint8Array,
+  length: number,
+) {
   const prefix = Uint8Array.of(length >>> 8, length & 0xff);
   return expand(sha256, prk, concat(prefix, VERSION, suite, utf8(label), info), length);
 }
 
 /** RFC 9180 section 7.1.3, for X25519: the secret key is 32 bytes expanded from `ikm`. */
-export function deriveSealKeyPair(ikm: Uint8Array): { secretKey: Uint8Array; publicKey: Uint8Array } {
+export function deriveSealKeyPair(ikm: Uint8Array): {
+  secretKey: Uint8Array;
+  publicKey: Uint8Array;
+} {
   const prk = labeledExtract(KEM_SUITE, EMPTY, "dkp_prk", ikm);
   const secretKey = labeledExpand(KEM_SUITE, prk, "sk", EMPTY, 32);
   return { secretKey, publicKey: x25519.getPublicKey(secretKey) };

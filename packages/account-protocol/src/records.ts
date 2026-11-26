@@ -29,8 +29,10 @@ export function readContext(reader: Reader): ListContext {
 
 /** Refuses an object read from the wire that is for another gateway or account. */
 export function expectContext(found: ListContext, expected: ListContext): void {
-  if (!equalBytes(found.gatewayId, expected.gatewayId)) fail("wrong_gateway", "for another gateway");
-  if (!equalBytes(found.accountId, expected.accountId)) fail("wrong_account", "for another account");
+  if (!equalBytes(found.gatewayId, expected.gatewayId))
+    fail("wrong_gateway", "for another gateway");
+  if (!equalBytes(found.accountId, expected.accountId))
+    fail("wrong_account", "for another account");
 }
 
 export const PLATFORMS = ["macos", "windows", "linux", "ios"] as const;

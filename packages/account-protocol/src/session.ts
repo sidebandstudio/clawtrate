@@ -42,7 +42,10 @@ function bodyHash(body: Uint8Array): Uint8Array {
 }
 
 /** The device signs a request to the account service with its session key. */
-export function signSessionRequest(key: SessionSecretKey, fields: SessionRequestFields): Uint8Array {
+export function signSessionRequest(
+  key: SessionSecretKey,
+  fields: SessionRequestFields,
+): Uint8Array {
   checkFields(fields);
   const signed = new Writer()
     .label(LABEL.sessionRequest)
@@ -54,7 +57,10 @@ export function signSessionRequest(key: SessionSecretKey, fields: SessionRequest
     .text(fields.path, 1, MAX_PATH_BYTES, "path")
     .fixed(bodyHash(fields.body), 32, "body hash")
     .finish();
-  return new Writer().fixed(signed, signed.length, "request").fixed(signSession(key, signed), 64, "signature").finish();
+  return new Writer()
+    .fixed(signed, signed.length, "request")
+    .fixed(signSession(key, signed), 64, "signature")
+    .finish();
 }
 
 /**
@@ -79,8 +85,10 @@ export function verifySessionRequest(
   const signed = reader.before();
   const signature = reader.fixed(64, "signature");
   reader.end();
-  if (!AUDIENCE.test(audience) || !PATH.test(path)) fail("malformed", "the audience or path is not well formed");
-  if (!verifyEd25519(key.bytes, signed, signature)) fail("bad_signature", "the session request's signature does not verify");
+  if (!AUDIENCE.test(audience) || !PATH.test(path))
+    fail("malformed", "the audience or path is not well formed");
+  if (!verifyEd25519(key.bytes, signed, signature))
+    fail("bad_signature", "the session request's signature does not verify");
   if (
     audience !== expected.audience ||
     method !== expected.method ||
@@ -90,7 +98,9 @@ export function verifySessionRequest(
   ) {
     fail("bad_challenge", "the request answers another challenge, service or request");
   }
-  if (!Number.isSafeInteger(expected.nowMs) || expected.nowMs < 0) fail("bad_time", "the service's clock is not whole ms");
-  if (Math.abs(expected.nowMs - issuedAtMs) > SESSION_SKEW_MS) fail("bad_time", "the request's time is out of range");
+  if (!Number.isSafeInteger(expected.nowMs) || expected.nowMs < 0)
+    fail("bad_time", "the service's clock is not whole ms");
+  if (Math.abs(expected.nowMs - issuedAtMs) > SESSION_SKEW_MS)
+    fail("bad_time", "the request's time is out of range");
   return key;
 }

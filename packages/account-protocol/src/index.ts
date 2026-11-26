@@ -44,7 +44,14 @@ export {
   type RemovalOrigin,
   type Role,
 } from "./list.ts";
-export { cardHash, checkCardForList, signCard, verifyCard, type Card, type CardAddress } from "./card.ts";
+export {
+  cardHash,
+  checkCardForList,
+  signCard,
+  verifyCard,
+  type Card,
+  type CardAddress,
+} from "./card.ts";
 export {
   ListSecret,
   MAX_CARD_BYTES,

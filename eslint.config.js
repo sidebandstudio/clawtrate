@@ -62,6 +62,39 @@ export default tseslint.config(
     },
   },
   {
+    // The account protocol runs in Workers, Node, Electron and Hermes, and takes time and
+    // randomness only as arguments.
+    files: ["packages/account-protocol/src/**/*.ts"],
+    languageOptions: { globals: {} },
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [{ group: ["node:*"], message: "the account protocol runs outside Node too" }],
+        },
+      ],
+      "no-restricted-globals": [
+        "error",
+        "window",
+        "document",
+        "process",
+        "Buffer",
+        "require",
+        "crypto",
+        "performance",
+      ],
+      "no-restricted-properties": [
+        "error",
+        { object: "Math", property: "random", message: "randomness comes in as an argument" },
+        { object: "Date", property: "now", message: "time comes in as an argument" },
+      ],
+      "no-restricted-syntax": [
+        "error",
+        { selector: "NewExpression[callee.name='Date']", message: "time comes in as an argument" },
+      ],
+    },
+  },
+  {
     // Metro reads its config as CommonJS.
     files: ["apps/mobile/metro.config.js"],
     rules: { "@typescript-eslint/no-require-imports": "off" },

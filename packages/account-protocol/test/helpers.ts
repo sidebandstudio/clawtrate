@@ -60,8 +60,13 @@ export const OTHER_GATEWAY: ListContext = { gatewayId: fill(16, 0xa3), accountId
 export const OTHER_ACCOUNT: ListContext = { gatewayId: fill(16, 0xa1), accountId: fill(16, 0xb4) };
 
 /** A device's secret keys and record, all from one number. */
-export function makeDevice(n: number, name = `Device ${n}`, platform: Platform = "macos"): JoiningDevice {
-  const listKey = ListSecretKey.fromSeed(fill(32, n));
+export function makeDevice(
+  n: number,
+  name = `Device ${n}`,
+  platform: Platform = "macos",
+  listSeed = fill(32, n),
+): JoiningDevice {
+  const listKey = ListSecretKey.fromSeed(listSeed);
   const sealKey = SealSecretKey.fromSeed(fill(32, (n + 64) % 256));
   const device: DeviceRecord = {
     listKey: listKey.publicKey,
@@ -87,10 +92,16 @@ export interface World {
 }
 
 /** A linked gateway: the connector, the gateway machine's own device (device 1), the card and the first secret. */
-export function makeWorld(): World {
-  const connector = ListSecretKey.fromSeed(CONNECTOR_SEED);
-  const gatewayDevice = makeDevice(1, "Windows PC", "windows");
-  const fields = { context: CONTEXT, connectorKey: connector.publicKey, device: gatewayDevice.device };
+export function makeWorld(
+  seeds: { connector?: Uint8Array; gatewayDevice?: Uint8Array } = {},
+): World {
+  const connector = ListSecretKey.fromSeed(seeds.connector ?? CONNECTOR_SEED);
+  const gatewayDevice = makeDevice(1, "Windows PC", "windows", seeds.gatewayDevice);
+  const fields = {
+    context: CONTEXT,
+    connectorKey: connector.publicKey,
+    device: gatewayDevice.device,
+  };
   const { entry, state } = assembleGenesis(
     fields,
     signGenesis(connector, fields),
@@ -136,7 +147,11 @@ export const DECOY_SEED = fill(32, 0x33);
 export const SEAL_SEED = fill(32, 0x44);
 
 /** Steps 1 to 4 of a join with no one in the middle, and where the right set is. */
-export function runJoin(member: JoinMember, joining: JoiningDevice, nonces = { n: N_NONCE, a: A_NONCE, decoy: DECOY_SEED }): JoinRun {
+export function runJoin(
+  member: JoinMember,
+  joining: JoiningDevice,
+  nonces = { n: N_NONCE, a: A_NONCE, decoy: DECOY_SEED },
+): JoinRun {
   const commit = joinCommit(joining, member.state.context, nonces.n);
   const answer = joinAnswer(member, commit, nonces.a);
   const { reveal, words } = joinReveal(joining, member.state.context, nonces.n, commit, answer);
@@ -146,12 +161,32 @@ export function runJoin(member: JoinMember, joining: JoiningDevice, nonces = { n
 }
 
 /** A whole join with a right pick; returns the entry, A's new state and what N opened. */
-export function addDevice(member: JoinMember, joining: JoiningDevice, nonces = { n: N_NONCE, a: A_NONCE, decoy: DECOY_SEED }) {
+export function addDevice(
+  member: JoinMember,
+  joining: JoiningDevice,
+  nonces = { n: N_NONCE, a: A_NONCE, decoy: DECOY_SEED },
+) {
   const run = runJoin(member, joining, nonces);
   const pick: JoinPick = { set: run.right };
-  const outcome = joinConfirm(member, run.commit, run.answer, run.reveal, nonces.decoy, pick, SEAL_SEED);
+  const outcome = joinConfirm(
+    member,
+    run.commit,
+    run.answer,
+    run.reveal,
+    nonces.decoy,
+    pick,
+    SEAL_SEED,
+  );
   if (outcome.outcome !== "added") throw new Error("expected an added outcome");
-  const finished = joinFinish(joining, member.state.context, nonces.n, run.commit, run.answer, run.reveal, outcome.confirm);
+  const finished = joinFinish(
+    joining,
+    member.state.context,
+    nonces.n,
+    run.commit,
+    run.answer,
+    run.reveal,
+    outcome.confirm,
+  );
   return { run, ...outcome, finished };
 }
 

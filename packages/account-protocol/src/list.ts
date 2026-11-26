@@ -65,7 +65,10 @@ const ZERO_HASH = new Uint8Array(32);
 function encodeSigned(entry: Entry): Uint8Array {
   const writer = new Writer().label(LABEL.listEntry);
   writeContext(writer, entry.context);
-  writer.u32(entry.seq).fixed(entry.prev, 32, "previous hash").u8(TYPES.indexOf(entry.type) + 1);
+  writer
+    .u32(entry.seq)
+    .fixed(entry.prev, 32, "previous hash")
+    .u8(TYPES.indexOf(entry.type) + 1);
   switch (entry.type) {
     case "genesis":
       writer.fixed(entry.connectorKey.bytes, 32, "connector key");
@@ -73,7 +76,9 @@ function encodeSigned(entry: Entry): Uint8Array {
       break;
     case "add":
       writeRecord(writer, entry.device);
-      writer.fixed(entry.joinTranscript, 32, "join transcript").fixed(entry.signer.bytes, 32, "signer");
+      writer
+        .fixed(entry.joinTranscript, 32, "join transcript")
+        .fixed(entry.signer.bytes, 32, "signer");
       break;
     case "remove":
       writer.u8(ORIGINS.indexOf(entry.origin) + 1).fixed(entry.target.bytes, 32, "target");
@@ -215,7 +220,10 @@ export class ListState {
   }
 
   get context(): ListContext {
-    return { gatewayId: this.#data.context.gatewayId.slice(), accountId: this.#data.context.accountId.slice() };
+    return {
+      gatewayId: this.#data.context.gatewayId.slice(),
+      accountId: this.#data.context.accountId.slice(),
+    };
   }
 
   get connectorKey(): ListPublicKey {
@@ -265,7 +273,8 @@ export class ListState {
 
   /** Refuses a device record any of whose keys the list holds or has held. */
   requireNew(device: DeviceRecord): void {
-    if (device.listKey.equals(this.#data.connectorKey)) fail("duplicate_key", "a key already on the list");
+    if (device.listKey.equals(this.#data.connectorKey))
+      fail("duplicate_key", "a key already on the list");
     for (const key of seenKeys(device)) {
       if (this.#data.seen.has(key)) fail("duplicate_key", "a key already on the list");
     }
@@ -283,9 +292,17 @@ export class ListState {
       fail("bad_signature", "the linking device's signature does not verify");
     }
     expectContext(entry.context, expected);
-    if (entry.seq !== 0 || !equalBytes(entry.prev, ZERO_HASH)) fail("bad_chain", "the first entry is not first");
-    if (entry.connectorKey.equals(entry.device.listKey)) fail("duplicate_key", "one key in two roles");
-    const connector: Member = { key: entry.connectorKey, role: "connector", device: null, addedBy: null, since: 0 };
+    if (entry.seq !== 0 || !equalBytes(entry.prev, ZERO_HASH))
+      fail("bad_chain", "the first entry is not first");
+    if (entry.connectorKey.equals(entry.device.listKey))
+      fail("duplicate_key", "one key in two roles");
+    const connector: Member = {
+      key: entry.connectorKey,
+      role: "connector",
+      device: null,
+      addedBy: null,
+      since: 0,
+    };
     const device: Member = {
       key: entry.device.listKey,
       role: "gateway-device",
@@ -349,9 +366,11 @@ export class ListState {
       case "remove": {
         const target = this.member(entry.target);
         if (!target) fail("bad_target", "the target is not a current member");
-        if (target.role === "connector") fail("protected_member", "the connector is removed by unlinking");
+        if (target.role === "connector")
+          fail("protected_member", "the connector is removed by unlinking");
         if (entry.origin === "account") {
-          if (signer.role !== "connector") fail("not_permitted", "only the connector writes the account's removal");
+          if (signer.role !== "connector")
+            fail("not_permitted", "only the connector writes the account's removal");
           if (target.role === "gateway-device") {
             fail("protected_member", "the account page can't remove the gateway's own device");
           }
@@ -427,11 +446,19 @@ export function assembleGenesis(
   deviceSignature: Uint8Array,
 ): { entry: Uint8Array; state: ListState } {
   const signed = encodeSigned(genesisEntry(fields));
-  const entry = concat(signed, checkLength(connectorSignature, 64, "a signature"), checkLength(deviceSignature, 64, "a signature"));
+  const entry = concat(
+    signed,
+    checkLength(connectorSignature, 64, "a signature"),
+    checkLength(deviceSignature, 64, "a signature"),
+  );
   return { entry, state: ListState.fromGenesis(fields.context, entry) };
 }
 
-function signEntry(signer: ListSecretKey, state: ListState, fields: Entry): { entry: Uint8Array; state: ListState } {
+function signEntry(
+  signer: ListSecretKey,
+  state: ListState,
+  fields: Entry,
+): { entry: Uint8Array; state: ListState } {
   const signed = encodeSigned(fields);
   const entry = concat(signed, signList(signer, signed));
   return { entry, state: state.append(entry) };
@@ -495,7 +522,10 @@ export function encodeRemovalNotice(context: ListContext, target: ListPublicKey)
   return writer.fixed(target.bytes, 32, "target").finish();
 }
 
-export function decodeRemovalNotice(bytes: Uint8Array): { context: ListContext; target: ListPublicKey } {
+export function decodeRemovalNotice(bytes: Uint8Array): {
+  context: ListContext;
+  target: ListPublicKey;
+} {
   const reader = new Reader(bytes);
   reader.label(LABEL.removalNotice);
   const context = readContext(reader);

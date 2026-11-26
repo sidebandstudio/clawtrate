@@ -14,7 +14,8 @@ import { deriveSealKeyPair } from "./hpke.ts";
  * that verify under it.
  */
 function checkEd25519(bytes: Uint8Array, what: string): Uint8Array {
-  if (!(bytes instanceof Uint8Array) || bytes.length !== 32) fail("bad_key", `${what}: not 32 bytes`);
+  if (!(bytes instanceof Uint8Array) || bytes.length !== 32)
+    fail("bad_key", `${what}: not 32 bytes`);
   let point;
   try {
     point = ed25519.Point.fromBytes(bytes, false);
@@ -22,12 +23,17 @@ function checkEd25519(bytes: Uint8Array, what: string): Uint8Array {
     fail("bad_key", `${what}: not a point`);
   }
   if (!equalBytes(point.toBytes(), bytes)) fail("bad_key", `${what}: not the canonical encoding`);
-  if (point.isSmallOrder() || !point.isTorsionFree()) fail("bad_key", `${what}: not of prime order`);
+  if (point.isSmallOrder() || !point.isTorsionFree())
+    fail("bad_key", `${what}: not of prime order`);
   return bytes.slice();
 }
 
 /** RFC 8032 verification with its strict decoding (not ZIP-215), so a signature has one form. */
-export function verifyEd25519(publicKey: Uint8Array, message: Uint8Array, signature: Uint8Array): boolean {
+export function verifyEd25519(
+  publicKey: Uint8Array,
+  message: Uint8Array,
+  signature: Uint8Array,
+): boolean {
   try {
     return ed25519.verify(signature, message, publicKey, { zip215: false });
   } catch {
@@ -44,7 +50,8 @@ const PROBE = Uint8Array.from({ length: 32 }, (_, i) => (i === 0 ? 8 : i === 31 
  * not of small order, so it has one encoding and a key exchange with it never gives zero.
  */
 function checkX25519(bytes: Uint8Array, what: string): Uint8Array {
-  if (!(bytes instanceof Uint8Array) || bytes.length !== 32) fail("bad_key", `${what}: not 32 bytes`);
+  if (!(bytes instanceof Uint8Array) || bytes.length !== 32)
+    fail("bad_key", `${what}: not 32 bytes`);
   let u = 0n;
   for (let i = 31; i >= 0; i--) u = (u << 8n) | BigInt(bytes[i]!);
   if (u >= P) fail("bad_key", `${what}: not the canonical encoding`);

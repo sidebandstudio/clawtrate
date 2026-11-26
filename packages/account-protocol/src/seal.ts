@@ -9,15 +9,43 @@ import { sha256 } from "@noble/hashes/sha2.js";
 import { checkLength, concat, Reader, utf8, Writer } from "./bytes.ts";
 import { fail } from "./errors.ts";
 import { hpkeOpen, hpkeSeal } from "./hpke.ts";
-import { ListPublicKey, sealSecretBytes, signList, verifyEd25519, type ListSecretKey, type SealSecretKey } from "./keys.ts";
+import {
+  ListPublicKey,
+  sealSecretBytes,
+  signList,
+  verifyEd25519,
+  type ListSecretKey,
+  type SealSecretKey,
+} from "./keys.ts";
 import { LABEL, TAG } from "./labels.ts";
-import { MAX_ADDRESSES, MAX_ENTRIES, MAX_HOST_BYTES, MAX_MEMBERS, MAX_NAME_BYTES } from "./limits.ts";
+import {
+  MAX_ADDRESSES,
+  MAX_ENTRIES,
+  MAX_HOST_BYTES,
+  MAX_MEMBERS,
+  MAX_NAME_BYTES,
+} from "./limits.ts";
 import { MAX_ENTRY_BYTES, decodeList, encodeList, type ListState } from "./list.ts";
-import { checkContext, expectContext, readContext, writeContext, type ListContext } from "./records.ts";
+import {
+  checkContext,
+  expectContext,
+  readContext,
+  writeContext,
+  type ListContext,
+} from "./records.ts";
 
 /** The largest signed card: eight addresses of the longest host and the longest name. */
 export const MAX_CARD_BYTES =
-  LABEL.card.length + 16 + 4 + 32 + 32 + 1 + MAX_ADDRESSES * (2 + MAX_HOST_BYTES + 2) + 2 + MAX_NAME_BYTES + 64;
+  LABEL.card.length +
+  16 +
+  4 +
+  32 +
+  32 +
+  1 +
+  MAX_ADDRESSES * (2 + MAX_HOST_BYTES + 2) +
+  2 +
+  MAX_NAME_BYTES +
+  64;
 /** The largest list as one byte string. */
 export const MAX_LIST_BYTES = 2 + MAX_ENTRIES * (2 + MAX_ENTRY_BYTES);
 
@@ -39,7 +67,8 @@ export class ListSecret {
 
   /** `random` is 32 bytes from the system's random source. */
   static fromBytes(random: Uint8Array, epoch: number): ListSecret {
-    if (!Number.isInteger(epoch) || epoch < 0 || epoch > 0xffffffff) fail("bad_argument", "epoch out of range");
+    if (!Number.isInteger(epoch) || epoch < 0 || epoch > 0xffffffff)
+      fail("bad_argument", "epoch out of range");
     return new ListSecret(checkLength(random, 32, "a list secret").slice(), epoch);
   }
 }
@@ -67,7 +96,13 @@ function aad(header: Uint8Array, context: ListContext): Uint8Array {
   return concat(utf8(TAG.listSealed), header, context.gatewayId, context.accountId);
 }
 
-function seal(secret: ListSecret, kind: SealedKind, context: ListContext, plaintext: Uint8Array, nonce: Uint8Array) {
+function seal(
+  secret: ListSecret,
+  kind: SealedKind,
+  context: ListContext,
+  plaintext: Uint8Array,
+  nonce: Uint8Array,
+) {
   const checked = checkContext(context);
   if (plaintext.length > MAX_PLAINTEXT[kind]) fail("too_large", `the ${kind} is over its bound`);
   const header = new Writer()
@@ -76,13 +111,21 @@ function seal(secret: ListSecret, kind: SealedKind, context: ListContext, plaint
     .u32(secret.epoch)
     .fixed(checkLength(nonce, 24, "a nonce"), 24, "nonce")
     .finish();
-  const ciphertext = xchacha20poly1305(aeadKey(secret), nonce, aad(header, checked)).encrypt(plaintext);
+  const ciphertext = xchacha20poly1305(aeadKey(secret), nonce, aad(header, checked)).encrypt(
+    plaintext,
+  );
   return concat(header, ciphertext);
 }
 
-function open(secret: ListSecret, kind: SealedKind, context: ListContext, sealed: Uint8Array): Uint8Array {
+function open(
+  secret: ListSecret,
+  kind: SealedKind,
+  context: ListContext,
+  sealed: Uint8Array,
+): Uint8Array {
   const checked = checkContext(context);
-  if (sealed.length > HEADER_BYTES + MAX_PLAINTEXT[kind] + 16) fail("too_large", `the sealed ${kind} is over its bound`);
+  if (sealed.length > HEADER_BYTES + MAX_PLAINTEXT[kind] + 16)
+    fail("too_large", `the sealed ${kind} is over its bound`);
   const reader = new Reader(sealed);
   if (reader.u8() !== SEALED_VERSION) fail("unsupported_version", "sealed with another version");
   if (reader.u8() !== KINDS[kind]) fail("malformed", `not a sealed ${kind}`);
@@ -92,24 +135,40 @@ function open(secret: ListSecret, kind: SealedKind, context: ListContext, sealed
   if (sealed.length - HEADER_BYTES < 16) fail("malformed", "the ciphertext is cut short");
   if (epoch !== secret.epoch) fail("decrypt_failed", "sealed under another list secret");
   try {
-    return xchacha20poly1305(aeadKey(secret), nonce, aad(header, checked)).decrypt(sealed.subarray(HEADER_BYTES));
+    return xchacha20poly1305(aeadKey(secret), nonce, aad(header, checked)).decrypt(
+      sealed.subarray(HEADER_BYTES),
+    );
   } catch {
     fail("decrypt_failed", "sealed bytes did not open");
   }
 }
 
 /** Seals a whole list. `nonce` is 24 random bytes. */
-export function sealList(secret: ListSecret, context: ListContext, entries: readonly Uint8Array[], nonce: Uint8Array) {
+export function sealList(
+  secret: ListSecret,
+  context: ListContext,
+  entries: readonly Uint8Array[],
+  nonce: Uint8Array,
+) {
   return seal(secret, "list", context, encodeList(entries), nonce);
 }
 
 /** Opens a sealed list. The entries still need `verifyList`. */
-export function openList(secret: ListSecret, context: ListContext, sealed: Uint8Array): Uint8Array[] {
+export function openList(
+  secret: ListSecret,
+  context: ListContext,
+  sealed: Uint8Array,
+): Uint8Array[] {
   return decodeList(open(secret, "list", context, sealed));
 }
 
 /** Seals the signed card. `nonce` is 24 random bytes. */
-export function sealCard(secret: ListSecret, context: ListContext, card: Uint8Array, nonce: Uint8Array) {
+export function sealCard(
+  secret: ListSecret,
+  context: ListContext,
+  card: Uint8Array,
+  nonce: Uint8Array,
+) {
   return seal(secret, "card", context, card, nonce);
 }
 
@@ -119,12 +178,21 @@ export function openCard(secret: ListSecret, context: ListContext, sealed: Uint8
 }
 
 /** Seals one entry on its way to the connector. `nonce` is 24 random bytes. */
-export function sealEntry(secret: ListSecret, context: ListContext, entry: Uint8Array, nonce: Uint8Array) {
+export function sealEntry(
+  secret: ListSecret,
+  context: ListContext,
+  entry: Uint8Array,
+  nonce: Uint8Array,
+) {
   return seal(secret, "entry", context, entry, nonce);
 }
 
 /** Opens a sealed entry. The entry still needs `ListState.append`. */
-export function openEntry(secret: ListSecret, context: ListContext, sealed: Uint8Array): Uint8Array {
+export function openEntry(
+  secret: ListSecret,
+  context: ListContext,
+  sealed: Uint8Array,
+): Uint8Array {
   return open(secret, "entry", context, sealed);
 }
 
@@ -151,7 +219,8 @@ export function rotateListSecret(
   secret: ListSecret,
   random: Uint8Array,
 ): Uint8Array {
-  if (!connector.publicKey.equals(state.connectorKey)) fail("not_permitted", "only the connector rotates the secret");
+  if (!connector.publicKey.equals(state.connectorKey))
+    fail("not_permitted", "only the connector rotates the secret");
   const devices = state.devices();
   checkLength(random, 32 * devices.length, "the random bytes for each device");
   const context = state.context;
@@ -161,8 +230,17 @@ export function rotateListSecret(
   devices.forEach((member, i) => {
     const info = rotationInfo(context, secret.epoch, member.key);
     const ikm = random.subarray(32 * i, 32 * (i + 1));
-    const { enc, ciphertext } = hpkeSeal(member.device!.sealKey.bytes, info, new Uint8Array(0), secretBytes(secret), ikm);
-    writer.fixed(member.key.bytes, 32, "recipient").fixed(enc, 32, "enc").fixed(ciphertext, 48, "sealed secret");
+    const { enc, ciphertext } = hpkeSeal(
+      member.device!.sealKey.bytes,
+      info,
+      new Uint8Array(0),
+      secretBytes(secret),
+      ikm,
+    );
+    writer
+      .fixed(member.key.bytes, 32, "recipient")
+      .fixed(enc, 32, "enc")
+      .fixed(ciphertext, 48, "sealed secret");
   });
   const signed = writer.finish();
   return concat(signed, signList(connector, signed));
