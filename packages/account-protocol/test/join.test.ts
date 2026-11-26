@@ -26,6 +26,7 @@ import {
   CONTEXT,
   expectCode,
   fill,
+  twin,
   LIST_RANDOM,
   makeDevice,
   makeWorld,
@@ -187,6 +188,10 @@ describe("rules the package keeps per key", () => {
     const first = NewDeviceJoin.start(device, CONTEXT, N_RANDOM, CLOCK);
     first.reveal(MemberJoin.answer(anew(member), first.commit, CLOCK).answer);
     expectCode(() => NewDeviceJoin.start(device, CONTEXT, N_RANDOM, CLOCK), "join_spent");
+    // The rule is the key's, not the object's: a second object from the same seed is refused too.
+    const rebuilt = { ...device, listKey: twin(device.listKey) };
+    expect(rebuilt.listKey.publicKey.equals(device.listKey.publicKey)).toBe(true);
+    expectCode(() => NewDeviceJoin.start(rebuilt, CONTEXT, N_RANDOM, CLOCK), "join_spent");
   });
 
   it("a second commitment on a member with a join open ends both", () => {
@@ -197,7 +202,9 @@ describe("rules the package keeps per key", () => {
     const { reveal } = one.reveal(a.answer);
     // The same commitment again is the same join, not a second one.
     expect(MemberJoin.answer(own, one.commit, CLOCK)).toBe(a);
-    expectCode(() => MemberJoin.answer(own, two.commit, CLOCK), "join_spent");
+    // A second commitment through another object of the same member key ends both too.
+    const rebuilt = { ...own, key: twin(own.key) };
+    expectCode(() => MemberJoin.answer(rebuilt, two.commit, CLOCK), "join_spent");
     expectCode(() => a.choices(reveal), "join_spent");
     // Once a join has ended, the member answers the next one.
     expect(MemberJoin.answer(own, two.commit, CLOCK).answer).toHaveLength(37 + 1 + 32 + 32 * 5);

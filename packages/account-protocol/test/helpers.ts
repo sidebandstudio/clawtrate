@@ -29,6 +29,7 @@ import {
   type Platform,
   type Words,
 } from "../src/index.ts";
+import { forgetJoinsOfForTests } from "../src/join.ts";
 
 export function fill(length: number, byte: number): Uint8Array {
   return new Uint8Array(length).fill(byte);
@@ -71,11 +72,19 @@ function keyFrom(seed: Uint8Array): ListSecretKey {
 }
 
 /**
- * The same list key as a new object. The package allows one new-device join per key object and
- * one open member join per key object, in a process; tests that run many joins with one fixed
- * key take a new object each time, as an app that made new keys would.
+ * The same list key as if in a new running program. The package allows one new-device join per
+ * list key and one open member join per list key in a running program; tests that run many joins
+ * with one fixed key make the package forget it first, as a restart would.
  */
 export function again(key: ListSecretKey): ListSecretKey {
+  const seed = seedOf.get(key);
+  if (!seed) throw new Error("a key the helpers didn't make");
+  forgetJoinsOfForTests(key.publicKey);
+  return keyFrom(seed);
+}
+
+/** Another object of the same list key, which the package doesn't forget: the same key's rules apply. */
+export function twin(key: ListSecretKey): ListSecretKey {
   const seed = seedOf.get(key);
   if (!seed) throw new Error("a key the helpers didn't make");
   return keyFrom(seed);

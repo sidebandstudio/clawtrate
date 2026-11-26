@@ -176,6 +176,10 @@ describe("a rotation", () => {
     const b = shareEphemeral(world.connector, ZERO, info, fill(32, 3));
     expect(a).not.toEqual(b);
     expect(a).not.toEqual(ZERO);
+    // The connector's key is in it: another key, with the same random, info and secret, gives
+    // another ephemeral, so knowing the caller's bytes isn't enough to compute one.
+    const other = ListSecretKey.fromSeed(fill(32, 0x77));
+    expect(shareEphemeral(other, ZERO, info, fill(32, 2))).not.toEqual(a);
     // The service, guessing a constant random, can't recompute the ephemeral of a real share.
     const { world: w, mac, phone, two } = grown();
     const removed = appended(two, signRemoval(mac.listKey, two.state, phone.device.listKey));
@@ -193,6 +197,10 @@ describe("a rotation", () => {
     const key = world.gatewayDevice.listKey;
     expect(confirmationEphemeral(key, ZERO, info, fill(80, 2))).not.toEqual(
       confirmationEphemeral(key, ZERO, info, fill(80, 3)),
+    );
+    // And A's key is in it.
+    expect(confirmationEphemeral(world.connector, ZERO, info, fill(80, 2))).not.toEqual(
+      confirmationEphemeral(key, ZERO, info, fill(80, 2)),
     );
   });
 });

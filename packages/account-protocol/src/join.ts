@@ -19,6 +19,7 @@ import {
   concat,
   copy,
   equalBytes,
+  hex,
   Reader,
   taggedHash,
   utf8,
@@ -426,18 +427,27 @@ export type WordBackOutcome =
 const ZERO_HEAD = new Uint8Array(32);
 
 /**
- * The list keys a new device's join has started from, in this running program. A second start from one
- * would give the same commitment in an object that has never revealed (README, "The rules the
- * words rest on"). Weak: it holds no key alive.
+ * The public list keys a new device's join has started from, in this running program, by value:
+ * a second start from one, even through another object made from the same seed, would give the
+ * same commitment in an object that has never revealed (README, "The rules the words rest on").
  */
-const startedFrom = new WeakSet<ListSecretKey>();
+const startedFrom = new Set<string>();
 
 /**
- * The open join on each member key, in this running program: a second commitment while one is open ends
- * both (design §4.4 step 2). A rebuild for the same commitment at the same head gets the same
- * object back.
+ * The latest join on each member's public list key, in this running program, by value: a second
+ * commitment while one is open ends both (design §4.4 step 2). A rebuild for the same commitment
+ * at the same head gets the same object back.
  */
-const openOn = new WeakMap<ListSecretKey, MemberJoin>();
+const openOn = new Map<string, MemberJoin>();
+
+/**
+ * For the package's own tests only, never exported from `index.ts`: forgets a key's start and
+ * open join, as a new running program would, so one fixed test key can run many joins.
+ */
+export function forgetJoinsOfForTests(key: ListPublicKey): void {
+  startedFrom.delete(hex(key.bytes));
+  openOn.delete(hex(key.bytes));
+}
 
 /**
  * The new device's side of one join. Built from N's keys, its record and 32 random bytes; it
@@ -498,9 +508,10 @@ export class NewDeviceJoin {
   ): NewDeviceJoin {
     checkClock(clock);
     checkJoiningDevice(device);
-    if (startedFrom.has(device.listKey))
+    const started = hex(device.listKey.publicKey.bytes);
+    if (startedFrom.has(started))
       fail("join_spent", "a join has already started from this list key; make new keys");
-    startedFrom.add(device.listKey);
+    startedFrom.add(started);
     const frozen: JoiningDevice = Object.freeze({
       listKey: device.listKey,
       sealKey: device.sealKey,
@@ -960,7 +971,7 @@ export class MemberJoin {
     const head = checkMember(own);
     const commit = readCommit(copy(commitInput));
     expectContext(commit.context, own.state.context);
-    const open = openOn.get(own.key);
+    const open = openOn.get(hex(own.key.publicKey.bytes));
     if (open && !open.#side.done) {
       if (
         equalBytes(open.#side.commit.commitment, commit.commitment) &&
@@ -979,7 +990,7 @@ export class MemberJoin {
       head.hash,
     );
     const join = new MemberJoin(own, side, head.hash);
-    openOn.set(own.key, join);
+    openOn.set(hex(own.key.publicKey.bytes), join);
     return join;
   }
 
