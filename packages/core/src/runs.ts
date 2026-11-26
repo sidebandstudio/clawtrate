@@ -392,6 +392,11 @@ export type RunError = {
    * history).
    */
   raw?: RunErrorRaw;
+  /**
+   * The gateway failed the run's message before any run of it started: its history keeps a
+   * "run-failed-before-reply" row for it (`not-run.ts`).
+   */
+  beforeReply?: true;
 };
 
 /** What a failed run's Raw holds (F-301). */
@@ -2762,6 +2767,13 @@ export function throughRunAliases(
   return { messages: rows, inFlight: flight ? { ...inFlight, runId: flight } : inFlight };
 }
 
+/**
+ * The `customType` of the row the gateway keeps in history for a message it failed before any run
+ * of it started (OpenClaw 2026.10.6 and 2026.11.10): `content` says so, with the reason on
+ * 2026.10.6; 2026.11.10 also sends it as `openclawRunError.summary`, often without the reason.
+ */
+export const RUN_FAILED_BEFORE_REPLY = "run-failed-before-reply";
+
 /** The display id `mapHistory` gives a row, so runs can anchor to transcript items. */
 export function historyItemId(message: RawRecord, index: number): string {
   return `${str(meta(message).id) ?? `row-${index}`}:${index}`;
@@ -2801,6 +2813,8 @@ export function runsFromHistory(
    * it started (OpenClaw 2026.10.6), not as a user row.
    */
   const startedBy = new Map<string, string>();
+  /** Runs the gateway failed before any of them started, with what it kept of why. */
+  const beforeReply = new Map<string, string>();
   const rows = Array.isArray(messages) ? messages : [];
   const first = asRecord(rows[0]);
   const cutRunId =
@@ -2825,6 +2839,14 @@ export function runsFromHistory(
     // The gateway's injected aborted-partial row names its run in `openclawAbort`.
     const runId = str(meta(message).runId) ?? str(asRecord(message.openclawAbort)?.runId);
     if (!runId) return;
+    // The gateway's record of a message it failed before any run of it started, and its words.
+    if (message.role === "custom" && message.customType === RUN_FAILED_BEFORE_REPLY) {
+      const summary = str(asRecord(message.openclawRunError)?.summary);
+      beforeReply.set(
+        runId,
+        summary ?? (typeof message.content === "string" ? message.content : ""),
+      );
+    }
     const at = rowTime(message);
     let run =
       runs.get(runId) ??
@@ -3002,7 +3024,8 @@ export function runsFromHistory(
       lastStop === "length" ||
       lastStop === "aborted" ||
       lastStop === "error" ||
-      asRecord(lastRow?.openclawAbort)?.aborted === true;
+      asRecord(lastRow?.openclawAbort)?.aborted === true ||
+      (beforeReply.has(built.id) && !lastRow);
     // The newest run, its rows stopping short of an end, while the gateway has a turn of the
     // task in flight or queued: the gateway has not said it ended (it may wait on an approval
     // or a question, with a steer queued behind it). It stays open until its end is said.
@@ -3013,6 +3036,11 @@ export function runsFromHistory(
     const stopReason = str(last?.stopReason);
     if (stopReason === "aborted" || asRecord(last?.openclawAbort)?.aborted === true) {
       return finishRun(run, "stopped", ctx, null, run.endedAt);
+    }
+    const notRun = beforeReply.get(run.id);
+    if (notRun !== undefined && !last) {
+      const message = notRun.trim() || "The run failed.";
+      return finishRun(run, "failed", ctx, { message, kind: null, beforeReply: true }, run.endedAt);
     }
     if (stopReason === "error") {
       // The gateway writes the failure as the run's last row; its text is the error itself.
