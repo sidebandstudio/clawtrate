@@ -2,10 +2,12 @@
 // and Expo's native modules. The same core runs here as in Electron and Node.
 
 import type { ClawtrateHost } from "@clawtrate/core";
+import { requireNativeModule } from "expo";
 import { getRandomBytes, randomUUID } from "expo-crypto";
 import * as SecureStore from "expo-secure-store";
 import { Settings } from "react-native";
 import { approvalInstructionsFor, devGatewayHint, type DevGatewayHint } from "./dev-gateway.ts";
+import { createHostFetch, type NativeFetch } from "./fetch.ts";
 import { createSocketFactory, type WebSocketConstructor } from "./socket.ts";
 import { createKeychainSigner } from "./signer.ts";
 import { createKeychainStore } from "./store.ts";
@@ -47,6 +49,7 @@ export function createIosHost(): IosHost {
       client: { displayName: DEVICE_NAME, version: APP_VERSION, platform: "ios" },
       randomId: randomUUID,
       approvalInstructions: approvalInstructionsFor(devGateway),
+      fetch: createHostFetch(requireNativeModule<NativeFetch>("ClawtrateFetch")),
       log: (level, message) => {
         // Only problems reach the console, and never a credential the gateway sent back.
         if (level === "warn" || level === "error")

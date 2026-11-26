@@ -38,6 +38,7 @@ import {
   type HelloOk,
 } from "@openclaw/gateway-client/browser";
 import { isRefusedDecision } from "./approval-refusals.ts";
+import { answerKind, readAgain, READ_AGAIN_TRIES } from "./read-again.ts";
 import { fromBase64, toBase64 } from "./bytes.ts";
 import { chatSendParams, sendRefusal } from "./send-size.ts";
 import { GatewayScopeUpgrade } from "@openclaw/gateway-client/scope-upgrade";
@@ -424,6 +425,14 @@ export const MAX_DEFERRED_STOPS = 32;
 /** Why a deferred Stop was given up: every place for its check is held by a Stop still waiting. */
 const TOO_MANY_STOPS =
   "Too many Stops are waiting for their runs to start, so nothing was sent for this one. Try again in a moment.";
+/**
+ * What the strip adds when bots and tasks couldn't be loaded and the gateway's last answer to
+ * every read that failed was one it marks as passing (`answerKind`): only then is it true.
+ */
+export const DISCOVERY_NOT_READY = "The gateway wasn't ready.";
+/** What an open task says when its live updates couldn't be started, after the tries again. */
+export const LIVE_UPDATES_NOT_STARTED = "Live updates for this task couldn't be started.";
+
 /** A failed read of the gateway's identity is asked again this many times, each 4 times later. */
 const IDENTITY_RETRIES = 4;
 const IDENTITY_RETRY_MS = 500;
@@ -716,6 +725,8 @@ export type ClientOptions = {
   setupListenerReadsMs?: number;
   /** First wait before a creation without an answer is asked again; `CREATION_CHECK_MS` unless a test shortens it. */
   creationCheckMs?: number;
+  /** First wait before a read answered as passing is asked again; `READ_AGAIN_MS` unless a test shortens it. */
+  readAgainMs?: number;
   /**
    * Counts the host sets for its device. Each defaults to the bound the
    * retention arithmetic assumes and may only be lower: `trackedTasks`, the
@@ -1561,6 +1572,18 @@ export class ClawtrateClient {
   private guidesChanges: Promise<unknown> = Promise.resolve();
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
   private discoveryRead: { sessionsChanged: boolean; botsChanged: boolean } | null = null;
+  /**
+   * Bots and tasks failed to load, every failure one asked again (`askedAgain`), and the tries
+   * were used up: the gateway's next event reads them once more. Set or cleared when each read
+   * of bots and tasks ends, so it is always the latest one's; a new connection's own read is out
+   * or has ended by the time its gateway sends an event.
+   */
+  private discoveryAgain = false;
+  /**
+   * Settles when the current connection ends (another hello, a drop, a close): a read waiting
+   * to be asked again (`readAgain`) stops waiting then, and makes no try on the next connection.
+   */
+  private connectionEnded = new AbortController();
   /** The pairing request this client last saw pending, and when. */
   private pairingSeen: string | null = null;
   private readonly writes: ConnectionWrites;
@@ -1745,6 +1768,7 @@ export class ClawtrateClient {
       if (!this.protocol) return Promise.reject(new NotSentError());
       return this.protocol.request(method, params, options);
     },
+    readAgain: (read, current) => this.readAgain(read, current),
     get: () => this.state.accounts,
     update: (change) =>
       this.store.update((state) => ({ ...state, accounts: change(state.accounts) })),
@@ -2752,19 +2776,25 @@ export class ClawtrateClient {
       // A read that published its failure while this retry arrived (its listeners run before it
       // ends) settles nothing more: still loading once it ends, the task is read again. A close
       // and reopen between here and then is a different task, so its incarnation must still match.
+      // That read subscribes again, as a retry of a failed task does when no read is under way:
+      // the failure cleared above may have been its live updates (#592).
       void load.done.then(() => {
         if (
           this.openSessions.has(key) &&
           this.incarnations.get(key) === incarnation &&
-          this.state.transcripts[key]?.status === "loading"
+          this.state.transcripts[key]?.status === "loading" &&
+          this.state.connection.status === "connected"
         )
-          this.reloadSession(key);
+          void this.loadTranscript(key, true, null);
       });
       return;
     }
+    // A task that failed may have failed to subscribe: Try again subscribes again (a read).
+    const subscribe = current?.status === "error";
     if (current?.status === "error")
       this.setTranscript(key, () => ({ ...current, status: "loading", error: null }));
-    if (this.state.connection.status === "connected") void this.loadTranscript(key, false, null);
+    if (this.state.connection.status === "connected")
+      void this.loadTranscript(key, subscribe, null);
   }
 
   /** Keep only Raw entries that still belong to this task's retained state. */
@@ -8962,6 +8992,7 @@ export class ClawtrateClient {
       onHello: (hello) => {
         if (generation !== this.generation) return;
         this.epoch += 1;
+        this.endConnection();
         this.attemptGreeted = true;
         if (hello.protocol !== PROTOCOL_VERSION) {
           // Outside this client's range: nothing else is asked of this gateway.
@@ -9010,6 +9041,7 @@ export class ClawtrateClient {
       onClose: () => {
         if (generation !== this.generation) return;
         this.epoch += 1;
+        this.endConnection();
         this.discoveryRead = null;
         // The next socket's first roster is its own, as after an explicit close.
         this.lastRosterIds.clear();
@@ -9148,6 +9180,7 @@ export class ClawtrateClient {
 
   private close(options?: { keepPendingAnswer: boolean }): void {
     this.generation += 1;
+    this.endConnection();
     if (this.reopenTimer !== null) clearTimeout(this.reopenTimer);
     this.reopenTimer = null;
     this.discoveryRead = null;
@@ -9561,7 +9594,11 @@ export class ClawtrateClient {
    * open transcripts. Bots and tasks load independently, so one failing read
    * keeps the other's result and any data shown before it.
    */
-  private async bootstrap(generation: number, resync: CaughtUp["reason"] | null): Promise<void> {
+  private async bootstrap(
+    generation: number,
+    resync: CaughtUp["reason"] | null,
+    tries = READ_AGAIN_TRIES,
+  ): Promise<void> {
     const selection = this.selectionApplied;
     // Closing the socket or starting another discovery retires this read.
     const epoch = this.epoch;
@@ -9570,7 +9607,9 @@ export class ClawtrateClient {
     const sameSocket = () => generation === this.generation && epoch === this.epoch;
     const current = () =>
       this.discoveryRead === read && selection === this.selectionApplied && sameSocket();
-    this.setDiscovery({ status: "loading", error: null });
+    // The try the gateway's next event makes (`discoveryAgain`) leaves the failure on screen
+    // until it has an answer, so the strip changes only for the news: loaded, or not.
+    if (tries > 0) this.setDiscovery({ status: "loading", error: null, detail: null });
     // The last gateway's identity goes with the connection it came from, so a
     // write waits for this one's read (routines.ts `blocked`).
     this.setConnection({ gatewayId: null });
@@ -9588,8 +9627,10 @@ export class ClawtrateClient {
     // Bots are published as soon as they arrive, so the app can open on them
     // while tasks are still loading.
     const botsIssued = ++this.botsIssued;
+    // A read the gateway answers as passing (it is still starting) is asked again while this
+    // read is the current one.
     const [agents, sessions] = await Promise.allSettled([
-      this.request("agents.list", {}).then(async (result) => {
+      this.readAgain(() => this.request("agents.list", {}), current, tries).then(async (result) => {
         const id = await gatewayId;
         if (current()) {
           // A read asked later, after a bot was created, may have answered first.
@@ -9605,12 +9646,16 @@ export class ClawtrateClient {
         }
         return result;
       }),
-      this.loadAllSessions(generation, "sessions.subscribe"),
+      this.readAgain(() => this.loadAllSessions(generation, "sessions.subscribe"), current, tries),
     ]);
     if (!current()) return;
 
     const failures: string[] = [];
-    if (agents.status !== "fulfilled") failures.push(`bots: ${errorMessage(agents.reason)}`);
+    const reasons: unknown[] = [];
+    if (agents.status !== "fulfilled") {
+      failures.push(`bots: ${errorMessage(agents.reason)}`);
+      reasons.push(agents.reason);
+    }
     if (sessions.status === "fulfilled") {
       // The rows are this connection's, and so is the identity read on it: settled first, and
       // published only while this read is still the current one.
@@ -9628,6 +9673,7 @@ export class ClawtrateClient {
       if (read.sessionsChanged) await this.refreshSessions(generation);
     } else {
       failures.push(`tasks: ${errorMessage(sessions.reason)}`);
+      reasons.push(sessions.reason);
     }
     if (!current()) return;
     for (const key of Object.keys(this.state.transcripts)) {
@@ -9661,18 +9707,29 @@ export class ClawtrateClient {
       this.setupCheck = null;
     if (failures.length > 0 && setup) {
       this.log("error", "discovery failed on the setup connection");
+      this.discoveryAgain = false;
       this.setDiscovery({ status: "error", error: "Could not load your bots." });
     } else if (failures.length > 0) {
       this.log("error", `discovery failed: ${failures.join("; ")}`);
+      // The gateway's own words stay with the strip, but a passing answer is said plainly.
+      const detail = this.scrub(`Could not load ${failures.join("; ")}`);
+      const kinds = reasons.map(answerKind);
       this.setDiscovery({
         status: "error",
-        error: this.scrub(`Could not load ${failures.join("; ")}`),
+        // Said only when it is true: every failed read's last answer was marked passing.
+        error: kinds.every((kind) => kind === "passing") ? DISCOVERY_NOT_READY : null,
+        detail,
       });
+      // Once more when the gateway next speaks, if every failure was one asked again; a read
+      // that event started does not arm another.
+      this.discoveryAgain = tries > 0 && kinds.every((kind) => kind !== "lasting");
     } else {
+      this.discoveryAgain = false;
       this.selectionReady = selection;
       this.setDiscovery({
         status: "ready",
         error: null,
+        detail: null,
         partial: sessions.status === "fulfilled" && sessions.value.partial,
       });
     }
@@ -10095,9 +10152,13 @@ export class ClawtrateClient {
     resync: CaughtUp["reason"] | null,
   ): Promise<void> {
     const generation = this.generation;
+    const epoch = this.epoch;
     const incarnation = this.incarnations.get(key);
+    // The read belongs to its connection: after a drop and a new hello it publishes nothing,
+    // a failure included, and the new connection's own read reloads the task.
     const stale = () =>
       generation !== this.generation ||
+      epoch !== this.epoch ||
       !this.tracked(key) ||
       this.incarnations.get(key) !== incarnation;
     // Runs active when the read starts; one the gateway then no longer has has ended.
@@ -10106,14 +10167,30 @@ export class ClawtrateClient {
         .filter((run) => run.bound && !isTerminal(run.state) && run.state !== "queued")
         .map((run) => run.id),
     );
+    // The task's live events come only through its subscription: asked again like the reads.
+    // A subscription that failed for good stays failed through later history reads, and each of
+    // them tries it again; only one that succeeds clears it.
+    const unsubscribed = this.state.transcripts[key]?.error === LIVE_UPDATES_NOT_STARTED;
+    let live = !unsubscribed;
     try {
-      if (subscribe) {
-        await this.request("sessions.messages.subscribe", { key }).catch((error: unknown) => {
-          this.logFailure("warn", "sessions.messages.subscribe", error);
-        });
+      if (subscribe || unsubscribed) {
+        live = await this.readAgain(
+          () => this.request("sessions.messages.subscribe", { key }),
+          () => !stale(),
+        ).then(
+          () => true,
+          (error: unknown) => {
+            this.logFailure("warn", "sessions.messages.subscribe", error);
+            return false;
+          },
+        );
+        if (stale()) return;
       }
       const history = asRecord(
-        await this.request("chat.history", { sessionKey: key, limit: HISTORY_LIMIT }),
+        await this.readAgain(
+          () => this.request("chat.history", { sessionKey: key, limit: HISTORY_LIMIT }),
+          () => !stale(),
+        ),
       );
       if (stale()) return;
       // A resync starts every stream of this task again from what the gateway sends next.
@@ -10194,12 +10271,14 @@ export class ClawtrateClient {
           settleQuestionsOfEndedRuns(normalizeApprovals(activity, (runId) => this.otherRun(runId))),
         ),
         sessionKey: key,
-        status: "ready",
+        // History shows, but without its subscription nothing live reaches the task: it says
+        // so, and Try again subscribes again (`reloadSession`).
+        status: live ? "ready" : "error",
         items,
         interSession: interSessionMessages(messages),
         // Reactions leave with the history they belonged to (F-283).
         ...(current.reactions ? { reactions: reactionsShown(current.reactions, items) } : {}),
-        error: null,
+        error: live ? null : LIVE_UPDATES_NOT_STARTED,
         hasMore: history?.hasMore === true,
         caughtUp: resync ? { reason: resync, at: this.now() } : current.caughtUp,
         loadedAt: this.now(),
@@ -10223,10 +10302,11 @@ export class ClawtrateClient {
       if (current.workspaceRoot === undefined) void this.readWorkspaceRoot(key, generation);
     } catch (error) {
       if (stale()) return;
+      // Without its subscription, that is what the task says: Try again reads both again.
       this.setTranscript(key, (current) => ({
         ...(current ?? this.emptyTranscript(key)),
         status: "error",
-        error: errorMessage(error),
+        error: live ? errorMessage(error) : LIVE_UPDATES_NOT_STARTED,
       }));
     }
   }
@@ -10310,6 +10390,11 @@ export class ClawtrateClient {
   }
 
   private handleEvent(event: EventFrame, generation: number): void {
+    // Not while a read of bots and tasks is out: it decides again when it ends.
+    if (this.discoveryAgain && !this.discoveryRead) {
+      this.discoveryAgain = false;
+      void this.bootstrap(generation, null, 0);
+    }
     switch (event.event) {
       case "update.available":
         // While a setup connection is open, the report is held, never published.
@@ -10961,8 +11046,12 @@ export class ClawtrateClient {
   /** Read the arrangement the gateway keeps; on any failure the rail keeps its own. */
   private async loadSidebar(generation: number): Promise<void> {
     const issued = ++this.sidebarIssued;
+    const epoch = this.epoch;
     try {
-      const sidebar = await readSidebar(this.actionContext(null));
+      const sidebar = await this.readAgain(
+        () => readSidebar(this.actionContext(null)),
+        () => generation === this.generation && epoch === this.epoch,
+      );
       if (generation === this.generation) this.setSidebar(sidebar, issued);
     } catch (error) {
       this.logFailure("warn", "users.prefs.get", error);
@@ -10979,11 +11068,15 @@ export class ClawtrateClient {
    */
   private async loadWaitingApprovals(generation: number): Promise<void> {
     if (!this.holds(APPROVALS_SCOPE)) return;
+    const epoch = this.epoch;
     let changed = false;
     let before: ReadonlySet<string> | null = null;
     for (const source of APPROVAL_SOURCES) {
       try {
-        const value = await this.request(source.method, {});
+        const value = await this.readAgain(
+          () => this.request(source.method, {}),
+          () => generation === this.generation && epoch === this.epoch,
+        );
         if (generation !== this.generation) return;
         const record = asRecord(value);
         const items = Array.isArray(value)
@@ -11008,8 +11101,14 @@ export class ClawtrateClient {
   /** The questions pending at a connect, for the rail's waiting state (needs `operator.questions`). */
   private async loadWaitingQuestions(generation: number): Promise<void> {
     if (!this.holds(QUESTIONS_SCOPE)) return;
+    const epoch = this.epoch;
     try {
-      const listed = asRecord(await this.request("question.list", {}));
+      const listed = asRecord(
+        await this.readAgain(
+          () => this.request("question.list", {}),
+          () => generation === this.generation && epoch === this.epoch,
+        ),
+      );
       if (generation !== this.generation) return;
       const questions = Array.isArray(listed?.questions) ? listed.questions : [];
       const before = this.keptKeys();
@@ -11021,6 +11120,21 @@ export class ClawtrateClient {
   }
 
   // Helpers --------------------------------------------------------------------
+
+  /** `readAgain` with this client's first wait: `READ_AGAIN_MS` unless a test shortens it. */
+  private readAgain<T>(read: () => Promise<T>, current: () => boolean, tries?: number): Promise<T> {
+    return readAgain(read, current, {
+      tries,
+      firstMs: this.options.readAgainMs,
+      ended: this.connectionEnded.signal,
+    });
+  }
+
+  /** The current connection has ended: reads waiting to be asked again stop waiting. */
+  private endConnection(): void {
+    this.connectionEnded.abort();
+    this.connectionEnded = new AbortController();
+  }
 
   private request(
     method: string,
