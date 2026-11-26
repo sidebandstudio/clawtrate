@@ -929,7 +929,8 @@ function botId(value: unknown): string {
 
 /** A press's id, as a screen makes one: short, plain characters. */
 function pressId(value: unknown): string {
-  if (typeof value !== "string" || !/^[\w-]{8,64}$/.test(value)) throw new Error("invalid press id");
+  if (typeof value !== "string" || !/^[\w-]{8,64}$/.test(value))
+    throw new Error("invalid press id");
   return value;
 }
 
