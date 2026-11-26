@@ -117,6 +117,8 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/types.ts:initialConnectionState.requestedScopes":
     "static, an empty list copied on write",
   "packages/core/src/types.ts:initialState.bots": "static, an empty list copied on write",
+  "packages/core/src/device-approval.ts:initialDeviceRequests.requests":
+    "static, an empty list copied on write",
   "packages/core/src/types.ts:initialState.unroutedApprovals":
     "static, an empty list copied on write",
   "packages/core/src/types.ts:initialState.creations": "static, an empty list copied on write",
