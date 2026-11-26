@@ -69,6 +69,8 @@ describe("the card for this computer, after This computer", () => {
       "not-gateway",
       "not-published",
       "folder",
+      "replaced",
+      "other-settings",
       "unchecked",
     ] as const) {
       const html = render(local(), found({ outcome: "unverified", reason, access: null }));
@@ -106,6 +108,27 @@ describe("the card for this computer, after This computer", () => {
     expect(html).toContain("Checking it matches OpenClaw&#x27;s settings");
   });
 
+  it("a Connect the gateway never answered on settings changed since it started ends with Advanced and a look again", () => {
+    const html = render(local(), {
+      ...found(),
+      phase: "failed",
+      failure: { kind: "unanswered", exitCode: null, port: PORT, reason: null },
+    });
+    expect(html).toContain(
+      escape(
+        `The gateway at port ${PORT} didn't answer as OpenClaw's settings on this Mac say it would.`,
+      ),
+    );
+    expect(html).toContain(
+      escape(
+        "It may have just stopped, or be running on settings changed since it started, such as a secure address. Use Advanced, or look again.",
+      ),
+    );
+    expect(html).toMatch(/>Use Advanced<\/button>/);
+    expect(html).toMatch(/>Look again<\/button>/);
+    expect(html).not.toContain("Nothing answered");
+  });
+
   it("without local connect, the card is as it was", () => {
     const info: HostInfo = { ...local(), setup: { look: true, pair: true, platform: "darwin" } };
     const html = render(
@@ -127,6 +150,9 @@ describe("the words of a refusal", () => {
     );
     expect(PROOF_REFUSAL_LINES["not-published"](PORT)).toBe(
       `Clawtrate couldn't check this version's module for what is listening at port ${PORT}.`,
+    );
+    expect(PROOF_REFUSAL_LINES["other-settings"](PORT)).toBe(
+      `What is listening at port ${PORT} was started with another OpenClaw settings file than the one Clawtrate read, so Clawtrate can't tell how to connect to it.`,
     );
     for (const line of Object.values(PROOF_REFUSAL_LINES).map((words) => words(PORT)))
       expect(line).not.toMatch(/isn't the OpenClaw|isn't the copy|is OpenClaw|another gateway/);

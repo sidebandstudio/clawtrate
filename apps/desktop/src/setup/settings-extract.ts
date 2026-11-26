@@ -186,9 +186,11 @@ export function extractSettings(text: string, profile: SettingsProfile): Extract
   if (mode !== undefined && mode !== "local") return refuse("address", "remote");
   // Local connect dials plain `ws://` only. OpenClaw 2026.10.6 and 2026.11.10 serve TLS exactly
   // when the loaded settings' `gateway.tls.enabled` is `true` (`loadGatewayTlsServerRuntime`),
-  // and nothing else turns it on: no variable, no gateway flag. So TLS is certainly off only
-  // with no `tls`, or a `tls` whose `enabled` is absent or `false`; anything else (`true`, a
+  // and nothing else turns it on: no variable, no gateway flag. So this file says TLS is off
+  // only with no `tls`, or a `tls` whose `enabled` is absent or `false`; anything else (`true`, a
   // string a variable would fill in, any other value or shape) is TLS here, before any offer.
+  // That is what the file says, not what the running gateway loaded: one started before the file
+  // was changed serves what it read then (docs/decisions.md, "Local connect's proof").
   if (Object.hasOwn(gateway, "tls")) {
     const tls = gateway.tls;
     const enabled = isPlain(tls) ? own(tls, "enabled") : true;

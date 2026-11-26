@@ -1,5 +1,6 @@
 // "This computer" with local connect (docs/design/setup-effortless.md §3): the look reads
-// OpenClaw's settings and proves its port, and Connect is the one step. Each rule here has a test
+// OpenClaw's settings and checks that what listens at their port is held by this account and
+// matches this account's OpenClaw profile, and Connect is the one step. Each rule here has a test
 // that fails with the rule undone. Every home is a private folder of the test's own under the
 // system's temporary root, every port one of the test's own and never OpenClaw's default; no
 // test names, reads or dials the account's own OpenClaw.
@@ -16,6 +17,7 @@ import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSy
 import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { createServer as createTlsServer } from "node:tls";
 import { ClawtrateClient, FULL_SCOPES, PROOF_REFUSAL_LINES, type SetupLook } from "@clawtrate/core";
 import { createNodeHost, STATE_FILE, type SecretBox } from "@clawtrate/core/node";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
@@ -133,7 +135,8 @@ const tokenSettings = (port: number, token: string) => ({
 /**
  * What the helper prints for a holder that is this profile's gateway, of `version`: mapping
  * that version's own module (`pinned`), another module (`wrong`), or none (`none`, as an install
- * laid out otherwise, or a runtime that maps no module, is written).
+ * laid out otherwise, or a runtime that maps no module, is written). Its lock names the settings
+ * file it loaded: the profile's own unless `configPath` says another.
  */
 function provedAnswer(
   home: string,
@@ -141,6 +144,7 @@ function provedAnswer(
   port: number,
   version = "2026.10.6",
   module: "pinned" | "wrong" | "none" = "pinned",
+  configPath = join(home, folder, "openclaw.json"),
 ): Buffer {
   const lock = Buffer.from(
     JSON.stringify({
@@ -148,6 +152,7 @@ function provedAnswer(
       role: "gateway",
       port,
       stateDir: join(home, folder),
+      configPath,
       startTime: 1795410457,
     }),
   );
@@ -496,6 +501,21 @@ describe.skipIf(!mac)(
           proof: () => "refused helper\n",
           look: { outcome: "unverified", reason: "unchecked" },
         },
+        // A gateway started on another settings file (`OPENCLAW_CONFIG_PATH`): what the file
+        // read says of its port, token and TLS isn't known to hold for it, so no Connect.
+        {
+          settings: { ".openclaw": tokenSettings(listening.port, "a-gateway-token") },
+          proof: (home) =>
+            provedAnswer(
+              home,
+              ".openclaw",
+              listening.port,
+              "2026.11.10",
+              "pinned",
+              join(home, "elsewhere.json"),
+            ),
+          look: { outcome: "unverified", reason: "other-settings", port: listening.port },
+        },
         // A pinned version whose module isn't its own is still refused.
         {
           settings: { ".openclaw": tokenSettings(listening.port, "a-gateway-token") },
@@ -555,6 +575,73 @@ describe.skipIf(!mac)(
         }
       } finally {
         await listening.close();
+      }
+    });
+
+    it("settings changed in place to TLS off while the gateway still serves TLS: Connect fails with its ways on, and nothing is sent", async () => {
+      // What the reader knows is the settings file; the gateway runs on what it loaded when it
+      // started. A file edited to TLS off since then names a listener that still speaks TLS.
+      const home = newHome();
+      execFileSync(
+        "/usr/bin/openssl",
+        [
+          "req",
+          "-x509",
+          "-newkey",
+          "rsa:2048",
+          "-nodes",
+          "-days",
+          "1",
+          "-subj",
+          "/CN=127.0.0.1",
+          "-keyout",
+          join(home, "tls-key.pem"),
+          "-out",
+          join(home, "tls-cert.pem"),
+        ],
+        { stdio: "ignore" },
+      );
+      let plaintext = 0;
+      const listener = createTlsServer(
+        {
+          key: readFileSync(join(home, "tls-key.pem")),
+          cert: readFileSync(join(home, "tls-cert.pem")),
+        },
+        (socket) => socket.destroy(),
+      );
+      listener.on("tlsClientError", () => (plaintext += 1));
+      await new Promise<void>((done) => listener.listen(0, "127.0.0.1", done));
+      const port = (listener.address() as AddressInfo).port;
+      const local: LocalConnect = {
+        home,
+        helper: standInHelper(home),
+        platform,
+        sandboxed: true,
+        deadlineMs: SLOW,
+      };
+      settingsFile(home, ".openclaw", tokenSettings(port, "a-gateway-token"));
+      proofFile(home, ".openclaw", provedAnswer(home, ".openclaw", port));
+      const { client, setup } = localApp(local);
+      try {
+        await client.start({ resume: false });
+        await setup.look();
+        expect(setup.current.look).toMatchObject({ outcome: "running", port });
+        await setup.connect();
+        // Not left on Connecting, and not retried for ever: failed, with Look again and Advanced
+        // (the card's ways on after a failed Connect).
+        await until(() => setup.current.phase === "failed", 60_000);
+        expect(setup.current.failure).toMatchObject({ kind: "unanswered", port });
+        await until(() => client.state.connection.status === "idle", 15_000);
+        const tries = plaintext;
+        expect(tries).toBeGreaterThan(0);
+        await sleep(1_000);
+        expect(plaintext).toBe(tries);
+        // A look again finds it as before, and Connect may be pressed again.
+        await setup.look();
+        expect(setup.current.look).toMatchObject({ outcome: "running", port });
+      } finally {
+        client.stop();
+        await new Promise((done) => listener.close(done));
       }
     });
 
@@ -1003,6 +1090,38 @@ describe.skipIf(!BIN || !mac)(
       } finally {
         client.stop();
         await proxy.stop();
+      }
+    });
+  },
+);
+
+describe.skipIf(!BIN || !mac)(
+  "This computer on a development gateway started on another settings file",
+  { timeout: 300_000 },
+  () => {
+    let gateway: DevGateway;
+    beforeAll(async () => {
+      gateway = await startGateway(BIN!, { approval: false, elsewhere: true });
+    }, 300_000);
+    afterAll(async () => {
+      await gateway?.remove();
+    });
+
+    it("isn't offered: its lock names the file it loaded, not the profile's, and it gets nothing", async () => {
+      const { client, setup } = localApp({ home: gateway.home, helper, platform, sandboxed: true });
+      try {
+        await setup.look();
+        // The profile's own file names this port and token, and its gateway holds the lock and the
+        // database: only the settings file the lock names differs.
+        expect(setup.current.look).toMatchObject({
+          outcome: "unverified",
+          reason: "other-settings",
+          port: gateway.port,
+        });
+        await expect(setup.connect()).rejects.toThrow("nothing to connect to");
+        expect(client.state.connection.status).toBe("idle");
+      } finally {
+        client.stop();
       }
     });
   },

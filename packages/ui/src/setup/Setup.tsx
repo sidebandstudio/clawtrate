@@ -588,6 +588,13 @@ const FAILURES: Record<
     next: "advanced",
     step: 0,
   },
+  unanswered: {
+    lead: "",
+    text: () =>
+      "It may have just stopped, or be running on settings changed since it started, such as a secure address. Use Advanced, or look again.",
+    next: "advanced",
+    step: 1,
+  },
   "no-dialog": {
     lead: "Pairing needs the desktop app, which asks you first.",
     text: () => "In this web preview, use Advanced.",
@@ -764,9 +771,11 @@ export function SetupFlow({
     const lead =
       failure?.kind === "unreachable"
         ? `Nothing answered on port ${failure.port}.`
-        : failure?.kind === "unverified"
-          ? refusalWords(failure.reason, failure.port)
-          : (copy?.lead ?? "");
+        : failure?.kind === "unanswered"
+          ? `The gateway at port ${failure.port} didn't answer as OpenClaw's settings on this Mac say it would.`
+          : failure?.kind === "unverified"
+            ? refusalWords(failure.reason, failure.port)
+            : (copy?.lead ?? "");
     body = (
       <>
         <Back onBack={backFromConnect} />
@@ -790,7 +799,7 @@ export function SetupFlow({
                 <Primary onClick={() => void send({ type: "setupLook" })}>Look again</Primary>
               )}
               {copy.next === "advanced" && <Primary onClick={advanced}>Use Advanced</Primary>}
-              {failure.kind === "unverified" && (
+              {(failure.kind === "unverified" || failure.kind === "unanswered") && (
                 <Quiet onClick={() => void send({ type: "setupLook" })}>Look again</Quiet>
               )}
               {copy.next === "back" && <Primary onClick={backFromConnect}>Back</Primary>}

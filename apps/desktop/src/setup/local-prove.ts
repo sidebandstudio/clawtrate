@@ -14,6 +14,10 @@
 //     holds this profile's gateway lock and state database open, and is the
 //     process that lock names, with role gateway, this port, this state folder
 //     and its start time.
+// (g) That lock names, as the settings file its gateway loaded, the profile's
+//     own `openclaw.json`: the file the reader read the port, the token and TLS
+//     from. A gateway started on another file (OpenClaw's `OPENCLAW_CONFIG_PATH`)
+//     may listen otherwise than the file the reader read says ("config").
 // And the pin, a consistency check that authenticates nothing: where that
 // holder maps a file laid out as OpenClaw's native module in a package whose
 // package.json names a version pinned in openclaw-pins.ts, the module must be
@@ -35,6 +39,7 @@ import {
   holdHome,
   READ_DEADLINE_MS,
   runHelper,
+  SETTINGS_FILE,
   type FolderIdentity,
   type Opened,
 } from "./settings-reader.ts";
@@ -75,6 +80,7 @@ export const PROVE_REFUSALS = [
   "pin",
   "package",
   "named",
+  "config",
   "platform",
 ] as const;
 export type ProveRefusal = (typeof PROVE_REFUSALS)[number];
@@ -87,6 +93,7 @@ export function refusalKind(why: ProveRefusal): ProofRefusalKind {
   if (why === "pin" || why === "package") return "not-published";
   if (["denied", "failed", "helper", "path", "platform"].includes(why)) return "unchecked";
   if (why === "replaced") return "replaced";
+  if (why === "config") return "other-settings";
   return "folder";
 }
 export type Proof = { proved: true } | Refused;
@@ -181,8 +188,13 @@ function judge(facts: Facts, stateDir: string, port: number): Proof {
     lock.stateDir === stateDir &&
     typeof lock.startTime === "number" &&
     // OpenClaw records the kernel's start time in whole seconds.
-    Math.abs(lock.startTime - facts.start) <= 1;
-  return named ? { proved: true } : no("named");
+    Math.abs(lock.startTime - facts.start) <= 1 &&
+    // Both pinned versions write the settings file the gateway loaded into its lock.
+    typeof lock.configPath === "string";
+  if (!named) return no("named");
+  // The settings the reader read are the ones this gateway loaded, or nothing they say about
+  // its port, its token or TLS is known to hold for it.
+  return lock.configPath === join(stateDir, SETTINGS_FILE) ? { proved: true } : no("config");
 }
 
 function parsed(bytes: Buffer): Record<string, unknown> | null {

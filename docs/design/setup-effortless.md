@@ -192,6 +192,7 @@ What 2026.10.6 offers, checked against the source and, where it could work, live
    - **OpenClaw's native module, where the app has a pin.** If the holder maps a file laid out as `node_modules/@openclaw/fs-safe-<platform>-<arch>/fs-safe-native.node` inside a package whose `package.json` names a version with pins (2026.10.6, 2026.11.10), the module's SHA-256 must equal that version's pin, from the published `@openclaw/fs-safe-*` packages it depends on exactly. The module is ad-hoc signed with no team, so its code signature says nothing. This check authenticates nothing: the package's `package.json` and the module's path are files the holder's own account can write, so a holder with no module, an unreadable one, or one whose package names another version skips it.
    - **The profile's files.** It holds open descriptors on the profile's `tmp/openclaw-<uid>/gateway.state.lock` and `state/openclaw.sqlite`. Each is matched by device and inode against Clawtrate's own no-follow open of the same file.
    - **The lock names it.** The lock is OpenClaw's compatibility projection of its gateway owner (`<openclaw>/docs/gateway/gateway-lock.md`), owner-only, read with the reader's rules. It must name this PID, role `gateway`, this port and this profile's state folder, with a `startTime` equal to the kernel's start time for the PID, to within a second.
+   - **The lock names the settings file that was read.** Both versions write the settings file the gateway loaded into its lock (`configPath`), and OpenClaw's `OPENCLAW_CONFIG_PATH` can choose a file other than the profile's own. It must be the profile's own `openclaw.json`, the file the reader read the port, token and TLS from; a gateway started on another file is refused, with no Connect.
 3. **Bounds.**
    - Both checks run in a small helper off the main thread, with a 2 s deadline and bounded output. On macOS the helper uses libproc (`proc_pidfdinfo`, `proc_pidpath`, region and vnode info), as `lsof` does. On Linux it reads `/proc/net/tcp`, `/proc/<pid>/exe`, `/proc/<pid>/maps` and `/proc/<pid>/fd`.
    - A missing helper, a timeout, denied access or malformed output all mean unverified, and nothing is sent.
@@ -210,7 +211,7 @@ What 2026.10.6 offers, checked against the source and, where it could work, live
 **What (e) and (f) establish.** At the moment of the check, the server end of Clawtrate's connection is held by processes of this account the helper can see, and one of them:
 
 - has this profile's gateway lock and state database open;
-- is the process this profile's lock names as its running gateway, with the same start time.
+- is the process this profile's lock names as its running gateway, with the same start time, started on this profile's own `openclaw.json`.
 
 That is, the connection matches this account's OpenClaw profile. A process that can't open the profile's 0700 folder (a sandboxed proxy, the case the review built) can't hold those descriptors, and is refused. The stated limits, what this defends against and what it doesn't, are in `docs/decisions.md`, "Local connect's proof".
 
@@ -219,6 +220,8 @@ That is, the connection matches this account's OpenClaw profile. A process that 
 - **Which program is running.** A process of this same account that can write the profile's files can satisfy (e) and (f); such a process can already read the shared token and the gateway's pairing state, and replace the gateway. OpenClaw offers no way today for a gateway to prove itself from a source such a process can't write.
 
 - **That the JavaScript running is unmodified OpenClaw.** Node loads scripts and closes them. A process of this account with write access to the package, or the power to inject into the gateway, could change what runs. Such a process could read the token anyway.
+- **What the running gateway loaded.** "TLS is off" means the settings file the reader read says so. A file changed in place since the gateway started (TLS turned off, a port or a token changed) is still the file the lock names, while the gateway serves what it read at its start. A Connect that gateway never answers on `ws://` ends with Use Advanced and Look again, never behind Connecting.
+- **The folder at every moment.** The folder's identity is compared at checkpoints (the look's read and check, Connect's read of the token, both checks of every socket, each reconnect's dial), not watched continuously between them.
 - **That no other holder exists.** An unprivileged scan can't see a duplicate of the accepted socket held by another account. One could exist only if a holder of this account passed it on (`SCM_RIGHTS`, inheritance).
 - **The moment between the last check and the write.** Two checks narrow that window but don't close it.
 - **That the gateway is the one its address implies,** in any cryptographic sense. Only (b), which isn't built, would do that.
@@ -237,7 +240,7 @@ A bounded, read-only reader. It never repairs a file or a permission, and runs n
 - **Where.**
   - Only `~/.openclaw/openclaw.json` (the default profile) and `~/.openclaw-clawtrate/openclaw.json`, under the home folder the operating system reports for this account.
   - `OPENCLAW_CONFIG_PATH` and `OPENCLAW_STATE_DIR` affect only processes started with them (`<openclaw>/dist/paths-BP0DYpE8.mjs` lines 117-140, 214-223).
-  - If both profiles qualify, both are shown by name: "Choose the OpenClaw profile to connect to."
+  - If both profiles qualify, the look offers the first whose port matches its profile, the default profile first, and doesn't name the other: a choice between them isn't built.
 - **Which home.** Every entry point of the reader requires a `sandboxed` option, and the choice is made before anything is opened.
   - A production run reads only the home the operating system reports for this account, refuses any other home a caller names, and reads nothing when that home can't be determined.
   - Any other run, including one with the option missing, reads only a private folder of this account's below one of this machine's temporary roots, away from the account's real home.
@@ -305,7 +308,7 @@ A sandboxed run reads the development instance's own `openclaw.json`, proven as 
 - a listener that holds the port while the instance is stopped;
 - on a hosted macOS runner, a listener from a second account.
 
-The TLS path is checked by a probe-style test that turns TLS on in its own instance only. A development gateway has local auto-approval off by its contract. So the setup checks start their instance with `--default-local-pairing` for the zero-approval path, and without it for the one-approval path.
+An earlier design experiment checked a TLS path with a probe-style test that turned TLS on in its own instance only; that path isn't built. What is tested now: the extractor takes every TLS form in the settings as TLS, before any port or credential is used (`settings-extract.test.ts`), and the look gives such a profile no Connect and asks for no check of its port (`local-setup.test.ts`); the card offers Advanced. A development gateway has local auto-approval off by its contract. So the setup checks start their instance with `--default-local-pairing` for the zero-approval path, and without it for the one-approval path.
 
 ## 4. Another computer: the form up front
 
@@ -554,7 +557,7 @@ Each quote is from `docs/decisions.md`, `docs/design/setup.md` or `docs/parity.m
 
    > "So the look never runs an installed OpenClaw whose version isn't on a list of versions verified to have a read-only path (`READ_ONLY_VERSIONS` …), and that list is empty."
 
-   Replacement: "The look runs no OpenClaw program on any version. It reads the version from `package.json`, and the address and token from `openclaw.json` with the bounded reader of `setup-effortless.md` §3. It sends nothing to a socket until it passes `setup-effortless.md` §3's send gate: OpenClaw's TLS pin when TLS is on, and otherwise the account that holds the accepted end plus the kernel's facts about that holder. `READ_ONLY_VERSIONS`, `gateway status`, `config get` and `qr` leave the look."
+   Replacement: "The look runs no OpenClaw program on any version, and reads no version. It reads the port and token from the canonical `openclaw.json` of the default and `clawtrate` profiles with the bounded reader of `setup-effortless.md` §3. It sends nothing to a socket until it passes `setup-effortless.md` §3's send gate: the account that holds the accepted end, and that end's match to this account's OpenClaw profile (the profile's lock and state database held open by the process the lock names, and the settings file the lock names being the one read). With TLS on in the settings, This computer offers no Connect, and the person uses Advanced with the gateway's address. `READ_ONLY_VERSIONS`, `gateway status`, `config get` and `qr` leave the look."
 
 5. **The host's confirmation**:
 
@@ -584,7 +587,7 @@ Each quote is from `docs/decisions.md`, `docs/design/setup.md` or `docs/parity.m
 
    > "**Clawtrate does not read the gateway's shared token.** … the design deliberately does not."
 
-   Replacement: "Clawtrate reads the shared token from OpenClaw's settings file, which belongs to the same account, and sends it only to a socket whose other end it has proved."
+   Replacement: "Clawtrate reads the shared token from OpenClaw's settings file, which belongs to the same account, and sends it only to a socket held by this account whose other end matches this account's OpenClaw profile (§3's send gate)."
 
 10. `setup.md` §9:
 
@@ -633,7 +636,7 @@ Each quote is from `docs/decisions.md`, `docs/design/setup.md` or `docs/parity.m
 
 ## 13. Residual risk on this Mac, accepted
 
-**The decision.** The product owner chose the local send gate of §3. As relayed to this design: "pure one-click Connect, with the account check plus a check of the listening program's executable", "no TLS switch and no OpenClaw restart". The confirming review found that the account check alone isn't a proof of identity. The relay records that the product owner "accepts that narrow residual risk".
+**The decision, as first relayed (superseded in part).** The product owner chose the local send gate of §3: one-click Connect, with no TLS switch and no OpenClaw restart. As first relayed, that gate was the account check plus a check of the listening program's executable; the executable check is superseded, and the check as built is the account check (e) and the profile check (f) of §3 (see "The product owner decided how local connect works" there). The confirming review found that the account check alone isn't a proof of identity. The relay records that the product owner accepts that narrow residual risk.
 
 **What is at stake.** OpenClaw's shared token. Whoever has it can pair a device with full control, and that includes a terminal as the gateway's user.
 
