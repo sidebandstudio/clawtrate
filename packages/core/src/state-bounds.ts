@@ -25,6 +25,7 @@ import {
   MAX_SIGNIN_METHODS,
   type AccountsState,
   type AccountWrite,
+  type OrderClear,
   type BotBinding,
   type BotCreationState,
   type CatalogModel,
@@ -1160,6 +1161,11 @@ const lockEvidence = object<LockEvidence>()({
   checkedAt: NUMBER,
   lastMatchAt: NUMBER,
   lostAt: NUMBER,
+  readSeq: NUMBER,
+  attemptSeq: NUMBER,
+  startedSeq: NUMBER,
+  readGateway: ID,
+  providerRead: FLAG,
   error: text(MAX_MESSAGE_LINE_CHARS),
 });
 const binding = object<BotBinding>()({
@@ -1231,6 +1237,20 @@ const accountWrite = object<AccountWrite>()({
   error: text(MAX_MESSAGE_LINE_CHARS),
   at: NUMBER,
 });
+const orderClear = object<OrderClear>()({
+  id: ID,
+  gatewayId: ID,
+  botId: ID,
+  provider: ID,
+  kind: ENUM,
+  account: ID,
+  status: ENUM,
+  error: text(MAX_MESSAGE_LINE_CHARS),
+  at: NUMBER,
+  sentSeq: NUMBER,
+  checkedSeq: NUMBER,
+  checkedAt: NUMBER,
+});
 export const ACCOUNTS: Bound = object<AccountsState>()({
   status: ENUM,
   error: text(MAX_MESSAGE_LINE_CHARS),
@@ -1249,6 +1269,7 @@ export const ACCOUNTS: Bound = object<AccountsState>()({
   signIn,
   creation: botCreation,
   write: accountWrite,
+  clear: orderClear,
 });
 
 /** Setting up on the host's computer (`setup.ts`): fixed facts and a few short names. */
