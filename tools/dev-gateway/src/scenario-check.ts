@@ -58,7 +58,7 @@ import {
   ATTACH_TEXT_PATH,
   reviewsDraftPdf,
 } from "./scripted-files.ts";
-import { DENIED_TOOLS, GATEWAY_TOOLS } from "./cli.ts";
+import { DENIED_TOOLS, GATEWAY_TOOLS, logSection, logTail } from "./cli.ts";
 import { shape, toolJson } from "./versions.ts";
 import { OFFERED_TOOLS_PATH, QUIET_TURNS_PATH } from "./fake-provider.ts";
 import { COMPUTER_CHECKS } from "./computer-checks.ts";
@@ -106,6 +106,17 @@ function same(actual: unknown, expected: unknown, what: string): void {
   );
 }
 
+/** What a tool result says about itself, for a failure message: its status and error, or its text. */
+export function resultSays(result: JsonRecord): string {
+  const details = rec(result.details);
+  if (details.status !== undefined || details.error !== undefined) {
+    return `its status is ${JSON.stringify(details.status)}, its error ${JSON.stringify(details.error)}`;
+  }
+  const blocks = Array.isArray(result.content) ? (result.content as JsonRecord[]) : [];
+  const text = blocks.map((b) => String(b.text ?? "")).join("\n");
+  return text ? `its text is ${JSON.stringify(text.slice(0, 500))}` : "it has no details or text";
+}
+
 /** Everything one run emitted on one connection, with helpers to read it. */
 export class RunView {
   readonly op: OperatorSession;
@@ -147,9 +158,15 @@ export class RunView {
       same(this.data(start).args, call.args, `${where} arguments`);
       const end = this.tool("result").find((e) => this.data(e).toolCallId === id);
       expect(end, `${where} has no result`);
-      same(this.data(end).isError, call.isError, `${where} isError`);
       const result = rec(this.data(end).result);
       const blocks = Array.isArray(result.content) ? (result.content as JsonRecord[]) : [];
+      // A result that failed, or didn't, unexpectedly says why in its details or text.
+      expect(
+        canonical(this.data(end).isError) === canonical(call.isError),
+        `${where} isError: expected ${JSON.stringify(call.isError)}, got ${JSON.stringify(
+          this.data(end).isError,
+        )}; ${resultSays(result)}`,
+      );
       same(
         blocks.map((b) => b.type),
         blocks.map(() => "text"),
@@ -4616,6 +4633,8 @@ export async function runScenarioChecks(
     images?: boolean;
     /** The instance was started with `--with-message-tool` (`Harness.messageTool`). */
     messageTool?: boolean;
+    /** The instance's gateway log, whose end a failed check prints, since the reset removes it. */
+    gatewayLog?: string;
   } = {},
 ): Promise<{ passed: number; failed: number; notes: string[] }> {
   const log = options.log ?? console.log;
@@ -4637,6 +4656,10 @@ export async function runScenarioChecks(
     } catch (error) {
       failed += 1;
       log(`FAIL  ${check.name}: ${error instanceof Error ? error.message : String(error)}`);
+      const gatewayLog = options.gatewayLog;
+      if (gatewayLog) {
+        log(logSection("the development gateway's", gatewayLog, logTail(gatewayLog, 20)));
+      }
     }
   }
   return { passed, failed, notes: harness.notes };

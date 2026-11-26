@@ -148,6 +148,7 @@ async function main(): Promise<number> {
         ownerAgent: (botId, key, message) => ownerAgent(inst, botId, key, message),
         providerUrl,
         only: (check) => !MESSAGE_TOOL_CHECKS.includes(check.name),
+        gatewayLog: join(inst.runDir, "gateway.log"),
       });
       for (const row of FAMILY_ROWS) console.log(`family ${JSON.stringify(row)}`);
       for (const note of notes) console.log(`note  ${note}`);
@@ -298,6 +299,7 @@ async function imageChecks(
       only: (check) => MESSAGE_TOOL_CHECKS.includes(check.name),
       images: true,
       messageTool: true,
+      gatewayLog: join(inst.runDir, "gateway.log"),
     });
     console.log(`${passed} of ${passed + failed} image checks passed`);
     return failed;
