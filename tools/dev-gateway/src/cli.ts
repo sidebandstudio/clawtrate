@@ -997,13 +997,33 @@ function logSection(owner: string, log: string, tail: string): string {
  * which the instance's reset removes, so a failed CI job still shows what the gateway was doing.
  */
 export function seedProblem(problem: {
+  /** What stopped: the seed, or a start's check after its gateway answered. */
+  what?: string;
   error: string;
   logs: Array<{ owner: string; log: string; tail: string }>;
 }): string {
   return [
-    `the seed stopped: ${problem.error}`,
+    `${problem.what ?? "the seed"} stopped: ${problem.error}`,
     ...problem.logs.map(({ owner, log, tail }) => logSection(owner, log, tail)),
   ].join("\n");
+}
+
+/** Run `step`; if it fails, say what stopped with the end of the gateway's and the model's logs. */
+async function withLogTails<T>(
+  inst: DevInstance,
+  what: string,
+  step: () => Promise<T>,
+): Promise<T> {
+  try {
+    return await step();
+  } catch (error) {
+    const logs = [
+      { owner: "the development gateway's", log: join(inst.runDir, "gateway.log") },
+      { owner: "the scripted model's", log: join(inst.runDir, "provider.log") },
+    ].map((each) => ({ ...each, tail: logTail(each.log) }));
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(seedProblem({ what, error: message, logs }), { cause: error });
+  }
 }
 
 /** What a start watches while one of its processes comes up. */
@@ -1090,8 +1110,11 @@ export function execScopeProblem(scope: ExecScope): string | null {
 
 /** Ask the running gateway what exec policy each bot actually gets. */
 export async function execPolicyProblems(inst: DevInstance): Promise<string[]> {
+  // A read, so safe to try again.
   const snapshot = parseJsonOutput<{ effectivePolicy?: { scopes?: ExecScope[] } }>(
-    await must(inst, ["approvals", "get", "--json"]),
+    await retryOnTransport(() => must(inst, ["approvals", "get", "--json"]), {
+      what: "approvals get",
+    }),
   );
   const scopes = snapshot.effectivePolicy?.scopes ?? [];
   if (scopes.length === 0) return ["the gateway reported no exec policy scopes"];
@@ -1448,7 +1471,9 @@ export async function start(
       },
       GATEWAY_START_MS,
     );
-    await assertExecDenied(inst);
+    // The first read after the health check, which a gateway slow to settle can leave unanswered
+    // (#647): tried again as the seed's reads are, and its failure shows the gateway's log.
+    await withLogTails(inst, "the start's exec policy check", () => assertExecDenied(inst));
     if (options.node) await startScriptedNode(inst, runId, ports);
     const marker = readMarker(inst.stateDir);
     console.log(
@@ -1900,7 +1925,9 @@ export async function callGateway<T>(
 /** A gateway call that failed reaching or hearing from the gateway, not one the gateway refused. */
 export function isTransportFailure(error: unknown): boolean {
   const text = error instanceof Error ? error.message : String(error);
-  return /"type":\s*"gateway_transport_error"/.test(text);
+  // The gateway client's own error, or the CLI's for a gateway it couldn't reach: commands
+  // other than `gateway call`, such as `approvals get`, report that as a `cli_error`.
+  return /"type":\s*"gateway_transport_error"|Gateway not reachable at /.test(text);
 }
 
 /**
@@ -2273,7 +2300,7 @@ async function seedConversations(
 export async function seed(inst: DevInstance): Promise<void> {
   const refusal = inst.runner.refusal();
   if (refusal) throw new Error(refusal);
-  try {
+  await withLogTails(inst, "the seed", async () => {
     // Inside the diagnostics: a gateway that no longer answers its health call is one whose log
     // says why.
     if (!(await gatewayHealthy(inst))) {
@@ -2282,14 +2309,7 @@ export async function seed(inst: DevInstance): Promise<void> {
       );
     }
     await seedBotsAndTasks(inst);
-  } catch (error) {
-    const logs = [
-      { owner: "the development gateway's", log: join(inst.runDir, "gateway.log") },
-      { owner: "the scripted model's", log: join(inst.runDir, "provider.log") },
-    ].map((each) => ({ ...each, tail: logTail(each.log) }));
-    const message = error instanceof Error ? error.message : String(error);
-    throw new Error(seedProblem({ error: message, logs }), { cause: error });
-  }
+  });
 }
 
 async function seedBotsAndTasks(inst: DevInstance): Promise<void> {
