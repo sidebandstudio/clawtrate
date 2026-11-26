@@ -41,7 +41,7 @@ import type { BotGuidesAnswer, GuidesChange } from "../src/guides.ts";
 import { agentEvent, grantingGateway, openTask } from "./client-harness.ts";
 import { GatewayError, memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
-import { ClawtrateClient } from "../src/client.ts";
+import { ClawtrateClient, CONNECTION_CHANGED } from "../src/client.ts";
 import { FAST } from "./client-harness.ts";
 import { URL_A } from "./client-harness.ts";
 
@@ -1282,6 +1282,36 @@ describe("the guides in the client", () => {
       // Settings reads now: its own read learns the name, which queues the change.
       const read = await client.readBotGuides();
       expect(read.folders[0]?.state).toBe("current");
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("a Settings read whose connection changes on the way reads nothing more on the new one", async () => {
+    const files = fakeFiles({ pip: BOT_FILE });
+    const storage = adminStorage();
+    const { client, gateway } = await openTask({ storage });
+    withFiles(gateway, files);
+    try {
+      await reconnect(client, gateway, storage);
+      // The connection changes while this device's record is read.
+      const get = storage.get.bind(storage);
+      let once = true;
+      storage.get = async (key: string) => {
+        if (key === guidesKey("gw-a") && once) {
+          once = false;
+          const was = client.state.connection.connectedAt;
+          gateway.dropAll();
+          await until(
+            () =>
+              client.state.connection.status === "connected" &&
+              client.state.connection.connectedAt !== was,
+          );
+        }
+        return get(key);
+      };
+      // Without the binding, it would read the files on the new connection and show them.
+      await expect(client.readBotGuides()).rejects.toThrow(CONNECTION_CHANGED);
     } finally {
       client.stop();
     }

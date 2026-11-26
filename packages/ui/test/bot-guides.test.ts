@@ -4,7 +4,7 @@
 // its words and its one action, and no row for a bot simply as Clawtrate keeps it.
 import type { BotGuidesAnswer, GuideFolder } from "@clawtrate/core";
 import { describe, expect, it } from "vitest";
-import { afterChange, forConnection, guideRow } from "../src/BotGuides.tsx";
+import { afterChange, forConnection, guideRow, removalConfirmed } from "../src/BotGuides.tsx";
 
 const read = (gatewayId: string | null, target: number): BotGuidesAnswer => ({
   folders: [],
@@ -105,5 +105,23 @@ describe("a bot's row", () => {
       words: "Couldn't read its instructions file. missing scope: operator.read",
       action: null,
     });
+  });
+});
+
+describe("a row's Remove", () => {
+  const after = (folders: Partial<GuideFolder>[], errors: string[] = []): BotGuidesAnswer => ({
+    ...read("gw-a", 1),
+    folders: folders.map((f) => ({ bots: ["pip"], state: "none", ...f }) as GuideFolder),
+    errors,
+  });
+
+  it("is announced only when the file read back holds no section, or the bot is gone", () => {
+    expect(removalConfirmed(after([{ state: "none" }]), "pip")).toBe(true);
+    expect(removalConfirmed(after([{ state: "removed" }]), "pip")).toBe(true);
+    expect(removalConfirmed(after([]), "pip")).toBe(true);
+    // A section there in any shape, a file that couldn't be read, or an error: not announced.
+    for (const state of ["current", "older", "changed", null] as const)
+      expect(removalConfirmed(after([{ state }]), "pip"), String(state)).toBe(false);
+    expect(removalConfirmed(after([{ state: "none" }], ["pip: failed"]), "pip")).toBe(false);
   });
 });

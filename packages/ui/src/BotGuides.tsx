@@ -97,6 +97,17 @@ export function guideRow(
 }
 
 /** Whether an answer is the connected gateway's own (`GatewayStamp`): only that one is shown. */
+/**
+ * Whether a row's Remove is confirmed by what was read back: no error, and the bot's file read
+ * with no section in it, or no longer on the list. A section there in any shape, or a file that
+ * couldn't be read, isn't confirmed.
+ */
+export const removalConfirmed = (read: BotGuidesAnswer, bot: string): boolean =>
+  read.errors.length === 0 &&
+  read.folders
+    .filter((f) => f.bots.includes(bot))
+    .every((f) => f.state === "none" || f.state === "removed");
+
 export const forConnection = (
   stamp: GatewayStamp | undefined,
   connection: { gatewayId: string | null; target: number },
@@ -338,12 +349,7 @@ export function BotGuidesPane({ announce }: { announce: (text: string) => void }
                               .then(
                                 (read) =>
                                   read &&
-                                  read.errors.length === 0 &&
-                                  !read.folders.some(
-                                    (f) =>
-                                      f.bots.includes(folder.bots[0]!) &&
-                                      (f.state === "current" || f.state === "older"),
-                                  ) &&
+                                  removalConfirmed(read, folder.bots[0]!) &&
                                   announce(`Taken out of ${label}`),
                               );
                           void guides

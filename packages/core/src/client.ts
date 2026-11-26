@@ -7328,7 +7328,10 @@ export class ClawtrateClient {
       gatewayId !== null &&
       record?.on === false &&
       (await this.host.storage.get(guidesKey(gatewayId)).catch(() => "")) === null;
-    const request = (method: string, params: unknown) => this.request(method, params);
+    // Every read goes out on the connection this one began on: one gateway's record is never shown
+    // with another's files.
+    const request = (method: string, params: unknown) =>
+      alive() ? this.request(method, params) : Promise.reject(new Error(CONNECTION_CHANGED));
     const [folders, voice] = await Promise.all([
       readGuideFolders(request, record ?? null),
       readVoice(request, this.voiceAdvertised).catch(() => null),
