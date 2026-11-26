@@ -644,6 +644,7 @@ const item = flagged<TranscriptItem>()({
   updateNoticeAfter: NUMBER,
   updateNoticeWrittenAt: NUMBER,
   steered: FLAG,
+  gatewayEvent: FLAG,
 });
 const reaction = object<MessageReaction>()({
   emoji: id(MAX_EMOJI_CHARS),
