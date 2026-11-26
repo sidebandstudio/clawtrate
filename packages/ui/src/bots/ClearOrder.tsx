@@ -181,6 +181,7 @@ export function ClearOutcome({
           ? clear.error
           : `Nothing was sent.${clear.error ? ` ${clear.error}` : ""}`,
         true,
+        true,
       );
   }
 }

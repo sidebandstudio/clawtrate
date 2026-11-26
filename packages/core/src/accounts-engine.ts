@@ -29,6 +29,7 @@ import {
   prefProfileId,
   providerNotListed,
   readBotView,
+  unconfirmedOrder,
   readCatalog,
   readPickerCuts,
   readProviderCatalog,
@@ -918,6 +919,17 @@ export class AccountsEngine {
       !latest.evidence.providerRead
     ) {
       publish({ status: "unsent", error: providerNotListed(provider) });
+      return;
+    }
+    // The newest attempt begun after it failed (none has succeeded since): it confirmed nothing,
+    // and the order may have changed under it, so nothing is sent.
+    if (
+      latest !== undefined &&
+      latest.evidence.attemptSeq !== null &&
+      latest.evidence.attemptSeq > firstSeq &&
+      latest.evidence.attemptSeq !== latest.evidence.readSeq
+    ) {
+      publish({ status: "unsent", error: unconfirmedOrder(kind) });
       return;
     }
     // Any attempt begun after it, shown or failed, for any provider: the press goes on only while

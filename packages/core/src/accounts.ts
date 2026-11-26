@@ -1228,6 +1228,14 @@ export function evaluateOrder(
   };
 }
 
+/**
+ * Said when a read of the bot begun after the press's read before the send failed, and none has
+ * succeeded since: nothing confirms the order the person confirmed, so nothing is sent.
+ */
+export function unconfirmedOrder(kind: "unlock" | "clear"): string {
+  return `Clawtrate couldn't read the order again just now. Check now, then ${kind === "unlock" ? "Unlock" : "Clear order"} again.`;
+}
+
 /** Said when the gateway's answer for a bot doesn't list the provider of its account or order. */
 export function providerNotListed(provider: string): string {
   return `The gateway's answer didn't list ${provider}, so it says nothing of that provider's order.`;

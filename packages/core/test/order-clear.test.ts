@@ -15,6 +15,7 @@ import {
   NO_ACCOUNT_STATUS,
   ORDER_CLEAR_WAIT_MS,
   providerNotListed,
+  unconfirmedOrder,
   type AccountsState,
   type BotBinding,
   type OrderClear,
@@ -988,15 +989,67 @@ describe("F-592: never clear what the person didn't confirm", () => {
       await pressed;
       expect(fake.gateway.calls("models.authOrderSet")).toHaveLength(0);
       expect(fake.orders.otto?.acme).toEqual(["acme:home"]);
-      expect(accounts().clear?.status).toBe("moved");
+      expect(accounts().clear).toMatchObject({
+        status: "unsent",
+        error: unconfirmedOrder("unlock"),
+      });
     } finally {
       restore();
     }
     client.stop();
   });
 
-  it("a newer read that only failed, with nothing else changed: the press goes on", async () => {
-    const { client, fake, press } = await locked();
+  for (const [what, change] of [
+    ["with nothing else changed", null],
+    ["while the order changed from Work to Home", ["acme:home"]],
+  ] as const)
+    it(`a newer read that failed, ${what}: nothing is sent, and the page asks to check first`, async () => {
+      const { client, fake, accounts, press } = await locked();
+      // The press's read before the send: its config answer held, its status Work alone.
+      const get = fake.gateway.handlers["config.get"]!;
+      const held = deferred<void>();
+      let arm = false;
+      let holding = false;
+      fake.gateway.handlers["config.get"] = async (params) => {
+        const answer = get(params);
+        if (arm && !holding) {
+          holding = true;
+          await held.promise;
+        }
+        return answer;
+      };
+      const restore = fixedClock();
+      try {
+        arm = true;
+        const pressed = press();
+        await until(() => holding);
+        if (change) fake.orders.otto = { acme: [...change] };
+        // A newer Check now fails: the page keeps its last reading, Work alone, and confirms nothing.
+        fake.failStatusFor = "otto";
+        await client.checkLock("otto");
+        expect(otto(accounts()).evidence.status).toBe("failed");
+        expect(otto(accounts()).order).toMatchObject({ ids: ["acme:work"], stored: true });
+        fake.failStatusFor = null;
+        held.resolve();
+        await pressed;
+        expect(fake.gateway.calls("models.authOrderSet")).toHaveLength(0);
+        expect(fake.orders.otto?.acme).toEqual(change ?? ["acme:work"]);
+        expect(accounts().clear).toMatchObject({
+          status: "unsent",
+          error: unconfirmedOrder("unlock"),
+        });
+        expect(shown(accounts().clear!, otto(accounts()))).toBe("unsent");
+        // A Check now that succeeds since leaves the ending as it was: nothing was sent.
+        await client.checkLock("otto");
+        expect(shown(accounts().clear!, otto(accounts()))).toBe("unsent");
+      } finally {
+        restore();
+      }
+      client.stop();
+    });
+
+  it("a newer read that failed and a newer one that succeeded since, finding Work alone: the press goes on", async () => {
+    const { client, fake, accounts, press } = await locked();
     const get = fake.gateway.handlers["config.get"]!;
     const held = deferred<void>();
     let arm = false;
@@ -1017,9 +1070,12 @@ describe("F-592: never clear what the person didn't confirm", () => {
       fake.failStatusFor = "otto";
       await client.checkLock("otto");
       fake.failStatusFor = null;
+      await client.checkLock("otto");
+      expect(otto(accounts()).evidence.status).toBe("matched");
       held.resolve();
       await pressed;
       expect(fake.gateway.calls("models.authOrderSet")).toHaveLength(1);
+      expect(accounts().clear?.status).toBe("cleared");
     } finally {
       restore();
     }
