@@ -486,15 +486,25 @@ export class DeviceApprovals {
     }, due - now);
   }
 
-  /** One numbered `device.pair.list`, its pending rows and its paired devices. */
-  private async list(): Promise<{ seq: number; pending: unknown[]; paired: unknown[] }> {
+  /**
+   * The only way this engine sends `device.pair.list`: the send is numbered, and its pending
+   * rows are applied (published, collisions recorded) if no newer reply was applied on this
+   * connection, whichever path asked: the list read, a decision's read again, or the read of a
+   * paired device. `applied` says whether this reply was. A source check holds that no other
+   * call sends the method from here (`apps/desktop/test/device-pair-list-callers.test.ts`).
+   */
+  private async list(): Promise<{
+    seq: number;
+    applied: boolean;
+    pending: unknown[];
+    paired: unknown[];
+  }> {
     const seq = (this.sent += 1);
+    const epoch = this.epoch;
     const answer = asRecord(await this.ctx.request("device.pair.list", {})) ?? {};
-    return {
-      seq,
-      pending: Array.isArray(answer.pending) ? answer.pending : [],
-      paired: Array.isArray(answer.paired) ? answer.paired : [],
-    };
+    const pending = Array.isArray(answer.pending) ? answer.pending : [];
+    const applied = epoch === this.epoch && this.applyNewest(seq, pending);
+    return { seq, applied, pending, paired: Array.isArray(answer.paired) ? answer.paired : [] };
   }
 
   /**
@@ -519,9 +529,8 @@ export class DeviceApprovals {
     this.reading = true;
     this.lastReadAt = this.ctx.now();
     try {
-      const { seq, pending } = await this.list();
+      await this.list();
       if (epoch !== this.epoch) return;
-      this.applyNewest(seq, pending);
     } catch (error) {
       if (epoch === this.epoch) this.patch({ error: errorText(error) });
     } finally {
@@ -614,9 +623,9 @@ export class DeviceApprovals {
   }
 
   /** The whole pending list read again from the gateway, for a decision. */
-  private async readAgain(): Promise<{ seq: number; rows: unknown[] }> {
-    const { seq, pending } = await this.list();
-    return { seq, rows: pending };
+  private async readAgain(): Promise<{ seq: number; applied: boolean; rows: unknown[] }> {
+    const { seq, applied, pending } = await this.list();
+    return { seq, applied, rows: pending };
   }
 
   private spend(requestId: string): void {
@@ -682,10 +691,10 @@ export class DeviceApprovals {
     // Each step goes on the connection the sheet was read on, or not at all.
     const same = this.here();
     try {
-      const { seq, rows } = await this.readAgain();
+      const { seq, applied, rows } = await this.readAgain();
       if (!same()) return { kind: "interrupted" };
-      // A newer list was applied while this one was out: decide nothing on the older one.
-      if (!this.applyNewest(seq, rows)) {
+      // A newer reply, from any read, was applied before or since this one: decide nothing on it.
+      if (!applied || seq !== this.applied) {
         this.refreshOn(same);
         return { kind: "not-allowed" };
       }
