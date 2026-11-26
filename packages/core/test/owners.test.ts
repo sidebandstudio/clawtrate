@@ -50,6 +50,7 @@ const WALKED = new Set([
   "OpenClawUpdates",
   "MachinesEngine",
   "WaitingIndex",
+  "QuietChecks",
   "ComputerViews",
 ]);
 /**

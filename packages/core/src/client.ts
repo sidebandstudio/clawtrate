@@ -280,6 +280,8 @@ import {
   settleMissingQuestions,
   settleQuestionsOfEndedRuns,
   settleVanishedRuns,
+  settleQuietEnds,
+  quietPending,
   retainActivity,
   startLocalRun,
   questionPending,
@@ -388,6 +390,7 @@ import {
   type TaskActionContext,
 } from "./task-actions.ts";
 import { fromActivity, WaitingIndex } from "./waiting.ts";
+import { QUIET_CHECK_ROWS, QuietChecks, quietInHistory } from "./quiet-end.ts";
 import { mentionRows, slashRows, type MenuRow } from "./composer-menus.ts";
 import { listedBots } from "./gateway-bot.ts";
 import {
@@ -1527,6 +1530,8 @@ export class ClawtrateClient {
   private rows = new Map<string, RawRecord>();
   /** Which tasks wait for the person, across every bot (`waiting.ts`), for the rail. */
   private readonly waiting = new WaitingIndex();
+  /** What history said of a marked failure of a task this client does not follow (#680). */
+  private readonly quietChecks = new QuietChecks();
   /** Tasks whose read on opening is on its way: one per task at a time, however often it is asked. */
   private readonly openedReads = new Set<string>();
   /** Reads and writes of the rail's arrangement in the order they were asked, and the latest shown. */
@@ -5577,6 +5582,11 @@ export class ClawtrateClient {
       };
     this.foreign.delete(sessionKey);
     this.foreign.set(sessionKey, next);
+    // A quiet end is one only once its history has been read (#680).
+    const quiet = [...quietPending(next.runs)].filter(
+      (id) => findRun(before, id)?.quietEnd !== "pending",
+    );
+    if (quiet.length > 0) void this.settleForeignQuiet(sessionKey, new Set(quiet));
     while (this.foreign.size > FOREIGN_SESSIONS) {
       const oldest = this.foreign.keys().next().value as string;
       this.foreign.delete(oldest);
@@ -5996,6 +6006,10 @@ export class ClawtrateClient {
           .filter((run) => ids.has(run.id) && !isTerminal(run.state))
           .map((run) => run.id),
       );
+      // Quiet ends this read may settle: those that ended before it was asked (#680).
+      const quietBefore = quietPending(
+        (this.foreign.get(sessionKey)?.runs ?? []).filter((run) => ids.has(run.id)),
+      );
       let history: RawRecord | null;
       try {
         history = asRecord(await this.request("chat.history", { sessionKey, limit: 40 }));
@@ -6064,10 +6078,12 @@ export class ClawtrateClient {
           ended,
           inferred,
         );
-        const settled =
+        const settled = settleQuietEnds(
           runs.length === merged.length && runs.every((run, i) => run === merged[i])
             ? merged
-            : runs;
+            : runs,
+          quietBefore,
+        );
         return {
           ...aliased,
           runs: [...aliased.runs.filter((run) => !ids.has(run.id)), ...settled],
@@ -6078,6 +6094,20 @@ export class ClawtrateClient {
       if (tokens.size === 0 && this.foreignReads.get(sessionKey) === tokens)
         this.foreignReads.delete(sessionKey);
     }
+  }
+
+  /**
+   * A run of a session nobody has open ended with an end the gateway marked not to show (#680):
+   * its history says whether that is a quiet answer. One the read did not settle (refused, failed,
+   * or from an earlier connection) stays the failure it was sent as.
+   */
+  private async settleForeignQuiet(sessionKey: string, ids: Set<string>): Promise<void> {
+    await this.readRecipientRuns(sessionKey, ids, this.generation);
+    if (!this.foreign.has(sessionKey)) return;
+    this.updateForeign(sessionKey, (activity) => {
+      const runs = settleQuietEnds(activity.runs, ids, true);
+      return runs === activity.runs ? activity : { ...activity, runs };
+    });
   }
 
   /** Copy the state of every recipient run a task's `sessions_send` results name, where it is known. */
@@ -9301,6 +9331,7 @@ export class ClawtrateClient {
     this.unsentStops.clear();
     this.approvalOutcomes.clear();
     this.waiting.clear();
+    this.quietChecks.clear();
     this.unrouted.clear();
     this.recipients.clear();
     this.spawnedBy.clear();
@@ -9944,6 +9975,43 @@ export class ClawtrateClient {
   }
 
   /**
+   * Whether the task's row reports a failure whose end the gateway marked not to show
+   * (`suppressErrorNotice`, OpenClaw 2026.11.10) and that end is a quiet answer (#680). The run
+   * this client holds says; for one it doesn't hold, the gateway's history, read once. Until that
+   * read has looked, it is the quiet answer it is meant to be; a read refused or failed leaves
+   * the failure.
+   */
+  private quietAnswer(key: string): boolean {
+    const row = this.rows.get(key);
+    const runId = row?.suppressErrorNotice === true ? row.lastRunId : null;
+    if (typeof runId !== "string" || !runId) return false;
+    const transcript = this.state.transcripts[key];
+    const run = transcript ? findRun(transcript, runId) : undefined;
+    if (run) return run.state === "completed" && run.quietEnd !== undefined;
+    const verdict = this.quietChecks.verdict(key, runId, this.epoch);
+    if (verdict !== undefined) return verdict === "pending" || verdict === "quiet";
+    if (!this.quietChecks.begin(key, runId, this.epoch)) return false;
+    void this.checkQuiet(key, runId);
+    return true;
+  }
+
+  /** Read the task's history for the run its row names, and say what it showed (`quietAnswer`). */
+  private async checkQuiet(key: string, runId: string): Promise<void> {
+    const epoch = this.epoch;
+    let verdict: "quiet" | "failed" | "unread" = "unread";
+    try {
+      const history = asRecord(
+        await this.request("chat.history", { sessionKey: key, limit: QUIET_CHECK_ROWS }),
+      );
+      verdict = quietInHistory(history?.messages, runId) ? "quiet" : "failed";
+    } catch {
+      // Unread: the failure stays, and a later connection reads again.
+    }
+    this.quietChecks.settle(key, runId, epoch, verdict);
+    if (verdict !== "quiet" && epoch === this.epoch) this.publishTasks();
+  }
+
+  /**
    * `before`: the rows the cap kept before the change being published (`keptKeys`). Without it,
    * those kept when publishing starts, so a row that settles here is still seen to leave.
    */
@@ -9957,7 +10025,14 @@ export class ClawtrateClient {
     // What waits for the person, and whose latest run was stopped (`waiting.ts`): a task the
     // engine follows by its runs, any other by the gateway's events.
     for (const [botId, tasks] of Object.entries(tasksByBot)) {
-      for (const [index, task] of tasks.entries()) {
+      for (const [index, row] of tasks.entries()) {
+        // A failure the row reports with an end the gateway marked not to show, which is a quiet
+        // answer: the run ended with nothing to show, as on OpenClaw 2026.10.6 (#680).
+        const task =
+          row.status === "failed" && this.quietAnswer(row.key)
+            ? { ...row, status: "done" as const }
+            : row;
+        if (task !== row) tasks[index] = task;
         // A row with no active run ends what waited before it; a newer marker stays.
         if (task.status !== "running") this.waiting.settle(task.key, task.updatedAt);
         // A run the row says started after a failure: the failure is no longer the latest (#664).
@@ -10337,6 +10412,8 @@ export class ClawtrateClient {
         .filter((run) => run.bound && !isTerminal(run.state) && run.state !== "queued")
         .map((run) => run.id),
     );
+    // Quiet ends this read may settle: those that ended before it was asked (#680).
+    const quietBefore = quietPending(this.state.transcripts[key]?.runs ?? []);
     // The task's live events come only through its subscription: asked again like the reads.
     // A subscription that failed for good stays failed through later history reads, and each of
     // them tries it again; only one that succeeds clears it.
@@ -10407,12 +10484,15 @@ export class ClawtrateClient {
           .filter((message) => message.status === "sending" || message.status === "awaiting-access")
           .map((message) => message.id),
       );
-      const runs = settleUnboundStops(
-        settleVanishedRuns(merge.runs, activeBefore, historyIds, inFlightId, ctx, busy),
-        inFlightId,
-        historyIds,
-        awaitingAnswer,
-        ctx,
+      const runs = settleQuietEnds(
+        settleUnboundStops(
+          settleVanishedRuns(merge.runs, activeBefore, historyIds, inFlightId, ctx, busy),
+          inFlightId,
+          historyIds,
+          awaitingAnswer,
+          ctx,
+        ),
+        quietBefore,
       );
       // A Stop asked before the gateway named its run: the run in flight under the send's id
       // is that run, named now, and is stopped; so is one settled earlier with no known outcome.
@@ -10478,6 +10558,8 @@ export class ClawtrateClient {
       // Without its subscription, that is what the task says: Try again reads both again.
       this.setTranscript(key, (current) => ({
         ...(current ?? this.emptyTranscript(key)),
+        // History unread can't show a quiet end to be one: each stays the failure it was sent as.
+        runs: settleQuietEnds(current?.runs ?? [], quietBefore, true),
         status: "error",
         error: live ? errorMessage(error) : LIVE_UPDATES_NOT_STARTED,
       }));

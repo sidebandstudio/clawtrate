@@ -76,6 +76,7 @@ import {
   WAITING_MARKER_CHARS,
   WAITING_RUN_CHARS,
 } from "./waiting.ts";
+import { MAX_QUIET_CHECKS, quietCheckChars } from "./quiet-end.ts";
 import {
   APPROVAL_ATTEMPTS,
   MAX_BOTS,
@@ -201,6 +202,8 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // separator between them, which JSON escapes to six characters (`\u0000`).
   botDeletes: { max: MAX_BOT_DELETES, each: 2 * ID + 4, row: "bookkeeping" },
   "waiting.held": { max: MAX_WAITING_SESSIONS, each: WAITING_HELD_CHARS, row: "bookkeeping" },
+  // What history said of a marked failure of a task not followed (#680): its key, run and verdict.
+  "quietChecks.checks": { max: MAX_QUIET_CHECKS, each: quietCheckChars(ID), row: "bookkeeping" },
   // Sessions no viewer has open: a few runs each, without their steps; their payloads are not kept.
   foreign: {
     max: FOREIGN_SESSIONS,
@@ -417,6 +420,7 @@ export const CLIENT_PARTS: Record<string, string> = {
   openclawUpdates: "OpenClawUpdates",
   machines: "MachinesEngine",
   waiting: "WaitingIndex",
+  quietChecks: "QuietChecks",
   computer: "ComputerViews",
 };
 

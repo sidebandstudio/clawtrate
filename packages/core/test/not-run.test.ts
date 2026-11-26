@@ -456,7 +456,8 @@ describe("a task's mark is its latest run's outcome (#664)", () => {
 
 describe("an end the gateway marks not to show is no failure (#680)", () => {
   // 2026.11.10 ends a turn it started itself, which the bot answered quietly, with this error,
-  // marked `suppressErrorNotice`; 2026.10.6 sends no such mark.
+  // marked `suppressErrorNotice`; 2026.10.6 sends no such mark. How such an end is drawn, and when
+  // it is a failure after all, is `quiet-end.test.ts`.
   const QUIET = "No answer was returned. Ask again if you still need one.";
 
   it("its chat error neither fails the message as one the gateway couldn't run nor marks the task", async () => {
@@ -478,13 +479,20 @@ describe("an end the gateway marks not to show is no failure (#680)", () => {
       suppressErrorNotice: true,
     });
     await until(() =>
-      transcript().runs.some((run) => run.id === "wake-1" && run.state === "failed"),
+      transcript().runs.some((run) => run.id === "wake-1" && run.quietEnd === "settled"),
     );
     const run = transcript().runs.find((each) => each.id === "wake-1")!;
-    expect(run.error?.quiet).toBe(true);
+    expect(run.state).toBe("completed");
     expect(neverRan(run)).toBe(false);
-    // Even with no start of its own seen, the mark keeps it from being one the gateway couldn't run.
-    expect(neverRan({ ...run, reportedStartAt: null })).toBe(false);
+    // Failed after all (its history said it answered nothing), the mark keeps it from being one the
+    // gateway couldn't run, even with no start of its own seen.
+    const failed = {
+      ...run,
+      state: "failed" as const,
+      error: { message: QUIET, kind: null, quiet: true as const },
+    };
+    expect(neverRan(failed)).toBe(false);
+    expect(neverRan({ ...failed, reportedStartAt: null })).toBe(false);
     await sleep(50);
     expect(task(client)?.status).not.toBe("failed");
     client.stop();
