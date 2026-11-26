@@ -1,5 +1,25 @@
 import { describe, expect, it } from "vitest";
-import { columnWidths, COLUMN_WIDTH, openableUrl, parseMarkdown } from "../src/markdown.ts";
+import {
+  besideLink,
+  columnWidths,
+  COLUMN_WIDTH,
+  linkPlace,
+  openableUrl,
+  parseMarkdown,
+  type Inline,
+} from "../src/markdown.ts";
+
+// Private and link-local addresses are built from their parts, so no tracked file writes one
+// out (test/addresses.test.ts).
+const join4 = (...parts: number[]) => parts.join(".");
+const join6 = (...groups: string[]) => groups.join(":");
+
+/** The links of a one-paragraph message, in order. */
+function links(markdown: string): Extract<Inline, { t: "link" }>[] {
+  const [block] = parseMarkdown(markdown);
+  if (block?.t !== "p") throw new Error("not a paragraph");
+  return block.children.filter((node) => node.t === "link");
+}
 
 describe("the bot's markdown on iOS", () => {
   it("reads paragraphs, emphasis, strong, inline code and links", () => {
@@ -23,6 +43,7 @@ describe("the bot's markdown on iOS", () => {
             url: "https://docs.example/a",
             host: "docs.example",
             plain: false,
+            place: null,
             children: [{ t: "text", text: "a link" }],
           },
           { t: "text", text: "." },
@@ -101,7 +122,7 @@ describe("the bot's markdown on iOS", () => {
     ]);
   });
 
-  it("marks a link whose text is not its address, so the screen shows the host and asks first", () => {
+  it("marks a link whose text is not its address, so the screen shows the host beside it", () => {
     const [hidden] = parseMarkdown("[the notes](https://elsewhere.example/n)");
     expect(hidden).toMatchObject({
       children: [{ t: "link", host: "elsewhere.example", plain: false }],
@@ -123,7 +144,7 @@ describe("the bot's markdown on iOS", () => {
     });
   });
 
-  it("asks first when the text differs from its address only in a path's case, a trailing slash or a query's case", () => {
+  it("shows the host when the text differs from its address only in a path's case, a trailing slash or a query's case", () => {
     for (const [shown, target] of [
       ["http://127.0.0.1:47000/Notes", "http://127.0.0.1:47000/notes"],
       ["http://127.0.0.1:47000/notes", "http://127.0.0.1:47000/notes/"],
@@ -133,6 +154,92 @@ describe("the bot's markdown on iOS", () => {
         children: [{ t: "link", plain: false }],
       });
     }
+  });
+
+  it("shows nothing beside a link whose text is its address, and the host beside one whose text isn't", () => {
+    const [plain, hidden, upper] = links(
+      "See https://b.example/a, [the notes](https://elsewhere.example/n) and [HTTPS://B.EXAMPLE/](https://b.example/).",
+    );
+    expect(plain).toMatchObject({ plain: true, place: null });
+    expect(besideLink(plain!)).toBeNull();
+    expect(besideLink(hidden!)).toBe("elsewhere.example");
+    // The same address in capitals is still its address.
+    expect(besideLink(upper!)).toBeNull();
+  });
+
+  it("names this iPhone beside a loopback link and your network beside a local one, even when the text is the address", () => {
+    const [loopback, preview, network] = links(
+      `At http://127.0.0.1:8080/x, [the preview](http://localhost:8081/) and [the router](http://${join4(192, 168, 1, 1)}/).`,
+    );
+    expect(besideLink(loopback!)).toBe("this iPhone");
+    expect(besideLink(preview!)).toBe("localhost:8081, this iPhone");
+    expect(besideLink(network!)).toBe(`${join4(192, 168, 1, 1)}, your network`);
+    expect(besideLink(links("At https://studio.local/x.")[0]!)).toBe("your network");
+  });
+
+  it("knows a loopback host in any spelling, IPv6 included", () => {
+    for (const url of [
+      "http://127.0.0.1/",
+      "http://127.8.9.10:1/",
+      "http://localhost/",
+      "http://LOCALHOST./",
+      "http://app.localhost/",
+      "http://0.0.0.0:3000/",
+      "http://0x7f.1/",
+      "http://[::1]:3000/",
+      "http://[::]/",
+      "http://[::ffff:127.0.0.1]/",
+    ])
+      expect(linkPlace(new URL(url)), url).toBe("device");
+  });
+
+  it("knows the person's own network: private, shared and link-local ranges, IPv6 local ranges, .local and a name without a dot", () => {
+    for (const url of [
+      `http://${join4(10, 0, 0, 5)}/`,
+      `http://${join4(172, 16, 0, 1)}/`,
+      `http://${join4(172, 31, 255, 1)}/`,
+      `http://${join4(192, 168, 1, 20)}:8080/`,
+      `http://${join4(169, 254, 3, 4)}/`,
+      `http://${join4(100, 64, 0, 1)}/`,
+      `http://${join4(100, 127, 255, 1)}/`,
+      `http://[::ffff:${join4(192, 168, 1, 20)}]/`,
+      `http://[${join6("fd12", "", "1")}]/`,
+      `http://[${join6("fe80", "", "1")}]/`,
+      "http://studio.local/",
+      "http://studio.local./",
+      "http://nas:5000/",
+      "http://nas./",
+    ])
+      expect(linkPlace(new URL(url)), url).toBe("network");
+    for (const url of [
+      "https://docs.example/",
+      // Just past the private 172.16/12 range and the shared 100.64/10 one.
+      `http://${join4(172, 32, 0, 1)}/`,
+      `http://${join4(100, 128, 0, 1)}/`,
+      // A name that starts like an address is a name.
+      "https://100.64.example/",
+      "https://local.example/",
+    ])
+      expect(linkPlace(new URL(url)), url).toBeNull();
+  });
+
+  it("shows a look-alike host in ASCII, so it shows as one, even when the text is the address", () => {
+    // A Cyrillic letter in place of a Latin "a".
+    const lookalike = "b\u0430nk.example";
+    const [written, hidden] = links(
+      `Sign in at https://${lookalike}/login or [your bank](https://${lookalike}/).`,
+    );
+    expect(written).toMatchObject({
+      url: "https://xn--bnk-6cd.example/login",
+      host: "xn--bnk-6cd.example",
+      plain: false,
+    });
+    expect(besideLink(written!)).toBe("xn--bnk-6cd.example");
+    expect(besideLink(hidden!)).toBe("xn--bnk-6cd.example");
+    // Another spelling of an address is not its address either.
+    expect(besideLink(links("[http://0x7f.1/](http://0x7f.1/)")[0]!)).toBe(
+      "127.0.0.1, this iPhone",
+    );
   });
 
   it("shows raw HTML as text", () => {
