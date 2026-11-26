@@ -467,7 +467,7 @@ export function notRunWords(
     case "model-unknown":
       return {
         title,
-        reason: `The gateway doesn't know ${bot}'s model. Choose another model.`,
+        reason: `The gateway doesn't know ${bot}'s model. Choose another model.${cause.words ? ` The gateway said: ${cause.words}` : ""}`,
         ways: ["model"],
       };
     case "no-account":

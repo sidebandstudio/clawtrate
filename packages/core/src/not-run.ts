@@ -60,7 +60,9 @@ export function notRunCause(said: string | null | undefined): NotRunCause | null
   const text = reasonOf(said);
   if (!text) return { kind: "unsaid", words: null };
   const kind = kindOf(text);
-  return { kind, words: kind === "other" ? cleanLine(text, MAX_NOT_RUN_WORDS) || null : null };
+  // An unknown model keeps the gateway's words too: they name the model, and what it suggests.
+  const shown = kind === "other" || kind === "model-unknown";
+  return { kind, words: shown ? cleanLine(text, MAX_NOT_RUN_WORDS) || null : null };
 }
 
 function kindOf(text: string): NotRunKind {
@@ -117,11 +119,14 @@ function startSeen(
     | "pendingCards"
     | "suspendedCards"
     | "closedCards"
+    | "omittedSteps"
   >,
 ): boolean {
   return (
     run.reportedStartAt !== null ||
     run.steps.length > 0 ||
+    // Steps it had that were dropped at their bound.
+    run.omittedSteps > 0 ||
     run.text !== "" ||
     (run.preambles?.length ?? 0) > 0 ||
     run.pendingCards.length > 0 ||
@@ -150,6 +155,7 @@ export function neverRan(
     | "pendingCards"
     | "suspendedCards"
     | "closedCards"
+    | "omittedSteps"
   >,
 ): boolean {
   if (run.state !== "failed" || run.error?.quiet === true) return false;

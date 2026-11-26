@@ -733,7 +733,8 @@ describe("only a run that started sends these, so each says it ran (#686)", () =
   });
 
   it("each kind of evidence counts; a model choice or a status before the failure does not", () => {
-    const bare = {
+    type Shown = Parameters<typeof neverRan>[0];
+    const bare: Shown = {
       state: "failed" as const,
       error: { message: "boom", kind: null },
       origin: "local" as const,
@@ -743,18 +744,21 @@ describe("only a run that started sends these, so each says it ran (#686)", () =
       pendingCards: [],
       suspendedCards: [],
       closedCards: [],
+      omittedSteps: 0,
     };
     // Lifecycle `model` and `run_status` set these: the gateway sends them for a message it fails.
-    expect(neverRan({ ...bare, model: "nope/dev-1", phase: "queued" } as typeof bare)).toBe(true);
+    expect(neverRan({ ...bare, model: "nope/dev-1", phase: "queued" } as Shown)).toBe(true);
     const card = { id: "ap-1", kind: "approval" as const, since: T0 };
-    for (const evidence of [
+    const evidences: Array<Partial<Shown>> = [
       { reportedStartAt: T0 },
       { text: "Here" },
       { preambles: [{ id: "p1", text: "Reading", ended: false, beforeCall: null }] },
       { pendingCards: [card] },
       { suspendedCards: [card] },
       { closedCards: [{ ...card, reason: "resolved" as const }] },
-    ])
-      expect(neverRan({ ...bare, ...evidence })).toBe(false);
+      // Steps it had, dropped at their bound.
+      { omittedSteps: 2 },
+    ];
+    for (const evidence of evidences) expect(neverRan({ ...bare, ...evidence })).toBe(false);
   });
 });

@@ -80,8 +80,10 @@ describe("#663: a message the gateway couldn't run says so, and why", () => {
       "account",
       "model",
     ]);
+    // The gateway's own words follow: they name the model, and what it suggests.
     expect(of("Unknown model: nope/dev-1. Run `openclaw models list`.")).toMatchObject({
-      reason: "The gateway doesn't know Otto's model. Choose another model.",
+      reason:
+        "The gateway doesn't know Otto's model. Choose another model. The gateway said: Unknown model: nope/dev-1. Run `openclaw models list`.",
       ways: ["model"],
     });
     expect(
@@ -252,6 +254,30 @@ describe("#686: a not-run line sits only under the message its run is known to h
     expect(forEarlierMessage(run, transcript)).toBe(false);
     const ending = endingOf(run) as Extract<RunEnding, { kind: "not-run" }>;
     expect(notRunWords(ending, "Otto", false).title).toBe("The gateway couldn't run this message");
+  });
+
+  it("each run that history keys to its own row sits there, answered ones too", () => {
+    const { transcript } = reloaded([
+      userRow("run-a", "Back up the photos.", 1),
+      userRow("run-b", "And the notes.", 2),
+      replyRow("run-a", 3),
+      replyRow("run-b", 4),
+    ]);
+    const anchorOf = (id: string) => transcript.runs.find((each) => each.id === id)!.anchorItemId;
+    expect(anchorOf("run-a")).toBe(itemOf(transcript, "Back up the photos."));
+    expect(anchorOf("run-b")).toBe(itemOf(transcript, "And the notes."));
+  });
+
+  it("a message this device sent and still holds is its run's own, wherever history has it", () => {
+    const run = {
+      ...newRun("run-a", { state: "failed", origin: "local", bound: true }, T0),
+      messageId: "run-a",
+    };
+    const outbox = [
+      { id: "run-a", text: "Back up the photos." },
+    ] as unknown as Transcript["outbox"];
+    expect(forEarlierMessage(run, { outbox })).toBe(false);
+    expect(forEarlierMessage(run, { outbox: [] })).toBe(true);
   });
 
   it("no message known to have started it: the reason, said to be for an earlier message, and no Try again", () => {
