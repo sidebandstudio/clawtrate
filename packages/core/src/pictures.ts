@@ -146,8 +146,17 @@ const GRANT_TICKET =
 export function issuedPath(key: string, artifactId: string, url: unknown): string | null {
   if (typeof url !== "string" || url.length > 4096) return null;
   const attachment = MANAGED_ARTIFACT.exec(artifactId)?.[1];
-  const session = encodeURIComponent(key);
-  // A session that would be a dot segment, or holds a slash or backslash, is never asked for.
+  let session: string;
+  try {
+    session = encodeURIComponent(key);
+  } catch {
+    // A key with a lone surrogate can't be written in a path: nothing is fetched for it.
+    return null;
+  }
+  // Refused even though both versions issue and serve such a path: a task whose key is empty, a
+  // dot segment, or holds `/` or `\` (`%2F`, `%5C`). Whoever makes a session can choose its key,
+  // and a key must never shape the path fetched with this connection's credentials, as one a
+  // server or proxy decodes or normalises would. Such a task's pictures and files aren't read.
   if (!attachment || !session || session === "." || session === ".." || /%2F|%5C/.test(session))
     return null;
   const route = `/api/chat/media/outgoing/${session}/${attachment}/full?mediaTicket=`;

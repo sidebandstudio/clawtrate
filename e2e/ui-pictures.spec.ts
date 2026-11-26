@@ -108,7 +108,9 @@ test("F-535: a picture the bot makes with image_generate shows in the conversati
   await openTask(page, "Otto", TASK);
   // 2026.10.6 delivers the picture in a turn of the gateway's own, with its text, named for the
   // description it was made from. 2026.11.10 writes it into the task as a row of its own, with no
-  // text and no turn of that run (`pictureTurn`), so it shows as a picture the bot handed over.
+  // text and no turn of that run (`pictureTurn`). There the picture loses its description and
+  // shows as a picture the bot handed over: a fault, #662. Once #662 is fixed, 2026.11.10 expects
+  // the description (`ALT`) too.
   const { pictureTurn } = instanceForm(openInstance(INSTANCE));
   const turn = page
     .getByTestId("transcript-turn")

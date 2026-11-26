@@ -435,6 +435,7 @@ describe("F-535: the download path either OpenClaw issues", () => {
         NEWER.replace(encodeURIComponent(KEY), "agent%3Aa%5Cb"),
         "agent:a\\b",
       ],
+      ["a task with a lone surrogate", NEWER, "agent:\uD800"],
     ];
     for (const [label, url, key = KEY, artifactId = ARTIFACT] of refused)
       expect(issuedPath(key, artifactId, url), label).toBeNull();
