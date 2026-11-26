@@ -1413,6 +1413,11 @@ export function accountCommand(
     }
     case "clearBotOrder": {
       // As the engine ends a press (`clearOrder`): the state from the read after it.
+      // As the host does (`requireSameGateway`): a press confirmed for another gateway sends nothing.
+      if (!sameStamp(command.stamp, gatewayStamp(get().connection)))
+        return Promise.reject(
+          new Error("This change was made for another gateway, so nothing was sent."),
+        );
       const end = params.clear ?? "cleared";
       // The gateway it was pressed for: a held press released on another writes nothing.
       const asked = get().connection.gatewayId;

@@ -281,9 +281,11 @@ export function BotSettings({
     } else if (
       lastWord.current === "locked" &&
       word === "bound" &&
-      // An Unlock pressed here says so in its own line: this change of word, the read it made.
+      // An Unlock pressed here says so in its own line: this change of word, the read it made,
+      // and only on the screen that shows that line (the press's own).
       !(
         accounts.clear?.botId === bot.id &&
+        accounts.clear.id === pressed &&
         accounts.clear.status === "cleared" &&
         accounts.clear.checkedSeq !== null &&
         accounts.clear.checkedSeq === binding?.evidence.readSeq
@@ -291,7 +293,7 @@ export function BotSettings({
     )
       announce(`${name} is no longer locked`);
     lastWord.current = word;
-  }, [word, announce, name, focusIn, accounts.clear, bot.id, binding?.evidence.readSeq]);
+  }, [word, announce, name, focusIn, accounts.clear, bot.id, binding?.evidence.readSeq, pressed]);
 
   const cli = gatewayCli(info, connection);
   const stopped = orderNeedsStoppedGateway(connection.serverVersion);
@@ -1399,9 +1401,10 @@ export function BotSettings({
           name={name}
           who={who}
           named={nameOfAccount(clear.account)}
-          // The page of a bot the gateway chooses for has no Check now of its own.
+          // Only where the page shows no Check now of its own: a bot the gateway chooses for, or
+          // one whose account is gone (No account).
           onCheck={
-            binding.mode === "account"
+            binding.mode === "account" && word !== "no-account" && account !== null
               ? null
               : () => void bridge.send({ type: "checkLock", botId: bot.id }).catch(() => {})
           }

@@ -301,11 +301,11 @@ export class AccountsEngine {
         // read's stamp. The picker below reads this one's.
         const same =
           read.gatewayId !== null && a.readOn !== null && a.readOn.gatewayId === read.gatewayId;
-        return {
+        return settleClear({
           ...this.compose(a, config, views, same ? a.models : [], at, startedAt, seq),
           ...(same ? {} : { modelsCut: initialAccountsState.modelsCut }),
           readOn: read,
-        };
+        });
       });
       // The default bot's picker, the Model menu's rows (section 9), asked once the accounts are
       // published and in the same read, so it never overlaps another account read or what a
@@ -589,7 +589,10 @@ export class AccountsEngine {
       const current = a.bindings.find((each) => each.botId === botId) ?? before;
       if (current.evidence.readSeq !== null && current.evidence.readSeq > seq) return a;
       const next = this.binding(botId, entry, view, current, at, seq);
-      return { ...a, bindings: a.bindings.map((each) => (each.botId === botId ? next : each)) };
+      return settleClear({
+        ...a,
+        bindings: a.bindings.map((each) => (each.botId === botId ? next : each)),
+      });
     });
     return view;
   }
@@ -683,8 +686,9 @@ export class AccountsEngine {
       return;
     }
     let first: BotView | null;
+    const firstSeq = this.nextSeq();
     try {
-      first = await this.readOrder(botId, before, ctx);
+      first = await this.readOrder(botId, before, ctx, firstSeq);
     } catch (error) {
       publish({ status: "unsent", error: errorText(error) });
       return;
@@ -693,7 +697,19 @@ export class AccountsEngine {
       publish({ status: "unsent", error: "The gateway says its account status is unavailable." });
       return;
     }
-    if (!holds(first)) {
+    // A read begun after this one may have been shown meanwhile (Check now, a load, another
+    // device's change): the press acts on the newest the page has, never on one it superseded.
+    const latest = base.get().bindings.find((each) => each.botId === botId);
+    const superseded =
+      latest?.evidence.readSeq != null &&
+      latest.evidence.readSeq > firstSeq &&
+      !(
+        latest.provider === provider &&
+        latest.order?.stored === true &&
+        latest.order.ids.length === 1 &&
+        latest.order.ids[0] === account
+      );
+    if (!holds(first) || superseded) {
       publish({ status: "moved", error: null });
       return;
     }
@@ -741,7 +757,7 @@ export class AccountsEngine {
       // Only while the page still shows that read: a newer one that confirmed a lock keeps it.
       ctx.update((a) =>
         this.patchBinding(a, botId, (b) =>
-          b.evidence.readSeq === afterSeq
+          b.evidence.readSeq === afterSeq && b.provider === provider
             ? { ...b, evidence: { ...b.evidence, lostAt: null, lastMatchAt: null } }
             : b,
         ),
@@ -2331,6 +2347,48 @@ export class AccountsEngine {
     if (this.slowTimer) clearTimeout(this.slowTimer);
     this.slowTimer = null;
   }
+}
+
+/**
+ * An Unlock or Clear that ended unsure (`unanswered`, `unread`, `kept`), settled by the read just
+ * published when that read began after its send and finds no stored order for its provider: the
+ * press becomes `cleared` with that read's number and time, and the bot's evidence forgets the lock
+ * at once, so the page never shows "Unlocked" beside "The lock is gone". A change with no press
+ * behind it keeps its warning.
+ */
+function settleClear(a: AccountsState): AccountsState {
+  const clear = a.clear;
+  if (
+    !clear ||
+    clear.sentSeq === null ||
+    (clear.status !== "unanswered" && clear.status !== "unread" && clear.status !== "kept")
+  )
+    return a;
+  const binding = a.bindings.find((each) => each.botId === clear.botId);
+  const seq = binding?.evidence.readSeq ?? null;
+  if (
+    !binding ||
+    seq === null ||
+    seq <= clear.sentSeq ||
+    binding.provider !== clear.provider ||
+    binding.order?.stored === true
+  )
+    return a;
+  return {
+    ...a,
+    clear: {
+      ...clear,
+      status: "cleared",
+      error: null,
+      checkedSeq: seq,
+      checkedAt: binding.evidence.checkedAt,
+    },
+    bindings: a.bindings.map((each) =>
+      each === binding
+        ? { ...each, evidence: { ...each.evidence, lostAt: null, lastMatchAt: null } }
+        : each,
+    ),
+  };
 }
 
 /** A sign-in still under way on the gateway. */
