@@ -134,6 +134,7 @@ import {
   accountProfiles,
   accountsConfig,
   authContract,
+  modelsContract,
   saveAccountCommand,
   SCRIPTED_ACCOUNTS,
 } from "./accounts.ts";
@@ -771,7 +772,12 @@ export function devConfigContract(
   ) as unknown as Record<string, Record<string, unknown>>;
   // With accounts, the gateway itself writes profile entries (labels, sign-ins,
   // the CLI's saves): scripted accounts only, each of a closed shape.
-  if (options.accounts) (contract as Record<string, unknown>).auth = authContract();
+  if (options.accounts) {
+    (contract as Record<string, unknown>).auth = authContract();
+    // A provider's list may grow by its later model (`LATER_MODELS`), as a check writes it.
+    const providers = contract.models!.providers as Record<string, Record<string, unknown>>;
+    providers.acme!.models = modelsContract("acme");
+  }
   (contract.gateway!.auth as Record<string, unknown>).token = matching(
     "a token",
     (value) => typeof value === "string" && /^\S+$/.test(value),
@@ -1018,7 +1024,7 @@ export function startProblem(problem: {
 }
 
 /** The end of a process's log, as a failure prints it under its first line. */
-function logSection(owner: string, log: string, tail: string): string {
+export function logSection(owner: string, log: string, tail: string): string {
   return tail
     ? `  the end of ${owner} log, ${log}:\n${tail.replace(/^/gm, "    ")}`
     : `  ${owner} log, ${log}, is empty`;

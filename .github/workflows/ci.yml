@@ -40,6 +40,13 @@ jobs:
   # picture in the macOS set redraws its Linux twin too, and the Linux job fails until that is
   # recorded, so the twin brings in the macos job. test/ci-macos-gate.test.ts checks
   # the list against the job's steps. Every push to main runs the macos job.
+  #
+  # The scenario check runs on a pull request only when it changes one of SCENARIOS_PATHS: the
+  # development gateway, the files the check reaches outside it, the plugins it loads, the
+  # OpenClaw pins, the root manifest, lockfile and workspace file, and this file (#693). The
+  # app's own code under packages/ and apps/ is left out: the e2e job tests it on every change.
+  # test/ci-scenarios-gate.test.ts checks the list against the check's imports. Every push to
+  # main runs the check.
   changes:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -47,6 +54,7 @@ jobs:
       code: ${{ steps.diff.outputs.code }}
       macos: ${{ steps.diff.outputs.macos }}
       visual: ${{ steps.diff.outputs.visual }}
+      scenarios: ${{ steps.diff.outputs.scenarios }}
     steps:
       - uses: actions/checkout@v7
         with:
@@ -102,10 +110,28 @@ jobs:
             visual/baselines/darwin/**
             packages/ui/package.json
             packages/ui/src/styles/tokens.css
+          # The same form. packages/core/package.json pins the gateway client and protocol, as
+          # the development gateway's own package.json does. The root package.json, the lockfile
+          # and pnpm-workspace.yaml decide what the job installs, Playwright's Chromium among it.
+          SCENARIOS_PATHS: |
+            .github/workflows/ci.yml
+            package.json
+            pnpm-lock.yaml
+            pnpm-workspace.yaml
+            tools/dev-gateway/**
+            e2e/scenario-check.ts
+            e2e/global-setup.ts
+            e2e/ports.ts
+            e2e/run-record.ts
+            plugins/clawtrate-computer/**
+            plugins/clawtrate-dev-signin/**
+            plugins/clawtrate-tool-rules/**
+            packages/core/package.json
         run: |
           code=true
           macos=true
           visual=true
+          scenarios=true
           # A run by hand for the Keychain check alone runs no other end-to-end or packaging job.
           if [ "$KEYCHAIN_ONLY" = "true" ]; then code=false; fi
           if [ "$GITHUB_EVENT_NAME" = "workflow_dispatch" ]; then
@@ -135,12 +161,25 @@ jobs:
               echo "No file the macos job uses changed."
               macos=false
             fi
+            set -f
+            pathspecs=$(printf '%s\n' "$SCENARIOS_PATHS" | sed -e '/^$/d' -e 's/^/:(glob)/')
+            # shellcheck disable=SC2086
+            ours=$(git diff --name-only --no-renames "origin/$BASE...HEAD" -- $pathspecs)
+            set +f
+            if [ -n "$ours" ]; then
+              echo "The scenario check runs for:"
+              printf '%s\n' "$ours"
+            else
+              echo "No file the scenario check uses changed."
+              scenarios=false
+            fi
           fi
           # Jobs that test code run only when code does.
-          if [ "$code" = "false" ]; then macos=false; visual=false; fi
+          if [ "$code" = "false" ]; then macos=false; visual=false; scenarios=false; fi
           echo "code=$code" >> "$GITHUB_OUTPUT"
           echo "macos=$macos" >> "$GITHUB_OUTPUT"
           echo "visual=$visual" >> "$GITHUB_OUTPUT"
+          echo "scenarios=$scenarios" >> "$GITHUB_OUTPUT"
 
   check:
     runs-on: ubuntu-latest
@@ -343,6 +382,48 @@ jobs:
           RESULT: ${{ needs.visual-linux.result }}
         run: |
           echo "changes: $CHANGES, visual-linux: $RESULT"
+          [ "$CHANGES" = "success" ]
+          [ "$RESULT" = "success" ] || [ "$RESULT" = "skipped" ]
+
+  # `pnpm scenarios` on the development gateway's own pinned OpenClaw, the version
+  # docs/decisions.md names (#693). On a pull request it runs only when the changes job says the
+  # check's files changed; every push to main runs it. openclaw-latest.yml runs the same check
+  # against npm's newest OpenClaw.
+  scenario-check:
+    needs: changes
+    if: needs.changes.outputs.scenarios == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      # The pinned OpenClaw, and a Node it supports, into the tool's own folder.
+      - run: pnpm dev-gateway setup
+      # The computer checks start the Chromium that Playwright installs.
+      - run: pnpm exec playwright install --with-deps chromium
+      - run: pnpm scenarios
+
+  # The scenario check's one check for branch protection, as `visual` is the screenshot shards'.
+  # A skipped job counts as passed, and a failed changes job skips scenario-check too. This passes
+  # when the check passed, or when the changes job succeeded and chose to skip it.
+  scenarios:
+    needs: [changes, scenario-check]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - env:
+          CHANGES: ${{ needs.changes.result }}
+          RESULT: ${{ needs.scenario-check.result }}
+        run: |
+          echo "changes: $CHANGES, scenario-check: $RESULT"
           [ "$CHANGES" = "success" ]
           [ "$RESULT" = "success" ] || [ "$RESULT" = "skipped" ]
 

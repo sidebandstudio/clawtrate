@@ -3,7 +3,7 @@
 // model and effort selects, the access bar for admin, and the announcer.
 
 import type { ConnectionState, HostInfo } from "@clawtrate/core";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
 import { useCommand } from "../bridge.tsx";
 import { copyText } from "../clipboard.ts";
 import { Menu, type MenuEntry } from "../Menu.tsx";
@@ -170,6 +170,10 @@ export type SelectRow = {
   close?: boolean;
   /** It shows a second section in place: focus moves to that section's first choice. */
   expands?: boolean;
+  /** One line of text under the row, such as what its action found. */
+  line?: string;
+  /** More text, one step away: a small item on the line, named `label`, shows it under it. */
+  more?: { label: string; lines: string[] };
   onSelect: () => void;
 };
 
@@ -215,6 +219,10 @@ export function Select({
   const open = !unavailable && anchor !== null;
   // A row that shows the second section was chosen in this opening of the menu.
   const [expanding, setExpanding] = useState(false);
+  // The row whose more text shows, for the line it is under: a new line closes it.
+  const [moreFor, setMoreFor] = useState<string | null>(null);
+  const moreKey = (each: SelectRow) => `${each.label}\n${each.line ?? ""}`;
+  const panelId = useId();
   const close = useCallback(
     (refocus: boolean) => {
       const element = anchor?.element;
@@ -226,6 +234,7 @@ export function Select({
   const openFrom = (element: HTMLButtonElement) => {
     if (unavailable) return;
     setExpanding(false);
+    setMoreFor(null);
     setAnchor({ rect: element.getBoundingClientRect(), element });
   };
   const radio = (choice: Choice): MenuEntry => ({
@@ -251,11 +260,47 @@ export function Select({
       each.onSelect();
     },
   });
-  const entries: MenuEntry[] = [...choices.map(radio), ...rows.map(row)];
+  const entries: MenuEntry[] = [
+    ...choices.map(radio),
+    ...rows.flatMap((each, n): MenuEntry[] => {
+      if (each.line === undefined) return [row(each)];
+      const id = `${panelId}-${n}`;
+      const open = each.more !== undefined && moreFor === moreKey(each);
+      return [
+        row(each),
+        {
+          kind: "line",
+          text: each.line,
+          ...(each.more
+            ? {
+                more: {
+                  label: each.more.label,
+                  open,
+                  panel: id,
+                  onToggle: () => setMoreFor(open ? null : moreKey(each)),
+                },
+              }
+            : {}),
+        },
+        ...(open && each.more ? [{ kind: "panel" as const, id, lines: each.more.lines }] : []),
+      ];
+    }),
+  ];
+  // Escape closes the more text that shows before the menu.
+  const onEscape = () => {
+    if (!rows.some((each) => each.more && moreFor === moreKey(each))) return false;
+    setMoreFor(null);
+    return true;
+  };
   // After a row that shows the second section, focus moves to its first choice.
   const focusAt =
     expanding && section && section.choices.length > 0
-      ? entries.filter((entry) => entry.kind !== "label" && entry.kind !== "rule").length
+      ? entries.filter(
+          (entry) =>
+            entry.kind === "item" ||
+            entry.kind === "radio" ||
+            (entry.kind === "line" && entry.more !== undefined),
+        ).length
       : undefined;
   if (section)
     entries.push(
@@ -273,7 +318,12 @@ export function Select({
   const box = anchor?.element.closest("dialog")?.getBoundingClientRect() ?? null;
   const floor = Math.min(innerHeight, box?.bottom ?? innerHeight) - 8;
   const ceiling = Math.max(0, box?.top ?? 0) + 8;
-  const wanted = Math.min(MENU_MAX_HEIGHT, 10 + MENU_ROW * entries.length);
+  // A panel of text takes about a row for each of its lines.
+  const rowsTall = entries.reduce(
+    (n, entry) => n + (entry.kind === "panel" ? entry.lines.length : 1),
+    0,
+  );
+  const wanted = Math.min(MENU_MAX_HEIGHT, 10 + MENU_ROW * rowsTall);
   const below = rect ? floor - (rect.bottom + 6) : wanted;
   const above = rect ? rect.top - 6 - ceiling : 0;
   const under = below >= wanted || below >= above;
@@ -307,6 +357,7 @@ export function Select({
           entries={entries}
           onClose={close}
           trigger={anchor.element}
+          onEscape={onEscape}
           className="b-menu"
           {...(focusAt !== undefined ? { focusAt } : {})}
           style={{
