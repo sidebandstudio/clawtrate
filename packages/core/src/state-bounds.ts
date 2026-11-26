@@ -1210,6 +1210,8 @@ const accountWrite = object<AccountWrite>()({
   at: NUMBER,
 });
 const orderClear = object<OrderClear>()({
+  id: ID,
+  gatewayId: ID,
   botId: ID,
   provider: ID,
   kind: ENUM,
@@ -1217,6 +1219,8 @@ const orderClear = object<OrderClear>()({
   status: ENUM,
   error: text(MAX_MESSAGE_LINE_CHARS),
   at: NUMBER,
+  sentAt: NUMBER,
+  checkedAt: NUMBER,
 });
 export const ACCOUNTS: Bound = object<AccountsState>()({
   status: ENUM,

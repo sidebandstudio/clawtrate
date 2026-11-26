@@ -13,6 +13,8 @@ import {
   initialAccountsState,
   ORDER_CLEAR_WAIT_MS,
   type AccountsState,
+  type BotBinding,
+  type OrderClear,
 } from "../src/accounts.ts";
 import { ADMIN_SCOPES, READ_SCOPES } from "../src/scopes.ts";
 import { gatewayStamp } from "../src/types.ts";
@@ -28,6 +30,9 @@ import {
 } from "./fake-gateway.ts";
 
 const otto = (state: AccountsState) => state.bindings.find((each) => each.botId === "otto")!;
+/** What the page's line says now: its status, or null when it shows nothing. */
+const shown = (clear: OrderClear, binding: BotBinding) =>
+  clearShown(clear, binding)?.status ?? null;
 
 /** Otto locked to Work, or with no fixed account and an order kept naming Work alone. */
 async function locked(mode: "unlock" | "clear" = "unlock") {
@@ -41,6 +46,7 @@ async function locked(mode: "unlock" | "clear" = "unlock") {
   const press = (account = "acme:work") =>
     createBridgeSession(ready.client).apply({
       type: "clearBotOrder",
+      press: "press-0001",
       botId: "otto",
       provider: "acme",
       account,
@@ -109,6 +115,7 @@ describe("F-592: Unlock and Clear, over the connection", () => {
     const { client, accounts } = await accountsClient({ gateway: fake });
     expect(accountWord(otto(accounts()))).toBe("locked");
     await client.clearBotOrder(
+      "press-0001",
       "otto",
       "acme",
       "acme:work",
@@ -178,12 +185,12 @@ describe("F-592: Unlock and Clear, over the connection", () => {
     expect(clear).toMatchObject({ status: "unanswered" });
     expect(clear.error).not.toBeNull();
     // The press read nothing on the connection that came back: what it showed was its own.
-    expect(clearShown(clear, otto(accounts()))).toBe("unanswered");
+    expect(shown(clear, otto(accounts()))).toBe("unanswered");
     // The page's next read, on the connection that came back, finds the order gone.
     await until(() => client.state.connection.status === "connected", 8000);
     await client.checkLock("otto");
     expect(accountWord(otto(accounts()))).toBe("bound");
-    expect(clearShown(accounts().clear!, otto(accounts()))).toBe("cleared");
+    expect(shown(accounts().clear!, otto(accounts()))).toBe("cleared");
     client.stop();
   });
 
@@ -193,19 +200,22 @@ describe("F-592: Unlock and Clear, over the connection", () => {
     await press();
     const kept = accounts().clear!;
     expect(kept.status).toBe("kept");
-    expect(clearShown(kept, otto(accounts()))).toBe("kept");
+    expect(shown(kept, otto(accounts()))).toBe("kept");
     // Still stored at the next read: kept.
     await client.checkLock("otto");
-    expect(clearShown(kept, otto(accounts()))).toBe("kept");
-    // Gone at a read before the press: never counts.
+    expect(shown(kept, otto(accounts()))).toBe("kept");
+    // Gone at a read begun before the send's answer: never counts.
     const gone = { ...otto(accounts()), order: null };
     expect(
-      clearShown(kept, { ...gone, evidence: { ...gone.evidence, checkedAt: kept.at - 1 } }),
+      shown(kept, { ...gone, evidence: { ...gone.evidence, checkedAt: kept.sentAt! - 1 } }),
     ).toBe("kept");
-    // Gone at a read since: cleared. A refusal is the gateway's answer and stays one.
-    expect(clearShown(kept, gone)).toBe("cleared");
-    expect(clearShown({ ...kept, status: "refused" }, gone)).toBe("refused");
-    expect(clearShown(kept, { ...gone, provider: "globex" })).toBe("kept");
+    // Gone at a read since: cleared, at that read's time. A refusal is the gateway's answer.
+    expect(clearShown(kept, gone)).toEqual({
+      status: "cleared",
+      checkedAt: gone.evidence.checkedAt,
+    });
+    expect(shown({ ...kept, status: "refused" }, gone)).toBe("refused");
+    expect(shown(kept, { ...gone, provider: "globex" })).toBe("kept");
     client.stop();
   });
 
@@ -227,12 +237,144 @@ describe("F-592: Unlock and Clear, over the connection", () => {
     client.stop();
   });
 
+  it("a cleared line goes once a later read finds the order back, and names the time of its own read", async () => {
+    const { client, fake, accounts, press } = await locked();
+    await press();
+    const clear = accounts().clear!;
+    expect(clearShown(clear, otto(accounts()))).toEqual({
+      status: "cleared",
+      checkedAt: clear.checkedAt,
+    });
+    expect(clear.checkedAt).toBe(otto(accounts()).evidence.checkedAt);
+    // Locked again (on 2026.10.6 beside the running gateway, or by another device), then read.
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
+    fake.orders.otto = { acme: ["acme:work"] };
+    await client.checkLock("otto");
+    expect(accountWord(otto(accounts()))).toBe("locked");
+    expect(clearShown(accounts().clear!, otto(accounts()))).toBeNull();
+    client.stop();
+  });
+
+  it("the gateway refuses but its read finds the order gone: cleared, the read before the answer", async () => {
+    const { client, fake, accounts, press } = await locked();
+    fake.orderSet = () => {
+      delete fake.orders.otto;
+      throw new GatewayError({ code: "UNAVAILABLE", message: "said no, did it anyway" });
+    };
+    await press();
+    expect(accounts().clear).toMatchObject({ status: "cleared", error: null });
+    client.stop();
+  });
+
+  it("an order only the gateway's settings give, where the bot's own was: moved, nothing sent", async () => {
+    const { client, fake, accounts, press } = await locked();
+    delete fake.orders.otto;
+    fake.configuredOrders.acme = ["acme:work"];
+    await press();
+    expect(fake.gateway.calls("models.authOrderSet")).toEqual([]);
+    expect(accounts().clear?.status).toBe("moved");
+    client.stop();
+  });
+
+  it("one press at a time: a second for the bot sends nothing and leaves the first's line; another bot's is refused", async () => {
+    const { client, fake, accounts } = await locked();
+    fake.orders.pip = { acme: ["acme:home"] };
+    await client.refreshAccounts();
+    const held = deferred<void>();
+    fake.orderSet = async (params) => {
+      await held.promise;
+      delete fake.orders[params.agentId]?.[params.provider];
+      return { provider: params.provider, profileIds: null };
+    };
+    const stamp = gatewayStamp(client.state.connection);
+    const first = client.clearBotOrder("press-0001", "otto", "acme", "acme:work", "unlock", stamp);
+    await until(() => fake.gateway.calls("models.authOrderSet").length === 1);
+    // The same bot again (Cancel or Escape while busy, or the page left and opened again).
+    await client.clearBotOrder("press-0002", "otto", "acme", "acme:work", "unlock", stamp);
+    expect(accounts().clear).toMatchObject({ id: "press-0001", status: "sending" });
+    await expect(
+      client.clearBotOrder("press-0003", "pip", "acme", "acme:home", "unlock", stamp),
+    ).rejects.toThrow("Another Unlock or Clear order is under way");
+    held.resolve();
+    await first;
+    expect(fake.gateway.calls("models.authOrderSet")).toEqual([
+      { provider: "acme", agentId: "otto" },
+    ]);
+    expect(accounts().clear).toMatchObject({ id: "press-0001", status: "cleared" });
+    // Once it has ended, the next press goes.
+    await client.clearBotOrder("press-0004", "pip", "acme", "acme:home", "unlock", stamp);
+    expect(accounts().clear).toMatchObject({ id: "press-0004", botId: "pip", status: "cleared" });
+    client.stop();
+  });
+
+  it("an older read that answers last never puts back the order the press cleared", async () => {
+    const { client, fake, accounts, press } = await locked();
+    // Check now begins first: its order is read at once, its config answer held.
+    const get = fake.gateway.handlers["config.get"]!;
+    const held = deferred<void>();
+    let holding = true;
+    fake.gateway.handlers["config.get"] = async (params) => {
+      const answer = get(params);
+      if (holding) {
+        holding = false;
+        await held.promise;
+      }
+      return answer;
+    };
+    const older = client.checkLock("otto");
+    await until(() => !holding);
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
+    await press();
+    expect(accountWord(otto(accounts()))).toBe("bound");
+    held.resolve();
+    await older;
+    expect(accountWord(otto(accounts()))).toBe("bound");
+    expect(shown(accounts().clear!, otto(accounts()))).toBe("cleared");
+    client.stop();
+  });
+
+  it("an accounts load begun before the press that answers last never puts the order back either", async () => {
+    const { client, fake, accounts, press } = await locked();
+    const get = fake.gateway.handlers["config.get"]!;
+    const held = deferred<void>();
+    let holding = true;
+    fake.gateway.handlers["config.get"] = async (params) => {
+      const answer = get(params);
+      if (holding) {
+        holding = false;
+        await held.promise;
+      }
+      return answer;
+    };
+    const load = client.refreshAccounts();
+    await until(() => !holding && fake.gateway.calls("models.authStatus").length > 0);
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
+    await press();
+    expect(accountWord(otto(accounts()))).toBe("bound");
+    held.resolve();
+    await load;
+    expect(accountWord(otto(accounts()))).toBe("bound");
+    client.stop();
+  });
+
+  it("another gateway answering at the same address shows nothing of the press", async () => {
+    const { client, accounts, press } = await locked();
+    await press();
+    const engine = (client as unknown as { accounts: AccountsEngine }).accounts;
+    engine.onGateway("gateway-a");
+    expect(accounts().clear?.status).toBe("cleared");
+    engine.onGateway("gateway-other");
+    expect(accounts().clear).toBeNull();
+    client.stop();
+  });
+
   it("needs admin: below it, nothing is sent", async () => {
     const fake = new AccountsGateway();
     fake.orders.otto = { acme: ["acme:work"] };
     const { client, accounts } = await accountsClient({ gateway: fake, scopes: READ_SCOPES });
     await expect(
       client.clearBotOrder(
+        "press-0001",
         "otto",
         "acme",
         "acme:work",
@@ -249,6 +391,7 @@ describe("F-592: Unlock and Clear, over the connection", () => {
     const stamp = { gatewayId: "gateway-a", target: 4 };
     const command = {
       type: "clearBotOrder",
+      press: "press-0001",
       botId: "otto",
       provider: "acme",
       account: "acme:work",
@@ -310,7 +453,7 @@ describe("F-592: a press bound to the gateway and the bot on screen", () => {
     await switchToB();
     await client.refreshAccounts();
     await expect(
-      client.clearBotOrder("otto", "acme", "acme:work", "unlock", stamp),
+      client.clearBotOrder("press-0001", "otto", "acme", "acme:work", "unlock", stamp),
     ).rejects.toThrow(CONNECTION_CHANGED);
     expect(a.gateway.calls("models.authOrderSet")).toEqual([]);
     expect(b.gateway.calls("models.authOrderSet")).toEqual([]);
@@ -327,6 +470,7 @@ describe("F-592: a press bound to the gateway and the bot on screen", () => {
       return status(params);
     };
     const pressed = client.clearBotOrder(
+      "press-0001",
       "otto",
       "acme",
       "acme:work",
@@ -358,6 +502,7 @@ describe("F-592: a press bound to the gateway and the bot on screen", () => {
       return status(params);
     };
     await client.clearBotOrder(
+      "press-0001",
       "otto",
       "acme",
       "acme:work",
@@ -376,10 +521,11 @@ describe("F-592: a press bound to the gateway and the bot on screen", () => {
     const { client, switchToB } = await twoGateways();
     const engine = (client as unknown as { accounts: AccountsEngine }).accounts;
     let given: ((sent: boolean) => void) | undefined;
-    engine.clearOrder = async (_bot, _provider, _account, _kind, beforeSend) => {
+    engine.clearOrder = async (_id, _bot, _provider, _account, _kind, beforeSend) => {
       given = beforeSend;
     };
     await client.clearBotOrder(
+      "press-0001",
       "otto",
       "acme",
       "acme:work",
@@ -402,7 +548,7 @@ describe("F-592: a press bound to the gateway and the bot on screen", () => {
       gone = true;
       return status(params);
     };
-    await engine.clearOrder("otto", "acme", "acme:work", "unlock", () => {
+    await engine.clearOrder("press-0001", "otto", "acme", "acme:work", "unlock", () => {
       if (gone) throw new Error("changed");
     });
     expect(a.gateway.calls("models.authOrderSet")).toEqual([]);
@@ -412,7 +558,7 @@ describe("F-592: a press bound to the gateway and the bot on screen", () => {
     const reads = () => a.gateway.calls("models.authStatus").length;
     let sent = false;
     let readsAtSend = 0;
-    await engine.clearOrder("otto", "acme", "acme:work", "unlock", (wrote) => {
+    await engine.clearOrder("press-0001", "otto", "acme", "acme:work", "unlock", (wrote) => {
       if (wrote && !sent) {
         sent = true;
         readsAtSend = reads();
@@ -436,6 +582,7 @@ describe("F-592: a press bound to the gateway and the bot on screen", () => {
       return status(params);
     };
     const pressed = client.clearBotOrder(
+      "press-0001",
       "otto",
       "acme",
       "acme:work",
@@ -518,11 +665,12 @@ describe("F-592: the answer's wait", () => {
       },
       connected: () => true,
       admin: () => true,
+      gatewayNow: () => "gateway-a",
       now: () => 10,
       log: () => {},
     } as unknown as AccountsContext;
     const engine = new AccountsEngine(ctx);
-    await engine.clearOrder("otto", "acme", "acme:work", "unlock");
+    await engine.clearOrder("press-0001", "otto", "acme", "acme:work", "unlock");
     expect(waits).toEqual([ORDER_CLEAR_WAIT_MS]);
     // The answer didn't come; the read after it found the order gone.
     expect(state.clear?.status).toBe("cleared");
@@ -535,7 +683,21 @@ describe("F-592: the answer's wait", () => {
         return ctx.request(method, params, options);
       },
     });
-    await engine2.clearOrder("otto", "acme", "acme:work", "unlock");
+    await engine2.clearOrder("press-0001", "otto", "acme", "acme:work", "unlock");
     expect(state.clear).toMatchObject({ status: "unanswered", error: "gateway request timeout" });
+    // Another gateway (`reset`) while the first read is out: nothing is sent, with no host check.
+    stored = true;
+    const sent: string[] = [];
+    let engine3: AccountsEngine | null = null;
+    engine3 = new AccountsEngine({
+      ...ctx,
+      request: async (method: string, params: unknown, options?: { timeoutMs?: number }) => {
+        sent.push(method);
+        if (method === "models.authStatus") engine3!.reset();
+        return ctx.request(method, params, options);
+      },
+    });
+    await engine3.clearOrder("press-0002", "otto", "acme", "acme:work", "unlock");
+    expect(sent).not.toContain("models.authOrderSet");
   });
 });

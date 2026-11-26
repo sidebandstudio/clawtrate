@@ -1413,19 +1413,27 @@ export function accountCommand(
     case "clearBotOrder": {
       // As the engine ends a press (`clearOrder`): the state from the read after it.
       const end = params.clear ?? "cleared";
-      const outcome = (status: NonNullable<AccountsState["clear"]>["status"]) =>
+      // The gateway it was pressed for: a held press released on another writes nothing.
+      const asked = get().connection.gatewayId;
+      const outcome = (status: NonNullable<AccountsState["clear"]>["status"]) => {
+        const now = Date.now();
         put((a) => ({
           ...a,
           clear: {
+            id: command.press,
+            gatewayId: asked,
             botId: command.botId,
             provider: command.provider,
             kind: command.kind,
             account: command.account,
             status,
             error: CLEAR_WORDS[status] ?? null,
-            at: Date.now(),
+            at: now,
+            sentAt: status === "sending" ? null : now,
+            checkedAt: status === "cleared" ? now : null,
           },
         }));
+      };
       const order = (ids: string[] | null) =>
         put((a) => ({
           ...a,
@@ -1448,8 +1456,10 @@ export function accountCommand(
       if (end === "hold")
         return new Promise<void>((resolve) => {
           (globalThis as unknown as { releaseClear: () => void }).releaseClear = () => {
-            order(null);
-            outcome("cleared");
+            if (get().connection.gatewayId === asked) {
+              order(null);
+              outcome("cleared");
+            }
             resolve();
           };
         });

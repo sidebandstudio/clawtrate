@@ -2461,6 +2461,11 @@ test("F-592: while the press is under way the page says so and Unlock waits", as
   await expect(page.getByText("Unlocking Otto…")).toBeVisible();
   // The page's Unlock waits (the confirmation's own button reads "Unlock…" while it is busy).
   await expect(page.locator("[data-bs='unlock']")).toBeDisabled();
+  // Cancel while busy closes the confirmation, not the press: Unlock still waits, nothing more goes.
+  await page.getByTestId("confirm").getByRole("button", { name: "Cancel" }).click();
+  await expect(page.getByTestId("confirm")).toHaveCount(0);
+  await expect(page.locator("[data-bs='unlock']")).toBeDisabled();
+  expect((await sent(page)).filter((each) => each.type === "clearBotOrder")).toHaveLength(1);
   await page.evaluate(() => (window as unknown as { releaseClear: () => void }).releaseClear());
   await expect(page.getByTestId("clear-outcome")).toContainText("Unlocked.");
 });
@@ -2506,4 +2511,24 @@ test("F-592: Change account names the button, with admin, where it named the com
   await expect(page.getByTestId("locked-change-note")).toContainText(
     "Account then shows the lock command, and Unlock.",
   );
+});
+
+test("F-592: an unsure Clear order says Check now, and its line has the button the page lacks", async ({
+  page,
+}) => {
+  await openFixture(
+    page,
+    `scene=main&${OTTO_DISK}&panel=open&tab=settings&access=admin&lock=retained&clear=unread`,
+    "light",
+  );
+  await page.getByRole("button", { name: /^Account: OpenAI, Gateway chooses\. Open\.$/ }).click();
+  await page.getByRole("button", { name: "Clear order…" }).click();
+  await page.getByTestId("confirm").getByRole("button", { name: "Clear order" }).click();
+  const outcome = page.getByTestId("clear-outcome");
+  await expect(outcome).toContainText("Check now reads it again.");
+  const before = (await sent(page)).filter((each) => each.type === "checkLock").length;
+  await outcome.getByRole("button", { name: "Check now" }).click();
+  await expect
+    .poll(async () => (await sent(page)).filter((each) => each.type === "checkLock").length)
+    .toBeGreaterThan(before);
 });

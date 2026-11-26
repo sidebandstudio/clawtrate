@@ -412,6 +412,10 @@ export type AccountWrite = {
  * connection. What it ended as is said only from the gateway's own read after it.
  */
 export type OrderClear = {
+  /** The press's own id, chosen by the screen that pressed it: what that screen shows as its own. */
+  id: string;
+  /** The gateway the press was confirmed for, by its identity: another gateway shows nothing of it. */
+  gatewayId: string | null;
   botId: string;
   provider: string;
   /** `unlock`: the order of a bot bound to an account; `clear`: one kept for a bot the gateway chooses for. */
@@ -430,6 +434,10 @@ export type OrderClear = {
   /** The gateway's words for a refusal, or why an answer or a read didn't come. */
   error: string | null;
   at: number;
+  /** When the send's answer came or was given up on: a read begun since can settle an unsure ending. */
+  sentAt: number | null;
+  /** When the read that found no stored order began: the time a `cleared` line names. */
+  checkedAt: number | null;
 };
 
 /** How long a press waits for the gateway's answer before it reads the order to find out. */
@@ -898,16 +906,28 @@ export function retainedOrder(binding: BotBinding): string | null {
 }
 
 /**
- * What an Unlock or Clear is shown as now: as it ended, unless it ended unsure (`unanswered`,
- * `unread`, `kept`) and a read of the bot since then finds no stored order for its provider,
- * which settles it as `cleared` from the gateway's own read.
+ * What an Unlock or Clear is shown as now, from the gateway's reads of the bot (each stamped with
+ * when it began): as it ended, with the time of the read that settled it. An unsure ending
+ * (`unanswered`, `unread`, `kept`) becomes `cleared` when a read begun after the send finds no
+ * stored order for its provider. A `cleared` one is shown no more (null) once a later read finds a
+ * stored order there again: the line never says the order is gone above a page that shows it.
  */
-export function clearShown(clear: OrderClear, binding: BotBinding): OrderClear["status"] {
+export function clearShown(
+  clear: OrderClear,
+  binding: BotBinding,
+): { status: OrderClear["status"]; checkedAt: number | null } | null {
+  const read = binding.evidence.checkedAt;
+  const same = binding.provider === clear.provider;
+  const stored = same && binding.order?.stored === true;
+  if (clear.status === "cleared")
+    return stored && read !== null && clear.checkedAt !== null && read > clear.checkedAt
+      ? null
+      : { status: "cleared", checkedAt: clear.checkedAt };
   const unsure =
     clear.status === "unanswered" || clear.status === "unread" || clear.status === "kept";
-  const readSince = binding.evidence.checkedAt !== null && binding.evidence.checkedAt >= clear.at;
-  const gone = binding.provider === clear.provider && !binding.order?.stored;
-  return unsure && readSince && gone ? "cleared" : clear.status;
+  if (unsure && same && !stored && read !== null && clear.sentAt !== null && read >= clear.sentAt)
+    return { status: "cleared", checkedAt: read };
+  return { status: clear.status, checkedAt: null };
 }
 
 /** The gateway's command line for the lock, in its own form (rows 12 and 14). */

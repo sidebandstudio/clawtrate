@@ -150,12 +150,12 @@ export function BotSettings({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [effortNote, setEffortNote] = useState<string | null>(null);
-  // Unlock and Clear (#660): the confirmation open, where its page was read, and since when the
-  // Account page has been open (a press before that isn't this visit's to report).
+  // Unlock and Clear (#660): the confirmation open, where its page was read, and the id of this
+  // visit's press (a press from before isn't this visit's to report; no clocks are compared).
   const [ask, setAsk] = useState<ClearAsk | null>(null);
   const [asking, setAsking] = useState(false);
   const askedOn = useRef<ShownStamp | null>(null);
-  const [pageSince, setPageSince] = useState(0);
+  const [pressed, setPressed] = useState<string | null>(null);
   // The page's clock: evidence ages while the page stays open, and with every change of the connection.
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -218,6 +218,7 @@ export function BotSettings({
     setWatching(false);
     setPick(null);
     setAsk(null);
+    setPressed(null);
   }
 
   // Every connect clears the gateway's id until its identity read answers, the reconnect that
@@ -248,7 +249,7 @@ export function BotSettings({
   const go = (next: View, focus: string = "[data-bs-focus]") => {
     setView(next);
     setError(null);
-    if (next === "account" && view !== "account") setPageSince(Date.now());
+    if (next === "account" && view !== "account") setPressed(null);
     if (next === "change" && view !== "change")
       setChoicesRead(accounts.readOn ?? shownStamp(connection));
     if (next !== "change") setPick(null);
@@ -280,12 +281,17 @@ export function BotSettings({
     } else if (
       lastWord.current === "locked" &&
       word === "bound" &&
-      // An Unlock pressed here says so in its own line.
-      !(accounts.clear?.botId === bot.id && accounts.clear.status === "cleared")
+      // An Unlock pressed here says so in its own line: this change of word, the read it made.
+      !(
+        accounts.clear?.botId === bot.id &&
+        accounts.clear.status === "cleared" &&
+        accounts.clear.checkedAt !== null &&
+        accounts.clear.checkedAt === binding?.evidence.checkedAt
+      )
     )
       announce(`${name} is no longer locked`);
     lastWord.current = word;
-  }, [word, announce, name, focusIn, accounts.clear, bot.id]);
+  }, [word, announce, name, focusIn, accounts.clear, bot.id, binding?.evidence.checkedAt]);
 
   const cli = gatewayCli(info, connection);
   const stopped = orderNeedsStoppedGateway(connection.serverVersion);
@@ -809,9 +815,15 @@ export function BotSettings({
     const listed = accounts.accounts.find((a) => a.id === id);
     return listed ? accountName(listed, accounts) : id;
   };
+  // A press under way is shown wherever its bot's page is open; an ended one only to the visit
+  // that pressed it.
   const clear =
-    accounts.clear?.botId === bot.id && accounts.clear.at >= pageSince ? accounts.clear : null;
-  const clearing = clear?.status === "sending";
+    accounts.clear?.botId === bot.id &&
+    (accounts.clear.status === "sending" || accounts.clear.id === pressed)
+      ? accounts.clear
+      : null;
+  // One press at a time, for any bot (the engine refuses a second one too).
+  const clearing = accounts.clear?.status === "sending" || asking;
   const openClear = (kind: ClearAsk["kind"]) => {
     if (!held || !binding.provider) return;
     askedOn.current = shownOn;
@@ -820,9 +832,14 @@ export function BotSettings({
   };
   const pressClear = async (asked: ClearAsk) => {
     setAsking(true);
+    const id = Array.from(crypto.getRandomValues(new Uint8Array(12)), (byte) =>
+      byte.toString(16).padStart(2, "0"),
+    ).join("");
+    setPressed(id);
     try {
       await bridge.invoke({
         type: "clearBotOrder",
+        press: id,
         botId: bot.id,
         provider: asked.provider,
         account: asked.account,
@@ -1382,6 +1399,13 @@ export function BotSettings({
           name={name}
           who={who}
           named={nameOfAccount(clear.account)}
+          // The page of a bot the gateway chooses for has no Check now of its own.
+          onCheck={
+            binding.mode === "account"
+              ? null
+              : () => void bridge.send({ type: "checkLock", botId: bot.id }).catch(() => {})
+          }
+          connected={connected}
         />
       )}
       {page}

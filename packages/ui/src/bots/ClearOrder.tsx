@@ -70,13 +70,19 @@ export function ClearOrderConfirm({
   );
 }
 
-/** How the last press for this bot ended, in words. Null when there is nothing to say. */
+/**
+ * How the last press for this bot ended, in words, from the gateway's reads (`clearShown`).
+ * Nothing once a later read shows the order back. Where the page has no Check now of its own
+ * (a bot the gateway chooses for), `onCheck` puts one in the line of an ending that couldn't tell.
+ */
 export function ClearOutcome({
   clear,
   binding,
   name,
   who,
   named,
+  onCheck,
+  connected,
 }: {
   clear: OrderClear;
   binding: BotBinding;
@@ -84,22 +90,43 @@ export function ClearOutcome({
   who: string;
   /** The account the order named, as the page names it. */
   named: string;
+  onCheck: (() => void) | null;
+  connected: boolean;
 }) {
+  const shown = clearShown(clear, binding);
+  if (!shown) return null;
   const unlock = clear.kind === "unlock";
-  const status = clearShown(clear, binding);
   const doing = unlock ? `unlock ${name}` : `clear ${name}'s order`;
-  const at = binding.evidence.checkedAt;
-  const line = (tone: "warn" | undefined, text: string, alert = false) => (
+  const line = (tone: "warn" | undefined, text: string, alert = false, check = false) => (
     // Apart from the account's facts that follow it.
     <div style={{ marginBottom: 12 }}>
       <Note tone={tone} icon={tone ? undefined : <CheckIcon />} testId="clear-outcome">
         <p role={alert ? "alert" : "status"} tabIndex={-1} data-bs="clear-outcome">
           {text}
         </p>
+        {check && onCheck && (
+          <div className="b-actions">
+            <button
+              type="button"
+              className="button"
+              data-size="sm"
+              disabled={!connected}
+              onClick={onCheck}
+            >
+              Check now
+            </button>
+          </div>
+        )}
       </Note>
     </div>
   );
-  switch (status) {
+  // The order the page's last read found: the same one account, or another order.
+  const same =
+    binding.provider === clear.provider &&
+    binding.order?.stored === true &&
+    binding.order.ids.length === 1 &&
+    binding.order.ids[0] === clear.account;
+  switch (shown.status) {
     case "sending":
       return <Wait>{unlock ? `Unlocking ${name}…` : `Clearing ${name}'s order…`}</Wait>;
     case "cleared":
@@ -109,7 +136,7 @@ export function ClearOutcome({
           unlock
             ? `, so ${name} follows its other orders`
             : `, so it chooses among ${who}'s accounts for ${name}`
-        }. Checked with the gateway${at ? ` at ${clock(at)}` : ""}.`,
+        }. Checked with the gateway${shown.checkedAt ? ` at ${clock(shown.checkedAt)}` : ""}.`,
       );
     case "refused":
       return line(
@@ -122,17 +149,22 @@ export function ClearOutcome({
         "warn",
         `The gateway didn't answer${clear.error ? ` (${clear.error})` : ""}, so Clawtrate can't tell yet whether ${name}'s order was cleared. Check now reads it again.`,
         true,
+        true,
       );
     case "kept":
       return line(
         "warn",
-        `The gateway answered, but its order for ${name} still names only ${named}. Check now reads it again.`,
+        same
+          ? `The gateway answered, but its order for ${name} still names only ${named}. Check now reads it again.`
+          : `The gateway answered, but it still keeps an order for ${name}. Check now reads it again.`,
+        true,
         true,
       );
     case "unread":
       return line(
         "warn",
         `The gateway answered, but Clawtrate couldn't read ${name}'s order back, so it can't say yet whether it was cleared. Check now reads it again.`,
+        true,
         true,
       );
     case "moved":

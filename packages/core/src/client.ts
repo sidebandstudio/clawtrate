@@ -6674,6 +6674,7 @@ export class ClawtrateClient {
    * order still names `account` alone (`AccountsEngine.clearOrder`).
    */
   async clearBotOrder(
+    id: string,
     botId: string,
     provider: string,
     account: string,
@@ -6682,7 +6683,14 @@ export class ClawtrateClient {
   ): Promise<void> {
     if (this.options.readOnly) throw new Error("This host only reads.");
     await this.requireSameGateway(stamp);
-    return this.accounts.clearOrder(botId, provider, account, kind, this.sameConnection(stamp));
+    return this.accounts.clearOrder(
+      id,
+      botId,
+      provider,
+      account,
+      kind,
+      this.sameConnection(stamp),
+    );
   }
 
   /**

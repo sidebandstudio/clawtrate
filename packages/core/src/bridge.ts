@@ -398,6 +398,8 @@ export type BridgeCommand =
    */
   | {
       type: "clearBotOrder";
+      /** The press's id, chosen by the screen: the line it shows as its own. */
+      press: string;
       botId: string;
       provider: string;
       account: string;
@@ -925,6 +927,12 @@ function botId(value: unknown): string {
   return value;
 }
 
+/** A press's id, as a screen makes one: short, plain characters. */
+function pressId(value: unknown): string {
+  if (typeof value !== "string" || !/^[\w-]{8,64}$/.test(value)) throw new Error("invalid press id");
+  return value;
+}
+
 function flag(value: unknown): boolean {
   if (typeof value !== "boolean") throw new Error("invalid flag");
   return value;
@@ -1342,6 +1350,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "clearBotOrder":
       return {
         type: "clearBotOrder",
+        press: pressId(command.press),
         botId: botId(command.botId),
         provider: providerId(command.provider),
         account: profileId(command.account),
@@ -2293,6 +2302,7 @@ class ViewerSession implements BridgeSession {
         return client.removeBotFallbacks(command.botId, command.stamp);
       case "clearBotOrder":
         return client.clearBotOrder(
+          command.press,
           command.botId,
           command.provider,
           command.account,
