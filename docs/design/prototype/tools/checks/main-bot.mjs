@@ -367,13 +367,23 @@ await check(
     );
     assert.equal(await page.getByText("Want me to show you how I work here?").count(), 0);
     // A message sent while the help question is being written waits for it.
-    await open("at=greeted", "full");
+    // The stand-in is held the moment the rename line is drawn, so the help
+    // question stays being written until the check releases it.
+    await open("at=greeted");
     await page.locator(".mb-msg.is-bot").first().waitFor();
+    await page.evaluate(() =>
+      new MutationObserver((_, observer) => {
+        if (!document.querySelector('[data-testid="named-line"]')) return;
+        window.mbHold = true;
+        observer.disconnect();
+      }).observe(document.getElementById("mb-root"), { childList: true, subtree: true }),
+    );
     await send(page, "Maple");
     await page.getByTestId("named-line").waitFor();
     await send(page, "I need help with code");
     assert.equal(await page.locator(".mb-status").count(), 1, "one reply being written");
     assert.equal(await page.getByTestId("card-task").count(), 0);
+    await page.evaluate(() => (window.mbHold = false));
     await page.getByText("What would you like a hand with?").waitFor();
     await page.getByTestId("card-task").waitFor();
     // A Skip while the name is being taken: the name stays, no further tour
