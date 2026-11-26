@@ -536,9 +536,16 @@ export type BridgeCommand =
       requestId: string;
       code: string;
       scopes: string[];
+      listedOn: number;
       stamp: GatewayStamp;
     }
-  | { type: "refuseDevice"; requestId: string; why: "not-mine" | "none-match"; stamp: GatewayStamp }
+  | {
+      type: "refuseDevice";
+      requestId: string;
+      why: "not-mine" | "none-match";
+      listedOn: number;
+      stamp: GatewayStamp;
+    }
   // Deleting a bot (`bot-delete.ts`). The read is `operator.read`; the delete needs admin.
   /** What the delete dialog lists for a bot, read now. */
   | { type: "readBotDelete"; botId: string }
@@ -2019,6 +2026,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         requestId: id(command.requestId, "request"),
         code: shortText(command.code, 16, "code"),
         scopes: command.scopes.map((scope) => oneOf(scope, FULL_SCOPES, "scope")),
+        listedOn: count(command.listedOn, Number.MAX_SAFE_INTEGER, "listedOn"),
         stamp: gatewayStampOf(command.stamp),
       };
     }
@@ -2027,6 +2035,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         type: "refuseDevice",
         requestId: id(command.requestId, "request"),
         why: oneOf(command.why, ["not-mine", "none-match"] as const, "reason"),
+        listedOn: count(command.listedOn, Number.MAX_SAFE_INTEGER, "listedOn"),
         stamp: gatewayStampOf(command.stamp),
       };
     default:
@@ -2661,9 +2670,15 @@ class ViewerSession implements BridgeSession {
       case "takeDevicePrompt":
         return { taken: client.takeDevicePrompt(command.requestId) };
       case "approveDevice":
-        return client.approveDevice(command.requestId, command.code, command.scopes, command.stamp);
+        return client.approveDevice(
+          command.requestId,
+          command.code,
+          command.scopes,
+          command.listedOn,
+          command.stamp,
+        );
       case "refuseDevice":
-        return client.refuseDevice(command.requestId, command.why, command.stamp);
+        return client.refuseDevice(command.requestId, command.why, command.listedOn, command.stamp);
     }
   }
 

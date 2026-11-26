@@ -6775,25 +6775,30 @@ export class ClawtrateClient {
     return this.deviceApprovals.takePrompt(requestId);
   }
 
-  /** The person picked `code` on the sheet that showed `scopes`, on the gateway of `stamp`. */
+  /**
+   * The person picked `code` on the sheet that showed `scopes`, read on connection `listedOn`
+   * (`deviceRequests.listedOn`) of the gateway of `stamp`.
+   */
   async approveDevice(
     requestId: string,
     code: string,
     scopes: readonly string[],
+    listedOn: number,
     stamp: GatewayStamp,
   ): Promise<DeviceDecision> {
     await this.requireSameGateway(stamp);
-    return this.deviceApprovals.approve(requestId, code, scopes);
+    return this.deviceApprovals.approve(requestId, code, scopes, listedOn);
   }
 
   /** "I didn't start this" denies the request; "None of these match" sends nothing. */
   async refuseDevice(
     requestId: string,
     why: "not-mine" | "none-match",
+    listedOn: number,
     stamp: GatewayStamp,
   ): Promise<DeviceDecision> {
     await this.requireSameGateway(stamp);
-    return this.deviceApprovals.refuse(requestId, why);
+    return this.deviceApprovals.refuse(requestId, why, listedOn);
   }
 
   /** Not now on a name card: kept on this device for that bot and that name. */

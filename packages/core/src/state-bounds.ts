@@ -868,6 +868,7 @@ export const DEVICE_REQUESTS: Bound = object<DeviceRequestsState>()({
   noticed: NUMBER,
   prompt: ID,
   error: text(MAX_MESSAGE_LINE_CHARS),
+  listedOn: NUMBER,
 });
 const task = flagged<Task>()({
   key: ID,

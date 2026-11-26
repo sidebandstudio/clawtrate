@@ -160,6 +160,11 @@ export type DeviceRequestsState = {
   prompt: string | null;
   /** The last list read failed: its message. */
   error: string | null;
+  /**
+   * The connection the list was read on. A decision carries it back, and one made on a list an
+   * earlier connection published sends nothing.
+   */
+  listedOn: number;
 };
 
 export const initialDeviceRequests: DeviceRequestsState = {
@@ -169,6 +174,7 @@ export const initialDeviceRequests: DeviceRequestsState = {
   noticed: 0,
   prompt: null,
   error: null,
+  listedOn: 0,
 };
 
 /** What a decision did, for the sheet to say. */
@@ -330,6 +336,12 @@ export class DeviceApprovals {
   private readonly collided = new Set<string>();
   private crowded = false;
   /**
+   * Requests a decision is under way for, taken before its first await: no second decision on
+   * the same request starts until it ends. Kept when the gateway may have acted on it (an
+   * approval sent whose answer was lost, or approved), until the request leaves the list.
+   */
+  private readonly deciding = new Set<string>();
+  /**
    * Until when this host opens no sheet by itself: five minutes after any refusal or wrong pick
    * here, whichever device asks next. The requests are still listed and can be opened.
    */
@@ -346,6 +358,13 @@ export class DeviceApprovals {
   private lastReadAt = -Infinity;
   /** Ends the earliest notice when its five minutes are up, with no event needed. */
   private cancelNotice: (() => void) | null = null;
+  /**
+   * The list's order on this connection: each `device.pair.list` send takes the next number, and
+   * `applied` is the newest whose reply was applied. A reply older than that prunes nothing and
+   * publishes nothing, and a decision resting on one sends no approval.
+   */
+  private sent = 0;
+  private applied = 0;
 
   constructor(ctx: DeviceApprovalsContext) {
     this.ctx = ctx;
@@ -363,6 +382,7 @@ export class DeviceApprovals {
   /** A hello: with admin the list is read; without, only events are noticed. */
   onHello(): void {
     this.epoch += 1;
+    this.applied = 0;
     this.clearTimer();
     this.clearNotices();
     const admin = this.ctx.admin();
@@ -373,6 +393,7 @@ export class DeviceApprovals {
   /** The connection closed: what it listed goes with it. */
   onClose(): void {
     this.epoch += 1;
+    this.applied = 0;
     this.clearTimer();
     this.reading = false;
     this.again = false;
@@ -387,6 +408,7 @@ export class DeviceApprovals {
     this.prompted.clear();
     this.collided.clear();
     this.crowded = false;
+    this.deciding.clear();
     this.quietUntil = -Infinity;
   }
 
@@ -464,6 +486,28 @@ export class DeviceApprovals {
     }, due - now);
   }
 
+  /** One numbered `device.pair.list`, its pending rows and its paired devices. */
+  private async list(): Promise<{ seq: number; pending: unknown[]; paired: unknown[] }> {
+    const seq = (this.sent += 1);
+    const answer = asRecord(await this.ctx.request("device.pair.list", {})) ?? {};
+    return {
+      seq,
+      pending: Array.isArray(answer.pending) ? answer.pending : [],
+      paired: Array.isArray(answer.paired) ? answer.paired : [],
+    };
+  }
+
+  /**
+   * Apply a pending list if no newer one was applied on this connection; false when it is older
+   * and changed nothing.
+   */
+  private applyNewest(seq: number, rows: unknown[]): boolean {
+    if (seq < this.applied) return false;
+    this.applied = seq;
+    this.apply(rows);
+    return true;
+  }
+
   private async read(): Promise<void> {
     if (!this.ctx.admin()) return;
     if (this.reading) {
@@ -475,9 +519,9 @@ export class DeviceApprovals {
     this.reading = true;
     this.lastReadAt = this.ctx.now();
     try {
-      const answer = asRecord(await this.ctx.request("device.pair.list", {})) ?? {};
+      const { seq, pending } = await this.list();
       if (epoch !== this.epoch) return;
-      this.apply(Array.isArray(answer.pending) ? answer.pending : []);
+      this.applyNewest(seq, pending);
     } catch (error) {
       if (epoch === this.epoch) this.patch({ error: errorText(error) });
     } finally {
@@ -548,6 +592,7 @@ export class DeviceApprovals {
     const ids = new Set(all.map((request) => request.requestId));
     for (const id of this.spent) if (!ids.has(id)) this.spent.delete(id);
     for (const id of this.prompted) if (!ids.has(id)) this.prompted.delete(id);
+    for (const id of this.deciding) if (!ids.has(id)) this.deciding.delete(id);
     const only = all.length === 1 ? requests[0]! : null;
     this.ctx.set({
       access: "admin",
@@ -560,6 +605,7 @@ export class DeviceApprovals {
           ? only.requestId
           : null,
       error: null,
+      listedOn: this.epoch,
     });
   }
 
@@ -568,9 +614,9 @@ export class DeviceApprovals {
   }
 
   /** The whole pending list read again from the gateway, for a decision. */
-  private async readAgain(): Promise<unknown[]> {
-    const answer = asRecord(await this.ctx.request("device.pair.list", {})) ?? {};
-    return Array.isArray(answer.pending) ? answer.pending : [];
+  private async readAgain(): Promise<{ seq: number; rows: unknown[] }> {
+    const { seq, pending } = await this.list();
+    return { seq, rows: pending };
   }
 
   private spend(requestId: string): void {
@@ -590,10 +636,41 @@ export class DeviceApprovals {
     requestId: string,
     code: string,
     scopes: readonly string[],
+    listedOn: number,
   ): Promise<DeviceDecision> {
     const shown = this.shown(requestId);
     if (!this.ctx.admin()) return { kind: "not-allowed" };
+    // A sheet an earlier connection showed decides nothing here; this one read its own list.
+    if (listedOn !== this.epoch) return { kind: "not-allowed" };
     if (!shown) return { kind: "gone" };
+    if (!this.reserve(requestId)) return { kind: "not-allowed" };
+    const decision = await this.approveReserved(shown, code, scopes);
+    this.settle(requestId, decision);
+    return decision;
+  }
+
+  /** Take `requestId` for one decision; false when one is under way or too many are. */
+  private reserve(requestId: string): boolean {
+    if (this.deciding.has(requestId) || this.deciding.size >= MAX_DEVICE_REQUESTS) return false;
+    this.deciding.add(requestId);
+    return true;
+  }
+
+  /**
+   * A decision ended: free its request, unless the gateway may have acted on it (an approval
+   * whose answer was lost, or one that went through), until the request leaves the list.
+   */
+  private settle(requestId: string, decision: DeviceDecision): void {
+    const acted = ["approved", "undone", "undo-failed", "unknown"].includes(decision.kind);
+    if (!acted) this.deciding.delete(requestId);
+  }
+
+  private async approveReserved(
+    shown: DeviceRequest,
+    code: string,
+    scopes: readonly string[],
+  ): Promise<DeviceDecision> {
+    const requestId = shown.requestId;
     if (shown.blocked || shown.spent || !shown.choices.includes(code))
       return { kind: "not-allowed" };
     if (code !== pairCode(shown.publicKey, shown.requestId)) {
@@ -605,22 +682,20 @@ export class DeviceApprovals {
     // Each step goes on the connection the sheet was read on, or not at all.
     const same = this.here();
     try {
-      const rows = await this.readAgain();
+      const { seq, rows } = await this.readAgain();
       if (!same()) return { kind: "interrupted" };
+      // A newer list was applied while this one was out: decide nothing on the older one.
+      if (!this.applyNewest(seq, rows)) {
+        this.refreshOn(same);
+        return { kind: "not-allowed" };
+      }
       const row = rows.map((each) => asRecord(each) ?? {}).find((r) => r.requestId === requestId);
       if (!row) return this.gone(same);
       const what = differences(shown, row);
-      if (what.length > 0) {
-        this.refreshOn(same);
-        return { kind: "changed", what };
-      }
-      // The list as it is now, by the rules it is shown by: a code it now shares, a collision
-      // seen before, more waiting than are shown, or a newer block this connection published.
-      const now = this.snapshot(rows).requests.find((each) => each.requestId === requestId);
-      if (!now || now.blocked || this.shown(requestId)?.blocked) {
-        this.apply(rows);
-        return { kind: "not-allowed" };
-      }
+      if (what.length > 0) return { kind: "changed", what };
+      // The list as now published, from this read, by the rules it is shown by: a request not
+      // in it (hidden past the sixteen), or blocked in it, takes no approval.
+      if (this.shown(requestId)?.blocked !== null) return { kind: "not-allowed" };
     } catch (error) {
       return { kind: "refused", message: errorText(error) };
     }
@@ -677,8 +752,7 @@ export class DeviceApprovals {
   }
 
   private async readPaired(deviceId: string): Promise<RawRecord | null> {
-    const answer = asRecord(await this.ctx.request("device.pair.list", {})) ?? {};
-    const paired = Array.isArray(answer.paired) ? answer.paired : [];
+    const { paired } = await this.list();
     return (paired.map((row) => asRecord(row) ?? {}).find((r) => r.deviceId === deviceId) ??
       null) as RawRecord | null;
   }
@@ -732,10 +806,17 @@ export class DeviceApprovals {
   }
 
   /** "I didn't start this" (`device.pair.reject`) or "None of these match" (nothing sent). */
-  async refuse(requestId: string, why: "not-mine" | "none-match"): Promise<DeviceDecision> {
+  async refuse(
+    requestId: string,
+    why: "not-mine" | "none-match",
+    listedOn: number,
+  ): Promise<DeviceDecision> {
     const shown = this.shown(requestId);
     if (!this.ctx.admin()) return { kind: "not-allowed" };
+    if (listedOn !== this.epoch) return { kind: "not-allowed" };
     if (!shown) return { kind: "gone" };
+    // A decision under way on this request (an approval being sent) takes no refusal.
+    if (this.deciding.has(requestId)) return { kind: "not-allowed" };
     if (why === "none-match") {
       // Only a request offering codes takes this pick: a blocked one (too many waiting, or a
       // reason of its own) is denied or left, so spent picks stay within the requests shown.
@@ -744,16 +825,23 @@ export class DeviceApprovals {
       this.spend(requestId);
       return { kind: "none-match" };
     }
+    if (!this.reserve(requestId)) return { kind: "not-allowed" };
     const same = this.here();
+    let decision: DeviceDecision;
     try {
       this.quiet();
       await this.ctx.request("device.pair.reject", { requestId });
       this.refreshOn(same);
-      return { kind: "denied" };
+      decision = { kind: "denied" };
     } catch (error) {
-      if (!this.ctx.answered(error)) return { kind: "unknown" };
-      if (unknownRequest(error)) return this.gone(same);
-      return { kind: "refused", message: errorText(error) };
+      decision = !this.ctx.answered(error)
+        ? { kind: "unknown" }
+        : unknownRequest(error)
+          ? this.gone(same)
+          : { kind: "refused", message: errorText(error) };
     }
+    // A denial (or a lost answer) may have ended the request: it stays taken until it leaves.
+    if (decision.kind !== "denied" && decision.kind !== "unknown") this.deciding.delete(requestId);
+    return decision;
   }
 }

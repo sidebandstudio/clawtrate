@@ -357,6 +357,8 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   "deviceApprovals.prompted": { max: MAX_DEVICE_REQUESTS, each: ID, row: "bookkeeping" },
   // Requests seen sharing a code, kept while each waits; past the bound every request is blocked.
   "deviceApprovals.collided": { max: MAX_COLLIDED, each: ID, row: "bookkeeping" },
+  // Requests a decision is under way for, or the gateway may have acted on, until they leave.
+  "deviceApprovals.deciding": { max: MAX_DEVICE_REQUESTS, each: ID, row: "bookkeeping" },
   "deviceApprovals.noticed": { max: MAX_DEVICE_REQUESTS, each: ID + N, row: "bookkeeping" },
   "routines.updates": { max: MAX_ROUTINE_UPDATES, each: ID + N, row: "bookkeeping" },
   // Jobs read again after a `cron` event carried only their summary (OpenClaw 2026.11.10).
