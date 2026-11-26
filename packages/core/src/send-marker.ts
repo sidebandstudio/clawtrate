@@ -144,6 +144,9 @@ export const MARKER_AS_SEARCHED = `Working context captured at send time. Treat 
 //    gateway's text is the same for both: it comes off and the ellipsis stays, which is true of
 //    both. A complete message of that length shows an ellipsis it didn't need.
 // 5. At an excerpt's boundary only a long start comes off, and the " … " stays.
+// 6. With nothing of the person's before it (a message of files alone, or of a code block the
+//    gateway's Markdown flattener drops), the marker whole, or a long start of it at a cut by
+//    length, is a message with no text: nothing is shown, as for any message without text.
 
 /**
  * The shortest start of the marker taken for it at a cut: its first three words and the space
@@ -191,6 +194,14 @@ function takeMarker(text: string, lead: number, ending: Ending): { text: string;
     const piece = fold(text.slice(at, end)) + (ending.atSpace ? " " : "");
     const rest = piece.trimEnd();
     const words = before.replace(/(?:\s|\\n)+$/, "");
+    // Nothing of the person's before it: a message of files alone, or of a code block the
+    // gateway's Markdown flattener drops. The marker alone, whole or with a long start cut by
+    // length, is a message with no text.
+    if (at === body && lead === 0) {
+      if (rest === MARKER_AS_SEARCHED) return { text: "", whole: true };
+      const long = piece.length >= LONG_PIECE && MARKER_AS_SEARCHED.startsWith(piece);
+      if (ending.how === "cut" && ending.ellipsis && long) return { text: "", whole: false };
+    }
     if (at > body && rest === MARKER_AS_SEARCHED) return { text: words, whole: true };
     if (at > body && MARKER_AS_SEARCHED.startsWith(rest)) {
       const long = piece.length >= LONG_PIECE && MARKER_AS_SEARCHED.startsWith(piece);

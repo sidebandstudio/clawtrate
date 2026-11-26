@@ -5,6 +5,7 @@
 import { describe, expect, it } from "vitest";
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { mapSessionRow, plainPreview } from "../src/mapping.ts";
+import { readMessageSearch } from "../src/search.ts";
 import { isActive } from "../src/runs.ts";
 import {
   CLAWTRATE_WORK_CONTEXT,
@@ -22,6 +23,7 @@ import { agentEvent, KEY, openTask, questionRecord } from "./client-harness.ts";
 import { deferred, GatewayError, sleep, until } from "./fake-gateway.ts";
 
 type Send = { message: string; idempotencyKey: string; queueMode: string; workContext?: unknown };
+type ClawtrateClientOf = Awaited<ReturnType<typeof openTask>>["client"];
 const sends = (gateway: { calls(method: string): unknown[] }) =>
   gateway.calls("chat.send") as Send[];
 
@@ -322,6 +324,133 @@ describe("a refusal of the marker", () => {
     expect("workContext" in sends(gateway)[1]!).toBe(false);
     expect(transcript().runs.some((run) => run.id === id)).toBe(false);
     client.stop();
+  });
+
+  describe("a held steer keeps its place ahead of a message queued after it", () => {
+    /**
+     * run-y runs. A steer leaves marked; a message is queued after it; run-y asks a question while
+     * the steer's frame waits, and the refusal holds the steer. The steer has no run of its own.
+     */
+    async function heldSteerThenQueued(resolve = "cancelled", laterWhileAsked = false) {
+      const { client, gateway, transcript } = await openTask();
+      gateway.handlers["question.resolve"] = () => ({ status: resolve });
+      gateway.emit("agent", agentEvent("run-y", 1, "lifecycle", { phase: "start" }, KEY));
+      await until(() => transcript().runs.some((run) => run.id === "run-y"));
+      const answer = deferred<unknown>();
+      gateway.handlers["chat.send"] = () =>
+        sends(gateway).length === 1
+          ? answer.promise
+          : { runId: `run-${sends(gateway).length}`, status: "started" };
+      const steer = client.sendMessage(KEY, "cancel");
+      await until(() => sends(gateway).length === 1);
+      expect(sends(gateway)[0]).toMatchObject({ queueMode: "steer" });
+      let later = laterWhileAsked
+        ? ""
+        : client.sendMessage(KEY, "and then this", { mode: "queue" });
+      if (later) await until(() => transcript().runs.some((run) => run.id === later));
+      gateway.emit("question.requested", questionRecord("ask_1", "run-y"));
+      await until(() => transcript().runs.some((run) => run.state === "waiting"));
+      answer.reject(refusal(ORDINARY_ONLY));
+      await until(() => transcript().outbox.find((m) => m.id === steer)?.status === "held");
+      // Or typed while the question is open: held as it is sent.
+      if (laterWhileAsked) later = client.sendMessage(KEY, "and then this", { mode: "queue" });
+      await sleep(50);
+      expect(sends(gateway)).toHaveLength(1);
+      const order = () =>
+        sends(gateway)
+          .slice(1)
+          .map((p) => [p.message, p.queueMode, "workContext" in p]);
+      return { client, gateway, transcript, steer, later, order };
+    }
+
+    it("the asking run ends: the steer goes first, as a run of its own, and the queued message after it", async () => {
+      const { client, gateway, steer, later, order } = await heldSteerThenQueued();
+      gateway.emit("agent", agentEvent("run-y", 2, "lifecycle", { phase: "end" }, KEY));
+      await until(() => sends(gateway).length === 2);
+      await sleep(50);
+      expect(order()).toEqual([["cancel", "followup", false]]);
+      expect(sends(gateway)[1]).toMatchObject({ idempotencyKey: steer });
+      // The later message waits for the steer's own run, then goes.
+      gateway.emit("agent", agentEvent(steer, 1, "lifecycle", { phase: "start" }, KEY));
+      gateway.emit("agent", agentEvent(steer, 2, "lifecycle", { phase: "end" }, KEY));
+      await until(() => sends(gateway).length === 3);
+      expect(sends(gateway)[2]).toMatchObject({ message: "and then this", idempotencyKey: later });
+      client.stop();
+    });
+
+    it("the asking run ends with the later message typed while it asked: the steer still goes first", async () => {
+      const { client, gateway, transcript, steer, later, order } = await heldSteerThenQueued(
+        "cancelled",
+        true,
+      );
+      expect(transcript().outbox.find((m) => m.id === later)?.status).toBe("held");
+      gateway.emit("agent", agentEvent("run-y", 2, "lifecycle", { phase: "end" }, KEY));
+      await until(() => sends(gateway).length === 2);
+      await sleep(50);
+      expect(order()).toEqual([["cancel", "followup", false]]);
+      gateway.emit("agent", agentEvent(steer, 1, "lifecycle", { phase: "start" }, KEY));
+      gateway.emit("agent", agentEvent(steer, 2, "lifecycle", { phase: "end" }, KEY));
+      await until(() => sends(gateway).length === 3);
+      expect(sends(gateway)[2]).toMatchObject({ message: "and then this", idempotencyKey: later });
+      client.stop();
+    });
+
+    for (const [how, settle] of [
+      [
+        "answered",
+        (client: ClawtrateClientOf) => client.answerQuestion(KEY, "ask_1", { color: ["Blue"] }),
+      ],
+      ["dismissed", (client: ClawtrateClientOf) => client.dismissQuestion(KEY, "ask_1")],
+    ] as const) {
+      it(`the question ${how}: the steer goes into the asking run, and the queued message after that run`, async () => {
+        const { client, gateway, later, order } = await heldSteerThenQueued(
+          how === "answered" ? "answered" : "cancelled",
+        );
+        await settle(client);
+        await until(() => sends(gateway).length === 2);
+        await sleep(50);
+        expect(order()).toEqual([["cancel", "steer", false]]);
+        gateway.emit("agent", agentEvent("run-y", 3, "lifecycle", { phase: "end" }, KEY));
+        await until(() => sends(gateway).length === 3);
+        expect(sends(gateway)[2]).toMatchObject({
+          message: "and then this",
+          idempotencyKey: later,
+        });
+        client.stop();
+      });
+    }
+
+    it("the asking run stopped: nothing starts by itself, and both stay Not sent", async () => {
+      const { client, gateway, transcript, steer, later } = await heldSteerThenQueued();
+      gateway.handlers["chat.abort"] = () => ({ ok: true, aborted: true, runIds: ["run-y"] });
+      await client.stopRun(KEY, "run-y");
+      gateway.emit(
+        "agent",
+        agentEvent("run-y", 3, "lifecycle", { phase: "end", aborted: true }, KEY),
+      );
+      await until(() => transcript().outbox.every((m) => m.status === "not-sent"));
+      await sleep(50);
+      expect(sends(gateway)).toHaveLength(1);
+      expect(transcript().outbox.map((m) => m.id)).toEqual([steer, later]);
+      expect(transcript().runs.some((run) => run.state === "queued")).toBe(false);
+      client.stop();
+    });
+
+    it("a reconnect while it is held, with the run and its question gone: the steer goes first", async () => {
+      const { client, gateway, steer, order } = await heldSteerThenQueued();
+      gateway.dropAll();
+      await until(() => client.state.connection.status !== "connected");
+      await until(() => client.state.connection.status === "connected");
+      await until(() => sends(gateway).length >= 2);
+      await sleep(50);
+      expect(order()).toEqual([["cancel", "followup", false]]);
+      expect(sends(gateway)[1]).toMatchObject({ idempotencyKey: steer });
+      gateway.emit("agent", agentEvent(steer, 1, "lifecycle", { phase: "start" }, KEY));
+      gateway.emit("agent", agentEvent(steer, 2, "lifecycle", { phase: "end" }, KEY));
+      await until(() => sends(gateway).length === 3);
+      expect(sends(gateway)[2]).toMatchObject({ message: "and then this" });
+      client.stop();
+    });
   });
 
   it("any other refusal is sent once and shown as before", async () => {
@@ -829,5 +958,80 @@ describe("words the marker also has are a person's own", () => {
       text: "…",
       whole: false,
     });
+  });
+});
+
+describe("a preview, a title or a snippet that is the marker alone is a message with no text", () => {
+  // Both versions join the person's words and the marker with `filter(Boolean)`, so a message of
+  // files alone is the marker alone; and both versions' Markdown flatteners drop a code block, so
+  // the preview of a message that is only one is the marker alone too.
+  const MARKER_ALONE = MARKER_AS_SEARCHED;
+  /** `projectSessionDisplayMessage(…, {flattenMarkdown: true})`, run on each version's package. */
+  const FLATTENED = {
+    "2026.10.6": {
+      "```\nconst x = 1;\n```": MARKER_ALONE,
+      '```ts\nconsole.log("hi")\nreturn 2\n```': MARKER_ALONE,
+      "~~~\nls -la\n~~~": `~ ls -la ~ ${MARKER_ALONE}`,
+      "    npm run build\n    npm test": `npm run build npm test ${MARKER_ALONE}`,
+      "": MARKER_ALONE,
+    },
+    "2026.11.10": {
+      "```\nconst x = 1;\n```": MARKER_ALONE,
+      '```ts\nconsole.log("hi")\nreturn 2\n```': MARKER_ALONE,
+      "~~~\nls -la\n~~~": MARKER_ALONE,
+      "    npm run build\n    npm test": `npm run build npm test ${MARKER_ALONE}`,
+      "": MARKER_ALONE,
+    },
+  };
+  /** `deriveGoalSessionTitle` of the first message's projection, the same on both versions. */
+  const TITLES = {
+    "": "Working context captured at send time. Treat the following…",
+    "```\nconst x = 1;\n```": "``` const x = 1; ``` Working context captured at send…",
+  };
+
+  it("the task's preview and the archived row's show none, so the title shows, on either version", () => {
+    for (const [version, previews] of Object.entries(FLATTENED)) {
+      for (const [words, listed] of Object.entries(previews)) {
+        // The person's text before the marker is shown as any preview is.
+        const expected =
+          listed === MARKER_ALONE ? null : plainPreview(listed.slice(0, -MARKER_ALONE.length - 1));
+        const row = { key: KEY, lastMessagePreview: listed, derivedTitle: "Check the logs" };
+        expect([version, words, mapSessionRow(row)?.preview]).toEqual([version, words, expected]);
+        expect(mapArchivedRow({ ...row, archived: true }, "otto")?.preview).toBe(expected);
+      }
+    }
+    // As for a message whose last row has no text: nothing listed, so the title shows.
+    expect(mapSessionRow({ key: KEY, lastMessagePreview: null })?.preview).toBeNull();
+  });
+
+  it("a title the gateway derived from the marker alone is none, so the task's own name shows", () => {
+    const untitled = mapSessionRow({ key: KEY })!.title;
+    expect(mapSessionRow({ key: KEY, derivedTitle: TITLES[""] })?.title).toBe(untitled);
+    expect(mapSessionRow({ key: KEY, displayName: TITLES[""] })?.title).toBe(untitled);
+    expect(titleWithoutMarker(TITLES[""])).toBe("");
+    // A code block's title keeps the code: the person's own text is before the marker.
+    expect(titleWithoutMarker(TITLES["```\nconst x = 1;\n```"])).toBe("``` const x = 1; ```");
+  });
+
+  it("a snippet of the marker alone shows no text, and a search for its words leaves it out", () => {
+    const copy = MARKER_AS_SEARCHED.replace(": {", ":\n{");
+    expect(snippetWithoutMarker(copy)).toEqual({ text: "", whole: true });
+    const reply = {
+      results: [
+        {
+          sessionKey: KEY,
+          messageId: "m1",
+          role: "user",
+          snippet: copy,
+        },
+      ],
+      sessions: [{ key: KEY, displayName: TITLES[""] }],
+    };
+    // A search for one of its words: the marker is all it shows matching.
+    expect(readMessageSearch(reply, "Clawtrate").hits).toEqual([]);
+    // Kept only where the query has no word: then it shows no text, and no title of the marker.
+    const kept = readMessageSearch(reply, "");
+    expect(kept.hits.map((hit) => hit.snippet)).toEqual([""]);
+    expect(kept.titles[KEY]).toBeUndefined();
   });
 });
