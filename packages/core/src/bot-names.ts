@@ -321,8 +321,16 @@ export function canUndoName(
  * The changes a bot's settings list: those confirmed done, or undone. A claim whose rename was
  * never confirmed, left by a lost answer or a device that stopped, is not a rename.
  */
-export const shownChanges = (changes: readonly NameRecordChange[]) =>
-  changes.filter((each) => each.done !== undefined || each.undone !== undefined);
+export const shownChanges = (changes: readonly NameRecordChange[], bots: readonly Bot[]) =>
+  changes.filter(
+    (each) =>
+      each.done !== undefined ||
+      each.undone !== undefined ||
+      // Confirmed by the bot list itself when its mark couldn't be written: the bot's latest
+      // change, and the bot has its name.
+      (changes.filter((other) => other.bot === each.bot).at(-1)?.run === each.run &&
+        bots.find((bot) => bot.id === each.bot)?.name === each.to),
+  );
 
 export type BotNamesContext = {
   request: (method: string, params: unknown) => Promise<unknown>;
@@ -331,8 +339,11 @@ export type BotNamesContext = {
   canRename: () => boolean;
   /** Where a read is made now: the gateway's identity and the host's target (`gatewayStamp`). */
   stamp: () => GatewayStamp;
-  /** The connection's own number, new with each connection, the same gateway's included. */
-  generation: () => number;
+  /**
+   * The connection's own key, new with each connection and each socket, an automatic reconnect to
+   * the same gateway included.
+   */
+  generation: () => string;
   /** Refuse unless `stamp` is still where the host is connected, as every bot write does. */
   sameGateway: (stamp: GatewayStamp) => Promise<void>;
   /** The host's storage: only to forget what the earlier card kept there. */
@@ -357,7 +368,7 @@ export type BotNamesContext = {
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 /** Where a record operation began: the gateway and the very connection it is bound to. */
-type RecordOp = { stamp: GatewayStamp; generation: number };
+type RecordOp = { stamp: GatewayStamp; generation: string };
 
 /** What a rename's line says of whose it was. */
 export type RenameOrigin = { asked: boolean; source: NameSource; run: string };
@@ -554,7 +565,6 @@ export class BotNames {
           changes: [...record.changes, change],
           counts: [...counts, { bot: botId, day, n: renamesOn(record, botId, day) + 1 }],
         };
-        if (renamesOn(fitNameRecord(next), botId, day) === 0) return "full";
         return next;
       });
       if (epoch !== this.epoch) return;
@@ -814,13 +824,23 @@ export class BotNames {
   private async writeRecord<T extends string>(
     op: RecordOp,
     change: (record: NameRecord) => NameRecord | T,
-  ): Promise<"written" | "unavailable" | T> {
+  ): Promise<"written" | "unavailable" | "full" | T> {
     for (let attempt = 0; attempt < RECORD_WRITE_ATTEMPTS; attempt += 1) {
       const { record, raw } = await this.readRecord(op);
       if (!record) return "unavailable";
       const next = change(record);
       if (typeof next === "string") return next;
       const value = fitNameRecord({ ...next, rev: record.rev + 1 });
+      // No write may drop a count for today: the day's limit would forget a bot's renames.
+      const today = dayOf(this.ctx.now());
+      const counted = (counts: NameRecord["counts"]) =>
+        counts.filter((each) => each.day === today).length;
+      if (counted(value.counts) < counted(next.counts)) return "full";
+      // Nor may it drop the change it adds: a rename recorded nowhere would have no Undo.
+      const added = next.changes.filter(
+        (each) => !record.changes.some((old) => old.run === each.run),
+      );
+      if (added.some((each) => !value.changes.some((kept) => kept.run === each.run))) return "full";
       const result = await this.recordRequest(op, "users.prefs.set", {
         entries: { [NAME_RECORD_KEY]: value },
         expectedEntries: { [NAME_RECORD_KEY]: raw ?? null },

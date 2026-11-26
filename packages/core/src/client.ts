@@ -1835,7 +1835,7 @@ export class ClawtrateClient {
       this.state.connection.canAdmin &&
       !this.options.readOnly,
     stamp: () => gatewayStamp(this.state.connection),
-    generation: () => this.generation,
+    generation: () => `${this.generation}:${this.epoch}`,
     sameGateway: async (stamp) => {
       await this.requireSameGateway(stamp);
     },

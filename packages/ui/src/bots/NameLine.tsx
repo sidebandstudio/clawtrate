@@ -163,7 +163,7 @@ export function NameChanges({ bot }: { bot: Bot }) {
   const record = state.botNameRecord;
   const changes = record?.changes ?? [];
   // Only renames the bot list confirmed, and Undos: a claim that never landed isn't a rename.
-  const mine = shownChanges(changes).filter((each) => each.bot === bot.id);
+  const mine = shownChanges(changes, state.bots).filter((each) => each.bot === bot.id);
   if (!record || mine.length === 0) return null;
   const undo = async (change: NameRecordChange) => {
     setProblem(null);
