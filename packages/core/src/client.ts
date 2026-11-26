@@ -6012,7 +6012,7 @@ export class ClawtrateClient {
         return;
       const aliases = Object.fromEntries([
         ...(terminal?.pairs ?? []),
-        ...historyQueuePairs(history?.messages, history?.hasMore === true),
+        ...historyQueuePairs(history?.messages),
       ]);
       const { messages, inFlight } = throughRunAliases(
         history?.messages,
@@ -10368,7 +10368,7 @@ export class ClawtrateClient {
       // A queued turn's two ids, as history pairs them, whatever this client holds: kept, so a
       // pairing frame missed in a gap, or a transcript built from history alone, still makes
       // one run, and later frames under either id update that run.
-      const pairs = historyQueuePairs(history?.messages, history?.hasMore === true);
+      const pairs = historyQueuePairs(history?.messages);
       if (pairs.length > 0) {
         this.updateActivity(key, (activity) =>
           pairs.reduce(

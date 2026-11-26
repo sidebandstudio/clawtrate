@@ -1638,20 +1638,20 @@ export function registerRunAlias(
  * the rows of the run it was sent into, which came before it, and an ordinary turn's by
  * rows under the send's own id: neither pairs. Nor does a failure's row, whose place proves nothing.
  *
- * A place pairs only when no other message could own those rows: the page reaches the task's
- * start (`windowCut` false), no message before has no key, and every earlier send on it has rows
- * of its own. Two quick sends can put the first one's reply after the second's prompt: that reply
- * is then paired by a key or the gateway's own pairing, or by nothing, never by its place (#686).
+ * A place pairs only when no other message on the page could own those rows: every earlier send
+ * on it has rows of its own (or joined a run as a steer), and no message with no key is still
+ * without rows after it. Two quick sends can put the first one's reply after the second's prompt:
+ * that reply is then paired by a key or the gateway's own pairing, or by nothing, never by its
+ * place (#686).
  */
 export function historyQueuePairs(
   messages: unknown,
-  windowCut = false,
 ): Array<[gatewayRunId: string, clientRunId: string]> {
   const pairs: Array<[string, string]> = [];
-  if (windowCut) return pairs;
   // Run ids the page has shown so far, sends and their rows alike.
   const seen = new Set<string>();
-  // Sends on the page with no rows of their own yet, and whether a message with no key came before.
+  // Sends on the page with no rows of their own yet, and whether a message with no key has no rows
+  // after it yet.
   const waiting = new Set<string>();
   let unkeyed = false;
   let sendId: string | null = null;
@@ -1680,8 +1680,12 @@ export function historyQueuePairs(
       pairs.push([runId, sendId]);
       waiting.delete(sendId);
     }
+    // A send followed at once by rows of a run shown before is a steer into it: no run of its own.
+    if (sendId && seen.has(runId)) waiting.delete(sendId);
     waiting.delete(runId);
     seen.add(runId);
+    // Rows came after a message with no key: they are its own, or it joined their run.
+    unkeyed = false;
     sendId = null;
   }
   return pairs;

@@ -763,19 +763,27 @@ describe("#686: the mark is the newest run's, never the latest-written failure's
     ).toEqual([["gateway-b", "b"]]);
   });
 
-  it("a page that doesn't reach the task's start pairs nothing by place", () => {
-    const rows = [
-      { ...userRow("b", "and this"), __openclaw: { id: "u-b", seq: 2, idempotencyKey: "b:user" } },
-      {
-        role: "assistant",
-        content: [{ type: "text", text: "Done." }],
-        stopReason: "stop",
-        __openclaw: { id: "r-x", seq: 3, runId: "gateway-x" },
-      },
-    ];
-    expect(historyQueuePairs(rows)).toEqual([["gateway-x", "b"]]);
-    // An earlier message above the page may be the one those rows answer.
-    expect(historyQueuePairs(rows, true)).toEqual([]);
+  it("an earlier message answered, or a steer, still lets a later queued turn pair with its send", () => {
+    const row = (runId: string, id: string) => ({
+      role: "assistant",
+      content: [{ type: "text", text: "Done." }],
+      stopReason: "stop",
+      __openclaw: { id, runId },
+    });
+    const keyed = (runId: string) => ({
+      role: "user",
+      content: runId,
+      __openclaw: { id: `u-${runId}`, idempotencyKey: `${runId}:user` },
+    });
+    const queued = [keyed("c"), row("gateway-c", "r-c")];
+    // A message from a channel (no key), answered.
+    const channel = { role: "user", content: "hi", __openclaw: { id: "u-ch" } };
+    expect(historyQueuePairs([channel, row("ch-run", "r-ch"), ...queued])).toEqual([
+      ["gateway-c", "c"],
+    ]);
+    // A steer into a run that goes on: its row sits among that run's rows.
+    const steered = [keyed("base"), row("base", "r-1"), keyed("steer"), row("base", "r-2")];
+    expect(historyQueuePairs([...steered, ...queued])).toEqual([["gateway-c", "c"]]);
   });
 
   it("the merge keeps history's word that a live failure never ran; a later reply row overrides it", () => {
