@@ -4,8 +4,11 @@
 export const MAX_MEMBERS = 32;
 /** Adds and restores are refused once a list holds this many entries; removals never are. */
 export const GROWTH_LIMIT = 1024;
-/** Entries in one list, the first included: the growth limit, then a removal of every device. */
-export const MAX_ENTRIES = GROWTH_LIMIT + MAX_MEMBERS;
+/**
+ * Entries in one list, the first included: the growth limit, then at most a removal of every
+ * device and a re-link before each removal of the gateway's own device, and one more re-link.
+ */
+export const MAX_ENTRIES = GROWTH_LIMIT + 2 * MAX_MEMBERS + 1;
 /** A device's or the gateway's name, in UTF-8 bytes. */
 export const MAX_NAME_BYTES = 64;
 /** Addresses on the gateway's card. */

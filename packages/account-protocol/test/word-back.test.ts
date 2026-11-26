@@ -35,6 +35,7 @@ import {
   SEAL_RANDOM,
   seeded,
   type World,
+  fresh,
 } from "./helpers.ts";
 
 // Signatures and key checks are quick alone; on a loaded machine a test can take seconds.
@@ -54,7 +55,7 @@ function upToTheWord(world: World, random = N_RANDOM) {
     LIST_RANDOM,
     headObject(world, after),
   );
-  const prompt = run.n.finish(outcome.confirm, sealed, headOf(world, after));
+  const prompt = run.n.finish(outcome.confirm, sealed, headOf(world, after), null);
   return { run, outcome, prompt, mac };
 }
 
@@ -135,7 +136,7 @@ describe("the word back", () => {
       // N starts no join while the pause lasts.
       expectCode(
         () =>
-          NewDeviceJoin.start(makeDevice(5), CONTEXT, N_RANDOM, {
+          NewDeviceJoin.start(fresh(makeDevice(5)), CONTEXT, N_RANDOM, {
             nowMs: NOW + 1,
             pausedUntilMs: NOW + JOIN_PAUSE_MS,
           }),
@@ -169,7 +170,7 @@ describe("pauses", () => {
     const outcome = run.a.confirm("not-started", SEAL_RANDOM, NOW);
     if (outcome.outcome !== "refused") throw new Error("expected refused");
     expect(outcome.pauseUntilMs).toBe(NOW + JOIN_PAUSE_MS);
-    const n = NewDeviceJoin.start(makeDevice(3), CONTEXT, N_RANDOM, CLOCK);
+    const n = NewDeviceJoin.start(fresh(makeDevice(3)), CONTEXT, N_RANDOM, CLOCK);
     expectCode(
       () =>
         MemberJoin.answer(member, n.commit, {
@@ -200,7 +201,7 @@ describe("a server's first join", () => {
         connector: world.connector,
         context: CONTEXT,
         card: world.card,
-        secret: world.secret,
+        random: fill(32, 0x5d),
       },
     };
   }
@@ -209,7 +210,7 @@ describe("a server's first join", () => {
     const { world, install: inst } = install();
     const phone = makeDevice(4, "iPhone", "ios");
     const server = ServerFirstDeviceJoin.open(inst);
-    const n = NewDeviceJoin.start(phone, CONTEXT, N_RANDOM, CLOCK);
+    const n = NewDeviceJoin.start(fresh(phone), CONTEXT, N_RANDOM, CLOCK);
     const answer = server.answer(n.commit);
     expect(server.answer(n.commit)).toEqual(answer);
     const { reveal, words } = n.reveal(answer);
@@ -220,7 +221,7 @@ describe("a server's first join", () => {
       NOW,
     );
     if (outcome.outcome !== "added") throw new Error("expected added");
-    const prompt = n.finish(outcome.confirm, null, null);
+    const prompt = n.finish(outcome.confirm, null, null, null);
     expect(prompt.mode).toBe("first-device");
     const picked = n.pickWord({ under: prompt.under, word: outcome.wordBack.word }, NOW);
     if (picked.outcome !== "confirmed") throw new Error("expected confirmed");
@@ -243,31 +244,29 @@ describe("a server's first join", () => {
   it("ends for good on a second commitment, and on any refusal at the terminal", () => {
     const { install: inst } = install();
     const server = ServerFirstDeviceJoin.open(inst);
-    server.answer(NewDeviceJoin.start(makeDevice(4), CONTEXT, N_RANDOM, CLOCK).commit);
+    server.answer(NewDeviceJoin.start(fresh(makeDevice(4)), CONTEXT, N_RANDOM, CLOCK).commit);
     expectCode(
-      () => server.answer(NewDeviceJoin.start(makeDevice(5), CONTEXT, N_RANDOM, CLOCK).commit),
+      () =>
+        server.answer(NewDeviceJoin.start(fresh(makeDevice(5)), CONTEXT, N_RANDOM, CLOCK).commit),
       "join_spent",
     );
     expectCode(
-      () => server.answer(NewDeviceJoin.start(makeDevice(4), CONTEXT, N_RANDOM, CLOCK).commit),
+      () =>
+        server.answer(NewDeviceJoin.start(fresh(makeDevice(4)), CONTEXT, N_RANDOM, CLOCK).commit),
       "join_spent",
     );
     const second = ServerFirstDeviceJoin.open(inst);
-    const n = NewDeviceJoin.start(makeDevice(4), CONTEXT, N_RANDOM, CLOCK);
+    const n = NewDeviceJoin.start(fresh(makeDevice(4)), CONTEXT, N_RANDOM, CLOCK);
     second.choices(n.reveal(second.answer(n.commit)).reveal);
     expect(second.confirm("none-match", SEAL_RANDOM, NOW)).toEqual({ outcome: "refused" });
     expectCode(() => second.confirm("none-match", SEAL_RANDOM, NOW), "join_spent");
   });
 
-  it("is opened only with the first secret, and refuses a device using the connector's key", () => {
+  it("refuses a device using the connector's key", () => {
     const { install: inst } = install();
-    expectCode(
-      () => ServerFirstDeviceJoin.open({ ...inst, secret: ListSecret.fromBytes(fill(32, 9), 1) }),
-      "stale_secret",
-    );
     const sneaky = makeDevice(4, "Phone", "ios", fill(32, 0xc5));
     const server = ServerFirstDeviceJoin.open(inst);
-    const n = NewDeviceJoin.start({ ...sneaky }, CONTEXT, N_RANDOM, CLOCK);
+    const n = NewDeviceJoin.start(fresh({ ...sneaky }), CONTEXT, N_RANDOM, CLOCK);
     const { reveal } = n.reveal(server.answer(n.commit));
     expectCode(() => server.choices(reveal), "duplicate_key");
     expect(ListSecretKey.fromSeed(fill(32, 0xc5)).publicKey.equals(inst.connector.publicKey)).toBe(
@@ -280,7 +279,7 @@ describe("a server's first join", () => {
     // server's terminal, which a person adding a device to a gateway with an app doesn't have.
     const { install: inst } = install();
     const server = ServerFirstDeviceJoin.open(inst);
-    const n = NewDeviceJoin.start(makeDevice(4), CONTEXT, N_RANDOM, CLOCK);
+    const n = NewDeviceJoin.start(fresh(makeDevice(4)), CONTEXT, N_RANDOM, CLOCK);
     const { reveal, words } = n.reveal(server.answer(n.commit));
     const { sets } = server.choices(reveal);
     const outcome = server.confirm(
@@ -289,7 +288,7 @@ describe("a server's first join", () => {
       NOW,
     );
     if (outcome.outcome !== "added") throw new Error("expected added");
-    expect(n.finish(outcome.confirm, null, null).mode).toBe("first-device");
+    expect(n.finish(outcome.confirm, null, null, null).mode).toBe("first-device");
   });
 });
 

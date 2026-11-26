@@ -9,6 +9,7 @@ import {
   signGenesis,
   encodeRemovalNotice,
   GatewayDeviceKey,
+  ListPublicKey,
   ListSecretKey,
   MAX_FRESH_START_BYTES,
   MAX_MEMBERS,
@@ -48,7 +49,12 @@ function again(device: JoiningDevice, n: number): JoiningDevice {
   return {
     listKey,
     sealKey,
-    device: { ...device.device, listKey: listKey.publicKey, sealKey: sealKey.publicKey },
+    device: {
+      ...device.device,
+      listKey: listKey.publicKey,
+      sealKey: sealKey.publicKey,
+      tlsPin: fill(32, n + 2),
+    },
   };
 }
 
@@ -62,17 +68,27 @@ describe("a withdrawal", () => {
     );
     const out = held.state.append(signWithdrawal(world.connector, held.state, mac.device.listKey));
     expect(out.removal(mac.device.listKey)?.origin).toBe("withdrawn");
-    // The same OpenClaw identity and TLS pin, fresh list and seal keys: taken.
+    // The same OpenClaw identity, fresh list and seal keys and a new TLS key: taken.
     const retry = again(mac, 0x90);
     expect(
       out
         .append(signAdd(world.gatewayDevice.listKey, out, retry.device, TRANSCRIPT))
         .member(retry.device.listKey),
     ).toBeDefined();
-    // And the very same keys too, since none of them ever paired.
-    expect(
-      out.append(signAdd(world.gatewayDevice.listKey, out, mac.device, TRANSCRIPT)).length,
-    ).toBe(4);
+    // Its list key, seal key and TLS pin stay refused, and the freed OpenClaw key is taken again
+    // only as an OpenClaw key.
+    expectCode(
+      () => signAdd(world.gatewayDevice.listKey, out, mac.device, TRANSCRIPT),
+      "duplicate_key",
+    );
+    const asListKey = {
+      ...makeDevice(40).device,
+      listKey: ListPublicKey.fromBytes(mac.device.gatewayDeviceKey.bytes),
+    };
+    expectCode(
+      () => signAdd(world.gatewayDevice.listKey, out, asListKey, TRANSCRIPT),
+      "duplicate_key",
+    );
     // A withdrawn device is not put back by the account page's restore.
     expectCode(
       () => signRestore(world.gatewayDevice.listKey, out, mac.device.listKey),
@@ -221,7 +237,9 @@ describe("a fresh start", () => {
     );
     // A new device reads the new list from its first entry, against the connector's new head.
     const newList = { state: fresh.state, entries: [fresh.entry] };
-    expect(verifyList(CONTEXT, newList.entries, headOf(world, newList)).head.generation).toBe(1);
+    expect(verifyList(CONTEXT, newList.entries, headOf(world, newList), null).head.generation).toBe(
+      1,
+    );
     // The new list keeps refusing its members' keys.
     expectCode(() => signAdd(mac.listKey, fresh.state, mac.device, TRANSCRIPT), "duplicate_key");
   });
@@ -251,8 +269,9 @@ describe("a fresh start", () => {
     // Drop the last carried device (the phone: its record and its 32-byte "added by"), lower the
     // count, and sign again with the connector's and the gateway device's keys.
     const phoneBytes = 4 * 32 + 1 + 2 + "iPhone".length + 32;
-    const body = fresh.slice(0, fresh.length - 128 - phoneBytes);
-    const countAt = body.length - (4 * 32 + 1 + 2 + "Device 2".length + 32) - 1;
+    // After the carried devices comes the count of restorable removals (0).
+    const body = Uint8Array.of(...fresh.slice(0, fresh.length - 128 - 1 - phoneBytes), 0);
+    const countAt = body.length - 1 - (4 * 32 + 1 + 2 + "Device 2".length + 32) - 1;
     body[countAt] = body[countAt]! - 1;
     const fewer = Uint8Array.of(
       ...body,
@@ -328,7 +347,9 @@ describe("a fresh start", () => {
       signFreshStart(world.connector, held.state),
       signFreshStart(world.gatewayDevice.listKey, held.state),
     );
-    expect(fresh.entry.length).toBe(MAX_FRESH_START_BYTES - (64 - "Windows PC".length));
+    expect(fresh.entry.length).toBe(
+      MAX_FRESH_START_BYTES - MAX_MEMBERS * (4 * 32 + 1 + 2 + 64 + 32) - (64 - "Windows PC".length),
+    );
   });
 
   it("can't be made when the gateway's own device is gone", () => {

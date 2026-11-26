@@ -25,7 +25,7 @@ import {
   ListSecret,
   MemberJoin,
   NewDeviceJoin,
-  openRotation,
+  catchUp,
   refuseJoin,
   rotateListSecret,
   sealList,
@@ -57,6 +57,10 @@ import {
   NOW,
   headObject,
   headOf,
+  holding,
+  rotated,
+  fresh,
+  anew,
 } from "./helpers.ts";
 
 // Signatures and key checks are quick alone; on a loaded machine a test can take seconds.
@@ -119,27 +123,25 @@ function kinds(): Kind[] {
     plus.state,
     encodeRemovalNotice(CONTEXT, other.device.listKey),
   );
-  const rotation = rotateListSecret(
-    asConnector.connector,
-    plus.state,
-    asConnector.secret,
-    ListSecret.fromBytes(fill(32, 9), 1),
-    fill(32, 3),
-  );
-  const holder = { listKey: other.device.listKey, sealKey: other.sealKey };
+  const afterRemoval = appended(plus, removal);
+  const rotatedOnce = rotated(asConnector, afterRemoval, asConnector.secret);
+  const rotation = rotatedOnce.newest.rotation;
+  const holder = {
+    listKey: asConnector.gatewayDevice.device.listKey,
+    sealKey: asConnector.gatewayDevice.sealKey,
+  };
   const withdrawal = signWithdrawal(asConnector.connector, plus.state, other.device.listKey);
   const head = headOf(asConnector, plus);
   const firstSecret = sealFirstSecret(
     asConnector.connector,
     asConnector.state,
-    asConnector.secret,
     fill(32, 4),
-  );
+  ).message;
   const gatewayHolder = {
     listKey: asConnector.gatewayDevice.device.listKey,
     sealKey: asConnector.gatewayDevice.sealKey,
   };
-  const fresh = assembleFreshStart(
+  const freshEntry = assembleFreshStart(
     plus.state,
     signFreshStart(asConnector.connector, plus.state),
     signFreshStart(asConnector.gatewayDevice.listKey, plus.state),
@@ -149,10 +151,10 @@ function kinds(): Kind[] {
     connector: asConnector.connector,
     context: CONTEXT,
     card: asConnector.card,
-    secret: asConnector.secret,
+    random: fill(32, 0x5d),
   });
   const first = makeDevice(5, "Phone", "ios");
-  const firstN = NewDeviceJoin.start(first, CONTEXT, N_RANDOM, CLOCK);
+  const firstN = NewDeviceJoin.start(fresh(first), CONTEXT, N_RANDOM, CLOCK);
   const firstReveal = firstN.reveal(server.answer(firstN.commit));
   const firstSets = server.choices(firstReveal.reveal).sets;
   const firstOutcome = server.confirm(
@@ -161,7 +163,7 @@ function kinds(): Kind[] {
     NOW,
   );
   if (firstOutcome.outcome !== "added") throw new Error("expected added");
-  const firstPrompt = firstN.finish(firstOutcome.confirm, null, null);
+  const firstPrompt = firstN.finish(firstOutcome.confirm, null, null, null);
   const firstPicked = firstN.pickWord(
     { under: firstPrompt.under, word: firstOutcome.wordBack.word },
     NOW,
@@ -185,7 +187,7 @@ function kinds(): Kind[] {
     headObject(asMember, withMac),
   );
   const withMacHead = headOf(asMember, withMac);
-  const refusal = refuseJoin(member, run.commit, "not-started");
+  const refusal = refuseJoin(member, run.commit, "not-started", NOW).refusal;
   const memberRemoval = signRemoval(
     asMember.gatewayDevice.listKey,
     withMac.state,
@@ -269,7 +271,7 @@ function kinds(): Kind[] {
       bytes: joinerRun.reveal,
       signatures: 1,
       label: 37,
-      verify: (b) => MemberJoin.answer(joinerMember, joinerRun.commit, CLOCK).choices(b),
+      verify: (b) => MemberJoin.answer(anew(joinerMember), joinerRun.commit, CLOCK).choices(b),
     },
     {
       name: "join confirmation",
@@ -277,9 +279,9 @@ function kinds(): Kind[] {
       signatures: 1,
       label: 37,
       verify: (b) => {
-        const n = NewDeviceJoin.start(mac, CONTEXT, N_RANDOM, CLOCK);
+        const n = NewDeviceJoin.start(fresh(mac), CONTEXT, N_RANDOM, CLOCK);
         n.reveal(run.answer);
-        return n.finish(b, sealed, withMacHead);
+        return n.finish(b, sealed, withMacHead, null);
       },
     },
     {
@@ -287,7 +289,8 @@ function kinds(): Kind[] {
       bytes: rotation,
       signatures: 1,
       label: 33,
-      verify: (b) => openRotation(holder, plus.state, b, asConnector.secret),
+      verify: (b) =>
+        catchUp(holder, holding(asConnector, plus), { ...rotatedOnce.newest, rotation: b }),
     },
     {
       name: "withdrawal entry",
@@ -312,7 +315,7 @@ function kinds(): Kind[] {
     },
     {
       name: "fresh start",
-      bytes: fresh,
+      bytes: freshEntry,
       signatures: 2,
       label: 32,
       verify: asEntry("fresh-start", null, (b) => plus.state.freshStart(b)),

@@ -39,4 +39,5 @@ export const TAG = {
   headHash: "clawtrate account head hash v1\n",
   confirmationWord: "clawtrate account join confirmation word v1\n",
   wordBackDecoys: "clawtrate account join word back decoys v1\n",
+  listSecretValue: "clawtrate account list secret value v1\n",
 } as const;

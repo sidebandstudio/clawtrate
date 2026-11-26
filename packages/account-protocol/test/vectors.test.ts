@@ -18,7 +18,7 @@ import {
   signWithdrawal,
   entryHash,
   ListSecret,
-  openRotation,
+  catchUp,
   refuseJoin,
   rotateListSecret,
   sealCard,
@@ -47,6 +47,9 @@ import {
   headOf,
   CLOCK,
   NOW,
+  holding,
+  rotated,
+  fresh,
 } from "./helpers.ts";
 
 // Signatures and key checks are quick alone; on a loaded machine a test can take seconds.
@@ -90,7 +93,7 @@ function scenario() {
   } = addDevice(world, gateway.listKey, mac);
   const confirmWord = back.word;
   const added = { confirm };
-  const refusal = refuseJoin(member, run.commit, "none-match");
+  const refusal = refuseJoin(member, run.commit, "none-match", NOW).refusal;
   const notice = encodeRemovalNotice(CONTEXT, mac.device.listKey);
   const byPageEntry = signRemovalNotice(world.connector, withMac.state, notice);
   const byPage = appended(withMac, byPageEntry);
@@ -98,14 +101,9 @@ function scenario() {
   const restored = appended(byPage, restoreEntry);
   const removalEntry = signRemoval(gateway.listKey, restored.state, mac.device.listKey);
   const removal = appended(restored, removalEntry);
-  const next = ListSecret.fromBytes(fill(32, 0xe1), 1);
-  const rotation = rotateListSecret(
-    world.connector,
-    removal.state,
-    world.secret,
-    next,
-    fill(32, 0x55),
-  );
+  const rotatedOnce = rotated(world, removal, world.secret, fill(32, 0x55));
+  const rotation = rotatedOnce.newest.rotation;
+  const next = rotatedOnce.secret;
   const entries = [...removal.entries];
   const restore = restoreEntry;
   const session = signSessionRequest(SessionSecretKey.fromSeed(fill(32, 0x5e)), {
@@ -121,14 +119,14 @@ function scenario() {
   // Part of the design's additions: the head, the first secret, a withdrawal, a fresh start,
   // a server's first entry, and the word back.
   const head = headOf(world, removal);
-  const firstSecret = sealFirstSecret(world.connector, world.state, world.secret, fill(32, 0x56));
+  const firstSecret = sealFirstSecret(world.connector, world.state, fill(32, 0x56)).message;
   const phone = makeDevice(3, "iPhone", "ios");
   const withPhone = appended(
     removal,
     signAdd(gateway.listKey, removal.state, phone.device, fill(32, 0x5a)),
   );
   const withdrawal = signWithdrawal(world.connector, withPhone.state, phone.device.listKey);
-  const fresh = assembleFreshStart(
+  const freshEntry = assembleFreshStart(
     removal.state,
     signFreshStart(world.connector, removal.state),
     signFreshStart(gateway.listKey, removal.state),
@@ -137,9 +135,9 @@ function scenario() {
     connector: world.connector,
     context: CONTEXT,
     card: world.card,
-    secret: world.secret,
+    random: fill(32, 0x5d),
   });
-  const firstN = NewDeviceJoin.start(phone, CONTEXT, fill(32, 0x57), CLOCK);
+  const firstN = NewDeviceJoin.start(fresh(phone), CONTEXT, fill(32, 0x57), CLOCK);
   const firstReveal = firstN.reveal(server.answer(firstN.commit));
   const firstSets = server.choices(firstReveal.reveal).sets;
   const serverOutcome = server.confirm(
@@ -148,7 +146,7 @@ function scenario() {
     NOW,
   );
   if (serverOutcome.outcome !== "added") throw new Error("expected added");
-  const firstPrompt = firstN.finish(serverOutcome.confirm, null, null);
+  const firstPrompt = firstN.finish(serverOutcome.confirm, null, null, null);
   const firstPicked = firstN.pickWord(
     { under: firstPrompt.under, word: serverOutcome.wordBack.word },
     NOW,
@@ -158,7 +156,7 @@ function scenario() {
     head,
     firstSecret,
     withdrawal,
-    fresh,
+    freshEntry,
     serverConfirm: serverOutcome.confirm,
     serverFirst: firstPicked.result.firstEntry!,
     wordBack: { word: confirmWord, choices: prompt.choices },
@@ -175,6 +173,8 @@ function scenario() {
     removal,
     next,
     rotation,
+    newest: rotatedOnce.newest,
+    restored,
     entries,
     session,
     transcriptHash,
@@ -253,7 +253,7 @@ function vectors(): Record<string, unknown> {
     head: toHex(s.head),
     firstSecret: toHex(s.firstSecret),
     withdrawal: toHex(s.withdrawal),
-    freshStart: toHex(s.fresh),
+    freshStart: toHex(s.freshEntry),
     serverFirst: { confirm: toHex(s.serverConfirm), entry: toHex(s.serverFirst) },
     wordBack: s.wordBack,
   };
@@ -285,7 +285,7 @@ describe("known-answer vectors", () => {
     checkSigned(s.head, [connector]);
     checkSigned(s.firstSecret, [connector]);
     checkSigned(s.withdrawal, [connector]);
-    checkSigned(s.fresh, [connector, gateway]);
+    checkSigned(s.freshEntry, [connector, gateway]);
     checkSigned(s.serverFirst, [
       connector,
       s.serverFirst.subarray(32 + 32 + 4 + 32 + 1 + 32, 32 + 32 + 4 + 32 + 1 + 64),
@@ -295,13 +295,12 @@ describe("known-answer vectors", () => {
   it("let N open the card the words covered, and the remaining devices open the rotation", () => {
     const s = scenario();
     expect(s.finished.card.name).toBe("Windows PC");
-    const opened = openRotation(
+    const opened = catchUp(
       { listKey: s.gateway.device.listKey, sealKey: s.gateway.sealKey },
-      s.removal.state,
-      s.rotation,
-      s.world.secret,
+      holding(s.world, s.restored),
+      s.newest,
     );
-    expect(opened.epoch).toBe(1);
+    expect(opened.secret.epoch).toBe(1);
   });
 });
 

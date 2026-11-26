@@ -84,16 +84,22 @@ export class Writer {
   }
 
   u8(value: number): this {
+    if (!Number.isInteger(value) || value < 0 || value > 0xff)
+      fail("too_large", "a byte is out of range");
     this.#parts.push(Uint8Array.of(value));
     return this;
   }
 
   u16(value: number): this {
+    if (!Number.isInteger(value) || value < 0 || value > 0xffff)
+      fail("too_large", "a length is out of range");
     this.#parts.push(Uint8Array.of(value >>> 8, value & 0xff));
     return this;
   }
 
   u32(value: number): this {
+    if (!Number.isInteger(value) || value < 0 || value > 0xffffffff)
+      fail("too_large", "a number is out of range");
     const out = new Uint8Array(4);
     new DataView(out.buffer).setUint32(0, value);
     this.#parts.push(out);

@@ -21,7 +21,7 @@ import {
   openCard,
   openEntry,
   openList,
-  openRotation,
+  catchUp,
   readEntryUnverified,
   refuseJoin,
   rotateListSecret,
@@ -54,6 +54,10 @@ import {
   NOW,
   headObject,
   headOf,
+  holding,
+  rotated,
+  fresh,
+  anew,
 } from "./helpers.ts";
 
 // Signatures and key checks are quick alone; on a loaded machine a test can take seconds.
@@ -143,7 +147,7 @@ const sealedWithMac = sealList(
   headObject(world),
 );
 /** A fresh N with the same keys and random: the same commitment, ready for one answer. */
-const freshN = () => NewDeviceJoin.start(mac, CONTEXT, N_RANDOM, CLOCK);
+const freshN = () => NewDeviceJoin.start(fresh(mac), CONTEXT, N_RANDOM, CLOCK);
 
 describe("seeded fuzzing", () => {
   it("entries, read alone: whatever is accepted reads back as the bytes it came from", () => {
@@ -182,7 +186,7 @@ describe("seeded fuzzing", () => {
 
   it("the card, the refusal and the removal notice", () => {
     fuzz(7, world.card, (b) => verifyCard(b, world.connector.publicKey, CONTEXT.gatewayId));
-    const refusal = refuseJoin(member, run.commit, "none-match");
+    const refusal = refuseJoin(member, run.commit, "none-match", NOW).refusal;
     fuzz(8, refusal, (b) => verifyRefusal(world.state, b, [world.state.head]));
     const notice = encodeRemovalNotice(CONTEXT, mac.device.listKey);
     fuzz(9, notice, decodeRemovalNotice, (b, out) => {
@@ -193,23 +197,29 @@ describe("seeded fuzzing", () => {
 
   it("the join's messages, at the step that reads each", () => {
     // A changed commit that A answers gives N an answer to another join.
-    fuzz(10, run.commit, (b) => freshN().reveal(MemberJoin.answer(member, b, CLOCK).answer));
+    fuzz(10, run.commit, (b) => freshN().reveal(MemberJoin.answer(anew(member), b, CLOCK).answer));
     // A changed answer that N reads still gives a reveal A refuses: the answer's acceptance is A's.
     fuzz(11, run.answer, (b) =>
-      MemberJoin.answer(member, run.commit, CLOCK).choices(freshN().reveal(b).reveal),
+      MemberJoin.answer(anew(member), run.commit, CLOCK).choices(freshN().reveal(b).reveal),
     );
-    fuzz(12, run.reveal, (b) => MemberJoin.answer(member, run.commit, CLOCK).choices(b));
+    fuzz(12, run.reveal, (b) => MemberJoin.answer(anew(member), run.commit, CLOCK).choices(b));
     fuzz(13, added.confirm, (b) => {
       const n = freshN();
       n.reveal(run.answer);
-      return n.finish(b, sealedWithMac, headOf(world, withMac));
+      return n.finish(b, sealedWithMac, headOf(world, withMac), null);
     });
   }, 120_000);
 
   it("sealed things and the rotation", () => {
     const secret = world.secret;
     fuzz(14, sealList(secret, CONTEXT, entries, fill(32, 1), headObject(world)), (b) =>
-      openList(secret, CONTEXT, b, headOf(world, { state: chain(CONTEXT, entries), entries })),
+      openList(
+        secret,
+        CONTEXT,
+        b,
+        headOf(world, { state: chain(CONTEXT, entries), entries }),
+        null,
+      ),
     );
     fuzz(15, sealCard(secret, CONTEXT, world.card, fill(32, 2), headObject(world)), (b) =>
       openCard(secret, world.state, b, headObject(world)),
@@ -217,21 +227,23 @@ describe("seeded fuzzing", () => {
     fuzz(16, sealEntry(secret, CONTEXT, added.entry, fill(32, 3), headObject(world)), (b) =>
       openEntry(secret, world.state, b),
     );
-    const rotation = rotateListSecret(
-      world.connector,
-      withMac.state,
-      secret,
-      ListSecret.fromBytes(fill(32, 9), 1),
-      fill(32, 3),
-    );
-    fuzz(17, rotation, (b) =>
-      openRotation({ listKey: mac.device.listKey, sealKey: mac.sealKey }, withMac.state, b, secret),
+    const afterRemoval = appended(withMac, removal);
+    const { newest } = rotated(world, afterRemoval, secret);
+    fuzz(17, newest.rotation, (b) =>
+      catchUp(
+        { listKey: gateway.device.listKey, sealKey: gateway.sealKey },
+        holding(world, withMac),
+        {
+          ...newest,
+          rotation: b,
+        },
+      ),
     );
   }, 120_000);
 
   it("the head, the first secret, a fresh start and a server's first entry", () => {
     fuzz(19, headOf(world, withMac), (b) => verifyHead(b, world.connector.publicKey, CONTEXT));
-    const first = sealFirstSecret(world.connector, world.state, world.secret, fill(32, 4));
+    const first = sealFirstSecret(world.connector, world.state, fill(32, 4)).message;
     fuzz(20, first, (b) =>
       openFirstSecret(
         { listKey: gateway.device.listKey, sealKey: gateway.sealKey },

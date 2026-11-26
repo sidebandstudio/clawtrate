@@ -15,7 +15,6 @@ import {
   openCard,
   openEntry,
   openList,
-  openRotation,
   rotateListSecret,
   SealSecretKey,
   sealCard,
@@ -492,6 +491,7 @@ describe("sealing with the list secret", () => {
         CONTEXT,
         sealList(secret, CONTEXT, entries, RANDOM, headObject(world)),
         headOf(world, { state, entries }),
+        null,
       ).state.head,
     ).toEqual(state.head);
     const card = openCard(
@@ -508,14 +508,15 @@ describe("sealing with the list secret", () => {
     );
     expect(opened.state.length).toBe(2);
     const sealedCard = sealCard(secret, CONTEXT, world.card, RANDOM, headObject(world));
-    expectCode(() => openList(secret, CONTEXT, sealedCard, headOf(world)), "malformed");
+    expectCode(() => openList(secret, CONTEXT, sealedCard, headOf(world), null), "malformed");
     expectCode(
       () =>
         openList(
-          ListSecret.fromBytes(fill(32, 9), 0),
+          ListSecret.restoreStored(fill(32, 9), 0),
           CONTEXT,
           sealList(secret, CONTEXT, entries, RANDOM, headObject(world)),
           headOf(world),
+          null,
         ),
       "decrypt_failed",
     );
@@ -532,6 +533,7 @@ describe("sealing with the list secret", () => {
           CONTEXT,
           sealList(secret, CONTEXT, [world.genesis, forged], RANDOM, headObject(world)),
           headOf(world),
+          null,
         ),
       "bad_chain",
     );
@@ -579,191 +581,22 @@ describe("sealing with the list secret", () => {
     // The same secret bytes under another epoch: the associated data matches the header it was
     // sealed with, so only the explicit check refuses it.
     const sealed = sealCard(
-      ListSecret.fromBytes(bytes, 1),
+      ListSecret.restoreStored(bytes, 1),
       CONTEXT,
       world.card,
       RANDOM,
       headObject(world),
     );
     expectCode(
-      () => openCard(ListSecret.fromBytes(bytes, 0), world.state, sealed, headObject(world)),
+      () => openCard(ListSecret.restoreStored(bytes, 0), world.state, sealed, headObject(world)),
       "decrypt_failed",
     );
     // A card relabelled as an entry: the kind check passes for the entry it now claims to be, and
     // only the associated data, which covers the kind, refuses it.
     const relabelled = sealed.slice();
     relabelled[1] = 3;
-    const holder = ListSecret.fromBytes(bytes, 1);
+    const holder = ListSecret.restoreStored(bytes, 1);
     expectCode(() => openEntry(holder, world.state, relabelled), "decrypt_failed");
-  });
-});
-
-describe("the list secret's rotation", () => {
-  it("is sealed to the remaining devices, and the removed one opens nothing after", () => {
-    const { state, world, gateway, mac, phone } = threeDevices();
-    const removed = after(state, signRemoval(gateway.listKey, state, phone.device.listKey));
-    const next = ListSecret.fromBytes(fill(32, 0xe1), 1);
-    const rotation = rotateListSecret(world.connector, removed, world.secret, next, RANDOM);
-    for (const device of [gateway, mac]) {
-      const opened = openRotation(
-        { listKey: device.device.listKey, sealKey: device.sealKey },
-        removed,
-        rotation,
-        world.secret,
-      );
-      expect(opened.epoch).toBe(1);
-      expect(
-        openCard(
-          opened,
-          removed,
-          sealCard(next, CONTEXT, world.card, RANDOM, headObject(world)),
-          headObject(world),
-        ).serial,
-      ).toBe(1);
-    }
-    expectCode(
-      () =>
-        openRotation(
-          { listKey: phone.device.listKey, sealKey: phone.sealKey },
-          removed,
-          rotation,
-          world.secret,
-        ),
-      "not_member",
-    );
-    const sealedAfter = sealList(next, CONTEXT, [world.genesis], RANDOM, headObject(world));
-    expectCode(() => openList(world.secret, CONTEXT, sealedAfter, headOf(world)), "decrypt_failed");
-    expectCode(
-      () => openList(ListSecret.fromBytes(fill(32, 0xe0), 1), CONTEXT, sealedAfter, headOf(world)),
-      "decrypt_failed",
-    );
-    expectCode(
-      () =>
-        openRotation(
-          { listKey: mac.device.listKey, sealKey: phone.sealKey },
-          removed,
-          rotation,
-          world.secret,
-        ),
-      "decrypt_failed",
-    );
-  });
-
-  it("refuses a new secret with the held bytes or an epoch that isn't higher", () => {
-    const { state, world, mac } = threeDevices();
-    const sameBytes = ListSecret.fromBytes(fill(32, 0xe0), 1);
-    expectCode(
-      () => rotateListSecret(world.connector, state, world.secret, sameBytes, RANDOM),
-      "stale_secret",
-    );
-    const lower = ListSecret.fromBytes(fill(32, 0xe1), 0);
-    expectCode(
-      () => rotateListSecret(world.connector, state, world.secret, lower, RANDOM),
-      "stale_secret",
-    );
-    // A member refuses a rotation whose share is the secret it holds, under a higher epoch.
-    const held = ListSecret.fromBytes(fill(32, 0xe1), 1);
-    const rotation = rotateListSecret(
-      world.connector,
-      state,
-      ListSecret.fromBytes(fill(32, 0xe2), 0),
-      ListSecret.fromBytes(fill(32, 0xe1), 2),
-      RANDOM,
-    );
-    expectCode(
-      () =>
-        openRotation({ listKey: mac.device.listKey, sealKey: mac.sealKey }, state, rotation, held),
-      "stale_secret",
-    );
-  });
-
-  it("takes a rotation only from the connector, for this list, newer than the secret held", () => {
-    const { state, world, mac } = threeDevices();
-    const next = ListSecret.fromBytes(fill(32, 0xe1), 1);
-    const rotation = rotateListSecret(world.connector, state, world.secret, next, RANDOM);
-    const me = { listKey: mac.device.listKey, sealKey: mac.sealKey };
-    expectCode(
-      () => rotateListSecret(mac.listKey, state, world.secret, next, RANDOM),
-      "not_permitted",
-    );
-    expectCode(() => openRotation(me, state, rotation, next), "stale_secret");
-    const tampered = rotation.slice();
-    tampered[tampered.length - 1]! ^= 1;
-    expectCode(() => openRotation(me, state, tampered, world.secret), "bad_signature");
-    expectCode(
-      () => rotateListSecret(world.connector, state, world.secret, next, fill(16, 1)),
-      "bad_argument",
-    );
-    // A rotation the same connector signed for another account's list: refused for its context.
-    const fields = {
-      context: OTHER_ACCOUNT,
-      connectorKey: world.connector.publicKey,
-      device: world.gatewayDevice.device,
-    };
-    const other = assembleGenesis(
-      fields,
-      signGenesis(world.connector, fields),
-      signGenesis(world.gatewayDevice.listKey, fields),
-    );
-    const withMac = after(
-      other.state,
-      signAdd(world.gatewayDevice.listKey, other.state, mac.device, TRANSCRIPT),
-    );
-    const foreign = rotateListSecret(world.connector, withMac, world.secret, next, RANDOM);
-    expectCode(() => openRotation(me, state, foreign, world.secret), "wrong_account");
-  });
-
-  it("hedges each share's ephemeral: a constant random gives different shares each rotation", () => {
-    const { state, world } = threeDevices();
-    const zero = new Uint8Array(32);
-    const one = rotateListSecret(
-      world.connector,
-      state,
-      world.secret,
-      ListSecret.fromBytes(fill(32, 0xe1), 1),
-      zero,
-    );
-    const two = rotateListSecret(
-      world.connector,
-      state,
-      world.secret,
-      ListSecret.fromBytes(fill(32, 0xe1), 2),
-      zero,
-    );
-    const enc = (rotation: Uint8Array) =>
-      rotation.subarray(33 + 32 + 4 + 1 + 32, 33 + 32 + 4 + 1 + 64);
-    expect(enc(one)).not.toEqual(enc(two));
-  });
-
-  it("has nothing to rotate to when no device is left", () => {
-    const { state, world, gateway, mac, phone } = threeDevices();
-    let empty = state;
-    for (const device of [gateway, mac, phone]) {
-      empty = after(
-        empty,
-        signRemovalOnGatewayMachine(world.connector, empty, device.device.listKey),
-      );
-    }
-    expectCode(
-      () =>
-        rotateListSecret(
-          world.connector,
-          empty,
-          world.secret,
-          ListSecret.fromBytes(fill(32, 9), 1),
-          RANDOM,
-        ),
-      "bad_target",
-    );
-  });
-
-  it("can't have its epoch changed by a caller", () => {
-    const held = ListSecret.fromBytes(fill(32, 1), 5);
-    expect(() => {
-      (held as unknown as { epoch: number }).epoch = -1;
-    }).toThrow(TypeError);
-    expect(held.epoch).toBe(5);
-    expect(Object.isFrozen(held)).toBe(true);
   });
 });
 

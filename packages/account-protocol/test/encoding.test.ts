@@ -288,7 +288,7 @@ describe("keys", () => {
 
   it("are frozen: no field of a key or a list secret can be reassigned", () => {
     const list = ListSecretKey.fromSeed(fill(32, 1));
-    const secret = ListSecret.fromBytes(fill(32, 2), 3);
+    const secret = ListSecret.restoreStored(fill(32, 2), 3);
     for (const object of [
       list,
       list.publicKey,
@@ -307,7 +307,7 @@ describe("keys", () => {
     expectCode(() => ListSecretKey.fromSeed(fill(31, 1)), "bad_argument");
     expectCode(() => SessionSecretKey.fromSeed(fill(33, 1)), "bad_argument");
     expectCode(() => SealSecretKey.fromSeed(new Uint8Array(0)), "bad_argument");
-    expectCode(() => ListSecret.fromBytes(fill(16, 1), 0), "bad_argument");
+    expectCode(() => ListSecret.restoreStored(fill(16, 1), 0), "bad_argument");
   });
 });
 
@@ -319,7 +319,7 @@ describe("secrets stay inside", () => {
       ListSecretKey.fromSeed(seed),
       SessionSecretKey.fromSeed(seed),
       SealSecretKey.fromSeed(seed),
-      ListSecret.fromBytes(seed, 0),
+      ListSecret.restoreStored(seed, 0),
     ]) {
       const shown = `${inspect(secret, { showHidden: true, depth: 5 })} ${JSON.stringify(secret)} ${String(secret)}`;
       const compact = shown.replace(/\s/g, "");
@@ -362,7 +362,9 @@ describe("what the package never does", () => {
       );
       // Module-level `let` only for the secret accessors each class sets once in its static block.
       for (const match of text.matchAll(/^let (\w+)/gm))
-        expect(match[1]).toMatch(/^(sessionSeed|listSeed|listRoot|sealSecret|secretBytes)$/);
+        expect(match[1]).toMatch(
+          /^(sessionSeed|listSeed|listRoot|sealSecret|secretBytes|makeSecret|makeHead)$/,
+        );
     }
   });
 });
@@ -371,8 +373,8 @@ describe("the bounds the README states", () => {
   it("are the numbers the code holds", () => {
     expect(MAX_CARD_BYTES).toBe(2297);
     expect(MAX_ENTRY_BYTES).toBe(488);
-    expect(MAX_FRESH_START_BYTES).toBe(7534);
-    expect(MAX_LIST_BYTES).toBe(524_488);
+    expect(MAX_FRESH_START_BYTES).toBe(14_799);
+    expect(MAX_LIST_BYTES).toBe(2 + (2 + 14_799) + 1088 * (2 + 488));
   });
 });
 
@@ -420,7 +422,7 @@ describe("bytes from a Node Buffer", () => {
     expect(verifySessionRequest(request, { ...fields, nowMs: 1 }).equals(key.publicKey)).toBe(true);
 
     const secretBytes = Buffer.alloc(32, 0x22);
-    const secret = ListSecret.fromBytes(secretBytes, 0);
+    const secret = ListSecret.restoreStored(secretBytes, 0);
     const world = makeWorld();
     const sealed = sealCard(secret, CONTEXT, world.card, fill(32, 4), headObject(world));
     secretBytes.fill(0);

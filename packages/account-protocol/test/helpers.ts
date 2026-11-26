@@ -12,6 +12,7 @@ import {
   MemberJoin,
   NewDeviceJoin,
   SealSecretKey,
+  rotateListSecret,
   sealList,
   signCard,
   signGenesis,
@@ -20,6 +21,7 @@ import {
   type AccountProtocolErrorCode,
   type DeviceRecord,
   type Head,
+  type HeldList,
   type JoiningDevice,
   type JoinMember,
   type ListContext,
@@ -59,6 +61,36 @@ export const CONTEXT: ListContext = { gatewayId: fill(16, 0xa1), accountId: fill
 export const OTHER_GATEWAY: ListContext = { gatewayId: fill(16, 0xa3), accountId: fill(16, 0xb2) };
 export const OTHER_ACCOUNT: ListContext = { gatewayId: fill(16, 0xa1), accountId: fill(16, 0xb4) };
 
+/** The seed each list key the helpers made came from, so a test can make it again. */
+const seedOf = new WeakMap<ListSecretKey, Uint8Array>();
+
+function keyFrom(seed: Uint8Array): ListSecretKey {
+  const key = ListSecretKey.fromSeed(seed);
+  seedOf.set(key, seed);
+  return key;
+}
+
+/**
+ * The same list key as a new object. The package allows one new-device join per key object and
+ * one open member join per key object, in a process; tests that run many joins with one fixed
+ * key take a new object each time, as an app that made new keys would.
+ */
+export function again(key: ListSecretKey): ListSecretKey {
+  const seed = seedOf.get(key);
+  if (!seed) throw new Error("a key the helpers didn't make");
+  return keyFrom(seed);
+}
+
+/** The same member with a new key object: a member that answers a new join after the last ended. */
+export function anew<M extends { readonly key: ListSecretKey }>(member: M): M {
+  return { ...member, key: again(member.key) };
+}
+
+/** The same device with new key objects (the same keys). */
+export function fresh(device: JoiningDevice): JoiningDevice {
+  return { ...device, listKey: again(device.listKey) };
+}
+
 /** A device's secret keys and record, all from one number. */
 export function makeDevice(
   n: number,
@@ -66,7 +98,7 @@ export function makeDevice(
   platform: Platform = "macos",
   listSeed = fill(32, n),
 ): JoiningDevice {
-  const listKey = ListSecretKey.fromSeed(listSeed);
+  const listKey = keyFrom(listSeed);
   const sealKey = SealSecretKey.fromSeed(fill(32, (n + 64) % 256));
   const device: DeviceRecord = {
     listKey: listKey.publicKey,
@@ -104,7 +136,7 @@ export interface World extends Held {
 export function makeWorld(
   seeds: { connector?: Uint8Array; gatewayDevice?: Uint8Array } = {},
 ): World {
-  const connector = ListSecretKey.fromSeed(seeds.connector ?? CONNECTOR_SEED);
+  const connector = keyFrom(seeds.connector ?? CONNECTOR_SEED);
   const gatewayDevice = makeDevice(1, "Windows PC", "windows", seeds.gatewayDevice);
   const fields = {
     context: CONTEXT,
@@ -133,18 +165,34 @@ export function makeWorld(
     entries: [entry],
     state,
     card,
-    secret: ListSecret.fromBytes(fill(32, 0xe0), 0),
+    secret: ListSecret.restoreStored(fill(32, 0xe0), 0),
   };
 }
 
 /** The connector's signed head of `held`, with the world's card and secret. */
-export function headOf(world: World, held: Held = world): Uint8Array {
-  return signHead(world.connector, held.state, world.secret, world.card);
+export function headOf(world: World, held: Held = world, secret = world.secret): Uint8Array {
+  return signHead(world.connector, held.state, secret, world.card);
 }
 
 /** The same head, read. */
-export function headObject(world: World, held: Held = world): Head {
-  return verifyHead(headOf(world, held), held.state.connectorKey, held.state.context);
+export function headObject(world: World, held: Held = world, secret = world.secret): Head {
+  return verifyHead(headOf(world, held, secret), held.state.connectorKey, held.state.context);
+}
+
+/** What a device holds: its list, the head of it (verified), and its secret. */
+export function holding(world: World, held: Held, secret: ListSecret = world.secret): HeldList {
+  return { state: held.state, head: headObject(world, held, secret), secret };
+}
+
+/**
+ * The connector after a removal or restore: rotate, reseal the list under the new secret, sign
+ * the head. Returns the new secret and what a device reads to catch up.
+ */
+export function rotated(world: World, held: Held, secret: ListSecret, random = fill(32, 0x6b)) {
+  const { rotation, secret: next } = rotateListSecret(world.connector, held.state, secret, random);
+  const head = headOf(world, held, next);
+  const list = sealList(next, CONTEXT, held.entries, LIST_RANDOM, headObject(world, held, next));
+  return { secret: next, newest: { rotation, list, head } };
 }
 
 export function memberOf(world: World, key: ListSecretKey, held: Held = world): JoinMember {
@@ -177,9 +225,9 @@ export const CLOCK = { nowMs: NOW, pausedUntilMs: 0 } as const;
 
 /** Steps 1 to 4 of a join with no one in the middle, and where the right set is. */
 export function runJoin(member: JoinMember, joining: JoiningDevice, random = N_RANDOM): JoinRun {
-  const n = NewDeviceJoin.start(joining, member.state.context, random, CLOCK);
+  const n = NewDeviceJoin.start(fresh(joining), member.state.context, random, CLOCK);
   const commit = n.commit;
-  const a = MemberJoin.answer(member, commit, CLOCK);
+  const a = MemberJoin.answer({ ...member, key: again(member.key) }, commit, CLOCK);
   const answer = a.answer;
   const { reveal, words } = n.reveal(answer);
   const { sets } = a.choices(reveal);
@@ -211,7 +259,7 @@ export function addDevice(
     LIST_RANDOM,
     headObject(world, after),
   );
-  const prompt = run.n.finish(outcome.confirm, sealed, head);
+  const prompt = run.n.finish(outcome.confirm, sealed, head, null);
   const picked = run.n.pickWord({ under: prompt.under, word: outcome.wordBack.word }, NOW);
   if (picked.outcome !== "confirmed") throw new Error("expected the word back to confirm");
   return {

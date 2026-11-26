@@ -1,4 +1,4 @@
-// The join (steps 1 to 5 of the design's section 4.4). A new device N commits to its keys; a
+// The join (steps 1 to 5a of the design's section 4.4). A new device N commits to its keys; a
 // member A answers with its key, the list's latest entry, the card's hash and a value of its
 // own; N reveals; both compute three words from the transcript; A shows five sets and the
 // person picks; a right pick makes A sign an entry adding N and seal the list secret and the
@@ -8,8 +8,12 @@
 // nonce, takes exactly one answer for its commitment and reveals once; `MemberJoin` derives A's
 // answer from A's key and the commitment, so asking twice gets the same answer, and confirms
 // once. Every random value of the join is derived or hedged inside the package from secret key
-// material, so a caller's repeated or predictable random bytes can't weaken it.
+// material, so a caller's repeated or predictable random bytes can't weaken it, within one live
+// join object. A second object built from the same list key and random would commit the same way
+// and could reveal again: a second start from one list key is refused in this process, and an
+// attempt never outlives its object (README, "What the caller owes").
 
+import { sha256 } from "@noble/hashes/sha2.js";
 import {
   checkLength,
   concat,
@@ -58,7 +62,14 @@ import {
   type ListContext,
   type Platform,
 } from "./records.ts";
-import { ListSecret, listSecretBytes, MAX_CARD_BYTES, openListEntries } from "./seal.ts";
+import {
+  listSecretBytes,
+  MAX_CARD_BYTES,
+  openListEntries,
+  receivedListSecret,
+  serverFirstSecret,
+  type ListSecret,
+} from "./seal.ts";
 import { WORDLIST_TEXT } from "./wordlist.ts";
 
 const WORDS = WORDLIST_TEXT.split("\n");
@@ -314,18 +325,24 @@ function wordOf(hash: Uint8Array): string {
  * The confirmation word (design §4.4 step 5a): the first 11 bits of a tagged hash of the
  * transcript hash, A's confirmation signature and the card's hash.
  */
-function confirmationWord(transcript: Uint8Array, signature: Uint8Array, card: Uint8Array): string {
+export function confirmationWord(
+  transcript: Uint8Array,
+  signature: Uint8Array,
+  card: Uint8Array,
+): string {
   return wordOf(taggedHash(TAG.confirmationWord, transcript, signature, card));
 }
 
 /**
  * N's five words for the word back: the confirmation word at a uniformly random place and four
- * other words, none equal to it or to each other, all from 256 bytes of HKDF-SHA256 of N's list
- * key's random bytes, salted with the transcript hash, with the `join word back decoys` tag and
- * A's confirmation signature as info. Drawn as the decoy sets are.
+ * other words, none equal to it, to each other or to N's own three words above them, all from
+ * 256 bytes of HKDF-SHA256 of N's list key's random bytes, salted with the transcript hash, with
+ * the `join word back decoys` tag and A's confirmation signature as info. Drawn as the decoy sets
+ * are. Exported for the tests only.
  */
-function fiveWords(
+export function fiveWords(
   right: string,
+  under: Words,
   key: ListSecretKey,
   transcript: Uint8Array,
   signature: Uint8Array,
@@ -344,7 +361,7 @@ function fiveWords(
     return value;
   };
   const words: string[] = [];
-  const used = new Set([right]);
+  const used = new Set([right, ...under]);
   while (words.length < 4) {
     const word = WORDS[next(2) & 0x7ff]!;
     if (used.has(word)) continue;
@@ -355,6 +372,20 @@ function fiveWords(
   while (place >= 250) place = next(1);
   words.splice(place % 5, 0, right);
   return words;
+}
+
+/**
+ * A confirmation's HPKE ephemeral input: HKDF-SHA256 with A's list key's random bytes as input,
+ * the caller's random as salt, and as info the `join ephemeral` tag, the delivery's HPKE info and
+ * the SHA-256 of the payload it seals. Exported for the tests only.
+ */
+export function confirmationEphemeral(
+  key: ListSecretKey,
+  random: Uint8Array,
+  info: Uint8Array,
+  payload: Uint8Array,
+): Uint8Array {
+  return deriveFromListKey(key, random, concat(utf8(TAG.joinEphemeral), info, sha256(payload)), 32);
 }
 
 /** What N holds once its join has finished: everything checked and the word back picked right. */
@@ -393,6 +424,20 @@ export type WordBackOutcome =
     };
 
 const ZERO_HEAD = new Uint8Array(32);
+
+/**
+ * The list keys a new device's join has started from, in this running program. A second start from one
+ * would give the same commitment in an object that has never revealed (README, "The rules the
+ * words rest on"). Weak: it holds no key alive.
+ */
+const startedFrom = new WeakSet<ListSecretKey>();
+
+/**
+ * The open join on each member key, in this running program: a second commitment while one is open ends
+ * both (design §4.4 step 2). A rebuild for the same commitment at the same head gets the same
+ * object back.
+ */
+const openOn = new WeakMap<ListSecretKey, MemberJoin>();
 
 /**
  * The new device's side of one join. Built from N's keys, its record and 32 random bytes; it
@@ -444,6 +489,7 @@ export class NewDeviceJoin {
    * Step 1: a new join for N. `random` is 32 bytes from the system's random source. Refused while
    * N's own pause after a refused word back lasts.
    */
+  /** Every list key a join has started from in this running program: a second start is refused. */
   static start(
     device: JoiningDevice,
     context: ListContext,
@@ -452,6 +498,9 @@ export class NewDeviceJoin {
   ): NewDeviceJoin {
     checkClock(clock);
     checkJoiningDevice(device);
+    if (startedFrom.has(device.listKey))
+      fail("join_spent", "a join has already started from this list key; make new keys");
+    startedFrom.add(device.listKey);
     const frozen: JoiningDevice = Object.freeze({
       listKey: device.listKey,
       sealKey: device.sealKey,
@@ -526,10 +575,25 @@ export class NewDeviceJoin {
     confirmInput: Uint8Array,
     sealedList: Uint8Array | null,
     headBytes: Uint8Array | null,
-    held?: Head,
+    held: Head | null,
   ): WordBackPrompt {
     if (this.#phase !== "revealed")
       fail("join_spent", "this join has no reveal to finish, or has ended");
+    try {
+      return this.#finish(confirmInput, sealedList, headBytes, held);
+    } catch (error) {
+      // Anything that fails ends the attempt: the service gets no second try at this join.
+      this.#phase = "ended";
+      throw error;
+    }
+  }
+
+  #finish(
+    confirmInput: Uint8Array,
+    sealedList: Uint8Array | null,
+    headBytes: Uint8Array | null,
+    held: Head | null,
+  ): WordBackPrompt {
     const confirm = copy(confirmInput);
     const answer = this.#answer!;
     const transcript = this.#transcript!;
@@ -595,7 +659,7 @@ export class NewDeviceJoin {
     inner.end();
     if (!equalBytes(cardHash(cardBytes), answer.cardHash))
       fail("card_mismatch", "not the card the words covered");
-    const secret = ListSecret.fromBytes(secretBytes, epoch);
+    const secret = receivedListSecret(secretBytes, epoch);
 
     let state: ListState;
     let head: Head | null = null;
@@ -638,7 +702,9 @@ export class NewDeviceJoin {
     const prompt: WordBackPrompt = Object.freeze({
       mode: firstDevice ? "first-device" : "member",
       under: freezeWords(wordsFor(transcript)),
-      choices: Object.freeze(fiveWords(right, this.#device.listKey, transcript, signature)),
+      choices: Object.freeze(
+        fiveWords(right, wordsFor(transcript), this.#device.listKey, transcript, signature),
+      ),
     });
     this.#checked = {
       result: Object.freeze({
@@ -750,6 +816,7 @@ class Answering {
     commit: Commit,
     listHead: Uint8Array,
     card: Uint8Array,
+    headHash: Uint8Array,
   ) {
     this.key = key;
     this.context = context;
@@ -759,6 +826,7 @@ class Answering {
       .fixed(context.gatewayId, 16, "gateway id")
       .fixed(context.accountId, 16, "account id")
       .fixed(commit.commitment, 32, "commitment")
+      .fixed(headHash, 32, "head hash")
       .finish();
     const nonce = deriveFromListKey(key, undefined, info, 32);
     this.answer = {
@@ -831,7 +899,7 @@ class Answering {
       .bytes(card, 1, MAX_CARD_BYTES, "card")
       .finish();
     const info = deliveryInfo(this.context, shown.transcript);
-    const ikm = deriveFromListKey(this.key, random, concat(utf8(TAG.joinEphemeral), info), 32);
+    const ikm = confirmationEphemeral(this.key, random, info, payload);
     const { enc, ciphertext } = hpkeSeal(
       shown.device.sealKey.bytes,
       info,
@@ -858,17 +926,20 @@ class Answering {
 
 /**
  * The member's side of one join. Its answer nonce is HKDF-SHA256 of A's list key's random
- * bytes, with the `join answer nonce` tag, the gateway and account ids and the commitment as
- * info: no one without A's key can predict it, and the same commitment always gets the same
- * answer, byte for byte. It takes one reveal and confirms once.
+ * bytes, with the `join answer nonce` tag, the gateway and account ids, the commitment and the
+ * hash of the head A answers from as info: no one without A's key can predict it, and the same
+ * commitment at the same head always gets the same answer, byte for byte. It takes one reveal
+ * and confirms once. One join is open per member key: a second commitment ends both.
  */
 export class MemberJoin {
   readonly #member: JoinMember;
   readonly #side: Answering;
+  readonly #headHash: Uint8Array;
 
-  private constructor(member: JoinMember, side: Answering) {
+  private constructor(member: JoinMember, side: Answering, headHash: Uint8Array) {
     this.#member = member;
     this.#side = side;
+    this.#headHash = headHash;
     Object.freeze(this);
   }
 
@@ -886,11 +957,35 @@ export class MemberJoin {
       card: copy(member.card),
       secret: member.secret,
     });
-    checkMember(own);
+    const head = checkMember(own);
     const commit = readCommit(copy(commitInput));
     expectContext(commit.context, own.state.context);
-    const side = new Answering(own.key, own.state.context, commit, own.state.head, own.card);
-    return new MemberJoin(own, side);
+    const open = openOn.get(own.key);
+    if (open && !open.#side.done) {
+      if (
+        equalBytes(open.#side.commit.commitment, commit.commitment) &&
+        equalBytes(open.#headHash, head.hash)
+      )
+        return open;
+      open.#side.done = true;
+      fail("join_spent", "two joins at once: both end");
+    }
+    const side = new Answering(
+      own.key,
+      own.state.context,
+      commit,
+      own.state.head,
+      own.card,
+      head.hash,
+    );
+    const join = new MemberJoin(own, side, head.hash);
+    openOn.set(own.key, join);
+    return join;
+  }
+
+  /** Ends this join without a pick (the person closed it, or it timed out). */
+  end(): void {
+    this.#side.done = true;
   }
 
   /** The answer message: the same bytes for the same commitment, however often it is built. */
@@ -943,13 +1038,13 @@ export class MemberJoin {
   }
 }
 
-/** What the server's connector holds at install: its key, the gateway, its card, the first secret. */
+/** What the server's connector holds at install: its key, the gateway and its card. */
 export interface ServerInstall {
   readonly connector: ListSecretKey;
   readonly context: ListContext;
   readonly card: Uint8Array;
-  /** The first list secret, epoch 0. */
-  readonly secret: ListSecret;
+  /** 32 random bytes, from which the package derives the first list secret. */
+  readonly random: Uint8Array;
 }
 
 export type ServerFirstOutcome =
@@ -959,6 +1054,8 @@ export type ServerFirstOutcome =
       readonly confirm: Uint8Array;
       /** What the server's terminal shows. */
       readonly wordBack: WordBack;
+      /** The first list secret, for the connector to keep. */
+      readonly secret: ListSecret;
     }
   | { readonly outcome: "refused" };
 
@@ -973,11 +1070,11 @@ export type ServerFirstOutcome =
  * with `ListState.fromGenesis`.
  */
 export class ServerFirstDeviceJoin {
-  readonly #install: ServerInstall;
+  readonly #install: Omit<ServerInstall, "random"> & { readonly secret: ListSecret };
   #side: Answering | null = null;
   #ended = false;
 
-  private constructor(install: ServerInstall) {
+  private constructor(install: Omit<ServerInstall, "random"> & { readonly secret: ListSecret }) {
     this.#install = install;
     Object.freeze(this);
   }
@@ -986,9 +1083,9 @@ export class ServerFirstDeviceJoin {
     const context = checkContext(install.context);
     const card = copy(install.card);
     verifyCard(card, install.connector.publicKey, context.gatewayId);
-    if (install.secret.epoch !== 0) fail("stale_secret", "a server's first secret is epoch 0");
+    const secret = serverFirstSecret(install.connector, context, install.random);
     return new ServerFirstDeviceJoin(
-      Object.freeze({ connector: install.connector, context, card, secret: install.secret }),
+      Object.freeze({ connector: install.connector, context, card, secret }),
     );
   }
 
@@ -1004,7 +1101,14 @@ export class ServerFirstDeviceJoin {
       fail("join_spent", "two devices asked to join; run the command again");
     }
     const install = this.#install;
-    this.#side = new Answering(install.connector, install.context, commit, ZERO_HEAD, install.card);
+    this.#side = new Answering(
+      install.connector,
+      install.context,
+      commit,
+      ZERO_HEAD,
+      install.card,
+      ZERO_HEAD,
+    );
     return copy(this.#side.answerBytes);
   }
 
@@ -1050,7 +1154,7 @@ export class ServerFirstDeviceJoin {
       ownRandom,
       nowMs,
     );
-    return Object.freeze({ outcome: "added", confirm, wordBack });
+    return Object.freeze({ outcome: "added", confirm, wordBack, secret: install.secret });
   }
 }
 
@@ -1083,19 +1187,26 @@ function refusal(
 
 /**
  * A member refuses a join without a pick: "I didn't start this" before the sets are shown, or
- * two joins at once (which ends both and pauses nothing). Only a current device member can refuse.
+ * two joins at once (which ends both and pauses nothing). Only a current device member can
+ * refuse. `pauseUntilMs` is when the member may answer a join again (null for two joins at
+ * once); its app keeps it and passes it back as `clock.pausedUntilMs`.
  */
 export function refuseJoin(
   member: { readonly key: ListSecretKey; readonly state: ListState },
   commit: Uint8Array,
   reason: RefusalReason,
-): Uint8Array {
+  nowMs: number,
+): { refusal: Uint8Array; pauseUntilMs: number | null } {
+  checkTime(nowMs);
   if (!REASONS.includes(reason)) fail("bad_argument", "unknown refusal reason");
   const role = member.state.requireMember(member.key.publicKey).role;
   if (role === "connector") fail("not_permitted", "a device refuses a join, not the connector");
   const found = readCommit(copy(commit));
   expectContext(found.context, member.state.context);
-  return refusal(member.key, member.state, found, reason);
+  return Object.freeze({
+    refusal: refusal(member.key, member.state, found, reason),
+    pauseUntilMs: reason === "concurrent" ? null : nowMs + JOIN_PAUSE_MS,
+  });
 }
 
 export interface Refusal {
@@ -1111,15 +1222,17 @@ export interface Refusal {
 
 /**
  * The connector checks a refusal: signed by a current device member, for this gateway and
- * account, naming a head the connector signed within the last hour. `signedWithinHour` is the
- * latest-entry hashes of the heads it signed in that hour (the connector keeps them with their
- * times; the package keeps no clock). It returns the refusal's hash, by which the connector
- * takes each refusal once, and whether it pauses joins (`JOIN_PAUSE_MS`).
+ * account, naming a head that was current at any time within the last hour: the current one
+ * (`state.head`, always) or one of `replacedWithinHour`, the latest-entry hashes of the heads
+ * replaced in the last hour (the connector keeps them with their times; the package keeps no
+ * clock). It returns the refusal's hash, by which the connector takes each refusal once, keeping
+ * that mark for as long as the head it names stays current plus an hour, and whether it pauses
+ * joins (`JOIN_PAUSE_MS`).
  */
 export function verifyRefusal(
   state: ListState,
   input: Uint8Array,
-  signedWithinHour: readonly Uint8Array[],
+  replacedWithinHour: readonly Uint8Array[],
 ): Refusal {
   const bytes = copy(input);
   const reader = new Reader(bytes);
@@ -1138,8 +1251,11 @@ export function verifyRefusal(
   expectContext(context, state.context);
   if (state.requireMember(signer).role === "connector")
     fail("not_permitted", "a device refuses a join, not the connector");
-  if (!signedWithinHour.some((head) => equalBytes(head, listHead)))
-    fail("stale_head", "a refusal naming a head not signed within the hour");
+  if (
+    !equalBytes(listHead, state.head) &&
+    !replacedWithinHour.some((head) => equalBytes(head, listHead))
+  )
+    fail("stale_head", "a refusal naming a head not current within the hour");
   return Object.freeze({
     listHead,
     commitment: value,

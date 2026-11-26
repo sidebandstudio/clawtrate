@@ -44,6 +44,8 @@ export {
   signRemoval,
   signRemovalNotice,
   signRemovalOnGatewayMachine,
+  assembleRelink,
+  signRelink,
   signRestore,
   signWithdrawal,
   verifyList,
@@ -56,7 +58,7 @@ export {
   type Role,
 } from "./list.ts";
 export { cardHash, signCard, verifyCard, type Card, type CardAddress } from "./card.ts";
-export { requireNotOlder, signHead, verifyHead, type Head } from "./head.ts";
+export { Head, requireNotOlder, signHead, verifyHead } from "./head.ts";
 export {
   ListSecret,
   MAX_CARD_BYTES,
@@ -64,12 +66,14 @@ export {
   openEntry,
   openFirstSecret,
   openList,
-  openRotation,
+  catchUp,
   rotateListSecret,
   sealCard,
   sealEntry,
   sealFirstSecret,
   sealList,
+  type HeldList,
+  type Newest,
 } from "./seal.ts";
 export {
   MemberJoin,

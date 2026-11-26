@@ -105,3 +105,48 @@ export function forgeRefusal(fields: {
     .finish();
   return concat(signed, signList(fields.signer, signed));
 }
+
+/**
+ * A rotation the connector signs with any position, epoch, recipients and sealed secret: what a
+ * connector gone wrong could send. Each share is sealed with HPKE to its recipient's seal key.
+ */
+export function forgeRotation(fields: {
+  connector: ListSecretKey;
+  context: ListContext;
+  generation: number;
+  length: number;
+  entryHash: Uint8Array;
+  epoch: number;
+  recipients: readonly { key: ListPublicKey; seal: SealPublicKey }[];
+  secret: Uint8Array;
+}): Uint8Array {
+  const writer = new Writer()
+    .label(LABEL.listSecret)
+    .fixed(fields.context.gatewayId, 16, "g")
+    .fixed(fields.context.accountId, 16, "a")
+    .u32(fields.generation)
+    .u32(fields.length)
+    .fixed(fields.entryHash, 32, "h")
+    .u32(fields.epoch)
+    .u8(fields.recipients.length);
+  for (const r of fields.recipients) {
+    const info = new Writer()
+      .label(TAG.deviceSeal)
+      .u8(2)
+      .fixed(fields.context.gatewayId, 16, "g")
+      .fixed(fields.context.accountId, 16, "a")
+      .u32(fields.epoch)
+      .fixed(r.key.bytes, 32, "r")
+      .finish();
+    const { enc, ciphertext } = hpkeSeal(
+      r.seal.bytes,
+      info,
+      new Uint8Array(0),
+      fields.secret,
+      new Uint8Array(32).fill(0x5e),
+    );
+    writer.fixed(r.key.bytes, 32, "r").fixed(enc, 32, "enc").fixed(ciphertext, 48, "c");
+  }
+  const signed = writer.finish();
+  return concat(signed, signList(fields.connector, signed));
+}

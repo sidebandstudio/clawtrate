@@ -16,7 +16,8 @@ import {
   openCard,
   openEntry,
   openList,
-  openRotation,
+  catchUp,
+  signRemoval,
   refuseJoin,
   rotateListSecret,
   sealCard,
@@ -49,6 +50,10 @@ import {
   NOW,
   headObject,
   headOf,
+  holding,
+  rotated,
+  fresh,
+  anew,
 } from "./helpers.ts";
 
 // Signatures and key checks are quick alone; on a loaded machine a test can take seconds.
@@ -178,7 +183,7 @@ describe("tampering with the list", () => {
   });
 
   it("a refusal", () => {
-    const refusal = refuseJoin(member, run.commit, "none-match");
+    const refusal = refuseJoin(member, run.commit, "none-match", NOW).refusal;
     tamper(
       refusal,
       [
@@ -219,14 +224,13 @@ describe("tampering with the list", () => {
   });
 
   it("a rotation of the list secret", () => {
-    const rotation = rotateListSecret(
-      world.connector,
-      withMac.state,
-      world.secret,
-      ListSecret.fromBytes(fill(32, 9), 1),
-      fill(32, 3),
+    const afterRemoval = appended(
+      withMac,
+      signRemoval(gateway.listKey, withMac.state, mac.device.listKey),
     );
-    const holder = { listKey: mac.device.listKey, sealKey: mac.sealKey };
+    const { newest } = rotated(world, afterRemoval, world.secret);
+    const rotation = newest.rotation;
+    const holder = { listKey: gateway.device.listKey, sealKey: gateway.sealKey };
     const share: Field[] = [
       ["recipient", 32, KEY],
       ["enc", 32, SIGNED],
@@ -243,10 +247,9 @@ describe("tampering with the list", () => {
         ["epoch", 4, SIGNED],
         ["count", 1, ["malformed", "too_large"]],
         ...share,
-        ...share,
         ["signature", 64, SIGNED],
       ],
-      (b) => openRotation(holder, withMac.state, b, world.secret),
+      (b) => catchUp(holder, holding(world, withMac), { ...newest, rotation: b }),
     );
   });
 
@@ -267,7 +270,7 @@ describe("tampering with the list", () => {
       ],
       (b) => verifyHead(b, world.connector.publicKey, CONTEXT),
     );
-    const first = sealFirstSecret(world.connector, world.state, world.secret, fill(32, 4));
+    const first = sealFirstSecret(world.connector, world.state, fill(32, 4)).message;
     const holder = { listKey: gateway.device.listKey, sealKey: gateway.sealKey };
     tamper(
       first,
@@ -312,7 +315,7 @@ describe("tampering with the list", () => {
     tamper(
       list,
       [...sealedHeader(["decrypt_failed"]), ["ciphertext", list.length - 30, ["decrypt_failed"]]],
-      (b) => openList(secret, CONTEXT, b, headOf(world)),
+      (b) => openList(secret, CONTEXT, b, headOf(world), null),
     );
     const card = sealCard(secret, CONTEXT, world.card, fill(32, 2), headObject(world));
     tamper(
@@ -344,7 +347,7 @@ describe("tampering with the join", () => {
     headObject(world),
   );
   /** A fresh N with the same keys and random: the same commitment, ready for one answer. */
-  const freshN = () => NewDeviceJoin.start(mac, CONTEXT, N_RANDOM, CLOCK);
+  const freshN = () => NewDeviceJoin.start(fresh(mac), CONTEXT, N_RANDOM, CLOCK);
   const label: Field = ["label", 37, LABEL];
   const step: Field = ["step", 1, ["transcript_mismatch"]];
 
@@ -357,7 +360,7 @@ describe("tampering with the join", () => {
         ...CONTEXT_FIELDS(["wrong_gateway", "wrong_account"]),
         ["commitment", 32, ["transcript_mismatch"]],
       ],
-      (b) => freshN().reveal(MemberJoin.answer(member, b, CLOCK).answer),
+      (b) => freshN().reveal(MemberJoin.answer(anew(member), b, CLOCK).answer),
     );
   });
 
@@ -365,7 +368,7 @@ describe("tampering with the join", () => {
     // A changed key, list head, card hash or nonce gives N other words and a reveal A refuses.
     const throughBoth = (b: Uint8Array) => {
       const { reveal } = freshN().reveal(b);
-      return MemberJoin.answer(member, run.commit, CLOCK).choices(reveal);
+      return MemberJoin.answer(anew(member), run.commit, CLOCK).choices(reveal);
     };
     tamper(
       run.answer,
@@ -395,7 +398,7 @@ describe("tampering with the join", () => {
         ["transcript hash", 32, ["transcript_mismatch"]],
         ["signature", 64, SIGNED],
       ],
-      (b) => MemberJoin.answer(member, run.commit, CLOCK).choices(b),
+      (b) => MemberJoin.answer(anew(member), run.commit, CLOCK).choices(b),
     );
   });
 
@@ -419,7 +422,7 @@ describe("tampering with the join", () => {
       (b) => {
         const n = freshN();
         n.reveal(run.answer);
-        return n.finish(b, sealed, headOf(world, appended(world, added.entry)));
+        return n.finish(b, sealed, headOf(world, appended(world, added.entry)), null);
       },
     );
   });

@@ -1,14 +1,14 @@
 // The device list: a chain of signed entries, each naming the hash of the one before it. A list
 // starts with one of three first entries, each signed by the connector and by the device that
-// confirms others on the gateway's machine: the linking app's first entry, a server's first
-// device after its terminal confirmed it, or a fresh start carrying an older list's head and
-// members. Every later entry is signed by one current member. `ListState` is what a verifier
-// knows after each entry: who is a member, who was removed and how, and every key the list has
-// held. A reader checks a list against the connector's signed head (head.ts).
+// holds the gateway machine's own role: the linking app's first entry, a server's first device
+// after its terminal confirmed it, or a fresh start carrying an older list's head and members.
+// Every later entry is signed by one current member, except a re-link of the gateway device's
+// role, which the connector and that device sign together. `ListState` is what a verifier knows
+// after each entry. A reader checks a list against the connector's signed head (head.ts).
 
 import { checkLength, concat, copy, equalBytes, hex, Reader, taggedHash, Writer } from "./bytes.ts";
 import { fail } from "./errors.ts";
-import { verifyHead, requireNotOlder, type Head } from "./head.ts";
+import { Head, requireNotOlder, verifyHead } from "./head.ts";
 import { ListPublicKey, signList, verifyEd25519, type ListSecretKey } from "./keys.ts";
 import { LABEL, TAG } from "./labels.ts";
 import { GROWTH_LIMIT, MAX_ENTRIES, MAX_MEMBERS, MAX_NAME_BYTES } from "./limits.ts";
@@ -28,7 +28,10 @@ const MAX_RECORD_BYTES = 4 * 32 + 1 + 2 + MAX_NAME_BYTES;
 const HEAD_BYTES = LABEL.listEntry.length + 32 + 4 + 32 + 1;
 /** The largest entry other than a fresh start: a server's first entry with the longest name. */
 export const MAX_ENTRY_BYTES = HEAD_BYTES + 32 + MAX_RECORD_BYTES + 32 + 128;
-/** The largest fresh start: every device carried over, each with the longest name. */
+/**
+ * The largest fresh start: the gateway's own device, 31 carried devices and 32 restorable
+ * removals, each with the longest name and the member it descends from.
+ */
 export const MAX_FRESH_START_BYTES =
   HEAD_BYTES +
   4 +
@@ -38,6 +41,8 @@ export const MAX_FRESH_START_BYTES =
   MAX_RECORD_BYTES +
   1 +
   (MAX_MEMBERS - 1) * (MAX_RECORD_BYTES + 32) +
+  1 +
+  MAX_MEMBERS * (MAX_RECORD_BYTES + 32) +
   128;
 
 export type RemovalOrigin = "member" | "account" | "withdrawn";
@@ -48,7 +53,7 @@ interface EntryHead {
   readonly prev: Uint8Array;
 }
 
-/** A device a fresh start carries over, with the member whose entry made it one, if any. */
+/** A device a fresh start carries over, with its nearest current ancestor, if any. */
 export interface CarriedDevice {
   readonly device: DeviceRecord;
   readonly addedBy: ListPublicKey | null;
@@ -88,7 +93,7 @@ export type Entry = EntryHead &
         readonly joinTranscript: Uint8Array;
       }
     | {
-        /** A list started afresh: the old list's head and its members, carried over. */
+        /** A list started afresh: the old list's head, its members and its restorable removals. */
         readonly type: "fresh-start";
         readonly generation: number;
         readonly connectorKey: ListPublicKey;
@@ -97,18 +102,58 @@ export type Entry = EntryHead &
         /** The gateway machine's own device (on a server, the first device), which signs. */
         readonly device: DeviceRecord;
         readonly carried: readonly CarriedDevice[];
+        /** Account-page removals that can still be put back. */
+        readonly restorable: readonly CarriedDevice[];
+      }
+    | {
+        /** The gateway device's role given to a current device, by the connector and that device. */
+        readonly type: "relink";
+        readonly target: ListPublicKey;
       }
   );
 
 type FirstEntry = Extract<Entry, { type: "genesis" | "server-first" | "fresh-start" }>;
 
-const TYPES = ["genesis", "add", "remove", "restore", "server-first", "fresh-start"] as const;
+const TYPES = [
+  "genesis",
+  "add",
+  "remove",
+  "restore",
+  "server-first",
+  "fresh-start",
+  "relink",
+] as const;
 const ORIGINS = ["member", "account", "withdrawn"] as const;
 const ZERO_HASH = new Uint8Array(32);
 const NO_KEY = new Uint8Array(32);
 
 function isFirst(entry: Entry): entry is FirstEntry {
   return entry.type === "genesis" || entry.type === "server-first" || entry.type === "fresh-start";
+}
+
+/** Entries that carry two signatures: the first entries, and a re-link. */
+function twoSigned(type: Entry["type"]): boolean {
+  return (
+    type === "genesis" || type === "server-first" || type === "fresh-start" || type === "relink"
+  );
+}
+
+function writeCarried(writer: Writer, list: readonly CarriedDevice[], max: number, what: string) {
+  if (list.length > max) fail("too_large", `too many ${what}`);
+  writer.u8(list.length);
+  for (const carried of list) {
+    writeRecord(writer, carried.device);
+    writer.fixed(carried.addedBy?.bytes ?? NO_KEY, 32, "added by");
+  }
+}
+
+function readCarried(reader: Reader, max: number, what: string): CarriedDevice[] {
+  const count = reader.u8();
+  if (count > max) fail("too_large", `too many ${what}`);
+  const out: CarriedDevice[] = [];
+  for (let i = 0; i < count; i++)
+    out.push({ device: readRecord(reader), addedBy: readOptionalKey(reader, "added by") });
+  return out;
 }
 
 /** The bytes every signature on the entry covers: the whole entry up to its first signature. */
@@ -149,12 +194,11 @@ function encodeSigned(entry: Entry): Uint8Array {
         .u32(entry.oldCount)
         .fixed(entry.oldHead, 32, "old head");
       writeRecord(writer, entry.device);
-      if (entry.carried.length > MAX_MEMBERS - 1) fail("too_large", "too many devices carried");
-      writer.u8(entry.carried.length);
-      for (const carried of entry.carried) {
-        writeRecord(writer, carried.device);
-        writer.fixed(carried.addedBy?.bytes ?? NO_KEY, 32, "added by");
-      }
+      writeCarried(writer, entry.carried, MAX_MEMBERS - 1, "devices carried");
+      writeCarried(writer, entry.restorable, MAX_MEMBERS, "removals carried");
+      break;
+    case "relink":
+      writer.fixed(entry.target.bytes, 32, "target");
       break;
   }
   return writer.finish();
@@ -235,15 +279,24 @@ function decodeEntry(bytes: Uint8Array, partial = false): DecodedEntry {
       const oldCount = reader.u32();
       const oldHead = reader.fixed(32, "old head");
       const device = readRecord(reader);
-      const count = reader.u8();
-      if (count > MAX_MEMBERS - 1) fail("too_large", "too many devices carried");
-      const carried: CarriedDevice[] = [];
-      for (let i = 0; i < count; i++) {
-        carried.push({ device: readRecord(reader), addedBy: readOptionalKey(reader, "added by") });
-      }
-      entry = { ...head, type, generation, connectorKey, oldCount, oldHead, device, carried };
+      const carried = readCarried(reader, MAX_MEMBERS - 1, "devices carried");
+      const restorable = readCarried(reader, MAX_MEMBERS, "removals carried");
+      entry = {
+        ...head,
+        type,
+        generation,
+        connectorKey,
+        oldCount,
+        oldHead,
+        device,
+        carried,
+        restorable,
+      };
       break;
     }
+    case "relink":
+      entry = { ...head, type, target: ListPublicKey.fromBytes(reader.fixed(32, "target")) };
+      break;
     default:
       fail("malformed", "unknown entry type");
   }
@@ -251,7 +304,7 @@ function decodeEntry(bytes: Uint8Array, partial = false): DecodedEntry {
     fail("too_large", "an entry is over its bound");
   const signed = reader.before();
   const signatures = [reader.fixed(64, "signature")];
-  if (isFirst(entry) && !partial) signatures.push(reader.fixed(64, "signature"));
+  if (twoSigned(entry.type) && !partial) signatures.push(reader.fixed(64, "signature"));
   reader.end();
   return { entry, signed, signatures };
 }
@@ -275,7 +328,10 @@ export function readEntryUnverified(bytes: Uint8Array): Entry {
 
 function freezeEntry(entry: Entry): Entry {
   if ("device" in entry) Object.freeze(entry.device);
-  if (entry.type === "fresh-start") Object.freeze(entry.carried.map((c) => Object.freeze(c)));
+  if (entry.type === "fresh-start") {
+    Object.freeze(entry.carried.map((c) => Object.freeze(c)));
+    Object.freeze(entry.restorable.map((c) => Object.freeze(c)));
+  }
   Object.freeze(entry.context);
   return Object.freeze(entry);
 }
@@ -292,7 +348,7 @@ export interface Member {
   readonly role: Role;
   /** Null for the connector. */
   readonly device: DeviceRecord | null;
-  /** The member whose entry added it; null for a first entry's own two. */
+  /** The member whose entry added it (after a fresh start, its nearest current ancestor then). */
   readonly addedBy: ListPublicKey | null;
   /** The member whose entry last put it back, if it was put back. */
   readonly restoredBy: ListPublicKey | null;
@@ -313,12 +369,14 @@ interface StateData {
   readonly generation: number;
   readonly length: number;
   readonly head: Uint8Array;
+  /** The latest entry's type: a rotation follows exactly a removal or a restore. */
+  readonly last: Entry["type"];
   readonly members: ReadonlyMap<string, Member>;
   readonly removed: ReadonlyMap<string, Removal>;
   /**
    * Every key the list holds or held, of any kind and in any role (the connector's included),
-   * and every TLS pin, except those of a withdrawn entry. No key may appear twice, so one key
-   * can never act in two roles.
+   * and every TLS pin, under `key:` and `tls:`. An OpenClaw key freed by a withdrawal moves to
+   * `openclaw-only:`: taken again as an OpenClaw key, refused in any other role.
    */
   readonly seen: ReadonlySet<string>;
   /** The members that have signed an entry other than a first entry. */
@@ -356,6 +414,18 @@ function newMember(
   return { key: device.listKey, role, device, addedBy, restoredBy: null, since };
 }
 
+/** Every member the list has had, current and removed, by key. */
+function everyone(data: StateData): Map<string, Member> {
+  const all = new Map<string, Member>();
+  for (const [id, removal] of data.removed) all.set(id, removal.member);
+  for (const [id, member] of data.members) all.set(id, member);
+  return all;
+}
+
+function parentOf(member: Member): ListPublicKey | null {
+  return member.restoredBy ?? member.addedBy;
+}
+
 /** What a list says after a given entry. Immutable and frozen: `append` returns a new state. */
 export class ListState {
   readonly #data: StateData;
@@ -391,6 +461,11 @@ export class ListState {
     return copy(this.#data.head);
   }
 
+  /** Whether the latest entry is a removal or a restore: the only places a rotation follows. */
+  get rotationPoint(): boolean {
+    return this.#data.last === "remove" || this.#data.last === "restore";
+  }
+
   /** The current members, the connector first, in the order they were added. */
   members(): Member[] {
     return [...this.#data.members.values()].map(detach);
@@ -417,27 +492,44 @@ export class ListState {
   }
 
   /**
-   * What removing `key` offers to remove too (design §4.6): every current member whose entry
-   * descends from it through adds or restores. A device it added, a device that one added, a
-   * device it put back, and so on; for a device put back, the member that put it back is the
-   * one it descends from.
+   * What removing `key` offers to remove too (design §4.6): every current member that descends
+   * from it through adds or restores, walking through removed devices too, so removing a device
+   * in the middle doesn't hide what came after it. For a device put back, the member that put it
+   * back is the one it descends from.
    */
   causedBy(key: ListPublicKey): Member[] {
+    const all = everyone(this.#data);
     const caused = new Set([hex(key.bytes)]);
-    const members = this.members();
     let grew = true;
     while (grew) {
       grew = false;
-      for (const member of members) {
-        const parent = member.restoredBy ?? member.addedBy;
-        const id = hex(member.key.bytes);
+      for (const [id, member] of all) {
+        const parent = parentOf(member);
         if (parent && caused.has(hex(parent.bytes)) && !caused.has(id)) {
           caused.add(id);
           grew = true;
         }
       }
     }
-    return members.filter((member) => !member.key.equals(key) && caused.has(hex(member.key.bytes)));
+    return this.members().filter(
+      (member) => !member.key.equals(key) && caused.has(hex(member.key.bytes)),
+    );
+  }
+
+  /** The nearest current member up `member`'s chain of adds and restores, or null. */
+  #nearestCurrent(member: Member): ListPublicKey | null {
+    const all = everyone(this.#data);
+    const visited = new Set<string>([hex(member.key.bytes)]);
+    let parent = parentOf(member);
+    while (parent) {
+      const id = hex(parent.bytes);
+      if (visited.has(id)) return null;
+      visited.add(id);
+      if (this.#data.members.has(id)) return parent;
+      const next = all.get(id);
+      parent = next ? parentOf(next) : null;
+    }
+    return null;
   }
 
   /** Refuses a key that is not a current member, saying whether it never was or was removed. */
@@ -450,13 +542,18 @@ export class ListState {
 
   /**
    * Refuses a device record that uses one key twice, or any of whose keys or pin the list holds
-   * or has held in any role (a withdrawn entry's keys excepted).
+   * or has held in any role. An OpenClaw key a withdrawal freed is taken again only as an
+   * OpenClaw key.
    */
   requireNew(device: DeviceRecord): void {
     const keys = seenKeys(device);
     requireDistinct(keys);
     for (const key of keys) {
       if (this.#data.seen.has(key)) fail("duplicate_key", "a key already on the list");
+    }
+    for (const key of [device.listKey.bytes, device.sealKey.bytes]) {
+      if (this.#data.seen.has(`openclaw-only:${hex(key)}`))
+        fail("duplicate_key", "a key already on the list");
     }
   }
 
@@ -481,10 +578,12 @@ export class ListState {
       fail("bad_chain", "the first entry is not first");
     const connectorSeen = `key:${hex(entry.connectorKey.bytes)}`;
     const carried = entry.type === "fresh-start" ? entry.carried : [];
+    const restorable = entry.type === "fresh-start" ? entry.restorable : [];
     const keys = [
       connectorSeen,
       ...seenKeys(entry.device),
       ...carried.flatMap((c) => seenKeys(c.device)),
+      ...restorable.flatMap((c) => seenKeys(c.device)),
     ];
     requireDistinct(keys);
     if (entry.type === "fresh-start" && entry.generation < 1)
@@ -504,14 +603,22 @@ export class ListState {
     ]);
     for (const c of carried)
       members.set(hex(c.device.listKey.bytes), newMember(c.device, "device", c.addedBy, 0));
+    const removed = new Map<string, Removal>();
+    for (const c of restorable)
+      removed.set(hex(c.device.listKey.bytes), {
+        member: newMember(c.device, "device", c.addedBy, 0),
+        origin: "account",
+        at: 0,
+      });
     return new ListState({
       context: expected,
       connectorKey: entry.connectorKey,
       generation: entry.type === "fresh-start" ? entry.generation : 0,
       length: 1,
       head: entryHash(bytes),
+      last: entry.type,
       members,
-      removed: new Map(),
+      removed,
       seen: new Set(keys),
       signers: new Set(),
     });
@@ -519,7 +626,7 @@ export class ListState {
 
   /**
    * Checks the next entry against this state and returns the state after it. The order of the
-   * checks: the bytes, the signature, the gateway and account, the position, for an add or a
+   * checks: the bytes, the signatures, the gateway and account, the position, for an add or a
    * restore the growth limit, the signer, and what the signer's role allows.
    */
   append(input: Uint8Array): ListState {
@@ -527,82 +634,105 @@ export class ListState {
     const bytes = copy(input);
     const { entry, signed, signatures } = decodeEntry(bytes);
     if (isFirst(entry)) fail("bad_chain", "a second first entry");
-    if (!verifyEd25519(entry.signer.bytes, signed, signatures[0]!)) {
+    if (entry.type === "relink") {
+      if (!verifyEd25519(data.connectorKey.bytes, signed, signatures[0]!))
+        fail("bad_signature", "the connector's signature does not verify");
+      if (!verifyEd25519(entry.target.bytes, signed, signatures[1]!))
+        fail("bad_signature", "the device's signature does not verify");
+    } else if (!verifyEd25519(entry.signer.bytes, signed, signatures[0]!)) {
       fail("bad_signature", "the entry's signature does not verify");
     }
     expectContext(entry.context, data.context);
     if (entry.seq !== data.length || !equalBytes(entry.prev, data.head)) {
       fail("bad_chain", "the entry does not follow the list's latest entry");
     }
-    // Only growth is bounded: a removal is never refused for size, so a device can always be
-    // removed. At most MAX_MEMBERS removals can follow the growth limit.
-    if (entry.type !== "remove" && data.length >= GROWTH_LIMIT)
+    // Only adds and restores are bounded: a removal or a re-link is never refused for size.
+    if ((entry.type === "add" || entry.type === "restore") && data.length >= GROWTH_LIMIT)
       fail("list_full", "the list holds its most entries");
-    const signer = this.requireMember(entry.signer);
     const members = new Map(data.members);
     const removed = new Map(data.removed);
     const seen = new Set(data.seen);
     const signers = new Set(data.signers);
-    signers.add(hex(entry.signer.bytes));
     const deviceCount = this.devices().length;
 
-    switch (entry.type) {
-      case "add": {
-        if (signer.role === "connector") fail("not_permitted", "only a device adds a device");
-        this.requireNew(entry.device);
-        if (deviceCount >= MAX_MEMBERS) fail("list_full", "the list holds its most members");
-        const member = newMember(entry.device, "device", entry.signer, entry.seq);
-        members.set(hex(member.key.bytes), member);
-        for (const key of seenKeys(entry.device)) seen.add(key);
-        break;
-      }
-      case "remove": {
-        const target = this.member(entry.target);
-        if (!target) fail("bad_target", "the target is not a current member");
-        if (target.role === "connector")
-          fail("protected_member", "the connector is removed by unlinking");
-        if (entry.origin !== "member" && signer.role !== "connector")
-          fail("not_permitted", "only the connector writes this removal");
-        if (entry.origin === "member" && target.role === "gateway-device") {
-          // Only that device itself, or the connector (both on the gateway's machine).
-          if (signer.role !== "connector" && !entry.signer.equals(target.key))
-            fail("protected_member", "only the gateway's own device or the connector removes it");
+    if (entry.type === "relink") {
+      const target = this.member(entry.target);
+      if (!target || target.role !== "device")
+        fail("bad_target", "the role goes to a current device member");
+      if (this.devices().some((member) => member.role === "gateway-device"))
+        fail("bad_target", "the list already has the gateway's own device");
+      members.set(hex(target.key.bytes), { ...target, role: "gateway-device" });
+      signers.add(hex(target.key.bytes));
+    } else {
+      const signer = this.requireMember(entry.signer);
+      signers.add(hex(entry.signer.bytes));
+      switch (entry.type) {
+        case "add": {
+          if (signer.role === "connector") fail("not_permitted", "only a device adds a device");
+          this.requireNew(entry.device);
+          if (deviceCount >= MAX_MEMBERS) fail("list_full", "the list holds its most members");
+          const member = newMember(entry.device, "device", entry.signer, entry.seq);
+          members.set(hex(member.key.bytes), member);
+          for (const key of seenKeys(entry.device)) seen.add(key);
+          seen.delete(`openclaw-only:${hex(entry.device.gatewayDeviceKey.bytes)}`);
+          break;
         }
-        if (entry.origin === "account" && target.role === "gateway-device")
-          fail("protected_member", "the account page can't remove the gateway's own device");
-        if (entry.origin === "withdrawn") {
-          // An entry that never paired: a device added by a join, never put back, that has
-          // signed nothing. Its keys are freed so the same device can join again.
-          if (target.role !== "device" || target.restoredBy !== null || target.since === 0)
-            fail("bad_target", "only an added device that never paired is withdrawn");
-          if (data.signers.has(hex(target.key.bytes)))
-            fail("bad_target", "a device that has signed an entry is removed, not withdrawn");
-          for (const key of seenKeys(target.device!)) seen.delete(key);
+        case "remove": {
+          const target = this.member(entry.target);
+          if (!target) fail("bad_target", "the target is not a current member");
+          if (target.role === "connector")
+            fail("protected_member", "the connector is removed by unlinking");
+          if (entry.origin !== "member" && signer.role !== "connector")
+            fail("not_permitted", "only the connector writes this removal");
+          if (entry.origin === "member" && target.role === "gateway-device") {
+            // Only that device itself, or the connector (both on the gateway's machine).
+            if (signer.role !== "connector" && !entry.signer.equals(target.key))
+              fail("protected_member", "only the gateway's own device or the connector removes it");
+          }
+          if (entry.origin === "account" && target.role === "gateway-device")
+            fail("protected_member", "the account page can't remove the gateway's own device");
+          if (entry.origin === "withdrawn") {
+            // An entry that never paired: a device an add made a member, never put back, that
+            // has signed nothing. Only its OpenClaw key is freed, and only for that role.
+            if (target.role !== "device" || target.restoredBy !== null || target.since === 0)
+              fail("bad_target", "only an added device that never paired is withdrawn");
+            if (data.signers.has(hex(target.key.bytes)))
+              fail("bad_target", "a device that has signed an entry is removed, not withdrawn");
+            const openclaw = hex(target.device!.gatewayDeviceKey.bytes);
+            seen.delete(`key:${openclaw}`);
+            seen.add(`openclaw-only:${openclaw}`);
+          }
+          members.delete(hex(target.key.bytes));
+          removed.set(hex(target.key.bytes), {
+            member: target,
+            origin: entry.origin,
+            at: entry.seq,
+          });
+          break;
         }
-        members.delete(hex(target.key.bytes));
-        removed.set(hex(target.key.bytes), { member: target, origin: entry.origin, at: entry.seq });
-        break;
-      }
-      case "restore": {
-        if (signer.role === "connector") fail("not_permitted", "only a device puts a device back");
-        const removal = this.removal(entry.target);
-        if (!removal || removal.origin !== "account") {
-          fail("bad_target", "only a device the account page removed can be put back");
+        case "restore": {
+          if (signer.role === "connector")
+            fail("not_permitted", "only a device puts a device back");
+          const removal = this.removal(entry.target);
+          if (!removal || removal.origin !== "account") {
+            fail("bad_target", "only a device the account page removed can be put back");
+          }
+          if (deviceCount >= MAX_MEMBERS) fail("list_full", "the list holds its most members");
+          removed.delete(hex(entry.target.bytes));
+          members.set(hex(entry.target.bytes), {
+            ...removal.member,
+            restoredBy: entry.signer,
+            since: entry.seq,
+          });
+          break;
         }
-        if (deviceCount >= MAX_MEMBERS) fail("list_full", "the list holds its most members");
-        removed.delete(hex(entry.target.bytes));
-        members.set(hex(entry.target.bytes), {
-          ...removal.member,
-          restoredBy: entry.signer,
-          since: entry.seq,
-        });
-        break;
       }
     }
     return new ListState({
       ...data,
       length: data.length + 1,
       head: entryHash(bytes),
+      last: entry.type,
       members,
       removed,
       seen,
@@ -613,7 +743,8 @@ export class ListState {
   /**
    * A member takes a fresh start of its list: signed by this list's connector and its gateway
    * machine's own device, the next generation, and naming this list's head or a newer one. When
-   * it names this very head, the devices it carries must be exactly this list's.
+   * it names this very head, the devices and restorable removals it carries must be exactly this
+   * list's.
    */
   freshStart(input: Uint8Array): ListState {
     const next = ListState.fromGenesis(this.#data.context, input);
@@ -630,35 +761,78 @@ export class ListState {
     if (entry.oldCount === this.#data.length) {
       if (!equalBytes(entry.oldHead, this.#data.head))
         fail("bad_chain", "a fresh start of another list");
-      const carried = [entry.device, ...entry.carried.map((c) => c.device)]
-        .map((d) => hex(d.listKey.bytes))
-        .sort();
-      const current = this.devices()
-        .map((m) => hex(m.key.bytes))
-        .sort();
-      if (carried.join() !== current.join())
+      const ids = (list: readonly DeviceRecord[]) =>
+        list
+          .map((d) => hex(d.listKey.bytes))
+          .sort()
+          .join();
+      if (
+        ids([entry.device, ...entry.carried.map((c) => c.device)]) !==
+        ids(this.devices().map((m) => m.device!))
+      )
         fail("bad_chain", "a fresh start that changes the members");
+      if (
+        ids(entry.restorable.map((c) => c.device)) !== ids(this.#restorable().map((m) => m.device!))
+      )
+        fail("bad_chain", "a fresh start that changes the removals that can be put back");
     }
     return next;
+  }
+
+  /** The account-page removals a fresh start carries: the latest 32, oldest first. */
+  #restorable(): Member[] {
+    return [...this.#data.removed.values()]
+      .filter((removal) => removal.origin === "account")
+      .sort((a, b) => a.at - b.at)
+      .slice(-MAX_MEMBERS)
+      .map((removal) => removal.member);
+  }
+
+  /** For `signFreshStart` only: the fields of a fresh start of this state. */
+  freshStartFields(): Omit<
+    Extract<Entry, { type: "fresh-start" }>,
+    "context" | "seq" | "prev" | "type"
+  > {
+    const devices = this.devices();
+    const own = devices.find((member) => member.role === "gateway-device");
+    if (!own) fail("bad_target", "the list has no gateway device to sign a fresh start");
+    const carry = (member: Member): CarriedDevice => ({
+      device: member.device!,
+      addedBy: this.#nearestCurrent(member),
+    });
+    return {
+      generation: this.#data.generation + 1,
+      connectorKey: this.#data.connectorKey,
+      oldCount: this.#data.length,
+      oldHead: copy(this.#data.head),
+      device: own.device!,
+      carried: devices.filter((member) => member.role !== "gateway-device").map(carry),
+      restorable: this.#restorable().map(carry),
+    };
   }
 }
 
 /**
- * Reads a list someone else holds: checks it from its first entry, then checks the connector's
- * signed head that came with it, and that the list ends exactly at that head. With `held`, the
- * newest head this reader holds, it refuses a list older than that (`stale_head`) or forked from
- * it (`bad_chain`).
+ * Reads a list someone else holds: checks it from its first entry, then the connector's signed
+ * head that came with it, and that the list ends exactly at that head. `held` is the newest head
+ * this reader holds, or null only for a device's first read. Against it, a list is refused when
+ * its head is older (`stale_head`), when the held head's own entry isn't on it (a fork of any
+ * length, `bad_chain`), or, one fresh start on, when the fresh start names an older list than the
+ * held head or another list of the same length (`stale_head`, `bad_chain`). A reader more than
+ * one fresh start behind is refused (`bad_chain`): it can't check the gap.
  */
 export function verifyList(
   context: ListContext,
   entries: readonly Uint8Array[],
   headBytes: Uint8Array,
-  held?: Head,
+  held: Head | null,
 ): { state: ListState; head: Head } {
+  if (held !== null) Head.check(held);
   if (entries.length === 0) fail("malformed", "a list has at least its first entry");
   if (entries.length > MAX_ENTRIES) fail("too_large", "the list is over its bound");
-  let state = ListState.fromGenesis(context, entries[0]!);
-  for (const entry of entries.slice(1)) state = state.append(entry);
+  const own = entries.map(copy);
+  let state = ListState.fromGenesis(context, own[0]!);
+  for (const entry of own.slice(1)) state = state.append(entry);
   const head = verifyHead(headBytes, state.connectorKey, state.context);
   if (
     head.generation !== state.generation ||
@@ -666,7 +840,21 @@ export function verifyList(
     !equalBytes(head.entryHash, state.head)
   )
     fail("bad_chain", "the list doesn't end at its head");
-  if (held) requireNotOlder(head, held);
+  if (held !== null) {
+    requireNotOlder(head, held);
+    if (head.generation === held.generation) {
+      if (!equalBytes(entryHash(own[held.count - 1]!), held.entryHash))
+        fail("bad_chain", "the held head's entry isn't on this list");
+    } else if (head.generation === held.generation + 1) {
+      const first = decodeEntry(own[0]!).entry;
+      if (first.type !== "fresh-start") fail("bad_chain", "a new generation starts afresh");
+      if (first.oldCount < held.count) fail("stale_head", "a fresh start of an older list");
+      if (first.oldCount === held.count && !equalBytes(first.oldHead, held.entryHash))
+        fail("bad_chain", "a fresh start of another list");
+    } else {
+      fail("bad_chain", "more than one fresh start since the held head");
+    }
+  }
   return Object.freeze({ state, head });
 }
 
@@ -755,35 +943,23 @@ export function completeServerFirst(device: ListSecretKey, partial: Uint8Array):
 }
 
 function freshStartEntry(state: ListState): Entry {
-  const devices = state.devices();
-  const own = devices.find((member) => member.role === "gateway-device");
-  if (!own) fail("bad_target", "the list has no gateway device to sign a fresh start");
   return {
     context: state.context,
     seq: 0,
     prev: ZERO_HASH,
     type: "fresh-start",
-    generation: state.generation + 1,
-    connectorKey: state.connectorKey,
-    oldCount: state.length,
-    oldHead: state.head,
-    device: own.device!,
-    carried: devices
-      .filter((member) => member.role !== "gateway-device")
-      .map((member) => ({ device: member.device!, addedBy: member.restoredBy ?? member.addedBy })),
+    ...state.freshStartFields(),
   };
 }
 
 /**
  * One of a fresh start's two signatures, by the connector or the gateway machine's own device,
- * over the fields built from `state`: the next generation, its head, and its current devices.
+ * over the fields built from `state`: the next generation, its head, its current devices and its
+ * restorable removals, each with its nearest current ancestor.
  */
 export function signFreshStart(key: ListSecretKey, state: ListState): Uint8Array {
-  const entry = freshStartEntry(state);
-  if (
-    !key.publicKey.equals(state.connectorKey) &&
-    !key.publicKey.equals((entry as { device: DeviceRecord }).device.listKey)
-  )
+  const entry = freshStartEntry(state) as Extract<Entry, { type: "fresh-start" }>;
+  if (!key.publicKey.equals(state.connectorKey) && !key.publicKey.equals(entry.device.listKey))
     fail("not_permitted", "only the connector and the gateway's own device sign a fresh start");
   return signList(key, encodeSigned(entry));
 }
@@ -800,6 +976,41 @@ export function assembleFreshStart(
     checkLength(deviceSignature, 64, "a signature"),
   );
   return Object.freeze({ entry, state: state.freshStart(entry) });
+}
+
+function relinkEntry(state: ListState, target: ListPublicKey): Entry {
+  return { ...nextHead(state), type: "relink", target };
+}
+
+/**
+ * One of a re-link's two signatures (design §4.6): the connector's, or the device's that takes
+ * the gateway device's role. Made only on the gateway's machine or at the server's terminal;
+ * the package can't see where, and the caller owes it.
+ */
+export function signRelink(
+  key: ListSecretKey,
+  state: ListState,
+  target: ListPublicKey,
+): Uint8Array {
+  if (!key.publicKey.equals(state.connectorKey) && !key.publicKey.equals(target))
+    fail("not_permitted", "only the connector and the device taking the role sign a re-link");
+  return signList(key, encodeSigned(relinkEntry(state, target)));
+}
+
+/** Puts a re-link together from its two signatures and checks it would follow `state`. */
+export function assembleRelink(
+  state: ListState,
+  target: ListPublicKey,
+  connectorSignature: Uint8Array,
+  deviceSignature: Uint8Array,
+): Uint8Array {
+  const entry = concat(
+    encodeSigned(relinkEntry(state, target)),
+    checkLength(connectorSignature, 64, "a signature"),
+    checkLength(deviceSignature, 64, "a signature"),
+  );
+  state.append(entry);
+  return entry;
 }
 
 /**
@@ -861,8 +1072,8 @@ export function signRemovalOnGatewayMachine(
 
 /**
  * The connector withdraws an entry that never paired (design §4.4 step 5a), which frees its
- * keys so the same device can join again. Refused for any device that was put back, was in a
- * first entry, or has signed an entry; those are removed, and their keys stay burned.
+ * OpenClaw key, for that role only, so the same device can join again with fresh keys. Refused
+ * for any device that was put back, came in a first entry, or has signed an entry.
  */
 export function signWithdrawal(
   connector: ListSecretKey,
@@ -963,10 +1174,10 @@ export function decodeList(bytes: Uint8Array): Uint8Array[] {
   return entries;
 }
 
-/** For the join only: reads an entry other than a first entry and checks its one signature. */
+/** For the join only: reads an entry one member signs (not a first entry or a re-link), checked. */
 export function readSignedEntry(bytes: Uint8Array): Entry {
   const { entry, signed, signatures } = decodeEntry(copy(bytes));
-  if (isFirst(entry)) fail("malformed", "not an entry one member signs");
+  if (isFirst(entry) || entry.type === "relink") fail("malformed", "not an entry one member signs");
   if (!verifyEd25519(entry.signer.bytes, signed, signatures[0]!)) {
     fail("bad_signature", "the entry's signature does not verify");
   }

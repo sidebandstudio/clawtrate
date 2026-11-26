@@ -39,11 +39,11 @@ function checkEd25519(bytes: Uint8Array, what: string): Uint8Array {
 }
 
 /**
- * Ed25519 verification that accepts exactly what the cofactorless equation of RFC 8032 and the
- * common implementations accept: RFC 8032's strict decoding of R and A (not ZIP-215), S below
- * the group order, and R in the prime-order subgroup. Noble checks the cofactored equation;
- * with A (checked when its key was made) and R both free of small-order parts, the two
- * equations accept the same signatures.
+ * Ed25519 verification that accepts only signatures every common implementation accepts:
+ * RFC 8032's strict decoding of R and A (not ZIP-215), S below the group order, and R neither of
+ * small order (the identity included) nor with a small-order part. Noble checks the cofactored
+ * equation; with A (checked when its key was made) and R both of prime order, it accepts what
+ * the cofactorless equation of RFC 8032, OpenSSL, libsodium and strict verifiers accept.
  */
 export function verifyEd25519(
   publicKey: Uint8Array,
@@ -53,7 +53,7 @@ export function verifyEd25519(
   if (signature.length !== 64) return false;
   try {
     const r = ed25519.Point.fromBytes(signature.subarray(0, 32), false);
-    if (!r.isTorsionFree()) return false;
+    if (r.isSmallOrder() || !r.isTorsionFree()) return false;
     return ed25519.verify(signature, message, publicKey, { zip215: false });
   } catch {
     return false;

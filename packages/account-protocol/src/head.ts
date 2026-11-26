@@ -12,18 +12,70 @@ import type { ListState } from "./list.ts";
 import { expectContext, readContext, writeContext, type ListContext } from "./records.ts";
 import type { ListSecret } from "./seal.ts";
 
-export interface Head {
+let makeHead!: (fields: HeadFields) => Head;
+
+interface HeadFields {
   readonly generation: number;
-  /** How many entries the list holds. */
   readonly count: number;
-  /** The hash of the list's latest entry. */
   readonly entryHash: Uint8Array;
   readonly epoch: number;
   readonly cardHash: Uint8Array;
   readonly serial: number;
-  /** `taggedHash(head hash, the whole head)`. */
-  readonly hash: Uint8Array;
   readonly bytes: Uint8Array;
+}
+
+/**
+ * A head the package has verified. Only `verifyHead` makes one: a reader persists `head.bytes`
+ * and verifies them again when it reads them back, so no head a signature didn't check reaches
+ * the package. Frozen; its byte arrays are copies the caller owns.
+ */
+export class Head {
+  readonly #fields: HeadFields;
+
+  static {
+    makeHead = (fields) => new Head(fields);
+  }
+
+  private constructor(fields: HeadFields) {
+    this.#fields = fields;
+    Object.freeze(this);
+  }
+
+  /** Refuses anything not made by `verifyHead`. */
+  static check(head: Head): Head {
+    if (!(typeof head === "object" && head !== null && #fields in head))
+      fail("bad_argument", "a head is read only by verifyHead");
+    return head;
+  }
+
+  get generation(): number {
+    return this.#fields.generation;
+  }
+  /** How many entries the list holds. */
+  get count(): number {
+    return this.#fields.count;
+  }
+  /** The hash of the list's latest entry. */
+  get entryHash(): Uint8Array {
+    return copy(this.#fields.entryHash);
+  }
+  get epoch(): number {
+    return this.#fields.epoch;
+  }
+  get cardHash(): Uint8Array {
+    return copy(this.#fields.cardHash);
+  }
+  get serial(): number {
+    return this.#fields.serial;
+  }
+  /** `taggedHash(head hash, the whole head)`. */
+  get hash(): Uint8Array {
+    return taggedHash(TAG.headHash, this.#fields.bytes);
+  }
+  /** The signed bytes: what a reader persists. */
+  get bytes(): Uint8Array {
+    return copy(this.#fields.bytes);
+  }
 }
 
 /**
@@ -76,16 +128,7 @@ export function verifyHead(
     fail("bad_signature", "the head is not the connector's");
   expectContext(found, context);
   if (count < 1) fail("malformed", "a head names at least the first entry");
-  return Object.freeze({
-    generation,
-    count,
-    entryHash,
-    epoch,
-    cardHash: cardHashValue,
-    serial,
-    hash: taggedHash(TAG.headHash, bytes),
-    bytes,
-  });
+  return makeHead({ generation, count, entryHash, epoch, cardHash: cardHashValue, serial, bytes });
 }
 
 /**
@@ -94,6 +137,8 @@ export function verifyHead(
  * with another latest entry is a fork (`bad_chain`).
  */
 export function requireNotOlder(head: Head, held: Head): void {
+  Head.check(head);
+  Head.check(held);
   if (head.generation < held.generation) fail("stale_head", "a head from an older list");
   if (head.generation === held.generation) {
     if (head.count < held.count) fail("stale_head", "a head older than the one held");
@@ -106,6 +151,7 @@ export function requireNotOlder(head: Head, held: Head): void {
 
 /** Refuses a card other than the one a head names: an older card, or another. */
 export function requireHeadCard(card: Uint8Array, head: Head): void {
+  Head.check(head);
   if (!equalBytes(cardHash(checkLength(card, card.length, "a card")), head.cardHash))
     fail("card_mismatch", "not the card the head names");
 }
