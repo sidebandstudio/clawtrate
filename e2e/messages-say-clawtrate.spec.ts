@@ -15,6 +15,7 @@ import { join } from "node:path";
 import { instancePorts, openInstance, openOperator } from "../tools/dev-gateway/src/cli.ts";
 import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
 import { SYSTEM_PROMPT_PATH } from "../tools/dev-gateway/src/fake-provider.ts";
+import { plainPreview } from "../packages/core/src/mapping.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
 import { WORK_CONTEXT_LINE } from "../tools/dev-gateway/src/scripts.ts";
 import { devGateway, startHost, stopChild } from "./global-setup.ts";
@@ -28,6 +29,11 @@ const KEY = `agent:marlow:e2e-marker-${STAMP}`;
 const TITLE = `Marker check ${STAMP}`;
 /** What the person types: a word of the run's own, so search finds this message alone. */
 const WORDS = `Where are you today, ${STAMP}?`;
+/**
+ * A slow message of a length whose preview the gateway cuts inside the marker (240 characters
+ * with "..."), so the rail's preview of it shows whether the marker comes off a cut.
+ */
+const SLOW = `Look over the photos folder and the backup, then tell me what changed since last week and what still needs doing, ${STAMP} #slow 30`;
 /** What the gateway adds to the model's copy, on OpenClaw 2026.10.6 and 2026.11.10. */
 const MARKER = `${WORK_CONTEXT_LINE}\n{"page":"Clawtrate"}`;
 
@@ -268,11 +274,25 @@ test("#666: a command and a stop word, which can't carry the marker, still work"
   await expect(page.getByTestId("transcript").getByText("Couldn't start")).toHaveCount(0);
 
   // A stop word stops the run that is going.
-  await page.getByTestId("composer-input").fill("#slow 30");
+  await page.getByTestId("composer-input").fill(SLOW);
   await page.getByTestId("composer-input").press("Enter");
   await expect(page.getByRole("button", { name: "Stop Marlow" })).toBeVisible({ timeout: 30_000 });
   // The person's slow message reached the model with the marker.
-  await expect.poll(modelCopy, { timeout: 30_000 }).toContain(`#slow 30\n\n${MARKER}`);
+  await expect.poll(modelCopy, { timeout: 30_000 }).toContain(`${SLOW}\n\n${MARKER}`);
+  // While it runs, the gateway's preview of the task is the start of the model's copy, cut inside
+  // the marker; the task's preview, as Clawtrate reads the row, is the words alone.
+  const listed = async () =>
+    (
+      await other.request<{ sessions: { key: string; lastMessagePreview?: string }[] }>(
+        "sessions.list",
+        { includeLastMessage: true, limit: 200 },
+      )
+    ).sessions.find((row) => row.key === KEY)?.lastMessagePreview ?? "";
+  await expect.poll(listed, { timeout: 20_000 }).toMatch(/^Look over the photos folder/);
+  const preview = await listed();
+  expect(preview).toContain("Working context");
+  expect(preview).toMatch(/\.\.\.$/);
+  expect(plainPreview(preview)).toBe(SLOW);
   await page.getByTestId("composer-input").fill("stop");
   await page.getByTestId("composer-input").press("Enter");
   await expect(page.getByRole("button", { name: "Stop Marlow" })).toHaveCount(0, {
@@ -280,7 +300,7 @@ test("#666: a command and a stop word, which can't carry the marker, still work"
   });
   await expect(page.getByTestId("transcript").getByText("Couldn't start")).toHaveCount(0);
   // Neither the command nor the stop word was asked of the model.
-  expect(await modelCopy()).toContain(`#slow 30\n\n${MARKER}`);
+  expect(await modelCopy()).toContain(`${SLOW}\n\n${MARKER}`);
   await expectNoMarker(page);
 });
 
