@@ -21,11 +21,10 @@ import {
   signRemovalNotice,
   signRestore,
   verifyRefusal,
-  type HeldList,
 } from "../src/index.ts";
 import { deriveSealKeyPair } from "../src/hpke.ts";
 import { confirmationEphemeral } from "../src/join.ts";
-import { entryHash, signAdd } from "../src/list.ts";
+import { signAdd } from "../src/list.ts";
 import { shareEphemeral } from "../src/seal.ts";
 import { commitmentOf, forgeRefusal, forgeRotation } from "./forge.ts";
 import {
@@ -45,7 +44,6 @@ import {
   holding,
   rotated,
   type Held,
-  type World,
   fresh,
 } from "./helpers.ts";
 

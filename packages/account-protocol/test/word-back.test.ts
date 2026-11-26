@@ -6,7 +6,6 @@ import { describe, expect, it, vi } from "vitest";
 import {
   encodeRemovalNotice,
   JOIN_PAUSE_MS,
-  ListSecret,
   ListSecretKey,
   ListState,
   MemberJoin,

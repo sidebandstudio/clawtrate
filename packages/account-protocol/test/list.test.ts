@@ -15,7 +15,6 @@ import {
   openCard,
   openEntry,
   openList,
-  rotateListSecret,
   SealSecretKey,
   sealCard,
   sealEntry,

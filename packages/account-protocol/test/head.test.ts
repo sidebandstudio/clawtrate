@@ -4,29 +4,20 @@
 
 import { describe, expect, it, vi } from "vitest";
 import {
-  encodeRemovalNotice,
   ListSecret,
   MemberJoin,
   NewDeviceJoin,
   openCard,
-  openFirstSecret,
   openList,
-  refuseJoin,
-  rotateListSecret,
   sealCard,
-  sealFirstSecret,
   sealList,
   signCard,
   signHead,
-  signRemoval,
-  signRemovalNotice,
-  signRestore,
   verifyCard,
   verifyHead,
   verifyList,
-  verifyRefusal,
 } from "../src/index.ts";
-import { signList } from "../src/keys.ts";
+import {} from "../src/keys.ts";
 import { signAdd } from "../src/list.ts";
 import {
   addDevice,

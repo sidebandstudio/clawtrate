@@ -4,12 +4,12 @@
 // and the constructions the known-answer vectors alone would guard.
 
 import { describe, expect, it, vi } from "vitest";
+import type { Head } from "../src/index.ts";
 import {
   assembleFreshStart,
   assembleRelink,
   cardHash,
   encodeRemovalNotice,
-  Head,
   ListSecret,
   NewDeviceJoin,
   sealCard,
@@ -431,6 +431,36 @@ describe("re-linking the gateway's own device", () => {
       "protected_member",
     );
     expect(() => signFreshStart(world.connector, relinked)).not.toThrow();
+  });
+});
+
+describe("a re-link's target", () => {
+  it("is a current device member: never the connector, never a removed device", () => {
+    const { world, mac, phone, two } = grown();
+    const g = world.gatewayDevice;
+    const alone = appended(two, signRemoval(g.listKey, two.state, g.device.listKey));
+    const out = appended(alone, signRemoval(mac.listKey, alone.state, phone.device.listKey));
+    const target = world.connector.publicKey;
+    expectCode(
+      () =>
+        assembleRelink(
+          out.state,
+          target,
+          signRelink(world.connector, out.state, target),
+          signRelink(world.connector, out.state, target),
+        ),
+      "bad_target",
+    );
+    expectCode(
+      () =>
+        assembleRelink(
+          out.state,
+          phone.device.listKey,
+          signRelink(world.connector, out.state, phone.device.listKey),
+          signRelink(phone.listKey, out.state, phone.device.listKey),
+        ),
+      "bad_target",
+    );
   });
 });
 
