@@ -49,7 +49,7 @@ import {
   type CreatedBot,
 } from "./accounts-engine.ts";
 import { BotNames } from "./bot-names.ts";
-import type { ModelList } from "./accounts.ts";
+import type { ModelList, ModelRefresh } from "./accounts.ts";
 import {
   dismissCheckInSave,
   loadCheckIns,
@@ -6528,7 +6528,23 @@ export class ClawtrateClient {
 
   /** Read one provider's full list for "View more"; the answer is kept nowhere. */
   loadModelCatalog(provider: string): Promise<ModelList> {
-    return this.accounts.readModelList(provider);
+    // The gateway's words go to the screen with no credential this client holds.
+    return this.accounts
+      .readModelList(provider)
+      .then((list) =>
+        list.status === "ready" ? list : { ...list, error: this.scrub(list.error) },
+      );
+  }
+
+  /** Refresh in the Model menu: ask the gateway to look for a provider's models again (#565). */
+  refreshModels(provider: string, stamp: GatewayStamp): Promise<ModelRefresh> {
+    if (this.state.connection.status !== "connected")
+      return Promise.reject(new Error("Not connected to a gateway."));
+    return this.accounts
+      .refreshModels(provider, stamp)
+      .then((found) =>
+        found.status === "error" ? { ...found, error: this.scrub(found.error) } : found,
+      );
   }
 
   /** Read one bot's stored order and model again: the lock's evidence. */
