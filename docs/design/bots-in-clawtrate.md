@@ -264,7 +264,7 @@ The hook decides a write to a bootstrap file by its path, resolved against the b
 
 **Each hold gets its own scenario check, failing with the hold undone, in the pull request that adds the hook** (section 10, step 2).
 
-**For bots Clawtrate makes,** Clawtrate also denies OpenClaw's `gateway`, `plugins` and `openclaw` tools on the bot's own entry, as the Main Bot design §2 does for the Main Bot, so those bots don't depend on the hook alone. A bot someone brings in keeps its tools, so the hook is what covers it.
+**For bots Clawtrate makes,** Clawtrate also denies OpenClaw's `gateway`, `plugins` and `openclaw` tools on the bot's own entry, as the Main Bot design §2 does for the Main Bot, so those bots never have those tools, and the table's last row above (`openclaw`, `gateway`, `plugins`) applies only to a bot someone brings in, which keeps its tools and is covered by the hook.
 
 **A change Clawtrate didn't make.** Clawtrate already reads every field these tools change. When a read finds a bot's name, instructions, routines, check-ins or reach changed with no journal entry behind it (a command did it, or a client without the plugin), the bot's conversation and settings show "Changed outside Clawtrate · Open", with the field and the time. Nothing is undone by itself.
 
