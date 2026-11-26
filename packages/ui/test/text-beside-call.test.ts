@@ -1,0 +1,172 @@
+// What the conversation draws of a running run's text beside its calls and its reply, from the
+// engine's run and history's rows of it, as OpenClaw 2026.11.10 sends them: no `preamble` item,
+// each text an `assistant` item of its own (conversation.md 7.6). Every name and text is invented.
+
+import {
+  applyAgentEvent,
+  emptyActivity,
+  enforceState,
+  initialState,
+  mapHistory,
+  RawTable,
+  readingContextOf,
+  type ClawtrateBridge,
+  type Run,
+  type TaskActivity,
+  type Transcript,
+} from "@clawtrate/core";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import { describe, expect, it, vi } from "vitest";
+import { ActionScope, ItemFeed, RunFeed } from "../src/actions/feed.tsx";
+import { BridgeProvider } from "../src/bridge.tsx";
+import { CardScope } from "../src/cards/TranscriptCards.tsx";
+import { RunReply } from "../src/LiveTurn.tsx";
+
+// "Show commands" and "Show thinking" read the device's storage, which a markup render has none
+// of: off, as by default.
+vi.mock("../src/preferences.ts", async (original) => ({
+  ...(await original<Record<string, unknown>>()),
+  useShowCommands: () => [false, () => {}],
+  useShowThinking: () => [false, () => {}],
+}));
+
+// A markup render has no store to subscribe to: the state the card scope reads.
+vi.mock("../src/bridge.tsx", async (original) => ({
+  ...(await original<Record<string, unknown>>()),
+  useClawtrateState: () => initialState,
+}));
+
+const KEY = "agent:otto:logs";
+const RUN = "run-1";
+
+/** The run as the engine holds it after these `agent` events, within the state's bounds. */
+function transcriptOf(
+  events: Array<[string, Record<string, unknown>]>,
+  rows: unknown[] = [],
+): Transcript {
+  const raw = new RawTable();
+  let activity: TaskActivity = emptyActivity;
+  events.forEach(([stream, data], i) => {
+    const payload = { runId: RUN, seq: i + 1, stream, ts: 1_000 + i, sessionKey: KEY, data };
+    activity = applyAgentEvent(activity, payload, { sessionKey: KEY, now: 5_000, raw }).activity;
+  });
+  const transcript: Transcript = {
+    ...activity,
+    sessionKey: KEY,
+    status: "ready",
+    items: mapHistory(rows),
+    error: null,
+    hasMore: false,
+    live: null,
+    linkedRuns: {},
+    interSession: [],
+    mcpTools: {},
+    loadedAt: 1,
+  };
+  return enforceState({ ...initialState, transcripts: { [KEY]: transcript } }).transcripts[KEY]!;
+}
+
+/** The conversation's drawing of the run's history rows and of the run itself. */
+function draw(transcript: Transcript): string {
+  const run = transcript.runs[0]!;
+  const bridge = {
+    invoke: () => Promise.reject(new Error("not in this test")),
+    send: () => Promise.reject(new Error("not in this test")),
+  } as unknown as ClawtrateBridge;
+  const scope = createElement(
+    ActionScope,
+    {
+      taskKey: KEY,
+      transcript,
+      engineRuns: [run],
+      lost: false,
+      readOnly: true,
+      ctx: readingContextOf(transcript),
+    },
+    ...transcript.items.map((item) => createElement(ItemFeed, { key: item.id, itemId: item.id })),
+    createElement(RunFeed, {
+      runId: RUN,
+      reply: (each: Run) => createElement(RunReply, { run: each }),
+    }),
+  );
+  return renderToStaticMarkup(
+    createElement(BridgeProvider, {
+      bridge,
+      children: createElement(CardScope, { taskKey: KEY, transcript, children: scope }),
+    }),
+  );
+}
+
+const count = (html: string, text: string) => html.split(text).length - 1;
+const said = (itemId: string, text: string): Array<[string, Record<string, unknown>]> => [
+  ["assistant", { text, delta: text, itemId }],
+];
+const call = (id: string): Array<[string, Record<string, unknown>]> => [
+  ["item", { itemId: `tool:${id}`, toolCallId: id, name: "ls", kind: "tool", phase: "start" }],
+  ["tool", { toolCallId: id, name: "ls", phase: "start", args: { path: "." } }],
+  ["tool", { toolCallId: id, name: "ls", phase: "result", result: { content: [] } }],
+  ["item", { itemId: `tool:${id}`, toolCallId: id, name: "ls", kind: "tool", phase: "end" }],
+];
+const start: Array<[string, Record<string, unknown>]> = [["lifecycle", { phase: "start" }]];
+
+describe("F-088: text beside a call is known by its item, never by its words", () => {
+  it("two items with the same words, each beside its own call, are each drawn", () => {
+    const html = draw(
+      transcriptOf([
+        ...start,
+        ...said("m:1", "Checking logs."),
+        ...call("c1"),
+        ...said("m:2", "Checking logs."),
+        ...call("c2"),
+        ...said("m:3", "Both logs are clean."),
+      ]),
+    );
+    expect(count(html, "Checking logs.")).toBe(2);
+    expect(count(html, "Both logs are clean.")).toBe(1);
+  });
+
+  it("a reply with the same words as text beside an earlier call is drawn as the reply", () => {
+    const html = draw(
+      transcriptOf([
+        ...start,
+        ...said("m:1", "Checking logs."),
+        ...call("c1"),
+        ...said("m:2", "Checking logs."),
+      ]),
+    );
+    expect(count(html, "Checking logs.")).toBe(2);
+    expect(html).toContain('data-testid="live-turn"');
+  });
+
+  it("text beside a call longer than its bound is drawn once, before the call, cut as the bound says", () => {
+    const long = `First I read every log. ${"Line by line, before I answer. ".repeat(90)}The end.`;
+    expect(long.length).toBeGreaterThan(2_800);
+    const live = draw(transcriptOf([...start, ...said("m:1", long), ...call("c1")]));
+    expect(count(live, "First I read every log.")).toBe(1);
+    // The part past the bound is not drawn anywhere, and nothing is drawn as the reply.
+    expect(live).not.toContain("The end.");
+    expect(live).not.toContain('data-testid="live-turn"');
+
+    // The next item streams, and history now holds the call's row with the whole text before it.
+    const rows = [
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: long },
+          { type: "toolCall", id: "c1", name: "ls", arguments: { path: "." } },
+        ],
+        __openclaw: { id: "a1", seq: 2, runId: RUN },
+      },
+    ];
+    const later = draw(
+      transcriptOf(
+        [...start, ...said("m:1", long), ...call("c1"), ...said("m:2", "All clean.")],
+        rows,
+      ),
+    );
+    expect(count(later, "First I read every log.")).toBe(1);
+    expect(later).not.toContain("The end.");
+    expect(count(later, "All clean.")).toBe(1);
+  });
+});

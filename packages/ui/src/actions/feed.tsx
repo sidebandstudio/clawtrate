@@ -27,6 +27,7 @@ import {
   staysInView,
   type Thought,
   segmentFromStep,
+  textPlaced,
   type FeedEntry,
   type FeedGroup,
   type Preamble,
@@ -185,13 +186,22 @@ function callEntries(
   return out;
 }
 
-/** Whether the engine's run already draws this text, as text beside a call or as its reply. */
-function shownByEngine(run: Run, text: string): boolean {
-  const t = text.trim();
-  return (
-    (run.text.trim() !== "" && run.text.trim().startsWith(t)) ||
-    (run.preambles ?? []).some((p) => p.text.trim() === t)
-  );
+/**
+ * Whether the engine's run already draws text block `i` of its history item, by where the block
+ * stands, never by its words: right before a call the engine places text beside, or the last text
+ * of the run's last item, with no call after it, while the engine draws a reply.
+ */
+function shownByEngine(
+  run: Run,
+  blocks: TranscriptItem["blocks"],
+  i: number,
+  lastOfRun: boolean,
+): boolean {
+  const after = blocks.slice(i + 1).filter((block) => block.kind !== "reasoning");
+  const next = after[0];
+  if (next?.kind === "tool-call")
+    return (run.preambles ?? []).some((p) => p.beforeCall === next.callId);
+  return lastOfRun && after.length === 0 && run.text.trim() !== "" && !textPlaced(run);
 }
 
 const gap = (id: string, count: number): FeedEntry<FeedRef> => ({
@@ -312,6 +322,7 @@ function itemEntries(
   tally: Tally,
   fromEngine = false,
   record: EngineRecord | null = null,
+  lastOfRun = false,
 ): FeedEntry<FeedRef>[] {
   const reasoningSteps = run ? run.steps.filter((s) => s.kind === "reasoning") : [];
   const reasoningBlocks = item.blocks.filter((b) => b.kind === "reasoning").length;
@@ -324,7 +335,7 @@ function itemEntries(
   item.blocks.forEach((block, i) => {
     if (block.kind === "text") {
       // The engine already shows this text for its run: a preamble, or the streaming reply.
-      if (fromEngine && run && shownByEngine(run, block.text)) return;
+      if (fromEngine && run && shownByEngine(run, item.blocks, i, lastOfRun)) return;
       const head = block.text.slice(0, 64);
       const n = (seen.get(head) ?? 0) + 1;
       seen.set(head, n);
@@ -457,11 +468,9 @@ function runEntries(
     if (before === -1) entries.push(entry);
     else entries.splice(before, 0, entry);
   }
-  // While a message with a tool call streams, the gateway's chat stream carries the same text
-  // the preamble item does: it is that bubble, not a reply, and is not drawn twice.
-  const text = run.text.trim();
-  const repeats = (run.preambles ?? []).some((p) => p.text.trim().startsWith(text));
-  if (text && !repeats)
+  // The run's text is an item a call placed as the text beside it: that bubble, not a reply, and
+  // not drawn twice. Known by the item's id, never its words.
+  if (run.text.trim() && !textPlaced(run))
     entries.push({ type: "bubble", id: `reply:${run.id}`, ref: { t: "reply", run } });
   return entries;
 }
@@ -719,12 +728,11 @@ export function ActionScope({
       // holds of it keep only their text, so nothing is drawn twice and nothing only history has is lost.
       const fromEngine = run !== undefined && engineRunIds.has(run.id);
       const drawn = run ? (drawnOf.get(run.id) ?? new Set<string>()) : null;
+      const last = run !== undefined && lastItem.get(run.id) === item.id;
       if (run && drawn) drawnOf.set(run.id, drawn);
       const record =
-        run && drawn && !fromEngine
-          ? engineRecord(run, inRows, drawn, lastItem.get(run.id) === item.id, tally)
-          : null;
-      const entries = itemEntries(item, run, index, skip, cards, tally, fromEngine, record);
+        run && drawn && !fromEngine ? engineRecord(run, inRows, drawn, last, tally) : null;
+      const entries = itemEntries(item, run, index, skip, cards, tally, fromEngine, record, last);
       const placed = { pictures: placePictures(item, entries), files: placeFiles(item, entries) };
       built.push({ id: item.id, entries, revision: run?.reasoningRevision ?? 0, placed });
     }

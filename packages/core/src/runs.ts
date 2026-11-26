@@ -578,6 +578,12 @@ export type Run = {
 export type Preamble = {
   /** The gateway's item id. */
   id: string;
+  /**
+   * The `assistant` stream's item whose text this is, as its call started: the run's text while
+   * that item is the run's (`Run.textItemId`) is drawn here, not as the reply. Absent when the
+   * stream had none.
+   */
+  item?: string;
   text: string;
   /** The item's `end` arrived: no caret. */
   ended: boolean;
@@ -2795,20 +2801,38 @@ function applyItem(run: Run, data: RawRecord, ts: number, ctx: EngineContext): R
 }
 
 /**
- * As a tool call starts, the text the model was writing on the `assistant` stream is text beside
- * that call when the gateway sent no `preamble` item for it. OpenClaw 2026.11.10 sends none: the
- * text is an `assistant` item of its own, and the next item would replace it. Nothing is added
- * when the gateway sent one (2026.10.6): one waits for its call, or one already holds the text.
+ * As a tool call starts, the `assistant` stream's item that was streaming is text beside that
+ * call, placed once, by its item id (`Preamble.item`), never by its words. When the gateway sent a
+ * `preamble` item that waits for this call (2026.10.6), that item holds the message's text and
+ * takes the stream's item. OpenClaw 2026.11.10 sends none: the stream's item becomes the text
+ * beside the call, and the next item would replace it. An item already placed, by an earlier call
+ * of the same message, places nothing again.
  */
 function textBesideCall(run: Run): Run {
   const itemId = run.textItemId;
-  const text = run.text.trim();
   // An item id comes only with the `assistant` stream's text, never the chat stream's.
-  if (itemId === null || !text) return run;
+  if (itemId === null || !run.text.trim() || textPlaced(run)) return run;
   const list = run.preambles ?? [];
-  if (list.some((p) => p.beforeCall === null || p.text.trim().startsWith(text))) return run;
-  const next: Preamble = { id: itemId, text: run.text, ended: true, beforeCall: null };
+  const waiting = list.findLastIndex((p) => p.beforeCall === null);
+  if (waiting !== -1)
+    return { ...run, preambles: list.map((p, i) => (i === waiting ? { ...p, item: itemId } : p)) };
+  const next: Preamble = {
+    id: itemId,
+    item: itemId,
+    text: run.text,
+    ended: true,
+    beforeCall: null,
+  };
   return { ...run, preambles: [...list, next].slice(-MAX_PREAMBLES_PER_RUN) };
+}
+
+/**
+ * The run's text is an `assistant` item a call already placed as the text beside it: it is drawn
+ * there, not again as the reply. Decided by the item's id, never by its words.
+ */
+export function textPlaced(run: Pick<Run, "textItemId" | "preambles">): boolean {
+  const itemId = run.textItemId;
+  return itemId !== null && (run.preambles ?? []).some((p) => p.item === itemId);
 }
 
 /** Text beside a tool call: its updates replace its text in place; `end` ends it. */

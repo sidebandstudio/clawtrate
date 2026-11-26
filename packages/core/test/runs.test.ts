@@ -1264,7 +1264,9 @@ describe("text beside a tool call on a gateway that sends no preamble item (Open
         ...end(10),
       ]).activity,
     );
-    expect(run.preambles).toEqual([{ id: "s:1", text: BESIDE, ended: true, beforeCall: "c1" }]);
+    expect(run.preambles).toEqual([
+      { id: "s:1", item: "s:1", text: BESIDE, ended: true, beforeCall: "c1" },
+    ]);
     expect(run.text).toBe(ANSWER);
     expect(run.state).toBe("completed");
   });
@@ -1272,14 +1274,18 @@ describe("text beside a tool call on a gateway that sends no preamble item (Open
   it("F-088: a client that did not send the message sees only the call's item, and places the text the same way", () => {
     const frames = [start, ...said(2, "s:1", BESIDE), itemTool(4, "c1", "start")];
     const live = only(play(frames).activity);
-    expect(live.preambles).toEqual([{ id: "s:1", text: BESIDE, ended: true, beforeCall: "c1" }]);
+    expect(live.preambles).toEqual([
+      { id: "s:1", item: "s:1", text: BESIDE, ended: true, beforeCall: "c1" },
+    ]);
     // Until the next text comes, the run's text is the same text: shown once, beside its call.
     expect(live.text).toBe(BESIDE);
   });
 
   it("F-088: the sender's tool start alone places it too", () => {
     const run = only(play([start, ...said(2, "s:1", BESIDE), tool(4, "c1", "start")]).activity);
-    expect(run.preambles).toEqual([{ id: "s:1", text: BESIDE, ended: true, beforeCall: "c1" }]);
+    expect(run.preambles).toEqual([
+      { id: "s:1", item: "s:1", text: BESIDE, ended: true, beforeCall: "c1" },
+    ]);
   });
 
   it("F-088: text beside each of two calls stays beside its own call, in order", () => {
@@ -1296,8 +1302,8 @@ describe("text beside a tool call on a gateway that sends no preamble item (Open
       ]).activity,
     );
     expect(run.preambles).toEqual([
-      { id: "s:1", text: BESIDE, ended: true, beforeCall: "c1" },
-      { id: "s:2", text: second, ended: true, beforeCall: "c2" },
+      { id: "s:1", item: "s:1", text: BESIDE, ended: true, beforeCall: "c1" },
+      { id: "s:2", item: "s:2", text: second, ended: true, beforeCall: "c2" },
     ]);
     expect(run.text).toBe(ANSWER);
   });
@@ -1306,7 +1312,9 @@ describe("text beside a tool call on a gateway that sends no preamble item (Open
     const run = only(
       play([start, ...said(2, "s:1", BESIDE), ...call(4, "c1"), ...call(8, "c2")]).activity,
     );
-    expect(run.preambles).toEqual([{ id: "s:1", text: BESIDE, ended: true, beforeCall: "c1" }]);
+    expect(run.preambles).toEqual([
+      { id: "s:1", item: "s:1", text: BESIDE, ended: true, beforeCall: "c1" },
+    ]);
   });
 
   it("F-088: a run keeps the texts beside its newest calls, within the bound", () => {
@@ -1325,6 +1333,26 @@ describe("text beside a tool call on a gateway that sends no preamble item (Open
     ).toBe(undefined);
     const blank = only(play([start, ...said(2, "s:1", "  \n"), ...call(4, "c1")]).activity);
     expect(blank.preambles).toBe(undefined);
+  });
+
+  it("F-088: two items with the same words are two texts, each beside its own call; a reply with those words stays the reply", () => {
+    const same = "Checking logs.";
+    const run = only(
+      play([
+        start,
+        ...said(2, "s:1", same),
+        ...call(4, "c1"),
+        ...said(8, "s:2", same),
+        ...call(10, "c2"),
+        ...said(14, "s:3", same),
+      ]).activity,
+    );
+    expect(run.preambles).toEqual([
+      { id: "s:1", item: "s:1", text: same, ended: true, beforeCall: "c1" },
+      { id: "s:2", item: "s:2", text: same, ended: true, beforeCall: "c2" },
+    ]);
+    expect(run.text).toBe(same);
+    expect(run.textItemId).toBe("s:3");
   });
 
   it("F-088: only a call's first start places text: its later events, a repeated start included, leave the text streaming after it as the reply", () => {
@@ -1368,7 +1396,7 @@ describe("text beside a tool call on a gateway that sends no preamble item (Open
       ]).activity,
     );
     expect(run.preambles).toEqual([
-      { id: "commentary-0-a1", text: BESIDE, ended: true, beforeCall: "c1" },
+      { id: "commentary-0-a1", item: "s:1", text: BESIDE, ended: true, beforeCall: "c1" },
     ]);
     // `#think #steps` on 2026.10.6: the text is only in the item.
     const quiet = only(
@@ -1391,9 +1419,13 @@ describe("text beside a tool call on a gateway that sends no preamble item (Open
           itemId: "p",
         }),
         ...call(5, "c1"),
+        // A second call of the same message, with no new text: the stream's item is placed already.
+        ...call(9, "c2"),
       ]).activity,
     );
-    expect(run.preambles).toEqual([{ id: "p", text: BESIDE, ended: true, beforeCall: "c1" }]);
+    expect(run.preambles).toEqual([
+      { id: "p", item: "s:1", text: BESIDE, ended: true, beforeCall: "c1" },
+    ]);
   });
 
   it("F-088: text with no item id, or from the chat stream alone, stays the run's text", () => {

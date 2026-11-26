@@ -400,6 +400,7 @@ const runEnding = object<RunEnding>()({
 });
 const preamble = object<Preamble>()({
   id: ID,
+  item: ID,
   text: text(MAX_BLOCK_CHARS),
   ended: FLAG,
   beforeCall: ID,
