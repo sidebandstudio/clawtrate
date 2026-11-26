@@ -171,7 +171,9 @@ export function neverRan(
   // A reply row of it in history: it ran, whatever an earlier read said. The gateway writes its
   // "failed before reply" row only for a run with no reply row.
   if (run.ranInHistory === true) return false;
-  if (run.error?.beforeReply === true) return true;
+  // The gateway writes that row too for a run that started and failed before replying (a provider
+  // error after the request went out): any evidence that it started wins over the row (#686).
+  if (run.error?.beforeReply === true) return !startSeen(run);
   return run.origin !== "history" && !startSeen(run);
 }
 

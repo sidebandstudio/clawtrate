@@ -338,14 +338,18 @@ describe("#686: a not-run line sits only under the message its run is known to h
       model: null,
       attachments: Array.from({ length: 20 }, (_, i) => file(`p${n}-${i}.jpg`)),
     }));
-    const kept = (anchorFiles: number) => {
+    const kept = (anchorFiles: number, lastBatch = 20) => {
       const items = [
         ...transcript.items.map((item) =>
           item.id === failed.anchorItemId && anchorFiles > 0
             ? { ...item, attachments: Array.from({ length: anchorFiles }, (_, i) => file(`a${i}`)) }
             : item,
         ),
-        ...later,
+        ...later.map((item, i) =>
+          i === later.length - 1
+            ? { ...item, attachments: item.attachments.slice(0, lastBatch) }
+            : item,
+        ),
       ];
       const state = enforceState({ transcripts: { [KEY]: { ...transcript, items } } } as never);
       return (state as unknown as { transcripts: Record<string, Transcript> }).transcripts[KEY]!;
@@ -356,10 +360,54 @@ describe("#686: a not-run line sits only under the message its run is known to h
     const trimmed = kept(1);
     expect(trimmed.items.find((item) => item.id === failed.anchorItemId)?.attachments).toEqual([]);
     expect(retryPlan(failed, trimmed)).toEqual({ kind: "files-unknown" });
+    // Some of its files left in the list: it had files, whatever else was cut.
+    const partly = kept(2, 19);
+    const anchor = partly.items.find((item) => item.id === failed.anchorItemId)!;
+    expect(anchor.attachments).toHaveLength(1);
+    expect(attachmentsCut(anchor)).toBe(true);
+    expect(retryPlan(failed, partly)).toEqual({ kind: "files-gone" });
     // A full list of cut paths (eight, `MAX_CUT_PATHS`) may have let the one for its files go.
     const full = Array.from({ length: 8 }, (_, i) => `blocks[${i}].text`);
     expect(attachmentsCut({ cut: full })).toBe(true);
     expect(attachmentsCut({ cut: full.slice(1) })).toBe(false);
+  });
+
+  it("a run that started, then failed before replying: the gateway's row says nothing more", () => {
+    const ctx = { raw: new RawTable(), sessionKey: KEY, now: T0 + 10_000 };
+    // History after the failure: the message, then the row the gateway writes for a run with no
+    // reply, which it writes too for a provider error after the request went out.
+    const rows = [userRow("run-a", "Back up the photos.", 1), failedRow("run-a", 2)];
+    const evidences: Array<[string, Partial<Run>]> = [
+      ["a lifecycle start", { reportedStartAt: T0 + 1 }],
+      [
+        "providerStarted",
+        {
+          ending: { stopReason: null, timeoutPhase: null, providerStarted: true, status: "error" },
+        },
+      ],
+      ["a start said after the end", { startSaid: true }],
+    ];
+    for (const [kind, evidence] of evidences) {
+      const live = [failed("provider down", { id: "run-a", messageId: "run-a", ...evidence })];
+      const { runs } = mergeHistoryRuns(live, runsFromHistory(rows, null, ctx), ctx);
+      const transcript = {
+        ...emptyActivity,
+        sessionKey: KEY,
+        status: "ready",
+        items: mapHistory(rows),
+        runs,
+        error: null,
+        hasMore: false,
+      } as Transcript;
+      const run = runs.find((each) => each.id === "run-a")!;
+      expect(run.error?.beforeReply, kind).toBe(true);
+      // The ordinary failed-turn card, with its Try again.
+      expect(endingOf(run)?.kind, kind).toBe("failed");
+      expect(retryPlan(run, transcript), kind).toMatchObject({
+        kind: "text",
+        text: "Back up the photos.",
+      });
+    }
   });
 
   it("a reply goes again as a reply only for a run known by its key", () => {
