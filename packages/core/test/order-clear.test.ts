@@ -348,6 +348,83 @@ describe("F-592: a press bound to the gateway and the bot on screen", () => {
     client.stop();
   });
 
+  it("a switch begun as the first read answers sends nothing to either gateway", async () => {
+    const { client, a, b } = await twoGateways();
+    const status = a.gateway.handlers["models.authStatus"]!;
+    let switching: Promise<void> | null = null;
+    a.gateway.handlers["models.authStatus"] = (params) => {
+      // The person points the host at the other gateway while the answer is on its way.
+      switching ??= client.connect({ url: URL_B });
+      return status(params);
+    };
+    await client.clearBotOrder(
+      "otto",
+      "acme",
+      "acme:work",
+      "unlock",
+      gatewayStamp(client.state.connection),
+    );
+    await switching;
+    await until(() => client.state.connection.gatewayUrl === URL_B);
+    expect(a.gateway.calls("models.authOrderSet")).toEqual([]);
+    expect(b.gateway.calls("models.authOrderSet")).toEqual([]);
+    expect(b.orders.otto?.acme).toEqual(["acme:work"]);
+    client.stop();
+  });
+
+  it("the client gives the press a check bound to the screen's connection: after a switch it refuses", async () => {
+    const { client, switchToB } = await twoGateways();
+    const engine = (client as unknown as { accounts: AccountsEngine }).accounts;
+    let given: ((sent: boolean) => void) | undefined;
+    engine.clearOrder = async (_bot, _provider, _account, _kind, beforeSend) => {
+      given = beforeSend;
+    };
+    await client.clearBotOrder(
+      "otto",
+      "acme",
+      "acme:work",
+      "unlock",
+      gatewayStamp(client.state.connection),
+    );
+    expect(() => given!(false)).not.toThrow();
+    await switchToB();
+    expect(() => given!(false)).toThrow(CONNECTION_CHANGED);
+    client.stop();
+  });
+
+  it("the engine asks that check before the send and before the read after", async () => {
+    const { client, a } = await twoGateways();
+    const engine = (client as unknown as { accounts: AccountsEngine }).accounts;
+    // Refusing from the first read's answer on: nothing is sent.
+    let gone = false;
+    const status = a.gateway.handlers["models.authStatus"]!;
+    a.gateway.handlers["models.authStatus"] = (params) => {
+      gone = true;
+      return status(params);
+    };
+    await engine.clearOrder("otto", "acme", "acme:work", "unlock", () => {
+      if (gone) throw new Error("changed");
+    });
+    expect(a.gateway.calls("models.authOrderSet")).toEqual([]);
+    expect(client.state.accounts.clear).toMatchObject({ status: "unsent", error: "changed" });
+    // Refusing from the send on: no read after it, and nothing said to be cleared.
+    a.gateway.handlers["models.authStatus"] = status;
+    const reads = () => a.gateway.calls("models.authStatus").length;
+    let sent = false;
+    let readsAtSend = 0;
+    await engine.clearOrder("otto", "acme", "acme:work", "unlock", (wrote) => {
+      if (wrote && !sent) {
+        sent = true;
+        readsAtSend = reads();
+      }
+      if (sent) throw new Error("changed after the send");
+    });
+    expect(a.gateway.calls("models.authOrderSet")).toHaveLength(1);
+    expect(reads()).toBe(readsAtSend);
+    expect(client.state.accounts.clear?.status).toBe("unread");
+    client.stop();
+  });
+
   it("acts on the bot it was pressed for alone: another bot shown meanwhile gets nothing", async () => {
     const { client, a } = await twoGateways();
     a.orders.pip = { acme: ["acme:home"] };
