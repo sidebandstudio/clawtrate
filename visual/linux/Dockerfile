@@ -12,8 +12,18 @@ ARG BASE=mcr.microsoft.com/playwright:v1.65.1-noble@sha256:1507cbfc550a63a6b7396
 FROM ${BASE} AS fonts
 ARG DEJAVU_URL=https://github.com/dejavu-fonts/dejavu-fonts/releases/download/version_2_37/dejavu-fonts-ttf-2.37.tar.bz2
 ARG DEJAVU_SHA256=fa9ca4d13871dd122f61258a80d01751d603b4d3ee14095d65453b4e846e17d7
-RUN apt-get update && apt-get install -y --no-install-recommends bzip2 \
-  && curl -fsSLo /tmp/dejavu.tar.bz2 "$DEJAVU_URL" \
+# An Ubuntu mirror that is mid-sync serves index files of the wrong size, so each download is retried
+# and the whole update is tried three times, 10 seconds apart (#684). `--error-on=any` makes a
+# transient fetch error fail the update too, so it is retried. Only this stage uses apt. The font
+# download is retried too.
+RUN echo 'Acquire::Retries "5";' > /etc/apt/apt.conf.d/80-retries \
+  && for attempt in 1 2 3; do \
+    apt-get update --error-on=any && break; \
+    if [ "$attempt" = 3 ]; then echo "apt-get update failed 3 times" >&2; exit 1; fi; \
+    echo "apt-get update failed, trying again in 10 seconds" >&2; sleep 10; \
+  done \
+  && apt-get install -y --no-install-recommends bzip2 \
+  && curl -fsSL --retry 5 --retry-all-errors --retry-delay 5 -o /tmp/dejavu.tar.bz2 "$DEJAVU_URL" \
   && echo "$DEJAVU_SHA256  /tmp/dejavu.tar.bz2" | sha256sum -c - \
   && mkdir /dejavu \
   && tar -xjf /tmp/dejavu.tar.bz2 -C /dejavu --strip-components=1 \

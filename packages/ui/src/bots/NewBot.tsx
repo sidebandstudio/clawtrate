@@ -494,6 +494,7 @@ export function NewBot({
               provider={provider}
               anyAccount={draft.account === GATEWAY_CHOICE}
               update={connection.openclawUpdate}
+              announce={announce}
               model={draft.model}
               list={list}
               effort={shownEffort}
