@@ -10,6 +10,9 @@
 //   before_tool_call      every tool call: its run id, call id and requester
 //                         (channel, senderIsOwner); needs no access
 //   before_message_write  a message that joins a run already under way
+//   after_tool_call       the session a `sessions_spawn` or `sessions_create`
+//                         made: every run in it is a task (C), and carries
+//                         what the run that started it had read
 
 export const KNOWN_VERSIONS = Object.freeze(["2026.10.6", "2026.11.10"]);
 
@@ -20,8 +23,12 @@ export const LIMITS = Object.freeze({
   runMs: 24 * 60 * 60 * 1000,
   /** Tool calls remembered for the tools' own lookup (2026.10.6 gives a tool no run id). */
   calls: 2048,
-  /** Runs dropped while under way, remembered so they never come back as new. */
+  /** Runs dropped, or never seen starting, remembered so they never come back as new. */
   lost: 512,
+  /** Sessions a bot's own call made (tasks), remembered so their runs are C. */
+  tasks: 512,
+  /** How long a spawn waits for its task's first run before its session is known. */
+  spawnWaitMs: 60_000,
 });
 
 /**
@@ -108,6 +115,9 @@ export function kindOf(facts) {
   const provenance = facts.provenance;
   if (facts.trigger === "cron") return "routine";
   if (facts.trigger === "heartbeat") return "check-in";
+  // A task a bot started: by its session's form (a hidden task, both versions),
+  // or because the plugin saw the call that made the session.
+  if (facts.task || /^agent:[^:]+:subagent:/i.test(facts.sessionKey ?? "")) return "task";
   if (provenance && provenance.kind !== "external_user") {
     if (provenance.kind === "inter_session") {
       if (provenance.sourceTool === "sessions_spawn") return "task";
@@ -129,10 +139,10 @@ export function kindOf(facts) {
  *   { origin: "B" | "O" | "C", read: source | null, kind, why }
  */
 export function originOf(run, requester, { versionKnown }) {
-  if (!versionKnown) return { origin: "C", read: null, kind: "unknown", why: "version" };
-  if (!run) return { origin: "C", read: null, kind: "unknown", why: "unknown-run" };
+  // A run the plugin can't vouch for may have read anything: C, with read on.
+  if (!versionKnown) return { origin: "C", read: "lost", kind: "unknown", why: "version" };
+  if (!run || run.lost) return { origin: "C", read: "lost", kind: "unknown", why: "unknown-run" };
   const read = run.readOutside?.source ?? null;
-  if (run.lost) return { origin: "C", read, kind: run.kind, why: "lost" };
   if (run.kind === "typed") {
     // The gateway's own channel says every admin connection is the owner, so
     // senderIsOwner decides nothing here; and a requester on another channel
@@ -171,7 +181,7 @@ function factsFrom(ctx) {
   };
 }
 
-/** @typedef {{ runs: number, runMs: number, calls: number, lost: number }} Limits */
+/** @typedef {{ runs: number, runMs: number, calls: number, lost: number, tasks: number, spawnWaitMs: number }} Limits */
 
 export class RunOrigins {
   /** @param {{ now?: () => number, limits?: Limits }} [options] */
@@ -188,6 +198,10 @@ export class RunOrigins {
     this.active = new Map();
     /** runIds whose message came with files, seen before the run's first prompt */
     this.attached = new Set();
+    /** session key -> what the run that made it had read: a task's session */
+    this.tasks = new Map();
+    /** bot -> spawns whose session isn't known yet: { read, at } */
+    this.spawning = new Map();
   }
 
   /** before_prompt_build: a run starts (its first model request) or goes on. */
@@ -199,15 +213,17 @@ export class RunOrigins {
       known.lastSeenAt = this.now();
       return known;
     }
-    // A run this store dropped while it was under way never comes back as new:
-    // whatever it had read is gone with it.
+    // A run this store dropped, refused or saw only mid-way never comes back as
+    // new: whatever it had read is gone with it.
     if (this.lost.has(runId)) return null;
     const facts = factsFrom(ctx);
+    const parent = this.taskOf(facts);
+    facts.task = parent !== undefined;
     const run = {
       runId,
       ...facts,
       kind: kindOf(facts),
-      readOutside: null,
+      readOutside: parent ? { ...parent, at: this.now() } : null,
       attachments: false,
       steers: 0,
       ended: false,
@@ -215,13 +231,73 @@ export class RunOrigins {
       firstSeenAt: this.now(),
       lastSeenAt: this.now(),
     };
-    if (!this.admit(run)) return null;
+    if (!this.admit(run)) {
+      this.remember(this.lost, runId, this.limits.lost);
+      return null;
+    }
     if (run.sessionKey) this.active.set(run.sessionKey, runId);
     if (this.attached.delete(runId)) {
       run.attachments = true;
       this.markRead(run, "attachment", null);
     }
     return run;
+  }
+
+  /**
+   * Whether a run's session is a task a bot's own call made, and what the run
+   * that made it had read (null for nothing): undefined when it isn't one. A
+   * spawn whose session isn't known yet takes the first new run of its bot in
+   * any session but the bot's main one, within a minute: that may take a run
+   * someone typed for a task, which errs toward doing less.
+   */
+  taskOf(facts) {
+    const key = facts.sessionKey;
+    if (key && this.tasks.has(key)) return this.tasks.get(key);
+    const waiting = facts.agentId ? this.spawning.get(facts.agentId) : undefined;
+    if (!waiting?.length || !key || /^agent:[^:]+:main$/i.test(key) || facts.trigger !== "user")
+      return undefined;
+    const fresh = waiting.filter((w) => w.at > this.now() - this.limits.spawnWaitMs);
+    const taken = fresh.shift();
+    if (fresh.length) this.spawning.set(facts.agentId, fresh);
+    else this.spawning.delete(facts.agentId);
+    if (!taken) return undefined;
+    this.rememberTask(key, taken.read);
+    return taken.read;
+  }
+
+  rememberTask(key, read) {
+    this.tasks.delete(key);
+    this.tasks.set(key, read);
+    while (this.tasks.size > this.limits.tasks) this.tasks.delete(this.tasks.keys().next().value);
+  }
+
+  /** A call that makes a task (`sessions_spawn`, `sessions_create`) passed: its first run is a task. */
+  sawSpawn(run, bot) {
+    if (!bot) return;
+    const read = run?.readOutside
+      ? { source: run.readOutside.source, tool: run.readOutside.tool }
+      : null;
+    const list = (this.spawning.get(bot) ?? []).slice(-15);
+    list.push({ read, at: this.now() });
+    this.spawning.set(bot, list);
+  }
+
+  /**
+   * The session that call made, from its result: every run in it is a task,
+   * those already started included, and carries what the starting run had read.
+   */
+  sawSpawned(run, sessionKey) {
+    if (!sessionKey) return;
+    const read = run?.readOutside
+      ? { source: run.readOutside.source, tool: run.readOutside.tool }
+      : null;
+    this.rememberTask(sessionKey, read);
+    for (const held of this.runs.values()) {
+      if (held.sessionKey !== sessionKey) continue;
+      held.kind = "task";
+      held.task = true;
+      if (read && !held.readOutside) held.readOutside = { ...read, at: this.now() };
+    }
   }
 
   /** Room for one more run: expired runs leave, then ended ones; else it isn't held. */
@@ -273,7 +349,10 @@ export class RunOrigins {
   /**
    * before_message_write: a person's or another session's message written
    * into a session while a run is under way joins that run (a steer). One no
-   * person typed (another bot's, the system's) is outside content for it.
+   * person typed (another bot's, the system's) is outside content for it. So
+   * is any steer into a chat app's run: in a shared chat it may be anyone's,
+   * and no record will ever tell. A steer into a typed run is counted for
+   * Clawtrate's own record, which will tell whether its device sent it.
    */
   sawMessage(event, ctx) {
     const message = event?.message;
@@ -291,6 +370,7 @@ export class RunOrigins {
       return;
     }
     run.steers += 1;
+    if (run.kind === "chat-app") this.markRead(run, "steer", null);
   }
 
   /** before_tool_call: which run the call is in, remembered for the tool's own lookup. */
@@ -302,7 +382,19 @@ export class RunOrigins {
       this.calls.set(`${sessionKey}\0${callId}`, runId);
       while (this.calls.size > this.limits.calls) this.calls.delete(this.calls.keys().next().value);
     }
-    return runId ? this.lookup(runId) : null;
+    return runId ? this.seen(runId) : null;
+  }
+
+  /**
+   * A run a call or a result names: held, or lost. A run neither held nor lost
+   * started before the plugin saw it (loaded, enabled or given conversation
+   * access mid-way): it is lost from now on, so it never comes back as new.
+   */
+  seen(runId) {
+    const run = this.lookup(runId);
+    if (run) return run;
+    this.remember(this.lost, runId, this.limits.lost);
+    return { runId, kind: "unknown", lost: true };
   }
 
   /** A held run, or a lost one as `{ lost: true }`, or null. */

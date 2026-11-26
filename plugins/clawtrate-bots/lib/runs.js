@@ -3,6 +3,33 @@
 
 import { DESCRIPTIONS, botsAnswer, hereAnswer, readLimit, tasksAnswer } from "./here.js";
 import { KNOWN_VERSIONS, RunOrigins, originOf, readsOutside, sourceOf } from "./origins.js";
+import { readParam } from "./params.js";
+
+/** The calls that make a task: a bot's own or another bot's (2026.11.10 adds `sessions_create`). */
+const MAKES_TASK = new Set(["sessions_spawn", "sessions_create"]);
+
+/** The session a task-making call's result names, from its details or its JSON text. */
+export function madeSession(result) {
+  const pick = (v) =>
+    isObject(v)
+      ? typeof v.childSessionKey === "string"
+        ? v.childSessionKey
+        : typeof v.sessionKey === "string"
+          ? v.sessionKey
+          : null
+      : null;
+  const direct = pick(result?.details) ?? pick(result);
+  if (direct) return direct;
+  for (const block of Array.isArray(result?.content) ? result.content : []) {
+    try {
+      const found = pick(JSON.parse(String(block?.text ?? "")));
+      if (found) return found;
+    } catch {
+      // not JSON
+    }
+  }
+  return null;
+}
 
 export const READ_TOOLS = Object.freeze(["clawtrate_here", "clawtrate_tasks", "clawtrate_bots"]);
 const NONE = { type: "object", additionalProperties: false, properties: {} };
@@ -150,13 +177,18 @@ export function createRuns(api, options = {}) {
   });
   api.on("agent_end", (_event, ctx) => origins.sawEnd(ctx));
   api.on("after_tool_call", (event, ctx) => {
-    if (!readsOutside(event)) return;
-    const run = origins.runForTool({
-      runId: event?.runId ?? ctx?.runId,
-      sessionKey: ctx?.sessionKey,
-      toolCallId: event?.toolCallId ?? ctx?.toolCallId,
-    });
-    if (run && !run.lost) origins.markRead(run, sourceOf(event.toolName), event.toolName);
+    const runId = event?.runId ?? ctx?.runId;
+    const run =
+      typeof runId === "string" && runId
+        ? origins.seen(runId)
+        : origins.runForTool({
+            sessionKey: ctx?.sessionKey,
+            toolCallId: event?.toolCallId ?? ctx?.toolCallId,
+          });
+    if (MAKES_TASK.has(String(event?.toolName)) && !event?.error)
+      origins.sawSpawned(run, madeSession(event?.result));
+    if (readsOutside(event) && run && !run.lost)
+      origins.markRead(run, sourceOf(event.toolName), event.toolName);
   });
 
   /**
@@ -169,8 +201,19 @@ export function createRuns(api, options = {}) {
     const origin = originOf(run, ctx?.requester, { versionKnown: known });
     return { run, origin };
   }
-  function afterDecision(run, event, allowed) {
-    if (allowed && run && !run.lost && readsOutside(event))
+  function afterDecision(run, event, allowed, ctx) {
+    if (!allowed) return;
+    // A task's first run may start before its result comes back: wait for it.
+    if (MAKES_TASK.has(String(event?.toolName))) {
+      let bot;
+      try {
+        bot = readParam(event?.params, "agentId");
+      } catch {
+        // Two spellings disagree: the hold refuses it, and nothing starts.
+      }
+      origins.sawSpawn(run, (bot ?? ctx?.agentId ?? run?.agentId ?? "").toLowerCase() || null);
+    }
+    if (run && !run.lost && readsOutside(event))
       origins.markRead(run, sourceOf(event.toolName), event.toolName);
   }
 
@@ -218,10 +261,17 @@ export function createRuns(api, options = {}) {
       if (state !== undefined && !["working", "done", "failed"].includes(state))
         throw new Error("state must be working, done or failed.");
       const agentId = toolCtx?.agentId;
-      const rows = sessions(agentId)
-        .filter?.(
-          (s) => typeof s?.sessionKey === "string" && s.sessionKey.startsWith(`agent:${agentId}:`),
-        )
+      // Its own tasks, and the tasks it started under other bots (design section 8).
+      const others = botsFacts(config(), agentId).map((b) => b.id);
+      const mine = (s) =>
+        typeof s?.sessionKey === "string" && s.sessionKey.startsWith(`agent:${agentId}:`);
+      const startedByMe = (s) =>
+        typeof s?.entry?.spawnedBy === "string" &&
+        s.entry.spawnedBy.startsWith(`agent:${agentId}:`);
+      const rows = [
+        ...(sessions(agentId).filter?.(mine) ?? []),
+        ...others.flatMap((other) => sessions(other).filter?.(startedByMe) ?? []),
+      ]
         .map((s) => taskOf(s.sessionKey, s.entry, agentId))
         .sort((a, b) => (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0));
       return { ...tasksAnswer({ tasks: rows ?? [], limit, state }), source: "titles" };

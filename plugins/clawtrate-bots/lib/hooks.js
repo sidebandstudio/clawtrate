@@ -11,7 +11,7 @@ export function createHooks(api, options = {}) {
   api.on("before_tool_call", (event, ctx) => {
     try {
       const { run } = runs.sawCall(event, ctx);
-      runs.afterDecision(run, event, true);
+      runs.afterDecision(run, event, true, ctx);
     } catch (error) {
       api.logger?.warn?.(
         `clawtrate-bots: couldn't record a ${event?.toolName} call: ${error?.message}`,

@@ -153,8 +153,12 @@ async function patchConfig(ctx: BotsContext, patch: JsonRecord): Promise<void> {
   expect(patched.ok === true, `config.patch was refused: ${show(patched)}`);
   const deadline = Date.now() + 30_000;
   while (Date.now() < deadline) {
-    const now = rec(await admin.request("config.get", {}).catch(() => null)) as Revision;
+    // A read that fails proves nothing: wait and read again.
+    const read = await admin.request("config.get", {}).catch(() => null);
+    const now = rec(read) as Revision;
     if (
+      read !== null &&
+      typeof now.configRevisionHash === "string" &&
       (patched.noop === true || now.configRevisionHash !== before.configRevisionHash) &&
       now.appliedConfigHash === now.configRevisionHash
     )
@@ -164,18 +168,24 @@ async function patchConfig(ctx: BotsContext, patch: JsonRecord): Promise<void> {
   throw new BotsCheckFailure("the gateway did not apply the patched config within 30 seconds");
 }
 
-/** A setting for one check, put back afterwards whatever happens. */
+/**
+ * One `tools` setting for one check, put back afterwards to what it was
+ * (removed when it was absent), whatever happens.
+ */
 async function withSetting<T>(
   ctx: BotsContext,
-  on: JsonRecord,
-  off: JsonRecord,
+  key: string,
+  value: unknown,
   body: () => Promise<T>,
 ): Promise<T> {
-  await patchConfig(ctx, on);
+  const read = rec(await ctx.clients.admin.request("config.get", {}));
+  const tools = rec(rec(read.config).tools);
+  const before = Object.hasOwn(tools, key) ? tools[key] : null;
+  await patchConfig(ctx, { tools: { [key]: value } });
   try {
     return await body();
   } finally {
-    await patchConfig(ctx, off);
+    await patchConfig(ctx, { tools: { [key]: before } });
   }
 }
 
@@ -245,47 +255,37 @@ export const BOTS_CHECKS: BotsCheck[] = [
     name: "Tool Search: before_tool_call fires for a call through the catalog (tool_call; dispatch_action on 2026.11.10), with the tool's own name and the run's id",
     covers: ["#catalog-call"],
     async run(ctx, world) {
-      await withSetting(
-        ctx,
-        { tools: { toolSearch: true } },
-        { tools: { toolSearch: false } },
-        async () => {
-          const t = await turn(ctx, await task(ctx, world, "pip", "catalog"), "#catalog-call");
-          expect(
-            t.calls.some((c) => (c.name === "tool_call" || c.name === "dispatch_action") && c.ok),
-            `no tool_call ran: ${show(t.calls)}`,
-          );
-          const run = await runOf(ctx, t.runId);
-          expect(run.known === true, `the plugin doesn't know the run: ${show(run)}`);
-          expect(
-            rec(run.readOutside).tool === "sessions_list",
-            `the hook didn't see sessions_list through the catalog: ${show(run.readOutside)}`,
-          );
-        },
-      );
+      await withSetting(ctx, "toolSearch", true, async () => {
+        const t = await turn(ctx, await task(ctx, world, "pip", "catalog"), "#catalog-call");
+        expect(
+          t.calls.some((c) => (c.name === "tool_call" || c.name === "dispatch_action") && c.ok),
+          `no tool_call ran: ${show(t.calls)}`,
+        );
+        const run = await runOf(ctx, t.runId);
+        expect(run.known === true, `the plugin doesn't know the run: ${show(run)}`);
+        expect(
+          rec(run.readOutside).tool === "sessions_list",
+          `the hook didn't see sessions_list through the catalog: ${show(run.readOutside)}`,
+        );
+      });
     },
   },
   {
     name: "Code Mode: before_tool_call fires for a call from a code cell, with the tool's own name and the run's id",
     covers: ["#code-call"],
     async run(ctx, world) {
-      await withSetting(
-        ctx,
-        { tools: { codeMode: { enabled: true } } },
-        { tools: { codeMode: { enabled: false } } },
-        async () => {
-          const t = await turn(ctx, await task(ctx, world, "pip", "code"), "#code-call");
-          expect(
-            t.calls.some((c) => c.name === "exec" && c.ok),
-            `no code cell ran: ${show(t.calls)}`,
-          );
-          const run = await runOf(ctx, t.runId);
-          expect(
-            rec(run.readOutside).tool === "sessions_list",
-            `the hook didn't see sessions_list from the code cell: ${show(run.readOutside)}`,
-          );
-        },
-      );
+      await withSetting(ctx, "codeMode", { enabled: true }, async () => {
+        const t = await turn(ctx, await task(ctx, world, "pip", "code"), "#code-call");
+        expect(
+          t.calls.some((c) => c.name === "exec" && c.ok),
+          `no code cell ran: ${show(t.calls)}`,
+        );
+        const run = await runOf(ctx, t.runId);
+        expect(
+          rec(run.readOutside).tool === "sessions_list",
+          `the hook didn't see sessions_list from the code cell: ${show(run.readOutside)}`,
+        );
+      });
     },
   },
   {
@@ -337,9 +337,9 @@ export const BOTS_CHECKS: BotsCheck[] = [
     },
   },
   {
-    // On 2026.10.6 a task's run carries nothing that tells it from a typed one (design 4.1):
-    // only Clawtrate's own record does, so the plugin alone can't tell.
-    name: "a task's run is not typed here on 2026.11.10, and can't be told on 2026.10.6",
+    // On 2026.10.6 a task's run carries nothing that tells it from a typed one (design 4.1);
+    // the plugin knows it from the spawn it let through.
+    name: "a visible task's run is not typed here, on both versions (the plugin saw the spawn)",
     covers: ["#hand-off-here"],
     async run(ctx, world) {
       const t = await turn(ctx, await task(ctx, world, "pip", "task"), "#hand-off-here");
@@ -347,11 +347,30 @@ export const BOTS_CHECKS: BotsCheck[] = [
       const child = /"childSessionKey":\s*"([^"]+)"/.exec(spawned?.text ?? "")?.[1];
       expect(child, `no task started: ${show(t.calls)}`);
       const said = await toolAnswer(ctx, child, "clawtrate_here");
-      const expected =
-        ctx.clients.admin.serverVersion === "2026.10.6"
-          ? "In Clawtrate: can't tell yet"
-          : "In Clawtrate: no. This run is a task's brief";
+      const expected = "In Clawtrate: no. This run is a task's brief";
       expect(said.startsWith(expected), `the task's clawtrate_here: ${lines(said)}`);
+    },
+  },
+  {
+    name: "after a web search, the bot's own hidden task is a task, and carries what its starter read",
+    covers: ["#hand-off-hidden-here"],
+    async run(ctx, world) {
+      const t = await turn(
+        ctx,
+        await task(ctx, world, "pip", "hidden"),
+        "#search #hand-off-hidden-here",
+      );
+      const spawned = t.calls.find((c) => c.name === "sessions_spawn");
+      const child = /"childSessionKey":\s*"([^"]+)"/.exec(spawned?.text ?? "")?.[1];
+      expect(child, `no task started: ${show(t.calls)}`);
+      await toolAnswer(ctx, child, "clawtrate_here").catch(() => "");
+      const run = rec(
+        await ctx.clients.reader.request("clawtrate-bots.runs.get", { sessionKey: child }),
+      );
+      expect(
+        run.kind === "task" && rec(run.readOutside).source === "web",
+        `the hidden task's run: ${show(run)}`,
+      );
     },
   },
   {

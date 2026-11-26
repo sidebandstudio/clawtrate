@@ -335,6 +335,8 @@ export const HAND_OFF = {
 } as const;
 /** What `#hand-off-here` starts: a task whose brief asks Clawtrate's plugin where it is. */
 export const HAND_OFF_HERE = { label: "Where is this", task: "#here" } as const;
+/** What `#hand-off-hidden-here` starts: the same, hidden. */
+export const HAND_OFF_HIDDEN_HERE = { label: "Where is this, hidden", task: "#here" } as const;
 export const HAND_OFF_HIDDEN = {
   label: "Check the forecast",
   task: "Check the forecast for Saturday on the ridge. Reply in plain text.",
@@ -1017,6 +1019,16 @@ export const SCENARIOS: Scenario[] = [
     steps: () => [
       spawn(HAND_OFF_HERE, { visible: true }),
       afterSpawn(() => `I started ${HAND_OFF_HERE.label}.`),
+    ],
+  },
+  {
+    name: "hand-off-hidden-here",
+    phrase: "put where you are in a hidden task",
+    bots: "any bot, with clawtrate-bots",
+    summary: `Starts a hidden helper of the bot's own (no \`visible\`) labelled "${HAND_OFF_HIDDEN_HERE.label}", whose brief is \`#here\`.`,
+    steps: () => [
+      spawn(HAND_OFF_HIDDEN_HERE),
+      afterSpawn(() => `I started ${HAND_OFF_HIDDEN_HERE.label}.`),
     ],
   },
   {
