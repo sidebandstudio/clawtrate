@@ -3805,9 +3805,14 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
             from,
           );
           const runId = String(rec(began.payload).runId);
-          await op.terminal(runId);
-          await sleep(300);
-          TRACKED.set(runId, { calls: true, end: true, sessionKey: key });
+          // An ordinary turn, ended in a final. An event that names a scenario's phrase plays that
+          // scenario, as the same phrase from a person does; any other gets no tool call.
+          const turn = await h.wait(new RunView(op, runId, key, from));
+          const phrase = /please show your work/.test(wake.text);
+          turn.expectCalls(
+            phrase ? [await lsCall(h, "main"), await fileCall(h, "main", "AGENTS.md")] : [],
+          );
+          turn.expectEnd("final", phrase ? scriptedFinalText("#steps") : null);
           same(
             op.events
               .filter((e) => e.seq > from && rec(e.payload).runId === runId)
@@ -4052,7 +4057,11 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
           "The user wants to see reasoning first. I will reason briefly, then answer.\nThis is a coding change. I will hand it to the coding agent.",
           "two reasoning steps in one message join with a newline",
         );
-        const joined = `${besideCall}\n\nThe coding agent picked it up: ${THREAD_URL_BASE}thread-1\n\n${reply}`;
+        // The thread this run's MCP call returned, as the coding agent named it.
+        const url = String(
+          rec(view.result(`${CODING_AGENT_SERVER}__send_message`).details.structuredContent).url,
+        );
+        const joined = `${besideCall}\n\nThe coding agent picked it up: ${url}\n\n${reply}`;
         view.expectCalls(calls);
         view.expectEnd("final", joined);
         return;

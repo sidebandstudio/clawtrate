@@ -112,10 +112,51 @@ const isPromptUpdate = (message: ChatMessage) =>
 const PROMPT_UPDATE_HEADER =
   "System prompt update. The sections below replace their earlier versions; everything else in the system prompt is unchanged.";
 
+/** A workspace file's heading, as the gateway injects files: a path ending in `.md`. */
+const FILE_HEADING = /^## [^\n]*\/[^\n]*\.md\s*$/;
+/** The gateway's own marker around the parts of an attempt's prompt. */
+const ATTEMPT_MARKER = /^<!-- \/?openclaw:attempt:[A-Z]+ -->\s*$/;
+
+/**
+ * Where the section whose heading line starts at `at` ends: at the gateway's attempt marker, or
+ * at the next heading. A workspace file's section holds the file's own `##` headings, so it ends
+ * only at the next file's heading, as the memory read below takes it.
+ */
+function sectionEnd(text: string, at: number): number {
+  const headingEnd = text.indexOf("\n", at);
+  if (headingEnd === -1) return text.length;
+  const file = FILE_HEADING.test(text.slice(at, headingEnd));
+  let offset = headingEnd + 1;
+  for (const line of text.slice(headingEnd + 1).split("\n")) {
+    if (ATTEMPT_MARKER.test(line) || (line.startsWith("## ") && (!file || FILE_HEADING.test(line))))
+      return offset;
+    offset += line.length + 1;
+  }
+  return text.length;
+}
+
+/** Where each section's heading starts in `text`: every heading but a workspace file's own. */
+function sectionStarts(text: string): number[] {
+  const starts: number[] = [];
+  for (let at = text.search(/^## /m); at !== -1;) {
+    starts.push(at);
+    const end = sectionEnd(text, at);
+    const next = text.slice(end).search(/^## /m);
+    at = next === -1 ? -1 : end + next;
+  }
+  return starts;
+}
+
+/** The heading line that starts at `at`. */
+const headingAt = (text: string, at: number) => {
+  const newline = text.indexOf("\n", at);
+  return text.slice(at, newline === -1 ? undefined : newline);
+};
+
 /**
  * The system prompt a request gives the model, with 2026.11.10's updates to it applied in order:
- * each `## ` section of an update replaces the section of that heading, is added when there is
- * none, and is taken out when its body is `(removed)`. With no update, the system prompt as sent.
+ * each section of an update replaces the section of that heading, is added when there is none,
+ * and is taken out when its body is `(removed)`. With no update, the system prompt as sent.
  */
 export function effectivePrompt(messages: ChatMessage[]): string {
   let prompt = messages
@@ -124,26 +165,19 @@ export function effectivePrompt(messages: ChatMessage[]): string {
     .join("\n\n");
   for (const update of messages.filter(isPromptUpdate)) {
     const body = messageText(update).trimStart().slice(PROMPT_UPDATE_HEADER.length);
-    for (const section of body.split(/^(?=## )/m).filter((part) => part.startsWith("## "))) {
-      const heading = section.slice(
-        0,
-        section.indexOf("\n") === -1 ? undefined : section.indexOf("\n"),
+    for (const at of sectionStarts(body)) {
+      const heading = headingAt(body, at);
+      // The body as sent, from the line after the heading.
+      const content = body.slice(at + heading.length, sectionEnd(body, at)).trimEnd();
+      // The gateway's own section of that heading, never one inside a workspace file.
+      const found = sectionStarts(prompt).find(
+        (start) => headingAt(prompt, start).trimEnd() === heading.trimEnd(),
       );
-      // The body as sent, from the line after the heading, without the attempt marker after it.
-      const content = section
-        .slice(heading.length)
-        .replace(/\n<!-- \/?openclaw:attempt:[A-Z]+ -->[\s\S]*$/, "")
-        .trimEnd();
-      const at = prompt.search(
-        new RegExp(`^${heading.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\s*$`, "m"),
-      );
-      const next = at === -1 ? -1 : prompt.slice(at + heading.length).search(/^(## |<!-- )/m);
-      const end = at === -1 ? -1 : next === -1 ? prompt.length : at + heading.length + next;
       const replacement = content.trim() === "(removed)" ? "" : `${heading}${content}\n\n`;
       prompt =
-        at === -1
+        found === undefined
           ? `${prompt}\n\n${replacement}`
-          : prompt.slice(0, at) + replacement + prompt.slice(end);
+          : prompt.slice(0, found) + replacement + prompt.slice(sectionEnd(prompt, found));
     }
   }
   return prompt;
@@ -331,10 +365,15 @@ export function planReply(
       .map((prompt) => prompt.split("\n<!-- /openclaw:attempt:STABLE -->", 1)[0]!)
       .findLast((prompt) => /^## .*\/MEMORY\.md\s*$/m.test(prompt))
       // A heading stops the extract only when it names another workspace file, as the
-      // gateway's injected-file headings do; a `##` inside the memory itself does not.
-      ?.match(/^## .*\/MEMORY\.md\s*\n([\s\S]*?)(?=^## [^\n]*\/[^\n]*\.md\s*$|(?![\s\S]))/m)?.[1]
+      // gateway's injected-file headings do; a `##` inside the memory itself does not. The
+      // gateway's attempt marker stops it too.
+      ?.match(
+        /^## .*\/MEMORY\.md\s*\n([\s\S]*?)(?=^## [^\n]*\/[^\n]*\.md\s*$|^<!-- \/?openclaw:attempt:[A-Z]+ -->|(?![\s\S]))/m,
+      )?.[1]
       ?.trim();
-    return [{ kind: "text", text: memory || "I have no root memory for this task." }];
+    // An update that takes the section out leaves the bot no memory.
+    const kept = memory === "(removed)" ? "" : memory;
+    return [{ kind: "text", text: kept || "I have no root memory for this task." }];
   }
   const after = messages.slice(lastUserIndex + 1);
   // Each assistant message after the user's turn is one completed round.

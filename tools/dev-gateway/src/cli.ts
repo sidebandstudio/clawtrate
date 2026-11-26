@@ -587,7 +587,7 @@ export function devConfig(
           !(browsers && tool === "browser") &&
           !(options.images && tool === "image_generate") &&
           !(options.messageTool && tool === "message") &&
-          !(options.skillReview && tool === "skill_workshop"),
+          !(options.skillReview && form.skillReviewTools.includes(tool)),
       ),
     },
     // The stand-in coding agent: a local command server, no network, run in
