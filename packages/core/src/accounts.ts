@@ -346,6 +346,12 @@ export type LockEvidence = {
    */
   attemptSeq: number | null;
   /**
+   * The newest read of the bot sent, stamped as it is sent, whatever becomes of it (still out,
+   * failed, discarded, or applied): a press sends only when no read began after its own, or the
+   * newest one began is the one applied here as a reading (`readSeq`).
+   */
+  startedSeq: number | null;
+  /**
    * The gateway the read that gave this evidence was answered by, as its connection named it;
    * null when that wasn't known. Only a read of the gateway a press was sent to settles it.
    */
@@ -604,6 +610,7 @@ export const unreadEvidence: LockEvidence = {
   lostAt: null,
   readSeq: null,
   attemptSeq: null,
+  startedSeq: null,
   readGateway: null,
   providerRead: false,
   error: null,
@@ -1222,6 +1229,7 @@ export function evaluateOrder(
     lostAt: matched ? null : wasMatched ? at : previous.lostAt,
     readSeq: seq,
     attemptSeq: seq,
+    startedSeq: previous.startedSeq,
     readGateway: gateway,
     providerRead,
     error: null,

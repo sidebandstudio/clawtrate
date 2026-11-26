@@ -1146,6 +1146,7 @@ const lockEvidence = object<LockEvidence>()({
   lostAt: NUMBER,
   readSeq: NUMBER,
   attemptSeq: NUMBER,
+  startedSeq: NUMBER,
   readGateway: ID,
   providerRead: FLAG,
   error: text(MAX_MESSAGE_LINE_CHARS),

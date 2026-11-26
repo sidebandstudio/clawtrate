@@ -310,6 +310,11 @@ export class AccountsEngine {
     const seq = this.nextSeq();
     const startedAt = ctx.now();
     const bots = ctx.bots();
+    this.started(
+      ctx,
+      bots.map((bot) => bot.id),
+      seq,
+    );
     // Each bot whose order this read failed to read, as a failed Check now would say it.
     const failed: BotReadFailure[] = [];
     let configFailed = false;
@@ -805,6 +810,18 @@ export class AccountsEngine {
     );
   }
 
+  /** Each of `botIds` has a read sent now, numbered `seq`: stamped as sent, not as applied. */
+  private started(ctx: AccountsContext, botIds: readonly string[], seq: number): void {
+    ctx.update((a) => ({
+      ...a,
+      bindings: a.bindings.map((b) =>
+        botIds.includes(b.botId) && (b.evidence.startedSeq ?? 0) < seq
+          ? { ...b, evidence: { ...b.evidence, startedSeq: seq } }
+          : b,
+      ),
+    }));
+  }
+
   /**
    * One read of a bot's order and model, published as its binding, stamped with when it began.
    * An older read that answers after a newer one has published or failed publishes nothing: what
@@ -820,6 +837,7 @@ export class AccountsEngine {
     seq: number = this.nextSeq(),
     at: number = ctx.now(),
   ): Promise<{ view: BotView; applied: boolean; gateway: string | null } | null> {
+    this.started(ctx, [botId], seq);
     const on = ctx.readStamp();
     const [answer, config] = await Promise.all([
       ctx.request("models.authStatus", { agentId: botId, refresh: true }),
@@ -968,14 +986,12 @@ export class AccountsEngine {
       publish({ status: "unsent", error: providerNotListed(provider) });
       return;
     }
-    // The newest attempt begun after it failed (none has succeeded since): it confirmed nothing,
-    // and the order may have changed under it, so nothing is sent.
-    if (
-      latest !== undefined &&
-      latest.evidence.attemptSeq !== null &&
-      latest.evidence.attemptSeq > firstSeq &&
-      latest.evidence.attemptSeq !== latest.evidence.readSeq
-    ) {
+    // Any read of the bot sent after this one (a load, Check now, a sign-in's read): only once the
+    // newest of them has been applied here as a reading may the press go on. Still out, failed, or
+    // dropped with the rest of its load, it confirmed nothing, so nothing is sent: what this rests
+    // on is when each read was sent, never whether a failure was recorded.
+    const started = latest?.evidence.startedSeq ?? null;
+    if (started !== null && started > firstSeq && latest!.evidence.readSeq !== started) {
       publish({ status: "unsent", error: unconfirmedOrder(kind) });
       return;
     }
@@ -1490,6 +1506,7 @@ export class AccountsEngine {
       // Neither read is shown as the bot's order, but one that fails is its newest attempt, as
       // a failed Check now: a press begun before it sends nothing after it.
       const seq = this.nextSeq();
+      this.started(ctx, other ? [signIn.forBot, other] : [signIn.forBot], seq);
       const read = (agentId: string) =>
         ctx
           .request("models.authStatus", { agentId, refresh: true })

@@ -1090,6 +1090,144 @@ describe("F-592: never clear what the person didn't confirm", () => {
     client.stop();
   });
 
+  /**
+   * Otto locked to Work, the press out with its read before the send held (its status answered
+   * Work alone, its config answer held), and the clock fixed. `release` lets that read finish.
+   */
+  async function heldPress() {
+    const ready = await locked();
+    const get = ready.fake.gateway.handlers["config.get"]!;
+    const held = deferred<void>();
+    let holding = false;
+    ready.fake.gateway.handlers["config.get"] = async (params) => {
+      const answer = get(params);
+      if (!holding) {
+        holding = true;
+        await held.promise;
+      }
+      return answer;
+    };
+    const restore = fixedClock();
+    const pressed = ready.press();
+    await until(() => holding);
+    const release = async () => {
+      held.resolve();
+      await pressed;
+    };
+    return { ...ready, release, restore };
+  }
+
+  /** Each bot's next `models.authStatus` held until its own release; the others answer. */
+  function holdStatusOf(fake: AccountsGateway, botId: string) {
+    const status = fake.gateway.handlers["models.authStatus"]!;
+    const held = deferred<void>();
+    let asked = false;
+    fake.gateway.handlers["models.authStatus"] = async (params) => {
+      if ((params as { agentId: string }).agentId === botId && !asked) {
+        asked = true;
+        await held.promise;
+      }
+      return status(params);
+    };
+    return { asked: () => asked, release: () => held.resolve() };
+  }
+
+  it("a newer load fails for Otto while its read for Pip is still out: nothing is sent, Home stays", async () => {
+    const { client, fake, accounts, release, restore } = await heldPress();
+    try {
+      fake.orders.otto = { acme: ["acme:home"] };
+      // The load's request for Otto fails at once; its failure is recorded only when the load
+      // ends, which waits for Pip's.
+      const pip = holdStatusOf(fake, "pip");
+      fake.failStatusFor = "otto";
+      const loading = client.refreshAccounts();
+      await until(() => pip.asked());
+      await until(() =>
+        fake.gateway
+          .calls("models.authStatus")
+          .some((each) => (each as { agentId: string }).agentId === "otto"),
+      );
+      fake.failStatusFor = null;
+      await release();
+      expect(fake.gateway.calls("models.authOrderSet")).toHaveLength(0);
+      expect(fake.orders.otto?.acme).toEqual(["acme:home"]);
+      expect(accounts().clear).toMatchObject({
+        status: "unsent",
+        error: unconfirmedOrder("unlock"),
+      });
+      pip.release();
+      await loading;
+      expect(shown(accounts().clear!, otto(accounts()))).toBe("unsent");
+    } finally {
+      restore();
+    }
+    client.stop();
+  });
+
+  it("a newer load reads Home for Otto but fails for Pip, so Otto's reading is dropped: nothing is sent", async () => {
+    const { client, fake, accounts, release, restore } = await heldPress();
+    try {
+      fake.orders.otto = { acme: ["acme:home"] };
+      fake.failStatusFor = "pip";
+      await client.refreshAccounts();
+      expect(accounts().status).toBe("error");
+      // Otto's own read answered; it went with the rest of the load, so the page still shows Work.
+      expect(otto(accounts()).order).toMatchObject({ ids: ["acme:work"], stored: true });
+      fake.failStatusFor = null;
+      await release();
+      expect(fake.gateway.calls("models.authOrderSet")).toHaveLength(0);
+      expect(fake.orders.otto?.acme).toEqual(["acme:home"]);
+      expect(accounts().clear).toMatchObject({
+        status: "unsent",
+        error: unconfirmedOrder("unlock"),
+      });
+    } finally {
+      restore();
+    }
+    client.stop();
+  });
+
+  it("a newer Check now still out when the press's read comes back: nothing is sent, Home stays", async () => {
+    const { client, fake, accounts, release, restore } = await heldPress();
+    try {
+      fake.orders.otto = { acme: ["acme:home"] };
+      const check = holdStatusOf(fake, "otto");
+      const checking = client.checkLock("otto");
+      await until(() => check.asked());
+      await release();
+      expect(fake.gateway.calls("models.authOrderSet")).toHaveLength(0);
+      expect(fake.orders.otto?.acme).toEqual(["acme:home"]);
+      expect(accounts().clear).toMatchObject({
+        status: "unsent",
+        error: unconfirmedOrder("unlock"),
+      });
+      check.release();
+      await checking;
+      expect(otto(accounts()).order).toMatchObject({ ids: ["acme:home"], stored: true });
+    } finally {
+      restore();
+    }
+    client.stop();
+  });
+
+  it("a newer load applied for Otto that still shows Work alone: the press goes on", async () => {
+    const { client, fake, accounts, release, restore } = await heldPress();
+    try {
+      await client.refreshAccounts();
+      expect(accounts().status).toBe("ready");
+      const evidence = otto(accounts()).evidence;
+      expect(evidence.readSeq).toBe(evidence.startedSeq);
+      await release();
+      expect(fake.gateway.calls("models.authOrderSet")).toEqual([
+        { provider: "acme", agentId: "otto" },
+      ]);
+      expect(accounts().clear?.status).toBe("cleared");
+    } finally {
+      restore();
+    }
+    client.stop();
+  });
+
   it("the read before the send that fails: unsent, and the bot's page says the read failed", async () => {
     const { client, fake, accounts, press } = await locked();
     fake.failStatusFor = "otto";
@@ -1116,7 +1254,9 @@ describe("F-592: never clear what the person didn't confirm", () => {
     });
     // As after a failed Check now: the last confirmation stands.
     expect(accountWord(otto(accounts()))).toBe("locked");
-    expect(pip().evidence).toEqual(before);
+    // Its reading is as it was; only the load's read, sent for it too, is stamped as begun.
+    expect(pip().evidence).toEqual({ ...before, startedSeq: expect.any(Number) });
+    expect(pip().evidence.startedSeq).toBeGreaterThan(before.startedSeq ?? 0);
     client.stop();
   });
 
@@ -1778,7 +1918,7 @@ describe("F-592: the answer's wait", () => {
       clear: null,
       bindings: a.bindings.map((b) => ({
         ...b,
-        evidence: { ...b.evidence, readSeq: null, attemptSeq: null },
+        evidence: { ...b.evidence, readSeq: null, attemptSeq: null, startedSeq: null },
       })),
     });
     state = fresh(state);
