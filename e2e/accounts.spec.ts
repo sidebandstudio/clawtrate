@@ -669,7 +669,7 @@ async function accountPage() {
 }
 
 test("F-476 F-490: a bot locked with the tool's command shows as Locked, and one unlocked shows as Bound", async () => {
-  test.setTimeout(120_000);
+  test.setTimeout(480_000);
   const settings = await accountPage();
   await expect(settings.getByTestId("bound-note")).toContainText(
     "Bound. Second runs on Acme · Home.",
@@ -683,7 +683,11 @@ test("F-476 F-490: a bot locked with the tool's command shows as Locked, and one
   await expect(settings.getByTestId("evidence")).toContainText("Not locked. Checked at");
   await shots("account-page-bound");
   devGateway(INSTANCE, "lock", "--agent", "second", "--provider", "acme", "acme:home");
-  await settings.getByRole("button", { name: "Check now" }).click();
+  // From OpenClaw 2026.10.10 the tool's lock stops the gateway and starts it again, as its owner
+  // does: Check now is offered once Clawtrate has reconnected.
+  const checkNow = settings.getByRole("button", { name: "Check now" });
+  await expect(checkNow).toBeEnabled({ timeout: 180_000 });
+  await checkNow.click();
   await expect(settings.getByTestId("locked-note")).toContainText(
     "Locked. Second's ordinary runs use Acme · Home only",
     { timeout: 20_000 },
@@ -695,7 +699,8 @@ test("F-476 F-490: a bot locked with the tool's command shows as Locked, and one
   // Unlocked on the gateway: Bound again, and the page says the lock is gone.
   devGateway(INSTANCE, "unlock", "--agent", "second", "--provider", "acme");
   await page.getByRole("button", { name: /^Account: / }).click();
-  await settings.getByRole("button", { name: "Check now" }).click();
+  await expect(checkNow).toBeEnabled({ timeout: 180_000 });
+  await checkNow.click();
   await expect(settings.getByTestId("bound-note")).toBeVisible({ timeout: 20_000 });
   await expect(
     settings.getByText(/The lock is gone: the gateway's order for Second changed/),
@@ -703,10 +708,14 @@ test("F-476 F-490: a bot locked with the tool's command shows as Locked, and one
 });
 
 test("F-473: changing a locked bot to another account of its provider shows the lock out of date", async () => {
-  test.setTimeout(120_000);
+  test.setTimeout(480_000);
   devGateway(INSTANCE, "lock", "--agent", "second", "--provider", "acme", "acme:home");
   const settings = await accountPage();
-  await settings.getByRole("button", { name: "Check now" }).click();
+  // From OpenClaw 2026.10.10 the tool's lock stops the gateway and starts it again, as its owner
+  // does: Check now is offered once Clawtrate has reconnected.
+  const checkNow = settings.getByRole("button", { name: "Check now" });
+  await expect(checkNow).toBeEnabled({ timeout: 180_000 });
+  await checkNow.click();
   await expect(settings.getByTestId("locked-note")).toBeVisible({ timeout: 20_000 });
   await settings.getByRole("button", { name: "Change account" }).click();
   await settings.getByRole("radio", { name: /^Acme · Work/ }).click();
@@ -882,8 +891,10 @@ async function signInKey(name: string): Promise<string> {
 }
 
 test("F-476 F-490: a locked bot whose account answers 401, 402 or 429 fails the run, and no request reaches another account", async () => {
-  // A rate-limited account is retried ten times with growing pauses: minutes on a loaded machine.
-  test.setTimeout(1_200_000);
+  // A rate-limited account is retried with growing pauses: ten times on OpenClaw 2026.10.6, minutes
+  // on a loaded machine; sixteen times with pauses up to a minute on 2026.11.10, about ten minutes.
+  // There each lock also stops the gateway and starts it again.
+  test.setTimeout(2_400_000);
   const created = await admin.request<{ agentId: string }>("agents.create", {
     name: "Fence",
     model: "acme/dev-1@acme:work",
@@ -902,7 +913,7 @@ test("F-476 F-490: a locked bot whose account answers 401, 402 or 429 fails the 
     await scripted("/scripted/accounts/fail", { account, status });
     const session = `agent:${bot}:fence-${status}`;
     const sent = await admin.send(session, "#text");
-    const end = await admin.terminal(String(sent.runId), 300_000);
+    const end = await admin.terminal(String(sent.runId), 900_000);
     expect(end.state, `the run on ${account} answering ${status}`).toBe("error");
     const requests = await requestsFor(session);
     expect(requests.length).toBeGreaterThan(0);
