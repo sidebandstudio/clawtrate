@@ -238,30 +238,30 @@ One run of [`connectors/probe.ts`](connectors/probe.ts) on each version, on a de
 
 | Step | 2026.10.6 | 2026.11.10 |
 |---|---|---|
-| `config.patch` with no `baseHash` | "config base hash required for mcp.servers.probe-notes.url, …; re-run config.get and retry with baseHash" | @@N1@@ |
-| With a hash read before another write | "config changed since last load; re-run config.get and retry" | @@N2@@ |
-| With the current hash | `ok`, `changedPaths: ["mcp.servers.probe-notes"]`, `requiresRestart: false` | @@N3@@ |
-| `config.get` of that entry | `{"url": "http://127.0.0.1:<port>/mcp", "transport": "streamable-http", "headers": {"X-Example": "__OPENCLAW_REDACTED__"}}` | @@N4@@ |
-| The same name again with another address | `ok`: the entry's address is replaced (`changedPaths: ["mcp.servers.probe-notes.url"]`). Nothing stops a write over an existing name, so the client's own taken-name check is what keeps one | @@N5@@ |
-| An address and a command together | `ok`, written | @@N6@@ |
-| `oauth: {clientId, clientSecret}` | "invalid config: mcp.servers.probe-bad.oauth: Unrecognized keys: \"clientId\", \"clientSecret\"" | @@N7@@ |
-| `url: "not an address"` | "… url: Invalid URL; … url: Expected http:// or https:// URL" | @@N8@@ |
-| `command: ""`; a command with `args: []` | Both `ok` | @@N9@@ |
-| Pip's listing before any turn | No tools; notice `mcp-stale-catalog` naming the new servers: "… changed since the current runtime catalog was discovered. MCP tools will appear here after the next agent run discovers them." | @@N10@@ |
-| Otto given `agents.entries.otto.tools.deny: [..., "probe-notes__*"]`; one turn each | Pip: `probe-notes__echo`, `mcpServer: "probe-notes"`, group `mcp`, after a 4 s turn. Otto: no tools and no notice for it. The stand-in received `initialize`, `tools/list` and the `X-Example` header | @@N11@@ |
-| The server allowed only in Pip's own `tools.allow`, not in the gateway's allowlist | After a turn, Pip's listing has none of its tools: a bot's own allow does not reach past the gateway's allowlist | @@N12@@ |
-| `mcp.authLogin` on an OAuth entry, from this client | "Open Settings on this Gateway to sign in, or use openclaw mcp login in its terminal." | @@N13@@ |
-| `mcp.authLogin` on an entry without OAuth | "This connector cannot use operator browser sign-in. Check its existing account settings." | @@N14@@ |
-| `mcp.authLogout {serverName}` on the OAuth entry | "unknown method: mcp.authLogout" | @@N15@@ |
-| `device.pair.code {code: "ABCD-EFGH"}`, a code no browser asked for | "unknown method: device.pair.code" | @@N16@@ |
-| Removing every probe entry with `null`, no `replacePaths` | "config.patch would remove entries from array path(s): mcp.servers.probe-cmd.args. Pass replacePaths …" | @@N17@@ |
-| The same naming `mcp.servers.probe-cmd.args` | `ok`; `config.get` lists only `coder`; the rules put back read as before | @@N18@@ |
+| `config.patch` with no `baseHash` | "config base hash required for mcp.servers.probe-notes.url, …; re-run config.get and retry with baseHash" | The same |
+| With a hash read before another write | "config changed since last load; re-run config.get and retry" | The same |
+| With the current hash | `ok`, `changedPaths: ["mcp.servers.probe-notes"]`, `requiresRestart: false` | The same: `ok`, `requiresRestart: false` |
+| `config.get` of that entry | `{"url": "http://127.0.0.1:<port>/mcp", "transport": "streamable-http", "headers": {"X-Example": "__OPENCLAW_REDACTED__"}}` | The same |
+| The same name again with another address | `ok`: the entry's address is replaced (`changedPaths: ["mcp.servers.probe-notes.url"]`). Nothing stops a write over an existing name, so the client's own taken-name check is what keeps one | The same: the address is replaced |
+| An address and a command together | `ok`, written | Refused: `UNAVAILABLE`, "Config validation failed: mcp.servers.probe-mixed: MCP server cannot combine \"command\" and \"url\"; remove \"command\" and stdio options for HTTP, or remove \"url\" and HTTP/auth options for stdio. …" |
+| `oauth: {clientId, clientSecret}` | "invalid config: mcp.servers.probe-bad.oauth: Unrecognized keys: \"clientId\", \"clientSecret\"" | The same |
+| `url: "not an address"` | "… url: Invalid URL; … url: Expected http:// or https:// URL" | The same |
+| `command: ""`; a command with `args: []` | Both `ok` | Both `ok`, as on 2026.10.6 |
+| Pip's listing before any turn | No tools; notice `mcp-stale-catalog` naming the new servers: "… changed since the current runtime catalog was discovered. MCP tools will appear here after the next agent run discovers them." | The same notice |
+| Otto given `agents.entries.otto.tools.deny: [..., "probe-notes__*"]`; one turn each | Pip: `probe-notes__echo`, `mcpServer: "probe-notes"`, group `mcp`, after a 4 s turn. Otto: no tools and no notice for it. The stand-in received `initialize`, `tools/list` and the `X-Example` header | The same: Pip lists `probe-notes__echo` after a 5 s turn; Otto has nothing for it; the header reached the stand-in |
+| The server allowed only in Pip's own `tools.allow`, not in the gateway's allowlist | After a turn, Pip's listing has none of its tools: a bot's own allow does not reach past the gateway's allowlist | The same (the turn took 92 s on both versions and ended without the server's tools) |
+| `mcp.authLogin` on an OAuth entry, from this client | "Open Settings on this Gateway to sign in, or use openclaw mcp login in its terminal." | "Open Settings on this Gateway to sign in, or sign in from its terminal: stop the Gateway with openclaw --profile <the instance's profile> gateway stop, run openclaw --profile <…> mcp login probe-oauth, then start the Gateway again." |
+| `mcp.authLogin` on an entry without OAuth | "This connector cannot use operator browser sign-in. Check its existing account settings." | "This MCP server cannot use operator browser sign-in. Check its existing account settings." |
+| `mcp.authLogout {serverName}` on the OAuth entry | "unknown method: mcp.authLogout" | `ok`, `{"serverName": "probe-oauth"}` (nothing was signed in, so this shows the method and its scope, not what it cleared); on the entry without OAuth: "This MCP server has no operator sign-in to clear. Check its existing account settings." |
+| `device.pair.code {code: "ABCD-EFGH"}`, a code no browser asked for | "unknown method: device.pair.code" | "No browser is waiting for this code. Check the code shown in the browser." |
+| Removing every probe entry with `null`, no `replacePaths` | "config.patch would remove entries from array path(s): mcp.servers.probe-cmd.args. Pass replacePaths …" | The same |
+| The same naming `mcp.servers.probe-cmd.args` | `ok`; `config.get` lists only `coder`; the rules put back read as before | The same |
 
 
 ## 10. Instances and cleanup
 
 - November: `d11conn` and the reviewers' instances, reset when that work was done (the first probe's runs).
-- November 26: @@INSTANCES@@
+- November 26: `c85old` (2026.10.6) and `c85new` (2026.11.10, through `OPENCLAW_BIN` to a scratch copy run on Node 24), each started with `pnpm dev-gateway start`, probed once, and reset with `pnpm dev-gateway reset` when the work was done.
 - The stand-in tool server ran inside the probe's own process and ended with it. The probe's client folder was a new temporary folder, removed when it exited.
 
 ## 11. What could not be tried here
