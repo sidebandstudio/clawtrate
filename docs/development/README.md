@@ -8,6 +8,7 @@ How to run Clawtrate from a checkout. [CONTRIBUTING.md](../../CONTRIBUTING.md) c
 - [Packaging](packaging.md): building the desktop app for macOS and Windows, signing, and the logo and icons.
 - [The first screen and the look on this computer](setup.md): why a development build looks only in a sandbox, and how to run "This computer" against a development instance.
 - [Desktop releases](releases.md) covers cutting, publishing and withdrawing a Mac beta, release candidates for Stable and Beta, signing checks and the owner's signed trial.
+- [Publishing the bots plugin to npm](plugins-publish.md): the workflow that publishes `@clawtrate/clawtrate-bots` with no stored token, its two modes and the one-time first publish.
 
 ## Setup
 

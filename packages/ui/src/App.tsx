@@ -127,6 +127,12 @@ export function App({
   const lost = status !== "connected";
   const waitingMessages = restartWaitingMessages(state);
   const openUpdates = () => openSettings("updates");
+  // Settings' Check-ins lead to a bot's routines, which the shell shows (#604).
+  const routinesLink = useRef<((botId: string) => void) | null>(null);
+  const openRoutines = useCallback((botId: string) => {
+    setSettingsOpen(false);
+    routinesLink.current?.(botId);
+  }, []);
   // A newer OpenClaw's line, in a bot's settings or near the Model menu, links here (#590).
   const openOpenClawUpdates = useCallback(() => openSettings("updates", true), [openSettings]);
   return (
@@ -152,6 +158,7 @@ export function App({
           initialSection={openSection}
           atOpenClaw={atOpenClaw}
           onClose={closeSettings}
+          onOpenRoutines={screen === "shell" ? openRoutines : null}
         />
       )}
       {screen === "shell" ? (
@@ -177,6 +184,7 @@ export function App({
             }
             onOpenSettings={openSettings}
             inert={settingsOpen}
+            routinesLinkRef={routinesLink}
           />
         </OpenOpenClawUpdates.Provider>
       ) : (

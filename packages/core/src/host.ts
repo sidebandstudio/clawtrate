@@ -89,7 +89,7 @@ export type ClawtrateHost = {
   /**
    * Resolves true only while the host keeps this device's credentials (its device
    * tokens, a saved gateway token and its key) in the system's secure storage.
-   * Full access (`ClientOptions.fullAccess`) needs it; without it, a host has none.
+   * Full access (a first pairing that asks for the six) needs it; without it, a host has none.
    */
   secureCredentials?: () => Promise<boolean>;
   /**

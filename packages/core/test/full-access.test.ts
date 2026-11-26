@@ -1,13 +1,21 @@
-// Full access behind a flag (`ClientOptions.fullAccess`; docs/decisions.md,
-// "Scopes, once, at the first pairing"):
+// Full access, with no switch (docs/decisions.md, "Scopes, once, at the first pairing"):
 // a first pairing asks for all six operator scopes, the gateway's confirmed grant is the
 // limit, a reconnect asks for exactly what is held, and an existing pairing keeps its
 // grant. It needs a host that keeps credentials in secure storage, and stays off otherwise.
 
 import { describe, expect, it } from "vitest";
 import { PROTOCOL_VERSION } from "@openclaw/gateway-protocol";
-import { ClawtrateClient, setupGrant, type ClientOptions } from "../src/client.ts";
-import { protectedGatewayUrl, validateGatewayUrl } from "../src/gateway-url.ts";
+import {
+  ClawtrateClient,
+  FULL_PAIRING_LIMIT,
+  setupGrant,
+  type ClientOptions,
+} from "../src/client.ts";
+import {
+  plainRemoteGatewayUrl,
+  protectedGatewayUrl,
+  validateGatewayUrl,
+} from "../src/gateway-url.ts";
 import type { KeyValueStore } from "../src/host.ts";
 import { FULL_SCOPES, READ_SCOPES } from "../src/scopes.ts";
 import { FakeGateway, helloOk, memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
@@ -52,7 +60,7 @@ function fullClient(
     ...(secure ? { secureCredentials: secure } : {}),
     log: (_level: string, line: string) => options.logs?.push(line),
   };
-  const client = new ClawtrateClient(host, { ...FAST, fullAccess: true, ...options.client });
+  const client = new ClawtrateClient(host, { ...FAST, ...options.client });
   return { client, storage };
 }
 
@@ -65,7 +73,7 @@ const stored = (storage: { data: Map<string, string> }) =>
     fullGrant?: boolean;
   } | null;
 
-describe("full access behind a flag", () => {
+describe("full access, with no switch", () => {
   it("with silent local pairing, the first pairing asks for the six and holds them, and a reconnect asks for exactly those", async () => {
     const gateway = grantingGateway();
     const logs: string[] = [];
@@ -171,6 +179,62 @@ describe("full access behind a flag", () => {
     client.stop();
   });
 
+  it("F-002: on a full pairing nothing later asks the gateway again: send, Stop, an approval, a question, admin, devices", async () => {
+    // The gateway granted read alone of the six: every later ask Clawtrate used to make is refused
+    // by core at once, and no request reaches the gateway (docs/decisions.md, 2026-11-25).
+    const gateway = grantingGateway(READ_SCOPES);
+    gateway.handlers["device.scopes.requestUpgrade"] = () => ({ requestId: "never" });
+    const { client } = fullClient(gateway);
+    await client.start();
+    await client.connect({ url: URL, token: SHARED });
+    await until(() => client.state.connection.status === "connected");
+    expect(client.state.connection.fullPairing).toBe(true);
+    const ask = client as unknown as { ensureScope(scope: string): Promise<void> };
+    const asks: Array<[string, () => Promise<unknown>]> = [
+      // The Request access buttons (AccessBar, Conversation, Shell, cards, Settings).
+      ["the interactive tier", () => client.requestAccess()],
+      // New bot, a bot's account, model or fallbacks (bots/parts.tsx).
+      ["admin", () => client.requestAccess("admin")],
+      // Machines' paired devices (machines/Machines.tsx).
+      ["devices", () => client.requestAccess("pairing")],
+      // The first send, a Stop, an approval and a question answer wait for their scope.
+      ["a send", () => client.createTask("main", "Hello")],
+      ["a Stop", () => ask.ensureScope("operator.write")],
+      ["an approval", () => ask.ensureScope("operator.approvals")],
+      ["a question", () => ask.ensureScope("operator.questions")],
+    ];
+    for (const [name, call] of asks) await expect(call(), name).rejects.toThrow(FULL_PAIRING_LIMIT);
+    expect(gateway.calls("device.scopes.requestUpgrade")).toEqual([]);
+    expect(gateway.connects).toHaveLength(1);
+    expect(client.state.connection.upgrade.status).not.toBe("pending");
+    client.stop();
+  });
+
+  it("a plain ws:// address on another computer is warned about, and a first pairing there asks for read", async () => {
+    for (const url of ["ws://gateway.example", "ws://openclaw-box.lan:18789", "ws://[2001:db8::1]"])
+      expect(plainRemoteGatewayUrl(url), url).toBe(true);
+    for (const url of [
+      "wss://gateway.example",
+      "ws://127.0.0.1:18789",
+      "ws://localhost:18789",
+      "ws://[::1]:18789",
+      "ws://0x7f000001",
+      "not an address",
+      "",
+    ])
+      expect(plainRemoteGatewayUrl(url), url).toBe(false);
+    const gateway = grantingGateway();
+    const { client, storage } = fullClient(gateway);
+    const plain = "ws://openclaw-box.lan:18789";
+    await client.start();
+    await client.connect({ url: plain, token: SHARED });
+    await until(() => client.state.connection.status === "connected");
+    expect(connectAt(gateway, 0).scopes).toEqual([...READ_SCOPES]);
+    expect(client.state.connection.fullPairing).toBe(false);
+    expect(JSON.parse(storage.data.get(tokenKey(plain)) ?? "null")?.fullGrant).toBeUndefined();
+    client.stop();
+  });
+
   it("an existing pairing keeps its grant: a read token asks for read, and its record is unchanged", async () => {
     const gateway = grantingGateway();
     const record = JSON.stringify({
@@ -196,7 +260,6 @@ describe("full access behind a flag", () => {
     ["a host whose secure storage isn't in use", async () => false, {}],
     ["a host whose secure storage can't say", async () => Promise.reject(new Error("no")), {}],
     ["a read-only host", async () => true, { readOnly: true }],
-    ["the flag off", async () => true, { fullAccess: false }],
   ];
   for (const [name, secure, options] of closed) {
     it(`stays off for ${name}: the first pairing asks for read alone`, async () => {
@@ -306,7 +369,6 @@ describe("full access behind a flag", () => {
     host.createWebSocket = (url) => (plain.push(url), gateway.createWebSocket(url));
     const restarted = new ClawtrateClient(host, {
       ...FAST,
-      fullAccess: true,
       localConnect: () => later.sockets,
     });
     await restarted.start();
@@ -321,7 +383,7 @@ describe("full access behind a flag", () => {
     restarted.stop();
 
     // And a restart whose host can't prove the route sends nothing at all.
-    const none = new ClawtrateClient(host, { ...FAST, fullAccess: true });
+    const none = new ClawtrateClient(host, { ...FAST });
     await none.start();
     await until(() => none.state.connection.error?.code === "LOCAL_UNVERIFIED");
     expect(gateway.connects).toHaveLength(2);
