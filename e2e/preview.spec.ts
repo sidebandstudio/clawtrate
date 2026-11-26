@@ -5,7 +5,7 @@ import { cpSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { protocolMismatch } from "../packages/core/src/connect-errors.ts";
-import { openInstance } from "../tools/dev-gateway/src/cli.ts";
+import { instanceForm, openInstance, recordedStartOptions } from "../tools/dev-gateway/src/cli.ts";
 import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
 import {
   devGateway,
@@ -699,11 +699,17 @@ test("F-059: a new task shows no context line until the gateway reports a figure
   await expect(page.getByTestId("status-line")).toBeVisible();
   await expect(page.getByRole("heading", { level: 1 })).toBeVisible();
   // The first run is still going and the gateway's row for the task has no count yet: no line at all.
+  // 2026.11.10 reports a figure already while it runs (#609), and the header shows that one.
   const running = await row();
   expect(running, "the gateway lists the new task").toBeDefined();
-  expect(running!.totalTokens).toBeUndefined();
-  await expect(page.getByTestId("task-context")).toHaveCount(0);
-  await expect(page.getByText(/^Context:/)).toHaveCount(0);
+  if (instanceForm(openInstance(INSTANCE)).contextWhileRunning) {
+    expect(running!.totalTokens).toBeGreaterThan(0);
+    await expect(page.getByTestId("task-context")).toHaveText(/^Context: [\d,]+ of [\d,]+ tokens$/);
+  } else {
+    expect(running!.totalTokens).toBeUndefined();
+    await expect(page.getByTestId("task-context")).toHaveCount(0);
+    await expect(page.getByText(/^Context:/)).toHaveCount(0);
+  }
   // Once the run ends the gateway reports one, and the header shows exactly that.
   await expect.poll(() => gatewayIdle(key), { timeout: 30_000 }).toBe(true);
   await expect.poll(async () => (await row())?.totalTokens, { timeout: 30_000 }).toBeGreaterThan(0);
@@ -1183,8 +1189,11 @@ test("F-227 F-387 F-457: Settings shows the gateway, this device and its granted
   await expect(dialog.getByTestId("gateway-facts")).toContainText("This deviceClawtrate Web · ");
   // The scopes the gateway granted, from its hello.
   await expect(dialog.getByTestId("granted-scopes")).toHaveText("operator.read");
+  // The version this run's gateway runs, as its start recorded it (#609).
+  const version = recordedStartOptions(openInstance(INSTANCE)).openclaw;
+  expect(version, "the instance records the OpenClaw it runs").toBeTruthy();
   await expect(dialog.getByTestId("gateway-facts")).toContainText(
-    "OpenClaw 2026.10.6 · protocol 4",
+    `OpenClaw ${version} · protocol 4`,
   );
 
   await dialog.getByRole("button", { name: "Disconnect" }).click();

@@ -109,6 +109,13 @@ import {
   setupOpenclaw,
 } from "./pinned.ts";
 import {
+  isOpenclawVersion,
+  OPENCLAW_VERSIONS,
+  shapeOf,
+  type OpenclawVersion,
+  type Shape,
+} from "./versions.ts";
+import {
   choosePorts,
   listInstances,
   NOT_CHECKED,
@@ -437,6 +444,11 @@ export type StartOptions = {
    * review only after `#learn` (scenarios.ts, `skillReviewReply`).
    */
   skillReview?: boolean;
+  /**
+   * The OpenClaw version the gateway runs, the start's program's (versions.ts); absent, the pin.
+   * The config is written in that version's form, and its stamps are checked against it.
+   */
+  openclaw?: OpenclawVersion;
 };
 
 /** The config the development gateway runs with. Written fresh by every start. */
@@ -448,6 +460,7 @@ export function devConfig(
   options: StartOptions = {},
   chromium?: string,
 ) {
+  const form = shapeOf(options.openclaw ?? OPENCLAW_VERSION);
   const accounts = options.accounts ? accountsConfig(ports.providerPort, stateDir) : null;
   const owner = plugins.find((plugin) => plugin.botBrowsers);
   const browsers = owner?.botBrowsers
@@ -524,7 +537,8 @@ export function devConfig(
         model: { primary: MODEL_REF },
         thinkingDefault: "low",
         systemAgent: { agentId: "main" },
-        heartbeat: { agentId: "main" },
+        // 2026.11.10 refuses the key.
+        ...(form.heartbeat ? { heartbeat: { agentId: "main" } } : {}),
         ...(options.images ? { mediaModels: { image: { primary: IMAGE_MODEL_REF } } } : {}),
       },
       // The bots are declared here so their tool policy is part of the checked
@@ -559,7 +573,8 @@ export function devConfig(
         ...(browsers ? ["browser"] : []),
         ...(options.images ? ["image_generate"] : []),
         ...(options.messageTool ? ["message"] : []),
-        ...(options.skillReview ? ["skill_workshop"] : []),
+        // 2026.11.10 adds skill_library beside skill_workshop itself (skillLibraryToolSplit).
+        ...(options.skillReview ? form.skillReviewTools : []),
       ],
       // Denied as well, so a change to the allowlist cannot bring them back:
       // tools that reach the network, manage the gateway or its installation,
@@ -567,12 +582,12 @@ export function devConfig(
       // bot browsers the browser tool is denied per bot instead (botEntries).
       // With the stand-in image provider, image_generate is offered instead, and
       // with the message tool, message, and with skill reviews, skill_workshop.
-      deny: DENIED_TOOLS.filter(
+      deny: [...DENIED_TOOLS, ...form.extraDeniedTools].filter(
         (tool) =>
           !(browsers && tool === "browser") &&
           !(options.images && tool === "image_generate") &&
           !(options.messageTool && tool === "message") &&
-          !(options.skillReview && tool === "skill_workshop"),
+          !(options.skillReview && form.skillReviewTools.includes(tool)),
       ),
     },
     // The stand-in coding agent: a local command server, no network, run in
@@ -709,7 +724,14 @@ export const DENIED_TOOLS = [
 
 /** What a plugin's contract addition is checked against. */
 export const PLUGIN_RULE: PluginRule = {
-  gatewayTools: [...GATEWAY_TOOLS, ...DENIED_TOOLS],
+  // Every listed version's own tools: a plugin may name none of them.
+  gatewayTools: [
+    ...new Set([
+      ...GATEWAY_TOOLS,
+      ...DENIED_TOOLS,
+      ...OPENCLAW_VERSIONS.flatMap((version) => shapeOf(version).addedGatewayTools),
+    ]),
+  ],
   reserved: RESERVED_PLUGIN_IDS,
   seedBots: SEED_BOTS.map((bot) => bot.id),
   scriptedProviders: ACCOUNT_PROVIDERS,
@@ -741,6 +763,7 @@ export function devConfigContract(
   options: StartOptions = {},
   chromium?: string,
 ): Contract {
+  const form = shapeOf(options.openclaw ?? OPENCLAW_VERSION);
   const contract = structuredClone(
     devConfig("", ports, stateDir, plugins, options, chromium),
   ) as unknown as Record<string, Record<string, unknown>>;
@@ -759,12 +782,11 @@ export function devConfigContract(
   // The CLI stamps the version that last wrote the config, and the migrations
   // it considers applied, whenever it writes it.
   (contract as Record<string, unknown>).meta = optional({
-    lastTouchedVersion: optional("2026.10.6"),
+    lastTouchedVersion: optional(form.version),
     lastTouchedAt: optional(matching("a time stamp", (value) => typeof value === "string")),
-    migrations: optional({
-      modelPolicyAllowlist: optional(true),
-      utilityModelSeparation: optional(true),
-    }),
+    migrations: optional(
+      Object.fromEntries(form.migrations.map((migration) => [migration, optional(true)])),
+    ),
   });
   return contract as unknown as Contract;
 }
@@ -811,6 +833,11 @@ function recordedPlugins(inst: DevInstance): DevPlugin[] {
 const renewChoice = (value: unknown) =>
   value === undefined || (BOT_BROWSER_CHOICES.renewTimeoutMs as readonly unknown[]).includes(value);
 
+/** The form of the OpenClaw version an instance's gateway runs, as its start recorded it. */
+export function instanceForm(inst: { runDir: string }): Shape {
+  return shapeOf(recordedStartOptions(inst).openclaw ?? OPENCLAW_VERSION);
+}
+
 /** What this run of the instance was started with besides plugins, beside its run file. */
 const startOptionsFile = (inst: DevInstance) => join(inst.runDir, "start-options.json");
 
@@ -830,7 +857,8 @@ export function recordedStartOptions(inst: { runDir: string }): StartOptions {
         key !== "images" &&
         key !== "messageTool" &&
         key !== "httpApi" &&
-        key !== "skillReview",
+        key !== "skillReview" &&
+        key !== "openclaw",
     ) ||
     !["boolean", "undefined"].includes(typeof (recorded as StartOptions).accounts) ||
     !["boolean", "undefined"].includes(typeof (recorded as StartOptions).defaultLocalPairing) ||
@@ -838,7 +866,9 @@ export function recordedStartOptions(inst: { runDir: string }): StartOptions {
     !["boolean", "undefined"].includes(typeof (recorded as StartOptions).messageTool) ||
     !["boolean", "undefined"].includes(typeof (recorded as StartOptions).httpApi) ||
     !["boolean", "undefined"].includes(typeof (recorded as StartOptions).skillReview) ||
-    !renewChoice((recorded as StartOptions).renewTimeoutMs)
+    !renewChoice((recorded as StartOptions).renewTimeoutMs) ||
+    ((recorded as StartOptions).openclaw !== undefined &&
+      !isOpenclawVersion((recorded as StartOptions).openclaw))
   ) {
     throw new Error(`${path} is not a record of start options`);
   }
@@ -1412,6 +1442,8 @@ export async function start(
         pluginsFile(inst),
         `${JSON.stringify(plugins.map(({ name, digest }) => ({ name, digest })))}\n`,
       );
+      // The config is written for the version the start's program is.
+      startOptions.openclaw = runner.openclawVersion();
       writeFileAtomic(startOptionsFile(inst), `${JSON.stringify(startOptions)}\n`);
       writeFreshConfig(inst, ports, runId, plugins, startOptions);
       const providerLog = openSync(join(inst.runDir, "provider.log"), "w");
@@ -2648,8 +2680,8 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
     if (selected !== null)
       throw new Error("setup is for this checkout; it does not take --instance");
     if (env.OPENCLAW_BIN) {
-      openclawProgram(env);
-      console.log(`OPENCLAW_BIN is OpenClaw ${OPENCLAW_VERSION}; nothing to set up.`);
+      const { version } = openclawProgram(env);
+      console.log(`OPENCLAW_BIN is OpenClaw ${version}; nothing to set up.`);
     } else await setupOpenclaw(PINNED_DIR, env);
     return;
   }
@@ -2700,7 +2732,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
   switch (command) {
     case "start":
     case "up":
-      // The pinned OpenClaw, set up on first use; an OPENCLAW_BIN of another version is refused.
+      // The pinned OpenClaw, set up on first use; an OPENCLAW_BIN of an unlisted version is refused.
       if (!env.OPENCLAW_BIN && !openclawReady(env)) await setupOpenclaw(PINNED_DIR, env);
       openclawProgram(env);
       return start(inst, {

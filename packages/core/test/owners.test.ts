@@ -52,8 +52,12 @@ const WALKED = new Set([
   "WaitingIndex",
   "ComputerViews",
 ]);
-/** Classes whose instances hold no collection of their own: handles. */
-const HANDLES = new Set(["Promise", "Timeout", "Immediate"]);
+/**
+ * Classes whose instances hold no collection of their own: handles. An `AbortController`'s
+ * signal holds only the listeners of the waits under way on its connection, each taken off
+ * when its wait ends (`readAgain`, "leaves no listener on its connection once a wait is over").
+ */
+const HANDLES = new Set(["Promise", "Timeout", "Immediate", "AbortController"]);
 
 /**
  * Every map, set, array, weak map and weak set reachable through own
