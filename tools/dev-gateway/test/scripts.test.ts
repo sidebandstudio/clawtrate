@@ -316,6 +316,30 @@ describe("the system prompt as the model has it now", () => {
     expect(now).not.toContain("Model one.");
   });
 
+  it("keeps a section an update adds after an added workspace file a section of its own (#659)", () => {
+    const now = effectivePrompt([
+      { role: "system", content: "Intro.\n\n## Runtime\nModel one.\n" },
+      update("## /workspace/MEMORY.md\nNotes.\n<!-- /openclaw:attempt:DYNAMIC -->"),
+      update("## Extra\nOld."),
+      update("## Extra\nNew."),
+    ]);
+    expect(now).toContain("## /workspace/MEMORY.md\nNotes.");
+    expect(now).toContain("## Extra\nNew.");
+    expect(now).not.toContain("Old.");
+    expect(now.match(/^## Extra$/gm)).toHaveLength(1);
+    expect(now.match(/^## \/workspace\/MEMORY\.md$/gm)).toHaveLength(1);
+    // Taken out again, it leaves the file's section as it was.
+    const removed = effectivePrompt([
+      { role: "system", content: "Intro.\n" },
+      update("## /workspace/MEMORY.md\nNotes."),
+      update("## Extra\nOld."),
+      update("## Extra\n(removed)"),
+    ]);
+    expect(removed).not.toContain("Extra");
+    expect(removed).not.toContain("Old.");
+    expect(removed).toContain("## /workspace/MEMORY.md\nNotes.");
+  });
+
   it("takes out a removed section, replaces a changed one and adds a new one, in order", () => {
     const now = effectivePrompt([
       system,

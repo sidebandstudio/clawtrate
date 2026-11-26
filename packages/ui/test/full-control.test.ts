@@ -62,10 +62,36 @@ describe("the consent line on the address form", () => {
     });
   }
 
-  it("a host without full control keeps its read-only line, at any address", () => {
+  it("a build that doesn't keep credentials in secure storage says why it asks for read, in one sentence, at any address", () => {
     const html = form(base, "wss://gateway.example");
     expect(html).not.toContain(CONSENT_LINE);
+    expect(html).toContain(
+      "This build of Clawtrate doesn&#x27;t keep its credentials in the system&#x27;s secure storage, so it asks for read access only.",
+    );
+  });
+
+  it("plain ws:// to another computer is warned about above Connect, before any token goes", () => {
+    const warning =
+      "This connection isn&#x27;t protected: unless the network between the two computers protects it, anyone on the path can read it, the gateway token included, and take over the session.";
+    for (const info of [base, { ...base, fullControl: true }]) {
+      const html = form(info, "ws://openclaw-box.lan:18789");
+      expect(html).toContain(warning);
+      // Above the button: the person reads it before Connect sends anything.
+      expect(html.indexOf(warning)).toBeLessThan(html.indexOf('<div class="actions">'));
+      // A screen reader hears it: announced when it appears, and describing the address and Connect.
+      const id = /<div aria-live="polite"><p class="form-warning" id="([^"]+)"/.exec(html)?.[1];
+      expect(id).toBeTruthy();
+      expect(html.split(`aria-describedby="${id}"`)).toHaveLength(3);
+    }
+    for (const url of ["wss://gateway.example", "ws://127.0.0.1:18789", "ws://localhost:18789", ""])
+      expect(form(base, url), url).not.toContain(warning);
+  });
+
+  it("a read-only host keeps its read-only line", () => {
+    const html = form({ ...base, readOnly: true }, "wss://gateway.example");
+    expect(html).not.toContain(CONSENT_LINE);
     expect(html).toContain("It asks for read access only.");
+    expect(html).not.toContain("secure storage");
   });
 });
 

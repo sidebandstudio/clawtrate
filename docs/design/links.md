@@ -57,33 +57,32 @@ bot in the rail. Open its last selected task if still available, or its most
 recent task otherwise. A link cannot name or create a task. Save the draft of
 the chat being left through the normal composer path.
 
-| State                      | What is shown and what happens                                                                                                                                                                                                                                     |
-| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Opened into an empty draft | Open the conversation. Fill the composer. Show and announce “Link text added to your draft. Nothing was sent.” Focus the field with the caret at the end. Drop the notice on edit or navigation.                                                                   |
-| Existing draft             | Open the conversation with its draft intact. Any non-empty draft counts, including whitespace. Show “Replace your draft?” and “You already have a draft in this chat with <Bot>. Replacing it discards that draft.” Buttons read “Keep draft” and “Replace draft”. |
-| Keep draft                 | Close the dialog and focus the existing draft. Escape does the same.                                                                                                                                                                                               |
-| Replace draft              | Close the dialog, replace the draft, and show the opened state.                                                                                                                                                                                                    |
+| State                      | What is shown and what happens                                                                                                                                                                                                                                                                                                                                                                       |
+| -------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Opened into an empty draft | Open the conversation. Fill the composer. Show and announce “Link text added to your draft. Nothing was sent.” Focus the field with the caret at the end. Drop the notice on edit or navigation.                                                                                                                                                                                                     |
+| Existing draft             | Open the conversation and put the link's text in place of the draft, with nothing asked ("Doing, not asking"). Any non-empty draft counts, including whitespace. Show and announce “Replaced your draft. Nothing was sent.” with “Put it back”, which restores the earlier draft exactly and drops the link's text. Keep the earlier draft until the person sends, edits past it or leaves the chat. |
 
 Use the composer and focus ring from [Visual language, section 8](visual-language.md#8-the-conversation)
 and the composer behaviour from [Conversation, section 15](conversation.md#15-the-composer-during-a-run).
 The status line above the composer uses secondary text and a polite live region.
-It never appears as a message in the transcript. The choice uses the existing
-confirmation dialog, with the title and description as its accessible name and
-description. Focus begins on “Keep draft”. Tab and Shift+Tab stay inside.
+It never appears as a message in the transcript. “Put it back” is a button in
+that line, reached by Tab from the field.
 
-At 1440, 1100 and 800 px, keep the normal rail and conversation layout and use
-the centred confirmation card. At 390 px the conversation takes the whole pane
-with Back to bots. The confirmation uses the existing bottom card with stacked
-buttons. Use the same wording, focus order and tokens in light and dark.
+At 1440, 1100 and 800 px, keep the normal rail and conversation layout, with
+the line above the composer. At 390 px the conversation takes the whole pane
+with Back to bots, and the line wraps above the composer. Use the same wording,
+focus order and tokens in light and dark. The prototype's draft states still
+show the earlier Keep draft and Replace draft choice until this conversion is
+built (`doing-not-asking.md`, row D9).
 
 ## 3. When a link cannot open
 
-Keep the current screen and drafts. Use the same confirmation card with the
+Keep the current screen and drafts. Use the existing centred card with the
 title “Can’t open link” and one “Close” button. Focus “Close”. Enter or Escape
 dismisses the card and restores focus to the previous control, or the current
 screen’s heading or title if the app just opened. The title and reason are the
-dialog’s accessible name and description. At phone width use the same bottom
-card as the draft choice. The app never retries a refused link on its own.
+dialog’s accessible name and description. At phone width use the existing bottom
+card. The app never retries a refused link on its own.
 
 Evaluate in this order. If normal startup is still loading, hold one validated
 link in memory until the existing connection and discovery have an outcome.

@@ -24,9 +24,11 @@ import { join } from "node:path";
 import {
   browserPorts,
   instancePorts,
+  lockMode,
   lockOrder,
   openInstance,
   openOperator,
+  orderBesideGateway,
 } from "../tools/dev-gateway/src/cli.ts";
 import { ACCOUNT_CLIENTS, runAccountChecks } from "../tools/dev-gateway/src/account-checks.ts";
 import { runGuideChecks } from "../tools/dev-gateway/src/guide-checks.ts";
@@ -170,12 +172,19 @@ async function main(): Promise<number> {
     let accountsFailed = 0;
     let guidesFailed = 0;
     try {
+      const mode = await lockMode(inst);
+      console.log(
+        `Account checks: lock and unlock ${mode === "live" ? "run the command beside the running gateway" : "stop the gateway, run the command and start it again"}`,
+      );
       const accounts = await runAccountChecks({
         admin,
         reader,
         providerUrl,
         stateDir: inst.stateDir,
         lock: (bot, provider, profileId) => lockOrder(inst, { bot, provider, profileId }),
+        lockMode: mode,
+        orderBeside: (bot, provider, profileId) =>
+          orderBesideGateway(inst, { bot, provider, profileId }),
       });
       for (const note of accounts.notes) console.log(`note  ${note}`);
       for (const line of accounts.differences) console.log(`differs from the design  ${line}`);
