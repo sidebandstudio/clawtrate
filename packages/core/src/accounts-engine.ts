@@ -123,6 +123,9 @@ export type AccountsContext = {
   log(message: string): void;
 };
 
+/** One bot's order a read failed to read: as `readFailed` says it on the binding. */
+type BotReadFailure = { botId: string; status: "failed" | "unavailable"; error: string };
+
 /**
  * One bot write, its optional gateway identity and the host's target its screen was read under
  * (`GatewayStamp`), and the reset count it began on.
@@ -306,8 +309,11 @@ export class AccountsEngine {
     // Where these reads stand among the engine's reads (`nextSeq`), and when they began.
     const seq = this.nextSeq();
     const startedAt = ctx.now();
+    const bots = ctx.bots();
+    // Each bot whose order this read failed to read, as a failed Check now would say it.
+    const failed: BotReadFailure[] = [];
+    let configFailed = false;
     try {
-      const bots = ctx.bots();
       // Every read asked is answered before the account read ends, a failed one too: a Refresh
       // waiting for it never asks the picker beside a read still out (#565).
       let failure: { error: unknown } | null = null;
@@ -317,8 +323,20 @@ export class AccountsEngine {
           return null;
         });
       const [config, views, prefs] = await Promise.all([
-        settle(ctx.readAgain(() => ctx.request("config.get", {}), current).then(asRecord)),
-        settle(this.readViews(bots.map((bot) => bot.id))),
+        settle(
+          ctx
+            .readAgain(() => ctx.request("config.get", {}), current)
+            .then(asRecord, (error) => {
+              configFailed = true;
+              throw error;
+            }),
+        ),
+        settle(
+          this.readViews(
+            bots.map((bot) => bot.id),
+            failed,
+          ),
+        ),
         ctx.request("users.prefs.get", {}).then(asRecord, () => null),
       ]);
       if (failure) throw (failure as { error: unknown }).error;
@@ -370,10 +388,21 @@ export class AccountsEngine {
     } catch (error) {
       // A failure of a read for another gateway is not this one's to show.
       if (resets !== this.resets) return;
+      // Each bot whose order went unread says so on its own page, as after a failed Check now, and
+      // the failure is the bot's newest attempt: a press begun before it sends nothing after it.
+      // A config read that failed, or a connection that ended, left every bot's order unread.
+      const cut = !current();
+      const shared = cut || configFailed;
+      const said = cut ? ACCOUNTS_READ_CUT_OFF : this.scrub(errorText(error));
+      for (const bot of bots) {
+        const own = failed.find((each) => each.botId === bot.id);
+        if (own) this.readFailed(ctx, bot.id, seq, own.status, cut ? said : own.error);
+        else if (shared) this.readFailed(ctx, bot.id, seq, "failed", said);
+      }
       // Its connection ended: the gateway's words from it are not published (they may echo what
       // was typed, and the sign-in's typed values are already forgotten). The screen says the
       // read didn't finish instead of waiting on it.
-      if (!current()) {
+      if (cut) {
         ctx.update((a) =>
           a.status === "loading" ? { ...a, status: "error", error: ACCOUNTS_READ_CUT_OFF } : a,
         );
@@ -562,7 +591,11 @@ export class AccountsEngine {
     return result;
   }
 
-  private async readViews(botIds: string[]): Promise<Map<string, BotView>> {
+  /** Every bot's view, in chunks; each bot whose read fails or is unavailable goes in `failed`. */
+  private async readViews(
+    botIds: string[],
+    failed: BotReadFailure[] = [],
+  ): Promise<Map<string, BotView>> {
     const views = new Map<string, BotView>();
     // A few bots at a time. Sharing is decided only from refreshed answers (row 33).
     for (let i = 0; i < botIds.length; i += ACCOUNT_READ_CONCURRENCY) {
@@ -572,18 +605,30 @@ export class AccountsEngine {
       const settled = await Promise.allSettled(
         chunk.map((agentId) => this.ctx.request("models.authStatus", { agentId, refresh: true })),
       );
-      const failed = settled.find((each) => each.status === "rejected");
-      if (failed) throw failed.reason;
-      const answers = settled.map((each) => (each as PromiseFulfilledResult<unknown>).value);
+      let first: unknown = null;
       for (let j = 0; j < chunk.length; j += 1) {
-        const view = readBotView(answers[j]);
+        const botId = chunk[j]!;
+        const each = settled[j]!;
+        let view: BotView;
+        try {
+          if (each.status === "rejected") throw each.reason;
+          view = readBotView(each.value);
+        } catch (error) {
+          failed.push({ botId, status: "failed", error: this.scrub(errorText(error)) });
+          first ??= error;
+          continue;
+        }
         // Not a reading: the last good one stands, and the screens say why there is none.
-        if (view.unavailable)
-          throw new Error(
+        if (view.unavailable) {
+          failed.push({ botId, status: "unavailable", error: view.unavailable });
+          first ??= new Error(
             `The gateway says its account status is unavailable (${view.unavailable}).`,
           );
-        views.set(chunk[j]!, view);
+          continue;
+        }
+        views.set(botId, view);
       }
+      if (first !== null) throw first;
     }
     return views;
   }
@@ -897,6 +942,8 @@ export class AccountsEngine {
     try {
       first = await this.readOrder(botId, before, ctx, firstSeq);
     } catch (error) {
+      // As Check now says a failed read.
+      this.readFailed(ctx, botId, firstSeq, "failed", this.scrub(errorText(error)));
       publish({ status: "unsent", error: errorText(error) });
       return;
     }
@@ -1440,13 +1487,25 @@ export class AccountsEngine {
     };
     try {
       const other = ctx.bots().find((bot) => bot.id !== signIn.forBot)?.id ?? null;
-      const [target, second] = await Promise.all([
+      // Neither read is shown as the bot's order, but one that fails is its newest attempt, as
+      // a failed Check now: a press begun before it sends nothing after it.
+      const seq = this.nextSeq();
+      const read = (agentId: string) =>
         ctx
-          .request("models.authStatus", { agentId: signIn.forBot, refresh: true })
-          .then(readBotView),
-        other
-          ? ctx.request("models.authStatus", { agentId: other, refresh: true }).then(readBotView)
-          : Promise.resolve(null),
+          .request("models.authStatus", { agentId, refresh: true })
+          .then((answer) => {
+            const view = readBotView(answer);
+            if (view.unavailable)
+              this.readFailed(ctx, agentId, seq, "unavailable", view.unavailable);
+            return view;
+          })
+          .catch((error: unknown) => {
+            this.readFailed(ctx, agentId, seq, "failed", this.scrub(errorText(error)));
+            throw error;
+          });
+      const [target, second] = await Promise.all([
+        read(signIn.forBot),
+        other ? read(other) : Promise.resolve(null),
       ]);
       if (target.unavailable || second?.unavailable)
         throw new Error("The gateway says its account status is unavailable.");

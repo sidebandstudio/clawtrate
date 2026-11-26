@@ -1048,6 +1048,90 @@ describe("F-592: never clear what the person didn't confirm", () => {
       client.stop();
     });
 
+  it("an accounts load that fails to read Otto while the order goes from Work to Home: nothing is sent", async () => {
+    const { client, fake, accounts, press } = await locked();
+    // The press's read before the send: its config answer held, its status Work alone.
+    const get = fake.gateway.handlers["config.get"]!;
+    const held = deferred<void>();
+    let arm = false;
+    let holding = false;
+    fake.gateway.handlers["config.get"] = async (params) => {
+      const answer = get(params);
+      if (arm && !holding) {
+        holding = true;
+        await held.promise;
+      }
+      return answer;
+    };
+    const restore = fixedClock();
+    try {
+      arm = true;
+      const pressed = press();
+      await until(() => holding);
+      fake.orders.otto = { acme: ["acme:home"] };
+      // A full accounts read whose request for Otto fails.
+      fake.failStatusFor = "otto";
+      await client.refreshAccounts();
+      expect(accounts().status).toBe("error");
+      expect(otto(accounts()).evidence.status).toBe("failed");
+      fake.failStatusFor = null;
+      held.resolve();
+      await pressed;
+      expect(fake.gateway.calls("models.authOrderSet")).toHaveLength(0);
+      expect(fake.orders.otto?.acme).toEqual(["acme:home"]);
+      expect(accounts().clear).toMatchObject({
+        status: "unsent",
+        error: unconfirmedOrder("unlock"),
+      });
+      expect(shown(accounts().clear!, otto(accounts()))).toBe("unsent");
+    } finally {
+      restore();
+    }
+    client.stop();
+  });
+
+  it("the read before the send that fails: unsent, and the bot's page says the read failed", async () => {
+    const { client, fake, accounts, press } = await locked();
+    fake.failStatusFor = "otto";
+    await press();
+    expect(fake.gateway.calls("models.authOrderSet")).toHaveLength(0);
+    expect(accounts().clear?.status).toBe("unsent");
+    expect(otto(accounts()).evidence).toMatchObject({
+      status: "failed",
+      error: "status unavailable",
+    });
+    client.stop();
+  });
+
+  it("a load that fails to read one bot says so on that bot alone; the others keep their reading", async () => {
+    const { client, fake, accounts } = await locked();
+    const pip = () => accounts().bindings.find((each) => each.botId === "pip")!;
+    const before = pip().evidence;
+    fake.failStatusFor = "otto";
+    await client.refreshAccounts();
+    expect(accounts().status).toBe("error");
+    expect(otto(accounts()).evidence).toMatchObject({
+      status: "failed",
+      error: "status unavailable",
+    });
+    // As after a failed Check now: the last confirmation stands.
+    expect(accountWord(otto(accounts()))).toBe("locked");
+    expect(pip().evidence).toEqual(before);
+    client.stop();
+  });
+
+  it("a load whose config read fails leaves every bot's order unread, as each one's Check now would", async () => {
+    const { client, fake, accounts } = await locked();
+    fake.gateway.handlers["config.get"] = () => {
+      throw new GatewayError({ code: "UNAVAILABLE", message: "config down" });
+    };
+    await client.refreshAccounts();
+    expect(accounts().status).toBe("error");
+    for (const binding of accounts().bindings)
+      expect(binding.evidence).toMatchObject({ status: "failed", error: "config down" });
+    client.stop();
+  });
+
   it("a newer read that failed and a newer one that succeeded since, finding Work alone: the press goes on", async () => {
     const { client, fake, accounts, press } = await locked();
     const get = fake.gateway.handlers["config.get"]!;
