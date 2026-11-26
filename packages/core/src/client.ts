@@ -1965,7 +1965,10 @@ export class ClawtrateClient {
   /** Waiting devices this admin connection can approve (`device-approval.ts`); its state is `deviceRequests`. */
   private readonly deviceApprovals = new DeviceApprovals({
     request: (method, params) => this.request(method, params),
-    admin: () => this.holds(ADMIN_SCOPE) && !this.options.readOnly,
+    // A setup connection publishes typed outcomes only, so it lists, approves and denies nothing,
+    // whichever path asks (a window's refresh included); its hello and events already skip it.
+    admin: () =>
+      this.holds(ADMIN_SCOPE) && !this.options.readOnly && !this.isSetup(this.settings?.url),
     pairing: () => this.holds(PAIRING_SCOPE),
     answered: (error) => error instanceof GatewayProtocolRequestError,
     now: () => this.now(),

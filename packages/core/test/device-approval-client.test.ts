@@ -6,6 +6,8 @@ import { ADMIN_SCOPES } from "../src/scopes.ts";
 import { FAST, grantingGateway, URL_A } from "./client-harness.ts";
 import { memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
 
+/** A protected address: a setup code's first pairing there asks for all six scopes. */
+const SETUP_URL = "wss://gateway.example:19950";
 const KEY_B64 = "q3J8bW2xR5tY7uN0kP4sV6aD9fG1hL3zX8cB5nM2vQw";
 const row = (requestId: string) => ({
   requestId,
@@ -44,6 +46,28 @@ describe("waiting devices on the client", () => {
     pending.push({ ...row("r2"), deviceId: "device-other", ts: 2 });
     gateway.emit("device.pair.requested", { requestId: "r2" });
     await until(() => client.state.deviceRequests?.requests.length === 2);
+    client.stop();
+  });
+
+  it("reads and publishes no list on a setup connection, though it holds admin", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["device.pair.list"] = () => ({ pending: [row("r1")], paired: [] });
+    // The first read of bots is held, so the connection stays setup's.
+    gateway.handlers["agents.list"] = () => new Promise(() => {});
+    const host = { ...testHost(gateway, memoryStorage()), secureCredentials: async () => true };
+    const client = new ClawtrateClient(host, FAST);
+    await client.start();
+    await client.connectWithSetupCode({
+      url: SETUP_URL,
+      bootstrapToken: "setup-bootstrap-0123456789abcdefghijklmnopqrstuvw",
+      expiresAtMs: Date.now() + 600_000,
+    });
+    await until(() => gateway.calls("agents.list").length === 1);
+    expect(client.state.connection.canAdmin).toBe(true);
+    // A window's refresh, the path the hello and the events don't take.
+    await client.readDeviceRequests();
+    expect(gateway.calls("device.pair.list")).toEqual([]);
+    expect(client.state.deviceRequests?.requests ?? []).toEqual([]);
     client.stop();
   });
 

@@ -492,6 +492,121 @@ describe("approving a waiting device", () => {
       kind: "not-allowed",
     });
     expect(await t.engine.refuse(id, "not-mine")).toEqual({ kind: "not-allowed" });
+    expect(t.calls.filter((call) => call === "device.pair.approve")).toHaveLength(1);
+  });
+
+  it("frees a request only by the decision that took it, across another gateway", async () => {
+    const row = pendingRow();
+    const t = await listed([row]);
+    const id = row.requestId as string;
+    let lists = 0;
+    let releaseFirst: () => void = () => {};
+    let releaseSecond: () => void = () => {};
+    t.answers["device.pair.list"] = async () => {
+      // The first decision's read again, then the second gateway's hello read, then the second
+      // decision's read again; later reads answer at once.
+      const read = (lists += 1);
+      if (read === 1) await new Promise<void>((resolve) => (releaseFirst = resolve));
+      if (read === 3) await new Promise<void>((resolve) => (releaseSecond = resolve));
+      return { pending: t.gw.pending, paired: t.gw.paired };
+    };
+    const first = t.engine.approve(id, codeOf(row), [...FULL_SCOPES]);
+    await t.settle();
+    // Another gateway, which lists a request with the same id, and a decision on it.
+    t.engine.reset();
+    t.engine.onHello();
+    await t.settle();
+    const second = t.engine.approve(id, codeOf(row), [...FULL_SCOPES]);
+    await t.settle();
+    releaseFirst();
+    expect(await first).toEqual({ kind: "interrupted" });
+    // The stale decision ended; the second still holds the request, so nothing else decides it.
+    expect(await t.engine.approve(id, codeOf(row), [...FULL_SCOPES])).toEqual({
+      kind: "not-allowed",
+    });
+    expect(await t.engine.refuse(id, "not-mine")).toEqual({ kind: "not-allowed" });
+    expect(t.calls.filter((call) => call === "device.pair.approve")).toHaveLength(0);
+    releaseSecond();
+    expect(await second).toEqual({ kind: "approved", deviceId: row.deviceId });
+    expect(t.calls.filter((call) => call === "device.pair.approve")).toHaveLength(1);
+    expect(t.calls).not.toContain("device.pair.reject");
+  });
+
+  it("takes one None of these match per request, and still denies it", async () => {
+    const row = pendingRow();
+    const t = await listed([row]);
+    const id = row.requestId as string;
+    expect(await t.engine.refuse(id, "none-match")).toEqual({ kind: "none-match" });
+    t.advance(4 * 60_000);
+    expect(await t.engine.refuse(id, "none-match")).toEqual({ kind: "not-allowed" });
+    // The quiet minutes run from the first pick: the refused one started none.
+    t.advance(60_000);
+    const next = pendingRow();
+    t.gw.pending = [next, row];
+    await t.engine.refresh();
+    t.gw.pending = [next];
+    await t.engine.refresh();
+    expect(t.state().prompt).toBe(next.requestId);
+    // "I didn't start this" still denies a request picked for.
+    t.gw.pending = [next, row];
+    await t.engine.refresh();
+    expect(await t.engine.refuse(id, "not-mine")).toEqual({ kind: "denied" });
+    expect(t.calls).toContain("device.pair.reject");
+  });
+
+  it("compares and removes the paired device read once after a lost answer", async () => {
+    const row = pendingRow();
+    const t = await listed([row]);
+    let after = 0;
+    t.answers["device.pair.approve"] = () => {
+      t.gw.pending = [];
+      t.gw.paired = [pairedOf(row, { scopes: ["operator.admin"] })];
+      t.answers["device.pair.list"] = () => {
+        // The one paired-device read; every read after it fails.
+        if ((after += 1) === 1) return { pending: [], paired: t.gw.paired };
+        throw new Error("timed out");
+      };
+      throw new Error("connection closed");
+    };
+    const decision = await t.engine.approve(row.requestId as string, codeOf(row), [...FULL_SCOPES]);
+    // The pairing that differs is removed on that one read; the removal isn't confirmed.
+    expect(t.calls).toContain("device.pair.remove");
+    expect(decision).toEqual({ kind: "undo-failed", what: ["access"], message: "timed out" });
+  });
+
+  it("confirms no removal from a read without a paired list", async () => {
+    const row = pendingRow();
+    const t = await listed([row]);
+    t.answers["device.pair.approve"] = () => {
+      t.gw.pending = [];
+      t.gw.paired = [pairedOf(row, { scopes: ["operator.admin"] })];
+      return {};
+    };
+    t.answers["device.pair.remove"] = () => {
+      // The gateway's next list answers without its paired devices.
+      t.answers["device.pair.list"] = () => ({ pending: [] });
+      return {};
+    };
+    expect(await t.engine.approve(row.requestId as string, codeOf(row), [...FULL_SCOPES])).toEqual({
+      kind: "undo-failed",
+      what: ["access"],
+      message: "The gateway's answer didn't list its paired devices.",
+    });
+    // An empty list is a confirmation.
+    const u = await listed([row]);
+    u.answers["device.pair.approve"] = () => {
+      u.gw.pending = [];
+      u.gw.paired = [pairedOf(row, { scopes: ["operator.admin"] })];
+      return {};
+    };
+    u.answers["device.pair.remove"] = () => {
+      u.answers["device.pair.list"] = () => ({ pending: [], paired: [] });
+      return {};
+    };
+    expect(await u.engine.approve(row.requestId as string, codeOf(row), [...FULL_SCOPES])).toEqual({
+      kind: "undone",
+      what: ["access"],
+    });
   });
 
   it("decides nothing from a sheet an earlier connection showed", async () => {
@@ -743,7 +858,10 @@ describe("a connection that changes during a decision", () => {
       if (step === "device.pair.approve") await t.engine.approve(id, codeOf(row), [...FULL_SCOPES]);
       else await t.engine.refuse(id, "not-mine");
       await t.settle();
-      // The hello's own read, and nothing the stale decision asked for.
+      // The hello's own read, and nothing the stale decision asked for: none queued either.
+      expect(readsAfter(t, step)).toEqual(["device.pair.list"]);
+      expect(t.delays()).toEqual([]);
+      await t.fire();
       expect(readsAfter(t, step)).toEqual(["device.pair.list"]);
     }
   });
@@ -960,6 +1078,41 @@ describe("the waiting requests", () => {
       await t.engine.refresh();
       expect(t.state().prompt).toBe(next.requestId);
     }
+  });
+
+  it("tries a failed read again, four times, each four times later, and polls no empty list", async () => {
+    const row = pendingRow();
+    const t = setup({ pending: [row] });
+    let fail = true;
+    t.answers["device.pair.list"] = () => {
+      if (fail) throw new Error("timed out");
+      return { pending: [row], paired: [] };
+    };
+    // A request already waiting when the admin connects, and the first read fails.
+    t.engine.onHello();
+    await t.settle();
+    expect(t.state()).toMatchObject({ requests: [], error: "timed out" });
+    expect(t.delays()).toEqual([1_000]);
+    fail = false;
+    await t.fire();
+    expect(t.state().requests.map((each) => each.requestId)).toEqual([row.requestId]);
+    // A read that keeps failing is tried four times, then left to an event or a refresh.
+    const u = setup();
+    u.answers["device.pair.list"] = () => {
+      throw new Error("timed out");
+    };
+    u.engine.onHello();
+    await u.settle();
+    const waits: Array<number | undefined> = [];
+    for (let i = 0; i < 6; i += 1) {
+      waits.push(...u.delays());
+      await u.fire();
+    }
+    expect(waits).toEqual([1_000, 4_000, 16_000, 64_000]);
+    expect(u.calls.filter((call) => call === "device.pair.list")).toHaveLength(5);
+    // A read that succeeds with nothing waiting sets no timer.
+    const v = await listed([]);
+    expect(v.delays()).toEqual([]);
   });
 
   it("reads a burst of events once", async () => {
