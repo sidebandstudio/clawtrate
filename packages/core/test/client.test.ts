@@ -160,7 +160,7 @@ describe("pairing instructions (A3)", () => {
     client.stop();
   });
 
-  it("falls back to the gateway owner's command with a note", async () => {
+  it("leads with OpenClaw's own page, the owner's command as the fallback", async () => {
     const gateway = pairingGateway();
     const client = new ClawtrateClient(testHost(gateway), FAST);
     await client.connect({ url: URL_B, token: "t" });
@@ -168,7 +168,9 @@ describe("pairing instructions (A3)", () => {
     expect(client.state.connection.pairing?.approveCommand).toBe(
       "openclaw devices approve req-123",
     );
-    expect(client.state.connection.pairing?.approveNote).toMatch(/gateway's owner/);
+    expect(client.state.connection.pairing?.approveNote).toMatch(
+      /^On the computer running OpenClaw, approve this device in OpenClaw's own page under Devices/,
+    );
     client.stop();
   });
 });

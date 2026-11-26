@@ -129,7 +129,9 @@ describe("scope step-up (B1, F-002)", () => {
       scopes: [...INTERACTIVE_SCOPES],
       approveCommand: "openclaw devices approve up-1",
     });
-    expect(client.state.connection.upgrade.approveNote).toMatch(/gateway's owner/);
+    expect(client.state.connection.upgrade.approveNote).toMatch(
+      /^On the computer running OpenClaw, approve this device in OpenClaw's own page under Devices/,
+    );
 
     wait.resolve({
       status: "approved",
