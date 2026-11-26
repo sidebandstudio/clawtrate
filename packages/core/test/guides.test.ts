@@ -522,6 +522,35 @@ describe("the switch and the rows' changes", () => {
     expect(asked.store.get("pip")).toBe(withSection(BOT_FILE));
   });
 
+  it("by itself, writes nothing while the gateway's settings file is invalid, as its answer says", async () => {
+    // The gateway answers a settings file it can't read or parse with `valid: false` and an empty
+    // `config`: every setting reads unset, so its limit would read as 20,000 though it may be lower.
+    // 9,500 characters fit a gateway limit of 10,000 whole; with the section they wouldn't.
+    const long = `# Pip\n${"x".repeat(9_500)}\n`;
+    for (const change of [{ action: "auto" }, { action: "switch", on: true }] as GuidesChange[]) {
+      const files = fakeFiles({ pip: long });
+      const request: typeof files.request = (method, params) =>
+        method === "config.get"
+          ? Promise.resolve({ valid: false, config: {}, hash: "h", issues: [] })
+          : files.request(method, params);
+      const result = await applyGuidesChange(request, null, change);
+      expect(files.sets, change.action).toEqual([]);
+      expect(result.record?.bots ?? [], change.action).not.toContain("pip");
+    }
+    // The same file under a valid config that sets no limit is written.
+    const valid = fakeFiles({ pip: long }, {}, {}, {});
+    await applyGuidesChange(valid.request, null, { action: "auto" });
+    expect(valid.sets).toHaveLength(1);
+    // The person's own Add doesn't depend on the limit.
+    const asked = fakeFiles({ pip: long });
+    const askedRequest: typeof asked.request = (method, params) =>
+      method === "config.get"
+        ? Promise.resolve({ valid: false, config: {}, hash: "h", issues: [] })
+        : asked.request(method, params);
+    await applyGuidesChange(askedRequest, null, { action: "add", bots: ["pip"] });
+    expect(asked.sets).toHaveLength(1);
+  });
+
   it("a row's Remove of a section that changed since Settings read it says so, and leaves it", async () => {
     const changed = withSection(BOT_FILE).replace("Be warm", "Be cold");
     const files = fakeFiles({ pip: changed });
