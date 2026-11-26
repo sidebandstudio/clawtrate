@@ -43,9 +43,10 @@ jobs:
   #
   # The scenario check runs on a pull request only when it changes one of SCENARIOS_PATHS: the
   # development gateway, the files the check reaches outside it, the plugins it loads, the
-  # OpenClaw pins, the root manifest and lockfile and this file (#693). The app's own code under packages/ and apps/ is left
-  # out: the e2e job tests it on every change. test/ci-scenarios-gate.test.ts checks the list
-  # against the check's imports. Every push to main runs the check.
+  # OpenClaw pins, the root manifest, lockfile and workspace file, and this file (#693). The
+  # app's own code under packages/ and apps/ is left out: the e2e job tests it on every change.
+  # test/ci-scenarios-gate.test.ts checks the list against the check's imports. Every push to
+  # main runs the check.
   changes:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -109,12 +110,13 @@ jobs:
             packages/ui/package.json
             packages/ui/src/styles/tokens.css
           # The same form. packages/core/package.json pins the gateway client and protocol, as
-          # the development gateway's own package.json does. The root package.json and the
-          # lockfile decide what the job installs, Playwright's Chromium among it.
+          # the development gateway's own package.json does. The root package.json, the lockfile
+          # and pnpm-workspace.yaml decide what the job installs, Playwright's Chromium among it.
           SCENARIOS_PATHS: |
             .github/workflows/ci.yml
             package.json
             pnpm-lock.yaml
+            pnpm-workspace.yaml
             tools/dev-gateway/**
             e2e/scenario-check.ts
             e2e/global-setup.ts
