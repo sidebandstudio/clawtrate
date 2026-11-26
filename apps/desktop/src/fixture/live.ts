@@ -44,6 +44,9 @@ export const LIVE_SCENES = [
   "run-stopped-elsewhere",
   "run-finished-before-stop",
   "run-failed",
+  "not-run-api-key",
+  "not-run-other",
+  "not-started",
   "run-turn-limit",
   "stop-failed",
   "send-failed",
@@ -663,6 +666,45 @@ export function liveScene(
             kind: "provider",
             raw: { holds: "chat-event", chars: JSON.stringify(FAILED_EVENT).length },
           },
+        }),
+        steps: [],
+      };
+    // A message the gateway couldn't run (#663): nothing reported started, no action, no reply.
+    case "not-run-api-key":
+      return {
+        initial: withRun(base, now, {
+          state: "failed",
+          reportedStartAt: null,
+          endedAt: now - 2 * SECOND,
+          error: {
+            message:
+              'Auth profile "acme:default" uses oauth auth, but acme/acme-responses requires an Acme API key profile.',
+            kind: null,
+            raw: { holds: "chat-event", chars: 240 },
+          },
+        }),
+        steps: [],
+      };
+    case "not-run-other":
+      return {
+        initial: withRun(base, now, {
+          state: "failed",
+          reportedStartAt: null,
+          endedAt: now - 2 * SECOND,
+          error: {
+            message: "Error: The session is being moved to another machine. Try again in a minute.",
+            kind: null,
+          },
+        }),
+        steps: [],
+      };
+    case "not-started":
+      return {
+        initial: withRun(base, now, {
+          state: "completed",
+          outcomeKnown: false,
+          reportedStartAt: null,
+          endedAt: now - 2 * SECOND,
         }),
         steps: [],
       };

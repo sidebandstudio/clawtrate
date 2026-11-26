@@ -110,6 +110,10 @@
   --bubble-user: #0a6e5c;
   --bubble-user-text: #ffffff;
 
+  /* The Main Bot's star: the one gold in the app, a disc with a dark star. */
+  --star: #e0a526;
+  --star-ink: #2a1b00;
+
   --warn: #935600;
   --warn-soft: rgba(147, 86, 0, 0.1);
   --warn-line: rgba(147, 86, 0, 0.32);
@@ -157,6 +161,9 @@
 
   --bubble-user: #3ee6c1;
   --bubble-user-text: #04261f;
+
+  --star: #f6bd3b;
+  --star-ink: #2a1b00;
 
   --warn: #f0b45a;
   --warn-soft: rgba(240, 180, 90, 0.12);
