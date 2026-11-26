@@ -11,7 +11,17 @@ import { hkdf } from "@noble/hashes/hkdf.js";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { describe, expect, it, vi } from "vitest";
 import {
+  AccountProtocolError,
+  assembleFreshStart,
+  readEntryUnverified,
   encodeRemovalNotice,
+  ListState,
+  openFirstSecret,
+  sealFirstSecret,
+  ServerFirstDeviceJoin,
+  signFreshStart,
+  signWithdrawal,
+  verifyHead,
   ListSecret,
   MemberJoin,
   NewDeviceJoin,
@@ -75,6 +85,19 @@ interface Kind {
   readonly verify: (bytes: Uint8Array) => unknown;
 }
 
+/** Accepts `bytes` only as the given entry type (and removal origin), then checks it with `verify`. */
+function asEntry(type: string, origin: string | null, verify: (b: Uint8Array) => unknown) {
+  return (b: Uint8Array) => {
+    const entry = readEntryUnverified(b);
+    if (
+      entry.type !== type ||
+      (origin !== null && (entry as { origin?: string }).origin !== origin)
+    )
+      throw new AccountProtocolError("malformed", "another entry type");
+    return verify(b);
+  };
+}
+
 /** A session request signed by K's list key, its session key field set to that key. */
 function sessionRequestByK(): Uint8Array {
   const honest = signSessionRequest(SessionSecretKey.fromSeed(fill(32, 1)), {
@@ -105,6 +128,47 @@ function kinds(): Kind[] {
     fill(32, 3),
   );
   const holder = { listKey: other.device.listKey, sealKey: other.sealKey };
+  const withdrawal = signWithdrawal(asConnector.connector, plus.state, other.device.listKey);
+  const head = headOf(asConnector, plus);
+  const firstSecret = sealFirstSecret(
+    asConnector.connector,
+    asConnector.state,
+    asConnector.secret,
+    fill(32, 4),
+  );
+  const gatewayHolder = {
+    listKey: asConnector.gatewayDevice.device.listKey,
+    sealKey: asConnector.gatewayDevice.sealKey,
+  };
+  const fresh = assembleFreshStart(
+    plus.state,
+    signFreshStart(asConnector.connector, plus.state),
+    signFreshStart(asConnector.gatewayDevice.listKey, plus.state),
+  ).entry;
+  // K as a server's connector: the first entry its terminal confirms.
+  const server = ServerFirstDeviceJoin.open({
+    connector: asConnector.connector,
+    context: CONTEXT,
+    card: asConnector.card,
+    secret: asConnector.secret,
+  });
+  const first = makeDevice(5, "Phone", "ios");
+  const firstN = NewDeviceJoin.start(first, CONTEXT, N_RANDOM, CLOCK);
+  const firstReveal = firstN.reveal(server.answer(firstN.commit));
+  const firstSets = server.choices(firstReveal.reveal).sets;
+  const firstOutcome = server.confirm(
+    firstSets.find((set) => set.join() === firstReveal.words.join())!,
+    SEAL_RANDOM,
+    NOW,
+  );
+  if (firstOutcome.outcome !== "added") throw new Error("expected added");
+  const firstPrompt = firstN.finish(firstOutcome.confirm, null, null);
+  const firstPicked = firstN.pickWord(
+    { under: firstPrompt.under, word: firstOutcome.wordBack.word },
+    NOW,
+  );
+  if (firstPicked.outcome !== "confirmed") throw new Error("expected confirmed");
+  const serverFirst = firstPicked.result.firstEntry!;
 
   // K as the answering member: the add entry, the confirmation, a refusal, a removal, a restore.
   const asMember = makeWorld({ gatewayDevice: K });
@@ -157,14 +221,14 @@ function kinds(): Kind[] {
       bytes: asConnector.genesis,
       signatures: 2,
       label: 32,
-      verify: (b) => chain(CONTEXT, [b]),
+      verify: asEntry("genesis", null, (b) => chain(CONTEXT, [b])),
     },
     {
       name: "account removal entry",
       bytes: removal,
       signatures: 1,
       label: 32,
-      verify: (b) => plus.state.append(b),
+      verify: asEntry("remove", "account", (b) => plus.state.append(b)),
     },
     {
       name: "add entry",
@@ -225,6 +289,41 @@ function kinds(): Kind[] {
       signatures: 1,
       label: 33,
       verify: (b) => openRotation(holder, plus.state, b, asConnector.secret),
+    },
+    {
+      name: "withdrawal entry",
+      bytes: withdrawal,
+      signatures: 1,
+      label: 32,
+      verify: asEntry("remove", "withdrawn", (b) => plus.state.append(b)),
+    },
+    {
+      name: "list head",
+      bytes: head,
+      signatures: 1,
+      label: 31,
+      verify: (b) => verifyHead(b, asConnector.connector.publicKey, CONTEXT),
+    },
+    {
+      name: "first secret",
+      bytes: firstSecret,
+      signatures: 1,
+      label: 34,
+      verify: (b) => openFirstSecret(gatewayHolder, asConnector.state, b),
+    },
+    {
+      name: "fresh start",
+      bytes: fresh,
+      signatures: 2,
+      label: 32,
+      verify: asEntry("fresh-start", null, (b) => plus.state.freshStart(b)),
+    },
+    {
+      name: "server first entry",
+      bytes: serverFirst,
+      signatures: 2,
+      label: 32,
+      verify: asEntry("server-first", null, (b) => ListState.fromGenesis(CONTEXT, b)),
     },
   ];
 }

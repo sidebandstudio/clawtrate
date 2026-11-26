@@ -6,6 +6,10 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   encodeRemovalNotice,
+  openFirstSecret,
+  sealFirstSecret,
+  signWithdrawal,
+  verifyHead,
   ListSecret,
   MemberJoin,
   NewDeviceJoin,
@@ -244,6 +248,56 @@ describe("tampering with the list", () => {
         ["signature", 64, SIGNED],
       ],
       (b) => openRotation(holder, withMac.state, b, world.secret),
+    );
+  });
+
+  it("the head and the first secret", () => {
+    const head = headOf(world, withMac);
+    tamper(
+      head,
+      [
+        ["label", 31, LABEL],
+        ...CONTEXT_FIELDS(SIGNED),
+        ["generation", 4, SIGNED],
+        ["count", 4, SIGNED],
+        ["latest entry hash", 32, SIGNED],
+        ["epoch", 4, SIGNED],
+        ["card hash", 32, SIGNED],
+        ["serial", 4, SIGNED],
+        ["signature", 64, SIGNED],
+      ],
+      (b) => verifyHead(b, world.connector.publicKey, CONTEXT),
+    );
+    const first = sealFirstSecret(world.connector, world.state, world.secret, fill(32, 4));
+    const holder = { listKey: gateway.device.listKey, sealKey: gateway.sealKey };
+    tamper(
+      first,
+      [
+        ["label", 34, LABEL],
+        ...CONTEXT_FIELDS(SIGNED),
+        ["first entry hash", 32, SIGNED],
+        ["recipient", 32, KEY],
+        ["enc", 32, SIGNED],
+        ["sealed secret", 48, SIGNED],
+        ["signature", 64, SIGNED],
+      ],
+      (b) => openFirstSecret(holder, world.state, b),
+    );
+  });
+
+  it("a withdrawal", () => {
+    const withdrawal = signWithdrawal(world.connector, withMac.state, mac.device.listKey);
+    tamper(
+      withdrawal,
+      [
+        ...head(SIGNED),
+        ["type", 1, ["malformed", "bad_key", "bad_signature"]],
+        ["origin", 1, ["malformed", "bad_signature"]],
+        ["target", 32, KEY],
+        ["signer", 32, KEY],
+        ["signature", 64, SIGNED],
+      ],
+      (b) => withMac.state.append(b),
     );
   });
 

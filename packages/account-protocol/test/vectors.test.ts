@@ -9,7 +9,13 @@ import { createHash, createPublicKey, verify } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { describe, expect, it, vi } from "vitest";
 import {
+  assembleFreshStart,
   encodeRemovalNotice,
+  NewDeviceJoin,
+  sealFirstSecret,
+  ServerFirstDeviceJoin,
+  signFreshStart,
+  signWithdrawal,
   entryHash,
   ListSecret,
   openRotation,
@@ -25,6 +31,7 @@ import {
   signSessionRequest,
   cardHash,
 } from "../src/index.ts";
+import { signAdd } from "../src/list.ts";
 import { WORDLIST_TEXT } from "../src/wordlist.ts";
 import {
   addDevice,
@@ -37,6 +44,9 @@ import {
   memberOf,
   toHex,
   headObject,
+  headOf,
+  CLOCK,
+  NOW,
 } from "./helpers.ts";
 
 // Signatures and key checks are quick alone; on a loaded machine a test can take seconds.
@@ -70,7 +80,15 @@ function scenario() {
   const gateway = world.gatewayDevice;
   const mac = makeDevice(2, "MacBook Pro");
   const member = memberOf(world, gateway.listKey);
-  const { run, confirm, held: withMac, finished } = addDevice(world, gateway.listKey, mac);
+  const {
+    run,
+    confirm,
+    held: withMac,
+    finished,
+    wordBack: back,
+    prompt,
+  } = addDevice(world, gateway.listKey, mac);
+  const confirmWord = back.word;
   const added = { confirm };
   const refusal = refuseJoin(member, run.commit, "none-match");
   const notice = encodeRemovalNotice(CONTEXT, mac.device.listKey);
@@ -100,7 +118,50 @@ function scenario() {
   });
   // The transcript hash is the 32 bytes before the reveal's signature.
   const transcriptHash = run.reveal.subarray(run.reveal.length - 96, run.reveal.length - 64);
+  // Part of the design's additions: the head, the first secret, a withdrawal, a fresh start,
+  // a server's first entry, and the word back.
+  const head = headOf(world, removal);
+  const firstSecret = sealFirstSecret(world.connector, world.state, world.secret, fill(32, 0x56));
+  const phone = makeDevice(3, "iPhone", "ios");
+  const withPhone = appended(
+    removal,
+    signAdd(gateway.listKey, removal.state, phone.device, fill(32, 0x5a)),
+  );
+  const withdrawal = signWithdrawal(world.connector, withPhone.state, phone.device.listKey);
+  const fresh = assembleFreshStart(
+    removal.state,
+    signFreshStart(world.connector, removal.state),
+    signFreshStart(gateway.listKey, removal.state),
+  ).entry;
+  const server = ServerFirstDeviceJoin.open({
+    connector: world.connector,
+    context: CONTEXT,
+    card: world.card,
+    secret: world.secret,
+  });
+  const firstN = NewDeviceJoin.start(phone, CONTEXT, fill(32, 0x57), CLOCK);
+  const firstReveal = firstN.reveal(server.answer(firstN.commit));
+  const firstSets = server.choices(firstReveal.reveal).sets;
+  const serverOutcome = server.confirm(
+    firstSets.find((set) => set.join() === firstReveal.words.join())!,
+    fill(32, 0x58),
+    NOW,
+  );
+  if (serverOutcome.outcome !== "added") throw new Error("expected added");
+  const firstPrompt = firstN.finish(serverOutcome.confirm, null, null);
+  const firstPicked = firstN.pickWord(
+    { under: firstPrompt.under, word: serverOutcome.wordBack.word },
+    NOW,
+  );
+  if (firstPicked.outcome !== "confirmed") throw new Error("expected confirmed");
   return {
+    head,
+    firstSecret,
+    withdrawal,
+    fresh,
+    serverConfirm: serverOutcome.confirm,
+    serverFirst: firstPicked.result.firstEntry!,
+    wordBack: { word: confirmWord, choices: prompt.choices },
     world,
     gateway,
     mac,
@@ -189,6 +250,12 @@ function vectors(): Record<string, unknown> {
       ),
     },
     session: toHex(s.session),
+    head: toHex(s.head),
+    firstSecret: toHex(s.firstSecret),
+    withdrawal: toHex(s.withdrawal),
+    freshStart: toHex(s.fresh),
+    serverFirst: { confirm: toHex(s.serverConfirm), entry: toHex(s.serverFirst) },
+    wordBack: s.wordBack,
   };
 }
 
@@ -215,6 +282,14 @@ describe("known-answer vectors", () => {
     checkSigned(s.refusal, [gateway]);
     checkSigned(s.rotation, [connector]);
     checkSigned(s.session, [SessionSecretKey.fromSeed(fill(32, 0x5e)).publicKey.bytes]);
+    checkSigned(s.head, [connector]);
+    checkSigned(s.firstSecret, [connector]);
+    checkSigned(s.withdrawal, [connector]);
+    checkSigned(s.fresh, [connector, gateway]);
+    checkSigned(s.serverFirst, [
+      connector,
+      s.serverFirst.subarray(32 + 32 + 4 + 32 + 1 + 32, 32 + 32 + 4 + 32 + 1 + 64),
+    ]);
   });
 
   it("let N open the card the words covered, and the remaining devices open the rotation", () => {

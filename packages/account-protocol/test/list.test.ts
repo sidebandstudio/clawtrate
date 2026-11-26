@@ -266,9 +266,16 @@ describe("removing and putting back", () => {
     const { state, world, gateway, mac } = threeDevices();
     // A stolen member can't remove it, so it can't leave the list with nobody to confirm a device.
     expectCode(() => signRemoval(mac.listKey, state, gateway.device.listKey), "protected_member");
-    expect(after(state, signRemoval(gateway.listKey, state, gateway.device.listKey)).member(gateway.device.listKey)).toBeUndefined();
     expect(
-      after(state, signRemovalOnGatewayMachine(world.connector, state, gateway.device.listKey)).member(gateway.device.listKey),
+      after(state, signRemoval(gateway.listKey, state, gateway.device.listKey)).member(
+        gateway.device.listKey,
+      ),
+    ).toBeUndefined();
+    expect(
+      after(
+        state,
+        signRemovalOnGatewayMachine(world.connector, state, gateway.device.listKey),
+      ).member(gateway.device.listKey),
     ).toBeUndefined();
   });
 
@@ -348,6 +355,7 @@ describe("what a caller is given", () => {
     const before = Buffer.from(state.member(mac.device.listKey)!.device!.tlsPin).toString("hex");
     state.member(mac.device.listKey)!.device!.tlsPin.fill(0);
     state.devices()[1]!.device!.tlsPin.fill(0);
+    state.members()[2]!.device!.tlsPin.fill(0);
     state.head.fill(0);
     state.context.gatewayId.fill(0);
     expect(Buffer.from(state.member(mac.device.listKey)!.device!.tlsPin).toString("hex")).toBe(
@@ -357,6 +365,12 @@ describe("what a caller is given", () => {
     expect(state.context.gatewayId).toEqual(CONTEXT.gatewayId);
     expect(Object.isFrozen(state)).toBe(true);
     expect(Object.isFrozen(state.member(mac.device.listKey))).toBe(true);
+    // A removal's record too.
+    const removed = after(state, signRemoval(mac.listKey, state, mac.device.listKey));
+    removed.removal(mac.device.listKey)!.member.device!.tlsPin.fill(0);
+    expect(
+      Buffer.from(removed.removal(mac.device.listKey)!.member.device!.tlsPin).toString("hex"),
+    ).toBe(before);
   });
 
   it("an entry is copied once on entry: bytes that change while append reads them can't split what it checks from what it keeps", () => {

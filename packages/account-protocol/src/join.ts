@@ -40,7 +40,7 @@ import {
   entryHash,
   ListState,
   MAX_ENTRY_BYTES,
-  readEntryUnverified,
+  entryTypeOf,
   readServerFirst,
   readSignedEntry,
   signAdd,
@@ -551,7 +551,7 @@ export class NewDeviceJoin {
     if (!verifyEd25519(answer.memberKey.bytes, signed, signature))
       fail("bad_signature", "the confirmation is not the answering key's");
 
-    const firstDevice = readEntryUnverified(entryBytes).type === "server-first";
+    const firstDevice = entryTypeOf(entryBytes) === "server-first";
     let firstEntry: Uint8Array | null = null;
 
     // (2)

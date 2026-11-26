@@ -7,6 +7,12 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   AccountProtocolError,
+  assembleFreshStart,
+  ListState,
+  openFirstSecret,
+  sealFirstSecret,
+  signFreshStart,
+  verifyHead,
   decodeRemovalNotice,
   encodeRemovalNotice,
   ListSecret,
@@ -222,6 +228,25 @@ describe("seeded fuzzing", () => {
     fuzz(17, rotation, (b) =>
       openRotation({ listKey: mac.device.listKey, sealKey: mac.sealKey }, withMac.state, b, secret),
     );
+  }, 120_000);
+
+  it("the head, the first secret, a fresh start and a server's first entry", () => {
+    fuzz(19, headOf(world, withMac), (b) => verifyHead(b, world.connector.publicKey, CONTEXT));
+    const first = sealFirstSecret(world.connector, world.state, world.secret, fill(32, 4));
+    fuzz(20, first, (b) =>
+      openFirstSecret(
+        { listKey: gateway.device.listKey, sealKey: gateway.sealKey },
+        world.state,
+        b,
+      ),
+    );
+    const fresh = assembleFreshStart(
+      withMac.state,
+      signFreshStart(world.connector, withMac.state),
+      signFreshStart(gateway.listKey, withMac.state),
+    ).entry;
+    fuzz(21, fresh, (b) => withMac.state.freshStart(b));
+    fuzz(22, fresh, (b) => ListState.fromGenesis(CONTEXT, b));
   }, 120_000);
 
   it("the session request", () => {

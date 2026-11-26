@@ -256,6 +256,18 @@ function decodeEntry(bytes: Uint8Array, partial = false): DecodedEntry {
   return { entry, signed, signatures };
 }
 
+/** For the join only: an entry's type, read from its fixed header alone. */
+export function entryTypeOf(bytes: Uint8Array): Entry["type"] {
+  const reader = new Reader(copy(bytes));
+  reader.label(LABEL.listEntry);
+  readContext(reader);
+  reader.u32();
+  reader.fixed(32, "previous hash");
+  const type = TYPES[reader.u8() - 1];
+  if (type === undefined) fail("malformed", "unknown entry type");
+  return type;
+}
+
 /** Reads an entry without checking it against a list or checking its signatures. */
 export function readEntryUnverified(bytes: Uint8Array): Entry {
   return freezeEntry(decodeEntry(copy(bytes)).entry);
