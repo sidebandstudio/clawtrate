@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from "vitest";
 import { mergeSessionRow } from "../src/mapping.ts";
-import { runsFromHistory } from "../src/runs.ts";
+import { RawTable, runsFromHistory } from "../src/runs.ts";
 import { neverRan, neverStarted, notRunCause, MAX_NOT_RUN_WORDS } from "../src/not-run.ts";
 import { WaitingIndex } from "../src/waiting.ts";
 import { agentEvent, grantingGateway, KEY, openTask } from "./client-harness.ts";
@@ -377,7 +377,7 @@ describe("the rules underneath", () => {
     const [run] = runsFromHistory(
       rows,
       null,
-      { sessionKey: KEY, now: T0 + 500, raw: new Map() },
+      { sessionKey: KEY, now: T0 + 500, raw: new RawTable() },
       {
         busy: true,
       },
@@ -401,7 +401,11 @@ describe("the rules underneath", () => {
         __openclaw: { id: "a-1", seq: 2, runId: "run-1" },
       },
     ];
-    const [run] = runsFromHistory(rows, null, { sessionKey: KEY, now: T0 + 500, raw: new Map() });
+    const [run] = runsFromHistory(rows, null, {
+      sessionKey: KEY,
+      now: T0 + 500,
+      raw: new RawTable(),
+    });
     expect(run).toMatchObject({ id: "run-1", state: "failed" });
     expect(neverRan(run!)).toBe(false);
   });
