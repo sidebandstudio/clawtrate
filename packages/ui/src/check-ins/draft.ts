@@ -51,9 +51,13 @@ function baseOf(checkIns: Read, botId: string): Base {
   };
 }
 
-/** A new draft for the bot, or null while nothing says which gateway the check-ins are from. */
+/**
+ * A new draft for the bot, or null while nothing says which gateway the check-ins are from,
+ * and on a gateway that keeps check-ins as routines, which has no setting to change.
+ */
 export function openDraft(checkIns: CheckInsState, botId: string): Draft | null {
   if (checkIns.stamp === null || checkIns.stamp.gatewayId === null) return null;
+  if (checkIns.model !== "heartbeat") return null;
   const base = baseOf(checkIns, botId);
   return {
     stamp: checkIns.stamp,

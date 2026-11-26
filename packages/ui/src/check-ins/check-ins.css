@@ -82,6 +82,20 @@
   color: var(--text-muted);
 }
 
+/* On a gateway that keeps check-ins as routines: the link to the bot's routines, in the sentence's line. */
+.ci-block .link-button {
+  display: inline;
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--text);
+  text-align: start;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+  cursor: pointer;
+}
+
 .ci-block p.ci-faint,
 p.ci-faint {
   font-size: var(--text-sm);

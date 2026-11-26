@@ -128,9 +128,12 @@ async function firstRun(
         { timeout: 60_000 },
       )
       .toBe("completed");
-    expect(client.state.transcripts[key]!.items.some((item) => item.role === "assistant")).toBe(
-      true,
-    );
+    // The reply shows from the run as it ends; history holds it once the client reads it again.
+    await expect
+      .poll(() => client.state.transcripts[key]!.items.some((item) => item.role === "assistant"), {
+        timeout: 30_000,
+      })
+      .toBe(true);
     // Nothing is left waiting for the owner once the conversation works.
     expect(await pendingFor(instance, deviceId)).toEqual([]);
   } catch (error) {

@@ -703,6 +703,8 @@ export function createFixtureBridge(
       },
     };
   if (accountParams.openclawRun) state = updateRunScene(accountParams.openclawRun, state);
+  if (accountParams.version)
+    state = { ...state, connection: { ...state.connection, serverVersion: accountParams.version } };
   const checkInParams = options.checkIns ?? {
     checkins: null,
     defaultPrompt: false,

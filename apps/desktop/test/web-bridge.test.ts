@@ -14,7 +14,7 @@ import {
 import { once } from "node:events";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
-import type { AddressInfo } from "node:net";
+import type { AddressInfo, Socket } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -446,19 +446,49 @@ describe("slow viewers (one snapshot per viewer beyond what its socket accepted)
     readingChannel.stop();
   });
 
-  it("holds at most one unaccepted snapshot for a real paused viewer, and drops it after the drain time", async () => {
-    const drain = 1_000;
+  it("holds at most one unaccepted snapshot for a viewer whose socket stops accepting, and drops it after the drain time", async () => {
+    const drain = 2_000;
     const { base, store } = await host({}, { snapshotDrainTimeoutMs: drain });
-    // What the host writes to its sockets, counted where it writes them, and what its socket to the
-    // viewer still holds unwritten.
+    // The host's own socket to the viewer, with what its kernel accepts in the check's hands. While
+    // `accepting` is false, a write stays in the socket, so `bufferedAmount` stays above 0. How
+    // much a real kernel takes from a viewer that stopped reading, and how soon, depends on the
+    // machine's buffers and load, so the check doesn't leave that to it.
+    let accepting = true;
+    let untilEmpty = false;
+    const held: Array<() => void> = [];
+    const control = (socket: Socket) => {
+      const pass =
+        (callback: (error?: Error | null) => void) =>
+        (error?: Error | null): void => {
+          callback(error);
+          // Everything it held is accepted: it stops again before the host can write the next.
+          if (untilEmpty && socket.writableLength === 0) accepting = untilEmpty = false;
+        };
+      const write = socket._write.bind(socket);
+      const writev = socket._writev!.bind(socket);
+      socket._write = (chunk, encoding, callback) => {
+        const go = () => write(chunk, encoding, pass(callback));
+        if (accepting) go();
+        else held.push(go);
+      };
+      socket._writev = (chunks, callback) => {
+        const go = () => writev(chunks, pass(callback));
+        if (accepting) go();
+        else held.push(go);
+      };
+    };
+    const acceptWhatItHolds = () => {
+      accepting = untilEmpty = true;
+      for (const go of held.splice(0)) go();
+    };
+    // The snapshots the host writes, counted where it writes them.
     const written: string[] = [];
-    let hostBuffered = () => 0;
     const send = WebSocket.prototype.send;
     WebSocket.prototype.send = function (this: WebSocket, data: unknown, ...rest: unknown[]) {
-      if (typeof data === "string" && data.startsWith('{"type":"state"')) {
-        written.push(data);
-        hostBuffered = () => this.bufferedAmount;
+      if (typeof data === "string" && data.startsWith('{"type":"hello"')) {
+        control((this as unknown as { _socket: Socket })._socket);
       }
+      if (typeof data === "string" && data.startsWith('{"type":"state"')) written.push(data);
       return (send as (...args: unknown[]) => void).call(this, data, ...rest);
     } as typeof send;
     const socket = new WebSocket(`${base.replace("http", "ws")}/bridge`, {
@@ -467,43 +497,33 @@ describe("slow viewers (one snapshot per viewer beyond what its socket accepted)
     const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
     try {
       await once(socket, "message");
-      // Anything the viewer receives once it stops reading would be a snapshot left to flush.
-      let delivered = 0;
-      socket.on("message", () => (delivered += 1));
+      const delivered: string[] = [];
+      socket.on("message", (data) => delivered.push(String(data)));
       const closed = once(socket, "close") as Promise<[number, Buffer]>;
-      // The viewer stops reading.
-      (socket as unknown as { _socket: { pause(): void } })._socket.pause();
-      const big = "x".repeat(8 * 1024 * 1024);
-      let update = 0;
-      // The kernel's buffers take what they can of a paused viewer's snapshots, and a snapshot they
-      // took all of is accepted: the host writes the next. Write until one stays unaccepted.
-      const stuck = () => hostBuffered() > 0;
-      for (let tries = 0; tries < 40; tries += 1) {
-        store.update(() => state(`${(update += 1)}:${big}`));
-        await sleep(25);
-        if (stuck()) {
-          await sleep(100);
-          if (stuck()) break;
-        }
-      }
-      expect(stuck()).toBe(true);
-      const accepted = written.length - 1;
-      for (let i = 0; i < 10; i += 1) {
-        store.update(() => state(`${(update += 1)}:${big}`));
+      // The viewer's socket stops accepting. Ten updates, 25 ms apart, give the host a chance to
+      // write at each of its looks: it writes one, and the newer ones wait as one reference.
+      accepting = false;
+      for (let update = 1; update <= 10; update += 1) {
+        store.update(() => state(`${update}`));
         await sleep(25);
       }
-      await sleep(50);
-      // One written and not accepted; the newer ones wait as one reference, not as copies.
-      expect(written).toHaveLength(accepted + 1);
-      await sleep(drain + 200);
-      (socket as unknown as { _socket: { resume(): void } })._socket.resume();
+      await sleep(100);
+      expect(written).toHaveLength(1);
+      expect(delivered).toEqual([]);
+      // It accepts that one, and the host writes only the newest.
+      const acceptedAt = Date.now();
+      acceptWhatItHolds();
+      await until(() => written.length === 2);
+      expect(markers(written)).toEqual([markers(written)[0], "10"]);
+      await until(() => delivered.length === 1);
+      // It stops accepting again. After the drain time the host drops the viewer without a close
+      // frame (1006), and the snapshot it left unaccepted never arrives. A graceful close would
+      // deliver it too, and then a 1013 close frame.
       const [code] = await closed;
-      expect(written).toHaveLength(accepted + 1);
-      // Dropped with what it left buffered: no close frame (1006), and the unaccepted snapshot is
-      // never flushed to it. Only the ones the kernel had already taken arrive. A graceful close
-      // would deliver the buffered snapshot too, and then a 1013 close frame.
+      expect(Date.now() - acceptedAt).toBeGreaterThan(drain);
       expect(code).toBe(1006);
-      expect(delivered).toBe(accepted);
+      expect(written).toHaveLength(2);
+      expect(delivered).toEqual([written[0]]);
     } finally {
       WebSocket.prototype.send = send;
       socket.terminate();
