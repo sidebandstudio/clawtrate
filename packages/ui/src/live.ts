@@ -449,22 +449,16 @@ export function notRunWords(
         reason: `${bot} is set to a model that needs a subscription sign-in, but the account it uses is an API key. Choose a model that works with that key, or sign in.`,
         ways: ["model", "account"],
       };
-    case "account-kind":
-      return {
-        title,
-        reason: `${bot}'s model can't be used with the kind of account it uses. Choose another model or another account.`,
-        ways: ["model", "account"],
-      };
     case "account-missing":
       return {
         title,
-        reason: `The account ${bot} is set to isn't on the gateway any more. Choose another account.`,
+        reason: `The account ${bot} is set to isn't available on the gateway. Choose another account.`,
         ways: ["account"],
       };
     case "account-other-provider":
       return {
         title,
-        reason: `The account ${bot} is set to belongs to another provider than its model. Choose an account for the model's provider, or another model.`,
+        reason: `The account ${bot} is set to isn't set up for its model's provider. Choose an account for that provider, or another model.`,
         ways: ["account", "model"],
       };
     case "model-unknown":
@@ -476,7 +470,7 @@ export function notRunWords(
     case "no-account":
       return {
         title,
-        reason: `The provider of ${bot}'s model has no account on the gateway. Add an account, or choose another model.`,
+        reason: `The gateway found no account it can use for the provider of ${bot}'s model. Add an account, or choose another model.`,
         ways: ["account", "model"],
       };
     case "other":

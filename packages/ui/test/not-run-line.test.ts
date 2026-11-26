@@ -50,7 +50,7 @@ describe("#663: a message the gateway couldn't run says so, and why", () => {
       ),
     ).toEqual({
       title: "The gateway couldn't run this message",
-      reason: "The account Otto is set to isn't on the gateway any more. Choose another account.",
+      reason: "The account Otto is set to isn't available on the gateway. Choose another account.",
       ways: ["account"],
     });
     expect(of('Error: Auth profile "acme:work" is not configured for globex.').ways).toEqual([
@@ -64,7 +64,19 @@ describe("#663: a message the gateway couldn't run says so, and why", () => {
     expect(
       of('No API key found for provider "globex". Auth store: /somewhere/auth.json.').reason,
     ).toBe(
-      "The provider of Otto's model has no account on the gateway. Add an account, or choose another model.",
+      "The gateway found no account it can use for the provider of Otto's model. Add an account, or choose another model.",
+    );
+  });
+
+  it("an account-kind reason other than the two read whole keeps the gateway's own remedy", () => {
+    expect(
+      words(
+        failed(
+          'Auth profile "acme:me" uses oauth auth, but acme/acme-responses requires token-sharing consent. Sign in again and enable sharing, or explicitly choose another inference credential.',
+        ),
+      ),
+    ).toBe(
+      'The gateway couldn\'t run this message | The gateway said: Auth profile "acme:me" uses oauth auth, but acme/acme-responses requires token-sharing consent. Sign in again and enable sharing, or explicitly choose another inference credential.',
     );
   });
 

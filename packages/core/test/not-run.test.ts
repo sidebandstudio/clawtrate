@@ -73,11 +73,41 @@ describe("why the gateway couldn't run a message, from its own words", () => {
         'Auth profile "acme:work" uses api-key auth, but acme/acme-chat-responses requires a Acme subscription (OAuth or token) profile.',
       )?.kind,
     ).toBe("needs-sign-in");
+    // A provider's own word for a sign-in where the model needs a key: the same text on both
+    // versions (OpenAI's provider plugin, beside "No API key found for provider").
     expect(
       notRunCause(
-        'Auth profile "acme:me" uses oauth auth, but acme/embedding requires token-sharing consent.',
+        'No API key found for provider "acme". You are authenticated with Acme ChatGPT/Codex OAuth. Use acme/acme-codex with the ChatGPT/Codex OAuth profile, or set ACME_API_KEY for direct Acme API access.',
+      ),
+    ).toEqual({ kind: "needs-api-key", words: null });
+  });
+
+  it("any other account-kind reason is the gateway's own, with its own remedy: its words, never ours", () => {
+    // The policy's other reasons (both versions): a consent to give, an operation a sign-in can't do.
+    const consent =
+      'Auth profile "acme:me" uses oauth auth, but acme/acme-responses requires token-sharing consent. Sign in again and enable sharing, or explicitly choose another inference credential.';
+    expect(notRunCause(consent)).toEqual({
+      kind: "other",
+      words:
+        'Auth profile "acme:me" uses oauth auth, but acme/acme-responses requires token-sharing consent. Sign in again and enable sharing, or explicitly choose another inference credential.',
+    });
+    expect(
+      notRunCause(
+        'Auth profile "acme:me" uses oauth auth, but acme/embedding does not support this operation with Sign in with ChatGPT. Configure a credential that supports it.',
       )?.kind,
-    ).toBe("account-kind");
+    ).toBe("other");
+    // A requirement with more said after it is read as the gateway's, not as ours.
+    expect(
+      notRunCause(
+        'Auth profile "acme:me" uses oauth auth, but acme/acme-responses requires an Acme API key profile, or explicitly choose another inference credential.',
+      )?.kind,
+    ).toBe("other");
+    // A subscription token is not a sign-in: the requirement holds, our sentence wouldn't.
+    expect(
+      notRunCause(
+        'Auth profile "acme:team" uses token auth, but acme/acme-responses requires an Acme API key profile.',
+      )?.kind,
+    ).toBe("other");
   });
 
   it("knows each other failure a message takes before any run, on either version", () => {

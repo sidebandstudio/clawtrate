@@ -12,19 +12,17 @@ import type { Run } from "./runs.ts";
 export const MAX_NOT_RUN_WORDS = 300;
 
 export type NotRunKind =
-  /** The model's API takes an API key, and the bot's account is a sign-in or a token. */
+  /** The model's API takes an API key, and the bot's account is a sign-in (OAuth). */
   | "needs-api-key"
   /** The model's API takes a subscription sign-in, and the bot's account is an API key. */
   | "needs-sign-in"
-  /** The model can't be used with the kind of account the bot is set to, for another reason. */
-  | "account-kind"
-  /** The account the bot is set to isn't on the gateway. */
+  /** The account the bot is set to isn't available on the gateway. */
   | "account-missing"
-  /** The account the bot is set to is another provider's. */
+  /** The account the bot is set to isn't set up for its model's provider. */
   | "account-other-provider"
   /** The gateway doesn't know the bot's model. */
   | "model-unknown"
-  /** The model's provider has no account on the gateway. */
+  /** The gateway found no account it can use for the model's provider. */
   | "no-account"
   /** Anything else: the gateway's own words. */
   | "other"
@@ -66,17 +64,27 @@ export function notRunCause(said: string | null | undefined): NotRunCause | null
 }
 
 function kindOf(text: string): NotRunKind {
-  // `Auth profile "<id>" uses <mode> auth, but <provider>/<api> <reason>.`
+  // `Auth profile "<id>" uses <mode> auth, but <provider>/<api> <reason>.` Only the two
+  // requirements read whole are ours to say; any other reason (a consent to give, an operation a
+  // sign-in can't do) is the gateway's own, with its own remedy, so its words are shown.
   const mode = /\bAuth profile "[^"]*" uses (\S+) auth, but \S+ (.*)$/is.exec(text);
   if (mode) {
-    const signIn = /^(?:oauth|token)$/i.test(mode[1]!);
-    const key = /^api[-_]?key$/i.test(mode[1]!);
-    if (signIn && /\brequires an? (?:\S+ )*API key profile\b/i.test(mode[2]!))
+    if (/^oauth$/i.test(mode[1]!) && /^requires an? (?:\S+ )*API key profile\.?$/i.test(mode[2]!))
       return "needs-api-key";
-    if (key && /\brequires an? (?:\S+ )*(?:subscription|OAuth)\b/i.test(mode[2]!))
+    if (
+      /^api[-_]?key$/i.test(mode[1]!) &&
+      /^requires an? (?:\S+ )*subscription \(OAuth or token\) profile\.?$/i.test(mode[2]!)
+    )
       return "needs-sign-in";
-    return "account-kind";
+    return "other";
   }
+  // A provider's own word for a sign-in where the model needs a key (OpenAI's ChatGPT/Codex OAuth).
+  if (
+    /\bNo API key found for provider "[^"]*"\.\s*You are authenticated with\b[^.]*\bOAuth\b/i.test(
+      text,
+    )
+  )
+    return "needs-api-key";
   if (
     /\bSelected auth profile "[^"]*" is unavailable\b/i.test(text) ||
     /\bThis saved login isn['’]t available\b/i.test(text) ||
