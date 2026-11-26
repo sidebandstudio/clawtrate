@@ -117,7 +117,9 @@ test("#637: a system event the gateway wakes a task with is the gateway's line, 
     });
 
     const line = transcript.getByTestId("gateway-event");
-    if (instanceForm(openInstance(INSTANCE)).heartbeat) {
+    const form = instanceForm(openInstance(INSTANCE));
+    test.info().annotations.push({ type: "openclaw", description: form.version });
+    if (form.heartbeat) {
       // 2026.10.6: the gateway's own turn, answered with its "nothing to say", adds nothing.
       await page.waitForTimeout(8_000);
       await expect(line).toHaveCount(0);
