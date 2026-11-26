@@ -580,7 +580,7 @@ export function Rail({
   onBubbles: (choice: BubbleChoice) => void;
   /** The one-pane layout's brand and update button, at the start of the top band (titlebar.md). */
   top?: ReactNode;
-  /** A quiet card above the gateway row: the one-time offer of the bots' guides. */
+  /** A quiet line above the gateway row: the devices asking to use this gateway (setup-effortless.md §5). */
   notice?: ReactNode;
   onOpenSettings: (section?: SettingsSection) => void;
   /** Settings' keys as this platform names them, for the gear's tooltip. */

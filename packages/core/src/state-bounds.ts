@@ -32,6 +32,7 @@ import {
   MAX_SIGNIN_METHODS,
   type AccountsState,
   type AccountWrite,
+  type OrderClear,
   type BotBinding,
   type BotCreationState,
   type CatalogModel,
@@ -76,6 +77,7 @@ import {
   json,
   list,
   map,
+  MAX_CUT_PATHS,
   object,
   scalar,
   text,
@@ -274,6 +276,16 @@ export const MAX_HISTORY_FILES = 40;
 /** Files a person's message names (`SentAttachment`), and across a task's history page. */
 export const MAX_ATTACHMENTS_PER_ITEM = 20;
 export const MAX_HISTORY_ATTACHMENTS = 40;
+
+/**
+ * History's list of the files a person's message carried may have been cut to its bound (the
+ * newest messages keep theirs first): then whether the message had files isn't known (#686). A
+ * full list of cut paths may have let that one go.
+ */
+export function attachmentsCut(item: { cut?: string[] }): boolean {
+  const cut = item.cut ?? [];
+  return cut.length >= MAX_CUT_PATHS || cut.some((path) => path.startsWith("attachments"));
+}
 /** Inter-session messages kept per task, newest. */
 export const MAX_INTER_SESSION = 64;
 /** Outgoing messages per task (also `MAX_OUTBOX_PER_TASK`). */
@@ -384,6 +396,8 @@ const runError = object<RunError>()({
   message: text(MAX_ERROR_JSON_CHARS),
   kind: NAME,
   raw: object<RunErrorRaw>()({ holds: ENUM, chars: NUMBER }),
+  beforeReply: FLAG,
+  quiet: FLAG,
 });
 const runEnding = object<RunEnding>()({
   stopReason: NAME,
@@ -429,6 +443,9 @@ export const RUN: Bound = flagged<Run>()({
   omittedTools: NUMBER,
   omittedToolsAtEnd: NUMBER,
   endFromRows: FLAG,
+  ranInHistory: FLAG,
+  startSaid: FLAG,
+  anchorKeyed: FLAG,
   preambles: list(MAX_PREAMBLES_PER_RUN, preamble),
   reasoningAnchor: ID,
   nextReasoning: NUMBER,
@@ -852,6 +869,7 @@ export const DEVICE_REQUESTS: Bound = object<DeviceRequestsState>()({
   noticed: NUMBER,
   prompt: ID,
   error: text(MAX_MESSAGE_LINE_CHARS),
+  listedOn: NUMBER,
 });
 const task = flagged<Task>()({
   key: ID,
@@ -1019,6 +1037,7 @@ const SESSION_ROW_FIELDS = [
   "sessionId",
   "sessionKey",
   "spawnedBy",
+  "startedAt",
   "status",
   "subject",
   "totalTokens",
@@ -1179,6 +1198,11 @@ const lockEvidence = object<LockEvidence>()({
   checkedAt: NUMBER,
   lastMatchAt: NUMBER,
   lostAt: NUMBER,
+  readSeq: NUMBER,
+  attemptSeq: NUMBER,
+  startedSeq: NUMBER,
+  readGateway: ID,
+  providerRead: FLAG,
   error: text(MAX_MESSAGE_LINE_CHARS),
 });
 const binding = object<BotBinding>()({
@@ -1250,6 +1274,20 @@ const accountWrite = object<AccountWrite>()({
   error: text(MAX_MESSAGE_LINE_CHARS),
   at: NUMBER,
 });
+const orderClear = object<OrderClear>()({
+  id: ID,
+  gatewayId: ID,
+  botId: ID,
+  provider: ID,
+  kind: ENUM,
+  account: ID,
+  status: ENUM,
+  error: text(MAX_MESSAGE_LINE_CHARS),
+  at: NUMBER,
+  sentSeq: NUMBER,
+  checkedSeq: NUMBER,
+  checkedAt: NUMBER,
+});
 export const ACCOUNTS: Bound = object<AccountsState>()({
   status: ENUM,
   error: text(MAX_MESSAGE_LINE_CHARS),
@@ -1268,6 +1306,7 @@ export const ACCOUNTS: Bound = object<AccountsState>()({
   signIn,
   creation: botCreation,
   write: accountWrite,
+  clear: orderClear,
 });
 
 /** Setting up on the host's computer (`setup.ts`): fixed facts and a few short names. */

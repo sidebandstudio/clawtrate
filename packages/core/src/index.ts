@@ -9,6 +9,7 @@ export * from "./avatar.ts";
 export * from "./gateway-update.ts";
 export * from "./openclaw-update.ts";
 export * from "./runs.ts";
+export * from "./not-run.ts";
 export * from "./approvals.ts";
 export * from "./approval-refusals.ts";
 export * from "./cards.ts";
@@ -94,7 +95,9 @@ export {
   GatewayChangedError,
   LIVE_UPDATES_NOT_STARTED,
   MAX_SESSION_PAGES,
+  LOCAL_ROUTE_ONLY,
   REQUESTED_SCOPES,
+  ROUTE_IDENTITY_CHANGED,
   SendTooLargeError,
   SESSION_PAGE_SIZE,
   SETUP_ENDPOINT_CHANGED,

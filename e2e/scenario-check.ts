@@ -145,6 +145,7 @@ async function main(): Promise<number> {
         ownerAgent: (botId, key, message) => ownerAgent(inst, botId, key, message),
         providerUrl,
         only: (check) => !MESSAGE_TOOL_CHECKS.includes(check.name),
+        gatewayLog: join(inst.runDir, "gateway.log"),
       });
       for (const row of FAMILY_ROWS) console.log(`family ${JSON.stringify(row)}`);
       for (const note of notes) console.log(`note  ${note}`);
@@ -182,16 +183,19 @@ async function main(): Promise<number> {
       console.log(
         `Account checks: lock and unlock ${mode === "live" ? "run the command beside the running gateway" : "stop the gateway, run the command and start it again"}`,
       );
-      const accounts = await runAccountChecks({
-        admin,
-        reader,
-        providerUrl,
-        stateDir: inst.stateDir,
-        lock: (bot, provider, profileId) => lockOrder(inst, { bot, provider, profileId }),
-        lockMode: mode,
-        orderBeside: (bot, provider, profileId) =>
-          orderBesideGateway(inst, { bot, provider, profileId }),
-      });
+      const accounts = await runAccountChecks(
+        {
+          admin,
+          reader,
+          providerUrl,
+          stateDir: inst.stateDir,
+          lock: (bot, provider, profileId) => lockOrder(inst, { bot, provider, profileId }),
+          lockMode: mode,
+          orderBeside: (bot, provider, profileId) =>
+            orderBesideGateway(inst, { bot, provider, profileId }),
+        },
+        { gatewayLog: join(inst.runDir, "gateway.log") },
+      );
       for (const note of accounts.notes) console.log(`note  ${note}`);
       for (const line of accounts.differences) console.log(`differs from the design  ${line}`);
       console.log(
@@ -325,6 +329,7 @@ async function imageChecks(
       only: (check) => MESSAGE_TOOL_CHECKS.includes(check.name),
       images: true,
       messageTool: true,
+      gatewayLog: join(inst.runDir, "gateway.log"),
     });
     console.log(`${passed} of ${passed + failed} image checks passed`);
     return failed;

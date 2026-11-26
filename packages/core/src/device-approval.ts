@@ -15,6 +15,8 @@ import { FULL_SCOPES } from "./scopes.ts";
 
 /** Requests kept and shown, newest first; past it, `omitted` counts the rest. */
 export const MAX_DEVICE_REQUESTS = 16;
+/** Requests remembered as having shared a code; past it, every request is blocked until none waits. */
+export const MAX_COLLIDED = 2 * MAX_DEVICE_REQUESTS;
 /** A reported name, platform or app, as shown, in characters. */
 export const MAX_REPORTED_CHARS = 64;
 /** The same as JSON: two units for a character past the basic plane, and the quotes. */
@@ -29,6 +31,12 @@ export const NOTICE_MS = 5 * 60_000;
 export const READ_GAP_MS = 1_000;
 /** While requests wait, the list is read again this often, so an expired one goes. */
 export const REREAD_MS = 30_000;
+/**
+ * A list read that failed is tried again this many times in a row, after `READ_GAP_MS` and then
+ * four times longer each time (1, 4, 16 and 64 seconds); then only an event, a new connection or
+ * a refresh reads it.
+ */
+export const READ_RETRIES = 4;
 
 const CROCKFORD = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const CODE_DOMAIN = utf8Bytes("clawtrate pairing code v2\n");
@@ -158,6 +166,11 @@ export type DeviceRequestsState = {
   prompt: string | null;
   /** The last list read failed: its message. */
   error: string | null;
+  /**
+   * The connection the list was read on. A decision carries it back, and one made on a list an
+   * earlier connection published sends nothing.
+   */
+  listedOn: number;
 };
 
 export const initialDeviceRequests: DeviceRequestsState = {
@@ -167,6 +180,7 @@ export const initialDeviceRequests: DeviceRequestsState = {
   noticed: 0,
   prompt: null,
   error: null,
+  listedOn: 0,
 };
 
 /** What a decision did, for the sheet to say. */
@@ -207,6 +221,11 @@ export type DeviceApprovalsContext = {
   set(state: DeviceRequestsState): void;
   /** Random bytes for the made-up codes. */
   random(bytes: number): Uint8Array;
+  /**
+   * The code collisions are counted by; `pairCode`, which makes the codes shown, unless a test
+   * needs two requests to share one (a real pair takes about 2^40 tries).
+   */
+  code?: (publicKey: string, requestId: string) => string | null;
 };
 
 const str = (value: unknown) => (typeof value === "string" && value.trim() !== "" ? value : null);
@@ -234,6 +253,8 @@ export function readDeviceRequest(
   spent: boolean,
   /** A block that comes from the other waiting requests, used when the row has none of its own. */
   among: DeviceRequestBlock | null = null,
+  /** Make its choices: only for a request that is shown and offers codes. */
+  withChoices = true,
 ): DeviceRequest | null {
   const r = asRecord(row) ?? {};
   const requestId = str(r.requestId);
@@ -267,7 +288,7 @@ export function readDeviceRequest(
     scopes: scopes.slice(0, 16).map((scope) => cleanLine(scope, MAX_REPORTED_CHARS)),
     at: typeof r.ts === "number" && Number.isFinite(r.ts) ? r.ts : 0,
     blocked,
-    choices: blocked ? [] : (codeChoices(publicKey, requestId, secret) ?? []),
+    choices: blocked || !withChoices ? [] : (codeChoices(publicKey, requestId, secret) ?? []),
     spent,
   };
 }
@@ -314,6 +335,22 @@ export class DeviceApprovals {
   /** Requests this host already opened by itself: each opens by itself once. */
   private readonly prompted = new Set<string>();
   /**
+   * Requests this host has seen share a code with another: blocked for as long as each waits,
+   * even once the other is gone, so it takes Deny and Ask again. Past `MAX_COLLIDED`, `crowded`
+   * blocks every request until the gateway lists none.
+   */
+  private readonly collided = new Set<string>();
+  private crowded = false;
+  /**
+   * Requests a decision is under way for, each with that decision's own token, taken before its
+   * first await: no other decision on the same request starts until it ends, and only the
+   * decision holding the token frees it. Kept when the gateway may have acted on it (an approval
+   * sent whose answer was lost, or approved, or a denial), until the request leaves the list.
+   */
+  private readonly deciding = new Map<string, number>();
+  /** The last decision token handed out. */
+  private decisions = 0;
+  /**
    * Until when this host opens no sheet by itself: five minutes after any refusal or wrong pick
    * here, whichever device asks next. The requests are still listed and can be opened.
    */
@@ -330,6 +367,15 @@ export class DeviceApprovals {
   private lastReadAt = -Infinity;
   /** Ends the earliest notice when its five minutes are up, with no event needed. */
   private cancelNotice: (() => void) | null = null;
+  /**
+   * The list's order on this connection: each `device.pair.list` send takes the next number, and
+   * `applied` is the newest whose reply was applied. A reply older than that prunes nothing and
+   * publishes nothing, and a decision resting on one sends no approval.
+   */
+  private sent = 0;
+  private applied = 0;
+  /** List reads that failed in a row on this connection, for the bounded retry. */
+  private failures = 0;
 
   constructor(ctx: DeviceApprovalsContext) {
     this.ctx = ctx;
@@ -347,6 +393,8 @@ export class DeviceApprovals {
   /** A hello: with admin the list is read; without, only events are noticed. */
   onHello(): void {
     this.epoch += 1;
+    this.applied = 0;
+    this.failures = 0;
     this.clearTimer();
     this.clearNotices();
     const admin = this.ctx.admin();
@@ -357,6 +405,8 @@ export class DeviceApprovals {
   /** The connection closed: what it listed goes with it. */
   onClose(): void {
     this.epoch += 1;
+    this.applied = 0;
+    this.failures = 0;
     this.clearTimer();
     this.reading = false;
     this.again = false;
@@ -369,6 +419,9 @@ export class DeviceApprovals {
     this.onClose();
     this.spent.clear();
     this.prompted.clear();
+    this.collided.clear();
+    this.crowded = false;
+    this.deciding.clear();
     this.quietUntil = -Infinity;
   }
 
@@ -446,6 +499,61 @@ export class DeviceApprovals {
     }, due - now);
   }
 
+  /**
+   * The only way the app sends `device.pair.list`: the send is numbered, and its pending rows are
+   * applied (published, collisions recorded) if no newer reply was applied on this connection,
+   * whichever path asked: the list read, a decision's read again, the read of a paired device, or
+   * Settings, Machines (`listDevices`). Only a connection with admin applies them, and only a
+   * reply with a pending list: one without changes nothing. `applied` says whether this reply
+   * was; `paired` is null when the reply has no paired list; `reply` is the gateway's answer as
+   * it came. A source check holds that nothing else sends the method
+   * (`apps/desktop/test/device-pair-list-callers.test.ts`).
+   */
+  private async list(): Promise<{
+    applied: boolean;
+    pending: unknown[];
+    paired: unknown[] | null;
+    reply: unknown;
+  }> {
+    const seq = (this.sent += 1);
+    const epoch = this.epoch;
+    const reply = await this.ctx.request("device.pair.list", {});
+    const answer = asRecord(reply) ?? {};
+    const pending = Array.isArray(answer.pending) ? answer.pending : null;
+    const applied =
+      epoch === this.epoch &&
+      pending !== null &&
+      this.ctx.admin() &&
+      this.applyNewest(seq, pending);
+    return {
+      applied,
+      pending: pending ?? [],
+      paired: Array.isArray(answer.paired) ? answer.paired : null,
+      reply,
+    };
+  }
+
+  /**
+   * `device.pair.list` for Settings, Machines: the same numbered send, its waiting requests
+   * applied by the same rules, and the gateway's whole answer, as it came, for the caller.
+   */
+  async listDevices(): Promise<unknown> {
+    return (await this.list()).reply;
+  }
+
+  /**
+   * Apply a pending list if no newer one was applied on this connection; false when it is older
+   * and changed nothing.
+   */
+  private applyNewest(seq: number, rows: unknown[]): boolean {
+    if (seq < this.applied) return false;
+    this.applied = seq;
+    // Any list applied, whoever read it, ends a run of failed reads.
+    this.failures = 0;
+    this.apply(rows);
+    return true;
+  }
+
   private async read(): Promise<void> {
     if (!this.ctx.admin()) return;
     if (this.reading) {
@@ -456,59 +564,93 @@ export class DeviceApprovals {
     const epoch = this.epoch;
     this.reading = true;
     this.lastReadAt = this.ctx.now();
+    // `list()` numbers this send, before its first await: the next number.
+    const seq = this.sent + 1;
+    let outcome: "read" | "failed" | "older" = "read";
     try {
-      const answer = asRecord(await this.ctx.request("device.pair.list", {})) ?? {};
+      await this.list();
       if (epoch !== this.epoch) return;
-      this.apply(Array.isArray(answer.pending) ? answer.pending : []);
     } catch (error) {
-      if (epoch === this.epoch) this.patch({ error: errorText(error) });
+      // A failure is ordered like a reply: one older than a list already applied (a decision's
+      // read, Machines') publishes nothing and is tried again by nothing.
+      if (epoch === this.epoch && seq > this.applied) {
+        this.patch({ error: errorText(error) });
+        outcome = "failed";
+      } else outcome = "older";
     } finally {
       if (epoch === this.epoch) {
         this.reading = false;
         if (this.again) {
           this.again = false;
           this.schedule();
-        } else if (this.state.requests.length > 0) this.schedule(REREAD_MS);
+        } else if (outcome === "failed") {
+          // A request may be waiting that no read has shown yet: try again, a few times. Then the
+          // last list read stays shown, with the error, until an event, a hello or a refresh.
+          if (this.failures < READ_RETRIES) this.schedule(READ_GAP_MS * 4 ** this.failures);
+          this.failures += 1;
+        } else if (outcome === "read" && this.state.requests.length > 0) this.schedule(REREAD_MS);
       }
     }
   }
 
-  private apply(rows: unknown[]): void {
-    // Every pending row's code, those past the sixteen included: a code two share blocks both.
-    const codeOf = (row: unknown) => {
-      const r = asRecord(row) ?? {};
-      const id = str(r.requestId);
-      const key = str(r.publicKey);
-      return id && key ? pairCode(key, id) : null;
-    };
-    const codes = rows.map(codeOf);
-    const all = rows
-      .map((row, i) => {
-        const id = str(asRecord(row)?.requestId);
-        const code = codes[i];
-        const shared = code !== null && codes.filter((each) => each === code).length > 1;
-        return readDeviceRequest(
-          row,
-          this.secret,
-          id !== null && this.spent.has(id),
-          shared ? "same-code" : null,
-        );
+  /**
+   * What one list read says, with the same rules for the list shown and for a decision: every
+   * valid request newest first, a code two share (the rows past the sixteen included, and any
+   * this host saw collide before) blocking each, and while more wait than are shown, none
+   * offering a pick. Choices are made only for the requests shown that offer codes.
+   */
+  private snapshot(rows: unknown[]): { all: DeviceRequest[]; requests: DeviceRequest[] } {
+    const parsed = rows
+      .map((row) => readDeviceRequest(row, this.secret, false, null, false))
+      .filter((request): request is DeviceRequest => request !== null);
+    const codeFor = this.ctx.code ?? pairCode;
+    const codeOf = (request: DeviceRequest) =>
+      request.publicKey === "" ? null : codeFor(request.publicKey, request.requestId);
+    const codes = parsed.map(codeOf);
+    const counts = new Map<string, number>();
+    for (const code of codes) if (code !== null) counts.set(code, (counts.get(code) ?? 0) + 1);
+    const ids = new Set(parsed.map((request) => request.requestId));
+    for (const id of this.collided) if (!ids.has(id)) this.collided.delete(id);
+    if (this.crowded && parsed.length === 0) this.crowded = false;
+    parsed.forEach((request, i) => {
+      const code = codes[i] ?? null;
+      if (code === null || (counts.get(code) ?? 0) < 2 || this.collided.has(request.requestId))
+        return;
+      if (this.collided.size >= MAX_COLLIDED) this.crowded = true;
+      else this.collided.add(request.requestId);
+    });
+    const all = parsed
+      .map((request) => {
+        const shared = this.crowded || this.collided.has(request.requestId);
+        return {
+          ...request,
+          spent: this.spent.has(request.requestId),
+          blocked: request.blocked ?? (shared ? ("same-code" as const) : null),
+        };
       })
-      .filter((request): request is DeviceRequest => request !== null)
       .sort((a, b) => b.at - a.at);
     // More waiting than shown: the person can't judge a set they can't see, so none is picked.
     const hidden = all.length > MAX_DEVICE_REQUESTS;
-    const requests = all
-      .slice(0, MAX_DEVICE_REQUESTS)
-      .map((request) =>
-        hidden && request.blocked === null
-          ? { ...request, blocked: "too-many" as const, choices: [] }
-          : request,
-      );
+    const requests = all.slice(0, MAX_DEVICE_REQUESTS).map((request) => {
+      const blocked = request.blocked ?? (hidden ? ("too-many" as const) : null);
+      return {
+        ...request,
+        blocked,
+        choices: blocked
+          ? []
+          : (codeChoices(request.publicKey, request.requestId, this.secret) ?? []),
+      };
+    });
+    return { all, requests };
+  }
+
+  private apply(rows: unknown[]): void {
+    const { all, requests } = this.snapshot(rows);
     // Every request still pending, shown or past the bound: a spent pick stays spent.
     const ids = new Set(all.map((request) => request.requestId));
     for (const id of this.spent) if (!ids.has(id)) this.spent.delete(id);
     for (const id of this.prompted) if (!ids.has(id)) this.prompted.delete(id);
+    for (const id of this.deciding.keys()) if (!ids.has(id)) this.deciding.delete(id);
     const only = all.length === 1 ? requests[0]! : null;
     this.ctx.set({
       access: "admin",
@@ -521,6 +663,7 @@ export class DeviceApprovals {
           ? only.requestId
           : null,
       error: null,
+      listedOn: this.epoch,
     });
   }
 
@@ -528,12 +671,10 @@ export class DeviceApprovals {
     return this.state.requests.find((request) => request.requestId === requestId) ?? null;
   }
 
-  /** The request's row read again from the gateway, or null when it isn't pending. */
-  private async readAgain(requestId: string): Promise<RawRecord | null> {
-    const answer = asRecord(await this.ctx.request("device.pair.list", {})) ?? {};
-    const pending = Array.isArray(answer.pending) ? answer.pending : [];
-    return (pending.map((row) => asRecord(row) ?? {}).find((r) => r.requestId === requestId) ??
-      null) as RawRecord | null;
+  /** The whole pending list read again from the gateway, for a decision. */
+  private async readAgain(): Promise<{ applied: boolean; rows: unknown[] }> {
+    const { applied, pending } = await this.list();
+    return { applied, rows: pending };
   }
 
   private spend(requestId: string): void {
@@ -553,10 +694,50 @@ export class DeviceApprovals {
     requestId: string,
     code: string,
     scopes: readonly string[],
+    listedOn: number,
   ): Promise<DeviceDecision> {
     const shown = this.shown(requestId);
     if (!this.ctx.admin()) return { kind: "not-allowed" };
+    // A sheet an earlier connection showed decides nothing here; this one read its own list.
+    if (listedOn !== this.epoch) return { kind: "not-allowed" };
     if (!shown) return { kind: "gone" };
+    const token = this.reserve(requestId);
+    if (token === null) return { kind: "not-allowed" };
+    const decision = await this.approveReserved(shown, code, scopes);
+    this.settle(requestId, token, decision);
+    return decision;
+  }
+
+  /**
+   * Take `requestId` for one decision: its token, or null when a decision holds the request
+   * already or too many do.
+   */
+  private reserve(requestId: string): number | null {
+    if (this.deciding.has(requestId) || this.deciding.size >= MAX_DEVICE_REQUESTS) return null;
+    const token = (this.decisions += 1);
+    this.deciding.set(requestId, token);
+    return token;
+  }
+
+  /**
+   * The decision holding `token` ended: free its request, unless the gateway may have acted on it
+   * (an approval that went through or whose answer was lost, a denial or one whose answer was
+   * lost), until the request leaves the list. A token that no longer holds the request (another
+   * gateway's, after a reset) frees nothing.
+   */
+  private settle(requestId: string, token: number, decision: DeviceDecision): void {
+    const acted = ["approved", "undone", "undo-failed", "unknown", "denied"].includes(
+      decision.kind,
+    );
+    if (!acted && this.deciding.get(requestId) === token) this.deciding.delete(requestId);
+  }
+
+  private async approveReserved(
+    shown: DeviceRequest,
+    code: string,
+    scopes: readonly string[],
+  ): Promise<DeviceDecision> {
+    const requestId = shown.requestId;
     if (shown.blocked || shown.spent || !shown.choices.includes(code))
       return { kind: "not-allowed" };
     if (code !== pairCode(shown.publicKey, shown.requestId)) {
@@ -568,21 +749,31 @@ export class DeviceApprovals {
     // Each step goes on the connection the sheet was read on, or not at all.
     const same = this.here();
     try {
-      const row = await this.readAgain(requestId);
+      const { applied, rows } = await this.readAgain();
       if (!same()) return { kind: "interrupted" };
+      // A newer reply, from any read, was applied before this one: decide nothing on it. One
+      // applied since is in the published list the decision checks below.
+      if (!applied) {
+        this.refreshOn(same);
+        return { kind: "not-allowed" };
+      }
+      const row = rows.map((each) => asRecord(each) ?? {}).find((r) => r.requestId === requestId);
       if (!row) return this.gone(same);
       const what = differences(shown, row);
-      if (what.length > 0) {
-        this.refreshOn(same);
-        return { kind: "changed", what };
-      }
+      if (what.length > 0) return { kind: "changed", what };
+      // The list as now published, from this read, by the rules it is shown by: a request not
+      // in it (hidden past the sixteen), or blocked in it, takes no approval.
+      if (this.shown(requestId)?.blocked !== null) return { kind: "not-allowed" };
     } catch (error) {
       return { kind: "refused", message: errorText(error) };
     }
     try {
       await this.ctx.request("device.pair.approve", { requestId });
     } catch (error) {
-      if (!this.ctx.answered(error)) return this.afterLost(shown, same);
+      // The answer was lost: the gateway may have approved. The paired device, read once, is
+      // compared and removed exactly as after an answer; not listed or not readable is unknown,
+      // and the request stays taken, so no second approval goes from here.
+      if (!this.ctx.answered(error)) return this.check(shown, same);
       if (unknownRequest(error)) return this.gone(same);
       this.refreshOn(same);
       return { kind: "refused", message: errorText(error) };
@@ -631,9 +822,10 @@ export class DeviceApprovals {
     }
   }
 
+  /** The paired device with `deviceId`; a reply without a paired list fails, so it confirms nothing. */
   private async readPaired(deviceId: string): Promise<RawRecord | null> {
-    const answer = asRecord(await this.ctx.request("device.pair.list", {})) ?? {};
-    const paired = Array.isArray(answer.paired) ? answer.paired : [];
+    const { paired } = await this.list();
+    if (paired === null) throw new Error("The gateway's answer didn't list its paired devices.");
     return (paired.map((row) => asRecord(row) ?? {}).find((r) => r.deviceId === deviceId) ??
       null) as RawRecord | null;
   }
@@ -649,16 +841,6 @@ export class DeviceApprovals {
     if (!same()) return null;
     const device = await this.readPaired(deviceId);
     return same() ? { device } : null;
-  }
-
-  /** The approval's answer was lost: read what the gateway did, and check it as for an answer. */
-  private async afterLost(shown: DeviceRequest, same: () => boolean): Promise<DeviceDecision> {
-    try {
-      if ((await this.readPairedOn(shown.deviceId, same))?.device) return this.check(shown, same);
-    } catch {
-      // Not readable either: unknown.
-    }
-    return { kind: "unknown" };
   }
 
   /** A refusal or a wrong pick: no sheet opens by itself for five minutes, for any device. */
@@ -687,28 +869,45 @@ export class DeviceApprovals {
   }
 
   /** "I didn't start this" (`device.pair.reject`) or "None of these match" (nothing sent). */
-  async refuse(requestId: string, why: "not-mine" | "none-match"): Promise<DeviceDecision> {
+  async refuse(
+    requestId: string,
+    why: "not-mine" | "none-match",
+    listedOn: number,
+  ): Promise<DeviceDecision> {
     const shown = this.shown(requestId);
     if (!this.ctx.admin()) return { kind: "not-allowed" };
+    if (listedOn !== this.epoch) return { kind: "not-allowed" };
     if (!shown) return { kind: "gone" };
+    // A decision under way on this request (an approval being sent) takes no refusal.
+    if (this.deciding.has(requestId)) return { kind: "not-allowed" };
     if (why === "none-match") {
       // Only a request offering codes takes this pick: a blocked one (too many waiting, or a
       // reason of its own) is denied or left, so spent picks stay within the requests shown.
-      if (shown.blocked !== null) return { kind: "not-allowed" };
+      // One pick per request: a request already picked for (a wrong code, or this) takes no
+      // other; "I didn't start this" still denies it.
+      if (shown.blocked !== null || shown.spent) return { kind: "not-allowed" };
       this.quiet();
       this.spend(requestId);
       return { kind: "none-match" };
     }
+    const token = this.reserve(requestId);
+    if (token === null) return { kind: "not-allowed" };
     const same = this.here();
+    let decision: DeviceDecision;
     try {
       this.quiet();
       await this.ctx.request("device.pair.reject", { requestId });
       this.refreshOn(same);
-      return { kind: "denied" };
+      decision = { kind: "denied" };
     } catch (error) {
-      if (!this.ctx.answered(error)) return { kind: "unknown" };
-      if (unknownRequest(error)) return this.gone(same);
-      return { kind: "refused", message: errorText(error) };
+      decision = !this.ctx.answered(error)
+        ? { kind: "unknown" }
+        : unknownRequest(error)
+          ? this.gone(same)
+          : { kind: "refused", message: errorText(error) };
     }
+    // A denial (or a lost answer) may have ended the request: it stays taken until it leaves.
+    this.settle(requestId, token, decision);
+    return decision;
   }
 }

@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { sha256Hex, toBase64, utf8Bytes } from "../src/bytes.ts";
 import {
   DeviceApprovals,
+  MAX_COLLIDED,
   MAX_DEVICE_REQUESTS,
   PAIR_CODE_CHARS,
   PAIR_CODE_CHOICES,
@@ -59,7 +60,14 @@ const pairedOf = (row: Row, extra: Row = {}): Row => ({
 class Refusal extends Error {}
 
 /** A gateway that lists `pending` and `paired`, and records what it was asked. */
-function setup(options: { admin?: boolean; pairing?: boolean; pending?: Row[] } = {}) {
+type Options = {
+  admin?: boolean;
+  pairing?: boolean;
+  pending?: Row[];
+  /** Requests whose ids are listed here count as sharing one code. */
+  sameCode?: string[];
+};
+function setup(options: Options = {}) {
   const gw = { pending: options.pending ?? [], paired: [] as Row[] };
   const calls: string[] = [];
   const answers: Record<string, (params: Row) => unknown> = {};
@@ -67,7 +75,7 @@ function setup(options: { admin?: boolean; pairing?: boolean; pending?: Row[] } 
   const timers: Array<() => void> = [];
   const delays = new Map<() => void, number>();
   let admin = options.admin ?? true;
-  const engine = new DeviceApprovals({
+  const real = new DeviceApprovals({
     request: async (method, params) => {
       calls.push(method);
       const answer = answers[method];
@@ -104,7 +112,27 @@ function setup(options: { admin?: boolean; pairing?: boolean; pending?: Row[] } 
     get: () => state,
     set: (next) => (state = next),
     random: (n) => new Uint8Array(n).fill(7),
+    ...(options.sameCode
+      ? {
+          code: (key: string, id: string) =>
+            options.sameCode!.includes(id) ? "SAME-CODE" : pairCode(key, id),
+        }
+      : {}),
   });
+  /** The engine, its decisions made on the list as last published unless a test says otherwise. */
+  const engine = {
+    onHello: () => real.onHello(),
+    onClose: () => real.onClose(),
+    reset: () => real.reset(),
+    onEvent: (event: string, payload: unknown) => real.onEvent(event, payload),
+    refresh: () => real.refresh(),
+    takePrompt: (id: string) => real.takePrompt(id),
+    listDevices: () => real.listDevices(),
+    approve: (id: string, code: string, scopes: readonly string[], listedOn?: number) =>
+      real.approve(id, code, scopes, listedOn ?? state?.listedOn ?? 0),
+    refuse: (id: string, why: "not-mine" | "none-match", listedOn?: number) =>
+      real.refuse(id, why, listedOn ?? state?.listedOn ?? 0),
+  };
   let now = 10_000;
   const settle = async () => {
     for (let i = 0; i < 5; i += 1) await new Promise<void>((r) => setTimeout(() => r(), 0));
@@ -128,7 +156,7 @@ function setup(options: { admin?: boolean; pairing?: boolean; pending?: Row[] } 
   };
 }
 
-async function listed(rows: Row[], options: { admin?: boolean } = {}) {
+async function listed(rows: Row[], options: Omit<Options, "pending"> = {}) {
   const t = setup({ ...options, pending: rows });
   t.engine.onHello();
   await t.settle();
@@ -246,6 +274,436 @@ describe("approving a waiting device", () => {
     ]);
     expect(decision).toEqual({ kind: "changed", what: ["access"] });
     expect(t.calls).toEqual(["device.pair.list"]);
+  });
+
+  it("approves nothing when, on the read before approving, it now shares its code", async () => {
+    const row = pendingRow();
+    const t = await listed([row]);
+    expect(t.request(row.requestId as string).blocked).toBeNull();
+    t.gw.pending = [row, { ...row, ts: 0 }];
+    expect(await t.engine.approve(row.requestId as string, codeOf(row), [...FULL_SCOPES])).toEqual({
+      kind: "not-allowed",
+    });
+    expect(t.calls).not.toContain("device.pair.approve");
+    // The list it decided on is the one now published: the request, blocked for its code.
+    const shown = t.state().requests.filter((each) => each.requestId === row.requestId);
+    expect(shown.length).toBeGreaterThan(0);
+    expect(shown.every((each) => each.blocked === "same-code")).toBe(true);
+  });
+
+  it("approves nothing when, on the read before approving, more now wait than are shown", async () => {
+    const row = pendingRow();
+    const t = await listed([row]);
+    t.gw.pending = [
+      row,
+      ...Array.from({ length: 16 }, (_, i) => pendingRow(newKey(), { ts: 2000 + i })),
+    ];
+    expect(await t.engine.approve(row.requestId as string, codeOf(row), [...FULL_SCOPES])).toEqual({
+      kind: "not-allowed",
+    });
+    expect(t.calls).not.toContain("device.pair.approve");
+    // Published: the request hidden past the sixteen, one hidden, every one shown too-many.
+    expect(t.state().requests.some((each) => each.requestId === row.requestId)).toBe(false);
+    expect(t.state().omitted).toBe(1);
+    expect(t.state().requests.every((each) => each.blocked === "too-many")).toBe(true);
+  });
+
+  /**
+   * The decision's list read goes out first; a background read sent after it is answered and
+   * applied first, with `newer`; then the decision's reply, `older`, arrives.
+   */
+  const outOfOrder = (t: Awaited<ReturnType<typeof listed>>, older: Row[], newer: Row[]) => {
+    let lists = 0;
+    t.answers["device.pair.list"] = async () => {
+      lists += 1;
+      if (lists === 1) {
+        await t.engine.refresh();
+        return { pending: older, paired: [] };
+      }
+      return { pending: newer, paired: [] };
+    };
+  };
+
+  it("approves nothing a newer read hid past the sixteen, on an older decision read", async () => {
+    const row = pendingRow();
+    const t = await listed([row]);
+    const newer = [
+      row,
+      ...Array.from({ length: 16 }, (_, i) => pendingRow(newKey(), { ts: 2000 + i })),
+    ];
+    outOfOrder(t, [row], newer);
+    expect(await t.engine.approve(row.requestId as string, codeOf(row), [...FULL_SCOPES])).toEqual({
+      kind: "not-allowed",
+    });
+    expect(t.calls).not.toContain("device.pair.approve");
+  });
+
+  it("keeps a collision a newer read recorded, though an older decision read lacks it", async () => {
+    const [mine, x, y] = [pendingRow(), pendingRow(), pendingRow()];
+    const t = await listed([mine], { sameCode: [x.requestId as string, y.requestId as string] });
+    // The decision's read goes out first and has only `mine`; a newer read sees x and y share a
+    // code; then the older reply arrives; after it, y is gone and only x waits.
+    let lists = 0;
+    t.answers["device.pair.list"] = async () => {
+      lists += 1;
+      if (lists === 1) {
+        await t.engine.refresh();
+        return { pending: [mine], paired: [] };
+      }
+      return { pending: lists === 2 ? [mine, x, y] : [x], paired: [] };
+    };
+    await t.engine.approve(mine.requestId as string, codeOf(mine), [...FULL_SCOPES]);
+    await t.settle();
+    await t.engine.refresh();
+    // Its twin gone, the survivor is still blocked: it takes Deny and Ask again.
+    expect(t.request(x.requestId as string).blocked).toBe("same-code");
+  });
+
+  it("approves nothing on a decision read older than another decision's paired-device read", async () => {
+    // W is approved first. While its approval is out, a decision on X sends its list read; then
+    // W's check reads the paired device and that reply, the newer one, lists X and a twin Y
+    // sharing its code; only then does X's older reply, without Y, arrive. The list read W's
+    // decision starts after its check answers last of all.
+    const [x, w, y] = [pendingRow(), pendingRow(), pendingRow()];
+    const t = await listed([x, w], { sameCode: [x.requestId as string, y.requestId as string] });
+    let lists = 0;
+    let releaseX: () => void = () => {};
+    let xDecision: Promise<unknown> = Promise.resolve();
+    let releaseRefresh: () => void = () => {};
+    t.answers["device.pair.list"] = async () => {
+      lists += 1;
+      if (lists === 1) return { pending: [x, w], paired: [] }; // W's read again
+      if (lists === 2) {
+        // X's read again: answered only after W's check has had its newer reply.
+        await new Promise<void>((resolve) => (releaseX = resolve));
+        return { pending: [x], paired: [] };
+      }
+      // W's paired-device read (3); the list read W's decision starts afterwards (4) answers last;
+      // any later read answers at once.
+      if (lists === 4) await new Promise<void>((resolve) => (releaseRefresh = resolve));
+      return { pending: [x, y], paired: [pairedOf(w)] };
+    };
+    t.answers["device.pair.approve"] = (params) => {
+      if ((params as Row).requestId === w.requestId)
+        xDecision = t.engine.approve(x.requestId as string, codeOf(x), [...FULL_SCOPES]);
+      return { requestId: (params as Row).requestId };
+    };
+    expect(await t.engine.approve(w.requestId as string, codeOf(w), [...FULL_SCOPES])).toEqual({
+      kind: "approved",
+      deviceId: w.deviceId,
+    });
+    releaseX();
+    expect(await xDecision).toEqual({ kind: "not-allowed" });
+    releaseRefresh();
+    await t.settle();
+    expect(t.calls.filter((call) => call === "device.pair.approve")).toHaveLength(1);
+    expect(t.request(x.requestId as string).blocked).toBe("same-code");
+  });
+
+  it("changes nothing with a reply that has no pending list, and approves nothing on one", async () => {
+    const [x, y] = [pendingRow(), pendingRow()];
+    const t = await listed([x, y], { sameCode: [x.requestId as string, y.requestId as string] });
+    const id = x.requestId as string;
+    expect(t.request(id).blocked).toBe("same-code");
+    t.answers["device.pair.list"] = () => ({ paired: [] });
+    await t.engine.refresh();
+    expect(
+      t
+        .state()
+        .requests.map((each) => each.requestId)
+        .sort(),
+    ).toEqual([x.requestId, y.requestId].sort());
+    expect(await t.engine.approve(id, codeOf(x), [...FULL_SCOPES])).toEqual({
+      kind: "not-allowed",
+    });
+    expect(t.calls).not.toContain("device.pair.approve");
+    // The collision it would have pruned is still remembered once y is gone.
+    delete t.answers["device.pair.list"];
+    t.gw.pending = [x];
+    await t.engine.refresh();
+    expect(t.request(id).blocked).toBe("same-code");
+  });
+
+  it("approves nothing on a decision read with no pending list, for a request that takes a pick", async () => {
+    const row = pendingRow();
+    const t = await listed([row]);
+    const id = row.requestId as string;
+    expect(t.request(id)).toMatchObject({ blocked: null, spent: false });
+    expect(t.request(id).choices).toContain(codeOf(row));
+    const shown = t.state();
+    const before = t.calls.length;
+    t.answers["device.pair.list"] = () => ({ paired: [] });
+    expect(await t.engine.approve(id, codeOf(row), [...FULL_SCOPES])).toEqual({
+      kind: "not-allowed",
+    });
+    await t.settle();
+    // The decision's read, then the list read again; no approval, and nothing published.
+    expect(t.calls.slice(before)).toEqual(["device.pair.list", "device.pair.list"]);
+    expect(t.state()).toBe(shown);
+  });
+
+  it("gives Settings, Machines the whole reply, applied like any read, and only with admin", async () => {
+    const row = pendingRow();
+    const t = await listed([]);
+    t.gw.pending = [row];
+    t.gw.paired = [pairedOf(pendingRow())];
+    expect(await t.engine.listDevices()).toEqual({ pending: [row], paired: t.gw.paired });
+    expect(t.state().requests.map((each) => each.requestId)).toEqual([row.requestId]);
+    // Without admin (a pairing-only connection, or setup) the reply is the caller's alone.
+    t.gw.pending = [];
+    t.setAdmin(false);
+    await t.engine.listDevices();
+    expect(t.state().requests.map((each) => each.requestId)).toEqual([row.requestId]);
+  });
+
+  it("changes nothing with a reply older than one already applied", async () => {
+    const row = pendingRow();
+    const t = await listed([row]);
+    const newer = [row, pendingRow(newKey(), { ts: 3000 })];
+    outOfOrder(t, [row], newer);
+    expect(await t.engine.approve(row.requestId as string, codeOf(row), [...FULL_SCOPES])).toEqual({
+      kind: "not-allowed",
+    });
+    // What is published is the newer list's, untouched by the older reply.
+    expect(
+      t
+        .state()
+        .requests.map((each) => each.requestId)
+        .sort(),
+    ).toEqual(newer.map((each) => each.requestId as string).sort());
+    expect(t.calls).not.toContain("device.pair.approve");
+  });
+
+  it("honours a newer block this connection published while it read again", async () => {
+    const row = pendingRow();
+    const t = await listed([row]);
+    let lists = 0;
+    t.answers["device.pair.list"] = async () => {
+      lists += 1;
+      if (lists === 1) {
+        // Another read on this connection lands first, and says the request now asks for more.
+        await t.engine.refresh();
+        return { pending: [row], paired: [] };
+      }
+      return { pending: [{ ...row, isRepair: true }], paired: [] };
+    };
+    expect(await t.engine.approve(row.requestId as string, codeOf(row), [...FULL_SCOPES])).toEqual({
+      kind: "not-allowed",
+    });
+    expect(t.calls).not.toContain("device.pair.approve");
+    // The older reply didn't put the unblocked row back over the newer block.
+    expect(t.request(row.requestId as string).blocked).toBe("repair");
+    expect(t.request(row.requestId as string).choices).toEqual([]);
+  });
+
+  it("starts one approval for two quick presses on the same request", async () => {
+    const row = pendingRow();
+    const t = await listed([row]);
+    const id = row.requestId as string;
+    const [first, second] = await Promise.all([
+      t.engine.approve(id, codeOf(row), [...FULL_SCOPES]),
+      t.engine.approve(id, codeOf(row), [...FULL_SCOPES]),
+    ]);
+    expect([first.kind, second.kind].sort()).toEqual(["approved", "not-allowed"]);
+    expect(t.calls.filter((call) => call === "device.pair.approve")).toHaveLength(1);
+  });
+
+  it("takes no refusal while an approval is under way, during its read or its call", async () => {
+    for (const during of ["device.pair.list", "device.pair.approve"] as const) {
+      const row = pendingRow();
+      const t = await listed([row]);
+      const id = row.requestId as string;
+      const refusals: string[] = [];
+      const inner = during === "device.pair.list" ? undefined : t.answers[during];
+      t.answers[during] = async (params) => {
+        delete t.answers[during];
+        if (inner) t.answers[during] = inner;
+        for (const why of ["none-match", "not-mine"] as const)
+          refusals.push((await t.engine.refuse(id, why)).kind);
+        if (during === "device.pair.list") return { pending: t.gw.pending, paired: t.gw.paired };
+        t.gw.pending = [];
+        t.gw.paired = [pairedOf(row)];
+        return { requestId: (params as Row).requestId };
+      };
+      expect(await t.engine.approve(id, codeOf(row), [...FULL_SCOPES])).toEqual({
+        kind: "approved",
+        deviceId: row.deviceId,
+      });
+      expect(refusals).toEqual(["not-allowed", "not-allowed"]);
+      expect(t.calls).not.toContain("device.pair.reject");
+      expect(t.calls.filter((call) => call === "device.pair.approve")).toHaveLength(1);
+    }
+  });
+
+  it("keeps a request taken after an approval whose answer was lost", async () => {
+    const row = pendingRow();
+    const t = await listed([row]);
+    const id = row.requestId as string;
+    t.answers["device.pair.approve"] = () => {
+      throw new Error("connection closed");
+    };
+    expect(await t.engine.approve(id, codeOf(row), [...FULL_SCOPES])).toEqual({ kind: "unknown" });
+    delete t.answers["device.pair.approve"];
+    // Still listed, as the gateway may not have acted: nothing more is decided on it here.
+    expect(await t.engine.approve(id, codeOf(row), [...FULL_SCOPES])).toEqual({
+      kind: "not-allowed",
+    });
+    expect(await t.engine.refuse(id, "not-mine")).toEqual({ kind: "not-allowed" });
+    expect(t.calls.filter((call) => call === "device.pair.approve")).toHaveLength(1);
+  });
+
+  it("frees each request a decision kept taken once it leaves the list", async () => {
+    // More approvals than the bound on requests taken, one after another: each approved request
+    // leaves the list, and with it its hold, so the last is approved too.
+    const t = await listed([]);
+    for (let i = 0; i <= MAX_DEVICE_REQUESTS; i += 1) {
+      const row = pendingRow();
+      t.gw.pending = [row];
+      await t.engine.refresh();
+      expect(
+        await t.engine.approve(row.requestId as string, codeOf(row), [...FULL_SCOPES]),
+      ).toEqual({ kind: "approved", deviceId: row.deviceId });
+    }
+  });
+
+  it("frees a request only by the decision that took it, across another gateway", async () => {
+    const row = pendingRow();
+    const t = await listed([row]);
+    const id = row.requestId as string;
+    let lists = 0;
+    let releaseFirst: () => void = () => {};
+    let releaseSecond: () => void = () => {};
+    t.answers["device.pair.list"] = async () => {
+      // The first decision's read again, then the second gateway's hello read, then the second
+      // decision's read again; later reads answer at once.
+      const read = (lists += 1);
+      if (read === 1) await new Promise<void>((resolve) => (releaseFirst = resolve));
+      if (read === 3) await new Promise<void>((resolve) => (releaseSecond = resolve));
+      return { pending: t.gw.pending, paired: t.gw.paired };
+    };
+    const first = t.engine.approve(id, codeOf(row), [...FULL_SCOPES]);
+    await t.settle();
+    // Another gateway, which lists a request with the same id, and a decision on it.
+    t.engine.reset();
+    t.engine.onHello();
+    await t.settle();
+    const second = t.engine.approve(id, codeOf(row), [...FULL_SCOPES]);
+    await t.settle();
+    releaseFirst();
+    expect(await first).toEqual({ kind: "interrupted" });
+    // The stale decision ended; the second still holds the request, so nothing else decides it.
+    expect(await t.engine.approve(id, codeOf(row), [...FULL_SCOPES])).toEqual({
+      kind: "not-allowed",
+    });
+    expect(await t.engine.refuse(id, "not-mine")).toEqual({ kind: "not-allowed" });
+    expect(t.calls.filter((call) => call === "device.pair.approve")).toHaveLength(0);
+    releaseSecond();
+    expect(await second).toEqual({ kind: "approved", deviceId: row.deviceId });
+    expect(t.calls.filter((call) => call === "device.pair.approve")).toHaveLength(1);
+    expect(t.calls).not.toContain("device.pair.reject");
+  });
+
+  it("takes one None of these match per request, and still denies it", async () => {
+    const row = pendingRow();
+    const t = await listed([row]);
+    const id = row.requestId as string;
+    expect(await t.engine.refuse(id, "none-match")).toEqual({ kind: "none-match" });
+    t.advance(4 * 60_000);
+    expect(await t.engine.refuse(id, "none-match")).toEqual({ kind: "not-allowed" });
+    // "I didn't start this" still denies it, while it is listed and still picked for.
+    await t.engine.refresh();
+    expect(t.request(id).spent).toBe(true);
+    expect(await t.engine.refuse(id, "not-mine")).toEqual({ kind: "denied" });
+    expect(t.calls).toContain("device.pair.reject");
+    // The quiet minutes run from the first pick: the refused one started none.
+    const first = pendingRow();
+    const u = await listed([first]);
+    const firstId = first.requestId as string;
+    expect(await u.engine.refuse(firstId, "none-match")).toEqual({ kind: "none-match" });
+    u.advance(4 * 60_000);
+    expect(await u.engine.refuse(firstId, "none-match")).toEqual({ kind: "not-allowed" });
+    u.advance(60_000);
+    const next = pendingRow();
+    u.gw.pending = [next];
+    await u.engine.refresh();
+    expect(u.state().prompt).toBe(next.requestId);
+  });
+
+  it("compares and removes the paired device read once after a lost answer", async () => {
+    const row = pendingRow();
+    const t = await listed([row]);
+    let after = 0;
+    t.answers["device.pair.approve"] = () => {
+      t.gw.pending = [];
+      t.gw.paired = [pairedOf(row, { scopes: ["operator.admin"] })];
+      t.answers["device.pair.list"] = () => {
+        // The one paired-device read; every read after it fails.
+        if ((after += 1) === 1) return { pending: [], paired: t.gw.paired };
+        throw new Error("timed out");
+      };
+      throw new Error("connection closed");
+    };
+    const decision = await t.engine.approve(row.requestId as string, codeOf(row), [...FULL_SCOPES]);
+    // The pairing that differs is removed on that one read; the removal isn't confirmed.
+    expect(t.calls).toContain("device.pair.remove");
+    expect(decision).toEqual({ kind: "undo-failed", what: ["access"], message: "timed out" });
+  });
+
+  it("confirms no removal from a read without a paired list", async () => {
+    const row = pendingRow();
+    const t = await listed([row]);
+    t.answers["device.pair.approve"] = () => {
+      t.gw.pending = [];
+      t.gw.paired = [pairedOf(row, { scopes: ["operator.admin"] })];
+      return {};
+    };
+    t.answers["device.pair.remove"] = () => {
+      // The gateway's next list answers without its paired devices.
+      t.answers["device.pair.list"] = () => ({ pending: [] });
+      return {};
+    };
+    expect(await t.engine.approve(row.requestId as string, codeOf(row), [...FULL_SCOPES])).toEqual({
+      kind: "undo-failed",
+      what: ["access"],
+      message: "The gateway's answer didn't list its paired devices.",
+    });
+    // An empty list is a confirmation.
+    const u = await listed([row]);
+    u.answers["device.pair.approve"] = () => {
+      u.gw.pending = [];
+      u.gw.paired = [pairedOf(row, { scopes: ["operator.admin"] })];
+      return {};
+    };
+    u.answers["device.pair.remove"] = () => {
+      u.answers["device.pair.list"] = () => ({ pending: [], paired: [] });
+      return {};
+    };
+    expect(await u.engine.approve(row.requestId as string, codeOf(row), [...FULL_SCOPES])).toEqual({
+      kind: "undone",
+      what: ["access"],
+    });
+  });
+
+  it("decides nothing from a sheet an earlier connection showed", async () => {
+    const row = pendingRow();
+    const t = await listed([row]);
+    const id = row.requestId as string;
+    const sheet = t.state().listedOn;
+    // Closed and connected again: the new connection reads its own list on its hello.
+    t.engine.onClose();
+    t.engine.onHello();
+    await t.settle();
+    expect(t.state().listedOn).not.toBe(sheet);
+    const before = t.calls.length;
+    expect(await t.engine.approve(id, codeOf(row), [...FULL_SCOPES], sheet)).toEqual({
+      kind: "not-allowed",
+    });
+    expect(await t.engine.refuse(id, "not-mine", sheet)).toEqual({ kind: "not-allowed" });
+    expect(await t.engine.refuse(id, "none-match", sheet)).toEqual({ kind: "not-allowed" });
+    // Nothing was sent, and no read of its own: the spent pick and the quiet minutes untouched.
+    expect(t.calls.slice(before)).toEqual([]);
+    expect(t.request(id).spent).toBe(false);
+    expect(t.state().prompt).toBe(id);
   });
 
   it("says a request decided elsewhere or expired is no longer pending", async () => {
@@ -475,7 +933,10 @@ describe("a connection that changes during a decision", () => {
       if (step === "device.pair.approve") await t.engine.approve(id, codeOf(row), [...FULL_SCOPES]);
       else await t.engine.refuse(id, "not-mine");
       await t.settle();
-      // The hello's own read, and nothing the stale decision asked for.
+      // The hello's own read, and nothing the stale decision asked for: none queued either.
+      expect(readsAfter(t, step)).toEqual(["device.pair.list"]);
+      expect(t.delays()).toEqual([]);
+      await t.fire();
       expect(readsAfter(t, step)).toEqual(["device.pair.list"]);
     }
   });
@@ -522,6 +983,7 @@ describe("the waiting requests", () => {
     const row = pendingRow();
     const t = await listed([row]);
     expect(await t.engine.refuse(row.requestId as string, "not-mine")).toEqual({ kind: "denied" });
+    await t.settle();
     // The device's next connect learns of the denial, and files one more request as it stops.
     t.gw.pending = [{ ...row, requestId: "req-again" }];
     await t.engine.refresh();
@@ -578,6 +1040,48 @@ describe("the waiting requests", () => {
       kind: "not-allowed",
     });
     expect(t.request(machine.requestId as string).spent).toBe(false);
+  });
+
+  it("keeps a collision blocked for as long as either request waits, whichever survives", async () => {
+    for (const survivor of [0, 1]) {
+      const pair = [pendingRow(), pendingRow()];
+      const ids = pair.map((row) => row.requestId as string);
+      const t = await listed(pair, { sameCode: ids });
+      expect(t.state().requests.map((each) => each.blocked)).toEqual(["same-code", "same-code"]);
+      const kept = pair[survivor]!;
+      t.gw.pending = [kept];
+      await t.engine.refresh();
+      expect(t.request(kept.requestId as string).blocked).toBe("same-code");
+      expect(
+        await t.engine.approve(kept.requestId as string, codeOf(kept), [...FULL_SCOPES]),
+      ).toEqual({ kind: "not-allowed" });
+      await t.settle();
+      // Deny, then the device asks again: a new id is a new request, with nothing against it.
+      expect(await t.engine.refuse(kept.requestId as string, "not-mine")).toEqual({
+        kind: "denied",
+      });
+      await t.settle();
+      const again = { ...kept, requestId: `${kept.requestId as string}-again` };
+      t.gw.pending = [again];
+      await t.engine.refresh();
+      expect(t.request(again.requestId).blocked).toBeNull();
+    }
+  });
+
+  it("blocks every request once more collisions are seen than it keeps, until none waits", async () => {
+    const many = Array.from({ length: MAX_COLLIDED + 1 }, (_, i) =>
+      pendingRow(newKey(), { ts: i }),
+    );
+    const t = await listed(many, { sameCode: many.map((row) => row.requestId as string) });
+    const fresh = pendingRow(newKey(), { ts: 500 });
+    t.gw.pending = [fresh];
+    await t.engine.refresh();
+    expect(t.request(fresh.requestId as string).blocked).toBe("same-code");
+    t.gw.pending = [];
+    await t.engine.refresh();
+    t.gw.pending = [fresh];
+    await t.engine.refresh();
+    expect(t.request(fresh.requestId as string).blocked).toBeNull();
   });
 
   it("blocks two waiting requests that show the same code, one of them past the sixteen", async () => {
@@ -637,6 +1141,7 @@ describe("the waiting requests", () => {
       const id = first.requestId as string;
       if (refusal === "wrong") await t.engine.approve(id, wrongOf(t, first), [...FULL_SCOPES]);
       else await t.engine.refuse(id, refusal);
+      await t.settle();
       expect(t.state().prompt).toBeNull();
       // Another key's request, the only one waiting: listed, not opened by itself.
       const next = pendingRow();
@@ -648,6 +1153,86 @@ describe("the waiting requests", () => {
       await t.engine.refresh();
       expect(t.state().prompt).toBe(next.requestId);
     }
+  });
+
+  it("publishes no failure older than a list a decision read, and tries it again never", async () => {
+    const row = pendingRow();
+    const t = await listed([row]);
+    const id = row.requestId as string;
+    t.answers["device.pair.list"] = async () => {
+      // A background read, sent first, fails last.
+      await new Promise<void>((resolve) => (failRead = resolve));
+      throw new Error("timed out");
+    };
+    let failRead: () => void = () => {};
+    void t.engine.refresh();
+    await t.settle();
+    // The decision's read, sent later, answers first: a good list in which the request now
+    // shares its code, so nothing is approved and nothing more is read.
+    t.answers["device.pair.list"] = () => ({ pending: [row, { ...row, ts: 0 }], paired: [] });
+    expect(await t.engine.approve(id, codeOf(row), [...FULL_SCOPES])).toEqual({
+      kind: "not-allowed",
+    });
+    const shown = t.state();
+    failRead();
+    await t.settle();
+    expect(t.state()).toBe(shown);
+    expect(t.state().error).toBeNull();
+    expect(t.delays()).toEqual([]);
+  });
+
+  it("stops after four retries, keeping the last list read, though requests were waiting", async () => {
+    const row = pendingRow();
+    const t = await listed([row]);
+    t.answers["device.pair.list"] = () => {
+      throw new Error("timed out");
+    };
+    const waits: Array<number | undefined> = [];
+    for (let i = 0; i < 8; i += 1) {
+      waits.push(...t.delays());
+      await t.fire();
+    }
+    // The 30-second read, then the four retries, then nothing until an event, hello or refresh.
+    expect(waits).toEqual([30_000, 1_000, 4_000, 16_000, 64_000]);
+    expect(t.delays()).toEqual([]);
+    // What the person sees: the last list read, and the read's failure.
+    expect(t.state()).toMatchObject({ error: "timed out" });
+    expect(t.state().requests.map((each) => each.requestId)).toEqual([row.requestId]);
+  });
+
+  it("tries a failed read again, four times, each four times later, and polls no empty list", async () => {
+    const row = pendingRow();
+    const t = setup({ pending: [row] });
+    let fail = true;
+    t.answers["device.pair.list"] = () => {
+      if (fail) throw new Error("timed out");
+      return { pending: [row], paired: [] };
+    };
+    // A request already waiting when the admin connects, and the first read fails.
+    t.engine.onHello();
+    await t.settle();
+    expect(t.state()).toMatchObject({ requests: [], error: "timed out" });
+    expect(t.delays()).toEqual([1_000]);
+    fail = false;
+    await t.fire();
+    expect(t.state().requests.map((each) => each.requestId)).toEqual([row.requestId]);
+    // A read that keeps failing is tried four times, then left to an event or a refresh.
+    const u = setup();
+    u.answers["device.pair.list"] = () => {
+      throw new Error("timed out");
+    };
+    u.engine.onHello();
+    await u.settle();
+    const waits: Array<number | undefined> = [];
+    for (let i = 0; i < 6; i += 1) {
+      waits.push(...u.delays());
+      await u.fire();
+    }
+    expect(waits).toEqual([1_000, 4_000, 16_000, 64_000]);
+    expect(u.calls.filter((call) => call === "device.pair.list")).toHaveLength(5);
+    // A read that succeeds with nothing waiting sets no timer.
+    const v = await listed([]);
+    expect(v.delays()).toEqual([]);
   });
 
   it("reads a burst of events once", async () => {

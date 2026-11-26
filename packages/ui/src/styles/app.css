@@ -2793,6 +2793,11 @@ textarea {
   margin-top: var(--space-6);
 }
 
+/* Conversation: "Bots know how Clawtrate works" (BotGuides.tsx), below Bot voice. */
+.bot-guides {
+  margin-top: var(--space-6);
+}
+
 /* Whether the gateway permits the prompt hook: a short fact, then where the guide doesn't reach. */
 .bot-voice .bot-voice-hook {
   margin-top: var(--space-3);

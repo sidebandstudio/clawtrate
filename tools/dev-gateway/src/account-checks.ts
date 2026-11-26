@@ -15,6 +15,8 @@
 // or cooldown of one check reaches another.
 
 import { randomUUID } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import {
   ACCOUNT_MODELS,
   credentialFor,
@@ -23,8 +25,10 @@ import {
   profileHash,
   SCRIPTED_ACCOUNTS,
 } from "./accounts.ts";
+import { logSection, logTail } from "./cli.ts";
 import type { OperatorSession } from "./operator.ts";
 import type { FailureStatus, RequestRecord } from "./scripted-accounts.ts";
+import { MARKER_FILE } from "./state-guard.ts";
 
 type JsonRecord = Record<string, unknown>;
 const rec = (value: unknown): JsonRecord =>
@@ -268,15 +272,42 @@ const profileIds = (view: ProviderView | undefined) =>
 type WizardStep = JsonRecord & { id: string; type: string };
 type WizardAnswer = { done: boolean; status?: string; error?: string; step?: WizardStep };
 
+/** The gateway's detail code for a wizard call on a sign-in it no longer holds. */
+const WIZARD_NOT_FOUND = "WIZARD_NOT_FOUND";
+
+/** A wizard call the gateway refused: which call, on which sign-in, answering which step. */
+export class WizardRefusal extends AccountCheckFailure {
+  /** The gateway's detail code, such as `WIZARD_NOT_FOUND`. */
+  readonly code: unknown;
+  constructor(method: string, sessionId: string, stepId: string | undefined, error: unknown) {
+    super(
+      `${method} on sign-in ${sessionId}${stepId ? `, answering step ${stepId}` : ""}: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    this.code = rec(rec(error).details).code;
+  }
+}
+
+async function wizardCall<T>(
+  h: AccountHarness,
+  method: "wizard.next" | "wizard.cancel",
+  sessionId: string,
+  answer?: { stepId: string; value: unknown },
+): Promise<T> {
+  try {
+    return await h.admin.request<T>(method, { sessionId, ...(answer ? { answer } : {}) });
+  } catch (error) {
+    throw new WizardRefusal(method, sessionId, answer?.stepId, error);
+  }
+}
+
 async function wizardNext(
   h: AccountHarness,
   sessionId: string,
   answer?: { stepId: string; value: unknown },
 ): Promise<WizardAnswer> {
-  return h.admin.request<WizardAnswer>("wizard.next", {
-    sessionId,
-    ...(answer ? { answer } : {}),
-  });
+  return wizardCall<WizardAnswer>(h, "wizard.next", sessionId, answer);
 }
 
 /** A note the client must acknowledge before the sign-in goes on, as a client does. */
@@ -607,6 +638,109 @@ export const ACCOUNT_CHECKS: AccountCheck[] = [
     },
   },
   {
+    name: "a bot's order is cleared over the connection while the gateway runs: unlocked, a kept order cleared, refused below admin",
+    rows: [14, 36],
+    run: async (h) => {
+      // The gateway's own process, from the tool's marker: the same one before and after is no restart.
+      const gatewayPid = () =>
+        rec(JSON.parse(readFileSync(join(h.stateDir, MARKER_FILE), "utf8"))).gatewayPid;
+      const stored = async (bot: string) => {
+        const view = await providerView(h.reader, bot, "acme");
+        return view?.profileOrderStored === true ? (view.profileOrder ?? []) : null;
+      };
+      /** `models.authOrderSet {provider, agentId}` with no account ids, as Clawtrate's Unlock sends it. */
+      const clear = async (op: OperatorSession, bot: string) => {
+        const pid = gatewayPid();
+        const started = Date.now();
+        const answer = await op.request<JsonRecord>("models.authOrderSet", {
+          provider: "acme",
+          agentId: bot,
+        });
+        same(answer, { provider: "acme", profileIds: null }, `the gateway's answer for ${bot}`);
+        same(await stored(bot), null, `${bot}'s stored order as models.authStatus reads it after`);
+        same(gatewayPid(), pid, `the gateway's process after clearing ${bot}'s order (no restart)`);
+        h.observe(
+          `${bot}'s order cleared and read back in ${Date.now() - started} ms, gateway pid ${String(pid)} throughout`,
+        );
+      };
+      /** One run whose first account fails once: where the gateway goes next. */
+      const runPast = async (bot: string, first: string, tag: string) => {
+        await fail(h, first, 401, 1);
+        const key = session(bot, tag);
+        const end = await runOnce(h, key, "#text");
+        const requests = await requestsFor(h, key);
+        return { end, requests };
+      };
+
+      // Unlock: a bot bound to one of two accounts, locked by the tool, cleared by the call.
+      const bot = await createBot(h, "acct-clear-call", "acme/dev-1");
+      const one = await signInKey(h, bot, "clearone");
+      await signInKey(h, bot, "cleartwo");
+      await setModel(h, bot, `acme/dev-1@${one}`);
+      same(await h.lock(bot, "acme", one), [one], "the lock, by the tool");
+      same(await stored(bot), [one], "the lock as models.authStatus reads it");
+      await clear(h.admin, bot);
+      // The next run follows the gateway's other orders: its account fails once, another serves.
+      const unlocked = await runPast(bot, one, "clear-unlocked");
+      same(unlocked.end.state, "final", "a run after the unlock whose account fails once");
+      same(unlocked.requests[0]?.account, one, "the bound account first");
+      expect(
+        unlocked.requests.some((r) => r.account !== one && r.status === 200),
+        `another acme account served once it failed (${accountsOf(unlocked.requests).join(", ")})`,
+      );
+
+      // Clear: a bot with no fixed account whose one-account order stays (row 36).
+      const kept = await createBot(h, "acct-clear-kept", "acme/dev-1");
+      const only = await signInKey(h, kept, "keptonly");
+      await signInKey(h, kept, "keptspare");
+      same(await h.lock(kept, "acme", only), [only], "the kept order, by the tool");
+      await clear(h.admin, kept);
+      const free = await runPast(kept, only, "clear-kept");
+      same(free.end.state, "final", "a run after the clear whose first account fails once");
+      expect(
+        free.requests.some((r) => r.account !== only && r.status === 200),
+        `another acme account served (${accountsOf(free.requests).join(", ")})`,
+      );
+
+      // Refused: below admin, and for a bot the gateway doesn't have. Nothing changes.
+      same(await h.lock(bot, "acme", one), [one], "locked again, by the tool");
+      const refusal = async (op: OperatorSession, agentId: string) =>
+        op.request("models.authOrderSet", { provider: "acme", agentId }).then(
+          () => null,
+          (error: unknown) => (error instanceof Error ? error.message : String(error)),
+        );
+      const reader = await refusal(h.reader, bot);
+      expect(reader?.includes("operator.admin"), `the call below admin was refused: ${reader}`);
+      same(await stored(bot), [one], "the order after the refusal below admin");
+      const unknown = await refusal(h.admin, "acct-no-such-bot");
+      expect(
+        unknown?.includes('unknown agent id "acct-no-such-bot"'),
+        `the call for a bot the gateway doesn't have was refused: ${unknown}`,
+      );
+      h.observe(`refused below admin: "${reader}"; for an unknown bot: "${unknown}"`);
+
+      // An order the gateway's settings give doesn't refuse a clear: the bot's own goes, theirs stays.
+      try {
+        await patchConfig(h, { auth: { order: { acme: ["acme:work", "acme:home"] } } });
+        await clear(h.admin, bot);
+        const view = await providerView(h.reader, bot, "acme");
+        same(
+          [view?.profileOrder ?? null, view?.profileOrderStored === true],
+          [["acme:work", "acme:home"], false],
+          "the order the gateway's settings give, after the bot's own was cleared",
+        );
+        h.observe(
+          `with auth.order configured, the clear was taken; profileOrderLocked ${String(view?.profileOrderLocked)}`,
+        );
+      } finally {
+        // Removing a list needs its path named (`replacePaths`).
+        await patchConfig(h, { auth: { order: null } }, ["auth.order.acme"]);
+      }
+      // A second clear, with nothing stored, is answered the same.
+      await clear(h.admin, bot);
+    },
+  },
+  {
     name: "where a sign-in lands: main's is shared, another bot's is its own",
     rows: [5, 6, 12, 33],
     run: async (h) => {
@@ -791,7 +925,7 @@ export const ACCOUNT_CHECKS: AccountCheck[] = [
         );
       expect(second !== "started", "a second sign-in started while one was running");
       h.observe(`a second sign-in while one runs: "${second}"`);
-      await cancelAndCheck(h, first);
+      h.observe(`API key cancelled: ${canonical(await cancelAndCheck(h, first))}`);
       await expectPipAccounts(h, before, ["acme:keyok"]);
     },
   },
@@ -1162,19 +1296,45 @@ async function browserSignIn(
   return { end: next.done ? next : await stepToEnd(h, sessionId), steps: [...steps], pasteStep };
 }
 
+/** A `wizard.next` with no answer, or "wizard not found" when the gateway no longer holds the sign-in. */
+async function nextOrGone(h: AccountHarness, sessionId: string): Promise<WizardAnswer | "gone"> {
+  return wizardNext(h, sessionId).catch((error: unknown) => {
+    if (error instanceof WizardRefusal && error.code === WIZARD_NOT_FOUND) return "gone";
+    throw error;
+  });
+}
+
 /**
- * Cancel a sign-in that waits, and assert both what `wizard.cancel` answers
- * and the terminal answer the next `wizard.next` gives.
+ * Cancel a sign-in that waits, and assert what `wizard.cancel` answers and
+ * that the gateway then lets the sign-in go.
+ *
+ * `wizard.cancel` answers at once and drops the sign-in only once its runner
+ * and its setup lock have settled (OpenClaw 2026.10.6,
+ * `server-methods/wizard.ts`). So the next `wizard.next` gets the terminal
+ * answer when it comes first, or "wizard not found" when the drop does; which
+ * one is timing. A `wizard.next` that gets the terminal answer drops the
+ * sign-in itself before it answers, so the one after it always gets "wizard
+ * not found".
  */
-async function cancelAndCheck(h: AccountHarness, sessionId: string): Promise<JsonRecord> {
-  const cancel = await h.admin.request<JsonRecord>("wizard.cancel", { sessionId });
+export async function cancelAndCheck(h: AccountHarness, sessionId: string): Promise<JsonRecord> {
+  const cancel = await wizardCall<JsonRecord>(h, "wizard.cancel", sessionId);
   same(cancel, { status: "cancelled", error: "cancelled" }, "what wizard.cancel answers");
-  const next = await wizardNext(h, sessionId);
-  const after = { done: next.done, status: next.status, error: next.error, step: next.step };
+  const next = await nextOrGone(h, sessionId);
+  const after =
+    next === "gone"
+      ? "wizard not found"
+      : { done: next.done, status: next.status, error: next.error, step: next.step };
+  if (next !== "gone") {
+    same(
+      after,
+      { done: true, status: "cancelled", error: "cancelled", step: undefined },
+      `the sign-in's terminal answer after the cancel (sign-in ${sessionId})`,
+    );
+  }
   same(
-    after,
-    { done: true, status: "cancelled", error: "cancelled", step: undefined },
-    "the sign-in's terminal answer after the cancel",
+    await nextOrGone(h, sessionId),
+    "gone",
+    `a wizard.next after the sign-in ended (sign-in ${sessionId})`,
   );
   return { cancel, after };
 }
@@ -1202,7 +1362,12 @@ async function expectPipAccounts(h: AccountHarness, before: string[], approved: 
 /** Run the account checks. One line per check; notes and differences for the report. */
 export async function runAccountChecks(
   h: Omit<AccountHarness, "observe" | "differ">,
-  options: { log?: (line: string) => void; only?: (check: AccountCheck) => boolean } = {},
+  options: {
+    log?: (line: string) => void;
+    only?: (check: AccountCheck) => boolean;
+    /** The instance's gateway log, whose end a failed check prints, since the reset removes it. */
+    gatewayLog?: string;
+  } = {},
 ): Promise<{ passed: number; failed: number; notes: string[]; differences: string[] }> {
   const log = options.log ?? console.log;
   const notes: string[] = [];
@@ -1222,6 +1387,10 @@ export async function runAccountChecks(
     } catch (error) {
       failed += 1;
       log(`FAIL  ${check.name}: ${error instanceof Error ? error.message : String(error)}`);
+      const gatewayLog = options.gatewayLog;
+      if (gatewayLog) {
+        log(logSection("the development gateway's", gatewayLog, logTail(gatewayLog, 20)));
+      }
     }
   }
   return { passed, failed, notes, differences };
