@@ -624,7 +624,7 @@ export class DeviceApprovals {
     const ids = new Set(all.map((request) => request.requestId));
     for (const id of this.spent) if (!ids.has(id)) this.spent.delete(id);
     for (const id of this.prompted) if (!ids.has(id)) this.prompted.delete(id);
-    for (const id of this.deciding) if (!ids.has(id)) this.deciding.delete(id);
+    for (const id of this.deciding.keys()) if (!ids.has(id)) this.deciding.delete(id);
     const only = all.length === 1 ? requests[0]! : null;
     this.ctx.set({
       access: "admin",

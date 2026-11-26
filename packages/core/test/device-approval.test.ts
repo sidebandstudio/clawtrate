@@ -495,6 +495,20 @@ describe("approving a waiting device", () => {
     expect(t.calls.filter((call) => call === "device.pair.approve")).toHaveLength(1);
   });
 
+  it("frees each request a decision kept taken once it leaves the list", async () => {
+    // More approvals than the bound on requests taken, one after another: each approved request
+    // leaves the list, and with it its hold, so the last is approved too.
+    const t = await listed([]);
+    for (let i = 0; i <= MAX_DEVICE_REQUESTS; i += 1) {
+      const row = pendingRow();
+      t.gw.pending = [row];
+      await t.engine.refresh();
+      expect(
+        await t.engine.approve(row.requestId as string, codeOf(row), [...FULL_SCOPES]),
+      ).toEqual({ kind: "approved", deviceId: row.deviceId });
+    }
+  });
+
   it("frees a request only by the decision that took it, across another gateway", async () => {
     const row = pendingRow();
     const t = await listed([row]);
