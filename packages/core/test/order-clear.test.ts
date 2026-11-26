@@ -1308,6 +1308,77 @@ describe("F-592: never clear what the person didn't confirm", () => {
     client.stop();
   });
 
+  it("a Check now a subscriber starts from the machines read's stamp goes out after that read: nothing is sent, Home stays", async () => {
+    const { client, fake, accounts, release, restore } = await heldPress();
+    try {
+      // The first of Otto's status reads from here answers Work; any after it finds Home.
+      const status = fake.gateway.handlers["models.authStatus"]!;
+      let answered = 0;
+      fake.gateway.handlers["models.authStatus"] = (params) => {
+        const answer = status(params);
+        if ((params as { agentId: string }).agentId === "otto" && answered++ === 0)
+          fake.orders.otto = { acme: ["acme:home"] };
+        return answer;
+      };
+      // A subscriber that starts a Check now the moment Otto's stamp moves.
+      const was = otto(accounts()).evidence.startedSeq;
+      let started = false;
+      let checking: Promise<void> | null = null;
+      const stop = client.store.subscribe(() => {
+        if (started || otto(accounts()).evidence.startedSeq === was) return;
+        // Set first: the Check now publishes before it returns.
+        started = true;
+        checking = client.checkLock("otto");
+      });
+      await client.readPlacement("otto", "inventory");
+      stop();
+      expect(checking).not.toBeNull();
+      await checking;
+      await release();
+      expect(fake.gateway.calls("models.authOrderSet")).toHaveLength(0);
+      expect(fake.orders.otto?.acme).toEqual(["acme:home"]);
+    } finally {
+      restore();
+    }
+    client.stop();
+  });
+
+  for (const [what, start] of [
+    ["Check now", (client: ClawtrateClient) => client.checkLock("otto")],
+    ["the accounts load", (client: ClawtrateClient) => client.refreshAccounts()],
+    ["the machines page", (client: ClawtrateClient) => client.readPlacement("otto", "inventory")],
+  ] as const) {
+    it(`a read a subscriber starts from the stamp of ${what} is numbered and sent after it`, async () => {
+      const { client, fake, accounts } = await locked();
+      const stamp = (botId: string) =>
+        accounts().bindings.find((each) => each.botId === botId)!.evidence.startedSeq!;
+      const calls = () =>
+        fake.gateway.calls("models.authStatus") as Array<{ agentId: string; refresh?: boolean }>;
+      const was = stamp("otto");
+      // The subscriber's read is the machines page's for Pip, the one asked without `refresh`.
+      let started = false;
+      let reading: Promise<unknown> | null = null;
+      const stop = client.store.subscribe(() => {
+        if (started || stamp("otto") === was) return;
+        // Set first: the read publishes before it returns.
+        started = true;
+        reading = client.readPlacement("pip", "inventory");
+      });
+      await start(client);
+      stop();
+      expect(reading).not.toBeNull();
+      await reading;
+      const ottoSent = calls()
+        .map((each) => each.agentId)
+        .lastIndexOf("otto");
+      const pipSent = calls().findIndex((each) => each.agentId === "pip" && !each.refresh);
+      // Otto's read went out first, so its number is the lower one: stamps in the order sent.
+      expect(pipSent).toBeGreaterThan(ottoSent);
+      expect(stamp("otto")).toBeLessThan(stamp("pip"));
+      client.stop();
+    });
+  }
+
   it("a newer load applied for Otto that still shows Work alone: the press goes on", async () => {
     const { client, fake, accounts, release, restore } = await heldPress();
     try {

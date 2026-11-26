@@ -1944,7 +1944,7 @@ export class ClawtrateClient {
     pairing: () => this.holds(PAIRING_SCOPE),
     readOnly: () => this.options.readOnly === true,
     bots: () => this.state.bots.map((bot) => ({ id: bot.id, name: bot.name })),
-    statusSent: (botId) => this.accounts.statusSent(botId),
+    readStatus: (botId, send) => this.accounts.readStatus(botId, send),
     latestTask: (botId) => {
       const tasks = this.state.tasksByBot[botId] ?? [];
       let latest: { key: string; at: number } | null = null;

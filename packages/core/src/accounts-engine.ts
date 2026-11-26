@@ -630,14 +630,15 @@ export class AccountsEngine {
     // A few bots at a time. Sharing is decided only from refreshed answers (row 33).
     for (let i = 0; i < botIds.length; i += ACCOUNT_READ_CONCURRENCY) {
       const chunk = botIds.slice(i, i + ACCOUNT_READ_CONCURRENCY);
-      const seq = this.nextSeq();
-      this.started(this.ctx, chunk, seq);
-      for (const botId of chunk) sent.set(botId, seq);
       // Every request of the chunk is answered before a failure ends the read, so nothing of it
       // is still out when a Refresh that waits for the read asks (#565); no later chunk starts.
-      const settled = await Promise.allSettled(
-        chunk.map((agentId) => this.ctx.request("models.authStatus", { agentId, refresh: true })),
+      const { seq, out } = this.statusRead(this.ctx, chunk, () =>
+        Promise.allSettled(
+          chunk.map((agentId) => this.ctx.request("models.authStatus", { agentId, refresh: true })),
+        ),
       );
+      for (const botId of chunk) sent.set(botId, seq);
+      const settled = await out;
       let first: unknown = null;
       for (let j = 0; j < chunk.length; j += 1) {
         const botId = chunk[j]!;
@@ -812,12 +813,8 @@ export class AccountsEngine {
         },
       })),
     );
-    const seq = this.nextSeq();
-    try {
-      await this.readOrder(botId, before, ctx, seq);
-    } catch (error) {
-      this.readFailed(ctx, botId, seq, "failed", this.scrub(errorText(error)));
-    }
+    // A failure is said on the binding by the read itself.
+    await this.readOrder(botId, before, ctx).catch(() => {});
   }
 
   /**
@@ -842,14 +839,33 @@ export class AccountsEngine {
   }
 
   /**
-   * Another read of a bot's account status is sent now (the machines page's inventory): it is
-   * never applied here, so a press begun before it sends nothing after it.
+   * Another reader's read of one bot's account status (the machines page's inventory), sent by
+   * `send` through `statusRead`: it is never applied here, so a press begun before it sends nothing
+   * after it.
    */
-  statusSent(botId: string): void {
-    this.started(this.ctx, [botId], this.nextSeq());
+  readStatus(botId: string, send: () => Promise<unknown>): Promise<unknown> {
+    return this.statusRead(this.ctx, [botId], send).out;
   }
 
-  /** Each of `botIds` has a read sent now, numbered `seq`: stamped as sent, not as applied. */
+  /**
+   * The one way a read of a bot's status goes out (`models.authStatus`, from every caller): its
+   * number is taken, `send` issues its requests, and only then is the stamp published
+   * (`startedSeq`). Nothing runs between the number and the send, so a read that a subscriber
+   * starts from that publish takes a later number and goes out after this one: the stamps' order
+   * is the order the reads were sent.
+   */
+  private statusRead<T>(
+    ctx: AccountsContext,
+    botIds: readonly string[],
+    send: () => T,
+  ): { seq: number; out: T } {
+    const seq = this.nextSeq();
+    const out = send();
+    this.started(ctx, botIds, seq);
+    return { seq, out };
+  }
+
+  /** Each of `botIds` has a read sent, numbered `seq`: stamped as sent, not as applied. */
   private started(ctx: AccountsContext, botIds: readonly string[], seq: number): void {
     ctx.update((a) => ({
       ...a,
@@ -868,21 +884,32 @@ export class AccountsEngine {
    * published (`applied`), and the gateway that answered it (`answeredBy`), or null when the
    * gateway says its account status is unavailable (said on the binding). An answer with no
    * account status in it throws (`NO_ACCOUNT_STATUS`): it is a failed read, never an empty order.
+   * A read that fails is said on the binding, as Check now says it, and thrown. The result carries
+   * the read's number (`statusRead`).
    */
   private async readOrder(
     botId: string,
     before: BotBinding,
     ctx: AccountsContext,
-    seq: number = this.nextSeq(),
     at: number = ctx.now(),
-  ): Promise<{ view: BotView; applied: boolean; gateway: string | null } | null> {
-    this.started(ctx, [botId], seq);
+  ): Promise<{ view: BotView; applied: boolean; gateway: string | null; seq: number } | null> {
     const on = ctx.readStamp();
-    const [answer, config] = await Promise.all([
-      ctx.request("models.authStatus", { agentId: botId, refresh: true }),
-      ctx.request("config.get", {}).then(asRecord),
-    ]);
-    const view = readBotView(answer);
+    const { seq, out } = this.statusRead(ctx, [botId], () =>
+      Promise.all([
+        ctx.request("models.authStatus", { agentId: botId, refresh: true }),
+        ctx.request("config.get", {}).then(asRecord),
+      ]),
+    );
+    let view: BotView;
+    let config: RawRecord | null;
+    try {
+      let answer: unknown;
+      [answer, config] = await out;
+      view = readBotView(answer);
+    } catch (error) {
+      this.readFailed(ctx, botId, seq, "failed", this.scrub(errorText(error)));
+      throw error;
+    }
     if (view.unavailable) {
       this.readFailed(ctx, botId, seq, "unavailable", view.unavailable);
       return null;
@@ -900,7 +927,7 @@ export class AccountsEngine {
         bindings: a.bindings.map((each) => (each.botId === botId ? next : each)),
       });
     });
-    return { view, applied, gateway };
+    return { view, applied, gateway, seq };
   }
 
   /**
@@ -995,12 +1022,10 @@ export class AccountsEngine {
       return;
     }
     let first: Awaited<ReturnType<AccountsEngine["readOrder"]>>;
-    const firstSeq = this.nextSeq();
     try {
-      first = await this.readOrder(botId, before, ctx, firstSeq);
+      // A failure is said on the bot's page by the read itself, as Check now says it.
+      first = await this.readOrder(botId, before, ctx);
     } catch (error) {
-      // As Check now says a failed read.
-      this.readFailed(ctx, botId, firstSeq, "failed", this.scrub(errorText(error)));
       publish({ status: "unsent", error: errorText(error) });
       return;
     }
@@ -1008,6 +1033,7 @@ export class AccountsEngine {
       publish({ status: "unsent", error: "The gateway says its account status is unavailable." });
       return;
     }
+    const firstSeq = first.seq;
     // An answer that doesn't list the provider says nothing of its order: nothing is sent.
     if (!first.view.providers.includes(provider)) {
       publish({ status: "unsent", error: providerNotListed(provider) });
@@ -1078,17 +1104,20 @@ export class AccountsEngine {
     }
     // Null when the read after failed, or the gateway said its status is unavailable.
     let after: Awaited<ReturnType<AccountsEngine["readOrder"]>> = null;
-    const afterSeq = this.nextSeq();
     const afterAt = base.now();
+    let onConnection = true;
     try {
       // The connection the press was sent on, still: a read on another says nothing of this one.
       check();
-      // Its number and time are the ones the line and the announcement name, one each.
-      after = await this.readOrder(botId, before, ctx, afterSeq, afterAt);
     } catch (error) {
-      // As Check now says a failed read.
-      this.readFailed(ctx, botId, afterSeq, "failed", this.scrub(errorText(error)));
+      // Nothing read: as Check now says a failed read.
+      onConnection = false;
+      this.readFailed(ctx, botId, this.nextSeq(), "failed", this.scrub(errorText(error)));
     }
+    // Its number and time are the ones the line and the announcement name, one each. A failure is
+    // said on the bot's page by the read itself.
+    if (onConnection) after = await this.readOrder(botId, before, ctx, afterAt).catch(() => null);
+    const afterSeq = after?.seq ?? null;
     // What the gateway's reads say of the order since the send: the read after it while the page
     // still shows it as its newest, answered by the gateway the press was sent to and listing the
     // provider; when the page took a newer one instead (before the read after, or between its
@@ -1096,13 +1125,13 @@ export class AccountsEngine {
     // began after the send, is the newest attempt (none failed since) and is as good. Anything
     // else is no reading: the press can't say the order is gone.
     const now = base.get().bindings.find((each) => each.botId === botId)?.evidence;
-    const newest = now?.readSeq === afterSeq && now.attemptSeq === afterSeq;
+    const newest = afterSeq !== null && now?.readSeq === afterSeq && now.attemptSeq === afterSeq;
     const decided = ((): { gone: boolean; seq: number; at: number | null } | null => {
       if (after?.applied && newest) {
         const { view, gateway } = after;
         if (gatewayId === null || gateway !== gatewayId || !view.providers.includes(provider))
           return null;
-        return { gone: view.orders[provider]?.stored !== true, seq: afterSeq, at: afterAt };
+        return { gone: view.orders[provider]?.stored !== true, seq: after.seq, at: afterAt };
       }
       const b = base.get().bindings.find((each) => each.botId === botId);
       const e = b?.evidence;
@@ -1545,11 +1574,12 @@ export class AccountsEngine {
       const other = ctx.bots().find((bot) => bot.id !== signIn.forBot)?.id ?? null;
       // Neither read is shown as the bot's order, but one that fails is its newest attempt, as
       // a failed Check now: a press begun before it sends nothing after it.
-      const seq = this.nextSeq();
-      this.started(ctx, other ? [signIn.forBot, other] : [signIn.forBot], seq);
-      const read = (agentId: string) =>
-        ctx
-          .request("models.authStatus", { agentId, refresh: true })
+      const ids = other ? [signIn.forBot, other] : [signIn.forBot];
+      const { seq, out } = this.statusRead(ctx, ids, () =>
+        ids.map((agentId) => ctx.request("models.authStatus", { agentId, refresh: true })),
+      );
+      const read = (agentId: string, asked: Promise<unknown>) =>
+        asked
           .then((answer) => {
             const view = readBotView(answer);
             if (view.unavailable)
@@ -1561,8 +1591,8 @@ export class AccountsEngine {
             throw error;
           });
       const [target, second] = await Promise.all([
-        read(signIn.forBot),
-        other ? read(other) : Promise.resolve(null),
+        read(signIn.forBot, out[0]!),
+        other ? read(other, out[1]!) : Promise.resolve(null),
       ]);
       if (target.unavailable || second?.unavailable)
         throw new Error("The gateway says its account status is unavailable.");
