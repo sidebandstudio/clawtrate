@@ -12,6 +12,7 @@ Every document in the repository, by what you want to do.
 - [The SSH transport's tests](development/ssh.md): running the tests of "Another computer" over SSH against an `sshd` of their own.
 - [Packaging](development/packaging.md): building the desktop app for macOS and Windows, signing, and the logo and icons.
 - [Desktop releases](development/releases.md) covers cutting, publishing and withdrawing a Mac beta, release candidates for Stable and Beta, signing checks and the owner's signed trial.
+- [Publishing the bots plugin to npm](development/plugins-publish.md): the workflow that publishes `@clawtrate/clawtrate-bots` with no stored token, its two modes and the one-time first publish.
 - [CONTRIBUTING.md](../CONTRIBUTING.md): how to pick up work and open a pull request.
 - [AGENTS.md](../AGENTS.md): the rules every change follows, written for coding agents and people alike.
 
