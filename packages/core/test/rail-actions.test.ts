@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 import { createBridgeSession, parseBridgeCommand } from "../src/bridge.ts";
 import {
   ClawtrateClient,
+  CONNECTION_CHANGED,
   CONNECTION_CHANGED_AFTER_SEND,
   MAX_DEFERRED_STOPS,
 } from "../src/client.ts";
@@ -1001,6 +1002,63 @@ describe("an archive or a delete bound to the connection it began on", () => {
       expect(await outcome(act(client, stamp))).toBe(
         "This change was made for another gateway, so nothing was sent.",
       );
+      expect(gateway.calls("sessions.patch")).toEqual([]);
+      client.stop();
+    });
+  }
+
+  const writes = [
+    {
+      title: "F-277: an archive",
+      act: (client: ClawtrateClient, stamp: GatewayStamp) =>
+        client.archiveTask("agent:pip:main", { stamp }),
+    },
+    {
+      title: "F-278: a delete",
+      act: (client: ClawtrateClient, stamp: GatewayStamp) =>
+        client.deleteTask("agent:pip:main", { stamp }),
+    },
+    ...changes,
+  ];
+  for (const { title, act } of writes) {
+    it(`${title} whose connection drops just after its guard passed sends nothing to another gateway answering the reconnect`, async () => {
+      const { client, gateway } = await connected(INTERACTIVE_SCOPES);
+      let id = "gateway-a";
+      gateway.handlers["gateway.identity.get"] = () => ({ deviceId: id });
+      gateway.handlers["sessions.describe"] = () => ({
+        session: { key: "agent:pip:main", sessionId: "s-main" },
+      });
+      gateway.handlers["sessions.delete"] = () => ({ ok: true });
+      await until(() => client.state.connection.gatewayId === "gateway-a");
+      const host = client as unknown as {
+        requireSameGateway(stamp: GatewayStamp): Promise<unknown>;
+      };
+      const guard = host.requireSameGateway.bind(client);
+      host.requireSameGateway = async (stamp) => {
+        const passed = await guard(stamp);
+        id = "gateway-x";
+        gateway.dropAll();
+        await until(() => client.state.connection.status !== "connected");
+        return passed;
+      };
+      const acting = outcome(act(client, gatewayStamp(client.state.connection)));
+      await until(() => client.state.connection.gatewayId === "gateway-x", 6_000);
+      const result = await acting;
+      expect(gateway.calls("sessions.patch")).toEqual([]);
+      expect(gateway.calls("sessions.delete")).toEqual([]);
+      expect(result).toBe(CONNECTION_CHANGED);
+      client.stop();
+    });
+
+    it(`${title} read on one gateway asks no access of a read-only gateway answering at the same address`, async () => {
+      const { client, gateway, stamp } = await granted("gateway-b");
+      gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway-b" });
+      gateway.dropAll();
+      await until(() => client.state.connection.gatewayId === "gateway-b", 6_000);
+      expect(await outcome(act(client, stamp))).toBe(
+        "This change was made for another gateway, so nothing was sent.",
+      );
+      expect(gateway.calls("device.scopes.requestUpgrade")).toEqual([]);
       expect(gateway.calls("sessions.patch")).toEqual([]);
       client.stop();
     });
