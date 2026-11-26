@@ -12,6 +12,7 @@ Every document in the repository, by what you want to do.
 - [The SSH transport's tests](development/ssh.md): running the tests of "Another computer" over SSH against an `sshd` of their own.
 - [Packaging](development/packaging.md): building the desktop app for macOS and Windows, signing, and the logo and icons.
 - [Desktop releases](development/releases.md) covers cutting, publishing and withdrawing a Mac beta, release candidates for Stable and Beta, signing checks and the owner's signed trial.
+- [Publishing the bots plugin to npm](development/plugins-publish.md): the workflow that publishes `@clawtrate/clawtrate-bots` with no stored token, its two modes and the one-time first publish.
 - [CONTRIBUTING.md](../CONTRIBUTING.md): how to pick up work and open a pull request.
 - [AGENTS.md](../AGENTS.md): the rules every change follows, written for coding agents and people alike.
 
@@ -41,6 +42,7 @@ Every document in the repository, by what you want to do.
 - [Effortless setup and connection](design/setup-effortless.md): full access at the first connect, connecting on this Mac from OpenClaw's settings file, approving devices inside Clawtrate, and the first run timed.
 - [Search](design/search.md): the Cmd/Ctrl+K palette, what each source covers, opening a result in its place, and the iPhone's scopes.
 - [The Main Bot](design/main-bot-onboarding.md): the first run's chat with the Main Bot, how bots run commands, bots asking to change themselves and other bots through Clawtrate's plugin, proposals, and external agents over MCP.
+- [Doing, not asking](design/doing-not-asking.md): every place Clawtrate asks a person, what each becomes under the rule that only something destructive asks, commands on the person's computer, and the order of the conversions.
 - [Title bar](design/titlebar.md): the mark, wordmark and Beta pill, the update button's states, the gear for Settings, and naming a gateway on this device.
 - [Prototype](design/prototype/README.md): static pages that show the design working.
 

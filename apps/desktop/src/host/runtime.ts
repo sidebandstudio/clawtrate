@@ -136,11 +136,6 @@ export async function startHostRuntime(options: {
    */
   secretBox?: SecretBox;
   /**
-   * A first pairing asks for full control once (`ClientOptions.fullAccess`, docs/decisions.md):
-   * only the packaged Mac app sets it, beside its `secretBox`, and it has no effect without one.
-   */
-  fullAccess?: boolean;
-  /**
    * Reopen the gateway the data folder remembers (the default). A development
    * build, an automated run and the web host's setup look pass false: they
    * never resume a saved gateway, whatever its address.
@@ -174,7 +169,9 @@ export async function startHostRuntime(options: {
       if (level !== "debug") console[level === "info" ? "log" : level](`[core] ${message}`);
     },
   });
-  const full = options.fullAccess === true && !!options.secretBox && !options.readOnly;
+  // A first pairing asks for full control once wherever this device's credentials are in secure
+  // storage and the host allows writes; there is no switch for it (docs/decisions.md, 2026-11-25).
+  const full = !!options.secretBox && !options.readOnly;
   const client = new ClawtrateClient(host, {
     allowGatewayUrl: (url) => {
       if (dev && url === dev.url) return stillProven();
@@ -182,7 +179,6 @@ export async function startHostRuntime(options: {
       return !options.devOnly;
     },
     ...(options.readOnly ? { readOnly: true } : {}),
-    ...(full ? { fullAccess: true } : {}),
   });
   const devOnly = options.devOnly ? dev : null;
   if (devOnly) {

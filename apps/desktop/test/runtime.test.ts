@@ -415,13 +415,15 @@ describe("pairing instructions (A3)", () => {
     });
   });
 
-  it("shows the owner's command, with where to run it, for any other gateway", () => {
+  it("leads with the approval that needs no terminal, the command as the gateway's fallback, for any other gateway", () => {
     for (const instructions of [
       approvalInstructionsFor(devGateway)("wss://gateway.example.com", "req-1"),
       approvalInstructionsFor(null)(DEV_GATEWAY_URL, "req-1"),
     ]) {
       expect(instructions.command).toBe("openclaw devices approve req-1");
-      expect(instructions.note).toMatch(/gateway's owner .* machine where the gateway runs/);
+      expect(instructions.note).toMatch(
+        /^On the computer running OpenClaw, open .*, go to Settings › Devices and approve this device\. If that page asks to approve the browser first, or that computer has no browser, run this there instead\.$/,
+      );
     }
   });
 });
