@@ -246,6 +246,11 @@ describe("F-592: Unlock and Clear, over the connection", () => {
       checkedAt: clear.checkedAt,
     });
     expect(clear.checkedAt).toBe(otto(accounts()).evidence.checkedAt);
+    // A later read that still finds none: the line keeps the time of the press's own read.
+    await new Promise<void>((resolve) => setTimeout(resolve, 5));
+    await client.checkLock("otto");
+    expect(otto(accounts()).evidence.checkedAt).toBeGreaterThan(clear.checkedAt!);
+    expect(clearShown(clear, otto(accounts()))?.checkedAt).toBe(clear.checkedAt);
     // Locked again (on 2026.10.6 beside the running gateway, or by another device), then read.
     await new Promise<void>((resolve) => setTimeout(resolve, 5));
     fake.orders.otto = { acme: ["acme:work"] };
