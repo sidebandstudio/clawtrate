@@ -764,6 +764,11 @@ export class RoutinesEngine {
    * `again` when another event came while it was out, so its answer may be older than that.
    */
   private readonly reads = new Map<string, { again: boolean }>();
+  /**
+   * Those reads' `cron.get` requests out now, counted until each settles: an entry a removal or a
+   * reconnect dropped still has its request out. `MAX_ROUTINE_READS` bounds this.
+   */
+  private readsOut = 0;
 
   private readonly ctx: RoutinesContext;
 
@@ -813,6 +818,8 @@ export class RoutinesEngine {
         return;
       }
       this.listedEpoch = this.epoch;
+      // A job read out now may answer with what this list already replaced.
+      for (const entry of this.reads.values()) entry.again = true;
       this.ctx.update((state) => ({
         ...state,
         status: "loaded",
@@ -966,7 +973,7 @@ export class RoutinesEngine {
       pending.again = true;
       return;
     }
-    if (this.reads.size >= MAX_ROUTINE_READS) {
+    if (this.readsOut >= MAX_ROUTINE_READS) {
       void this.load();
       return;
     }
@@ -983,6 +990,7 @@ export class RoutinesEngine {
     for (let attempt = 1; ; attempt += 1) {
       entry.again = false;
       let job: unknown;
+      this.readsOut += 1;
       try {
         job = await this.ctx.request("cron.get", { id });
       } catch (error) {
@@ -991,6 +999,8 @@ export class RoutinesEngine {
         this.reads.delete(id);
         if (!notFound(error) && !permanent(error)) this.schedule(RETRY_MS);
         return;
+      } finally {
+        this.readsOut -= 1;
       }
       if (!current()) return;
       if (entry.again && attempt < MAX_REREADS) continue;
@@ -1074,8 +1084,10 @@ export class RoutinesEngine {
   /** The gateway's own view of a routine, put in the list while the connection that read it holds. */
   private keep(routine: Routine, epoch: number): void {
     if (epoch !== this.epoch) return;
-    // A list read in flight may predate this answer, as it may an event's.
+    // A list read in flight may predate this answer, as it may an event's, and so may a job's read.
     if (this.loading) this.invalidated = true;
+    const pending = this.reads.get(routine.id);
+    if (pending) pending.again = true;
     this.ctx.update((state) => {
       const at = state.routines.findIndex((each) => each.id === routine.id);
       if (at < 0 && state.routines.length >= MAX_ROUTINES) return state;

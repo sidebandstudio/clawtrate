@@ -1048,6 +1048,78 @@ describe("F-191 on OpenClaw 2026.11.10: a cron event that carries only a summary
     expect(state().routines[0]!.schedule.kind).toBe("cron");
   });
 
+  it(`reads dropped while out still count: at most ${MAX_ROUTINE_READS} cron.get are out at once`, async () => {
+    const get = heldGets();
+    let lists = 0;
+    const { routines } = engine(
+      {
+        "cron.get": get.handler,
+        "cron.status": () => ({ enabled: true }),
+        "cron.list": () => {
+          lists += 1;
+          return { jobs: [], hasMore: false };
+        },
+      },
+      loaded(),
+    );
+    // Each job is added and removed again before its read answers.
+    for (let index = 0; index <= MAX_ROUTINE_READS + 8; index += 1) {
+      const id = `j${index}`;
+      routines.onEvent({ jobId: id, action: "added", job: summaryOf(job({ id })) });
+      routines.onEvent({ jobId: id, action: "removed", job: summaryOf(job({ id })) });
+    }
+    await until(() => lists >= 1);
+    expect(get.answers).toHaveLength(MAX_ROUTINE_READS);
+    // Once they settle, reads are counted out again.
+    for (const each of get.answers.splice(0)) each.answer(job({ id: each.id }));
+    await settle();
+    routines.onEvent({ jobId: "late", action: "added", job: summaryOf(job({ id: "late" })) });
+    await until(() => get.answers.length === 1);
+    routines.onClose();
+  });
+
+  it("a read out when a write's answer is shown is read again: the older answer never undoes it", async () => {
+    const get = heldGets();
+    const { routines, state } = engine(
+      { "cron.get": get.handler, "cron.update": () => job({ enabled: false }) },
+      loaded(job()),
+      ADMIN,
+    );
+    routines.onEvent({ jobId: JOB, action: "updated", job: summaryOf(job({ name: "Renamed" })) });
+    await until(() => get.answers.length === 1);
+    expect(await routines.setEnabled(JOB, false)).toMatchObject({ status: "saved" });
+    // The pause's own `updated` event is lost; the read was answered before the pause.
+    get.answers[0]!.answer(job({ name: "Renamed" }));
+    await until(() => get.answers.length === 2);
+    expect(state().routines[0]!.enabled).toBe(false);
+    get.answers[1]!.answer(job({ name: "Renamed", enabled: false }));
+    await settle();
+    expect(state().routines[0]).toMatchObject({ name: "Renamed", enabled: false });
+  });
+
+  it("a read out when the list is shown is read again: the older answer never undoes the list", async () => {
+    const get = heldGets();
+    const { routines, state } = engine(
+      {
+        "cron.get": get.handler,
+        "cron.status": () => ({ enabled: true }),
+        "cron.list": () => ({ jobs: [job({ name: "Fresh" })], hasMore: false }),
+      },
+      loaded(job()),
+    );
+    routines.onEvent({ jobId: JOB, action: "updated", job: summaryOf(job({ name: "Renamed" })) });
+    await until(() => get.answers.length === 1);
+    await routines.load();
+    expect(state().routines[0]!.name).toBe("Fresh");
+    get.answers[0]!.answer(job({ name: "Renamed" }));
+    await until(() => get.answers.length === 2);
+    expect(state().routines[0]!.name).toBe("Fresh");
+    get.answers[1]!.answer(job({ name: "Fresh" }));
+    await settle();
+    expect(state().routines[0]!.name).toBe("Fresh");
+    routines.onClose();
+  });
+
   it("a routine deleted from Clawtrate stays deleted when a read out for it answers", async () => {
     const get = heldGets();
     const { routines, state } = engine(
