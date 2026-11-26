@@ -11,6 +11,8 @@ export const LABEL = {
   card: "clawtrate account card v1\n",
   joinTranscript: "clawtrate account join transcript v1\n",
   listSecret: "clawtrate account list secret v1\n",
+  listHead: "clawtrate account list head v1\n",
+  firstSecret: "clawtrate account first secret v1\n",
 } as const;
 
 /** Tags in front of hash, derivation and sealing inputs. Never the start of an encoding. */
@@ -34,4 +36,7 @@ export const TAG = {
   rotationEphemeral: "clawtrate account rotation ephemeral v1\n",
   listSealNonce: "clawtrate account list seal nonce v1\n",
   refusalHash: "clawtrate account refusal hash v1\n",
+  headHash: "clawtrate account head hash v1\n",
+  confirmationWord: "clawtrate account join confirmation word v1\n",
+  wordBackDecoys: "clawtrate account join word back decoys v1\n",
 } as const;

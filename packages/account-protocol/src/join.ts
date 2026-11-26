@@ -21,6 +21,7 @@ import {
   Writer,
 } from "./bytes.ts";
 import { cardHash, verifyCard, type Card } from "./card.ts";
+import { requireHeadCard, verifyHead, type Head } from "./head.ts";
 import { fail } from "./errors.ts";
 import { hpkeOpen, hpkeSeal } from "./hpke.ts";
 import {
@@ -33,14 +34,18 @@ import {
   type SealSecretKey,
 } from "./keys.ts";
 import { LABEL, TAG } from "./labels.ts";
-import { MAX_MEMBERS } from "./limits.ts";
+import { JOIN_PAUSE_MS, MAX_MEMBERS, WORD_BACK_MS } from "./limits.ts";
 import {
+  completeServerFirst,
   entryHash,
+  ListState,
   MAX_ENTRY_BYTES,
+  readEntryUnverified,
+  readServerFirst,
   readSignedEntry,
   signAdd,
+  signServerFirst,
   verifyList,
-  type ListState,
 } from "./list.ts";
 import {
   checkContext,
@@ -67,12 +72,26 @@ export interface JoiningDevice {
   readonly device: DeviceRecord;
 }
 
-/** The member answering: its list key, the list it holds, the gateway's signed card and the list secret. */
+/**
+ * The member answering: its list key, the list it holds, the connector's signed head of that
+ * list (its newest), the card that head names, and the secret of the head's epoch.
+ */
 export interface JoinMember {
   readonly key: ListSecretKey;
   readonly state: ListState;
+  readonly head: Uint8Array;
   readonly card: Uint8Array;
   readonly secret: ListSecret;
+}
+
+/**
+ * The time now and the end of the pause this device keeps after a refusal (0 for none), both
+ * whole milliseconds by the device's clock. The package keeps no clock: the caller keeps the
+ * pause between joins, and the join refuses to start while it lasts.
+ */
+export interface JoinClock {
+  readonly nowMs: number;
+  readonly pausedUntilMs: number;
 }
 
 const STEP = { commit: 1, answer: 2, reveal: 3, confirm: 4 } as const;
@@ -249,10 +268,33 @@ function checkJoiningDevice(device: JoiningDevice): void {
     fail("bad_argument", "the record's seal key is not N's");
 }
 
-function checkMember(member: JoinMember): void {
-  const role = member.state.requireMember(member.key.publicKey).role;
+function checkTime(ms: number): number {
+  if (!Number.isSafeInteger(ms) || ms < 0) fail("bad_time", "not a whole number of ms");
+  return ms;
+}
+
+function checkClock(clock: JoinClock): void {
+  if (checkTime(clock.nowMs) < checkTime(clock.pausedUntilMs))
+    fail("paused", "joins are paused after a refusal");
+}
+
+/** A's member checks, with its head: A is at its newest head, holds that head's card and secret. */
+function checkMember(member: JoinMember): Head {
+  const state = member.state;
+  const role = state.requireMember(member.key.publicKey).role;
   if (role === "connector") fail("not_permitted", "a device answers a join, not the connector");
-  verifyCard(member.card, member.state.connectorKey, member.state.context.gatewayId);
+  verifyCard(member.card, state.connectorKey, state.context.gatewayId);
+  const head = verifyHead(member.head, state.connectorKey, state.context);
+  if (
+    head.generation !== state.generation ||
+    head.count !== state.length ||
+    !equalBytes(head.entryHash, state.head)
+  )
+    fail("bad_chain", "the list held is not at its head");
+  requireHeadCard(member.card, head);
+  if (member.secret.epoch !== head.epoch)
+    fail("stale_secret", "not the secret of the head's epoch");
+  return head;
 }
 
 function freezeWords(words: Words): Words {
@@ -263,13 +305,94 @@ function sameWords(a: readonly string[], b: readonly string[]): boolean {
   return a.length === b.length && a.every((word, i) => word === b[i]);
 }
 
-/** What N holds once its join has finished: everything checked, nothing left to the caller. */
+/** One word from a hash: its first 11 bits. */
+function wordOf(hash: Uint8Array): string {
+  return WORDS[(hash[0]! << 3) | (hash[1]! >> 5)]!;
+}
+
+/**
+ * The confirmation word (design §4.4 step 5a): the first 11 bits of a tagged hash of the
+ * transcript hash, A's confirmation signature and the card's hash.
+ */
+function confirmationWord(transcript: Uint8Array, signature: Uint8Array, card: Uint8Array): string {
+  return wordOf(taggedHash(TAG.confirmationWord, transcript, signature, card));
+}
+
+/**
+ * N's five words for the word back: the confirmation word at a uniformly random place and four
+ * other words, none equal to it or to each other, all from 256 bytes of HKDF-SHA256 of N's list
+ * key's random bytes, salted with the transcript hash, with the `join word back decoys` tag and
+ * A's confirmation signature as info. Drawn as the decoy sets are.
+ */
+function fiveWords(
+  right: string,
+  key: ListSecretKey,
+  transcript: Uint8Array,
+  signature: Uint8Array,
+): string[] {
+  const stream = deriveFromListKey(
+    key,
+    transcript,
+    concat(utf8(TAG.wordBackDecoys), signature),
+    256,
+  );
+  let at = 0;
+  const next = (bytes: number): number => {
+    if (at + bytes > stream.length) fail("bad_argument", "the word stream ran out");
+    let value = 0;
+    for (let i = 0; i < bytes; i++) value = (value << 8) | stream[at++]!;
+    return value;
+  };
+  const words: string[] = [];
+  const used = new Set([right]);
+  while (words.length < 4) {
+    const word = WORDS[next(2) & 0x7ff]!;
+    if (used.has(word)) continue;
+    used.add(word);
+    words.push(word);
+  }
+  let place = next(1);
+  while (place >= 250) place = next(1);
+  words.splice(place % 5, 0, right);
+  return words;
+}
+
+/** What N holds once its join has finished: everything checked and the word back picked right. */
 export interface JoinResult {
   readonly secret: ListSecret;
   readonly card: Card;
   readonly cardBytes: Uint8Array;
   readonly state: ListState;
+  /** The connector's head that came with the list; null in first-device mode, where N reads it on connecting. */
+  readonly head: Head | null;
+  /** The confirming device's name, from the list (or, on a server, the gateway's from the card). */
+  readonly confirmedOn: string;
+  /** In first-device mode, the server's first entry with N's signature added, for the connector. */
+  readonly firstEntry: Uint8Array | null;
 }
+
+/** N's word back prompt: its own three words, once, above five words. */
+export interface WordBackPrompt {
+  /** "first-device": the word to pick is on the server's terminal, not on another device. */
+  readonly mode: "member" | "first-device";
+  readonly under: Words;
+  readonly choices: readonly string[];
+}
+
+/** What the person did on N: the word picked under N's own words, or one of the two refusals. */
+export type WordBackPick =
+  { readonly under: Words; readonly word: string } | "none-match" | "not-confirmed";
+
+export type WordBackOutcome =
+  | { readonly outcome: "confirmed"; readonly result: JoinResult }
+  | {
+      /** N discarded everything it was sent and its keys for this attempt. */
+      readonly outcome: "refused";
+      /** N starts no join before this (nowMs + JOIN_PAUSE_MS); the caller keeps it. */
+      readonly pauseUntilMs: number;
+    };
+
+const ZERO_HEAD = new Uint8Array(32);
 
 /**
  * The new device's side of one join. Built from N's keys, its record and 32 random bytes; it
@@ -279,7 +402,9 @@ export interface JoinResult {
  * fresh random bytes for every attempt (README, "What the caller owes").
  *
  * It takes exactly one answer: the same answer again gets the same reveal (resuming after a
- * dropped connection), and any other answer ends the join for good (`join_spent`).
+ * dropped connection), and any other answer ends the join for good (`join_spent`). Its finish
+ * checks everything and hands back only the word back's prompt; the secret, card and list come
+ * only with the right word.
  */
 export class NewDeviceJoin {
   readonly #device: JoiningDevice;
@@ -287,11 +412,12 @@ export class NewDeviceJoin {
   readonly #nonce: Uint8Array;
   readonly #commit: Commit;
   readonly #commitBytes: Uint8Array;
-  #phase: "committed" | "revealed" | "ended" | "finished" = "committed";
+  #phase: "committed" | "revealed" | "checked" | "ended" | "finished" = "committed";
   #answerBytes: Uint8Array | null = null;
   #answer: Answer | null = null;
   #transcript: Uint8Array | null = null;
   #reveal: Uint8Array | null = null;
+  #checked: { result: JoinResult; prompt: WordBackPrompt; right: string } | null = null;
 
   private constructor(device: JoiningDevice, context: ListContext, random: Uint8Array) {
     this.#device = device;
@@ -314,8 +440,17 @@ export class NewDeviceJoin {
     Object.freeze(this);
   }
 
-  /** Step 1: a new join for N. `random` is 32 bytes from the system's random source. */
-  static start(device: JoiningDevice, context: ListContext, random: Uint8Array): NewDeviceJoin {
+  /**
+   * Step 1: a new join for N. `random` is 32 bytes from the system's random source. Refused while
+   * N's own pause after a refused word back lasts.
+   */
+  static start(
+    device: JoiningDevice,
+    context: ListContext,
+    random: Uint8Array,
+    clock: JoinClock,
+  ): NewDeviceJoin {
+    checkClock(clock);
     checkJoiningDevice(device);
     const frozen: JoiningDevice = Object.freeze({
       listKey: device.listKey,
@@ -371,23 +506,35 @@ export class NewDeviceJoin {
   }
 
   /**
-   * Step 5: checks the member's confirmation and the sealed list it opens, in the design's
-   * order, and only then hands anything back: (1) the confirmation answers this transcript and
-   * is signed by the member key the words covered; (2) its entry adds exactly N's record,
-   * carries this transcript and follows the head the words covered; (3) the delivery opens and
-   * the card's hash is the one the words covered; (4) the sealed list opens with the delivered
-   * secret, verifies from its first entry, and holds the covered head with N's entry (byte for
-   * byte the confirmation's) right after it, and N is a current member; (5) the confirming
-   * device is a current device member; (6) the card is signed by the connector key of that
-   * list's first entry and is for this gateway. It finishes once.
+   * Step 5: checks the confirmation and what it carries, in the design's order, and returns only
+   * the word back's prompt. (1) The confirmation answers this transcript and is signed by the
+   * key the words covered; (2) its entry adds exactly N's record, carries this transcript and
+   * follows the head the words covered; (3) the delivery opens and the card's hash is the one the
+   * words covered; (4) the sealed list opens with the delivered secret, verifies from its first
+   * entry against the connector's head that came with it (and `held`, the newest head N holds),
+   * holds the covered head with N's entry (byte for byte the confirmation's) right after it, and
+   * has N as a current member; (5) the confirming device is a current device member of that list;
+   * (6) the card verifies against the connector key in that list's first entry, is for this
+   * gateway, and is the card the head names.
+   *
+   * In first-device mode (the confirmation carries a server's first entry, signed by the
+   * connector that answered), the list is that first entry alone, (4) and (5) become "the first
+   * entry names N, this transcript and the answering connector", and no sealed list or head is
+   * taken.
    */
-  finish(confirmInput: Uint8Array, sealedListInput: Uint8Array): JoinResult {
+  finish(
+    confirmInput: Uint8Array,
+    sealedList: Uint8Array | null,
+    headBytes: Uint8Array | null,
+    held?: Head,
+  ): WordBackPrompt {
     if (this.#phase !== "revealed")
       fail("join_spent", "this join has no reveal to finish, or has ended");
     const confirm = copy(confirmInput);
     const answer = this.#answer!;
     const transcript = this.#transcript!;
     const context = this.#context;
+    const own = encodeRecord(this.#device.device);
 
     // (1)
     const { reader, context: found } = open(confirm, STEP.confirm);
@@ -402,22 +549,35 @@ export class NewDeviceJoin {
     if (!equalBytes(confirmed, transcript))
       fail("transcript_mismatch", "a confirmation of another join");
     if (!verifyEd25519(answer.memberKey.bytes, signed, signature))
-      fail("bad_signature", "the confirmation is not the answering member's");
+      fail("bad_signature", "the confirmation is not the answering key's");
+
+    const firstDevice = readEntryUnverified(entryBytes).type === "server-first";
+    let firstEntry: Uint8Array | null = null;
 
     // (2)
-    const entry = readSignedEntry(entryBytes);
-    if (
-      entry.type !== "add" ||
-      !equalBytes(encodeRecord(entry.device), encodeRecord(this.#device.device))
-    )
-      fail("transcript_mismatch", "the entry does not add this device");
-    if (!equalBytes(entry.joinTranscript, transcript))
-      fail("transcript_mismatch", "the entry is for another join");
-    if (!entry.signer.equals(answer.memberKey))
-      fail("transcript_mismatch", "the entry is not the answering member's");
-    if (!equalBytes(entry.prev, answer.listHead))
-      fail("bad_chain", "the entry does not follow the head the words covered");
-    expectContext(entry.context, context);
+    if (firstDevice) {
+      const { entry } = readServerFirst(entryBytes);
+      if (!equalBytes(encodeRecord(entry.device), own))
+        fail("transcript_mismatch", "the first entry does not name this device");
+      if (!equalBytes(entry.joinTranscript, transcript))
+        fail("transcript_mismatch", "the first entry is for another join");
+      if (!entry.connectorKey.equals(answer.memberKey))
+        fail("transcript_mismatch", "the first entry is not the answering connector's");
+      if (!equalBytes(answer.listHead, ZERO_HEAD))
+        fail("bad_chain", "a first entry answers a join with no list");
+      expectContext(entry.context, context);
+    } else {
+      const entry = readSignedEntry(entryBytes);
+      if (entry.type !== "add" || !equalBytes(encodeRecord(entry.device), own))
+        fail("transcript_mismatch", "the entry does not add this device");
+      if (!equalBytes(entry.joinTranscript, transcript))
+        fail("transcript_mismatch", "the entry is for another join");
+      if (!entry.signer.equals(answer.memberKey))
+        fail("transcript_mismatch", "the entry is not the answering member's");
+      if (!equalBytes(entry.prev, answer.listHead))
+        fail("bad_chain", "the entry does not follow the head the words covered");
+      expectContext(entry.context, context);
+    }
 
     // (3)
     const payload = hpkeOpen(
@@ -437,26 +597,99 @@ export class NewDeviceJoin {
       fail("card_mismatch", "not the card the words covered");
     const secret = ListSecret.fromBytes(secretBytes, epoch);
 
-    // (4)
-    const entries = openListEntries(secret, context, sealedListInput);
-    const state = verifyList(context, entries);
-    const at = entries.findIndex((candidate) => equalBytes(entryHash(candidate), answer.listHead));
-    if (at < 0 || !equalBytes(entries[at + 1] ?? new Uint8Array(0), entryBytes))
-      fail("bad_chain", "the list doesn't hold this device's entry after the covered head");
-    const self = state.member(this.#device.listKey.publicKey);
-    if (!self || !equalBytes(encodeRecord(self.device!), encodeRecord(this.#device.device)))
-      fail("not_member", "this device is not a current member of the list");
-
-    // (5)
-    const confirmer = state.member(answer.memberKey);
-    if (!confirmer || confirmer.role === "connector")
-      fail("not_member", "the confirming device is not a current device member");
-
-    // (6)
+    let state: ListState;
+    let head: Head | null = null;
+    let confirmedOn: string;
+    if (firstDevice) {
+      // (4) and (5): the list will be the first entry alone, once N adds its signature.
+      if (epoch !== 0) fail("stale_secret", "a server's first secret is epoch 0");
+      firstEntry = completeServerFirst(this.#device.listKey, entryBytes);
+      state = ListState.fromGenesis(context, firstEntry);
+      // (6)
+      const card = verifyCard(cardBytes, state.connectorKey, context.gatewayId);
+      confirmedOn = card.name;
+    } else {
+      // (4)
+      if (sealedList === null || headBytes === null)
+        fail("bad_argument", "a member's confirmation comes with the sealed list and its head");
+      const entries = openListEntries(secret, context, sealedList);
+      ({ state, head } = verifyList(context, entries, headBytes, held));
+      const at = entries.findIndex((candidate) =>
+        equalBytes(entryHash(candidate), answer.listHead),
+      );
+      if (at < 0 || !equalBytes(entries[at + 1] ?? new Uint8Array(0), entryBytes))
+        fail("bad_chain", "the list doesn't hold this device's entry after the covered head");
+      const self = state.member(this.#device.listKey.publicKey);
+      if (!self || !equalBytes(encodeRecord(self.device!), own))
+        fail("not_member", "this device is not a current member of the list");
+      // (5)
+      const confirmer = state.member(answer.memberKey);
+      if (!confirmer || confirmer.role === "connector")
+        fail("not_member", "the confirming device is not a current device member");
+      confirmedOn = confirmer.device!.name;
+      // (6)
+      verifyCard(cardBytes, state.connectorKey, context.gatewayId);
+      requireHeadCard(cardBytes, head!);
+      if (secret.epoch !== head!.epoch) fail("stale_secret", "not the secret of the head's epoch");
+    }
     const card = verifyCard(cardBytes, state.connectorKey, context.gatewayId);
 
+    const right = confirmationWord(transcript, signature, cardHash(cardBytes));
+    const prompt: WordBackPrompt = Object.freeze({
+      mode: firstDevice ? "first-device" : "member",
+      under: freezeWords(wordsFor(transcript)),
+      choices: Object.freeze(fiveWords(right, this.#device.listKey, transcript, signature)),
+    });
+    this.#checked = {
+      result: Object.freeze({
+        secret,
+        card,
+        cardBytes: copy(cardBytes),
+        state,
+        head,
+        confirmedOn,
+        firstEntry,
+      }),
+      prompt,
+      right,
+    };
+    this.#phase = "checked";
+    return prompt;
+  }
+
+  /**
+   * Step 5a, on N: the person's pick of the word back. A pick is the word together with N's own
+   * three words it was shown under. The right word hands back the join's result; anything else
+   * discards everything N was sent and ends the attempt, and N then starts no join for an hour.
+   * It picks once.
+   */
+  pickWord(pick: WordBackPick, nowMs: number): WordBackOutcome {
+    checkTime(nowMs);
+    if (this.#phase !== "checked")
+      fail("join_spent", "this join has nothing to pick, or has ended");
+    const checked = this.#checked!;
+    let right = false;
+    if (pick !== "none-match" && pick !== "not-confirmed") {
+      if (
+        typeof pick !== "object" ||
+        pick === null ||
+        !Array.isArray(pick.under) ||
+        typeof pick.word !== "string"
+      )
+        fail("bad_argument", "a pick is a word under N's words, or a refusal");
+      if (!sameWords(pick.under, checked.prompt.under))
+        fail("bad_argument", "a word picked under other words than this device's");
+      if (!checked.prompt.choices.includes(pick.word))
+        fail("bad_argument", "not one of the five words shown");
+      right = pick.word === checked.right;
+    }
+    this.#checked = null;
+    if (!right) {
+      this.#phase = "ended";
+      return Object.freeze({ outcome: "refused", pauseUntilMs: nowMs + JOIN_PAUSE_MS });
+    }
     this.#phase = "finished";
-    return Object.freeze({ secret, card, cardBytes: copy(cardBytes), state });
+    return Object.freeze({ outcome: "confirmed", result: checked.result });
   }
 }
 
@@ -466,6 +699,16 @@ export type JoinPick = Words | "none-match" | "not-started";
 export type RefusalReason = "wrong-set" | "none-match" | "not-started" | "concurrent";
 const REASONS: readonly RefusalReason[] = ["wrong-set", "none-match", "not-started", "concurrent"];
 
+/** What A shows after a right pick: the confirmation word, under N's three words and N's name. */
+export interface WordBack {
+  readonly word: string;
+  readonly under: Words;
+  /** The name N says it has: shown as "says it is". */
+  readonly name: string;
+  /** A clears the word at this time at the latest (nowMs + WORD_BACK_MS), or when the join ends. */
+  readonly showUntilMs: number;
+}
+
 export type JoinOutcome =
   | {
       readonly outcome: "added";
@@ -473,12 +716,145 @@ export type JoinOutcome =
       readonly entry: Uint8Array;
       /** For N: the entry, and the list secret and card sealed to N's seal key. */
       readonly confirm: Uint8Array;
+      readonly wordBack: WordBack;
     }
   | {
       /** For the connector, which then takes no new device for an hour. */
       readonly outcome: "refused";
       readonly refusal: Uint8Array;
+      /** A answers no join before this (nowMs + JOIN_PAUSE_MS); the caller keeps it. */
+      readonly pauseUntilMs: number;
     };
+
+interface Shown {
+  readonly device: DeviceRecord;
+  readonly transcript: Uint8Array;
+  readonly right: Words;
+  readonly sets: Words[];
+}
+
+/** The answerer's half of the join shared by a member and a server's connector. */
+class Answering {
+  readonly key: ListSecretKey;
+  readonly context: ListContext;
+  readonly commit: Commit;
+  readonly answer: Answer;
+  readonly answerBytes: Uint8Array;
+  reveal: Uint8Array | null = null;
+  shown: Shown | null = null;
+  done = false;
+
+  constructor(
+    key: ListSecretKey,
+    context: ListContext,
+    commit: Commit,
+    listHead: Uint8Array,
+    card: Uint8Array,
+  ) {
+    this.key = key;
+    this.context = context;
+    this.commit = commit;
+    const info = new Writer()
+      .label(TAG.answerNonce)
+      .fixed(context.gatewayId, 16, "gateway id")
+      .fixed(context.accountId, 16, "account id")
+      .fixed(commit.commitment, 32, "commitment")
+      .finish();
+    const nonce = deriveFromListKey(key, undefined, info, 32);
+    this.answer = {
+      context,
+      commitment: commit.commitment,
+      memberKey: key.publicKey,
+      listHead,
+      cardHash: cardHash(card),
+      nonce,
+    };
+    this.answerBytes = start(STEP.answer, context)
+      .fixed(commit.commitment, 32, "commitment")
+      .fixed(key.publicKey.bytes, 32, "member key")
+      .fixed(listHead, 32, "list head")
+      .fixed(this.answer.cardHash, 32, "card hash")
+      .fixed(nonce, 32, "nonce")
+      .finish();
+  }
+
+  /** Checks a reveal; `requireNew` checks N's keys against the list (or the connector's key). */
+  choices(input: Uint8Array, requireNew: (device: DeviceRecord) => void) {
+    const reveal = copy(input);
+    if (this.done) fail("join_spent", "this join has ended");
+    if (this.reveal !== null && !equalBytes(reveal, this.reveal))
+      fail("join_spent", "this join already took a reveal");
+    const found = readReveal(reveal);
+    expectContext(found.context, this.context);
+    if (!equalBytes(commitment(this.context, found.device, found.nonce), this.commit.commitment))
+      fail("commitment_mismatch", "the reveal does not open the commitment");
+    const transcript = transcriptHash(this.commit, this.answer, found.device, found.nonce);
+    if (!equalBytes(found.transcriptHash, transcript))
+      fail("transcript_mismatch", "a reveal for another transcript");
+    if (!verifyEd25519(found.device.listKey.bytes, found.signed, found.signature))
+      fail("bad_signature", "the reveal's signature does not verify");
+    requireNew(found.device);
+    const right = wordsFor(transcript);
+    const { sets } = fiveSets(transcript, right, this.key);
+    this.reveal = reveal;
+    this.shown = { device: found.device, transcript, right, sets };
+    return Object.freeze({
+      sets: Object.freeze(sets.map(freezeWords)) as unknown as Words[],
+      name: found.device.name,
+      platform: found.device.platform,
+    });
+  }
+
+  /** Judges a pick: null for the right set, or the refusal's reason. */
+  judge(pick: JoinPick): RefusalReason | null {
+    if (this.done) fail("join_spent", "this join has already been confirmed or refused");
+    const shown = this.shown;
+    if (shown === null) fail("bad_argument", "the sets have not been shown");
+    if (pick === "none-match" || pick === "not-started") return pick;
+    if (Array.isArray(pick) && shown.sets.some((set) => sameWords(set, pick)))
+      return sameWords(pick, shown.right) ? null : "wrong-set";
+    fail("bad_argument", "a pick is one of the five sets shown, or a refusal");
+  }
+
+  /** The confirmation for a right pick, with `entry` (an add, or a server's partial first entry). */
+  confirmation(
+    entry: Uint8Array,
+    secret: ListSecret,
+    card: Uint8Array,
+    random: Uint8Array,
+    nowMs: number,
+  ) {
+    const shown = this.shown!;
+    const payload = new Writer()
+      .u32(secret.epoch)
+      .fixed(listSecretBytes(secret), 32, "list secret")
+      .bytes(card, 1, MAX_CARD_BYTES, "card")
+      .finish();
+    const info = deliveryInfo(this.context, shown.transcript);
+    const ikm = deriveFromListKey(this.key, random, concat(utf8(TAG.joinEphemeral), info), 32);
+    const { enc, ciphertext } = hpkeSeal(
+      shown.device.sealKey.bytes,
+      info,
+      new Uint8Array(0),
+      payload,
+      ikm,
+    );
+    const signed = start(STEP.confirm, this.context)
+      .fixed(shown.transcript, 32, "transcript hash")
+      .bytes(entry, 1, MAX_ENTRY_BYTES, "entry")
+      .fixed(enc, 32, "enc")
+      .bytes(ciphertext, 17, MAX_DELIVERY_BYTES, "sealed delivery")
+      .finish();
+    const signature = signList(this.key, signed);
+    const wordBack: WordBack = Object.freeze({
+      word: confirmationWord(shown.transcript, signature, cardHash(card)),
+      under: freezeWords(shown.right),
+      name: shown.device.name,
+      showUntilMs: nowMs + WORD_BACK_MS,
+    });
+    return { confirm: concat(signed, signature), wordBack };
+  }
+}
 
 /**
  * The member's side of one join. Its answer nonce is HKDF-SHA256 of A's list key's random
@@ -488,146 +864,193 @@ export type JoinOutcome =
  */
 export class MemberJoin {
   readonly #member: JoinMember;
-  readonly #commit: Commit;
-  readonly #answer: Answer;
-  readonly #answerBytes: Uint8Array;
-  #reveal: Uint8Array | null = null;
-  #shown: { device: DeviceRecord; transcript: Uint8Array; right: Words; sets: Words[] } | null =
-    null;
-  #done = false;
+  readonly #side: Answering;
 
-  private constructor(member: JoinMember, commit: Commit) {
+  private constructor(member: JoinMember, side: Answering) {
     this.#member = member;
-    this.#commit = commit;
-    const state = member.state;
-    const context = state.context;
-    const info = new Writer()
-      .label(TAG.answerNonce)
-      .fixed(context.gatewayId, 16, "gateway id")
-      .fixed(context.accountId, 16, "account id")
-      .fixed(commit.commitment, 32, "commitment")
-      .finish();
-    const nonce = deriveFromListKey(member.key, undefined, info, 32);
-    this.#answer = {
-      context,
-      commitment: commit.commitment,
-      memberKey: member.key.publicKey,
-      listHead: state.head,
-      cardHash: cardHash(member.card),
-      nonce,
-    };
-    this.#answerBytes = start(STEP.answer, context)
-      .fixed(commit.commitment, 32, "commitment")
-      .fixed(member.key.publicKey.bytes, 32, "member key")
-      .fixed(state.head, 32, "list head")
-      .fixed(this.#answer.cardHash, 32, "card hash")
-      .fixed(nonce, 32, "nonce")
-      .finish();
+    this.#side = side;
     Object.freeze(this);
   }
 
   /**
    * Step 2: A's answer to a commitment, before it has seen N's keys. A must be a current device
-   * member, and its card must be signed by the list's connector.
+   * member at its newest head, holding that head's card and secret. Refused while A's own pause
+   * after a refusal lasts.
    */
-  static answer(member: JoinMember, commitInput: Uint8Array): MemberJoin {
+  static answer(member: JoinMember, commitInput: Uint8Array, clock: JoinClock): MemberJoin {
+    checkClock(clock);
     const own: JoinMember = Object.freeze({
       key: member.key,
       state: member.state,
+      head: copy(member.head),
       card: copy(member.card),
       secret: member.secret,
     });
     checkMember(own);
     const commit = readCommit(copy(commitInput));
     expectContext(commit.context, own.state.context);
-    return new MemberJoin(own, commit);
+    const side = new Answering(own.key, own.state.context, commit, own.state.head, own.card);
+    return new MemberJoin(own, side);
   }
 
   /** The answer message: the same bytes for the same commitment, however often it is built. */
   get answer(): Uint8Array {
-    return copy(this.#answerBytes);
+    return copy(this.#side.answerBytes);
   }
 
   /**
    * Step 4: checks N's reveal and returns the five sets to show, after "I didn't start this"
    * and "None of these match". It takes one reveal; the same reveal again gets the same sets.
    */
-  choices(input: Uint8Array): { sets: Words[]; name: string; platform: Platform } {
-    const reveal = copy(input);
-    if (this.#done) fail("join_spent", "this join has ended");
-    if (this.#reveal !== null && !equalBytes(reveal, this.#reveal))
-      fail("join_spent", "this join already took a reveal");
+  choices(reveal: Uint8Array): { sets: Words[]; name: string; platform: Platform } {
     const state = this.#member.state;
-    const found = readReveal(reveal);
-    expectContext(found.context, state.context);
-    if (!equalBytes(commitment(state.context, found.device, found.nonce), this.#commit.commitment))
-      fail("commitment_mismatch", "the reveal does not open the commitment");
-    const transcript = transcriptHash(this.#commit, this.#answer, found.device, found.nonce);
-    if (!equalBytes(found.transcriptHash, transcript))
-      fail("transcript_mismatch", "a reveal for another transcript");
-    if (!verifyEd25519(found.device.listKey.bytes, found.signed, found.signature))
-      fail("bad_signature", "the reveal's signature does not verify");
-    state.requireNew(found.device);
-    if (state.devices().length >= MAX_MEMBERS) fail("list_full", "the list holds its most members");
-    const right = wordsFor(transcript);
-    const { sets } = fiveSets(transcript, right, this.#member.key);
-    this.#reveal = reveal;
-    this.#shown = { device: found.device, transcript, right, sets };
-    return Object.freeze({
-      sets: Object.freeze(sets.map(freezeWords)) as unknown as Words[],
-      name: found.device.name,
-      platform: found.device.platform,
+    return this.#side.choices(reveal, (device) => {
+      state.requireNew(device);
+      if (state.devices().length >= MAX_MEMBERS)
+        fail("list_full", "the list holds its most members");
     });
   }
 
   /**
    * Step 5, after the pick: the words of the set the person picked, compared with the
-   * transcript's own words, or one of the two refusals. A right pick signs the entry adding N
-   * and seals the list secret and the card to N; anything else signs a refusal. `random` is 32
-   * random bytes; the sealing's ephemeral is hedged from it. It confirms once.
+   * transcript's own words, or one of the two refusals. A right pick signs the entry adding N,
+   * seals the list secret and the card to N, and returns the word back to show. Anything else
+   * signs a refusal. `random` is 32 random bytes; the sealing's ephemeral is hedged from it. It
+   * confirms once.
    */
-  confirm(pick: JoinPick, random: Uint8Array): JoinOutcome {
-    if (this.#done) fail("join_spent", "this join has already been confirmed or refused");
-    const shown = this.#shown;
-    if (shown === null) fail("bad_argument", "the sets have not been shown");
+  confirm(pick: JoinPick, random: Uint8Array, nowMs: number): JoinOutcome {
+    checkTime(nowMs);
+    const side = this.#side;
+    const reason = side.judge(pick);
     const ownRandom = copy(checkLength(random, 32, "the random bytes"));
-    let reason: RefusalReason | null;
-    if (pick === "none-match" || pick === "not-started") reason = pick;
-    else if (Array.isArray(pick) && shown.sets.some((set) => sameWords(set, pick))) {
-      reason = sameWords(pick, shown.right) ? null : "wrong-set";
-    } else fail("bad_argument", "a pick is one of the five sets shown, or a refusal");
     const member = this.#member;
-    this.#done = true;
+    side.done = true;
     if (reason !== null)
       return Object.freeze({
         outcome: "refused",
-        refusal: refusal(member.key, member.state, this.#commit, reason),
+        refusal: refusal(member.key, member.state, side.commit, reason),
+        pauseUntilMs: nowMs + JOIN_PAUSE_MS,
       });
-
-    const entry = signAdd(member.key, member.state, shown.device, shown.transcript);
-    const payload = new Writer()
-      .u32(member.secret.epoch)
-      .fixed(listSecretBytes(member.secret), 32, "list secret")
-      .bytes(member.card, 1, MAX_CARD_BYTES, "card")
-      .finish();
-    const context = member.state.context;
-    const info = deliveryInfo(context, shown.transcript);
-    const ikm = deriveFromListKey(member.key, ownRandom, concat(utf8(TAG.joinEphemeral), info), 32);
-    const { enc, ciphertext } = hpkeSeal(
-      shown.device.sealKey.bytes,
-      info,
-      new Uint8Array(0),
-      payload,
-      ikm,
+    const entry = signAdd(member.key, member.state, side.shown!.device, side.shown!.transcript);
+    const { confirm, wordBack } = side.confirmation(
+      entry,
+      member.secret,
+      member.card,
+      ownRandom,
+      nowMs,
     );
-    const signed = start(STEP.confirm, context)
-      .fixed(shown.transcript, 32, "transcript hash")
-      .bytes(entry, 1, MAX_ENTRY_BYTES, "entry")
-      .fixed(enc, 32, "enc")
-      .bytes(ciphertext, 17, MAX_DELIVERY_BYTES, "sealed delivery")
-      .finish();
-    const confirm = concat(signed, signList(member.key, signed));
-    return Object.freeze({ outcome: "added", entry, confirm });
+    return Object.freeze({ outcome: "added", entry, confirm, wordBack });
+  }
+}
+
+/** What the server's connector holds at install: its key, the gateway, its card, the first secret. */
+export interface ServerInstall {
+  readonly connector: ListSecretKey;
+  readonly context: ListContext;
+  readonly card: Uint8Array;
+  /** The first list secret, epoch 0. */
+  readonly secret: ListSecret;
+}
+
+export type ServerFirstOutcome =
+  | {
+      readonly outcome: "added";
+      /** For N: the first entry with the connector's signature, the first secret and the card. */
+      readonly confirm: Uint8Array;
+      /** What the server's terminal shows. */
+      readonly wordBack: WordBack;
+    }
+  | { readonly outcome: "refused" };
+
+/**
+ * The first join of a gateway on a server with no app (design §8.4): the connector answers one
+ * join itself, its terminal shows the sets, and a right pick makes the list's first entry with
+ * that device as its first device member. It takes no list, so it can't be used on a list that
+ * exists; the caller opens one only from the install's own one-time state, and never again.
+ * It answers one commitment: the same commitment again gets the same answer, and any other
+ * commitment ends it for good (`join_spent`). The first entry is complete once N adds its own
+ * signature on the right word back; N returns it to the connector, which starts its list from it
+ * with `ListState.fromGenesis`.
+ */
+export class ServerFirstDeviceJoin {
+  readonly #install: ServerInstall;
+  #side: Answering | null = null;
+  #ended = false;
+
+  private constructor(install: ServerInstall) {
+    this.#install = install;
+    Object.freeze(this);
+  }
+
+  static open(install: ServerInstall): ServerFirstDeviceJoin {
+    const context = checkContext(install.context);
+    const card = copy(install.card);
+    verifyCard(card, install.connector.publicKey, context.gatewayId);
+    if (install.secret.epoch !== 0) fail("stale_secret", "a server's first secret is epoch 0");
+    return new ServerFirstDeviceJoin(
+      Object.freeze({ connector: install.connector, context, card, secret: install.secret }),
+    );
+  }
+
+  /** Step 2, by the connector: its answer to the one commitment this join takes. */
+  answer(commitInput: Uint8Array): Uint8Array {
+    if (this.#ended) fail("join_spent", "this first join has ended");
+    const commit = readCommit(copy(commitInput));
+    expectContext(commit.context, this.#install.context);
+    if (this.#side !== null) {
+      if (equalBytes(commit.commitment, this.#side.commit.commitment))
+        return copy(this.#side.answerBytes);
+      this.#ended = true;
+      fail("join_spent", "two devices asked to join; run the command again");
+    }
+    const install = this.#install;
+    this.#side = new Answering(install.connector, install.context, commit, ZERO_HEAD, install.card);
+    return copy(this.#side.answerBytes);
+  }
+
+  /** Step 4, by the connector: checks N's reveal and returns the five sets for the terminal. */
+  choices(reveal: Uint8Array): { sets: Words[]; name: string; platform: Platform } {
+    if (this.#ended || this.#side === null)
+      fail("join_spent", "this first join has no answer, or has ended");
+    const connectorKey = `${this.#install.connector.publicKey.bytes.join(",")}`;
+    return this.#side.choices(reveal, (device) => {
+      const keys = [device.listKey.bytes, device.sealKey.bytes, device.gatewayDeviceKey.bytes].map(
+        (k) => k.join(","),
+      );
+      if (new Set(keys).size !== keys.length || keys.includes(connectorKey))
+        fail("duplicate_key", "one key in two roles");
+    });
+  }
+
+  /**
+   * Step 5, by the connector, after the number typed at the terminal: a right pick makes the
+   * first entry and seals the first secret and the card to N; anything else ends this first join.
+   */
+  confirm(pick: JoinPick, random: Uint8Array, nowMs: number): ServerFirstOutcome {
+    checkTime(nowMs);
+    if (this.#ended || this.#side === null)
+      fail("join_spent", "this first join has no answer, or has ended");
+    const side = this.#side;
+    const reason = side.judge(pick);
+    const ownRandom = copy(checkLength(random, 32, "the random bytes"));
+    side.done = true;
+    this.#ended = true;
+    if (reason !== null) return Object.freeze({ outcome: "refused" });
+    const install = this.#install;
+    const entry = signServerFirst(
+      install.connector,
+      install.context,
+      side.shown!.device,
+      side.shown!.transcript,
+    );
+    const { confirm, wordBack } = side.confirmation(
+      entry,
+      install.secret,
+      install.card,
+      ownRandom,
+      nowMs,
+    );
+    return Object.freeze({ outcome: "added", confirm, wordBack });
   }
 }
 
@@ -660,7 +1083,7 @@ function refusal(
 
 /**
  * A member refuses a join without a pick: "I didn't start this" before the sets are shown, or
- * a second join while one is open. Only a current device member can refuse.
+ * two joins at once (which ends both and pauses nothing). Only a current device member can refuse.
  */
 export function refuseJoin(
   member: { readonly key: ListSecretKey; readonly state: ListState },
@@ -682,14 +1105,22 @@ export interface Refusal {
   readonly signer: ListPublicKey;
   /** `taggedHash(refusal hash, the whole refusal)`: the connector takes each refusal once by it. */
   readonly hash: Uint8Array;
+  /** Whether the connector pauses joins for it: every reason but two joins at once. */
+  readonly pauses: boolean;
 }
 
 /**
  * The connector checks a refusal: signed by a current device member, for this gateway and
- * account. It returns the refusal's hash, by which the connector takes it once. The pause that
- * follows is the connector's to keep (`JOIN_PAUSE_MS`).
+ * account, naming a head the connector signed within the last hour. `signedWithinHour` is the
+ * latest-entry hashes of the heads it signed in that hour (the connector keeps them with their
+ * times; the package keeps no clock). It returns the refusal's hash, by which the connector
+ * takes each refusal once, and whether it pauses joins (`JOIN_PAUSE_MS`).
  */
-export function verifyRefusal(state: ListState, input: Uint8Array): Refusal {
+export function verifyRefusal(
+  state: ListState,
+  input: Uint8Array,
+  signedWithinHour: readonly Uint8Array[],
+): Refusal {
   const bytes = copy(input);
   const reader = new Reader(bytes);
   reader.label(LABEL.refusal);
@@ -707,11 +1138,14 @@ export function verifyRefusal(state: ListState, input: Uint8Array): Refusal {
   expectContext(context, state.context);
   if (state.requireMember(signer).role === "connector")
     fail("not_permitted", "a device refuses a join, not the connector");
+  if (!signedWithinHour.some((head) => equalBytes(head, listHead)))
+    fail("stale_head", "a refusal naming a head not signed within the hour");
   return Object.freeze({
     listHead,
     commitment: value,
     reason,
     signer,
     hash: taggedHash(TAG.refusalHash, bytes),
+    pauses: reason !== "concurrent",
   });
 }

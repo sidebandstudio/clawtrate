@@ -20,5 +20,11 @@ export const MAX_PATH_BYTES = 512;
 export const MAX_BODY_BYTES = 1024 * 1024;
 /** How far a session request's time may be from the service's clock, either way. */
 export const SESSION_SKEW_MS = 60_000;
-/** How long the connector accepts no new device after a refusal. Enforced by the connector. */
+/** How long joins pause after a refusal: on the connector, on the refusing member, on N. */
 export const JOIN_PAUSE_MS = 60 * 60 * 1000;
+/** How long a member shows the confirmation word after a right pick, at most. */
+export const WORD_BACK_MS = 2 * 60 * 1000;
+/** How long an entry may go without pairing before the connector withdraws it. Kept by the connector. */
+export const WITHDRAW_AFTER_MS = 10 * 60 * 1000;
+/** The connector starts a list afresh once it holds more entries than this. */
+export const FRESH_START_AFTER = 900;

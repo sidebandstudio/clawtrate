@@ -36,6 +36,7 @@ import { concat } from "../src/bytes.ts";
 import { signList } from "../src/keys.ts";
 import { encodeList, signAdd } from "../src/list.ts";
 import {
+  chain,
   addDevice,
   appended,
   CONTEXT,
@@ -47,6 +48,8 @@ import {
   OTHER_GATEWAY,
   seeded,
   type Held,
+  headObject,
+  headOf,
 } from "./helpers.ts";
 
 // Signatures and key checks are quick alone; on a loaded machine a test can take seconds.
@@ -103,7 +106,7 @@ describe("the first entry", () => {
       "gateway-device",
     ]);
     expect(world.state.length).toBe(1);
-    expect(verifyList(CONTEXT, [world.genesis]).head).toEqual(world.state.head);
+    expect(chain(CONTEXT, [world.genesis]).head).toEqual(world.state.head);
   });
 
   it("needs both signatures, each from its own key", () => {
@@ -151,22 +154,22 @@ describe("the first entry", () => {
 
   it("refuses a list that starts with anything else, and a second first entry", () => {
     const { entries, world } = threeDevices();
-    expectCode(() => verifyList(CONTEXT, entries.slice(1)), "bad_chain");
+    expectCode(() => chain(CONTEXT, entries.slice(1)), "bad_chain");
     expectCode(() => world.state.append(world.genesis), "bad_chain");
-    expectCode(() => verifyList(CONTEXT, []), "malformed");
+    expectCode(() => chain(CONTEXT, []), "malformed");
   });
 
   it("is for one gateway and one account", () => {
     const world = makeWorld();
-    expectCode(() => verifyList(OTHER_GATEWAY, [world.genesis]), "wrong_gateway");
-    expectCode(() => verifyList(OTHER_ACCOUNT, [world.genesis]), "wrong_account");
+    expectCode(() => chain(OTHER_GATEWAY, [world.genesis]), "wrong_gateway");
+    expectCode(() => chain(OTHER_ACCOUNT, [world.genesis]), "wrong_account");
   });
 });
 
 describe("the chain", () => {
   it("verifies from the first entry to the same state the appender reached", () => {
     const { entries, state, mac, phone, gateway } = threeDevices();
-    const verified = verifyList(CONTEXT, entries);
+    const verified = chain(CONTEXT, entries);
     expect(verified.head).toEqual(state.head);
     expect(verified.devices().map((member) => member.key.bytes)).toEqual(
       [gateway, mac, phone].map((device) => device.device.listKey.bytes),
@@ -175,10 +178,10 @@ describe("the chain", () => {
 
   it("refuses a reordered, repeated or forked list", () => {
     const { entries, world, gateway } = threeDevices();
-    expectCode(() => verifyList(CONTEXT, [entries[0]!, entries[2]!, entries[1]!]), "bad_chain");
-    expectCode(() => verifyList(CONTEXT, [entries[0]!, entries[1]!, entries[1]!]), "bad_chain");
+    expectCode(() => chain(CONTEXT, [entries[0]!, entries[2]!, entries[1]!]), "bad_chain");
+    expectCode(() => chain(CONTEXT, [entries[0]!, entries[1]!, entries[1]!]), "bad_chain");
     const fork = signAdd(gateway.listKey, world.state, makeDevice(4).device, TRANSCRIPT);
-    expectCode(() => verifyList(CONTEXT, [entries[0]!, entries[1]!, fork]), "bad_chain");
+    expectCode(() => chain(CONTEXT, [entries[0]!, entries[1]!, fork]), "bad_chain");
   });
 
   it("refuses an entry for another gateway or account", () => {
@@ -248,15 +251,25 @@ describe("the chain", () => {
 });
 
 describe("removing and putting back", () => {
-  it("a device member removes any device but the connector, itself included", () => {
+  it("a device member removes any device but the connector and the gateway's own, itself included", () => {
     const { state, gateway, mac, phone } = threeDevices();
-    const s1 = after(state, signRemoval(mac.listKey, state, gateway.device.listKey));
-    expect(s1.member(gateway.device.listKey)).toBeUndefined();
-    expect(s1.removal(gateway.device.listKey)?.origin).toBe("member");
-    const s2 = after(s1, signRemoval(phone.listKey, s1, phone.device.listKey));
-    expect(s2.devices().map((member) => member.key.bytes)).toEqual([mac.device.listKey.bytes]);
-    expectCode(() => signRemoval(mac.listKey, s2, s2.connectorKey), "protected_member");
-    expectCode(() => signRemoval(mac.listKey, s2, phone.device.listKey), "bad_target");
+    const s1 = after(state, signRemoval(mac.listKey, state, phone.device.listKey));
+    expect(s1.member(phone.device.listKey)).toBeUndefined();
+    expect(s1.removal(phone.device.listKey)?.origin).toBe("member");
+    const s2 = after(s1, signRemoval(mac.listKey, s1, mac.device.listKey));
+    expect(s2.devices().map((member) => member.key.bytes)).toEqual([gateway.device.listKey.bytes]);
+    expectCode(() => signRemoval(gateway.listKey, s2, s2.connectorKey), "protected_member");
+    expectCode(() => signRemoval(gateway.listKey, s2, phone.device.listKey), "bad_target");
+  });
+
+  it("the gateway machine's own device is removed only by itself or the connector", () => {
+    const { state, world, gateway, mac } = threeDevices();
+    // A stolen member can't remove it, so it can't leave the list with nobody to confirm a device.
+    expectCode(() => signRemoval(mac.listKey, state, gateway.device.listKey), "protected_member");
+    expect(after(state, signRemoval(gateway.listKey, state, gateway.device.listKey)).member(gateway.device.listKey)).toBeUndefined();
+    expect(
+      after(state, signRemovalOnGatewayMachine(world.connector, state, gateway.device.listKey)).member(gateway.device.listKey),
+    ).toBeUndefined();
   });
 
   it("the connector removes only through its own function for its own machine", () => {
@@ -452,7 +465,7 @@ describe("bounds", () => {
       state = after(state, signRemovalOnGatewayMachine(world.connector, state, member.key));
     }
     expect(state.length).toBeLessThanOrEqual(MAX_ENTRIES);
-    expect(verifyList(CONTEXT, [...held.entries]).length).toBe(GROWTH_LIMIT);
+    expect(chain(CONTEXT, [...held.entries]).length).toBe(GROWTH_LIMIT);
   });
 });
 
@@ -460,21 +473,36 @@ describe("sealing with the list secret", () => {
   it("opens only in verified forms: a list as its state, a card checked, an entry appended", () => {
     const { entries, world, state } = threeDevices();
     const secret = world.secret;
-    expect(openList(secret, CONTEXT, sealList(secret, CONTEXT, entries, RANDOM)).head).toEqual(
-      state.head,
+    expect(
+      openList(
+        secret,
+        CONTEXT,
+        sealList(secret, CONTEXT, entries, RANDOM, headObject(world)),
+        headOf(world, { state, entries }),
+      ).state.head,
+    ).toEqual(state.head);
+    const card = openCard(
+      secret,
+      state,
+      sealCard(secret, CONTEXT, world.card, RANDOM, headObject(world)),
+      headObject(world),
     );
-    const card = openCard(secret, state, sealCard(secret, CONTEXT, world.card, RANDOM));
     expect(card.name).toBe("Windows PC");
-    const opened = openEntry(secret, world.state, sealEntry(secret, CONTEXT, entries[1]!, RANDOM));
+    const opened = openEntry(
+      secret,
+      world.state,
+      sealEntry(secret, CONTEXT, entries[1]!, RANDOM, headObject(world)),
+    );
     expect(opened.state.length).toBe(2);
-    const sealedCard = sealCard(secret, CONTEXT, world.card, RANDOM);
-    expectCode(() => openList(secret, CONTEXT, sealedCard), "malformed");
+    const sealedCard = sealCard(secret, CONTEXT, world.card, RANDOM, headObject(world));
+    expectCode(() => openList(secret, CONTEXT, sealedCard, headOf(world)), "malformed");
     expectCode(
       () =>
         openList(
           ListSecret.fromBytes(fill(32, 9), 0),
           CONTEXT,
-          sealList(secret, CONTEXT, entries, RANDOM),
+          sealList(secret, CONTEXT, entries, RANDOM, headObject(world)),
+          headOf(world),
         ),
       "decrypt_failed",
     );
@@ -485,7 +513,13 @@ describe("sealing with the list secret", () => {
     const secret = world.secret;
     const forged = signAdd(mac.listKey, state, makeDevice(8).device, TRANSCRIPT);
     expectCode(
-      () => openList(secret, CONTEXT, sealList(secret, CONTEXT, [world.genesis, forged], RANDOM)),
+      () =>
+        openList(
+          secret,
+          CONTEXT,
+          sealList(secret, CONTEXT, [world.genesis, forged], RANDOM, headObject(world)),
+          headOf(world),
+        ),
       "bad_chain",
     );
     // A card a member signed with its own key, naming itself as the connector.
@@ -497,7 +531,13 @@ describe("sealing with the list secret", () => {
       name: "Gateway",
     });
     expectCode(
-      () => openCard(secret, state, sealCard(secret, CONTEXT, selfSigned, RANDOM)),
+      () =>
+        openCard(
+          secret,
+          state,
+          sealCard(secret, CONTEXT, selfSigned, RANDOM, headObject(world)),
+          headObject(world),
+        ),
       "card_mismatch",
     );
   });
@@ -505,8 +545,8 @@ describe("sealing with the list secret", () => {
   it("a repeated random reveals at most that two plaintexts were equal: the nonce is synthetic", () => {
     const { entries, world } = threeDevices();
     const secret = world.secret;
-    const list = sealList(secret, CONTEXT, entries, RANDOM);
-    const card = sealCard(secret, CONTEXT, world.card, RANDOM);
+    const list = sealList(secret, CONTEXT, entries, RANDOM, headObject(world));
+    const card = sealCard(secret, CONTEXT, world.card, RANDOM, headObject(world));
     // Different plaintexts under one random: different nonces, so no shared keystream.
     expect(list.subarray(6, 30)).not.toEqual(card.subarray(6, 30));
     const plainList = encodeList(entries);
@@ -517,7 +557,7 @@ describe("sealing with the list secret", () => {
     }
     expect(same).toBe(false);
     // The same plaintext under the same random: the same bytes.
-    expect(sealCard(secret, CONTEXT, world.card, RANDOM)).toEqual(card);
+    expect(sealCard(secret, CONTEXT, world.card, RANDOM, headObject(world))).toEqual(card);
   });
 
   it("the explicit epoch check and the associated data each catch what the other doesn't", () => {
@@ -525,9 +565,15 @@ describe("sealing with the list secret", () => {
     const bytes = fill(32, 0xe0);
     // The same secret bytes under another epoch: the associated data matches the header it was
     // sealed with, so only the explicit check refuses it.
-    const sealed = sealCard(ListSecret.fromBytes(bytes, 1), CONTEXT, world.card, RANDOM);
+    const sealed = sealCard(
+      ListSecret.fromBytes(bytes, 1),
+      CONTEXT,
+      world.card,
+      RANDOM,
+      headObject(world),
+    );
     expectCode(
-      () => openCard(ListSecret.fromBytes(bytes, 0), world.state, sealed),
+      () => openCard(ListSecret.fromBytes(bytes, 0), world.state, sealed, headObject(world)),
       "decrypt_failed",
     );
     // A card relabelled as an entry: the kind check passes for the entry it now claims to be, and
@@ -553,22 +599,29 @@ describe("the list secret's rotation", () => {
         world.secret,
       );
       expect(opened.epoch).toBe(1);
-      expect(openCard(opened, removed, sealCard(next, CONTEXT, world.card, RANDOM)).serial).toBe(1);
+      expect(
+        openCard(
+          opened,
+          removed,
+          sealCard(next, CONTEXT, world.card, RANDOM, headObject(world)),
+          headObject(world),
+        ).serial,
+      ).toBe(1);
     }
     expectCode(
       () =>
         openRotation(
           { listKey: phone.device.listKey, sealKey: phone.sealKey },
-          state,
+          removed,
           rotation,
           world.secret,
         ),
       "not_member",
     );
-    const sealedAfter = sealList(next, CONTEXT, [world.genesis], RANDOM);
-    expectCode(() => openList(world.secret, CONTEXT, sealedAfter), "decrypt_failed");
+    const sealedAfter = sealList(next, CONTEXT, [world.genesis], RANDOM, headObject(world));
+    expectCode(() => openList(world.secret, CONTEXT, sealedAfter, headOf(world)), "decrypt_failed");
     expectCode(
-      () => openList(ListSecret.fromBytes(fill(32, 0xe0), 1), CONTEXT, sealedAfter),
+      () => openList(ListSecret.fromBytes(fill(32, 0xe0), 1), CONTEXT, sealedAfter, headOf(world)),
       "decrypt_failed",
     );
     expectCode(

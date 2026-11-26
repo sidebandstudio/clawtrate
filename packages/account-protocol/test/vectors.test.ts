@@ -36,6 +36,7 @@ import {
   makeWorld,
   memberOf,
   toHex,
+  headObject,
 } from "./helpers.ts";
 
 // Signatures and key checks are quick alone; on a loaded machine a test can take seconds.
@@ -159,9 +160,33 @@ function vectors(): Record<string, unknown> {
     refusal: toHex(s.refusal),
     rotation: toHex(s.rotation),
     sealed: {
-      list: toHex(sealList(s.world.secret, CONTEXT, s.entries, fill(32, 0x71))),
-      card: toHex(sealCard(s.world.secret, CONTEXT, s.world.card, fill(32, 0x72))),
-      entry: toHex(sealEntry(s.world.secret, CONTEXT, s.entries[1]!, fill(32, 0x73))),
+      list: toHex(
+        sealList(
+          s.world.secret,
+          CONTEXT,
+          s.entries,
+          fill(32, 0x71),
+          headObject(s.world, s.removal),
+        ),
+      ),
+      card: toHex(
+        sealCard(
+          s.world.secret,
+          CONTEXT,
+          s.world.card,
+          fill(32, 0x72),
+          headObject(s.world, s.removal),
+        ),
+      ),
+      entry: toHex(
+        sealEntry(
+          s.world.secret,
+          CONTEXT,
+          s.entries[1]!,
+          fill(32, 0x73),
+          headObject(s.world, s.removal),
+        ),
+      ),
     },
     session: toHex(s.session),
   };

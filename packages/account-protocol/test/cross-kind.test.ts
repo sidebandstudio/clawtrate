@@ -31,6 +31,7 @@ import {
 } from "../src/index.ts";
 import { TAG } from "../src/labels.ts";
 import {
+  chain,
   addDevice,
   appended,
   code,
@@ -43,6 +44,10 @@ import {
   N_RANDOM,
   runJoin,
   SEAL_RANDOM,
+  CLOCK,
+  NOW,
+  headObject,
+  headOf,
 } from "./helpers.ts";
 
 // Signatures and key checks are quick alone; on a loaded machine a test can take seconds.
@@ -106,10 +111,17 @@ function kinds(): Kind[] {
   const member = memberOf(asMember, asMember.gatewayDevice.listKey);
   const mac = makeDevice(2);
   const run = runJoin(member, mac);
-  const added = run.a.confirm(run.words, SEAL_RANDOM);
+  const added = run.a.confirm(run.words, SEAL_RANDOM, NOW);
   if (added.outcome !== "added") throw new Error("expected an added outcome");
   const withMac = appended(asMember, added.entry);
-  const sealed = sealList(asMember.secret, CONTEXT, withMac.entries, LIST_RANDOM);
+  const sealed = sealList(
+    asMember.secret,
+    CONTEXT,
+    withMac.entries,
+    LIST_RANDOM,
+    headObject(asMember, withMac),
+  );
+  const withMacHead = headOf(asMember, withMac);
   const refusal = refuseJoin(member, run.commit, "not-started");
   const memberRemoval = signRemoval(
     asMember.gatewayDevice.listKey,
@@ -145,7 +157,7 @@ function kinds(): Kind[] {
       bytes: asConnector.genesis,
       signatures: 2,
       label: 32,
-      verify: (b) => verifyList(CONTEXT, [b]),
+      verify: (b) => chain(CONTEXT, [b]),
     },
     {
       name: "account removal entry",
@@ -187,14 +199,14 @@ function kinds(): Kind[] {
       bytes: refusal,
       signatures: 1,
       label: 29,
-      verify: (b) => verifyRefusal(asMember.state, b),
+      verify: (b) => verifyRefusal(asMember.state, b, [asMember.state.head]),
     },
     {
       name: "join reveal",
       bytes: joinerRun.reveal,
       signatures: 1,
       label: 37,
-      verify: (b) => MemberJoin.answer(joinerMember, joinerRun.commit).choices(b),
+      verify: (b) => MemberJoin.answer(joinerMember, joinerRun.commit, CLOCK).choices(b),
     },
     {
       name: "join confirmation",
@@ -202,9 +214,9 @@ function kinds(): Kind[] {
       signatures: 1,
       label: 37,
       verify: (b) => {
-        const n = NewDeviceJoin.start(mac, CONTEXT, N_RANDOM);
+        const n = NewDeviceJoin.start(mac, CONTEXT, N_RANDOM, CLOCK);
         n.reveal(run.answer);
-        return n.finish(b, sealed);
+        return n.finish(b, sealed, withMacHead);
       },
     },
     {

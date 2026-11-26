@@ -21,8 +21,14 @@ import {
 } from "../src/index.ts";
 import { Reader, Writer } from "../src/bytes.ts";
 import { LABEL, TAG } from "../src/labels.ts";
-import { MAX_CARD_BYTES, MAX_LIST_BYTES } from "../src/seal.ts";
-import { MAX_ENTRY_BYTES } from "../src/list.ts";
+import { MAX_CARD_BYTES } from "../src/seal.ts";
+import {
+  completeServerFirst,
+  MAX_ENTRY_BYTES,
+  MAX_FRESH_START_BYTES,
+  MAX_LIST_BYTES,
+  signServerFirst,
+} from "../src/list.ts";
 import {
   assembleGenesis,
   openCard,
@@ -34,6 +40,7 @@ import {
   verifySessionRequest,
 } from "../src/index.ts";
 import {
+  chain,
   code,
   CONTEXT,
   expectCode,
@@ -42,6 +49,7 @@ import {
   makeDevice,
   makeWorld,
   toHex,
+  headObject,
 } from "./helpers.ts";
 
 // Signatures and key checks are quick alone; on a loaded machine a test can take seconds.
@@ -112,7 +120,13 @@ describe("the reader", () => {
       signGenesis(connector, fields),
       signGenesis(makeDevice(1).listKey, fields),
     );
-    expect(entry.length).toBe(MAX_ENTRY_BYTES);
+    expect(entry.length).toBe(MAX_ENTRY_BYTES - 32);
+    // The largest entry is a server's first entry: the same, with the join's transcript hash.
+    const serverFirst = completeServerFirst(
+      makeDevice(1).listKey,
+      signServerFirst(connector, CONTEXT, device, fill(32, 7)),
+    );
+    expect(serverFirst.length).toBe(MAX_ENTRY_BYTES);
     const card = signCard(connector, {
       gatewayId: CONTEXT.gatewayId,
       serial: 0,
@@ -357,8 +371,9 @@ describe("what the package never does", () => {
 describe("the bounds the README states", () => {
   it("are the numbers the code holds", () => {
     expect(MAX_CARD_BYTES).toBe(2297);
-    expect(MAX_LIST_BYTES).toBe(483_650);
-    expect(MAX_ENTRY_BYTES).toBe(456);
+    expect(MAX_ENTRY_BYTES).toBe(488);
+    expect(MAX_FRESH_START_BYTES).toBe(7534);
+    expect(MAX_LIST_BYTES).toBe(524_488);
   });
 });
 
@@ -380,7 +395,7 @@ describe("bytes from a Node Buffer", () => {
       signGenesis(connector, fields),
       signGenesis(device.listKey, fields),
     );
-    expect(verifyList(CONTEXT, [inPool(entry)]).head).toEqual(state.head);
+    expect(chain(CONTEXT, [inPool(entry)]).head).toEqual(state.head);
     const card = signCard(connector, {
       gatewayId: CONTEXT.gatewayId,
       serial: 7,
@@ -408,9 +423,9 @@ describe("bytes from a Node Buffer", () => {
     const secretBytes = Buffer.alloc(32, 0x22);
     const secret = ListSecret.fromBytes(secretBytes, 0);
     const world = makeWorld();
-    const sealed = sealCard(secret, CONTEXT, world.card, fill(32, 4));
+    const sealed = sealCard(secret, CONTEXT, world.card, fill(32, 4), headObject(world));
     secretBytes.fill(0);
-    expect(openCard(secret, world.state, sealed).serial).toBe(1);
+    expect(openCard(secret, world.state, sealed, headObject(world)).serial).toBe(1);
 
     const publicBytes = Buffer.from(key.publicKey.bytes);
     const publicKey = SessionPublicKey.fromBytes(publicBytes);

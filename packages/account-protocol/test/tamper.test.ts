@@ -29,6 +29,7 @@ import {
   type AccountProtocolErrorCode as Code,
 } from "../src/index.ts";
 import {
+  chain,
   appended,
   code,
   CONTEXT,
@@ -41,6 +42,10 @@ import {
   N_RANDOM,
   runJoin,
   SEAL_RANDOM,
+  CLOCK,
+  NOW,
+  headObject,
+  headOf,
 } from "./helpers.ts";
 
 // Signatures and key checks are quick alone; on a loaded machine a test can take seconds.
@@ -99,7 +104,7 @@ describe("tampering with the list", () => {
   const mac = makeDevice(2, "MacBook Pro");
   const member = memberOf(world, gateway.listKey);
   const run = runJoin(member, mac);
-  const added = run.a.confirm(run.words, SEAL_RANDOM);
+  const added = run.a.confirm(run.words, SEAL_RANDOM, NOW);
   if (added.outcome !== "added") throw new Error("expected an added outcome");
   const withMac = appended(world, added.entry);
   const head = (codes: readonly Code[]): Field[] => [
@@ -120,7 +125,7 @@ describe("tampering with the list", () => {
         ["connector signature", 64, SIGNED],
         ["device signature", 64, SIGNED],
       ],
-      (b) => verifyList(CONTEXT, [b]),
+      (b) => chain(CONTEXT, [b]),
     );
   });
 
@@ -182,7 +187,7 @@ describe("tampering with the list", () => {
         ["signer", 32, KEY],
         ["signature", 64, SIGNED],
       ],
-      (b) => verifyRefusal(world.state, b),
+      (b) => verifyRefusal(world.state, b, [world.state.head]),
     );
   });
 
@@ -229,6 +234,9 @@ describe("tampering with the list", () => {
       [
         ["label", 33, LABEL],
         ...CONTEXT_FIELDS(SIGNED),
+        ["generation", 4, SIGNED],
+        ["length", 4, SIGNED],
+        ["latest entry hash", 32, SIGNED],
         ["epoch", 4, SIGNED],
         ["count", 1, ["malformed", "too_large"]],
         ...share,
@@ -247,19 +255,19 @@ describe("tampering with the list", () => {
       ["epoch", 4, ["decrypt_failed"]],
       ["nonce", 24, codes],
     ];
-    const list = sealList(secret, CONTEXT, [world.genesis], fill(32, 1));
+    const list = sealList(secret, CONTEXT, [world.genesis], fill(32, 1), headObject(world));
     tamper(
       list,
       [...sealedHeader(["decrypt_failed"]), ["ciphertext", list.length - 30, ["decrypt_failed"]]],
-      (b) => openList(secret, CONTEXT, b),
+      (b) => openList(secret, CONTEXT, b, headOf(world)),
     );
-    const card = sealCard(secret, CONTEXT, world.card, fill(32, 2));
+    const card = sealCard(secret, CONTEXT, world.card, fill(32, 2), headObject(world));
     tamper(
       card,
       [...sealedHeader(["decrypt_failed"]), ["ciphertext", card.length - 30, ["decrypt_failed"]]],
-      (b) => openCard(secret, world.state, b),
+      (b) => openCard(secret, world.state, b, headObject(world)),
     );
-    const entry = sealEntry(secret, CONTEXT, added.entry, fill(32, 3));
+    const entry = sealEntry(secret, CONTEXT, added.entry, fill(32, 3), headObject(world));
     tamper(
       entry,
       [...sealedHeader(["decrypt_failed"]), ["ciphertext", entry.length - 30, ["decrypt_failed"]]],
@@ -273,11 +281,17 @@ describe("tampering with the join", () => {
   const member = memberOf(world, world.gatewayDevice.listKey);
   const mac = makeDevice(2, "MacBook Pro");
   const run = runJoin(member, mac);
-  const added = run.a.confirm(run.words, SEAL_RANDOM);
+  const added = run.a.confirm(run.words, SEAL_RANDOM, NOW);
   if (added.outcome !== "added") throw new Error("expected an added outcome");
-  const sealed = sealList(world.secret, CONTEXT, appended(world, added.entry).entries, LIST_RANDOM);
+  const sealed = sealList(
+    world.secret,
+    CONTEXT,
+    appended(world, added.entry).entries,
+    LIST_RANDOM,
+    headObject(world),
+  );
   /** A fresh N with the same keys and random: the same commitment, ready for one answer. */
-  const freshN = () => NewDeviceJoin.start(mac, CONTEXT, N_RANDOM);
+  const freshN = () => NewDeviceJoin.start(mac, CONTEXT, N_RANDOM, CLOCK);
   const label: Field = ["label", 37, LABEL];
   const step: Field = ["step", 1, ["transcript_mismatch"]];
 
@@ -290,7 +304,7 @@ describe("tampering with the join", () => {
         ...CONTEXT_FIELDS(["wrong_gateway", "wrong_account"]),
         ["commitment", 32, ["transcript_mismatch"]],
       ],
-      (b) => freshN().reveal(MemberJoin.answer(member, b).answer),
+      (b) => freshN().reveal(MemberJoin.answer(member, b, CLOCK).answer),
     );
   });
 
@@ -298,7 +312,7 @@ describe("tampering with the join", () => {
     // A changed key, list head, card hash or nonce gives N other words and a reveal A refuses.
     const throughBoth = (b: Uint8Array) => {
       const { reveal } = freshN().reveal(b);
-      return MemberJoin.answer(member, run.commit).choices(reveal);
+      return MemberJoin.answer(member, run.commit, CLOCK).choices(reveal);
     };
     tamper(
       run.answer,
@@ -328,7 +342,7 @@ describe("tampering with the join", () => {
         ["transcript hash", 32, ["transcript_mismatch"]],
         ["signature", 64, SIGNED],
       ],
-      (b) => MemberJoin.answer(member, run.commit).choices(b),
+      (b) => MemberJoin.answer(member, run.commit, CLOCK).choices(b),
     );
   });
 
@@ -352,7 +366,7 @@ describe("tampering with the join", () => {
       (b) => {
         const n = freshN();
         n.reveal(run.answer);
-        return n.finish(b, sealed);
+        return n.finish(b, sealed, headOf(world, appended(world, added.entry)));
       },
     );
   });

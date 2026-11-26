@@ -49,7 +49,11 @@ export type AccountProtocolErrorCode =
   /** A new list secret is not newer than the one held, or has the same bytes. */
   | "stale_secret"
   /** A one-shot join was asked for a second answer, reveal, confirmation or finish. */
-  | "join_spent";
+  | "join_spent"
+  /** A head, list or card older than the newest one held, or a refusal naming a head not recently signed. */
+  | "stale_head"
+  /** Joins are paused after a refusal; the caller said when the pause ends. */
+  | "paused";
 
 export class AccountProtocolError extends Error {
   readonly code: AccountProtocolErrorCode;

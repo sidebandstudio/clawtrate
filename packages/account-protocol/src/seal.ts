@@ -20,15 +20,17 @@ import {
   type SealSecretKey,
 } from "./keys.ts";
 import { LABEL, TAG } from "./labels.ts";
-import {
-  MAX_ADDRESSES,
-  MAX_ENTRIES,
-  MAX_HOST_BYTES,
-  MAX_MEMBERS,
-  MAX_NAME_BYTES,
-} from "./limits.ts";
+import { MAX_ADDRESSES, MAX_HOST_BYTES, MAX_MEMBERS, MAX_NAME_BYTES } from "./limits.ts";
 import { verifyCard, type Card } from "./card.ts";
-import { MAX_ENTRY_BYTES, decodeList, encodeList, verifyList, type ListState } from "./list.ts";
+import { requireHeadCard, type Head } from "./head.ts";
+import {
+  MAX_ENTRY_BYTES,
+  MAX_LIST_BYTES,
+  decodeList,
+  encodeList,
+  verifyList,
+  type ListState,
+} from "./list.ts";
 import {
   checkContext,
   expectContext,
@@ -49,8 +51,6 @@ export const MAX_CARD_BYTES =
   2 +
   MAX_NAME_BYTES +
   64;
-/** The largest list as one byte string. */
-export const MAX_LIST_BYTES = 2 + MAX_ENTRIES * (2 + MAX_ENTRY_BYTES);
 
 let secretBytes!: (secret: ListSecret) => Uint8Array;
 
@@ -181,13 +181,23 @@ function open(
   }
 }
 
-/** Seals a whole list. `random` is 32 random bytes; the nonce is derived from it (above). */
+/** Refuses to seal under a secret older than the newest head held names. */
+function requireCurrent(secret: ListSecret, newest: Head): void {
+  if (secret.epoch < newest.epoch) fail("stale_secret", "the newest head names a newer secret");
+}
+
+/**
+ * Seals a whole list. `random` is 32 random bytes; the nonce is derived from it (above).
+ * `newest` is the newest head the sealer holds: nothing is sealed under an older secret.
+ */
 export function sealList(
   secret: ListSecret,
   context: ListContext,
   entries: readonly Uint8Array[],
   random: Uint8Array,
+  newest: Head,
 ): Uint8Array {
+  requireCurrent(secret, newest);
   return seal(secret, "list", context, encodeList(entries.map(copy)), random);
 }
 
@@ -200,9 +210,18 @@ export function openListEntries(
   return decodeList(open(secret, "list", context, sealed));
 }
 
-/** Opens a sealed list and verifies it from its first entry. */
-export function openList(secret: ListSecret, context: ListContext, sealed: Uint8Array): ListState {
-  return verifyList(context, openListEntries(secret, context, sealed));
+/**
+ * Opens a sealed list and verifies it from its first entry against the connector's head that
+ * came with it, and against `held`, the newest head the reader holds.
+ */
+export function openList(
+  secret: ListSecret,
+  context: ListContext,
+  sealed: Uint8Array,
+  head: Uint8Array,
+  held?: Head,
+): { state: ListState; head: Head } {
+  return verifyList(context, openListEntries(secret, context, sealed), head, held);
 }
 
 /** Seals the signed card. `random` is 32 random bytes. */
@@ -211,14 +230,27 @@ export function sealCard(
   context: ListContext,
   card: Uint8Array,
   random: Uint8Array,
+  newest: Head,
 ): Uint8Array {
+  requireCurrent(secret, newest);
   return seal(secret, "card", context, copy(card), random);
 }
 
-/** Opens a sealed card and verifies it against the list's connector key and gateway. */
-export function openCard(secret: ListSecret, state: ListState, sealed: Uint8Array): Card {
+/**
+ * Opens a sealed card and verifies it against the list's connector key and gateway, and that it
+ * is the card the newest head names: never an older one.
+ */
+export function openCard(
+  secret: ListSecret,
+  state: ListState,
+  sealed: Uint8Array,
+  head: Head,
+): Card {
   const context = state.context;
-  return verifyCard(open(secret, "card", context, sealed), state.connectorKey, context.gatewayId);
+  const bytes = open(secret, "card", context, sealed);
+  const card = verifyCard(bytes, state.connectorKey, context.gatewayId);
+  requireHeadCard(bytes, head);
+  return card;
 }
 
 /** Seals one entry on its way to the connector. `random` is 32 random bytes. */
@@ -227,7 +259,9 @@ export function sealEntry(
   context: ListContext,
   entry: Uint8Array,
   random: Uint8Array,
+  newest: Head,
 ): Uint8Array {
+  requireCurrent(secret, newest);
   return seal(secret, "entry", context, copy(entry), random);
 }
 
@@ -242,23 +276,32 @@ export function openEntry(
 }
 
 const ROTATION_PURPOSE = 2;
+const FIRST_SECRET_PURPOSE = 3;
+
+function shareInfo(
+  purpose: number,
+  context: ListContext,
+  anchor: (writer: Writer) => Writer,
+  recipient: ListPublicKey,
+): Uint8Array {
+  const writer = new Writer()
+    .label(TAG.deviceSeal)
+    .u8(purpose)
+    .fixed(context.gatewayId, 16, "gateway id")
+    .fixed(context.accountId, 16, "account id");
+  return anchor(writer).fixed(recipient.bytes, 32, "recipient").finish();
+}
 
 function rotationInfo(context: ListContext, epoch: number, recipient: ListPublicKey): Uint8Array {
-  return new Writer()
-    .label(TAG.deviceSeal)
-    .u8(ROTATION_PURPOSE)
-    .fixed(context.gatewayId, 16, "gateway id")
-    .fixed(context.accountId, 16, "account id")
-    .u32(epoch)
-    .fixed(recipient.bytes, 32, "recipient")
-    .finish();
+  return shareInfo(ROTATION_PURPOSE, context, (w) => w.u32(epoch), recipient);
 }
 
 /**
- * The connector seals a new list secret to every current device member and signs the whole.
- * `held` is the secret it replaces: the new one must have a higher epoch and other bytes, so a
- * removed device's old secret never opens what is sealed after. `random` is 32 random bytes;
- * each share's HPKE ephemeral is hedged from it (see `rotationEphemeral`).
+ * The connector seals a new list secret to every current device member and signs the whole,
+ * naming the head it follows: the list's generation, length and latest entry, after the
+ * removal or restore that caused it. `held` is the secret it replaces: the new one must have a
+ * higher epoch and other bytes, so a removed device's old secret never opens what is sealed
+ * after. `random` is 32 random bytes; each share's HPKE ephemeral is hedged from it.
  */
 export function rotateListSecret(
   connector: ListSecretKey,
@@ -278,10 +321,15 @@ export function rotateListSecret(
   const context = state.context;
   const writer = new Writer().label(LABEL.listSecret);
   writeContext(writer, context);
-  writer.u32(next.epoch).u8(devices.length);
+  writer
+    .u32(state.generation)
+    .u32(state.length)
+    .fixed(state.head, 32, "latest entry hash")
+    .u32(next.epoch)
+    .u8(devices.length);
   for (const member of devices) {
     const info = rotationInfo(context, next.epoch, member.key);
-    const ikm = rotationEphemeral(connector, ownRandom, info);
+    const ikm = shareEphemeral(connector, ownRandom, info);
     const { enc, ciphertext } = hpkeSeal(
       member.device!.sealKey.bytes,
       info,
@@ -304,13 +352,15 @@ export function rotateListSecret(
  * repeated or predictable random still gives a value no one without the connector's key can
  * compute, and a different one for each share.
  */
-function rotationEphemeral(connector: ListSecretKey, random: Uint8Array, info: Uint8Array) {
+function shareEphemeral(connector: ListSecretKey, random: Uint8Array, info: Uint8Array) {
   return deriveFromListKey(connector, random, concat(utf8(TAG.rotationEphemeral), info), 32);
 }
 
 /**
  * A device member opens its share of a rotation. It checks the connector's signature, the
- * gateway and account, and that the epoch is newer than the secret it holds.
+ * gateway and account, that the rotation follows exactly the list it holds (`state`, at the head
+ * the rotation names) and is sealed to exactly that list's devices, and that the secret is newer
+ * than, and differs from, the one it holds.
  */
 export function openRotation(
   member: { readonly listKey: ListPublicKey; readonly sealKey: SealSecretKey },
@@ -321,6 +371,9 @@ export function openRotation(
   const reader = new Reader(copy(bytes));
   reader.label(LABEL.listSecret);
   const context = readContext(reader);
+  const generation = reader.u32();
+  const length = reader.u32();
+  const head = reader.fixed(32, "latest entry hash");
   const epoch = reader.u32();
   const count = reader.u8();
   if (count < 1) fail("malformed", "a rotation has a recipient");
@@ -340,6 +393,14 @@ export function openRotation(
     fail("bad_signature", "the rotation is not the connector's");
   }
   expectContext(context, state.context);
+  if (generation !== state.generation || length !== state.length || !equalBytes(head, state.head))
+    fail("bad_chain", "the rotation follows another list head");
+  const devices = state.devices();
+  if (
+    shares.length !== devices.length ||
+    !shares.every((share, i) => share.key.equals(devices[i]!.key))
+  )
+    fail("bad_chain", "the rotation's recipients aren't this list's devices");
   if (epoch <= held.epoch) fail("stale_secret", "not newer than the secret held");
   const share = shares.find((candidate) => candidate.key.equals(member.listKey));
   if (!share) fail("not_member", "the rotation has nothing for this device");
@@ -354,4 +415,86 @@ export function openRotation(
   if (equalBytes(plaintext, secretBytes(held)))
     fail("stale_secret", "the new secret is the one held");
   return ListSecret.fromBytes(plaintext, epoch);
+}
+
+function firstSecretInfo(context: ListContext, first: Uint8Array, recipient: ListPublicKey) {
+  return shareInfo(
+    FIRST_SECRET_PURPOSE,
+    context,
+    (w) => w.fixed(first, 32, "first entry hash"),
+    recipient,
+  );
+}
+
+/**
+ * The first secret's own message (design §4.2.1): at linking, the connector seals the epoch-0
+ * secret to the linking device alone and signs it, naming the list's first entry. It goes over
+ * the local channel between the two, never through the service. On a server with no app, the
+ * first secret is in the first join's confirmation instead.
+ */
+export function sealFirstSecret(
+  connector: ListSecretKey,
+  state: ListState,
+  secret: ListSecret,
+  random: Uint8Array,
+): Uint8Array {
+  if (!connector.publicKey.equals(state.connectorKey))
+    fail("not_permitted", "only the connector seals the first secret");
+  if (state.length !== 1 || state.generation !== 0)
+    fail("bad_chain", "the first secret goes with the list's first entry");
+  if (secret.epoch !== 0) fail("stale_secret", "the first secret is epoch 0");
+  const device = state.devices()[0]!;
+  const context = state.context;
+  const info = firstSecretInfo(context, state.head, device.key);
+  const ikm = shareEphemeral(connector, copy(checkLength(random, 32, "the random bytes")), info);
+  const { enc, ciphertext } = hpkeSeal(
+    device.device!.sealKey.bytes,
+    info,
+    new Uint8Array(0),
+    secretBytes(secret),
+    ikm,
+  );
+  const writer = new Writer().label(LABEL.firstSecret);
+  writeContext(writer, context);
+  const signed = writer
+    .fixed(state.head, 32, "first entry hash")
+    .fixed(device.key.bytes, 32, "recipient")
+    .fixed(enc, 32, "enc")
+    .fixed(ciphertext, 48, "sealed secret")
+    .finish();
+  return concat(signed, signList(connector, signed));
+}
+
+/** The linking device opens the first secret: the connector's, for this first entry, to it. */
+export function openFirstSecret(
+  member: { readonly listKey: ListPublicKey; readonly sealKey: SealSecretKey },
+  state: ListState,
+  bytes: Uint8Array,
+): ListSecret {
+  const reader = new Reader(copy(bytes));
+  reader.label(LABEL.firstSecret);
+  const context = readContext(reader);
+  const first = reader.fixed(32, "first entry hash");
+  const recipient = ListPublicKey.fromBytes(reader.fixed(32, "recipient"));
+  const enc = reader.fixed(32, "enc");
+  const ciphertext = reader.fixed(48, "sealed secret");
+  const signed = reader.before();
+  const signature = reader.fixed(64, "signature");
+  reader.end();
+  if (!verifyEd25519(state.connectorKey.bytes, signed, signature))
+    fail("bad_signature", "the first secret is not the connector's");
+  expectContext(context, state.context);
+  if (state.length !== 1 || state.generation !== 0 || !equalBytes(first, state.head))
+    fail("bad_chain", "the first secret for another list");
+  if (!recipient.equals(member.listKey))
+    fail("not_member", "the first secret is for another device");
+  const plaintext = hpkeOpen(
+    sealSecretBytes(member.sealKey),
+    member.sealKey.publicKey.bytes,
+    enc,
+    firstSecretInfo(context, first, recipient),
+    new Uint8Array(0),
+    ciphertext,
+  );
+  return ListSecret.fromBytes(plaintext, 0);
 }

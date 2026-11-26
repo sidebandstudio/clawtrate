@@ -3,6 +3,7 @@
 
 export { AccountProtocolError, type AccountProtocolErrorCode } from "./errors.ts";
 export {
+  FRESH_START_AFTER,
   GROWTH_LIMIT,
   JOIN_PAUSE_MS,
   MAX_ADDRESSES,
@@ -14,6 +15,8 @@ export {
   MAX_NAME_BYTES,
   MAX_PATH_BYTES,
   SESSION_SKEW_MS,
+  WITHDRAW_AFTER_MS,
+  WORD_BACK_MS,
 } from "./limits.ts";
 export {
   GatewayDeviceKey,
@@ -26,19 +29,25 @@ export {
 } from "./keys.ts";
 export { PLATFORMS, type DeviceRecord, type ListContext, type Platform } from "./records.ts";
 export {
+  assembleFreshStart,
   assembleGenesis,
   decodeRemovalNotice,
   encodeRemovalNotice,
   entryHash,
   ListState,
   MAX_ENTRY_BYTES,
+  MAX_FRESH_START_BYTES,
+  MAX_LIST_BYTES,
   readEntryUnverified,
+  signFreshStart,
   signGenesis,
   signRemoval,
   signRemovalNotice,
   signRemovalOnGatewayMachine,
   signRestore,
+  signWithdrawal,
   verifyList,
+  type CarriedDevice,
   type Entry,
   type GenesisFields,
   type Member,
@@ -47,25 +56,29 @@ export {
   type Role,
 } from "./list.ts";
 export { cardHash, signCard, verifyCard, type Card, type CardAddress } from "./card.ts";
+export { requireNotOlder, signHead, verifyHead, type Head } from "./head.ts";
 export {
   ListSecret,
   MAX_CARD_BYTES,
-  MAX_LIST_BYTES,
   openCard,
   openEntry,
+  openFirstSecret,
   openList,
   openRotation,
   rotateListSecret,
   sealCard,
   sealEntry,
+  sealFirstSecret,
   sealList,
 } from "./seal.ts";
 export {
   MemberJoin,
   NewDeviceJoin,
   refuseJoin,
+  ServerFirstDeviceJoin,
   verifyRefusal,
   wordsFor,
+  type JoinClock,
   type JoiningDevice,
   type JoinMember,
   type JoinResult,
@@ -73,6 +86,12 @@ export {
   type JoinPick,
   type Refusal,
   type RefusalReason,
+  type ServerFirstOutcome,
+  type ServerInstall,
+  type WordBack,
+  type WordBackOutcome,
+  type WordBackPick,
+  type WordBackPrompt,
   type Words,
 } from "./join.ts";
 export {
