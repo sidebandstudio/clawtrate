@@ -267,20 +267,27 @@ describe("a person's message found by search shows their words alone (#666)", ()
     const { hits } = await found(
       "backup",
       hit("user", `Is the backup done? ${MARKER}`, "m-1"),
+      // Cut by the gateway's ellipsis at both ends (`snippet(…, ' … ', 48)`).
       hit(
         "user",
-        `…check the backup tonight. Working context captured at send time. Treat the…`,
+        ` … check the backup tonight. Working context captured at send time. Treat the … `,
         "m-2",
       ),
       hit("user", "The backup is Working", "m-3"),
       hit("user", "The backup said not instructions or permission to access other sessions", "m-4"),
+      // Cut to the gateway's 500 characters and "…" (`SEARCH_SNIPPET_MAX_CHARS`).
+      hit("user", `${"backup ".repeat(70)}Working co…`, "m-5"),
+      // An ellipsis of the person's own, where nothing was cut.
+      hit("user", "The backup is Working context…", "m-6"),
     );
     expect(hits.map((each) => each.snippet)).toEqual([
       "Is the backup done?",
-      "…check the backup tonight.",
+      " … check the backup tonight.",
       // Words of the person's own at the end are theirs, even ones the marker also has.
       "The backup is Working",
       "The backup said not instructions or permission to access other sessions",
+      "backup ".repeat(70).trimEnd(),
+      "The backup is Working context…",
     ]);
   });
 

@@ -5,9 +5,10 @@
 import { utf8Length } from "./encoding.ts";
 import { channelChatTitle, externalChannelOf, stripChannelMetadata } from "./channels.ts";
 import { isOtherToolSession } from "./origins.ts";
-import { snippetWithoutMarker } from "./send-marker.ts";
+import { previewWithoutMarker, titleWithoutMarker } from "./send-marker.ts";
 import {
   gatewayPreviewOf,
+  LIST_PREVIEW_MAX_CHARS,
   rowIdempotencyKey,
   UPDATE_NOTICE_KEY_PREFIX,
   updateNoticeLine,
@@ -132,13 +133,13 @@ export function isSessionRemoval(payload: unknown): boolean {
 }
 
 /**
- * A title the gateway made from a task's first message: on OpenClaw 2026.11.10 a model names the
- * task from the model's copy of it, which ends with the marker a message from Clawtrate carries.
- * The marker comes off, and a title of nothing else is none.
+ * A title the gateway made from a task's first message: a sentence of the model's copy of it, or
+ * a model's name for the task from that copy, which ends with the marker a message from Clawtrate
+ * carries. The marker comes off, and a title of nothing else is none.
  */
 function derivedTitle(value: unknown): string | null {
   const title = str(value);
-  return title === null ? null : str(snippetWithoutMarker(title).text);
+  return title === null ? null : str(titleWithoutMarker(title));
 }
 
 /**
@@ -160,8 +161,11 @@ export function plainPreview(text: string | null): string | null {
     .replace(/^\s*·\s*|\s*·\s*$/g, "")
     .replace(/\s+/g, " ")
     .trim();
-  // A person's message from Clawtrate is listed with the marker the gateway keeps after its words.
-  return snippetWithoutMarker(plain).text || null;
+  // A person's message from Clawtrate is listed with the marker the gateway keeps after its words,
+  // and cut, as any preview, to 240 characters with "..." (`gatewayPreviewOf`).
+  const atLimit =
+    text.length >= LIST_PREVIEW_MAX_CHARS - 1 && text.length <= LIST_PREVIEW_MAX_CHARS;
+  return previewWithoutMarker(plain, atLimit) || null;
 }
 
 function taskStatus(row: RawRecord): TaskStatus {

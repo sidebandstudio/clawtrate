@@ -8,7 +8,7 @@
 import { cutText } from "./bounds.ts";
 import { establishFolder } from "./files.ts";
 import { asRecord, botIdFromSessionKey, type RawRecord } from "./mapping.ts";
-import { snippetWithoutMarker } from "./send-marker.ts";
+import { snippetWithoutMarker, titleWithoutMarker } from "./send-marker.ts";
 import { MAX_ID_CHARS } from "./state-bounds.ts";
 import { MAX_TASK_LABEL_CHARS } from "./task-actions.ts";
 
@@ -191,8 +191,7 @@ export function readMessageSearch(reply: RawRecord | null, query = ""): MessageS
     const key = exactId(row?.key);
     // A title the gateway made from the first message loses the marker, as the task list's does.
     const named = str(row?.displayName);
-    const title =
-      str(row?.label) ?? (named === null ? null : str(snippetWithoutMarker(named).text));
+    const title = str(row?.label) ?? (named === null ? null : str(titleWithoutMarker(named)));
     if (key && title && hits.some((hit) => hit.sessionKey === key))
       titles[key] = cutText(title, MAX_TASK_LABEL_CHARS);
   }

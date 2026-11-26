@@ -4456,10 +4456,10 @@ export class ClawtrateClient {
         // A Stop withdrew it, or it went away, while the refusal was on its way: nothing more.
         const now = this.outgoing(key, messageId);
         if (!now || now.steer === "withdrawn") throw error;
-        // A Stop asked for before the gateway took it: the refusal ends it, as it did before the
-        // marker, rather than a resend starting a turn the person already stopped.
-        const run = findRun(this.state.transcripts[key] ?? emptyActivity, messageId);
-        if (run?.state === "stopping") throw error;
+        // Anything else pressed meanwhile is as it would be had the gateway taken the first
+        // frame. The refused frame started nothing, and a Stop asked for meanwhile waits for an
+        // answer that names the run: the resend's, which is aborted then (below), as before the
+        // marker. A stop word's resend is handled as the gateway answers it.
         this.updateActivity(key, (activity) =>
           updateMessage(activity, messageId, { unmarked: true }),
         );
