@@ -427,6 +427,7 @@ export type NotRunWords = { title: string; reason: string; ways: NotRunWay[] };
 export function notRunWords(
   ending: Extract<RunEnding, { kind: "not-run" | "not-started" }>,
   bot: string,
+  earlier = false,
 ): NotRunWords {
   if (ending.kind === "not-started")
     return {
@@ -434,7 +435,9 @@ export function notRunWords(
       reason: "It didn't say why.",
       ways: [],
     };
-  const title = "The gateway couldn't run this message";
+  const title = earlier
+    ? "The gateway couldn't run an earlier message"
+    : "The gateway couldn't run this message";
   const cause = ending.cause;
   switch (cause?.kind) {
     case "needs-api-key":
@@ -478,6 +481,18 @@ export function notRunWords(
     default:
       return { title, reason: "The gateway didn't say why.", ways: [] };
   }
+}
+
+/**
+ * A failed run no message is known to have started (#686): history keyed no user row to it
+ * (`Run.anchorItemId` null) and this client holds none it sent. Its line is said to be for an
+ * earlier message and offers no Try again: the latest message by position may be another one,
+ * already answered.
+ */
+export function forEarlierMessage(run: Run, transcript: Pick<Transcript, "outbox">): boolean {
+  return (
+    run.anchorItemId === null && !transcript.outbox.some((message) => message.id === run.messageId)
+  );
 }
 
 /**

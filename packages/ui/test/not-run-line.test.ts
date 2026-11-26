@@ -1,7 +1,15 @@
 // The line under a message the gateway couldn't run (#663, F-480): the gateway's reason in plain
 // words, and the ways forward, each kind as the gateway says it; nothing it didn't say.
 
-import { newRun, type Run } from "@clawtrate/core";
+import {
+  emptyActivity,
+  mapHistory,
+  newRun,
+  RawTable,
+  runsFromHistory,
+  type Run,
+  type Transcript,
+} from "@clawtrate/core";
 import { describe, expect, it } from "vitest";
 import {
   requestBotSettings,
@@ -10,7 +18,10 @@ import {
   type BotSettingsRequest,
   type ControlState,
 } from "../src/bots/settings-request.ts";
-import { endingOf, notRunWords } from "../src/live.ts";
+import { endingOf, forEarlierMessage, notRunWords, type RunEnding } from "../src/live.ts";
+import { messageTextOf } from "../src/LiveTurn.tsx";
+
+const KEY = "agent:otto:disk-space";
 
 const NOW = 1_795_000_000_000;
 
@@ -163,5 +174,96 @@ describe("#663: a message the gateway couldn't run says so, and why", () => {
     forget();
     requestBotSettings("otto", "model");
     expect(opened).toEqual(["settings"]);
+  });
+});
+
+describe("#686: a not-run line sits only under the message its run is known to have started from", () => {
+  const T0 = 1_795_000_000_000;
+  /** A person's message as the gateway keeps it: keyed `<runId>:user`, or with no key at all. */
+  const userRow = (runId: string | null, text: string, seq: number) => ({
+    role: "user",
+    content: text,
+    timestamp: T0 + seq,
+    __openclaw: { id: `u-${seq}`, seq, ...(runId ? { idempotencyKey: `${runId}:user` } : {}) },
+  });
+  const failedRow = (runId: string, seq: number) => ({
+    role: "custom",
+    customType: "run-failed-before-reply",
+    display: true,
+    timestamp: T0 + seq,
+    content:
+      "Your request couldn't be completed: This saved login isn't available. Choose another login under Models in the Control UI or run `openclaw configure`.",
+    __openclaw: { id: `c-${seq}`, seq, runId },
+  });
+  const replyRow = (runId: string, seq: number) => ({
+    role: "assistant",
+    content: [{ type: "text", text: "Here it is." }],
+    stopReason: "stop",
+    timestamp: T0 + seq,
+    __openclaw: { id: `a-${seq}`, seq, runId },
+  });
+
+  /** After a reload: the task as history alone rebuilds it. */
+  function reloaded(rows: unknown[]): { transcript: Transcript; run: Run } {
+    const ctx = { raw: new RawTable(), sessionKey: KEY, now: T0 + 10_000 };
+    const transcript = {
+      ...emptyActivity,
+      sessionKey: KEY,
+      status: "ready",
+      items: mapHistory(rows),
+      runs: runsFromHistory(rows, null, ctx),
+      error: null,
+      hasMore: false,
+    } as Transcript;
+    return { transcript, run: transcript.runs.find((each) => each.id === "run-a")! };
+  }
+  const itemOf = (transcript: Transcript, text: string) =>
+    transcript.items.find((item) =>
+      item.blocks.some((block) => block.kind === "text" && block.text === text),
+    )!.id;
+
+  it("A, B, A's failure, B's reply: the line is not under B, and Try again never sends B", () => {
+    const { transcript, run } = reloaded([
+      userRow("run-a", "Back up the photos.", 1),
+      userRow("run-b", "And the notes.", 2),
+      failedRow("run-a", 3),
+      replyRow("run-b", 4),
+    ]);
+    expect(endingOf(run)?.kind).toBe("not-run");
+    expect(run.anchorItemId).not.toBe(itemOf(transcript, "And the notes."));
+    expect(messageTextOf(run, transcript)).not.toBe("And the notes.");
+  });
+
+  it("the run known by its key: the line is under A, and Try again sends A again", () => {
+    const { transcript, run } = reloaded([
+      userRow("run-a", "Back up the photos.", 1),
+      userRow("run-b", "And the notes.", 2),
+      failedRow("run-a", 3),
+      replyRow("run-b", 4),
+    ]);
+    expect(run.anchorItemId).toBe(itemOf(transcript, "Back up the photos."));
+    expect(messageTextOf(run, transcript)).toBe("Back up the photos.");
+    expect(forEarlierMessage(run, transcript)).toBe(false);
+    const ending = endingOf(run) as Extract<RunEnding, { kind: "not-run" }>;
+    expect(notRunWords(ending, "Otto", false).title).toBe("The gateway couldn't run this message");
+  });
+
+  it("no message known to have started it: the reason, said to be for an earlier message, and no Try again", () => {
+    // A's row carries no key (a message from a channel, say), and B's names B's own run.
+    const { transcript, run } = reloaded([
+      userRow(null, "Back up the photos.", 1),
+      userRow("run-b", "And the notes.", 2),
+      failedRow("run-a", 3),
+      replyRow("run-b", 4),
+    ]);
+    expect(run.anchorItemId).toBeNull();
+    expect(forEarlierMessage(run, transcript)).toBe(true);
+    expect(messageTextOf(run, transcript)).toBeNull();
+    const ending = endingOf(run) as Extract<RunEnding, { kind: "not-run" }>;
+    expect(notRunWords(ending, "Otto", forEarlierMessage(run, transcript))).toEqual({
+      title: "The gateway couldn't run an earlier message",
+      reason: "The account Otto is set to isn't available on the gateway. Choose another account.",
+      ways: ["account"],
+    });
   });
 });

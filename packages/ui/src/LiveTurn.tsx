@@ -18,7 +18,7 @@ import { useBridge, useClawtrateState } from "./bridge.tsx";
 import { useAnnounce } from "./cards/parts.tsx";
 import { copyText, selectContents } from "./clipboard.ts";
 import { CloseIcon, WarnIcon } from "./icons.tsx";
-import { endingOf, notRunWords } from "./live.ts";
+import { endingOf, forEarlierMessage, notRunWords } from "./live.ts";
 import { requestBotSettings } from "./bots/settings-request.ts";
 import { Markdown } from "./Markdown.tsx";
 import { SentFiles } from "./SentFiles.tsx";
@@ -198,7 +198,6 @@ export function stoppedWithLines(run: Run, nameOf: (sessionKey: string) => strin
   return lines;
 }
 
-/** The text of the message that started a run, for "Try again". */
 /** The message a run's own message replied to, from the outbox or from history's reference. */
 export function messageReplyOf(run: Run, transcript: Transcript): string | null {
   const outgoing = transcript.outbox.find((message) => message.id === run.messageId);
@@ -207,6 +206,10 @@ export function messageReplyOf(run: Run, transcript: Transcript): string | null 
   return anchor?.replyTo?.id ?? null;
 }
 
+/**
+ * The text of the message that started a run, for "Try again": null (no Try again) when no
+ * message is known to have started it, as for a failure history keyed to none (#686).
+ */
 export function messageTextOf(run: Run, transcript: Transcript): string | null {
   const outgoing = transcript.outbox.find((message) => message.id === run.messageId);
   if (outgoing) return outgoing.text;
@@ -324,9 +327,11 @@ export function RunEnding({
   // A send the gateway refused already says so under your message.
   if (run.error?.kind === "not-started") return null;
   // A message the gateway couldn't run: why, and the ways forward (#663).
+  // No message is known to have started it: said to be for an earlier one, with no Try again.
+  const earlier = forEarlierMessage(run, transcript);
   const notRun =
     ending.kind === "not-run" || ending.kind === "not-started"
-      ? notRunWords(ending, bot.name)
+      ? notRunWords(ending, bot.name, earlier)
       : null;
   // The app's own limit and the gateway's are worded apart: each says who ended the turn.
   const title = notRun
@@ -335,7 +340,9 @@ export function RunEnding({
       ? `${bot.name}'s turn reached its ${ending.minutes} minute limit`
       : ending.kind === "gateway-timeout"
         ? `${bot.name}'s turn reached the gateway's time limit`
-        : `${bot.name} couldn't finish this turn`;
+        : earlier
+          ? `${bot.name} couldn't finish an earlier turn`
+          : `${bot.name} couldn't finish this turn`;
   const reason = notRun
     ? notRun.reason
     : ending.kind === "turn-limit"

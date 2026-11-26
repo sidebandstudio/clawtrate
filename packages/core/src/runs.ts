@@ -2825,6 +2825,13 @@ export function runsFromHistory(
    * it started (OpenClaw 2026.10.6), not as a user row.
    */
   const startedBy = new Map<string, string>();
+  /**
+   * The user row the gateway keyed for each run, by run id: its idempotency key
+   * `${runId}:user`, or the bare key. A row by position only
+   * (the latest user row before the run's first row) is not this: two quick sends put a
+   * later message there (#686).
+   */
+  const keyedBy = new Map<string, string>();
   /** Runs the gateway failed before any of them started, with what it kept of why. */
   const beforeReply = new Map<string, string>();
   const rows = Array.isArray(messages) ? messages : [];
@@ -2839,6 +2846,10 @@ export function runsFromHistory(
     if (!message) return;
     if (message.role === "user") {
       anchor = historyItemId(message, index);
+      // A steer's row is keyed by the steer's own id, never by the run it joined.
+      const key = rowIdempotencyKey(message);
+      const keyed = key?.endsWith(":user") ? key.slice(0, -":user".length) : key;
+      if (keyed && !keyedBy.has(keyed)) keyedBy.set(keyed, anchor);
       return;
     }
     const provenance = asRecord(message.provenance) ?? asRecord(meta(message).provenance);
@@ -2873,7 +2884,7 @@ export function runsFromHistory(
           state: "running",
           origin: "history",
           bound: true,
-          anchorItemId: startedBy.get(runId) ?? anchor,
+          anchorItemId: startedBy.get(runId) ?? keyedBy.get(runId) ?? anchor,
           reasoningAnchor: runId === cutRunId ? "c" : null,
         },
         at,
@@ -3000,7 +3011,7 @@ export function runsFromHistory(
               state: "running",
               origin: "history",
               bound: true,
-              anchorItemId: anchor,
+              anchorItemId: keyedBy.get(inFlightRunId) ?? anchor,
               reportedStartAt: num(snapshot?.startedAt),
             },
             num(snapshot?.startedAt),
@@ -3048,11 +3059,20 @@ export function runsFromHistory(
     // task in flight or queued: the gateway has not said it ended (it may wait on an approval
     // or a question, with a steer queued behind it). It stays open until its end is said.
     if (options.busy && built.id === newest && !endShown) return built;
-    // Its end is its last row's time, not one its lifecycle reported.
-    const run: Run = { ...built, endFromRows: true };
-    const last = lastAssistant.get(run.id);
+    const last = lastAssistant.get(built.id);
     const stopReason = str(last?.stopReason);
-    if (stopReason === "aborted" || asRecord(last?.openclawAbort)?.aborted === true) {
+    // Its end is its last row's time, not one its lifecycle reported. A failure sits only under
+    // the message its run is known to have started from: a row by position may be a later
+    // message, already answered, and Try again would send that one again. With no such row the
+    // failure has no message (`anchorItemId` null), and is said to be for an earlier one.
+    const stopped = stopReason === "aborted" || asRecord(last?.openclawAbort)?.aborted === true;
+    const failed = !stopped && ((beforeReply.has(built.id) && !last) || stopReason === "error");
+    const run: Run = {
+      ...built,
+      endFromRows: true,
+      ...(failed ? { anchorItemId: startedBy.get(built.id) ?? keyedBy.get(built.id) ?? null } : {}),
+    };
+    if (stopped) {
       return finishRun(run, "stopped", ctx, null, run.endedAt);
     }
     const notRun = beforeReply.get(run.id);
