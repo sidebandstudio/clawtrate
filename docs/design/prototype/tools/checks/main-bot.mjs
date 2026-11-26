@@ -113,11 +113,14 @@ await check(
     await open("", "full");
     await page.locator(".mb-msg.is-bot").first().waitFor();
     assert.equal(await title(page), "Clawtrate Main Bot");
+    // The stand-in's answer is held, so nothing can have read back yet.
+    await page.evaluate(() => (window.mbHold = true));
     await send(page, "Maple");
-    // Before the stand-in answers, nothing has changed.
     assert.equal(await title(page), "Clawtrate Main Bot");
     if (width !== "phone")
       assert.equal(await railName(page, "clawtrate-main-bot", width), "Clawtrate Main Bot");
+    assert.equal(await page.getByTestId("named-line").count(), 0);
+    await page.evaluate(() => (window.mbHold = false));
     await page.getByTestId("named-line").waitFor();
     await has(page, '[data-testid="named-line"]', "Renamed to Maple");
     assert.equal(await title(page), "Maple");
@@ -313,6 +316,50 @@ await check(
     await open("from=juniper&at=named");
     await page.getByTestId("named-line").waitFor();
     await has(page, '[data-testid="from-line"]', "Maple started from what Juniper knows");
+  },
+);
+
+await check(
+  "MB-13 the tour follows the person: a typed skip, a second message while naming, a clear yes, one Undo, Open task",
+  async ({ page, open, width }) => {
+    // A typed skip at the name question ends the tour; it doesn't become the name.
+    await open("");
+    await page.locator(".mb-msg.is-bot").first().waitFor();
+    await send(page, "Skip the tour");
+    await page.getByText("Sure, no tour.").waitFor();
+    assert.equal(await title(page), "Clawtrate Main Bot");
+    assert.equal(await page.getByTestId("skip").count(), 0);
+    // A second message while the name is being taken waits, and is the help answer.
+    await open("", "full");
+    await page.locator(".mb-msg.is-bot").first().waitFor();
+    await page.evaluate(() => (window.mbHold = true));
+    await send(page, "Maple");
+    await send(page, "I need help with code");
+    await page.evaluate(() => (window.mbHold = false));
+    await page.getByText("Want me to show you how I work here?").waitFor();
+    assert.equal(await title(page), "Maple");
+    // Anything but a clear yes at the offer ends the tour and starts no task.
+    await send(page, "Can you help me fix a test instead?");
+    await page.getByText("Happy to help with that instead.").waitFor();
+    assert.equal(await page.getByTestId("card-task").count(), 0);
+    // Undo pressed twice changes the name back once.
+    await open("at=named", "full");
+    await page.getByTestId("named-line").waitFor();
+    const undo = page.getByTestId("named-line").getByRole("button", { name: "Undo" });
+    await page.evaluate(() => (window.mbHold = true));
+    await undo.click();
+    await undo.click();
+    await page.evaluate(() => (window.mbHold = false));
+    await page.getByText("Back to Clawtrate Main Bot").waitFor();
+    // Open task opens the task.
+    await open("at=task");
+    await page.getByTestId("card-task").waitFor();
+    await page.getByTestId("card-task").getByRole("button", { name: "Open task" }).click();
+    await page.waitForFunction(
+      () => document.getElementById("mb-live").textContent === "Opened Week checklist",
+    );
+    if (width !== "phone")
+      assert.equal(await page.getByTestId("rail-task").getAttribute("aria-current"), "true");
   },
 );
 

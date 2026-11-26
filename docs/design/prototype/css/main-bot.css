@@ -730,7 +730,8 @@
   cursor: pointer;
 }
 
-.mb-task-row:hover {
+.mb-task-row:hover,
+.mb-task-row[aria-current="true"] {
   background: var(--accent-soft);
 }
 

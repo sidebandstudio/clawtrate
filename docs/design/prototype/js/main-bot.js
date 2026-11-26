@@ -31,7 +31,9 @@
     selfName: p.get("name") === "bot",
     slow: p.get("slow") === "1",
     opening: p.get("opening"),
-    limited: p.get("device") === "limited",
+    // Only while the first run's questions are open; a Main Bot already made has none.
+    limited: p.get("device") === "limited" && p.get("existing") !== "1",
+    fromKept: p.get("from") === "juniper",
     from: p.get("from") === "juniper",
     existing: p.get("existing") === "1",
     plugin: p.get("plugin") === "missing" ? "missing" : "present",
@@ -120,8 +122,13 @@
 
   const gateway = {
     bots: [],
+    // A check can hold the stand-in's answer (window.mbHold) to see the state
+    // before the read-back, then release it.
     answer(ms, fn) {
-      return new Promise((resolve) => setTimeout(() => resolve(fn()), reduced() ? 0 : ms));
+      return new Promise((resolve) => {
+        const go = () => (window.mbHold ? setTimeout(go, 20) : resolve(fn()));
+        setTimeout(go, reduced() ? 0 : ms);
+      });
     },
   };
   // The Main Bot is a bot Clawtrate made (id MAIN), never the gateway's own
@@ -154,16 +161,17 @@
   let items = [];
   let composer = { value: "" };
   let task = null; // { title, state: "Working" | "Done" }
-  let tour = { active: false, step: "name" }; // name | help | offer | task | over
+  let tour = { active: false, step: "name" }; // name | naming | help | offer | task | over
+  let waitingForName = []; // what the person wrote while the name was being taken
 
   function rail() {
     const m = shown().find((b) => b.main);
     const sub = task
-      ? `<button type="button" class="mb-task-row" data-testid="rail-task" aria-label="${esc(`${task.title}, ${task.state}, a task of ${m.name}`)}">` +
+      ? `<button type="button" class="mb-task-row" data-testid="rail-task"${task.open ? ' aria-current="true"' : ""} aria-label="${esc(`${task.title}, ${task.state}, a task of ${m.name}`)}">` +
         `<span class="mb-task-title">${esc(task.title)}</span><span class="mb-task-state" data-state="${task.state === "Done" ? "done" : "working"}">${esc(task.state)}</span></button>`
       : "";
     const tile = m
-      ? `<div class="mb-tile-wrap"><button type="button" class="mb-tile" data-bot="${m.id}" data-testid="main-tile" aria-current="true" aria-label="${esc(`${m.name}, Main Bot`)}">` +
+      ? `<div class="mb-tile-wrap"><button type="button" class="mb-tile" data-bot="${m.id}" data-testid="main-tile"${task?.open ? "" : ' aria-current="true"'} aria-label="${esc(`${m.name}, Main Bot`)}">` +
         `${claw(m.name, 56, { star: true })}<strong class="mb-name" data-testid="rail-name-${m.id}" title="${esc(m.name)}">${esc(m.name)}</strong></button>` +
         `<button type="button" class="mb-tile-more" data-act="main-menu" aria-expanded="${state.mainMenu}" aria-label="${esc(`${m.name} options`)}">⋯</button>${mainMenu()}</div>${sub}`
       : "";
@@ -280,6 +288,7 @@
 
   function render() {
     const focus = document.activeElement?.id;
+    const focusAct = document.activeElement?.dataset?.act;
     const b = mainBot();
     const skip =
       tour.active && !state.limited
@@ -297,6 +306,7 @@
     const t = root.querySelector(".mb-transcript");
     t.scrollTop = t.scrollHeight;
     if (focus && document.getElementById(focus)) document.getElementById(focus).focus();
+    else if (focusAct) root.querySelector(`[data-act="${focusAct}"]`)?.focus();
   }
 
   // ---- the first run ----------------------------------------------------------
@@ -392,7 +402,7 @@
 
   async function hello() {
     tour = { active: true, step: "name" };
-    const text = state.from
+    const text = state.fromKept
       ? "Hi Sam! I'm your new bot in Clawtrate, and I've picked up what Juniper knew about you. First things first: what would you like to call me?"
       : "Hi! I'm your new bot in Clawtrate. First things first: what would you like to call me?";
     await botSays(text, 900);
@@ -404,11 +414,12 @@
   async function fastForward() {
     const order = ["greeted", "named", "helped", "task", "done"];
     const upTo = order.indexOf(state.at);
-    if (upTo < 1) return;
+    // A Skip pressed meanwhile ends the tour: no scripted answer is posted after it.
+    if (upTo < 1 || !tour.active) return;
     await answer(state.selfName ? "You pick one!" : "Maple");
-    if (upTo < 2) return;
+    if (upTo < 2 || !tour.active) return;
     await answer("Keeping my week organised, and some coding.");
-    if (upTo < 3) return;
+    if (upTo < 3 || !tour.active) return;
     await answer("Sure", upTo < 4);
   }
 
@@ -416,10 +427,19 @@
   async function answer(text, holdTask = false) {
     items.push({ kind: "user", text });
     render();
+    return reply(text, holdTask);
+  }
+
+  async function reply(text, holdTask = false) {
     const step = tour.step;
     if (!tour.active || step === "over")
       return botSays("Happy to help. What would you like to do?");
+    // Asking to skip, in any words, ends the tour wherever it is.
+    if (/\bskip\b|\bno tour\b/i.test(text)) return endTour("Sure, no tour. I'm here whenever you need me.");
+    // A second message while the name is being taken waits for it.
+    if (step === "naming") return void waitingForName.push(text);
     if (step === "name") {
+      tour.step = "naming";
       // The bot writes its own name line. Clawtrate checks, silently, whether
       // the name is in what the person typed: that decides only the line's words.
       const typed = !/\byou (pick|choose)\b/i.test(text);
@@ -433,9 +453,9 @@
       );
     }
     if (step === "offer") {
-      if (/\b(no|skip|later)\b/i.test(text))
-        return endTour("Sure, no tour. I'm here whenever you need me.");
-      return startTask(holdTask);
+      // Only a clear yes starts the task; anything else ends the tour and is answered.
+      if (/^\s*(sure|yes|yeah|yep|ok|okay|go ahead|show me|please)\b/i.test(text)) return startTask(holdTask);
+      return endTour("Happy to help with that instead.");
     }
     return botSays("I'm on it.");
   }
@@ -457,10 +477,16 @@
       actions: [["Undo", "undo-name"]],
     });
     say(typed ? `Renamed to ${read.name}` : `${before} renamed itself to ${read.name}`);
+    render();
+    // Skipped while the name was being taken: the name stays, the tour doesn't go on.
+    if (!tour.active || tour.step !== "naming") return;
     tour.step = "help";
     await botSays(
       `${read.name} it is. What would you like a hand with? Anything from your week to your code.`,
     );
+    const waiting = waitingForName;
+    waitingForName = [];
+    for (const text of waiting) await reply(text);
   }
 
   async function startTask(hold) {
@@ -481,6 +507,8 @@
     });
     items.push({ kind: "file" });
     render();
+    // The task's result and file come whatever happened; the wrap-up only while the tour runs.
+    if (!tour.active) return;
     await endTour(
       "That's the tour. Ask me anything, or ask me to start something in its own task.",
     );
@@ -528,9 +556,11 @@
     }
     if (act === "undo-name") {
       const line = t.closest("[data-testid='named-line']");
-      if (!kept || mainBot().name !== kept.after) return;
+      if (!kept || kept.undoing || mainBot().name !== kept.after) return;
+      const record = kept;
+      record.undoing = true;
       const read = await gateway.answer(700, () => {
-        mainBot().name = kept.before;
+        mainBot().name = record.before;
         return { name: mainBot().name };
       });
       const it = items.find((x) => x.testid === "named-line" && x.actions?.length);
@@ -546,6 +576,7 @@
         text: "Removed what came from Juniper. Juniper keeps all of it.",
         actions: [],
       });
+      state.fromKept = false;
       render();
       return say("Removed what came from Juniper");
     }
@@ -567,6 +598,13 @@
       const it = items.find((x) => x.testid === "slow-line");
       Object.assign(it, { text: "Stopped. You can write to your Main Bot yourself.", actions: [] });
       return render();
+    }
+    if (act === "open-task") {
+      // The product opens the task beside the conversation (F-587); here the
+      // task's row in the sidebar is marked as the one open.
+      task.open = true;
+      render();
+      return say(`Opened ${task.title}`);
     }
     if (act === "save-file") {
       const it = items.find((x) => x.kind === "file");
