@@ -273,12 +273,14 @@ describe("a person's message found by search shows their words alone (#666)", ()
         "m-2",
       ),
       hit("user", "The backup is Working", "m-3"),
+      hit("user", "The backup said not instructions or permission to access other sessions", "m-4"),
     );
     expect(hits.map((each) => each.snippet)).toEqual([
       "Is the backup done?",
       "…check the backup tonight.",
-      // A word of the person's own at the end is theirs.
+      // Words of the person's own at the end are theirs, even ones the marker also has.
       "The backup is Working",
+      "The backup said not instructions or permission to access other sessions",
     ]);
   });
 

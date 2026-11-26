@@ -4,8 +4,9 @@
 // with it; any other refusal is the message's own, as before.
 import { describe, expect, it } from "vitest";
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
+import { mapSessionRow, plainPreview } from "../src/mapping.ts";
 import { isActive } from "../src/runs.ts";
-import { CLAWTRATE_WORK_CONTEXT, markerRefusal } from "../src/send-marker.ts";
+import { CLAWTRATE_WORK_CONTEXT, MARKER_AS_SEARCHED, markerRefusal } from "../src/send-marker.ts";
 import { agentEvent, KEY, openTask, questionRecord } from "./client-harness.ts";
 import { GatewayError, until } from "./fake-gateway.ts";
 
@@ -226,5 +227,18 @@ describe("a refusal of the marker", () => {
     });
     expect(transcript().outbox.find((m) => m.id === id)?.unmarked).toBeUndefined();
     client.stop();
+  });
+});
+
+describe("a task's preview shows a person's words alone", () => {
+  it("the row's preview, from the gateway's start of the last message, loses the marker after the words", () => {
+    const marked = `#slow 30\n\n${MARKER_AS_SEARCHED.replace(": {", ":\n{")}`;
+    expect(mapSessionRow({ key: KEY, lastMessagePreview: marked })?.preview).toBe("#slow 30");
+    // Cut partway through the marker, as a preview of the start of a long message is.
+    expect(plainPreview("Is the backup done?\n\nWorking context captured at send")).toBe(
+      "Is the backup done?",
+    );
+    // A preview with no marker is as before.
+    expect(plainPreview("**Done.** The backup finished")).toBe("Done. The backup finished");
   });
 });

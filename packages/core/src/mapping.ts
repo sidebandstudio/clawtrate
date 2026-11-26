@@ -5,6 +5,7 @@
 import { utf8Length } from "./encoding.ts";
 import { channelChatTitle, externalChannelOf, stripChannelMetadata } from "./channels.ts";
 import { isOtherToolSession } from "./origins.ts";
+import { snippetWithoutMarker } from "./send-marker.ts";
 import {
   gatewayPreviewOf,
   rowIdempotencyKey,
@@ -149,7 +150,8 @@ export function plainPreview(text: string | null): string | null {
     .replace(/^\s*·\s*|\s*·\s*$/g, "")
     .replace(/\s+/g, " ")
     .trim();
-  return plain || null;
+  // A person's message from Clawtrate is listed with the marker the gateway keeps after its words.
+  return snippetWithoutMarker(plain).text || null;
 }
 
 function taskStatus(row: RawRecord): TaskStatus {
