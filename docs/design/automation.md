@@ -372,6 +372,8 @@ The words after the cadence are said from what Clawtrate knows of the prompt in 
 
 <Cadence> is "Every 30 minutes", "Once a day", or the interval in words; in the setting below, Every… says "As often as you choose". The same sentence is under Daily, As needed and Every… in the setting, and follows the prompt field as it is typed.
 
+**On an OpenClaw that keeps check-ins as routines.** OpenClaw 2026.11.10 retired heartbeats: a check-in there is an ordinary routine, and nothing the gateway sends says which routine it is (docs/decisions.md, "Check-ins"). Each bot's block then says one sentence, "This OpenClaw keeps check-ins as routines.", with a link to that bot's routines in Settings ("Juniper's routines"); in the Routines view, where they are listed below it, the sentence alone. No cadence, prompt or Off is shown, the group heads in the list across bots say nothing, and there is no Change. Clawtrate tells which kind of gateway it is from its config schema on every read, never from its version.
+
 **The setting (F-201).** "Change" (admin) opens a dialog, "Juniper's check-ins", with a choice list:
 
 | Choice    | Words under it                                              | Writes `agents.entries.<bot>.heartbeat` |
