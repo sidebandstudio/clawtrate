@@ -33,6 +33,7 @@ import {
 } from "../icons.tsx";
 import { AccountChoices, GATEWAY_CHOICE, gatewayLine } from "./AccountChoices.tsx";
 import { ClearOrderConfirm, ClearOutcome, type ClearAsk } from "./ClearOrder.tsx";
+import { settleBotSettingsRequest, settlement, useBotSettingsRequest } from "./settings-request.ts";
 import { Connect } from "./Connect.tsx";
 import { ModelPair, rowFor, useModelList } from "./ModelPair.tsx";
 import { UpdateOpenClawNote } from "./UpdateOpenClaw.tsx";
@@ -255,6 +256,36 @@ export function BotSettings({
     if (next !== "change") setPick(null);
     focusIn(focus);
   };
+
+  // "Change model" or "Change account" under a message the gateway couldn't run (#663): the
+  // model on the first page, or the Account page, shown once.
+  const request = useBotSettingsRequest();
+  const [requestShown, setRequestShown] = useState(0);
+  // Another bot: a request still open for the bot left is applied again when its page is back.
+  const [requestBot, setRequestBot] = useState(bot.id);
+  if (requestBot !== bot.id) {
+    setRequestBot(bot.id);
+    setRequestShown(0);
+  }
+  if (request && request.seq !== requestShown && request.botId === bot.id) {
+    setRequestShown(request.seq);
+    setView(request.part === "account" ? "account" : "main");
+    setError(null);
+    setPick(null);
+  }
+  // Settled once its own bot's page is drawn (`settlement`): while the accounts are still read
+  // there is none yet, and another bot's page never settles it.
+  useEffect(() => {
+    if (!request || request.seq !== requestShown) return;
+    const root = rootRef.current;
+    const done = settlement(request, bot.id, (selector) => {
+      const found = root?.querySelector<HTMLElement>(selector);
+      return !found ? null : found.matches(":disabled") ? "disabled" : "usable";
+    });
+    if (!done) return;
+    settleBotSettingsRequest(request);
+    if (done.focus) focusIn(done.focus);
+  });
 
   // The evidence: read when the Account page opens, every 4 seconds while it
   // is open after the lock command was copied, every 30 seconds otherwise.
