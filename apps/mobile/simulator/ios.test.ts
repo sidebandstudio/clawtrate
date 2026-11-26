@@ -19,6 +19,7 @@ import {
   INBOUND_MEDIA_ROUTE,
   pictureWithChoice,
   plainPreview,
+  READ_AGAIN_TRIES,
   type AvatarChoice,
 } from "@clawtrate/core";
 import {
@@ -1590,11 +1591,14 @@ describe("the iOS app", () => {
   it("on iPhone, a bot whose tasks the gateway failed to send claims no count on Home and says so in its list; sent an empty list, the list says it has none", async () => {
     let mode: "fail" | "empty" = "fail";
     let failed = 0;
+    // The app reads a task list the gateway may answer if asked again (an `UNAVAILABLE` with no
+    // reason) READ_AGAIN_TRIES more times, then once more on the gateway's next event, which
+    // arms no other read: with every task list failing, the count ends there.
+    const FAILED_READS = 1 + READ_AGAIN_TRIES + 1;
     const proxy = await relay(env.gateway, {
-      // The first task list after pairing fails, as a gateway's error would.
+      // Every task list fails until the switch below, as a gateway that stays unavailable would.
       fromPhone: (frame) => {
-        if (mode !== "fail" || frame.method !== "sessions.subscribe" || failed > 0 || !frame.id)
-          return null;
+        if (mode !== "fail" || frame.method !== "sessions.subscribe" || !frame.id) return null;
         failed += 1;
         return {
           type: "res",
@@ -1621,12 +1625,20 @@ describe("the iOS app", () => {
         waitFor({ id: "pairing" }, 90_000),
       ]);
       devGateway("approve");
+      // The tries take about 15 seconds before the failure shows; the wait covers them.
       await steps("tasks-failed-home", [
         waitFor({ id: "bot-otto", text: "Otto" }, 120_000),
+        waitFor({ id: "bot-preview-otto", text: lit(TASKS_FAILED) }, 120_000),
+        notSee(".*, 0 tasks.*"),
+      ]);
+      // The gateway's next event (a tick comes at least every 30 seconds) makes the last read.
+      await until("the next event's read", async () => failed >= FAILED_READS, 90_000);
+      await new Promise((resolve) => setTimeout(resolve, 2_000));
+      expect(failed).toBe(FAILED_READS);
+      await steps("tasks-failed-home-after", [
         see({ id: "bot-preview-otto", text: lit(TASKS_FAILED) }),
         notSee(".*, 0 tasks.*"),
       ]);
-      expect(failed).toBe(1);
       await steps("tasks-failed-list", [
         tap({ id: "bot-otto" }),
         waitFor({ id: "bot-tasks-otto" }),
@@ -1643,6 +1655,8 @@ describe("the iOS app", () => {
         see(lit(noTasksBody("Otto"))),
         notSee(lit(TASKS_FAILED)),
       ]);
+      // Nothing failed after the switch.
+      expect(failed).toBe(FAILED_READS);
     } finally {
       await proxy.close();
     }

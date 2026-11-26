@@ -45,6 +45,7 @@ export {
   type UsageBusy,
   type UsageReport,
 } from "./usage-engine.ts";
+export { READ_AGAIN_TRIES } from "./read-again.ts";
 export * from "./task-actions.ts";
 export * from "./waiting.ts";
 export * from "./machines.ts";
@@ -87,8 +88,10 @@ export {
   MAX_FILE_READS,
   MAX_MESSAGE_CHARS,
   CONNECT_REFUSED,
+  DISCOVERY_NOT_READY,
   GATEWAY_CHANGED_MESSAGE,
   GatewayChangedError,
+  LIVE_UPDATES_NOT_STARTED,
   MAX_SESSION_PAGES,
   REQUESTED_SCOPES,
   SendTooLargeError,
