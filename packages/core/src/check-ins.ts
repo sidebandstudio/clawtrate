@@ -12,6 +12,16 @@
 //   name an owner the config no longer does: enrollment is read from the config;
 // - `every: "0m"` keeps the bot's job with `enabled: false` (and its old `everyMs`);
 // - the job cannot be edited with `cron.update` ("system-owned monitor jobs").
+//
+// OpenClaw 2026.11.10 retired heartbeats (its `docs/gateway/heartbeat.md`,
+// "Heartbeat migration"): its doctor turns each monitor into an ordinary
+// `agentTurn` job and removes every `heartbeat` setting, and its config schema
+// has none, so a `config.patch` that writes one is refused whole ("Unrecognized
+// key"). Which job was a bot's check-in is kept only in the gateway's own
+// records, not in `cron.list`, so such a gateway's check-ins are its bots'
+// routines: they are read and changed there, and nothing here writes to it. Which
+// kind of gateway this is, is read on every read from its config schema
+// (`config.schema.lookup`, read tier), never from its version.
 
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { asRecord, type RawRecord } from "./mapping.ts";
@@ -29,6 +39,9 @@ export const KEEP_TOO_MANY = `More than ${MAX_CHECKIN_KEPT} other bots check in 
 export const KEEP_TOO_LONG =
   "The cadence the gateway's default gives is longer than Clawtrate writes back.";
 export const CHECKIN_BOT_DELETED = "This bot was deleted while you were editing.";
+/** Why nothing is saved here on a gateway that keeps check-ins as routines. */
+export const CHECKINS_AS_ROUTINES =
+  "This OpenClaw keeps check-ins as routines, so they're changed in Routines.";
 const READ_BACK_MS = 20_000;
 const READ_BACK_EVERY_MS = 500;
 const JOB_PAGE = 200;
@@ -86,6 +99,13 @@ export type CheckInSave = {
   error: string | null;
 };
 
+/**
+ * How the gateway keeps check-ins: as heartbeat settings and their jobs
+ * (OpenClaw 2026.10.6), or as ordinary routines, its heartbeats retired
+ * (2026.11.10).
+ */
+export type CheckInModel = "heartbeat" | "routines";
+
 export type CheckInsState = {
   status: "loading" | "ready" | "error";
   error: string | null;
@@ -94,6 +114,8 @@ export type CheckInsState = {
    * Null once its connection closed.
    */
   stamp: GatewayStamp | null;
+  /** How the gateway that answered the last read keeps check-ins; null before any read. */
+  model: CheckInModel | null;
   /** `cron.status` `enabled`: false means no scheduled check-in runs; null when not read. */
   scheduler: boolean | null;
   /** The bot IDs covered by the last job and settings read. */
@@ -333,6 +355,7 @@ const emptyState = (): CheckInsState => ({
   status: "loading",
   error: null,
   stamp: null,
+  model: null,
   scheduler: null,
   readBotIds: [],
   jobs: [],
@@ -381,7 +404,28 @@ async function readAllJobs(request: CheckInsLink["request"]): Promise<CheckInJob
   throw new Error("The gateway's scheduled jobs kept changing while Clawtrate read them.");
 }
 
+/**
+ * How this gateway keeps check-ins, from its config schema: 2026.11.10's has
+ * no `agents.defaults.heartbeat` and answers the lookup "config schema path not
+ * found"; 2026.10.6's describes it. Any other answer says neither, and fails the read.
+ */
+async function readModel(request: CheckInsLink["request"]): Promise<CheckInModel> {
+  try {
+    await request("config.schema.lookup", { path: "agents.defaults.heartbeat" });
+    return "heartbeat";
+  } catch (error) {
+    if (
+      error instanceof GatewayProtocolRequestError &&
+      error.code === "INVALID_REQUEST" &&
+      /^config schema path not found$/i.test(error.message)
+    )
+      return "routines";
+    throw error;
+  }
+}
+
 type Snapshot = {
+  model: CheckInModel;
   hash: string | null;
   config: unknown;
   readBotIds: string[];
@@ -409,6 +453,20 @@ async function read(
     if (left <= 0) return Promise.reject(new Error("The check-in confirmation timed out."));
     return link.request(method, params, { timeoutMs: left });
   };
+  const model = await readModel(request);
+  // A gateway without heartbeats has no check-in settings or jobs to read.
+  if (model === "routines")
+    return {
+      model,
+      hash: null,
+      config: null,
+      readBotIds: bots,
+      allJobs: [],
+      jobs: [],
+      scheduler: null,
+      settings: null,
+      defaults: null,
+    };
   const configRead = request("config.get", {});
   const [config, allJobs, status] = await Promise.all([
     required ? configRead : configRead.catch(() => null),
@@ -418,6 +476,7 @@ async function read(
   const hash = asRecord(config)?.hash;
   const enabled = asRecord(status)?.enabled;
   return {
+    model,
     // A blank hash is no hash: the gateway reads it as missing.
     hash: typeof hash === "string" && hash.trim() !== "" ? hash : null,
     config,
@@ -430,7 +489,8 @@ async function read(
   };
 }
 
-const shown = ({ readBotIds, jobs, scheduler, settings, defaults }: Snapshot) => ({
+const shown = ({ model, readBotIds, jobs, scheduler, settings, defaults }: Snapshot) => ({
+  model,
   readBotIds,
   jobs,
   scheduler,
@@ -647,6 +707,11 @@ export async function saveCheckIn(
     return settle("failed", link.alive() ? message(error) : gone);
   }
   if (!link.alive()) return settle("failed", gone);
+  // The gateway refuses a `heartbeat` setting, so none is sent to it.
+  if (fresh.model !== "heartbeat") {
+    show(latest, fresh);
+    return settle("failed", CHECKINS_AS_ROUTINES);
+  }
   const plan = planCheckIn(botId, draft, fresh.config);
   if ("conflict" in plan) {
     if (!latest()) {

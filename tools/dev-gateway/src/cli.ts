@@ -45,6 +45,7 @@ import { parseArgs } from "node:util";
 import {
   activityRefusal,
   ForeignStateError,
+  forgetStoppedProcess,
   inUseRefusal,
   markerProblems,
   newRunId,
@@ -109,6 +110,13 @@ import {
   setupOpenclaw,
 } from "./pinned.ts";
 import {
+  isOpenclawVersion,
+  OPENCLAW_VERSIONS,
+  shapeOf,
+  type OpenclawVersion,
+  type Shape,
+} from "./versions.ts";
+import {
   choosePorts,
   listInstances,
   NOT_CHECKED,
@@ -120,6 +128,7 @@ import { CODING_AGENT_SERVER } from "./coding-agent-mcp.ts";
 import { IMAGE_API_KEY, IMAGE_MODEL_REF, IMAGE_PROVIDER_ID } from "./scripted-images.ts";
 import { contractProblems, matching, optional, type Contract } from "./contract.ts";
 import { accountStoreProblems } from "./account-stores.ts";
+import { orderNeedsStoppedGateway } from "../../../packages/core/src/accounts.ts";
 import {
   ACCOUNT_PROVIDERS,
   accountProfiles,
@@ -437,6 +446,11 @@ export type StartOptions = {
    * review only after `#learn` (scenarios.ts, `skillReviewReply`).
    */
   skillReview?: boolean;
+  /**
+   * The OpenClaw version the gateway runs, the start's program's (versions.ts); absent, the pin.
+   * The config is written in that version's form, and its stamps are checked against it.
+   */
+  openclaw?: OpenclawVersion;
 };
 
 /** The config the development gateway runs with. Written fresh by every start. */
@@ -448,6 +462,7 @@ export function devConfig(
   options: StartOptions = {},
   chromium?: string,
 ) {
+  const form = shapeOf(options.openclaw ?? OPENCLAW_VERSION);
   const accounts = options.accounts ? accountsConfig(ports.providerPort, stateDir) : null;
   const owner = plugins.find((plugin) => plugin.botBrowsers);
   const browsers = owner?.botBrowsers
@@ -524,7 +539,8 @@ export function devConfig(
         model: { primary: MODEL_REF },
         thinkingDefault: "low",
         systemAgent: { agentId: "main" },
-        heartbeat: { agentId: "main" },
+        // 2026.11.10 refuses the key.
+        ...(form.heartbeat ? { heartbeat: { agentId: "main" } } : {}),
         ...(options.images ? { mediaModels: { image: { primary: IMAGE_MODEL_REF } } } : {}),
       },
       // The bots are declared here so their tool policy is part of the checked
@@ -559,7 +575,8 @@ export function devConfig(
         ...(browsers ? ["browser"] : []),
         ...(options.images ? ["image_generate"] : []),
         ...(options.messageTool ? ["message"] : []),
-        ...(options.skillReview ? ["skill_workshop"] : []),
+        // 2026.11.10 adds skill_library beside skill_workshop itself (skillLibraryToolSplit).
+        ...(options.skillReview ? form.skillReviewTools : []),
       ],
       // Denied as well, so a change to the allowlist cannot bring them back:
       // tools that reach the network, manage the gateway or its installation,
@@ -567,12 +584,12 @@ export function devConfig(
       // bot browsers the browser tool is denied per bot instead (botEntries).
       // With the stand-in image provider, image_generate is offered instead, and
       // with the message tool, message, and with skill reviews, skill_workshop.
-      deny: DENIED_TOOLS.filter(
+      deny: [...DENIED_TOOLS, ...form.extraDeniedTools].filter(
         (tool) =>
           !(browsers && tool === "browser") &&
           !(options.images && tool === "image_generate") &&
           !(options.messageTool && tool === "message") &&
-          !(options.skillReview && tool === "skill_workshop"),
+          !(options.skillReview && form.skillReviewTools.includes(tool)),
       ),
     },
     // The stand-in coding agent: a local command server, no network, run in
@@ -709,7 +726,14 @@ export const DENIED_TOOLS = [
 
 /** What a plugin's contract addition is checked against. */
 export const PLUGIN_RULE: PluginRule = {
-  gatewayTools: [...GATEWAY_TOOLS, ...DENIED_TOOLS],
+  // Every listed version's own tools: a plugin may name none of them.
+  gatewayTools: [
+    ...new Set([
+      ...GATEWAY_TOOLS,
+      ...DENIED_TOOLS,
+      ...OPENCLAW_VERSIONS.flatMap((version) => shapeOf(version).addedGatewayTools),
+    ]),
+  ],
   reserved: RESERVED_PLUGIN_IDS,
   seedBots: SEED_BOTS.map((bot) => bot.id),
   scriptedProviders: ACCOUNT_PROVIDERS,
@@ -741,6 +765,7 @@ export function devConfigContract(
   options: StartOptions = {},
   chromium?: string,
 ): Contract {
+  const form = shapeOf(options.openclaw ?? OPENCLAW_VERSION);
   const contract = structuredClone(
     devConfig("", ports, stateDir, plugins, options, chromium),
   ) as unknown as Record<string, Record<string, unknown>>;
@@ -759,12 +784,11 @@ export function devConfigContract(
   // The CLI stamps the version that last wrote the config, and the migrations
   // it considers applied, whenever it writes it.
   (contract as Record<string, unknown>).meta = optional({
-    lastTouchedVersion: optional("2026.10.6"),
+    lastTouchedVersion: optional(form.version),
     lastTouchedAt: optional(matching("a time stamp", (value) => typeof value === "string")),
-    migrations: optional({
-      modelPolicyAllowlist: optional(true),
-      utilityModelSeparation: optional(true),
-    }),
+    migrations: optional(
+      Object.fromEntries(form.migrations.map((migration) => [migration, optional(true)])),
+    ),
   });
   return contract as unknown as Contract;
 }
@@ -811,6 +835,11 @@ function recordedPlugins(inst: DevInstance): DevPlugin[] {
 const renewChoice = (value: unknown) =>
   value === undefined || (BOT_BROWSER_CHOICES.renewTimeoutMs as readonly unknown[]).includes(value);
 
+/** The form of the OpenClaw version an instance's gateway runs, as its start recorded it. */
+export function instanceForm(inst: { runDir: string }): Shape {
+  return shapeOf(recordedStartOptions(inst).openclaw ?? OPENCLAW_VERSION);
+}
+
 /** What this run of the instance was started with besides plugins, beside its run file. */
 const startOptionsFile = (inst: DevInstance) => join(inst.runDir, "start-options.json");
 
@@ -830,7 +859,8 @@ export function recordedStartOptions(inst: { runDir: string }): StartOptions {
         key !== "images" &&
         key !== "messageTool" &&
         key !== "httpApi" &&
-        key !== "skillReview",
+        key !== "skillReview" &&
+        key !== "openclaw",
     ) ||
     !["boolean", "undefined"].includes(typeof (recorded as StartOptions).accounts) ||
     !["boolean", "undefined"].includes(typeof (recorded as StartOptions).defaultLocalPairing) ||
@@ -838,7 +868,9 @@ export function recordedStartOptions(inst: { runDir: string }): StartOptions {
     !["boolean", "undefined"].includes(typeof (recorded as StartOptions).messageTool) ||
     !["boolean", "undefined"].includes(typeof (recorded as StartOptions).httpApi) ||
     !["boolean", "undefined"].includes(typeof (recorded as StartOptions).skillReview) ||
-    !renewChoice((recorded as StartOptions).renewTimeoutMs)
+    !renewChoice((recorded as StartOptions).renewTimeoutMs) ||
+    ((recorded as StartOptions).openclaw !== undefined &&
+      !isOpenclawVersion((recorded as StartOptions).openclaw))
   ) {
     throw new Error(`${path} is not a record of start options`);
   }
@@ -1412,6 +1444,8 @@ export async function start(
         pluginsFile(inst),
         `${JSON.stringify(plugins.map(({ name, digest }) => ({ name, digest })))}\n`,
       );
+      // The config is written for the version the start's program is.
+      startOptions.openclaw = runner.openclawVersion();
       writeFileAtomic(startOptionsFile(inst), `${JSON.stringify(startOptions)}\n`);
       writeFreshConfig(inst, ports, runId, plugins, startOptions);
       const providerLog = openSync(join(inst.runDir, "provider.log"), "w");
@@ -2551,18 +2585,152 @@ const LOCK_BOT = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 const LOCK_PROVIDER = /^[a-z][a-z0-9-]{0,63}$/;
 const LOCK_PROFILE = /^[a-z][a-z0-9-]{0,63}:[A-Za-z0-9._@+-]{1,128}$/;
 
+/** The OpenClaw version the instance's command line reports (`openclaw --version`), or null. */
+export async function cliVersion(inst: DevInstance): Promise<string | null> {
+  return /\b(\d{4}\.\d{1,2}\.\d{1,3})\b/.exec(await must(inst, ["--version"]))?.[1] ?? null;
+}
+
 /**
- * Set or clear a bot's stored one-account order for a provider, the "lock"
- * of docs/design/bots.md section 10, by running the gateway's own command
- * line (`openclaw models auth order set|clear`) on a named development
- * instance this checkout started and whose gateway is running. Clawtrate the
- * application never does this; the tool does, so that checks can. Returns
- * the order the gateway reports for the bot afterwards.
+ * How the instance's command line changes a bot's account order: beside the
+ * running gateway (`live`, OpenClaw before 2026.10.10), or only while the
+ * gateway is stopped (`stopped`, 2026.10.10 on), as Clawtrate tells the
+ * gateway's owner (`orderNeedsStoppedGateway`).
  */
-export async function lockOrder(
+export async function lockMode(inst: DevInstance): Promise<"live" | "stopped"> {
+  return orderNeedsStoppedGateway(await cliVersion(inst)) ? "stopped" : "live";
+}
+
+/**
+ * Wait until a gateway that answers health also admits the methods it holds
+ * back while its startup sidecars finish (`chat.send`, `agent`,
+ * `tools.effective` and others answer "… unavailable during gateway startup",
+ * retryable): asked with `tools.effective`, which reads only.
+ */
+async function gatewayAdmitting(inst: DevInstance): Promise<void> {
+  const deadline = Date.now() + GATEWAY_START_MS;
+  const probe = ["gateway", "call", "tools.effective", "--params", '{"agentId":"main"}'];
+  for (;;) {
+    const result = await inst.runner.run([...probe, "--json", "--timeout", "3000"]);
+    if (!`${result.stdout}${result.stderr}`.includes("unavailable during gateway startup")) return;
+    if (Date.now() >= deadline) {
+      throw new Error(
+        `${label(inst)}: still starting ${GATEWAY_START_MS / 1000} s after it was started again`,
+      );
+    }
+    await sleep(500);
+  }
+}
+
+/**
+ * What a command that stopped the instance's gateway and could not start it again says: why,
+ * that the gateway isn't running, and the commands that recover the instance.
+ */
+export function strandedMessage(inst: DevInstance, why: string): string {
+  const flag = instanceFlag(inst);
+  return (
+    `${label(inst)}: ${why}. Its gateway was stopped and is not running again. ` +
+    `\`pnpm dev-gateway reset${flag}\` removes the instance; \`pnpm dev-gateway start${flag}\` then starts it afresh.`
+  );
+}
+
+/**
+ * Stop the instance's gateway alone, run `offline` while it is stopped, and
+ * start the gateway again on the same state, port and run, as the gateway's
+ * owner does for a command OpenClaw runs only while the gateway is stopped.
+ * Under the instance's lifecycle lock; the scripted model keeps running. The
+ * gateway is started again whether or not `offline` succeeded. Where starting
+ * it again isn't safe (its stop not confirmed, its port still held, its record
+ * not cleared) or the start fails, the error says so and names the commands
+ * that recover the instance (`strandedMessage`).
+ */
+async function withGatewayStopped<T>(inst: DevInstance, offline: () => Promise<T>): Promise<T> {
+  return withInstanceLock(inst, async () => {
+    const refusal = inst.runner.refusal();
+    if (refusal) throw new Error(refusal);
+    const marker = readMarker(inst.stateDir)!;
+    const port = marker.gatewayPort!;
+    const target: StopTarget = {
+      role: "gateway",
+      pid: marker.gatewayPid!,
+      identity: marker.gatewayIdentity!,
+      port,
+    };
+    if (!(await stopProcess(target, inst.identify))) {
+      throw new StateInUseError(
+        strandedMessage(
+          inst,
+          "could not confirm that its gateway stopped, so it isn't started again",
+        ),
+      );
+    }
+    // A port still open or a record not cleared means another start could collide: not safe to
+    // start again here.
+    const open = await portReleased(inst, target);
+    if (open) throw new StateInUseError(strandedMessage(inst, open));
+    try {
+      forgetStoppedProcess(inst.stateDir, marker.runId, "gateway", inst.identify);
+    } catch (error) {
+      throw new StateInUseError(
+        strandedMessage(inst, error instanceof Error ? error.message : String(error)),
+      );
+    }
+    const runner = inst.runner;
+    let outcome: { ok: true; value: T } | { ok: false; error: unknown };
+    // OpenClaw may run on this run's state while its gateway is stopped, as during its start.
+    runner.freshRunId = marker.runId;
+    try {
+      try {
+        outcome = { ok: true, value: await offline() };
+      } catch (error) {
+        outcome = { ok: false, error };
+      }
+      const gatewayLog = openSync(join(inst.runDir, "gateway.log"), "a");
+      try {
+        spawnRecorded(inst, marker.runId, "gateway", () =>
+          runner.spawnGated(["gateway", "run", "--port", String(port), "--bind", "loopback"], {
+            stdio: ["ignore", gatewayLog, gatewayLog],
+          }),
+        );
+      } finally {
+        closeSync(gatewayLog);
+      }
+    } catch (error) {
+      throw new StateInUseError(
+        strandedMessage(
+          inst,
+          `its gateway could not be started again: ${error instanceof Error ? error.message : String(error)}`,
+        ),
+      );
+    } finally {
+      runner.freshRunId = null;
+    }
+    try {
+      await waitForStart(
+        {
+          what: "the development gateway",
+          exited: () => recordedExited(inst, "gateway"),
+          health: () => gatewayHealth(inst),
+          log: join(inst.runDir, "gateway.log"),
+        },
+        GATEWAY_START_MS,
+      );
+    } catch (error) {
+      throw new StateInUseError(
+        strandedMessage(inst, error instanceof Error ? error.message : String(error)),
+      );
+    }
+    await gatewayAdmitting(inst);
+    await assertExecDenied(inst);
+    if (!outcome.ok) throw outcome.error;
+    return outcome.value;
+  });
+}
+
+/** The guards `lockOrder` and `orderBesideGateway` share, before anything runs. */
+async function assertLockable(
   inst: DevInstance,
   request: { bot: string; provider: string; profileId: string | null },
-): Promise<string[] | null> {
+): Promise<void> {
   if (inst.name === null) {
     throw new Error(
       "lock and unlock act only on a named development instance; use --instance <name>",
@@ -2597,18 +2765,54 @@ export async function lockOrder(
       `${label(inst)} is not running. Run \`pnpm dev-gateway start${instanceFlag(inst)}\` first.`,
     );
   }
-  const base = ["models", "auth", "order"];
+}
+
+/** The order command for a request: `set` with the account, or `clear`. */
+function orderArgs(request: { bot: string; provider: string; profileId: string | null }) {
   const where = ["--provider", request.provider, "--agent", request.bot];
-  await must(
-    inst,
-    request.profileId === null
-      ? [...base, "clear", ...where]
-      : [...base, "set", ...where, request.profileId],
-  );
-  const read = parseJsonOutput<{ order?: string[] | null }>(
-    await must(inst, [...base, "get", ...where, "--json"]),
-  );
-  return read.order ?? null;
+  return request.profileId === null
+    ? ["models", "auth", "order", "clear", ...where]
+    : ["models", "auth", "order", "set", ...where, request.profileId];
+}
+
+/**
+ * The order command run beside the running gateway, without stopping it, as
+ * a person who doesn't stop it first runs it; its exit status and output.
+ * OpenClaw 2026.10.10 on refuses it there and changes nothing.
+ */
+export async function orderBesideGateway(
+  inst: DevInstance,
+  request: { bot: string; provider: string; profileId: string | null },
+): Promise<{ status: number | null; output: string }> {
+  await assertLockable(inst, request);
+  const result = await inst.runner.run(orderArgs(request));
+  return { status: result.status, output: `${result.stdout}${result.stderr}` };
+}
+
+/**
+ * Set or clear a bot's stored one-account order for a provider, the "lock"
+ * of docs/design/bots.md section 10, by running the gateway's own command
+ * line (`openclaw models auth order set|clear`) on a named development
+ * instance this checkout started and whose gateway is running, as the
+ * gateway's owner does on its version (`lockMode`): beside the running
+ * gateway, or with the gateway stopped first and started again afterwards.
+ * Clawtrate the application never does this; the tool does, so that checks
+ * can. Returns the order the command line reads back for the bot.
+ */
+export async function lockOrder(
+  inst: DevInstance,
+  request: { bot: string; provider: string; profileId: string | null },
+): Promise<string[] | null> {
+  await assertLockable(inst, request);
+  const where = ["--provider", request.provider, "--agent", request.bot];
+  const change = async () => {
+    await must(inst, orderArgs(request));
+    const read = parseJsonOutput<{ order?: string[] | null }>(
+      await must(inst, ["models", "auth", "order", "get", ...where, "--json"]),
+    );
+    return read.order ?? null;
+  };
+  return (await lockMode(inst)) === "stopped" ? withGatewayStopped(inst, change) : change();
 }
 
 const USAGE =
@@ -2648,8 +2852,8 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
     if (selected !== null)
       throw new Error("setup is for this checkout; it does not take --instance");
     if (env.OPENCLAW_BIN) {
-      openclawProgram(env);
-      console.log(`OPENCLAW_BIN is OpenClaw ${OPENCLAW_VERSION}; nothing to set up.`);
+      const { version } = openclawProgram(env);
+      console.log(`OPENCLAW_BIN is OpenClaw ${version}; nothing to set up.`);
     } else await setupOpenclaw(PINNED_DIR, env);
     return;
   }
@@ -2700,7 +2904,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
   switch (command) {
     case "start":
     case "up":
-      // The pinned OpenClaw, set up on first use; an OPENCLAW_BIN of another version is refused.
+      // The pinned OpenClaw, set up on first use; an OPENCLAW_BIN of an unlisted version is refused.
       if (!env.OPENCLAW_BIN && !openclawReady(env)) await setupOpenclaw(PINNED_DIR, env);
       openclawProgram(env);
       return start(inst, {

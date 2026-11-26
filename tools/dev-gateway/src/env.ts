@@ -15,7 +15,8 @@ import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { openclawProgram, type Program } from "./pinned.ts";
+import { OPENCLAW_VERSION, openclawProgram, type Program } from "./pinned.ts";
+import type { OpenclawVersion } from "./versions.ts";
 import {
   DEFAULT_GATEWAY_PORT,
   DEFAULT_PROVIDER_PORT,
@@ -156,7 +157,7 @@ export type RunnerOptions = {
   stateDir: string;
   /** The tool's run file, with the run id and PIDs `start` recorded. */
   runFile: string;
-  /** The OpenClaw program; otherwise the pinned one (pinned.ts), found when first run. */
+  /** A stand-in OpenClaw program, for tests, taken as the pin; otherwise pinned.ts finds one. */
   bin?: string;
   spawnImpl?: typeof spawn;
   spawnSyncImpl?: typeof spawnSync;
@@ -186,7 +187,9 @@ export class OpenclawRunner {
     this.instance = options.instance ?? null;
     this.stateDir = options.stateDir;
     this.runFile = options.runFile;
-    this.program = options.bin ? { command: options.bin, args: [] } : null;
+    this.program = options.bin
+      ? { command: options.bin, args: [], version: OPENCLAW_VERSION }
+      : null;
     this.spawnImpl = options.spawnImpl ?? spawn;
     this.spawnSyncImpl = options.spawnSyncImpl ?? spawnSync;
     this.identify = options.identify ?? processIdentity;
@@ -197,6 +200,11 @@ export class OpenclawRunner {
   private openclaw(): Program {
     this.program ??= openclawProgram();
     return this.program;
+  }
+
+  /** The OpenClaw version this runner's program is, which the gateway it starts runs. */
+  openclawVersion(): OpenclawVersion {
+    return this.openclaw().version;
   }
 
   /** Why OpenClaw must not run now, or null. */

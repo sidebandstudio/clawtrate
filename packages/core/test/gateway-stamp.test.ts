@@ -408,7 +408,7 @@ describe("the offer of full control on a stale screen", () => {
       createWebSocket: (url: string) => (url === WSS_B ? b : a).gateway.createWebSocket(url),
       secureCredentials: async () => true,
     };
-    const client = new ClawtrateClient(host, { ...FAST, fullAccess: true });
+    const client = new ClawtrateClient(host, { ...FAST });
     await client.start();
     const offered = (url: string) =>
       client.state.connection.status === "connected" &&
