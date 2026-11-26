@@ -257,18 +257,25 @@ export function BotSettings({
     setError(null);
     setPick(null);
   }
-  // Settled once its control is drawn: while the accounts are still read there is none yet.
+  // Settled once its page is drawn: while the accounts are still read there is none yet. Focus
+  // goes to the control when it can take it, else to the Account page's heading; the first page
+  // has no heading to take it (a default-model binding has no model menu, and below admin the
+  // menu is disabled), so there the request settles where the page already stands.
   useEffect(() => {
     if (!request || request.seq !== requestShown) return;
-    const wanted =
-      request.part === "account" ? "[data-bs='change']" : '[data-testid="model-select"]';
-    // Where the control isn't offered (Change account below admin), the page's own heading.
-    const selector = [wanted, "[data-bs-focus]"].find((each) =>
-      rootRef.current?.querySelector(each),
-    );
-    if (!selector) return;
+    const root = rootRef.current;
+    const usable = (selector: string) => {
+      const found = root?.querySelector<HTMLElement>(selector);
+      return found && !found.matches(":disabled") ? selector : null;
+    };
+    const target =
+      request.part === "account"
+        ? (usable("[data-bs='change']") ?? usable("[data-bs-focus]"))
+        : usable('[data-testid="model-select"]');
+    const drawn = request.part === "account" ? target : root?.querySelector("[data-bs='account']");
+    if (!drawn) return;
     settleBotSettingsRequest(request);
-    focusIn(selector);
+    if (target) focusIn(target);
   });
 
   // The evidence: read when the Account page opens, every 4 seconds while it
