@@ -28,9 +28,9 @@
     - text: Bots know how Clawtrate works On
     - switch "Bots know how Clawtrate works" [checked]
     - paragraph:
-      - text: Clawtrate keeps a short section at the top of each bot's
+      - text: Clawtrate keeps a short section at the top of the
       - code: AGENTS.md
-      - text: that tells it how to talk to you and what a task is in Clawtrate.
+      - text: of each bot on this gateway that tells it how to talk to you and what a task is in Clawtrate.
     - group: Read it
   - status
 - navigation "Bots":

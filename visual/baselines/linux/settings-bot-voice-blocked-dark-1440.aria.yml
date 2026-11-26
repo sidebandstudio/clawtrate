@@ -42,9 +42,9 @@
     - text: Bots know how Clawtrate works On
     - switch "Bots know how Clawtrate works" [checked] [disabled]
     - paragraph:
-      - text: Clawtrate keeps a short section at the top of each bot's
+      - text: Clawtrate keeps a short section at the top of the
       - code: AGENTS.md
-      - text: that tells it how to talk to you and what a task is in Clawtrate. This connection doesn't have admin access, so Clawtrate can't add or remove it from here.
+      - text: of each bot on this gateway that tells it how to talk to you and what a task is in Clawtrate. This connection doesn't have admin access, so Clawtrate can't add or remove it from here.
     - group: Read it
   - status
 - navigation "Bots":
