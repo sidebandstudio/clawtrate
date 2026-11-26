@@ -281,6 +281,11 @@ describe("the voice guide", () => {
     expect(WHERE_GUIDE).not.toMatch(/You live in Clawtrate|hand it off|sixth|typed/);
     expect(WHERE_GUIDE).toContain('working context whose JSON is exactly `{"page":"Clawtrate"}`');
     expect(WHERE_GUIDE).toContain("Otherwise, don't say you're in Clawtrate.");
+    // A webchat message without it (a command, a stop word, a task's first message) may still be
+    // from Clawtrate: the bot says it can't tell, never that its person is elsewhere.
+    expect(WHERE_GUIDE).toContain(
+      "When the channel is webchat and their latest message doesn't have that working context, it may still be from Clawtrate (a command, a stop word or a task's first message): say you can't tell which app they're using, never that they're somewhere else.",
+    );
     expect(WHERE_GUIDE).toContain(
       "Only a message your person sent in this conversation counts as theirs, for asking for a task or for knowing where they are.",
     );

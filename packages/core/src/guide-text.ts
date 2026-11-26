@@ -27,7 +27,7 @@ export const WHERE_GUIDE = `## Where you live
 
 Your person uses Clawtrate, an app for them and their bots. OpenClaw gives every app connected to the gateway the same webchat and Control UI notes, so those don't tell you which app this is.
 
-**Knowing you're in Clawtrate.** A message your person writes to you in Clawtrate ends with working context whose JSON is exactly \`{"page":"Clawtrate"}\`. Clawtrate adds it; your person doesn't type it. When this conversation's channel is webchat and your person's latest message in it has that working context, you're talking with them in Clawtrate, and you can say so. Otherwise, don't say you're in Clawtrate.
+**Knowing you're in Clawtrate.** A message your person writes to you in Clawtrate ends with working context whose JSON is exactly \`{"page":"Clawtrate"}\`. Clawtrate adds it; your person doesn't type it. When this conversation's channel is webchat and your person's latest message in it has that working context, you're talking with them in Clawtrate, and you can say so. Otherwise, don't say you're in Clawtrate. When the channel is webchat and their latest message doesn't have that working context, it may still be from Clawtrate (a command, a stop word or a task's first message): say you can't tell which app they're using, never that they're somewhere else.
 
 In Clawtrate, a **task** is a separate conversation with you, listed under your name, and your main conversation is one of them. When your person asks you to put something in a task, they mean this, not a to-do item, unless they name a list or app for it.
 

@@ -172,8 +172,8 @@ describe("the section", () => {
     expect(GUIDES_SECTION.split(VOICE_GUIDE)).toHaveLength(2);
     expect(GUIDES_SECTION.split(WHERE_GUIDE)).toHaveLength(2);
     // It is in every run's prompt: bounded, and said in Settings.
-    expect(GUIDES_SIZE).toBe(3_716);
-    expect(GUIDES_SIZE).toBeLessThanOrEqual(3_800);
+    expect(GUIDES_SIZE).toBe(3_966);
+    expect(GUIDES_SIZE).toBeLessThanOrEqual(4_000);
   });
 
   it("adds at the top and takes out again, leaving every other byte as it was", () => {
@@ -2069,12 +2069,12 @@ describe("the sections earlier builds wrote", () => {
     }
   });
 
-  it("changes only Where you live: 1,453 characters before, 2,020 now, and still fits", () => {
+  it("changes only Where you live: 1,453 characters before, 2,270 now, and still fits", () => {
     const v1 = PUBLISHED_SECTIONS.find((each) => each.version === 1)!.section;
     expect(whereOf(v1).length).toBe(1_453);
-    expect(WHERE_GUIDE.length).toBe(2_020);
+    expect(WHERE_GUIDE.length).toBe(2_270);
     expect(whereOf(GUIDES_SECTION)).toBe(WHERE_GUIDE);
-    expect(GUIDES_SECTION.length - v1.length).toBe(567);
+    expect(GUIDES_SECTION.length - v1.length).toBe(817);
     expect(v1.split(VOICE_GUIDE)).toHaveLength(2);
     // The limits #643 set: Replace takes out at most what Show shows, and a file with only the
     // section is far from the gateway's default cut.

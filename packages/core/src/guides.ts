@@ -28,7 +28,7 @@ export const GUIDES_VERSION = 2;
  * holds the text to it, so the text can't change without the version changing with it. Every
  * earlier version's section is in the tests (`guides-published.ts`), as released builds wrote it.
  */
-export const GUIDES_PINNED_SHA256 = "d7896beafc7f977a";
+export const GUIDES_PINNED_SHA256 = "ec194b8ae364ffb8";
 /**
  * Where OpenClaw (2026.10.6 and 2026.11.10) starts cutting a long `AGENTS.md` out of a prompt
  * when its config sets no limit (`bootstrapMaxChars`): what Clawtrate uses when the config can't
