@@ -377,9 +377,9 @@ describe("approving a waiting device", () => {
         await new Promise<void>((resolve) => (releaseX = resolve));
         return { pending: [x], paired: [] };
       }
-      if (lists === 3) return { pending: [x, y], paired: [pairedOf(w)] }; // W's paired-device read
-      // The list read W's decision starts afterwards answers last.
-      await new Promise<void>((resolve) => (releaseRefresh = resolve));
+      // W's paired-device read (3); the list read W's decision starts afterwards (4) answers last;
+      // any later read answers at once.
+      if (lists === 4) await new Promise<void>((resolve) => (releaseRefresh = resolve));
       return { pending: [x, y], paired: [pairedOf(w)] };
     };
     t.answers["device.pair.approve"] = (params) => {
