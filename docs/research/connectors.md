@@ -1,0 +1,281 @@
+# Connectors: what the gateway allows
+
+What Clawtrate can show and do for connectors (tool servers a person adds by address or as a program, their sign-in and which bots reach them; the plugin catalog, adding a plugin, its state and its accounts), checked against OpenClaw 2026.10.6 and 2026.11.10. It is the evidence behind `docs/design/connectors.md` and the dependency cells of `docs/parity.md` rows F-004, F-217 to F-222 and F-380 to F-383. The capability map's section 21, "Connectors and MCP servers", is the starting point; where this note differs from it, the note says so.
+
+How to read the citations, as in `gateway-capabilities.md` and `setup-flow.md`:
+
+- `<openclaw>/…` and `<10.6>/…` are paths inside the `openclaw` 2026.10.6 npm package; `<11.10>/…` inside 2026.11.10. Both were downloaded into a scratch folder and read without running anything. Chunk names carry a build hash that changes with every release; search by the `//#region <source path>` (2026.10.6) or `//!src/<source path>` (2026.11.10) marker. 2026.10.6 chunks are formatted, so line numbers are given; 2026.11.10 chunks are minified to one or two lines, so the symbol or string is given instead.
+- `schema` is `protocol.schema.json` in `@openclaw/gateway-protocol@2026.10.6`.
+- **Tried** means it was run on a development gateway and the result is quoted; the section says which run. **Source** means it was read in shipped code. **Docs** means it was read in the bundled documentation only. **Not tried** says why.
+
+Where things were run:
+
+- **November, 2026.10.6, the first probe (retired).** One named development instance, `d11conn`, and a second one for a review. That probe used this project's client and read the instance's address, token and ports from the development tool's run files, ran `openclaw` through the tool's guarded runner, and could resume a client folder saved by an earlier run. That last part could reconnect to whatever gateway the folder had saved, so the probe was retired. Its findings in sections 1 to 8 are kept, each marked with what was run. Two of its experiments are not repeated by the new probe: the plugin install up to its download (section 3), and a sign-in on a connection that declared a browser origin (section 7), which probed the gateway's rule and is not a route for Clawtrate.
+- **November 26, both versions, the new probe.** [`connectors/probe.ts`](connectors/probe.ts) connects only to the loopback address and token it is given, from a new empty client folder, never resumes a saved gateway, reads no profile, token store or instance folder, runs no `openclaw` command, and refuses a gateway that isn't configured as a development gateway. Pairing and the admin upgrade are approved by the person running it with `pnpm dev-gateway approve`. Section 9 has its results.
+
+Every secret was a made-up `example-…` string; every address was loopback or a reserved `.example` name. No plugin was installed and no outside sign-in was made.
+
+## Summary
+
+| # | Question | Answer | Section |
+|---|---|---|---|
+| 1 | Is a development instance confined to loopback? | It was not. On start the gateway asked `catalog.openclaw.ai:443`, and `plugins.list`, every `plugins.catalog.*` method, `plugins.search`, `skills.search` and `plugins.install` ask `clawhub.ai`. The tool now sets the gateway's own `proxy.proxyUrl` to the instance's scripted model, which refuses and logs each such request. **Tried**: the log shows each host, and every later result in this note was taken behind it. | 1 |
+| 2 | Where does the catalog come from, and what do its methods return without it? | From ClawHub over HTTPS, joined with what the gateway has on disk. Without ClawHub: `plugins.list` still answers (the gateway's 70 plugins, bundled or known); `plugins.catalog.browse` answers with only what is on the gateway and a `remoteError` ("ClawHub is unavailable: … Installed plugins remain available."), after about 14 s of retries; `featured` and `trending` answer nothing but the error; `plugins.catalog.categories` fails (`UNAVAILABLE`, "Plugin categories are unavailable: … Retry to reconnect to ClawHub."); `plugins.catalog.get` for a plugin on the gateway answers from disk, for one only on ClawHub fails; `plugins.search` and `skills.search` fail. **Tried.** | 2 |
+| 3 | What is "Add"? | `plugins.install {source, packageName \| pluginId, version?, acknowledgeCapabilities?, acknowledgeInstallPolicyWarning?}`, `operator.admin`. For ClawHub and official sources the gateway downloads the package from ClawHub, extracts it, installs its npm dependencies with `--ignore-scripts`, and can apply changes to the running gateway (`restartRequired` and warnings say what else is needed). It reports stages to the connection that asked (`plugins.install.progress`: resolve, download, extract, files, dependencies, runtime). The schema accepts both `acknowledgeCapabilities` and `acknowledgeInstallPolicyWarning`, but the install RPC supplies its own capability acknowledgement, so a client sees only an install-policy warning to acknowledge, or an explicit refusal. A failure after the files were written is reported with `details.persistence`. **Source**; tried only up to the download, which the instance refused. | 3 |
+| 4 | Turning a connector off and on, and removing one | `plugins.setEnabled` and `plugins.uninstall`, `operator.admin`, each answering with the plugin's new state and a runtime generation; a bundled plugin cannot be removed ("bundled plugin cannot be uninstalled: … disable it instead"); a second change straight after the first was refused once ("Another plugin or config operation is already running; retry when it completes."). **Tried.** Uninstall keeps an `enabled: false` marker (**docs, source only**); the RPC does not clear OpenClaw's MCP OAuth store (**source**). | 4 |
+| 5 | Adding, reading back and removing a server | `config.patch` on `mcp.servers.<name>` (`operator.admin`): accepted and applied without a restart; read back through `config.get` with header values as `__OPENCLAW_REDACTED__`; removed with `null`, and a command server's `args` needs `replacePaths`. The gateway refuses a bad or non-http(s) address, and a `clientId` or `clientSecret` (no such fields), and accepts an empty command or neither command nor address. The gateway's tool listing for the selected task, as read, lists its tools or a notice naming it; it is no general connection test. **Tried.** | 5 |
+| 6 | Where are a header and a sign-in kept? | A header is written in plain text into the gateway's configuration file and is never read back by a client; it goes when the server is removed. A sign-in's access and refresh tokens are kept in plain text in the gateway's state database (`state/openclaw.sqlite`, `mcp_oauth_stores`) and stay there when the server is removed through `config.patch`. **Tried.** | 6 |
+| 7 | Sign-in | `mcp.authLogin {sessionId, serverName}`, `operator.admin`, only for a shared OAuth server and only on a connection with a browser origin; it runs a wizard whose one step carries the sign-in page (`externalUrl`, which must be `https`), returns to the gateway's `/oauth/provider/callback`, and ends `done` or with an error; 10 minutes. **Tried** end to end on loopback with a stand-in OAuth server, on a web chat connection declaring a loopback origin; this project's client is refused ("Open Settings on this Gateway to sign in, or use openclaw mcp login in its terminal."). A per-requester server is refused there and gives the bot a `<server>__connect` tool instead. **Source.** | 7 |
+| 8 | What the gateway reports about a connector | A plugin: `state` and `runtime.state` in `plugins.list` (**tried**), and, for the OAuth servers a plugin declares, `mcpAuth [{serverName, state}]` in `plugins.inspect` (**source**; no plugin on the instance declares one). A server in `mcp.servers`: its configuration, and the gateway's tool listing for the selected task, as read; no sign-in state and no accounts. **Tried.** | 8 |
+
+## 1. Confining the instance to loopback
+
+The rules for this work say an instance reaches nothing beyond loopback. Reading the catalog's source first showed that it was not so: `plugins.list` calls `listManagedPlugins`, which loads the hosted official catalog (`<openclaw>/dist/management-service-B1oc-TT4.mjs` lines 219-227), fetched from `https://clawhub.ai/v1/feeds/plugins` with the host pinned to `clawhub.ai` (`official-external-plugin-catalog-source-8hS3NARf.mjs` lines 13, 152), and the other catalog methods call ClawHub's API at `https://clawhub.ai` unless `OPENCLAW_CLAWHUB_URL` is set (`clawhub-client-B-TQ3xH6.mjs` lines 136, 155), which the tool's environment allowlist drops. **Source.** The development config already turned off update checks and mDNS; nothing kept the catalog off the network.
+
+So the tool now writes `proxy.proxyUrl: "http://127.0.0.1:<scripted model port>"` into every instance's config (`docs/decisions.md`, "Sandbox config"). With a proxy set, the gateway routes its HTTP and WebSocket clients through it, and in the default `loopbackMode: "gateway-only"` loopback connects directly (`<openclaw>/docs/security/network-proxy.md`, "How routing works"). The scripted model answers a tunnel request with 403, and any other proxied request with a 403 body, and logs "refused a request beyond loopback" with the host (`tools/dev-gateway/src/fake-provider.ts`; unit test `tools/dev-gateway/test/egress.test.ts`).
+
+**Tried.** The gateway logged `[proxy] routing process HTTP traffic through external proxy http://127.0.0.1:19770`, and the scripted model's log then showed:
+
+```
+refused a request beyond loopback: CONNECT catalog.openclaw.ai:443      (on start, before any client connected)
+refused a request beyond loopback: CONNECT clawhub.ai:443               (seeding; then every catalog read)
+refused a request beyond loopback: CONNECT 192.0.2.10:443               (a tool server at a documentation-range address)
+```
+
+**The one start before the fence.** The first start of `d11conn` in this work came before the fence, so it reached the network as every instance on `main` does; it left no log of its requests, so this is what the gateway's source and the identical fenced starts show:
+
+- On start, one `GET https://catalog.openclaw.ai/models/v2/catalog.json`, the remote model catalog refresh (`<openclaw>/dist/remote-overlay-Bpv95iW5.mjs` line 288; `remote-refresh-BsfrKP5f.mjs` lines 47-80). Its only header of OpenClaw's own is `Accept: application/json`; `If-None-Match` and `If-Modified-Since` are added only when a catalog was stored before, which a fresh instance has not. No query and no body.
+- During seeding, a few seconds later, HTTPS to `clawhub.ai`. The fenced log shows only the host (`CONNECT clawhub.ai:443`), not the path. By the source, the gateway's requests to that host are its plugin catalog's; the most likely one at that point is the official plugin feed, `GET https://clawhub.ai/v1/feeds/plugins` (`official-external-plugin-catalog-source-8hS3NARf.mjs` line 13), with conditional headers only from a stored snapshot. Which request it was is not established.
+- Neither request carries the instance's name, profile, gateway token, device identity or anything from its state. Each tells the host this machine's network address and the time.
+
+No client call was made on that start.
+
+## 2. The catalog
+
+### Where entries come from (source)
+
+- `plugins.catalog.browse {query?, intent?: all|bundled|trending|official|featured, category?, cursor?, pageSize?}` (`operator.read`; `<openclaw>/dist/plugins-BwrCfcpt.mjs` lines 340-390). With no query, category or cursor and `intent: "all"` it asks ClawHub for an overview (items and categories); `bundled` asks ClawHub nothing; anything else asks ClawHub's catalog. Each answer is joined with the gateway's own inventory, `listManagedPlugins`. When ClawHub fails, it still answers `ok`, with only what is on the gateway (for `all`, `bundled` and `official`), the cursor it was given, and `remoteError`.
+- Each item (`schema` `PluginDiscoveryEntry`): `id`; `catalog {name, packageName?, summary?, author?, official, categories[], icon?, imageUrl?, latestVersion?, downloads?, installs?, verificationTier?, featured?, trending?, …}`; `local {present, installed, enabled, state: enabled|disabled|needs-setup|not-installed|error, pluginId?, install?, action: install|manage|unavailable}`.
+- `plugins.catalog.categories {}` returns `{categories: [{slug, label, description, icon, order, pinnedPackages?}]}`, from ClawHub only (line 392). With no ClawHub it fails.
+- `plugins.catalog.get {id, version?}` (lines 394-454): for a ClawHub id, ClawHub's details joined with any local copy, or, when ClawHub fails and the plugin is on the gateway, the local details with `detail.remoteError` "ClawHub details are unavailable: …. Showing installed plugin metadata." and `downloadability: {status: "unknown"}`. The detail (`schema` `PluginsCatalogGetResult`) can carry `readme`, `author`, `verification`, `security`, `configuration [{name, required, sensitive}]`, `mcpServers`, `mcpServerDetails [{name, url?, transport?, auth?: oauth|api-key|none, …}]`, `skills`, `versions`, `compatibility`.
+- `plugins.list` (`operator.read`, lines 266-290): every plugin the gateway knows, installed or listed in the official catalog, each with `state`, `enabled`, `installed`, `origin`, `removable`, `categories`, `catalogId` and `runtime {state: unloaded|disabled|active|service-failed, error?}`; and `mutationAllowed`.
+- The skills half of "Search across apps and skills" is `skills.search {query?, limit?}` (`operator.read`), which asks ClawHub too.
+- `catalog.icon` and `imageUrl` are ClawHub's; the design draws no icon (section 2 of the design), so no icon address is ever used, as `docs/decisions.md`, "Addresses a gateway hands the client", requires for an address it does not list.
+
+### On the instance, behind the fence (tried)
+
+On the read-only device, `catalog` in the first probe (retired), 2026.10.6:
+
+| Call | Answer |
+|---|---|
+| `plugins.list {}` | `ok`, 70 plugins: bundled ones (`origin: "bundled"`, `removable: false`) in every state, and official ones not installed (`state: "not-installed"`); one diagnostic. One row: `{"id":"github","name":"GitHub","installed":true,"enabled":true,"state":"enabled","removable":false,"categories":["developer-tools"],"origin":"bundled","catalogId":"local_Z2l0aHVi","runtime":{"state":"active"}}`. About 2 s. |
+| `plugins.catalog.categories {}` | `UNAVAILABLE`: "Plugin categories are unavailable: fetch failed \| … Proxy response (403) !== 200 when HTTP Tunneling \| UND_ERR_ABORTED. Retry to reconnect to ClawHub." About 15 s. |
+| `plugins.catalog.browse {}` | `ok`, 66 items, all on the gateway (`local.present: true`), `remoteError`: "ClawHub is unavailable: … Installed plugins remain available." About 14 s: the log shows four attempts at 0, 1, 4 and 14 s. |
+| `browse {intent: "bundled"}` | `ok`, 64 items, no `remoteError`. Under 1 s. |
+| `browse {intent: "featured"}` | `ok`, no items, `remoteError` without the last sentence. |
+| `browse {intent: "official"}` | `ok`, 66 items, "… Bundled plugins remain available." |
+| `browse {query: "notes"}` | `ok`, one local item, `remoteError`. |
+| `browse {category: "productivity"}` | `ok`, two local items (Logbook, Workboard), `remoteError`. |
+| `plugins.catalog.get {id: "local_Z2l0aHVi"}` | `ok`, from disk: `catalog {name, packageName, summary, official, author, categories, latestVersion}`, `detail {origin: "local", author, readme, repositoryUrl, documentationUrl, contracts, …}`. |
+| `plugins.catalog.get {id: <a ClawHub id>}` | the id must match `^[A-Za-z0-9_-]+$`; a ClawHub id for a plugin not on the gateway needs ClawHub. |
+| `plugins.inspect {pluginId: "github"}` | `ok`: `plugin`, `source {kind: "bundled"}`, `declared {tools, hooks, mcpServers, skills, …}`, `components`, `grants`, `overview`. |
+| `plugins.search`, `skills.search` | `UNAVAILABLE`, the fetch error. |
+| `plugins.install` on this device | `FORBIDDEN`, "missing scope: operator.admin". |
+
+What follows for the design: without ClawHub there are no categories, no recommended list, no search beyond the gateway's own plugins, no skills search and nothing to add; what the gateway has stays listed and manageable. A full-catalog call took about 14 s to say so here, an observed retry duration and not a deadline the RPC promises; the bundled list took under a second. Featured and category requests have their own outcome. `browse {query}` returned a matching local row with `remoteError`, while the separate `plugins.search` and `skills.search` RPCs failed: a failed search is not one outcome.
+
+## 3. Adding a connector
+
+**Method and scope (source).** `plugins.install` is `operator.admin` (`<openclaw>/dist/core-method-policy-DkntKRY_.mjs` lines 2016-2021), checked again before each persistent step (`plugins-mutations-ClrWTX5-.mjs` lines 20-24). Its parameters (`schema` `PluginsInstallParams`) choose a source: `clawhub {packageName, version?, expectedIntegrity?}`, `official {pluginId}`, `npm`, `git`, `local`, `npm-pack`, `marketplace`, `bundled`. Local paths, archives and marketplaces need a connection from the gateway's own machine (line 73). For the catalog, `local.install` names the source to use (`{source: "clawhub", packageName}` or `{source: "official", pluginId}`). A remote-only catalog row has `action: "install"` and no `local.install`; its ClawHub package is `catalog.packageName` (`catalog-discovery-B1qyYMxg.mjs` lines 180-195, 229-255, 347-360). `plugins.catalog.get`'s `detail.selectedRelease` gives a version, date, changelog and tags, and no digest (`clawhub-plugin-catalog-D_Qc5qsn.mjs` lines 72-81), so the catalog flow has no `expectedIntegrity` to pass.
+
+**What it does on the gateway's machine (source, docs).** Resolve the release, download the package from ClawHub, extract it into the gateway's managed plugin folder, install its npm dependencies (with `--ignore-scripts`, `install-package-dir-D5h3GpAL.mjs` line 80), then load it into the running gateway. The connection that asked receives `plugins.install.progress {activityId, stage: resolve|download|extract|files|dependencies|runtime, status: started|completed|failed, requestId}` (lines 26-29; `schema` `PluginsInstallProgressEvent`). "Control UI actions and the Gateway plugin-management RPCs apply plugin changes without restarting the Gateway" (`<openclaw>/docs/plugins/manage-plugins.md` lines 277-279); the result's `restartRequired` says when a restart is still needed. The plugin's code then runs inside the gateway, with the gateway's access.
+
+**Which release (source).** For `source: "clawhub"` the gateway installs `clawhub:<packageName>@<version>` when a version is given or the hosted official entry names one, and checks `expectedIntegrity` against the hosted one; for `source: "official"` it takes the release its catalog selects, and the request's `version` may only be `"latest"` (`install-source-plan-CNjlQOX3.mjs` lines 177-219; `schema` `PluginsInstallParams`). So only a ClawHub install can be tied to the reviewed release.
+
+**Removal and read-only (source).** The bundled refusal is tried (section 4); the rest of this paragraph is source only. `plugins.uninstall` resolves the package that owns the plugin and plans for all its plugin ids (`management-uninstall-_v6bt-vR.mjs` lines 120-144); the answer lists them in `removed`. `plugins.list` can still return a removed official plugin, with `installed: false` (`management-service-B1oc-TT4.mjs` lines 380-430). Its `mutationAllowed` is false when the gateway's configuration is read-only (`OPENCLAW_CONFIG_READONLY=1`, or Nix mode; line 430, `resolveIsConfigReadOnly`). Tried on a dev gateway whose configuration was read-only: an admin connection got `mutationAllowed: false`, and `plugins.setEnabled` and `config.patch` were each refused.
+
+**Refusals before anything is written (source).** The gateway can refuse first with `details.capabilityConsentCode: "PLUGIN_CAPABILITY_CONSENT_REQUIRED"` and `{pluginId, reviewToken, widened}` (the tools, hooks, servers and so on the plugin declares), or with an install-policy warning (`installPolicyCode`, findings with `ruleId`, `severity: info|warn|critical`, `message`, `file?`, `line?`). A second call with `acknowledgeCapabilities {reviewToken}` or `acknowledgeInstallPolicyWarning: true` proceeds (`plugins-lifecycle-error-61PGW2_G.mjs` lines 22-50). In OpenClaw 2026.10.6 the RPC supplies the capability acknowledgement itself: `plugins-mutations-ClrWTX5-.mjs` lines 73-81 pass the review token, which `management-mutations-BsUMS3ce.mjs` lines 103-114, `management-install-CiDYuS33.mjs` lines 510-533 and `capability-consent-BVhgMs_-.mjs` lines 150-171 consume. So a capability review never reaches the client from this RPC; a refusal does, with its reason (source; an offline install stopped before staging). ClawHub trust errors come with their own code.
+
+**A failure in the middle (source).** The error carries `details.persistence {operation: "install", pluginId}` when the package was written but loading it failed, and `details.runtime` with the generation of any change already applied; its message then ends "An earlier runtime change from this operation was applied in Gateway generation N." (`lifecycle-CvKiePUp.mjs` lines 69-86). So after any failure, what is on the gateway is known only by reading `plugins.list` again.
+
+**On the instance (tried, up to the download).** As admin: `plugins.install {source: "clawhub", packageName: "example-notes"}` answered `UNAVAILABLE` "fetch failed | … Proxy response (403) …" with `details.pluginInstallRejected: true`, after six refused tunnels to `clawhub.ai`; `{source: "official", pluginId: "example-notes"}` answered `INVALID_REQUEST` "unknown official plugin catalog entry: example-notes"; `plugins.list` afterwards had no such plugin. Nothing was downloaded. Everything after the download (consent, dependencies, loading, progress events, `restartRequired`, a failure after the files were written) is **source only**: the only plugins this work may load are this repository's own, through `--with-plugin`, and neither declares a connector.
+
+**A bot adding an app (docs, source).** The gateway has an owner-only `plugins` tool that can list, inspect, search, install (official or ClawHub), enable, disable, uninstall and reload plugins through the running gateway (`<openclaw>/docs/plugins/manage-plugins.md` lines 325-333; `openclaw-tools-DV-z1IAc.mjs` line 1678, with `reviewToken` "Capability review acknowledged by the operator"). The capability map found no tool that adds a raw server; that still holds. The development instance denies `plugins` to every bot, and the scripted model never calls it. **Not tried.**
+
+## 4. Turning off, turning on and removing (tried)
+
+As admin, on the bundled `geolocation` plugin:
+
+- `plugins.setEnabled {pluginId, enabled: false}`: `{ok, restartRequired: false, runtime {operationId, generation: 3, pluginIds}, plugin {…, enabled: false, state: "disabled"}}`; `plugins.list` read back `state: "disabled"`, `runtime.state: "unloaded"`.
+- Straight after: `enabled: true` answered `UNAVAILABLE` "Another plugin or config operation is already running; retry when it completes."; the same call a moment later succeeded (`generation: 4`, `state: "enabled"`).
+- `plugins.uninstall {pluginId: "geolocation"}`: `INVALID_REQUEST` "bundled plugin cannot be uninstalled: geolocation; disable it instead". `plugins.list` marks such a plugin `removable: false`.
+- `plugins.uninstall {pluginId: "example-notes"}`: "Plugin not found: example-notes".
+- The read-only device: `plugins.setEnabled` refused, "missing scope: operator.admin".
+
+Removing an installed plugin (**docs**, `<openclaw>/docs/plugins/manage-plugins.md` lines 409-425): uninstall removes the install record, the plugin's settings, its entries in allow and deny lists and its load paths, and its files unless `keepFiles`; it keeps an exact `enabled: false` marker (source only, not tried); a Claw that references the plugin may break. The RPC does not clear OpenClaw's MCP OAuth store (`clearMcpOAuth*` is called only from the CLI's `mcp` commands and `/mcp` handlers, `mcp-config-mutation-Dv_-OyHo.mjs` lines 36-59). **Source.**
+
+## 5. A server by address or by command (tried)
+
+`servers` and `discover` in the first probe (retired), 2026.10.6, as admin; section 9 repeats the essentials on both versions. The stand-in remote server is an in-process Streamable HTTP server on `127.0.0.1` with one tool, `echo`; the command server is the tool's own stand-in coding agent (`tools/dev-gateway/src/coding-agent-mcp.ts`), run by this Node with the instance's folder as its working directory.
+
+**The fields** (`config.schema.lookup "mcp.servers.*"`): `enabled, command, args, env, cwd, url (format uri), transport: stdio|sse|streamable-http, headers, connectionTimeoutMs, requestTimeoutMs, supportsParallelToolCalls, auth: "oauth", oauth, sslVerify, clientCert, clientKey, toolFilter, codex`; under `oauth` only `identity: shared|per-requester, authProfileId, scope, redirectUrl, clientMetadataUrl`, `additionalProperties: false`, all `reloadKind: "hot"`.
+
+| Write (`config.patch`) | Answer | Read back, and the tool list |
+|---|---|---|
+| `probe-remote: {url: "http://127.0.0.1:<port>/mcp", transport: "streamable-http", headers: {"X-Example": "example-header-value"}}` | `ok`, `changedPaths: ["mcp.servers.probe-remote"]`, `requiresRestart: false` | `config.get`: `{"url": …, "transport": "streamable-http", "headers": {"X-Example": "__OPENCLAW_REDACTED__"}}`. Before any run, `tools.effective` had a notice `mcp-stale-catalog`: "MCP servers … changed since the current runtime catalog was discovered. MCP tools will appear here after the next agent run discovers them." After Pip's next run the stand-in had received `initialize`, `notifications/initialized`, `GET /mcp` and `tools/list`, each with `x-example: example-header-value`. |
+| the same server as `coder` (the only server name whose tools this instance offers bots) | `ok` | After a run: group `{"id": "mcp", "label": "MCP server tools", "source": "mcp"}` with `coder__echo`. |
+| `oauth: {clientId, clientSecret}` | `INVALID_REQUEST`: "invalid config: mcp.servers.probe-remote.oauth: Unrecognized keys: \"clientId\", \"clientSecret\"" | nothing written |
+| `url: "not an address"` | "… url: Invalid URL; … url: Expected http:// or https:// URL" | nothing written |
+| `url: "ftp://127.0.0.1/mcp"` | "… url: Expected http:// or https:// URL" | nothing written |
+| `{args: ["x"]}`, `{command: ""}` | `ok` | written; after a run, no tools and no notice for it |
+| a closed loopback port | `ok` | after a run: warning `mcp-server-diagnostic:probe-closed`: "MCP server \"probe-closed\": fetch failed \| connect ECONNREFUSED 127.0.0.1:60672 \| ECONNREFUSED; server unavailable; retry after 2026-11-19T13:05:06.558Z. Check server reachability or reload MCP after fixing it." |
+| `https://192.0.2.10/mcp` | `ok` | after a run: the same warning with the fence's 403 |
+| `{command: "/nonexistent/example-command"}` | `ok` | after a run: "MCP server \"probe-nocmd\": spawn /nonexistent/example-command ENOENT; server unavailable; …" |
+| `{command: <this Node>, args: [<stand-in script>], cwd}` | `ok` | read back whole, command and arguments in plain text |
+| all of them `null` | `INVALID_REQUEST`: "config.patch would remove entries from array path(s): mcp.servers.probe-cmd.args, …. Pass replacePaths with the exact path(s) when this is intentional, or use config.apply for full-config replacement." | nothing removed |
+| the same with `replacePaths` naming each `args` | `ok`, `changedPaths` naming each | `config.get` lists only `coder`; the tool list has nothing of them |
+
+Also tried: with `auth: "oauth"` and no sign-in yet, the tool list's notice was `mcp-not-yet-connected`: "MCP servers … are configured but not connected for this session yet. MCP tools will appear here after an agent run discovers them." `tools.effective` needs a task (`sessionKey`) and answers for that task (`<openclaw>/dist/tools-effective-VKbyCQ9I.mjs` lines 45, 181, 189). It can describe a stale, not connected or not yet listed catalog, and the tools it projects are subject to policy: it is no general connection test.
+
+**Two writers, and nested arrays (tried by a second probe on another named instance).** Two separately paired admin devices read the same revision; the first patch committed, and the second, sent with the hash both had seen, was refused ("config changed since last load"), while a read-only device saw only the first writer's entry. Removing a command entry that also had `toolFilter.include` and `toolFilter.exclude` was refused with only `args` in `replacePaths`, and succeeded with all three paths; even an explicitly empty `args` had to be named. The guard applies to the merged entry (`<openclaw>/dist/config-Bo7RGaun.mjs` lines 367-374, 689-746).
+
+**The revision (source, and a reviewer's probe).** For these paths `config.patch` requires `baseHash`, the `hash` of the last `config.get`: without it the gateway answers "config base hash required for mcp.servers.<name>.…; re-run config.get and retry with baseHash", and with an older one "config changed since last load; re-run config.get and retry" (`<openclaw>/dist/config-Bo7RGaun.mjs` lines 235-247, 689-746). The patch is then merged into the object. The first probe always sent the hash just read; the new probe sends none, a stale one and the current one (section 9).
+
+What follows for the design: a save is confirmed by `config.get`; The settings read establishes the saved entry. `tools.effective` establishes the current listing for the requested task, as read. The gateway does not refuse an empty command, so Clawtrate does. It accepts plain `http` anywhere; Clawtrate's own rule can be narrower. There is nowhere to put a client ID or secret: OpenClaw registers itself with the server (dynamic client registration, which the stand-in received as `POST /register`), or uses `clientMetadataUrl`.
+
+**What a command server is (source, docs).** The gateway runs `command` with `args`, `env` and `cwd` on its own machine, as the user it runs as, whenever a run needs the server's tools (`<openclaw>/docs/cli/mcp/transports.md`; the stand-in ran as the instance's own process). OpenClaw drops interpreter-startup and loader variables from `env` (same doc, line 43). Writing one needs `operator.admin`, as every `mcp.servers` write does.
+
+## 6. Where a header, a command and a sign-in are kept (tried)
+
+- **Headers** are written as given into the gateway's configuration file: after the write, `openclaw.json` in the instance's folder contained `example-header-value`; after the server's removal it did not. `config.get` and the `config.patch` response redact header values: they show the name and `__OPENCLAW_REDACTED__`. A header can also be a reference (`${ENV}` or a SecretRef) that the gateway resolves; **docs**.
+- **A command and its arguments** are written and read back in plain text, as above.
+- **A sign-in.** After an approved sign-in (section 7) the state database `state/openclaw.sqlite` had a row in `mcp_oauth_stores` whose `store_json` held the stand-in's access and refresh tokens in plain text, with `clientInformation`, `discoveryState`, `tokensAuthorizationServerUrl` and `tokenExpiresAt`. A refused or cancelled sign-in left a row with the client registration and no tokens. Removing the server with `config.patch` left every row. The store key is the server's name and a hash of its name and address (`mcp-oauth-identity-0fgjEqV6.mjs` lines 4-11), so the same name at the same address finds the old sign-in again. For a per-requester entry `logout` refuses ("Remove or replace the server to clear requester credentials."), and `unset` removes the entry and clears the CLI-managed OAuth credentials for that exact stored identity, shared and requester (`mcp-cli-DZoNoIpy.mjs` lines 684-700; `mcp-oauth-D1MVIya2.mjs` lines 507-518). A review probe found `unset` left a tokenless store row. `openclaw mcp logout <name>` and `openclaw mcp unset <name>` on the gateway's machine clear it (`<openclaw>/docs/cli/mcp/registry.md` line 87; `mcp-config-mutation-Dv_-OyHo.mjs` lines 44-59); no gateway method does.
+- This agrees with the drafts research on another branch (`docs/research/drafts-and-vault.md`, section 4 there), which found the gateway's secret store's values in plain text in the same database.
+
+## 7. Sign-in
+
+### `mcp.authLogin` (tried)
+
+`signin` in the first probe (retired), 2026.10.6. `mcp.authLogin {sessionId, serverName}` (`schema` `McpAuthLoginParams`), `operator.admin` (`core-method-policy-DkntKRY_.mjs` line 2935), checked in this order (`<openclaw>/dist/mcp-auth-login-DAnddU_m.mjs` lines 16-107):
+
+| Connection and server | Answer |
+|---|---|
+| The read-only device | "missing scope: operator.admin" |
+| This project's client, admin, a server with `auth: "oauth"` | "Open Settings on this Gateway to sign in, or use openclaw mcp login in its terminal." (no browser origin) |
+| The same, the stdio `coder` server, a `per-requester` server, or a name that does not exist | "This connector cannot use operator browser sign-in. Check its existing account settings." |
+| A second device, connected as client `webchat-ui` in `webchat` mode with `Origin: http://127.0.0.1:<gateway port>`, approved for `operator.read` and `operator.admin`, against a stand-in that asks for OAuth | `{sessionId, done: false, status: "running"}`, then `wizard.next` gave one step: `{"type":"progress","message":"Complete sign-in in your browser.","executor":"gateway","externalUrl":"https://signin.example/authorize?response_type=code&client_id=example-registered-client&code_challenge=…&code_challenge_method=S256&redirect_uri=http%3A%2F%2F127.0.0.1%3A19740%2Foauth%2Fprovider%2Fcallback&state=…&resource=…"}` |
+
+Before publishing that step the gateway had read the stand-in's protected-resource and authorization-server metadata and registered itself (`POST /register`). The page at `signin.example` was never opened: the first probe played the browser by sending the redirect the page would send straight to the gateway's callback on loopback.
+
+| Outcome | The gateway's callback page | `wizard.next` | The stand-in received |
+|---|---|---|---|
+| Approved (`code` and `state`) | 200, "Provider sign-in. Sign-in response received. Return to OpenClaw for the sign-in result." | `{"done": true, "status": "done"}` | `POST /token` |
+| Refused (`error=access_denied`) | 400, "Provider sign-in. Sign-in was not completed. Return to OpenClaw for the sign-in result." | `{"done": true, "status": "error", "error": "Sign-in did not finish. Check the connector settings and try again, or run openclaw mcp login with this connector's name in this Gateway's terminal."}` | no token request |
+| Cancelled (`wizard.cancel`) | not reached | `{"status": "cancelled", "error": "cancelled"}` | no token request |
+
+**Source, for the rest:**
+
+- The sign-in page's address must be `https` without credentials ("Provider sign-in requires an HTTPS authorization URL.", `provider-browser-auth-BOjjbaDz.mjs` line 78).
+- The return address is the gateway's own `/oauth/provider/callback` on the origin the connection declared: an `https` origin that is the gateway's host, `http` only from a local client on a loopback host, or the gateway's published Tailscale origin (lines 10, 21-31). With none of these the wizard fails with "Browser sign-in needs a secure Gateway address reachable from your browser. …" (lines 13-17).
+- The wait is 10 minutes (`timeoutMs: 6e5`, `mcp-auth-login-DAnddU_m.mjs` lines 90, 107); then "Browser sign-in expired. Retry /login." The session belongs to the connection that started it and ends with it (`gateway-capabilities.md`, row 21; `provider-accounts-and-t3-code.md`, A.2 step 5).
+- Only a server that is HTTP, `auth: "oauth"`, without `oauth.authProfileId`, and shared (not per-requester) can be signed in this way (`mcp-auth-status-lGLhpwWr.mjs` lines 9-15, 56-62).
+- How a sign-in is known to have finished: only the wizard's last answer, on the connection that started it. The web chat connection received no event about it; no other connection was watched.
+
+**What Clawtrate's connection is.** Both apps connect through their host. The web preview starts the same host runtime as the desktop app (`apps/desktop/src/web-host/main.ts`, `startHostRuntime({kind: "web"})`), which creates the same Node client (`apps/desktop/src/host/runtime.ts`); it opens its socket with `new WebSocket(url)` and no `Origin` (`packages/core/src/node/index.ts`) and connects as `gateway-client` in `ui` mode (`packages/core/src/client.ts`). The viewer's browser talks only to the preview host, never to the gateway. So the gateway answers both apps "Open Settings on this Gateway to sign in, or use openclaw mcp login in its terminal." (tried with this project's client). The web chat connection above was a probe of the gateway's rule, not a route for Clawtrate: Clawtrate does not present a connection as a browser to be given a method the gateway withholds from its own kind of connection (`docs/design/connectors.md` §10).
+
+**What the terminal command can find (source).** `openclaw mcp login <name>` looks the name up only in the configuration's own `mcp.servers` (`mcp-cli-DZoNoIpy.mjs` lines 38-49 and 634-640, through `listConfiguredMcpServers`, `mcp-config-DUgS2Rr7.mjs` lines 71-90), while `mcp.authLogin` also resolves the servers enabled plugins declare (`mcp-auth-status-lGLhpwWr.mjs` lines 55-62). For a server only a plugin declares, the command ends with "No MCP server named …"; an entry of the same name in `mcp.servers` with another URL would sign in to a different server. It refuses a per-requester entry ("Senders connect from the channel via the MCP connect flow.") and one without `auth: "oauth"`. When a saved sign-in is already there it prints "MCP OAuth credentials saved" without an address (lines 649-654). Where the CLI and the browser implementations differ, the CLI's eligibility is the client rule for a settings entry, and Settings' is the rule for a plugin's reported row.
+
+**The gateway's own command line (docs, source).** `openclaw mcp login <name>` prints the address, listens for the return on loopback for 5 minutes (`MCP_OAUTH_CALLBACK_TIMEOUT_MS = 3e5`, `mcp-cli-DZoNoIpy.mjs` line 54) and prints "MCP OAuth credentials saved for \"<name>\"." (line 644); `openclaw mcp login <name> --code <code>` finishes it when the browser is elsewhere. `openclaw mcp status --verbose` shows, on the gateway's machine, whether stored tokens need authorization (`<openclaw>/docs/cli/mcp/registry.md` line 79). **Not tried**: the CLI's login would need a real OAuth page.
+
+### A per-requester server (source)
+
+With `oauth.identity: "per-requester"` (which needs `gateway.publicOrigin`), the gateway gives a bot, for each such server not yet connected for the sender, one tool `<server>__connect` ("Connect your <server> account.", `agent-bundle-mcp-requester-connect-DyJtQr4y.mjs` lines 38-60). When the bot calls it the result is:
+
+- without `gateway.publicOrigin`: text and `details.status: "error"`, "MCP server \"<server>\" needs requester sign-in, but gateway.publicOrigin is not configured. Ask the operator to set the public Gateway HTTP(S) origin." (lines 7-19);
+- already connected: "MCP server \"<server>\" is connected. Its tools become available on the next message." (lines 22-27);
+- otherwise text "Connect MCP server \"<server>\" at <address>\nAfter sign-in completes, the server's tools become available on the next message." and `details.mcpConnect {serverName, authorizationUrl}` (lines 28-37).
+
+The sign-in returns to `<gateway.publicOrigin>/oauth/mcp/callback`, whose pages read "You're connected. Return to the chat.", "Sign-in wasn't completed. Ask the bot to connect again." or "This sign-in link expired or was already used. Ask the bot to connect again." (`mcp-oauth-callback-CCokV4wv.mjs` lines 13-27). The callback checks the attempt's state and an authorization code, and answers an error, a used or expired attempt, or a success with its own page (`mcp-oauth-callback-CCokV4wv.mjs` lines 39-97): an attempt is single use at the callback, and opening the provider's page alone completes nothing. The docs add that "any chat participant who opens one connects their own account to the sender the link was issued for" (`<openclaw>/docs/cli/mcp/transports.md` line 134). No method lists the accounts connected this way; nothing tells the client that a sign-in finished. Accounts are told apart by channel, account and sender (`mcp-oauth-identity-0fgjEqV6.mjs` lines 12-19), with no device in the key. For an ordinary `chat.send` from a client that is not the gateway's own operator UI, the sender is the client's protocol id (`gateway-client-identity-E44CR5D-.mjs` lines 63-78, used at `chat-send-handler-D_7lP5Io.mjs` lines 2552-2569), and the runtime picks requester connections by that sender (`agent-bundle-mcp-manager-api-BmCGGpKy.mjs` lines 750-758). Clawtrate connects as `gateway-client` from every device (`packages/core/src/client.ts`, `CLIENT_ID`), so every device of it is one requester. **Source.** **Not tried**: it needs a bot run that calls the connect tool, which the scripted model does not do.
+
+**History omits `details.mcpConnect`.** The history projector keeps a limited set of a tool result's details (`chat-display-projection.canvas-OCRpCKvQ.mjs` lines 286-347), which excludes `mcpConnect`, `mcpServer` and `mcpTool`. A reviewer's probe read `chat.history` after a successful `coder__send_message`: the row had the tool name and content and `details: null`. So `details.mcpConnect` can be seen only live, on the call's own events. **Source, and a probe.**
+
+A shared server that is not signed in is left out of a bot's tools rather than failing the run (`<openclaw>/docs/cli/mcp/transports.md` line 97); the bot gets no connect tool for it, so nothing in the conversation asks for its sign-in.
+
+## 8. What the gateway reports about a connector
+
+| Kind | Facts | Of the sign-in | Accounts |
+|---|---|---|---|
+| A plugin (bundled or installed) | `plugins.list`: `state` (`enabled`, `disabled`, `needs-setup` (off, and its settings do not pass the plugin's schema; `management-service-B1oc-TT4.mjs` lines 105-124, 279-303), `not-installed`, `error`), `runtime.state` (`active`, `unloaded`, `disabled`, `service-failed`) with `runtime.error`, `removable`, `version`, `origin`. **Tried.** | `plugins.inspect {pluginId}` (`operator.read`): for an enabled plugin's declared HTTP OAuth servers, `mcpAuth [{serverName, state: authorized \| requires-authorization \| pending-authorization \| unauthenticated}]`, read from the stored tokens without contacting the server; `authorized` means tokens are stored, not that they still work. The internal status can carry an expiry, but `plugins.inspect` passes on only `serverName` and `state`, and only for an enabled plugin's server whose URL matches and whose credentials are shared (`mcp-auth-status-lGLhpwWr.mjs` lines 9-15, 55-78), so no expiry reaches a client. An absent row alone proves no eligibility, shared ownership or expiry. `pending-authorization` means some client registration, discovery or authorization state is stored, not that an attempt is running or was abandoned (`mcp-oauth-D1MVIya2.mjs` lines 14-21). A row comes only for a declared server that resolves as a shared operator OAuth connection at the declared URL: none for a per-requester server, an auth-profile override or an override at another URL (lines 64-72; `management-service-B1oc-TT4.mjs` lines 506-538). Also `credentials [{label, status: configured \| missing \| invalid \| unresolved}]` for the credential fields the plugin declares, which are not a full list of its missing settings. **Source**: no plugin on the instance declares a server. | One shared sign-in per declared server. No list. |
+| A server in `mcp.servers` | `config.get` (redacted); the gateway's tool listing for the selected task, as read: the server's tools, or `mcp-not-yet-connected`, `mcp-not-yet-listed`, `mcp-stale-catalog` or `mcp-server-diagnostic:<name>` with the failure. **Tried.** | Nothing. `mcpAuth` covers only a plugin's own servers. `openclaw mcp status` on the gateway's machine is the only place. **Tried** (the method's absence), **docs** (the command). | Nothing. A second shared sign-in at the same address needs a second entry under another name (section 6). |
+
+The capability map said "No per-account list was found there"; that holds. What it did not have is `mcpAuth`, which gives a plugin connector a sign-in state.
+
+## 9. OpenClaw 2026.11.10, and the new probe on both versions
+
+### What changed, from the source
+
+Method lists compared (`core-method-policy-DkntKRY_.mjs` in 2026.10.6, `core-method-policy-DeU1xgVA.mjs` in 2026.11.10): among `mcp.*`, `plugins.*`, `tools.*` and `config.*`, 2026.11.10 adds only `mcp.authLogout` (`operator.admin`) and `mcp.events.list` (`operator.read`); every other connector method keeps its name and scope. Also new and used by the design: `device.pair.code` (`operator.admin`).
+
+| What | 2026.10.6 | 2026.11.10 |
+|---|---|---|
+| `mcp.authLogin` on a connection without a browser origin | Refused: "Open Settings on this Gateway to sign in, or use openclaw mcp login in its terminal." (`mcp-auth-login-DAnddU_m.mjs` lines 41-44) | Refused the same way, with new words: "Open Settings on this Gateway to sign in, or sign in from its terminal: <steps>." for an entry in `mcp.servers`, where the steps are "stop the Gateway with `openclaw gateway stop`, run `openclaw mcp login <name>`, then start the Gateway again" (`mcp-auth-login-B4KXgtBN.mjs`; `mcp-oauth-identity-CYclCFmF.mjs` `mcpOAuthCliLoginSteps`). The terminal sign-in now needs the gateway stopped (`<11.10>/docs/tools/mcp.md` line 208). Source. |
+| Signing a shared server out | No method; only `openclaw mcp logout` | `mcp.authLogout {serverName}` (`operator.admin`): resolves the server as `mcp.authLogin` does, config entry or plugin declaration, and clears its operator credentials (`mcp-auth-logout-8YiNRmac.mjs`). Source |
+| Removing or re-addressing a shared OAuth entry through `config.patch` | Leaves its stored sign-in (section 6, tried) | When the new config is accepted, `clearRetiredMcpOAuth(previous, next)` clears the sign-in of every OAuth entry that was removed, changed its address or changed its identity (`server-reload-managed-Bi1FqAcY.mjs`, `onConfigAccepted`; `mcp-config-mutation-BQWWzVul.mjs` `clearReplacedMcpOAuth`). Source, not run |
+| Uninstalling a plugin | Leaves its servers' sign-ins (section 4) | Clears them: `clearRemovedPluginMcpOAuth` (`mcp-auth-status-pBlVj9_H.mjs`); "Uninstalling the plugin also removes the saved sign-ins for its servers" (`<11.10>/docs/tools/mcp.md` line 219). Source |
+| An entry with both an address and a program | Accepted (run below) | "Config validation rejects definitions containing both, and writes reject new or edited mixed definitions" (`<11.10>/docs/tools/mcp.md` line 131). Run below |
+| A refused OAuth server's tools | Left out | "hides that server's tools while retaining the sign-in guidance in its catalog diagnostic" until a credential or config change (`<11.10>/docs/tools/mcp.md` lines 63-69) |
+| A browser's first visit to the gateway's page | Needs the gateway's secret; loopback then approves it by itself (`<10.6>/docs/web/control-ui.md` line 246; `docs/web/control-ui/connect-and-pair.md` line 60) | Also "Pair this browser": the page shows a code, and an admin connection approves it with `device.pair.code {code}` (inspect) then `{code, requestId, decision}` (`device-pair-code-CmW0vXto.mjs`; `<11.10>/docs/web/control-ui/connect-and-pair.md` lines 79-110). The refusals are "No browser is waiting for this code. Check the code shown in the browser.", "This code has expired. Choose Pair this browser again to get a new one." and "This code was already answered. …". Source |
+| Reporting a tool server's sign-in state | No method | No method: `readPluginMcpAuthStatus` (`mcp-auth-status-pBlVj9_H.mjs`) is used only by `plugins.inspect` (`management-service-B6thU7KZ.mjs`). Source |
+| A plugin MCP sign-in interface in the plugin SDK | None in `exports` | None in `exports` |
+| Listing a server's tools before a run | None: `mcp.app.listTools` runs on an open app view (`mcp-app-BdEDkVxk.mjs`, `operationHandler`) | The same (`mcp-app-BHc6vLiE.mjs`); `tools.effective`'s notice names are unchanged (`tools-effective-t16zsqin.mjs`) |
+| Per-task server choice | None | The Control UI's composer can enable or disable configured servers for one session, a sparse session override (`<11.10>/docs/web/control-ui/chat.md` lines 628-637). Not used by the design |
+
+The gateway's own Settings page signs in to an enabled shared HTTP OAuth entry on both versions, from its HTTPS, loopback or Tailscale address (`<10.6>/docs/tools/mcp.md` lines 145-149; `<11.10>/docs/tools/mcp.md` lines 200-206). That page is at `/settings/mcp` on both (`docs/cli/mcp/control-ui.md` line 14).
+
+### The new probe, on both versions (tried)
+
+One run of [`connectors/probe.ts`](connectors/probe.ts) on each version, on a development gateway this checkout started (`pnpm dev-gateway start`; for 2026.11.10, `OPENCLAW_BIN` pointing at a scratch copy run on Node 24), each a fresh device approved with `pnpm dev-gateway approve` and raised to admin the same way. The development config offers bots only the tools on its allowlist, so the probe adds `probe-notes__*` to it for the run and puts it back. Quoted answers are shortened; paths are the instance's own.
+
+| Step | 2026.10.6 | 2026.11.10 |
+|---|---|---|
+| `config.patch` with no `baseHash` | "config base hash required for mcp.servers.probe-notes.url, …; re-run config.get and retry with baseHash" | @@N1@@ |
+| With a hash read before another write | "config changed since last load; re-run config.get and retry" | @@N2@@ |
+| With the current hash | `ok`, `changedPaths: ["mcp.servers.probe-notes"]`, `requiresRestart: false` | @@N3@@ |
+| `config.get` of that entry | `{"url": "http://127.0.0.1:<port>/mcp", "transport": "streamable-http", "headers": {"X-Example": "__OPENCLAW_REDACTED__"}}` | @@N4@@ |
+| The same name again with another address | `ok`: the entry's address is replaced (`changedPaths: ["mcp.servers.probe-notes.url"]`). Nothing stops a write over an existing name, so the client's own taken-name check is what keeps one | @@N5@@ |
+| An address and a command together | `ok`, written | @@N6@@ |
+| `oauth: {clientId, clientSecret}` | "invalid config: mcp.servers.probe-bad.oauth: Unrecognized keys: \"clientId\", \"clientSecret\"" | @@N7@@ |
+| `url: "not an address"` | "… url: Invalid URL; … url: Expected http:// or https:// URL" | @@N8@@ |
+| `command: ""`; a command with `args: []` | Both `ok` | @@N9@@ |
+| Pip's listing before any turn | No tools; notice `mcp-stale-catalog` naming the new servers: "… changed since the current runtime catalog was discovered. MCP tools will appear here after the next agent run discovers them." | @@N10@@ |
+| Otto given `agents.entries.otto.tools.deny: [..., "probe-notes__*"]`; one turn each | Pip: `probe-notes__echo`, `mcpServer: "probe-notes"`, group `mcp`, after a 4 s turn. Otto: no tools and no notice for it. The stand-in received `initialize`, `tools/list` and the `X-Example` header | @@N11@@ |
+| The server allowed only in Pip's own `tools.allow`, not in the gateway's allowlist | After a turn, Pip's listing has none of its tools: a bot's own allow does not reach past the gateway's allowlist | @@N12@@ |
+| `mcp.authLogin` on an OAuth entry, from this client | "Open Settings on this Gateway to sign in, or use openclaw mcp login in its terminal." | @@N13@@ |
+| `mcp.authLogin` on an entry without OAuth | "This connector cannot use operator browser sign-in. Check its existing account settings." | @@N14@@ |
+| `mcp.authLogout {serverName}` on the OAuth entry | "unknown method: mcp.authLogout" | @@N15@@ |
+| `device.pair.code {code: "ABCD-EFGH"}`, a code no browser asked for | "unknown method: device.pair.code" | @@N16@@ |
+| Removing every probe entry with `null`, no `replacePaths` | "config.patch would remove entries from array path(s): mcp.servers.probe-cmd.args. Pass replacePaths …" | @@N17@@ |
+| The same naming `mcp.servers.probe-cmd.args` | `ok`; `config.get` lists only `coder`; the rules put back read as before | @@N18@@ |
+
+
+## 10. Instances and cleanup
+
+- November: `d11conn` and the reviewers' instances, reset when that work was done (the first probe's runs).
+- November 26: @@INSTANCES@@
+- The stand-in tool server ran inside the probe's own process and ended with it. The probe's client folder was a new temporary folder, removed when it exited.
+
+## 11. What could not be tried here
+
+| What | Why | Marked |
+|---|---|---|
+| A real catalog: categories, featured, search results, a ClawHub plugin's details; the catalog without ClawHub on 2026.11.10 | It is fetched from ClawHub, which nothing here may reach; the new probe has no catalog experiments | source; 2026.10.6 tried without ClawHub |
+| Installing, install-policy warnings, progress, a failure after the files were written | It downloads from ClawHub | source |
+| A full sign-in through the gateway's Settings page, on either version | It needs a browser driven on the gateway's page and a stand-in OAuth server, which is a builder's test (design §15) | docs, source |
+| What removing a signed-in server leaves on 2026.11.10 | Follows from the full sign-in | source |
+| `mcpAuth` for a plugin's server | No plugin here declares a server | source |
+| A per-requester sign-in from chat | Needs a bot run that calls `<server>__connect`; the scripted model does not | source |
+| A bot's `plugins` tool | Denied to every bot on the instance | docs |
+
+## Files
+
+- [`connectors/probe.ts`](connectors/probe.ts): one run, in order: the gateway's facts; a server added by address with no revision, a stale one and the current one; the shapes the gateway refuses; one bot given the server and another left out, a turn for each and each task's listing, then the server allowed only at the bot level; sign-in and sign-out asked for on an OAuth entry and an unknown pairing code; removal; every rule it changed put back.
