@@ -48,7 +48,7 @@ import {
   type CreateBotInput,
   type CreatedBot,
 } from "./accounts-engine.ts";
-import { BotNames } from "./bot-names.ts";
+import { BotNames, CLAIM_DELAY_MS, NAME_RECORD_KEY } from "./bot-names.ts";
 import type { ModelList } from "./accounts.ts";
 import {
   dismissCheckInSave,
@@ -726,6 +726,8 @@ export type ClientOptions = {
   creationCheckMs?: number;
   /** First wait before a read answered as passing is asked again; `READ_AGAIN_MS` unless a test shortens it. */
   readAgainMs?: number;
+  /** How long a device that didn't send a run waits before applying a name its bot wrote (`CLAIM_DELAY_MS`). */
+  nameClaimDelayMs?: number;
   /**
    * Counts the host sets for its device. Each defaults to the bound the
    * retention arithmetic assumes and may only be lower: `trackedTasks`, the
@@ -1817,7 +1819,7 @@ export class ClawtrateClient {
     withdrawn: (owner) => this.withdrawnOwners.has(owner),
     target: () => this.target,
   });
-  /** Names bots wrote for themselves, waiting for the person (`bot-names.ts`); its state is `botNames`. */
+  /** Names bots wrote for themselves, applied with Undo (`bot-names.ts`); its state is `botNames`. */
   private readonly botNames = new BotNames({
     request: (method, params) => this.request(method, params),
     bots: () => this.state.bots,
@@ -1825,7 +1827,6 @@ export class ClawtrateClient {
       this.state.connection.status === "connected" &&
       this.state.connection.canAdmin &&
       !this.options.readOnly,
-    gateway: () => this.state.connection.gatewayId ?? this.state.connection.gatewayUrl,
     stamp: () => gatewayStamp(this.state.connection),
     sameGateway: async (stamp) => {
       await this.requireSameGateway(stamp);
@@ -1845,11 +1846,23 @@ export class ClawtrateClient {
       };
     },
     refreshBots: () => this.refreshBots(),
+    runSteps: (sessionKey, runId) => {
+      const run = this.state.transcripts[sessionKey]?.runs.find((each) => each.id === runId);
+      return run
+        ? run.steps.map((step) => ({ toolName: step.toolName, args: step.argsText?.text ?? null }))
+        : null;
+    },
     missingScope: (error) => {
       this.noteMissingScope(error);
       return isMissingScope(error);
     },
-    publish: (botNames) => this.store.update((state) => ({ ...state, botNames })),
+    now: () => this.now(),
+    waitToClaim: () =>
+      new Promise((resolve) =>
+        setTimeout(resolve, this.options.nameClaimDelayMs ?? CLAIM_DELAY_MS),
+      ),
+    publishLines: (botNames) => this.store.update((state) => ({ ...state, botNames })),
+    publishRecord: (botNameRecord) => this.store.update((state) => ({ ...state, botNameRecord })),
     log: (message) => this.log("warn", message),
   });
   /**
@@ -4421,6 +4434,8 @@ export class ClawtrateClient {
       // A send that starts its own run names that run's request: what a failed turn's
       // "Copy request ID" gives (F-301). A steer joins a run another frame started.
       const starts = message.mode !== "steer";
+      // A run it starts runs under the message's id: the name a bot takes in it is judged by it.
+      if (starts) this.botNames.sent(key, message.id, message.text);
       const sent = this.request("chat.send", params, {
         onSent: (requestId) => {
           if (!starts) return;
@@ -6654,12 +6669,12 @@ export class ClawtrateClient {
   }
 
   /**
-   * Rename on a name card: `name` and `gatewayId` must be the ones it shows (`bot-names.ts`).
-   * Nothing is sent unless that gateway is still the one connected.
+   * Undo a name a bot took (`bot-names.ts`): only for the change the record still holds, on the
+   * gateway the line or the settings read it from (`stamp`).
    */
-  acceptBotName(botId: string, name: string, stamp: GatewayStamp): Promise<void> {
+  undoBotName(botId: string, run: string, stamp: GatewayStamp): Promise<void> {
     if (this.options.readOnly) return Promise.reject(new Error("This host only reads."));
-    return this.botNames.accept(botId, name, stamp);
+    return this.botNames.undo(botId, run, stamp);
   }
 
   /**
@@ -6689,14 +6704,9 @@ export class ClawtrateClient {
     return this.openclawUpdates.release();
   }
 
-  /** Not now on a name card: kept on this device for that bot and that name. */
-  /** Not now, with whether it answered the card shown now. */
-  async declineBotName(
-    botId: string,
-    name: string,
-    stamp: GatewayStamp,
-  ): Promise<{ declined: boolean }> {
-    return { declined: await this.botNames.decline(botId, name, stamp) };
+  /** Put a bot's name line away on this device. Nothing is sent. */
+  async dismissBotName(botId: string): Promise<void> {
+    this.botNames.dismiss(botId);
   }
 
   /** A new picture for a bot: a creature with its choice inside, or the person's own (`avatar.ts`). */
@@ -9666,6 +9676,7 @@ export class ClawtrateClient {
       if (this.tracked(key)) void this.loadTranscript(key, true, resync);
     }
     void this.loadSidebar(generation);
+    void this.botNames.loadRecord();
     void this.loadWaitingQuestions(generation);
     void this.loadWaitingApprovals(generation);
 
@@ -10371,7 +10382,8 @@ export class ClawtrateClient {
       this.scheduleHistory(key);
       // Only while a viewer has the task open: a task kept for its unsettled work reads nothing.
       const botId = botIdFromSessionKey(key);
-      if (botId && this.openSessions.has(key)) void this.botNames.afterRun(botId, payload.runId);
+      if (botId && this.openSessions.has(key))
+        void this.botNames.afterRun(botId, key, payload.runId);
     }
   }
 
@@ -10447,6 +10459,8 @@ export class ClawtrateClient {
         const keys = asRecord(event.payload)?.keys;
         if (Array.isArray(keys) && keys.includes(SIDEBAR_PREF_KEY))
           void this.loadSidebar(this.generation);
+        if (Array.isArray(keys) && keys.includes(NAME_RECORD_KEY))
+          void this.botNames.onPrefsChanged(keys);
         this.usage.onPrefsChanged(keys);
         return;
       }

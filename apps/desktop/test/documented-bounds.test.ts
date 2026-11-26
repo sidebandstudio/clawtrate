@@ -240,6 +240,7 @@ const stateParts: Row[] = [
     size(S, "computer"),
   ],
   ["Bot names", [max(S, "botNames")], size(S, "botNames")],
+  ["Bot name changes", [max(S, "botNameRecord.changes")], size(S, "botNameRecord")],
 ];
 const state: Row[] = [
   ...stateParts,

@@ -651,10 +651,15 @@ export type ClawtrateState = {
    */
   usage?: UsageState;
   /**
-   * Names bots wrote for themselves that wait for the person (`bot-names.ts`): one card each in
-   * that bot's conversation. Absent until the first.
+   * Names bots wrote for themselves (`bot-names.ts`): one line each in that bot's conversation,
+   * what happened and Undo. Absent until the first.
    */
-  botNames?: NameProposal[];
+  botNames?: NameLine[];
+  /**
+   * The record of changes as last read from the gateway, for Undo in a bot's settings; absent
+   * when this connection has none to read.
+   */
+  botNameRecord?: { stamp: GatewayStamp; changes: NameRecordChange[] } | null;
   /**
    * Updating OpenClaw from Clawtrate (`openclaw-update.ts`): the run followed, the press being
    * sent, and why the gateway can't update itself. Absent until the first.
@@ -664,21 +669,43 @@ export type ClawtrateState = {
   cut?: string[];
 };
 
+/** Where a rename that wasn't the person's ask came from, when the run's steps say: a web page, a file, or a tool's output. */
+export type NameSource = "web" | "file" | "tool" | null;
+
 /**
- * A bot's IDENTITY.md names it otherwise than the gateway's config does (#424): the card in
- * its conversation, whose Rename saves `name` with `agents.update`.
+ * A bot's IDENTITY.md named it otherwise than the gateway's config did (F-552): one line in that
+ * bot's conversation, saying what happened, with Undo (`bot-names.ts`).
  */
-export type NameProposal = {
+export type NameLine = {
   botId: string;
-  /** The file's name made plain, exactly as Rename saves it (`plainName`). */
-  name: string;
-  /** The bot's name when the file was read; Rename sends nothing once the bot is named otherwise. */
+  /** The name before and the name the bot wrote, made plain (`plainName`). */
   from: string;
-  /** Where the file was read (`gatewayStamp`): Rename sends only there. */
+  to: string;
+  /** Where the file was read (`gatewayStamp`): Undo sends only there. */
   stamp: GatewayStamp;
-  /** `renaming` while Rename is out; `failed` with `error` when it didn't land. */
-  status: "open" | "renaming" | "failed";
+  /** The record's tag for the run (`runTag`), naming its change in the record of changes. */
+  run: string;
+  /** All three checks passed: as far as Clawtrate can tell, the person's ask. Never proof. */
+  asked: boolean;
+  source: NameSource;
+  status: "renaming" | "renamed" | "undoing" | "undone" | "not-done" | "failed";
+  /** Why a rename wasn't made: a name another bot has, the day's limit, no admin, no record. */
+  reason: "taken" | "limit" | "no-admin" | "no-record" | null;
   error: string | null;
+};
+
+/** One change in the record of changes on the gateway (`users.prefs`): a bot's name only. */
+export type NameRecordChange = {
+  bot: string;
+  field: "name";
+  from: string;
+  to: string;
+  at: number;
+  run: string;
+  asked: boolean;
+  source: NameSource;
+  /** When Undo put the name back, from any device. */
+  undone?: number;
 };
 
 /**

@@ -37,6 +37,7 @@ import { ManageGroup } from "./DeleteBot.tsx";
 import { connectionKey, RunsOnPage, RunsOnRow, usePlacement } from "../machines/RunsOn.tsx";
 import { BotMemory, MemoryRow } from "../memory/BotMemory.tsx";
 import { StartTasksRow } from "./StartTasks.tsx";
+import { NameChanges } from "./NameLine.tsx";
 import { AdminBar, CommandBlock, GrantedBar, Note, useGranted, Wait } from "./parts.tsx";
 import {
   accountName,
@@ -482,6 +483,7 @@ export function BotSettings({
         <StartTasksRow name={name} botId={bot.id} transcripts={transcripts} />
         {extraGroups}
         {runsOnRow}
+        <NameChanges bot={bot} />
         <ManageGroup bot={bot} onDelete={onDeleteBot} />
         {foot}
       </div>

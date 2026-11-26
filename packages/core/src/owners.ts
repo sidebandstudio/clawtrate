@@ -67,7 +67,13 @@ import {
   MAX_QUEUED_INPUTS,
 } from "./computer.ts";
 import { MAX_STORE_LISTENERS } from "./store.ts";
-import { MAX_CHECKED_RUN_CHARS, MAX_CHECKED_RUNS, MAX_NAME_ERROR_CHARS } from "./bot-names.ts";
+import {
+  MAX_CHECKED_RUN_CHARS,
+  MAX_CHECKED_RUNS,
+  MAX_NAME_ERROR_CHARS,
+  MAX_SENT_RUNS,
+  MAX_SENT_TEXT_CHARS,
+} from "./bot-names.ts";
 import {
   MAX_WAITING_ID_CHARS,
   MAX_WAITING_MARKERS,
@@ -333,11 +339,18 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // What the person typed into the one sign-in under way, in the forms it may come back in, while
   // that sign-in lasts, to scrub the gateway's answers: never in the state, forgotten at its end.
   "accounts.secrets": { max: MAX_SIGNIN_SECRETS, each: MAX_SECRET_JSON_CHARS, row: "bookkeeping" },
-  // Names bots wrote for themselves (`bot-names.ts`): one card per listed bot, the reads under
-  // way (one per bot, within the file reads), and the bots whose file is too long to read.
-  "botNames.proposals": {
+  // Names bots wrote for themselves (`bot-names.ts`): one line per listed bot, the reads under
+  // way (one per bot, within the file reads), the bots whose file is too long to read, and the
+  // runs this device started with the first characters of what it sent, to judge whose ask a
+  // rename was.
+  "botNames.lines": {
     max: MAX_BOTS,
-    each: 2 * ID + 2 * MAX_NAME_CHARS + MAX_NAME_ERROR_CHARS + SHORT,
+    each: 3 * ID + 2 * MAX_NAME_CHARS + MAX_NAME_ERROR_CHARS + 4 * SHORT,
+    row: "bookkeeping",
+  },
+  "botNames.sentRuns": {
+    max: MAX_SENT_RUNS,
+    each: MAX_CHECKED_RUN_CHARS + ID + MAX_SENT_TEXT_CHARS,
     row: "bookkeeping",
   },
   "botNames.reading": { max: MAX_FILE_READS, each: ID, row: "bookkeeping" },
@@ -391,8 +404,6 @@ export const CLIENT_NOT_WALKED: Record<string, string> = {
   "routines.ctx": "the client's own functions, handed to the routines engine",
   "usage.ctx": "the client's own functions, handed to the usage engine",
   "botNames.ctx": "the client's own functions, handed to the bot names engine",
-  "botNames.declines":
-    "Not now as read from the host's storage, at most `MAX_NAME_DECLINES` names, each bounded when read",
   "machines.ctx": "the client's own functions, handed to the machines engine, which keeps nothing",
   "openclawUpdates.ctx": "the client's own functions, handed to the OpenClaw update engine",
   "openclawUpdates.lookFor":

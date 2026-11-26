@@ -14,8 +14,11 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { choiceFromPicture } from "../packages/core/src/avatar.ts";
+import { createBridgeSession } from "../packages/core/src/bridge.ts";
+import { ClawtrateClient } from "../packages/core/src/client.ts";
+import { createNodeHost } from "../packages/core/src/node/index.ts";
 import { ACCOUNT_CLIENTS, SIGNIN_CHOICES } from "../tools/dev-gateway/src/account-checks.ts";
-import { openInstance, openOperator } from "../tools/dev-gateway/src/cli.ts";
+import { openInstance, openOperator, readDevConnection } from "../tools/dev-gateway/src/cli.ts";
 import { TERMINAL_CHAT_STATES, type OperatorSession } from "../tools/dev-gateway/src/operator.ts";
 import { ACCOUNTS, test } from "./accounts-instance.ts";
 import { devGateway, listInstances, startHost, stopChild } from "./global-setup.ts";
@@ -435,8 +438,8 @@ test("F-520: a bot made in New bot starts as itself: no first-run sequence, its 
   await admin.request("agents.delete", { agentId: made.agentId, deleteFiles: true });
 });
 
-test("F-552: a bot made in New bot with no name takes one in the chat, and is renamed once the person confirms it, its picture kept out of its file", async () => {
-  test.setTimeout(240_000);
+test("F-552: a bot made in New bot takes a name in the chat and is renamed at once, with Undo; a second client connected throughout applies nothing", async () => {
+  test.setTimeout(300_000);
   await page.keyboard.press("ControlOrMeta+n");
   const create = dialog("New bot");
   await expect(create.getByRole("textbox", { name: "Name" })).toBeFocused();
@@ -460,53 +463,101 @@ test("F-552: a bot made in New bot with no name takes one in the chat, and is re
   expect(await identity()).toBe("New bot");
   await expect(botRow("New bot")).toHaveAttribute("aria-current", "true", { timeout: 20_000 });
 
-  const field = page.getByTestId("composer-input");
-  await expect(field).toBeVisible({ timeout: 20_000 });
-  const card = page.getByRole("region", { name: "A new name for New bot" });
-  const ran = async (count: number) =>
-    expect
-      .poll(async () => (await requestsFor("agent:new-bot:main")).length, { timeout: 60_000 })
-      .toBeGreaterThanOrEqual(count);
-  await field.fill("can i name u");
-  await field.press("Enter");
-  await ran(1);
-  // That turn has ended before the next message goes. Sent while the app still has the run as
-  // active, the message would steer it, and the gateway can refuse a steer that reaches the run as
-  // it ends ("Session … placement authority changed"). Steering isn't what this check is about.
-  await expect(
-    page.getByRole("region", { name: "Transcript" }).getByText("It has no reply written for:"),
-  ).toBeVisible({ timeout: 60_000 });
-  await expect(page.getByRole("button", { name: "Stop New bot" })).toHaveCount(0, {
-    timeout: 60_000,
+  // A second Clawtrate, with admin, its conversation open: it must never apply the name too.
+  const connection = readDevConnection(openInstance(INSTANCE).connectionFile)!;
+  const dataDir = mkdtempSync(join(tmpdir(), "clawtrate-second-device-"));
+  const node = createNodeHost({
+    dataDir,
+    client: {
+      displayName: "Clawtrate second device",
+      version: "0.0.0",
+      platform: process.platform,
+    },
   });
-  // The scripted model makes the bot's own edit; what is asserted is the file, the card and the config.
-  await field.fill("#take-name Johnny");
-  await field.press("Enter");
-  await expect(card).toContainText("New bot would like to be called “Johnny”", { timeout: 60_000 });
-  expect((await workspaceFile("new-bot", "IDENTITY.md")).content).toMatch(
-    /^- \*\*Name:\*\* Johnny$/m,
-  );
-  // The edit alone renamed nothing.
-  expect(await identity()).toBe("New bot");
-  await expect(page.locator(".title-pill-name")).toHaveText("New bot");
+  const second = new ClawtrateClient(node, { allowGatewayUrl: (url) => url === connection.url });
+  const viewer = createBridgeSession(second);
+  try {
+    await second.start();
+    await second.connect({ url: connection.url, token: connection.token });
+    await approve();
+    await expect.poll(() => second.state.connection.status, { timeout: 30_000 }).toBe("connected");
+    await viewer.apply({ type: "requestAccess", tier: "admin" });
+    await approve();
+    await expect.poll(() => second.state.connection.canAdmin, { timeout: 30_000 }).toBe(true);
+    await expect.poll(() => second.state.discovery.status).toBe("ready");
+    second.openSession("agent:new-bot:main");
 
-  await card.getByRole("button", { name: "Rename" }).click();
-  await expect(card).toHaveCount(0, { timeout: 30_000 });
-  expect(await identity()).toBe("Johnny");
-  const file = String((await workspaceFile("new-bot", "IDENTITY.md")).content);
-  expect(file.match(/^- \*{0,2}Name:/gm)).toEqual(["- Name:"]);
-  expect(file).toMatch(/^- Name: Johnny$/m);
-  expect(file).not.toMatch(/New bot/);
-  // The gateway wrote the picture into the file with the name; Clawtrate took it out again, and
-  // the picture is still the one chosen, in the bot's settings.
-  expect(file).not.toMatch(/^- Avatar:/m);
-  expect(file.length).toBeLessThan(1_000);
-  expect(await picture()).toEqual(chosen);
-  await expect(page.locator(".title-pill-name")).toHaveText("Johnny");
-  await expect(botRow("Johnny")).toBeVisible();
-  await shots("bot-name-renamed");
-  // Johnny stays: deleting it behind the page's back would leave the page listing a bot the
-  // gateway no longer has, and the accounts checks after this read every listed bot.
+    const field = page.getByTestId("composer-input");
+    await expect(field).toBeVisible({ timeout: 20_000 });
+    const line = page.getByTestId("name-line");
+    const transcript = page.getByRole("region", { name: "Transcript" });
+    // Each turn has ended before the next message goes: sent while the app still has the run as
+    // active, a message would steer it, which isn't what this check is about.
+    const ended = async (reply: string, count: number) => {
+      await expect(transcript.getByText(reply, { exact: true })).toHaveCount(count, {
+        timeout: 60_000,
+      });
+      await expect(page.getByRole("button", { name: "Stop New bot" })).toHaveCount(0, {
+        timeout: 60_000,
+      });
+    };
+    await field.fill("can i name u");
+    await field.press("Enter");
+    await expect(transcript.getByText("It has no reply written for:")).toBeVisible({
+      timeout: 60_000,
+    });
+    await expect(page.getByRole("button", { name: "Stop New bot" })).toHaveCount(0, {
+      timeout: 60_000,
+    });
+
+    // The person's ask: renamed at once, the line says what happened, and Undo is offered.
+    await field.fill("#take-name Johnny");
+    await field.press("Enter");
+    await expect(line.getByRole("status")).toHaveText("Renamed to Johnny", { timeout: 60_000 });
+    expect(await identity()).toBe("Johnny");
+    const file = String((await workspaceFile("new-bot", "IDENTITY.md")).content);
+    expect(file).toMatch(/^- Name: Johnny$/m);
+    // The gateway wrote the picture into the file with the name; Clawtrate took it out again.
+    expect(file).not.toMatch(/^- Avatar:/m);
+    expect(await picture()).toEqual(chosen);
+    await expect(page.locator(".title-pill-name")).toHaveText("Johnny");
+    // The second client shows the first one's change, and made none of its own.
+    await expect
+      .poll(() => second.state.botNames?.[0], { timeout: 30_000 })
+      .toMatchObject({ to: "Johnny", status: "renamed", asked: true });
+    expect(second.state.botNameRecord?.changes).toHaveLength(1);
+    await shots("bot-name-renamed");
+
+    // Undo puts the name before back, everywhere, and the same edit doesn't rename it again.
+    await line.getByRole("button", { name: "Undo: back to New bot" }).click();
+    await expect(line.getByRole("status")).toContainText("Back to New bot", { timeout: 30_000 });
+    expect(await identity()).toBe("New bot");
+    await expect.poll(() => second.state.botNames?.[0]?.status, { timeout: 30_000 }).toBe("undone");
+    await field.fill("#take-name Johnny");
+    await field.press("Enter");
+    await ended("Johnny it is.", 2);
+    // Past the second client's wait before it would apply a run it didn't send.
+    await page.waitForTimeout(7_000);
+    expect(await identity()).toBe("New bot");
+
+    // After a step that read a file first: renamed, as the bot's own doing.
+    await field.fill("#read\n#take-name Maple");
+    await field.press("Enter");
+    await expect(line.getByRole("status")).toHaveText(
+      "New bot renamed itself to Maple after reading a file",
+      { timeout: 60_000 },
+    );
+    expect(await identity()).toBe("Maple");
+    await expect
+      .poll(() => second.state.botNameRecord?.changes.length, { timeout: 30_000 })
+      .toBe(2);
+    await shots("bot-name-own");
+    // Maple stays: deleting it behind the page's back would leave the page listing a bot the
+    // gateway no longer has, and the accounts checks after this read every listed bot.
+  } finally {
+    second.stop();
+    rmSync(dataDir, { recursive: true, force: true });
+  }
 });
 
 /** Open Settings on Accounts, and the connect component. */

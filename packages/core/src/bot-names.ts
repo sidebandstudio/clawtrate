@@ -1,16 +1,19 @@
-// A name a bot wrote for itself, renamed once the person confirms it (#424).
+// A name a bot wrote for itself, applied at once with Undo ("Doing, not asking" in
+// docs/decisions.md; F-552).
 //
 // A bot asked to take a name edits the `- Name:` line of its own IDENTITY.md.
 // The name Clawtrate shows is the bot's identity in the gateway's config,
-// which `agents.create` set and which takes precedence over the file, so the
-// edit changes nothing a person sees. After each finished run of a bot whose
-// task is open, on a connection that can rename, Clawtrate reads that one
-// file. When its name line differs from the bot's name, the
-// conversation shows one card; its Rename sends `agents.update`, which also
-// writes the file's name line, and the card goes once the bot list shows the
-// new name. Nothing is sent without that click. Not now is kept on this
-// device for that bot and that name, so the card comes back only for another.
+// which takes precedence over the file, so the edit changes nothing a person
+// sees. After each finished run of a bot whose task is open, Clawtrate reads
+// that one file. When its name line differs from the bot's name, one device
+// renames the bot with `agents.update`, keeps the name before in the record of
+// changes on the gateway (`users.prefs`, `NAME_RECORD_KEY`), and the
+// conversation says what happened, with Undo. Whether it was the person's ask
+// is judged silently and is never proof: the line says what happened, and
+// Undo is always there. A rename that isn't made is said in the same place.
 
+import { sha256Hex, utf8Bytes } from "./bytes.ts";
+import { utf8Length } from "./encoding.ts";
 import type { KeyValueStore } from "./host.ts";
 import { asRecord } from "./mapping.ts";
 import {
@@ -18,28 +21,62 @@ import {
   sameStamp,
   type Bot,
   type GatewayStamp,
-  type NameProposal,
+  type NameLine,
+  type NameRecordChange,
+  type NameSource,
 } from "./types.ts";
 
 /** A name as long as New bot's Name field takes. */
 export const MAX_BOT_NAME_CHARS = 40;
 /** An IDENTITY.md longer than this is not read for a name. */
 export const MAX_IDENTITY_CHARS = 16_384;
-/** Not now, per gateway and bot: the latest kept, oldest dropped. */
-export const MAX_NAME_DECLINES = 64;
-export const NAME_DECLINES_KEY = "clawtrate.bot-name-declines";
-/** Cards, and bots skipped, at most: one per bot the state lists (`MAX_BOTS`). */
+/** Lines, and bots skipped, at most: one per bot the state lists (`MAX_BOTS`). */
 export const MAX_NAME_CARDS = 32;
 /** Runs whose end was checked, the latest kept: a repeated end of one of them reads nothing. */
 export const MAX_CHECKED_RUNS = 64;
 /** A run id longer than this isn't kept: its end is checked each time it comes. */
 export const MAX_CHECKED_RUN_CHARS = 256;
-/** What a card says of a Rename that didn't land, at most. */
+/** What a line says of a rename that didn't land, at most. */
 export const MAX_NAME_ERROR_CHARS = 512;
+/** Runs this device started, the latest kept, with the text sent (the first characters). */
+export const MAX_SENT_RUNS = 64;
+export const MAX_SENT_TEXT_CHARS = 4_000;
+/** The record of changes: one user preference on the gateway, its bound the gateway's own. */
+export const NAME_RECORD_KEY = "clawtrate.changes";
+export const MAX_RECORD_BYTES = 4_096;
+export const MAX_RECORD_CHANGES = 8;
+export const MAX_RECORD_DECLINED = 8;
+/** How long Undo is offered, and how long a change is kept. */
+export const UNDO_WINDOW_MS = 7 * 24 * 60 * 60 * 1000;
+/** At most this many renames of one bot are applied in a day. */
+export const MAX_RENAMES_PER_DAY = 3;
+const DAY_MS = 24 * 60 * 60 * 1000;
+/** A device that didn't send the run waits this long, so the one that did applies it first. */
+export const CLAIM_DELAY_MS = 5_000;
+/** Times a record write is tried again after another device's write came first. */
+export const RECORD_WRITE_ATTEMPTS = 4;
+/** A change dated this far ahead of this device's clock is not believed. */
+const CLOCK_SKEW_MS = 5 * 60 * 1000;
+const MAX_RECORD_BOT_CHARS = 128;
+/** The host storage key the earlier card kept Not now under; removed, it no longer counts. */
+export const NAME_DECLINES_KEY = "clawtrate.bot-name-declines";
 
 const PLACEHOLDERS = new Set(["not set yet", "pick something you like"]);
 /** A picture `agents.update` copied into IDENTITY.md from the config (R38). */
 const PICTURE_LINE = /^- Avatar: data:[^\n]*(\n|$)/gm;
+/** Tools whose result is no outside content: the session tools, and asking the person. */
+const OWN_TOOLS = new Set([
+  "sessions_spawn",
+  "sessions_send",
+  "sessions_list",
+  "sessions_history",
+  "subagents",
+  "ask_user",
+  "progress_card",
+]);
+const WEB_TOOLS = /^(web_search|web_fetch|browser)/;
+const FILE_TOOLS = new Set(["read", "ls", "find", "grep", "glob"]);
+const NAME_WRITES = new Set(["edit", "write", "apply_patch"]);
 
 /**
  * The name an IDENTITY.md gives, read as the gateway reads it: the last line labelled `Name`,
@@ -67,7 +104,7 @@ export function identityName(content: string): string | null {
 }
 
 /**
- * A bot's name as Rename saves it, from text a bot wrote: control characters and line breaks
+ * A bot's name as a rename saves it, from text a bot wrote: control characters and line breaks
  * become spaces, direction controls and invisible spaces go, runs of space one, the ends trimmed, as the gateway stores a name; then cut to
  * `MAX_BOT_NAME_CHARS` characters. Null when nothing is left.
  */
@@ -86,45 +123,173 @@ export function plainName(raw: string): string | null {
   return name || null;
 }
 
+const folded = (text: string) => text.replace(/\s+/g, " ").trim().toLowerCase();
+
+/** The record's tag for a run: the first 16 hex digits of its id's SHA-256. */
+export const runTag = (runId: string) => sha256Hex(utf8Bytes(runId)).slice(0, 16);
+
+/** One step of a run, as the engine has it: the tool and the text of its arguments. */
+export type RunStepFacts = { toolName: string | null; args: string | null };
+
+/** What this device knows of the run that wrote a name, to judge whose ask it was. */
+export type RunFacts = { sentHere: boolean; text: string | null; steps: RunStepFacts[] | null };
+
+/**
+ * Whose ask a rename was, as far as Clawtrate can tell, and where it came from when known. It is
+ * the person's (`asked`) only when this device sent the run, the run used no tool whose result is
+ * outside content before it wrote the name, and the name is in what the person typed. These are
+ * necessary, not proof: "Don't rename yourself Juniper" passes them too, so a line never says the
+ * person asked, and every rename carries Undo. A read or write of the bot's own IDENTITY.md is
+ * the edit itself; a run whose steps aren't known counts as having read something.
+ */
+export function judgeRename(facts: RunFacts, name: string): { asked: boolean; source: NameSource } {
+  let source: NameSource = null;
+  let outside = facts.steps === null;
+  for (const step of facts.steps ?? []) {
+    const tool = step.toolName;
+    if (!tool || OWN_TOOLS.has(tool) || tool.startsWith("clawtrate_")) continue;
+    const own = /IDENTITY\.md/.test(step.args ?? "");
+    if (own && NAME_WRITES.has(tool)) break;
+    if (own && tool === "read") continue;
+    outside = true;
+    source = WEB_TOOLS.test(tool) ? "web" : FILE_TOOLS.has(tool) ? "file" : "tool";
+    break;
+  }
+  const named = facts.text !== null && folded(facts.text).includes(folded(name));
+  return { asked: facts.sentHere && !outside && named, source };
+}
+
+/** A record as the gateway holds it, checked entry by entry: anything malformed is dropped. */
+export type NameRecord = {
+  rev: number;
+  changes: NameRecordChange[];
+  declined: Array<{ bot: string; name: string }>;
+};
+
+const isName = (value: unknown): value is string =>
+  typeof value === "string" && plainName(value) === value;
+const isBot = (value: unknown): value is string =>
+  typeof value === "string" && value.length > 0 && value.length <= MAX_RECORD_BOT_CHARS;
+const SOURCES = new Set(["web", "file", "tool"]);
+
+/**
+ * The record read from `users.prefs`, believed only as far as each entry passes the checks a new
+ * name would: any paired device can write that store on OpenClaw 2026.11.10, so a forged or
+ * malformed entry, or one older than Undo's window or dated in the future, offers nothing.
+ */
+export function parseNameRecord(raw: unknown, now: number): NameRecord {
+  const value = asRecord(raw);
+  const rev = typeof value?.rev === "number" && Number.isSafeInteger(value.rev) ? value.rev : 0;
+  const changes: NameRecordChange[] = [];
+  for (const each of Array.isArray(value?.changes)
+    ? value.changes.slice(-MAX_RECORD_CHANGES)
+    : []) {
+    const entry = asRecord(each);
+    if (!entry || !isBot(entry.bot) || entry.field !== "name") continue;
+    if (!isName(entry.from) || !isName(entry.to) || entry.from === entry.to) continue;
+    const at = entry.at;
+    if (typeof at !== "number" || !Number.isFinite(at)) continue;
+    if (at > now + CLOCK_SKEW_MS || now - at > UNDO_WINDOW_MS) continue;
+    if (typeof entry.run !== "string" || !/^[0-9a-f]{16}$/.test(entry.run)) continue;
+    const undone = entry.undone;
+    if (undone !== undefined && (typeof undone !== "number" || !Number.isFinite(undone))) continue;
+    const source = entry.source;
+    changes.push({
+      bot: entry.bot,
+      field: "name",
+      from: entry.from,
+      to: entry.to,
+      at,
+      run: entry.run,
+      asked: entry.asked === true,
+      source: typeof source === "string" && SOURCES.has(source) ? (source as NameSource) : null,
+      ...(undone === undefined ? {} : { undone }),
+    });
+  }
+  const declined: NameRecord["declined"] = [];
+  for (const each of Array.isArray(value?.declined)
+    ? value.declined.slice(-MAX_RECORD_DECLINED)
+    : []) {
+    const entry = asRecord(each);
+    if (entry && isBot(entry.bot) && isName(entry.name))
+      declined.push({ bot: entry.bot, name: entry.name });
+  }
+  return { rev, changes, declined };
+}
+
+/** The record cut to what the gateway keeps: the newest entries that fit in `MAX_RECORD_BYTES`. */
+export function fitNameRecord(record: NameRecord): NameRecord {
+  const next = {
+    rev: record.rev,
+    changes: record.changes.slice(-MAX_RECORD_CHANGES),
+    declined: record.declined.slice(-MAX_RECORD_DECLINED),
+  };
+  while (utf8Length(JSON.stringify(next)) > MAX_RECORD_BYTES) {
+    if (next.declined.length > next.changes.length) next.declined.shift();
+    else next.changes.shift();
+  }
+  return next;
+}
+
+/**
+ * Whether Undo is offered for a change: kept, not undone, the latest change of its bot's name,
+ * within Undo's window, and the bot is still called what the change made it.
+ */
+export function canUndoName(
+  change: NameRecordChange,
+  changes: readonly NameRecordChange[],
+  bots: readonly Bot[],
+  now: number,
+): boolean {
+  if (change.undone !== undefined || now - change.at > UNDO_WINDOW_MS) return false;
+  const latest = changes.filter((each) => each.bot === change.bot).at(-1);
+  if (latest?.run !== change.run) return false;
+  return bots.find((bot) => bot.id === change.bot)?.name === change.to;
+}
+
 export type BotNamesContext = {
   request: (method: string, params: unknown) => Promise<unknown>;
   bots: () => Bot[];
   /** Connected, with `operator.admin`, on a host that writes. */
   canRename: () => boolean;
-  /** The gateway's identity, or its address before that is known: whose Not now it is. */
-  gateway: () => string | null;
   /** Where a read is made now: the gateway's identity and the host's target (`gatewayStamp`). */
   stamp: () => GatewayStamp;
   /** Refuse unless `stamp` is still where the host is connected, as every bot write does. */
   sameGateway: (stamp: GatewayStamp) => Promise<void>;
+  /** The host's storage: only to forget what the earlier card kept there. */
   storage: KeyValueStore;
   /** Take one of the client's file reads, or null when they are all in use. */
   takeRead: () => (() => void) | null;
   refreshBots: () => Promise<void>;
+  /** The steps of a run in a task, as the engine holds them, or null when it has none. */
+  runSteps: (sessionKey: string, runId: string) => RunStepFacts[] | null;
   /** Whether an error is the gateway refusing for a missing scope (and note it). */
   missingScope: (error: unknown) => boolean;
-  publish: (proposals: NameProposal[]) => void;
+  now: () => number;
+  /** The wait of a device that didn't send the run before it applies a name (`CLAIM_DELAY_MS`). */
+  waitToClaim: () => Promise<void>;
+  publishLines: (lines: NameLine[]) => void;
+  publishRecord: (record: { stamp: GatewayStamp; changes: NameRecordChange[] } | null) => void;
   log: (text: string) => void;
 };
 
-type Declines = Record<string, string>;
-/** A kept decline's key: a gateway's identity or address and a bot's id, each an id at most. */
-const MAX_DECLINE_KEY_CHARS = 2 * 1_024 + 1;
-const declineKey = (gateway: string, botId: string) => `${gateway}\n${botId}`;
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
+/** What a rename's line says of whose it was. */
+export type RenameOrigin = { asked: boolean; source: NameSource; run: string };
+
 export class BotNames {
-  private proposals = new Map<string, NameProposal>();
+  private lines = new Map<string, NameLine>();
   /** The read under way for each bot, by a token of its own, so only that read ends it. */
   private readonly reading = new Map<string, object>();
-  /** Not now's writes, one after another, each from the record the one before kept. */
-  private declining: Promise<void> = Promise.resolve();
   private readonly skipped = new Set<string>();
   /** Runs already checked (`MAX_CHECKED_RUNS`), so one run reads the file once. */
   private readonly checkedRuns = new Set<string>();
-  private declines: Declines | null = null;
+  /** Runs this device started, by id: their task and the text sent (`MAX_SENT_RUNS`). */
+  private readonly sentRuns = new Map<string, { sessionKey: string; text: string }>();
   /** Moves on with every reset, so a read begun before it changes nothing after. */
   private epoch = 0;
+  private forgotDeclines = false;
 
   private readonly ctx: BotNamesContext;
 
@@ -132,12 +297,22 @@ export class BotNames {
     this.ctx = ctx;
   }
 
+  /** This device sent a message that starts a run: its id is that run's id (`chat.send`). */
+  sent(sessionKey: string, runId: string, text: string): void {
+    if (runId.length > MAX_CHECKED_RUN_CHARS) return;
+    this.sentRuns.delete(runId);
+    this.sentRuns.set(runId, { sessionKey, text: text.slice(0, MAX_SENT_TEXT_CHARS) });
+    if (this.sentRuns.size > MAX_SENT_RUNS)
+      this.sentRuns.delete(this.sentRuns.keys().next().value!);
+  }
+
   /**
-   * A run of `botId` ended in an open task: read its name line once, and show a card when it
-   * differs. A run already checked (its end delivered twice) reads nothing again.
+   * A run of `botId` ended in an open task: read its name line once, and apply a new name, or
+   * say why not. A run already checked (its end delivered twice) reads nothing again.
    */
-  async afterRun(botId: string, runId?: string): Promise<void> {
-    if (!this.ctx.canRename() || this.reading.has(botId) || this.skipped.has(botId)) return;
+  async afterRun(botId: string, sessionKey: string, runId?: string): Promise<void> {
+    if (this.reading.has(botId) || this.skipped.has(botId)) return;
+    void this.forgetOldDeclines();
     const counted = runId !== undefined && runId.length <= MAX_CHECKED_RUN_CHARS;
     if (counted && this.checkedRuns.has(runId)) return;
     const bot = this.ctx.bots().find((each) => each.id === botId);
@@ -154,24 +329,21 @@ export class BotNames {
         this.checkedRuns.delete(this.checkedRuns.values().next().value!);
     }
     const epoch = this.epoch;
-    // Where this read is made: a card drawn from it is for that gateway and that target only.
     const stamp = this.ctx.stamp();
     const token = {};
     this.reading.set(botId, token);
+    const stale = () =>
+      epoch !== this.epoch ||
+      !sameStamp(this.ctx.stamp(), stamp) ||
+      ["renaming", "undoing"].includes(this.lines.get(botId)?.status ?? "");
     try {
       const answer = asRecord(
         asRecord(
           await this.ctx.request("agents.files.get", { agentId: botId, name: "IDENTITY.md" }),
         )?.file,
       );
-      // A card being renamed stays until its Rename settles; a read from before a reset or for
-      // another target counts for nothing.
-      const stale = () =>
-        epoch !== this.epoch ||
-        !sameStamp(this.ctx.stamp(), stamp) ||
-        this.proposals.get(botId)?.status === "renaming";
       if (stale()) return;
-      // A picture copied in isn't counted: Rename takes it out again.
+      // A picture copied in isn't counted: a rename takes it out again.
       const content =
         typeof answer?.content === "string" ? answer.content.replace(PICTURE_LINE, "") : null;
       if (content === null) return;
@@ -180,30 +352,27 @@ export class BotNames {
         this.skipped.add(botId);
         if (this.skipped.size > MAX_NAME_CARDS)
           this.skipped.delete(this.skipped.values().next().value!);
-        return this.drop(botId);
+        return;
       }
       const raw = identityName(content);
       const name = raw === null ? null : plainName(raw);
-      if (name !== null) await this.loadDeclines();
-      if (stale()) return;
-      // Looked up after the last wait, with none before the card is drawn: a Not now that
-      // landed meanwhile is already in memory.
-      const declined = name !== null && this.isDeclined(botId, name);
       const now = this.ctx.bots().find((each) => each.id === botId);
-      // A name the bot already has, longer than a card's, is not a new one cut short.
-      if (!now || name === null || name === now.name || name === plainName(now.name) || declined)
-        return this.drop(botId);
-      const open = this.proposals.get(botId);
-      if (!open && this.proposals.size >= MAX_NAME_CARDS) return;
-      this.proposals.set(botId, {
-        botId,
-        name,
-        from: now.name,
-        stamp,
-        status: "open",
-        error: null,
-      });
-      this.publish();
+      // A name the bot already has, longer than a line's, is not a new one cut short.
+      if (!now || name === null || name === now.name || name === plainName(now.name)) return;
+      const sent = runId === undefined ? undefined : this.sentRuns.get(runId);
+      const facts: RunFacts = {
+        sentHere: sent?.sessionKey === sessionKey,
+        text: sent?.sessionKey === sessionKey ? sent.text : null,
+        steps: runId === undefined ? null : this.ctx.runSteps(sessionKey, runId),
+      };
+      const run = runTag(runId ?? `${botId}\n${name}\n${this.ctx.now()}`);
+      const origin = { ...judgeRename(facts, name), run };
+      // A device that didn't send the run gives the one that did the time to apply it first.
+      if (!facts.sentHere) {
+        await this.ctx.waitToClaim();
+        if (stale()) return;
+      }
+      await this.apply(botId, name, origin, stamp, epoch);
     } catch (error) {
       this.ctx.log(`could not read ${botId}'s IDENTITY.md: ${errorText(error)}`);
     } finally {
@@ -213,79 +382,267 @@ export class BotNames {
   }
 
   /**
-   * Rename: one `agents.update` with the name the card shows, where the card was read (`stamp`),
-   * then the bot list read back. The one way a card's name is saved.
+   * Apply a bot's new name, with its line and its Undo record: the one path a rename a bot asked
+   * for takes, whether the name came from its file or, later, from a tool of its own. Only one
+   * device applies it: the first to record it on the gateway, compared and set against the record
+   * it read; any other shows that device's line.
    */
-  async accept(botId: string, name: string, stamp: GatewayStamp): Promise<void> {
-    const open = this.proposals.get(botId);
-    if (!open || open.name !== name || open.status === "renaming")
-      throw new Error("That name is no longer waiting for you.");
-    if (!sameStamp(open.stamp, stamp))
-      throw new Error("This name was found on another gateway, so nothing was sent.");
-    if (!this.ctx.canRename()) throw new Error("Renaming a bot needs admin access.");
-    const epoch = this.epoch;
-    const set = (patch: Partial<NameProposal>) => {
-      if (epoch !== this.epoch || this.proposals.get(botId)?.name !== name) return;
-      this.proposals.set(botId, { ...open, ...patch });
-      this.publish();
+  async apply(
+    botId: string,
+    name: string,
+    origin: RenameOrigin,
+    stamp: GatewayStamp,
+    epoch = this.epoch,
+  ): Promise<void> {
+    const bot = this.ctx.bots().find((each) => each.id === botId);
+    if (!bot) return;
+    const line = (patch: Partial<NameLine>) => {
+      if (epoch !== this.epoch) return;
+      const base: NameLine = {
+        botId,
+        from: bot.name,
+        to: name,
+        stamp,
+        run: origin.run,
+        asked: origin.asked,
+        source: origin.source,
+        status: "renamed",
+        reason: null,
+        error: null,
+      };
+      this.setLine({ ...base, ...patch });
     };
-    set({ status: "renaming", error: null });
+    const read = await this.readRecord();
+    if (epoch !== this.epoch) return;
+    if (read.record?.declined.some((each) => each.bot === botId && each.name === name)) return;
+    const shown = read.record?.changes.find((each) => each.run === origin.run);
+    if (shown) return this.showChange(shown, stamp);
+    if (!this.ctx.canRename()) return line({ status: "not-done", reason: "no-admin" });
+    const taken = this.ctx
+      .bots()
+      .some((each) => each.id !== botId && folded(each.name) === folded(name));
+    if (taken) return line({ status: "not-done", reason: "taken" });
+    if (!read.record) return line({ status: "not-done", reason: "no-record" });
+    line({ status: "renaming" });
     try {
-      // The bot as the gateway lists it now: renamed or gone since the card was drawn, nothing is sent.
+      // The bot as the gateway lists it now, then the gateway the read was for.
       await this.ctx.refreshBots();
-      // A reset meanwhile: the cards now are another gateway's, and this one sends and removes nothing.
-      if (epoch !== this.epoch) throw new Error("The connection changed, so nothing was sent.");
-      const bot = this.ctx.bots().find((each) => each.id === botId);
-      if (!bot) {
-        this.drop(botId);
-        throw new Error(`${open.from} is no longer on the gateway, so nothing was sent.`);
-      }
-      if (bot.name === name) return this.drop(botId);
-      if (bot.name !== open.from) {
-        this.drop(botId);
-        throw new Error(`${open.from} was renamed ${bot.name} meanwhile, so nothing was sent.`);
-      }
-      // Still the gateway the card was drawn for, on the connection that read it.
       await this.ctx.sameGateway(stamp);
       if (epoch !== this.epoch) throw new Error("The connection changed, so nothing was sent.");
-      // The list as it stands after that wait, with no wait between this look and the write.
       const still = this.ctx.bots().find((each) => each.id === botId);
-      // Renamed to this name meanwhile, as at the first look: done, and nothing to send.
-      if (still?.name === name) return this.drop(botId);
-      if (still?.name !== open.from) {
-        this.drop(botId);
-        throw new Error(
-          still
-            ? `${open.from} was renamed ${still.name} meanwhile, so nothing was sent.`
-            : `${open.from} is no longer on the gateway, so nothing was sent.`,
+      if (!still || still.name === name) return this.drop(botId);
+      if (still.name !== bot.name)
+        throw new Error(`${bot.name} was renamed ${still.name} meanwhile, so nothing was sent.`);
+      const change: NameRecordChange = {
+        bot: botId,
+        field: "name",
+        from: bot.name,
+        to: name,
+        at: this.ctx.now(),
+        run: origin.run,
+        asked: origin.asked,
+        source: origin.source,
+      };
+      const claimed = await this.writeRecord((record) => {
+        if (record.changes.some((each) => each.run === origin.run)) return "taken";
+        if (record.declined.some((each) => each.bot === botId && each.name === name))
+          return "declined";
+        const today = record.changes.filter(
+          (each) => each.bot === botId && change.at - each.at < DAY_MS,
         );
+        if (today.length >= MAX_RENAMES_PER_DAY) return "limit";
+        return { ...record, changes: [...record.changes, change] };
+      });
+      if (epoch !== this.epoch) return;
+      if (claimed === "taken") {
+        const other = (await this.readRecord()).record?.changes.find((c) => c.run === origin.run);
+        return other ? this.showChange(other, stamp) : this.drop(botId);
       }
-      await this.ctx.request("agents.update", { agentId: botId, name });
+      if (claimed === "declined") return this.drop(botId);
+      if (claimed === "limit") return line({ status: "not-done", reason: "limit" });
+      if (claimed === "unavailable") return line({ status: "not-done", reason: "no-record" });
+      try {
+        await this.ctx.request("agents.update", { agentId: botId, name });
+      } catch (error) {
+        // Nothing was renamed: the record's entry goes again, best effort.
+        await this.writeRecord((record) => ({
+          ...record,
+          changes: record.changes.filter((each) => each.run !== origin.run),
+        })).catch(() => {});
+        throw error;
+      }
+      await this.keepPictureOutOfFile(botId, epoch);
+      await this.ctx.refreshBots().catch(() => {});
+      if (epoch !== this.epoch) throw new Error(CONNECTION_CHANGED_AFTER_SEND);
+      if (this.ctx.bots().find((each) => each.id === botId)?.name !== name)
+        throw new Error(`Rename was sent, but the gateway's bot list doesn't show ${name} yet.`);
+      line({ status: "renamed" });
     } catch (error) {
-      if (this.proposals.get(botId)?.status !== "renaming") throw error;
-      set({
+      line({
         status: "failed",
         error: this.ctx.missingScope(error)
           ? "The gateway refused: renaming a bot needs admin access."
           : errorText(error).slice(0, MAX_NAME_ERROR_CHARS),
       });
+    }
+  }
+
+  /**
+   * Undo: put back the name before, only while the record still holds the change, it is the
+   * latest for its bot and the bot is still called what it made it; then the change is marked
+   * undone and its name declined on the gateway, so the same edit doesn't rename the bot again.
+   */
+  async undo(botId: string, run: string, stamp: GatewayStamp): Promise<void> {
+    const epoch = this.epoch;
+    if (!this.ctx.canRename()) throw new Error("Renaming a bot needs admin access.");
+    if (!sameStamp(this.ctx.stamp(), stamp))
+      throw new Error("This change was read on another gateway, so nothing was sent.");
+    await this.ctx.refreshBots();
+    const { record } = await this.readRecord();
+    const change = record?.changes.find((each) => each.run === run && each.bot === botId);
+    if (!record || !change || !canUndoName(change, record.changes, this.ctx.bots(), this.ctx.now()))
+      throw new Error("That change can no longer be undone.");
+    const restore = (patch: Partial<NameLine>) => {
+      if (epoch !== this.epoch) return;
+      const base: NameLine = {
+        botId,
+        from: change.from,
+        to: change.to,
+        stamp,
+        run,
+        asked: change.asked,
+        source: change.source,
+        status: "undoing",
+        reason: null,
+        error: null,
+      };
+      this.setLine({ ...base, ...patch });
+    };
+    restore({ status: "undoing" });
+    try {
+      await this.ctx.sameGateway(stamp);
+      if (epoch !== this.epoch) throw new Error("The connection changed, so nothing was sent.");
+      if (this.ctx.bots().find((each) => each.id === botId)?.name !== change.to)
+        throw new Error("That change can no longer be undone.");
+      await this.ctx.request("agents.update", { agentId: botId, name: change.from });
+      await this.keepPictureOutOfFile(botId, epoch);
+      await this.ctx.refreshBots().catch(() => {});
+      await this.writeRecord((now) => ({
+        ...now,
+        changes: now.changes.map((each) =>
+          each.run === run ? { ...each, undone: this.ctx.now() } : each,
+        ),
+        declined: [
+          ...now.declined.filter((each) => !(each.bot === botId && each.name === change.to)),
+          { bot: botId, name: change.to },
+        ],
+      })).catch((error: unknown) => this.ctx.log(`could not record the undo: ${errorText(error)}`));
+      restore({ status: "undone" });
+    } catch (error) {
+      restore({ status: "renamed", error: errorText(error).slice(0, MAX_NAME_ERROR_CHARS) });
       throw error;
     }
-    await this.keepPictureOutOfFile(botId, epoch);
-    try {
-      await this.ctx.refreshBots();
-    } catch {
-      // Shown below: the list did not confirm it.
+  }
+
+  /** Put a line away on this device. Nothing is sent. */
+  dismiss(botId: string): void {
+    this.drop(botId);
+  }
+
+  /** The record changed on the gateway: read it again, and let lines follow it. */
+  async onPrefsChanged(keys: unknown): Promise<void> {
+    if (!Array.isArray(keys) || !keys.includes(NAME_RECORD_KEY)) return;
+    const { record } = await this.readRecord();
+    for (const line of [...this.lines.values()]) {
+      const change = record?.changes.find((each) => each.run === line.run);
+      if (change?.undone !== undefined && line.status === "renamed")
+        this.setLine({ ...line, status: "undone" });
     }
-    // Sent before a reset: it reached the gateway it was for, and leaves the cards of the next
-    // alone, but nothing confirmed it, so it isn't reported as done.
-    // A Rename sent, and the connection gone to another gateway before its read-back.
-    if (epoch !== this.epoch) throw new Error(CONNECTION_CHANGED_AFTER_SEND);
-    // Claimed only once the gateway's own list shows it.
-    if (this.ctx.bots().find((each) => each.id === botId)?.name === name) return this.drop(botId);
-    const unconfirmed = `Rename was sent, but the gateway's bot list doesn't show ${name} yet.`;
-    set({ status: "failed", error: unconfirmed });
-    throw new Error(unconfirmed);
+  }
+
+  /** Read the record on connecting, for the bots' settings. */
+  async loadRecord(): Promise<void> {
+    await this.readRecord().catch(() => {});
+  }
+
+  /** The bot list changed: a line whose bot is gone goes. */
+  onBots(bots: Bot[]): void {
+    for (const botId of this.lines.keys())
+      if (!bots.some((bot) => bot.id === botId)) this.drop(botId);
+  }
+
+  /** Another gateway, or none: nothing read of the last one counts. */
+  reset(): void {
+    this.epoch += 1;
+    this.reading.clear();
+    this.skipped.clear();
+    this.checkedRuns.clear();
+    this.ctx.publishRecord(null);
+    if (this.lines.size === 0) return;
+    this.lines = new Map();
+    this.publish();
+  }
+
+  private showChange(change: NameRecordChange, stamp: GatewayStamp): void {
+    this.setLine({
+      botId: change.bot,
+      from: change.from,
+      to: change.to,
+      stamp,
+      run: change.run,
+      asked: change.asked,
+      source: change.source,
+      status: change.undone === undefined ? "renamed" : "undone",
+      reason: null,
+      error: null,
+    });
+  }
+
+  /** The record as the gateway holds it now, with the raw value a write compares against. */
+  private async readRecord(): Promise<{ record: NameRecord | null; raw: unknown }> {
+    const stamp = this.ctx.stamp();
+    const result = asRecord(
+      await this.ctx.request("users.prefs.get", { keys: [NAME_RECORD_KEY] }).catch(() => null),
+    );
+    if (result?.status !== "ok") {
+      this.ctx.publishRecord(null);
+      return { record: null, raw: null };
+    }
+    const entries = asRecord(result.entries) ?? {};
+    const raw = Object.hasOwn(entries, NAME_RECORD_KEY) ? entries[NAME_RECORD_KEY] : null;
+    const record = parseNameRecord(raw, this.ctx.now());
+    this.ctx.publishRecord({ stamp, changes: record.changes });
+    return { record, raw };
+  }
+
+  /**
+   * One change to the record, compared and set against what was just read, and applied again to
+   * the newer value when another device wrote first. `change` may answer why not instead.
+   */
+  private async writeRecord<T extends string>(
+    change: (record: NameRecord) => NameRecord | T,
+  ): Promise<"written" | "unavailable" | T> {
+    for (let attempt = 0; attempt < RECORD_WRITE_ATTEMPTS; attempt += 1) {
+      const { record, raw } = await this.readRecord();
+      if (!record) return "unavailable";
+      const next = change(record);
+      if (typeof next === "string") return next;
+      const value = fitNameRecord({ ...next, rev: record.rev + 1 });
+      const result = asRecord(
+        await this.ctx.request("users.prefs.set", {
+          entries: {
+            [NAME_RECORD_KEY]: value,
+          },
+          expectedEntries: { [NAME_RECORD_KEY]: raw ?? null },
+        }),
+      );
+      if (result?.status === "ok") {
+        this.ctx.publishRecord({ stamp: this.ctx.stamp(), changes: value.changes });
+        return "written";
+      }
+      if (result?.status !== "conflict") return "unavailable";
+    }
+    throw new Error("The record of changes kept changing on another device.");
   }
 
   /**
@@ -298,7 +655,7 @@ export class BotNames {
    */
   private async keepPictureOutOfFile(botId: string, epoch: number): Promise<void> {
     // Within the client's file reads like every other read: with none free it is left for the
-    // next Rename, which a copied picture doesn't keep from coming.
+    // next rename, which a copied picture doesn't keep from coming.
     const release = this.ctx.takeRead();
     if (!release) {
       this.ctx.log(`left the picture in ${botId}'s IDENTITY.md: no file read was free`);
@@ -344,108 +701,24 @@ export class BotNames {
     }
   }
 
-  /**
-   * Not now: kept on this device for this bot and this name, only when it answers the card shown
-   * now, and whether it did. A late answer to an earlier card changes nothing, so it can't
-   * replace a later Not now.
-   */
-  async decline(botId: string, name: string, stamp: GatewayStamp): Promise<boolean> {
-    const answers = () => {
-      const open = this.proposals.get(botId);
-      return open?.name === name && open.status !== "renaming" && sameStamp(open.stamp, stamp);
-    };
-    if (!answers()) return false;
-    // Kept for the gateway that drew the card, as Rename is bound to it: its stamp names one, or
-    // it wouldn't answer. A connection that now answers as another gateway doesn't take it over.
-    const gateway = stamp.gatewayId!;
-    // The card stays up while what is kept is read; then the Not now is in memory before the
-    // card goes, so a run that ends meanwhile doesn't bring the card back. Awaited only when not
-    // read yet: a card is drawn only once they are, and a wait here would let a Rename sent just
-    // after this Not now take the card first (#512). After a wait, the card is looked at again.
-    if (this.declines === null) {
-      await this.loadDeclines();
-      if (!answers()) return false;
-    }
-    // Changed as they are now, after the read, so two at once both keep their names.
-    const declines = { ...this.declines };
-    const key = declineKey(gateway, botId);
-    delete declines[key];
-    declines[key] = name;
-    const keys = Object.keys(declines);
-    for (const old of keys.slice(0, Math.max(0, keys.length - MAX_NAME_DECLINES)))
-      delete declines[old];
-    this.declines = declines;
-    this.drop(botId);
-    const write = this.declining.then(() => this.keepDeclines());
-    this.declining = write.catch(() => {});
-    await write;
-    return true;
+  /** The earlier card kept Not now on this device; the record on the gateway replaces it. */
+  private async forgetOldDeclines(): Promise<void> {
+    if (this.forgotDeclines) return;
+    this.forgotDeclines = true;
+    await this.ctx.storage.delete(NAME_DECLINES_KEY).catch(() => {});
   }
 
-  /** What is in memory, kept on the device: the latest, whichever Not now asked for it. */
-  private async keepDeclines(): Promise<void> {
-    try {
-      await this.ctx.storage.set(NAME_DECLINES_KEY, JSON.stringify(this.declines ?? {}));
-    } catch (error) {
-      this.ctx.log(`could not keep Not now: ${errorText(error)}`);
-    }
-  }
-
-  /** The bot list changed: a card whose bot is gone, or already has its name, goes. */
-  onBots(bots: Bot[]): void {
-    let changed = false;
-    for (const [botId, proposal] of this.proposals) {
-      if (proposal.status === "renaming") continue;
-      const bot = bots.find((each) => each.id === botId);
-      if (!bot || bot.name === proposal.name) {
-        this.proposals.delete(botId);
-        changed = true;
-      }
-    }
-    if (changed) this.publish();
-  }
-
-  /** Another gateway, or none: nothing read of the last one counts. */
-  reset(): void {
-    this.epoch += 1;
-    this.reading.clear();
-    this.skipped.clear();
-    this.checkedRuns.clear();
-    if (this.proposals.size === 0) return;
-    this.proposals = new Map();
+  private setLine(line: NameLine): void {
+    if (!this.lines.has(line.botId) && this.lines.size >= MAX_NAME_CARDS) return;
+    this.lines.set(line.botId, line);
     this.publish();
   }
 
   private drop(botId: string): void {
-    if (this.proposals.delete(botId)) this.publish();
+    if (this.lines.delete(botId)) this.publish();
   }
 
   private publish(): void {
-    this.ctx.publish([...this.proposals.values()]);
-  }
-
-  /** Whether Not now is kept for this bot and name, as far as the declines read so far say. */
-  private isDeclined(botId: string, name: string): boolean {
-    const gateway = this.ctx.gateway();
-    return gateway !== null && this.declines?.[declineKey(gateway, botId)] === name;
-  }
-
-  private async loadDeclines(): Promise<Declines> {
-    if (this.declines) return this.declines;
-    let read: Declines = {};
-    try {
-      const parsed = asRecord(JSON.parse((await this.ctx.storage.get(NAME_DECLINES_KEY)) ?? "{}"));
-      for (const [key, value] of Object.entries(parsed ?? {}).slice(-MAX_NAME_DECLINES))
-        if (
-          key.length <= MAX_DECLINE_KEY_CHARS &&
-          typeof value === "string" &&
-          value.length <= MAX_BOT_NAME_CHARS * 4
-        )
-          read[key] = value;
-    } catch {
-      read = {};
-    }
-    this.declines ??= read;
-    return this.declines;
+    this.ctx.publishLines([...this.lines.values()]);
   }
 }

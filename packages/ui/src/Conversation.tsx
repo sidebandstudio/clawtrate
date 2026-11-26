@@ -28,7 +28,7 @@ import {
   type RefObject,
 } from "react";
 import { AccessBar } from "./AccessBar.tsx";
-import { NameCard } from "./bots/NameCard.tsx";
+import { NameLine } from "./bots/NameLine.tsx";
 import { useClawtrateState, useCommand } from "./bridge.tsx";
 import { Avatar, Presence } from "./Avatar.tsx";
 import {
@@ -1296,7 +1296,7 @@ export function Conversation({
       </header>
       {body}
       {task && bot && <UsageNotes bot={bot} canSet={!info.readOnly} />}
-      {task && bot && <NameCard bot={bot} connection={connection} onAnnounce={onAnnounce} />}
+      {task && bot && <NameLine bot={bot} onAnnounce={onAnnounce} />}
       {task && bot && interactive && (
         <Composer
           key={`composer:${connection.gatewayUrl ?? ""}:${task.key}`}

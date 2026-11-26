@@ -157,6 +157,7 @@ import {
   type CheckInsState,
 } from "./check-ins.ts";
 import { MAX_ACTION_FACTS_CHARS } from "./actions.ts";
+import { MAX_RECORD_CHANGES } from "./bot-names.ts";
 import type {
   Bot,
   ClawtrateState,
@@ -180,7 +181,8 @@ import type {
   TranscriptItem,
   ChatFile,
   ChatPicture,
-  NameProposal,
+  NameLine,
+  NameRecordChange,
   SentAttachment,
 } from "./types.ts";
 
@@ -778,13 +780,28 @@ const bot = flagged<Bot>()({
   isDefault: FLAG,
   ownerless: FLAG,
 });
-const nameProposal = object<NameProposal>()({
+const nameLine = object<NameLine>()({
   botId: ID,
-  name: NAME,
   from: NAME,
-  stamp: object<NameProposal["stamp"]>()({ gatewayId: ID, target: NUMBER }),
+  to: NAME,
+  stamp: object<NameLine["stamp"]>()({ gatewayId: ID, target: NUMBER }),
+  run: ID,
+  asked: FLAG,
+  source: ENUM,
   status: ENUM,
+  reason: ENUM,
   error: text(MAX_MESSAGE_LINE_CHARS),
+});
+const nameRecordChange = object<NameRecordChange>()({
+  bot: ID,
+  field: ENUM,
+  from: NAME,
+  to: NAME,
+  at: NUMBER,
+  run: ID,
+  asked: FLAG,
+  source: ENUM,
+  undone: NUMBER,
 });
 const updateRun = object<UpdateRunView>()({
   runId: ID,
@@ -1361,7 +1378,11 @@ export const STATE: Bound = flagged<ClawtrateState>()({
   showOtherToolSessions: FLAG,
   showGatewayBot: FLAG,
   usage: USAGE,
-  botNames: list(MAX_BOTS, nameProposal),
+  botNames: list(MAX_BOTS, nameLine),
+  botNameRecord: object<NonNullable<ClawtrateState["botNameRecord"]>>()({
+    stamp: object<NameLine["stamp"]>()({ gatewayId: ID, target: NUMBER }),
+    changes: list(MAX_RECORD_CHANGES, nameRecordChange),
+  }),
   openclawUpdating,
 });
 /** The listed-tasks pool, applied over the whole state. */
