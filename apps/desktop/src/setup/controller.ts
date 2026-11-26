@@ -552,7 +552,7 @@ export class SetupController implements SetupHost {
       // The selection this connect makes: its cleanup and its readiness are that one's only.
       const selection = client.nextSelection();
       this.owned = { attempt, url: found.url, selection };
-      this.watch(attempt, found.url, found.port, selection, true);
+      this.watch(attempt, found.url, found.port, selection);
       await client.connectForSetup(found.url, {
         check: listening,
         verify,

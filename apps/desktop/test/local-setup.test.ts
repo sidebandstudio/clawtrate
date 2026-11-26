@@ -14,6 +14,7 @@
 
 import { execFileSync } from "node:child_process";
 import { chmodSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { createServer as createHttpServer } from "node:http";
 import { createServer, type AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -192,9 +193,13 @@ function proofFile(dir: string, folder: string, answer: Buffer | string, once = 
  * accepts after the upgrade is one of the fake gateway's sockets.
  */
 async function bridged(gateway: FakeGateway) {
-  const server = new WebSocketServer({ host: "127.0.0.1", port: 0 });
-  await new Promise<void>((done) => server.on("listening", done));
-  const port = (server.address() as AddressInfo).port;
+  // Every TCP connection the port accepts is counted, upgraded to a socket or not.
+  const http = createHttpServer();
+  let accepted = 0;
+  http.on("connection", () => (accepted += 1));
+  const server = new WebSocketServer({ server: http });
+  await new Promise<void>((done) => http.listen(0, "127.0.0.1", done));
+  const port = (http.address() as AddressInfo).port;
   server.on("connection", (ws) => {
     const fake = gateway.createWebSocket(`ws://127.0.0.1:${port}`);
     fake.onmessage = (event) => ws.send(String(event.data));
@@ -204,9 +209,15 @@ async function bridged(gateway: FakeGateway) {
   });
   return {
     port,
+    accepted: () => accepted,
     close: () => {
       for (const client of server.clients) client.terminate();
-      return new Promise<void>((done) => server.close(() => done()));
+      return new Promise<void>((done) =>
+        server.close(() => {
+          http.closeAllConnections();
+          http.close(() => done());
+        }),
+      );
     },
   };
 }
@@ -234,9 +245,24 @@ function localApp(local: LocalConnect, options: { secure?: boolean; dataDir?: st
     client: { displayName: "Clawtrate Test", version: "0.0.0", platform: "test" },
     ...(options.secure === false ? {} : { secretBox: box }),
   });
+  // Every value the client asks the host to keep, as it hands it over: before the host seals
+  // its credentials record, where a search of the file on disk can't see into it.
+  const stored = new Map<string, string>();
+  const storage = {
+    get: (key: string) => host.storage.get(key),
+    delete: async (key: string) => {
+      stored.delete(key);
+      await host.storage.delete(key);
+    },
+    set: async (key: string, value: string) => {
+      stored.set(key, value);
+      await host.storage.set(key, value);
+    },
+  };
   const client = new ClawtrateClient(
     {
       ...host,
+      storage,
       createWebSocket: () => {
         throw new Error("a socket that isn't proved");
       },
@@ -253,7 +279,7 @@ function localApp(local: LocalConnect, options: { secure?: boolean; dataDir?: st
     log: (line) => lines.push(line),
     localConnect: { ...local, worker: WORKER },
   });
-  return { client, setup, dialog, lines, dataDir };
+  return { client, setup, dialog, lines, dataDir, stored };
 }
 
 describe.skipIf(!mac)(
@@ -275,7 +301,7 @@ describe.skipIf(!mac)(
       };
       settingsFile(home, ".openclaw", tokenSettings(server.port, "token-as-the-look-read-it"));
       proofFile(home, ".openclaw", provedAnswer(home, ".openclaw", server.port));
-      const { client, setup, dialog, dataDir } = localApp(local);
+      const { client, setup, dialog, dataDir, stored } = localApp(local);
       const drops = vi.spyOn(HeldToken.prototype, "drop");
       try {
         await client.start({ resume: false });
@@ -309,8 +335,11 @@ describe.skipIf(!mac)(
           route: ".openclaw@1:1",
           gatewayId: "gateway-identity-1",
         });
-        for (const file of [STATE_FILE, "credentials.bin"])
-          expect(readFileSync(join(dataDir, file), "latin1")).not.toContain("token-at-connect");
+        expect(readFileSync(join(dataDir, STATE_FILE), "latin1")).not.toContain("token-at-connect");
+        // The credentials record is sealed on disk: what went into it is checked as it was given.
+        const kept = [...stored.values()];
+        expect(kept.some((value) => value.includes("device-token-from-pairing"))).toBe(true);
+        for (const value of kept) expect(value).not.toContain("token-at-connect");
         // And the client holds no copy once the device token is saved.
         const inside = client as unknown as {
           typedAttempt: unknown;
@@ -573,13 +602,18 @@ describe.skipIf(!mac)(
           if (entry.proof) proofFile(home, entry.folder ?? ".openclaw", entry.proof(home));
           const { client, setup } = localApp(local);
           try {
+            const dialled = listening.accepted();
             await setup.lookAtStart();
             const label = JSON.stringify(entry.look);
             expect(setup.current.phase, label).toBe("found");
             expect(setup.current.look, label).toMatchObject(entry.look);
             expect(JSON.stringify(setup.current), label).not.toContain("a-gateway-token");
-            if (entry.look.reason === "tls")
+            if (entry.look.reason === "tls") {
               expect(readFileSync(join(home, "commands"), "utf8"), label).not.toContain("prove");
+              // Not dialled either: the port accepted no connection during the look.
+              await sleep(200);
+              expect(listening.accepted(), label).toBe(dialled);
+            }
             if (entry.look.outcome !== "running")
               await expect(setup.connect(), label).rejects.toThrow("nothing to connect to");
           } finally {
@@ -615,6 +649,7 @@ describe.skipIf(!mac)(
         { stdio: "ignore" },
       );
       let plaintext = 0;
+      let dials = 0;
       const listener = createTlsServer(
         {
           key: readFileSync(join(home, "tls-key.pem")),
@@ -623,6 +658,8 @@ describe.skipIf(!mac)(
         (socket) => socket.destroy(),
       );
       listener.on("tlsClientError", () => (plaintext += 1));
+      // Every TCP connection, counted apart from the TLS errors it may end in.
+      listener.on("connection", () => (dials += 1));
       await new Promise<void>((done) => listener.listen(0, "127.0.0.1", done));
       const port = (listener.address() as AddressInfo).port;
       const local: LocalConnect = {
@@ -639,16 +676,22 @@ describe.skipIf(!mac)(
         await client.start({ resume: false });
         await setup.look();
         expect(setup.current.look).toMatchObject({ outcome: "running", port });
+        // From after the look: what Connect itself dials.
+        await sleep(200);
+        const dialsBefore = dials;
+        const plaintextBefore = plaintext;
         await setup.connect();
         // Not left on Connecting, and not retried for ever: failed, with Look again and Advanced
         // (the card's ways on after a failed Connect).
         await until(() => setup.current.phase === "failed", 60_000);
         expect(setup.current.failure).toMatchObject({ kind: "unanswered", port });
         await until(() => client.state.connection.status === "idle", 15_000);
-        const tries = plaintext;
-        expect(tries).toBeGreaterThan(0);
+        // One dial, its plaintext refused by the TLS listener, and no retry before idle or after.
+        expect(dials - dialsBefore).toBe(1);
+        expect(plaintext - plaintextBefore).toBe(1);
         await sleep(1_000);
-        expect(plaintext).toBe(tries);
+        expect(dials - dialsBefore).toBe(1);
+        expect(plaintext - plaintextBefore).toBe(1);
         // A look again finds it as before, and Connect may be pressed again.
         await setup.look();
         expect(setup.current.look).toMatchObject({ outcome: "running", port });
@@ -1515,6 +1558,8 @@ describe.skipIf(!BIN || !mac)(
       try {
         await setup.lookAtStart();
         expect(setup.current.look).toMatchObject({ outcome: "unverified", port });
+        // The stand-in reports its accepts on its output, which may arrive after the look ends.
+        await until(() => proxy.accepted() > 0, 15_000);
         expect(proxy.accepted()).toBe(1);
         expect(proxy.bytes()).toBe(0);
       } finally {
