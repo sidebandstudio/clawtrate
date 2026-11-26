@@ -158,8 +158,6 @@ describe("F-588: Refresh in the Model menu", () => {
         throw new GatewayError({
           code: "UNAVAILABLE",
           message: "Model catalog is not ready. Retry after Gateway startup or refresh finishes.",
-          retryable: true,
-          retryAfterMs: 0,
         });
       return list(params);
     };
