@@ -443,7 +443,14 @@ export class AccountsEngine {
       // A bot's order read since these reads began, by Check now or a press, stays as it was read.
       if (seq !== null && before?.evidence.readSeq != null && before.evidence.readSeq > seq)
         return before;
-      return this.binding(botId, asRecord(entries[botId]), views.get(botId)!, before, startedAt, seq);
+      return this.binding(
+        botId,
+        asRecord(entries[botId]),
+        views.get(botId)!,
+        before,
+        startedAt,
+        seq,
+      );
     });
     return {
       ...previous,

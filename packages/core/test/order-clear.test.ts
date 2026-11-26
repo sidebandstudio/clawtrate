@@ -244,7 +244,7 @@ describe("F-592: Unlock and Clear, over the connection", () => {
   });
 
   it("a cleared line goes once a later read finds the order back, and names the time of its own read", async () => {
-    const { client, fake, accounts, press } = await locked();
+    const { client, accounts, press } = await locked();
     await press();
     const clear = accounts().clear!;
     expect(clearShown(clear, otto(accounts()))).toEqual({
