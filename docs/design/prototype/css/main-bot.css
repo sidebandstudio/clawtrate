@@ -620,432 +620,131 @@
   cursor: default;
 }
 
-/* ---- the autonomy step ---- */
-
-.mb-setup {
-  display: grid;
-  place-items: center;
-  height: 100%;
-  padding: var(--space-4);
-  overflow: auto;
-}
-
-.mb-setup-card {
-  display: grid;
-  gap: var(--space-4);
-  width: min(560px, 100%);
-}
-
-.mb-setup-done {
-  margin: 0;
-  color: var(--accent);
-  font-size: var(--text-sm);
-  font-weight: var(--weight-medium);
-}
-
-.mb-setup h1 {
-  margin: 0;
-  font-size: var(--text-title-sm);
-  font-weight: var(--weight-strong);
-}
-
-[data-width="full"] .mb-setup h1,
-[data-width="1100"] .mb-setup h1 {
-  font-size: 26px;
-}
-
-.mb-setup-now {
-  margin: 0;
-  color: var(--text-muted);
-}
-
-.mb-choices {
-  display: grid;
-  gap: var(--space-3);
-}
-
-.mb-choice {
-  display: flex;
-  gap: var(--space-3);
-  align-items: flex-start;
-  padding: var(--space-4);
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-lg);
-  background: var(--bg-pane);
-  text-align: left;
-  cursor: pointer;
-  transition: border-color var(--dur-quick) var(--ease-out), background var(--dur-quick) var(--ease-out);
-}
-
-.mb-choice:hover {
-  background: var(--bg-hover);
-}
-
-.mb-choice[aria-checked="true"] {
-  border-color: var(--accent-line);
-  background: var(--accent-soft);
-}
-
-.mb-choice > span:last-child {
-  display: grid;
-  gap: 4px;
-}
-
-.mb-choice strong {
-  font-size: var(--text-lg);
-  font-weight: var(--weight-medium);
-}
-
-.mb-choice > span:last-child > span {
-  color: var(--text-muted);
-  line-height: 1.4;
-}
-
-.mb-choice-mark {
-  flex: none;
-  width: 18px;
-  height: 18px;
-  margin-top: 3px;
-  border: 1.5px solid var(--border-strong);
-  border-radius: 50%;
-}
-
-.mb-choice[aria-checked="true"] .mb-choice-mark {
-  border: 5px solid var(--accent-line);
-}
-
-.mb-setup-later {
-  margin: 0;
-  color: var(--text-muted);
-  font-size: var(--text-sm);
-}
-
-.mb-setup .mb-link {
-  justify-self: start;
-}
-
-/* ---- the sheet and dialogs ---- */
-
-.mb-scrim {
-  position: fixed;
-  inset: 0;
-  background: var(--bg-scrim);
-}
-
-.mb-sheet,
-.mb-dialog {
-  position: fixed;
-  top: 50%;
-  left: 50%;
-  display: grid;
-  gap: var(--space-3);
-  width: min(520px, calc(100% - 32px));
-  max-height: calc(100% - 80px);
-  padding: var(--space-6);
-  overflow: auto;
-  border-radius: var(--radius-lg);
-  background: var(--bg-raised);
-  box-shadow: var(--shadow-pop);
-  transform: translate(-50%, -50%);
-}
-
-.mb-sheet h2,
-.mb-dialog h2 {
-  margin: 0;
-  font-size: var(--text-lg);
-}
-
-.mb-sheet ul {
-  display: grid;
-  gap: var(--space-2);
-  margin: 0;
-  padding-left: 1.1em;
-  color: var(--text-muted);
-  line-height: 1.45;
-}
-
-.mb-sheet .mb-btn {
-  justify-self: end;
-}
-
-[data-width="phone"] .mb-sheet,
-[data-width="phone"] .mb-dialog {
-  top: auto;
-  bottom: 0;
-  width: 100%;
-  border-radius: var(--radius-lg) var(--radius-lg) 0 0;
-  transform: translateX(-50%);
-}
-
-/* ---- Settings: agents with access ---- */
-
-.mb-settings {
-  display: grid;
-  grid-template-columns: 220px minmax(0, 1fr);
-  height: 100%;
-}
-
-[data-width="phone"] .mb-settings {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-[data-width="phone"] .mb-settings-nav {
-  display: none;
-}
-
-.mb-settings-nav {
-  padding: var(--space-4);
-  background: var(--bg-rail);
-  border-right: 1px solid var(--border);
-}
-
-.mb-settings-nav h2 {
-  margin: 0 0 var(--space-3);
-  font-size: var(--text-base);
-}
-
-.mb-settings-nav ul {
-  display: grid;
-  gap: 2px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.mb-settings-nav a {
-  display: block;
-  padding: 6px 10px;
-  border-radius: var(--radius-sm);
-  color: var(--text);
-  font-size: var(--text-md);
-  text-decoration: none;
-}
-
-.mb-settings-nav a[aria-current="page"] {
-  background: var(--bg-selected);
-  font-weight: var(--weight-medium);
-}
-
-.mb-settings-body {
-  display: grid;
-  align-content: start;
-  gap: var(--space-4);
-  max-width: 720px;
-  padding: var(--space-6);
-  overflow: auto;
-}
-
-.mb-settings-body h1 {
-  margin: 0;
-  font-size: var(--text-title-sm);
-}
-
-.mb-settings-body > .mb-btn {
-  justify-self: start;
-}
-
-.mb-lede {
-  margin: 0;
-  color: var(--text-muted);
-  line-height: 1.45;
-}
-
-.mb-grants {
-  display: grid;
-  gap: var(--space-2);
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.mb-grant {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-3);
-  align-items: center;
-  justify-content: space-between;
-  padding: var(--space-3) var(--space-4);
-  border-radius: var(--radius-md);
-  background: var(--bg-bubble);
-}
-
-.mb-grant > div:first-child {
-  display: grid;
-  gap: 2px;
-}
-
-.mb-grant span {
-  color: var(--text-muted);
-  font-size: var(--text-sm);
-}
-
-.mb-grant-actions {
-  display: flex;
-  gap: var(--space-2);
-}
-
-.mb-dialog fieldset {
-  display: grid;
-  gap: var(--space-2);
-  margin: 0;
-  padding: 0;
-  border: 0;
-}
-
-.mb-dialog legend {
-  margin-bottom: var(--space-2);
-  color: var(--text-muted);
-  font-size: var(--text-sm);
-}
-
-.mb-radio {
-  display: flex;
-  gap: var(--space-2);
-  align-items: flex-start;
-}
-
-.mb-radio > span {
-  display: grid;
-}
-
-.mb-radio > span > span {
-  color: var(--text-muted);
-  font-size: var(--text-sm);
-}
-
-.mb-field {
-  display: grid;
-  gap: 4px;
-  font-size: var(--text-sm);
-}
-
-.mb-field input {
-  height: 40px;
-  padding: 0 12px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--bg-inset);
-  color: var(--text);
-  font: inherit;
-}
-
-.mb-switch {
-  display: flex;
-  gap: var(--space-2);
-  align-items: center;
-}
-
 .mb-hint {
   margin: 0;
   color: var(--text-muted);
   font-size: var(--text-sm);
 }
 
-.mb-dialog-actions {
-  display: flex;
-  gap: var(--space-2);
-  justify-content: flex-end;
+/* ---- the first run: Clawtrate's own lines ---- */
+
+/* The brief Clawtrate sent the bot: one quiet line, never the person's bubble. */
+.mb-quiet {
+  align-self: center;
+  max-width: min(520px, 100%);
+  color: var(--text-faint);
+  font-size: var(--text-sm);
+  text-align: center;
 }
 
-.mb-added {
-  display: grid;
-  gap: var(--space-2);
-  padding: var(--space-4);
+.mb-quiet p {
+  margin: 0;
+}
+
+.mb-quiet .mb-brief {
+  margin-top: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
   border-radius: var(--radius-md);
-  background: var(--bg-bubble);
+  color: var(--text-muted);
+  text-align: left;
 }
 
-.mb-added h2 {
-  margin: 0;
-  font-size: var(--text-base);
+/* A message from Clawtrate itself, such as the sign-ins before the hello. */
+.mb-app {
+  align-self: stretch;
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-pane);
 }
 
-.mb-added p {
-  margin: 0;
+.mb-app p {
+  margin: 0 0 var(--space-2);
+}
+
+.mb-app .mb-app-from {
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+  font-weight: var(--weight-medium);
+  letter-spacing: 0.02em;
+}
+
+.mb-app-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-top: var(--space-3);
+}
+
+/* Skip the tour sits above the composer, out of the transcript. */
+.mb-skip-wrap {
+  display: flex;
+  justify-content: center;
+  width: min(var(--transcript-max), calc(100% - 2 * var(--space-4)));
+  margin: 0 auto var(--space-2);
+}
+
+/* A file a bot handed over. */
+.mb-file {
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+}
+
+.mb-file > span:last-child {
+  display: grid;
+}
+
+.mb-file > span:last-child span {
   color: var(--text-muted);
   font-size: var(--text-sm);
 }
 
-.mb-added .mb-btn {
-  justify-self: start;
-}
-
-.mb-code {
-  margin: 0;
-  padding: var(--space-3);
-  overflow: auto;
-  border-radius: var(--radius-sm);
-  background: var(--bg-code);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-}
-
-/* Quiet buttons on a bubble-coloured surface take the raised fill. */
-.mb-grant .mb-btn[data-variant="quiet"],
-.mb-added .mb-btn {
-  background: var(--bg-raised);
-  box-shadow: var(--shadow-button);
-}
-
-/* Marks on a proposal: what makes it always confirmed. */
-.mb-marks {
-  display: flex;
-  flex-wrap: wrap;
-  gap: var(--space-1);
-  margin-bottom: var(--space-2);
-}
-
-.mb-mark {
-  padding: 2px 8px;
-  border-radius: var(--radius-pill);
-  background: var(--warn-soft);
-  color: var(--warn);
-  font-size: var(--text-xs);
-  font-weight: var(--weight-medium);
-}
-
-.mb-diff {
+.mb-file-icon {
   display: grid;
-  gap: 2px;
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-}
-
-.mb-diff [data-sign="-"] {
-  color: var(--danger);
-}
-
-.mb-diff [data-sign="+"] {
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
   color: var(--accent);
+  font-size: 18px;
 }
 
-/* The first run's guided card. */
-.mb-guided {
-  display: grid;
-  gap: var(--space-3);
+/* A task the Main Bot started, listed under its tile. */
+.mb-task-row {
+  display: flex;
+  gap: var(--space-2);
+  align-items: center;
+  justify-content: space-between;
+  width: 100%;
+  margin-top: 4px;
+  padding: 6px 10px 6px 24px;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: none;
+  font-size: var(--text-sm);
+  text-align: left;
+  cursor: pointer;
 }
 
-.mb-guided .mb-card-head {
-  margin-bottom: 0;
+.mb-task-row:hover {
+  background: var(--accent-soft);
 }
 
-.mb-field textarea,
-.mb-field select {
-  padding: 8px 12px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-sm);
-  background: var(--bg-inset);
-  color: var(--text);
-  font: inherit;
-  resize: vertical;
+.mb-task-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.mb-field select {
-  height: 40px;
+.mb-task-state {
+  flex: none;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
 }
 
-.mb-guided .mb-card-note,
-.mb-guided .mb-card-actions,
-.mb-guided .mb-hint {
-  margin: 0;
+.mb-task-state[data-state="working"] {
+  color: var(--accent);
 }

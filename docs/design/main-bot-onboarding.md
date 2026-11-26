@@ -1,224 +1,283 @@
-# The Main Bot, the autonomy choice, and bots that set themselves up
+# The Main Bot and its first run
 
-Issue #292, revised for #434. The first run makes a new bot, the Main Bot, and you set it up by chatting with it: it greets you, and a card under its greeting asks what to call it, which of Clawtrate's avatars it wears and how it should help. When you save, its tile at the top of the sidebar and the chat's header change as soon as the gateway confirms. Before that, one question sets how bots run commands. Later, a bot can ask to change its own settings, a bot you allow can ask to create or change other bots, and an external agent you allow can see bots and suggest changes through MCP. **A bot never changes a setting by itself: you confirm each change, on a card that shows exactly what will be written.** Every change goes through the gateway's own methods, and Clawtrate shows only what the gateway confirmed.
+Issue #292, revised for #434. A new person's first minute in Clawtrate is a conversation. Once they connect, Clawtrate makes their Main Bot and the bot says hello. From there the bot leads: it asks what to call it, and the name is taken as they answer; it asks what they'd like help with; and it shows what Clawtrate is by doing a little real work: it starts a task under its own name, so they see a task with its work panel beside the conversation, and hands them what it made as a file. They can skip any of it by saying so, or with one button, and nothing is lost. Nothing in it stops them to read and agree: Clawtrate does each thing, shows what it did and offers Undo, and asks only for the few things that can't simply be undone (section 5). They end with a named Main Bot, starred and pinned first, that knows it lives in Clawtrate.
 
-It builds on:
+**How facts are marked.** _(on `main`: file:line)_ is code or a checklist row on `main` today. _(OpenClaw, both)_ is the source or docs of OpenClaw 2026.10.6 and 2026.11.10, each read; section 14 gives the file and line for each version. _(run)_ is a run on a development gateway, in section 14. _(proposed)_ is this design, not built. A statement with no mark is the design's own wording of what a screen says.
 
-- **Effortless setup** (the setup work's effortless-setup design, not yet on `main`). That design covers everything up to step 3 of its §7. This one is the autonomy step and the Main Bot's chat. Its PR 6 owns the measurement from pairing to the composer and to the first reply; section 3 adds one more.
-- **The avatar studio** (#302's design, not yet on `main`). The first run's card offers the name's Claw of its §2 first among Clawtrate's avatars, and "Make your own" opens the studio. Its Describe route (§7) and its proposal records and commit (§9) are part of this plugin's contract (section 9).
-- **What stays out of view** (#314, #433, #490, #491): channel chats, other tools' sessions and the gateway's own bot. The first run relies on these; section 4 says how.
-- **Bringing in what an existing OpenClaw has** (#487, its own design): a bot's memory, the person's profile and its skills, scheduled jobs, and context from another assistant. The first run offers it at one step (section 3) and that design covers the rest.
-- **#257 and #246** (the Approvals step and the Create sequence), and **#147** (the primary bot and a bot's identity). Section 16 says what is taken from each.
+It stands on:
 
-The evidence is [`docs/research/bot-self-management.md`](../research/bot-self-management.md), from checks on a development gateway and from the OpenClaw 2026.10.6 package CI installs. Its findings are cited as R1 to R45.
+- **Connecting** (`docs/design/setup-effortless.md`): local connect for OpenClaw on this computer, whose pieces are on `main` and off in every host _(on `main`: `apps/desktop/src/setup/local-connect.ts:12`)_, the next setup pull request; #653, a first pairing asking once for everything (draft); #658 and #665, approving a waiting device from inside Clawtrate (in build).
+- **Bots know Clawtrate by default** (#643, draft): Clawtrate's guide in every bot's instructions with nothing asked, one switch in Settings. #666, a bot knowing that _this_ conversation is in Clawtrate.
+- **Tasks a bot starts** (#532, on `main`): a task the bot starts under itself (F-565), the card where it was asked (F-587), and the guide that tells it how (F-566). **Files and pictures in the conversation** (F-115, F-535, on `main`; on 2026.11.10 they open once #661 lands).
+- **What stays out of view** (#490, #491, on `main`; #314, #433): the gateway's own bot, other tools' sessions and channel chats.
+- **How a bot knows and acts on the app** (`docs/design/bots-in-clawtrate.md`, in design beside this one, issue #436): the tools a bot has and who confirms each. This design is the first run's script and screens; where the first run needs a tool, section 3 names it as that design's and says what it needs.
+- **Bringing an existing OpenClaw in** (#495, `docs/design/bring-your-openclaw.md`, draft; issue #487): what the Main Bot can start from on a gateway that already has bots. Section 3 says where the first run hands over to it.
+- **#257, #246 and #147** (drafts): New bot's create handling and the bot's identity. Section 9 says what is taken from each.
 
-The prototype is [`prototype/main-bot.html`](prototype/main-bot.html): the autonomy step, the first run with its guided card, a bot asking to rename itself, creating a bot by chat, proposals, and external agents in Settings, in dark (the default) and light, at desktop and phone width. `prototype/tools/checks/main-bot.mjs` checks it. The prototype is a fixture: it shows what each state looks like and cannot show that a gateway effect happened. Section 17 lists the contract tests that do.
+The evidence is [`docs/research/bot-self-management.md`](../research/bot-self-management.md), findings R1 to R45, and section 14, which re-checks every fact the first run relies on against OpenClaw 2026.11.10. The prototype is [`prototype/main-bot.html`](prototype/main-bot.html); section 11 lists its states.
 
-## What the #434 revision changes
+## The first run, start to finish
 
-Until now the Main Bot was whichever bot the gateway called its default, set up in place if it had never been. It is now always a bot Clawtrate makes.
+### What the person does
 
-- **The first run makes the Main Bot.** On every gateway, including one that already has bots, Clawtrate makes a new bot and the person sets it up by chatting with it: its name, its picture from Clawtrate's avatars, and how it helps. No bot the gateway already has is adopted. The gateway a person already has is the usual path; a new gateway is only for someone who has none.
-- **One per gateway, made once.** If two devices set up at the same moment, the gateway lets only one make it, and every person on the gateway sees that same bot. Changing which bot is the Main Bot comes with Clawtrate's bot tools on the gateway, and then it changes for everyone; the old one becomes an ordinary bot with its chats.
-- **It knows it is the Main Bot.** Clawtrate writes into its identity: "You are the Main Bot in Clawtrate, the bot people here start with. Being the Main Bot gives you no extra access: don't make or change other bots yourself; tell the person what you'd suggest, and they decide in Clawtrate. Your picture is one of Clawtrate's avatars, chosen in Clawtrate. Don't make or set a picture yourself."
-- **It looks like the Main Bot:** a gold star on its avatar and a tile of its own at the top of the sidebar, above the other bots.
-- **The gateway's own bot is not shown** once another bot exists (#490). That is whichever bot OpenClaw treats as the gateway's default, so a bot the person made the default themselves leaves the sidebar too. It keeps running, and it keeps the channel messages and other traffic that reach the gateway without naming a bot. A switch under Settings → Advanced brings it back.
-- **Channels stay where they were.** Channel messages keep going to the bot they reach today, never to the Main Bot. On a gateway with only its own bot, OpenClaw itself records that bot as the one channels reach when the Main Bot is made; Clawtrate never writes channel settings.
-- **A bot changing itself asks first.** A new name or picture is a card the person confirms; a setting under Settings → Advanced can apply one at once when the person typed it in Clawtrate.
-- **It can start from what an existing bot knows** (#487): one step of the first run offers it.
-- **Being the Main Bot grants nothing by itself.** Once Clawtrate's bot tools are on the gateway, the first run lets the Main Bot suggest new bots and changes to other bots, with a switch on its setup card that is on unless the person turns it off; the person confirms each suggestion (#437).
+Two starting points: OpenClaw already runs on this computer (the usual case), or there is no OpenClaw yet. A click is a press in Clawtrate; "typed" is something typed into a setup field or a terminal; an approval is a request the gateway's owner must approve; a read-and-agree screen is one whose only job is to be read and accepted. Answers typed to the bot in the conversation are counted apart, since they are the conversation.
 
-Two choices are still with the product owner; section 4 gives what each costs:
+**OpenClaw runs on this computer**
 
-- **Open: while Clawtrate can't make a bot yet.** Default: the top of the sidebar says "Set up your Main Bot" and asks once for full control; no bot is starred, and on a gateway with other bots the gateway's own bot is out of view too, so until full control is given the person sees neither it nor a Main Bot. Alternative: an existing bot wears the star until then.
-- **Open: the bot already starred.** On today's builds that is always the gateway's own bot. Default: after the update the first run makes the Main Bot, and the old bot leaves the sidebar with its chats kept, one switch away. Alternative: keep it as the Main Bot when Clawtrate made it, which almost never applies.
+| Step | What happens                                                                                                                                                                                 | Clicks         | Typed | Approvals | Mark                                                                                                                               |
+| ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------- | ----- | --------- | ---------------------------------------------------------------------------------------------------------------------------------- |
+| 1    | Clawtrate opens on "OpenClaw is running on this Mac" with **Connect**.                                                                                                                       | 1              | 0     | 0         | proposed in `setup-effortless.md` §3; OpenClaw approves a first loopback pairing that asks for all six silently _(OpenClaw, both)_ |
+| 2    | The bots load. Clawtrate makes the Main Bot: a tile with the gold star at the top of the sidebar, above the person's bots. Its conversation opens.                                           | 0              | 0     | 0         | proposed (section 4); the calls are New bot's _(on `main`)_                                                                        |
+| 3    | The Main Bot says hello and asks what to call it.                                                                                                                                            | 0              | 0     | 0         | proposed (section 3)                                                                                                               |
+| 4    | The person answers. The name is taken at once: the tile, the header and "Message Maple" change, with **Undo** beside it.                                                                     | 0              | 0     | 0         | proposed (section 3, "Taking the name")                                                                                            |
+| 5    | The bot asks what they'd like help with, and they answer.                                                                                                                                    | 0              | 0     | 0         | proposed                                                                                                                           |
+| 6    | The bot offers to show how it works, and starts a small task under its name. The task appears in the sidebar under Maple and as a card in the conversation; its result comes back as a file. | 0 (open it: 1) | 0     | 0         | F-565, F-587, F-115 _(on `main`)_; whether the bot does it is its model's (section 3)                                              |
+| 7    | The bot says what's next. The person has a named Main Bot, starred and pinned first.                                                                                                         | 0              | 0     | 0         | proposed                                                                                                                           |
 
-### Before and after
+So: **1 click to a named Main Bot that has said hello**, nothing typed into setup, no approval, no read-and-agree screen. That click, Connect, is the one thing asked, because it lets this device control the gateway. The name and what to help with are two answers typed to the bot, both optional; the tour adds no click.
 
-| Question                | Before                                                                                                              | After                                                                                                                                                                                      |
-| ----------------------- | ------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Who the Main Bot is     | The gateway's default bot, or a bot chosen in `clawtrate.primary` (#147, not on `main`).                            | A bot Clawtrate made in its first run, with id `clawtrate-main-bot`; with Clawtrate's bot tools on the gateway, another bot chosen later, for everyone.                                    |
-| The gateway's own bot   | A row like any other, starred as the Main Bot.                                                                      | Not in the sidebar, Hidden bots, search or bot pickers once another bot exists; back with "Show the gateway's own bot" under Settings → Advanced. It keeps running and keeps its channels. |
-| Channels                | Their direct messages can lead the Main Bot's row, when the Main Bot is the bot channels reach.                     | Never brought in by the first run. They reach the gateway's own bot as before, and reach Clawtrate's view only through "Show external channel chats", off by default (#433).               |
-| The star and the tile   | A small neutral star badge on the default bot, in the rail's ordinary order.                                        | A gold star on the Main Bot's avatar and a tile of its own at the top of the sidebar, above pinned bots and the rest.                                                                      |
-| What the first run asks | The default bot's name and role, on a card, only if it had never been set up; otherwise "Juniper is your Main Bot." | Always: the new bot's name, its picture from Clawtrate's avatars and how it should help, by chatting, then an offer to start from what an existing bot knows.                              |
+On `main` today the same person types the address and token under Advanced, since "This computer" declines every version _(on `main`: `apps/desktop/src/setup/look.ts:130`)_, presses Connect, and approves three access requests, each with `openclaw devices approve` in a terminal: at the first send, the first admin action and the first visit to Machines. No Main Bot is made: the gateway's own bot wears the star _(on `main`: F-015)_.
+
+**No OpenClaw yet**
+
+| Step | What happens                                                                                                                                                                | Clicks                  | Typed | Approvals | Mark                                                                                                    |
+| ---- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------- | ----- | --------- | ------------------------------------------------------------------------------------------------------- |
+| 1    | "Clawtrate didn't find OpenClaw here", with **Set up OpenClaw here**, which says on the same card what it installs and that it keeps running.                               | 1                       | 0     | 0         | proposed for #244 (draft): its separate explanation screen goes (below)                                 |
+| 2    | The computer's own dialog asks once: install OpenClaw and its background service.                                                                                           | 1                       | 0     | 0         | #244's dialog, kept: it installs a program that keeps running                                           |
+| 3    | It installs (40 to 60 seconds) and connects by itself to the gateway it just set up.                                                                                        | 0                       | 0     | 0         | proposed: #244 offers Connect after the install; the person already said yes                            |
+| 4    | The Main Bot is made and its conversation opens with Clawtrate's own line: the bot needs a model account to talk, and the sign-ins the gateway offers, subscriptions first. | 1 + the provider's page | 0     | 0         | proposed (section 2); the sign-ins are `bots.md` §5's _(on `main`: `packages/ui/src/bots/Connect.tsx`)_ |
+| 5-9  | As steps 3 to 7 above.                                                                                                                                                      | 0                       | 0     | 0         |                                                                                                         |
+
+So: **3 clicks in Clawtrate and the provider's own sign-in page** to a named Main Bot. Each click is one of the few things that ask: installing OpenClaw changes the computer, the dialog is the computer's own, and signing in hands the gateway an account. A sign-in that finishes in a browser on this computer needs nothing typed in Clawtrate; the provider's page asks for what it asks. An API key, typed once, is the last of the options, never the first.
+
+**What the reviewed design asked, for comparison.** On both starting points it added a read-and-agree step, "How should bots run commands?" with two cards, nothing chosen and a sheet to read; a form card under the greeting with three fields (a name, a picture, how it should help) and Save; and an opening message sent in the person's name. On a gateway with other bots, a separate card then offered to start from what one of them knows, and a sheet asked which parts to bring. That is 5 to 7 clicks, 2 typed fields and 3 read-and-agree screens beyond Connect. This revision has none of them. Section 5 lists every prompt the reviewed design had and what each became.
+
+### The conversation
+
+As it usually goes, with what the app does in brackets. The bot is a real bot on the person's gateway, on their model, so its words vary; section 3 says what the app guarantees whatever it says.
+
+> _[Clawtrate makes the Main Bot and opens its conversation. A quiet line at the top: "Clawtrate started this conversation · Show".]_
+>
+> **Clawtrate Main Bot:** Hi! I'm your new bot in Clawtrate. First things first: what would you like to call me?
+>
+> **You:** Maple
+>
+> _[The name is taken. The tile, the header and the composer's "Message Maple" change once the gateway reads it back. Under the reply: "Named Maple · Undo".]_
+>
+> **Maple:** Maple it is. What would you like a hand with? Anything from your week to your code.
+>
+> **You:** Keeping my week organised, and some coding.
+>
+> **Maple:** Got it, I'll remember that. Want me to show you how I work here? It takes about a minute.
+>
+> **You:** Sure
+>
+> **Maple:** Here's something I can do while we keep talking: I'll put a starter checklist for your week together in its own task.
+>
+> _[A "Started a task" card, "Week checklist", Working. In the sidebar the task appears under Maple. Opening it shows "Maple started this task from Main" and the work as it happens.]_
+>
+> **Maple:** It's done. Here's the checklist. You'll find the task under my name whenever you want it.
+>
+> _[A file card: "week-checklist.md", its size, Save.]_
+>
+> **Maple:** That's the tour. Ask me anything, or ask me to start something in its own task.
+
+Above the composer, until the tour ends, one button: **Skip the tour**. It sends "Let's skip the tour for now." as the person's message; anything else they write works the same way. Section 3 has the brief the bot is given, what happens when it does something else, and the timings.
+
+### What changed from the reviewed design, and why
+
+Each is a place where the design as written conflicted with the direction set since: Clawtrate does not prompt (it does the thing, shows it and offers Undo, and asks only for what is destructive), connecting takes one click, bots know the app by default, and the bot introduces Clawtrate in conversation.
+
+1. **The bot speaks first.** The reviewed design sent a fixed message in the person's name ("Hi! I just set up Clawtrate. What should I call you…", F-006) and the bot answered it. Now the first thing the person sees is the bot's hello. Clawtrate's brief to the bot is still the conversation's first input, since a run needs one, but it is drawn as a quiet line, "Clawtrate started this conversation", with **Show**, never as the person's message (section 3).
+2. **No form.** The guided card (Name, Picture, How should it help?, Save) is gone. The bot asks, the person answers, and the app acts on the answer.
+3. **A name is taken as it's given, everywhere.** No card, no Save, no setting: a name a bot writes for itself is taken at once and shown with **Undo**, in the first run and after. The checks that used to decide "apply or ask" still run, silently, and decide only what the line under it says: "Named Maple · Undo" when the person typed that name in this conversation on this device, "Maple renamed itself Scout · Undo" otherwise (section 3). F-552's rename card, on `main`, becomes that line.
+4. **The picture is a default.** The Main Bot wears the Claw its name gives it (#302's name Claw), changed with the name, with nothing asked.
+5. **What it helps with is the bot's to remember.** The bot writes it in its own `USER.md`, the file OpenClaw keeps for what a bot knows about its person _(OpenClaw, both: `docs/reference/templates/USER.md`)_. Clawtrate writes nothing for it and asks nothing.
+6. **No question about how bots run commands.** "How should bots run commands?" is gone from setup, and the first run writes no command setting: the Main Bot runs commands as the gateway's own rules say, as a bot New bot makes on `main` does. What a bot may do on the person's computer is being designed separately, with its own security review; until then nothing here changes OpenClaw's own approval for a command (section 2).
+7. **The bot knows it lives in Clawtrate, by default.** Clawtrate's guide is in the Main Bot's instructions from the moment it is made, with nothing asked (#643). The reviewed design relied on Clawtrate's card for the name because the bot couldn't be relied on; now the bot leads, and the app guarantees only what it drives.
+8. **Clawtrate shows itself by doing.** New: a task under the bot's name with its work panel, and a file the task made, handed over in the conversation (section 3). The tour asks the person for nothing.
+9. **Connecting is one click on this computer.** The reviewed design assumed full control from the pairing; it now stands on local connect (0 approvals) and #653 (one approval on another computer), and counts the clicks.
+10. **A model account is part of the first run.** The reviewed design assumed one. On a gateway with none, signing in is the one step before the hello (section 2); it asks because it hands the gateway an account.
+11. **Starting from what another bot knows is done, not offered.** On a gateway where another bot knows things (#495), the Main Bot starts from its memory, what it knows about the person and its skills, at the end of the first run, and says so; Clawtrate's line under its message has **See what** and **Undo**. Its scheduled jobs aren't moved: they keep running as they are, and each has its own switch in #495's list (section 3).
+12. **Changing which bot is the Main Bot happens at once.** Choosing another bot makes it the Main Bot, shown with Undo; no Confirm (section 4).
+13. **An unconfirmed opening is sent again once, by itself.** The reviewed design stopped on "Send it again" or "Leave it"; now Clawtrate sends it once more and says so if it then appears twice (section 3).
+14. **The two choices left open are settled.** "While Clawtrate can't make a bot yet" takes its default, the "Set up your Main Bot" tile whose one request is for full control, which asks because it lets the device control the gateway; "the bot already starred" takes its default too: the first run makes the new Main Bot after the update. Section 4 keeps what each alternative would cost.
+15. **The proposal cards are withdrawn.** The reviewed design's sections on Clawtrate's bot tools, proposals, Review and save, the "Apply a bot's changes to itself at once" setting and external agents' suggestions rested on a card for every change. A bot's tools and their classes are now `bots-in-clawtrate.md`'s (#669); section 5 says what each prompt became.
+
+### What the rule superseded, and where an earlier decision still pulls against it
+
+- **Superseded, not a choice:** the decision of 2026-11-23 that a bot changing itself asks first on a card by default, with a setting under Settings → Advanced to apply it at once. A bot's own name and picture are now taken at once with Undo, inside and outside the first run, and there is no such setting. Also superseded: the reading of 2026-11-25 that a question is owed wherever a bot gets more freedom. Neither is put back anywhere in this design.
+- **Starting from what another bot knows.** On 2026-11-24 every import was to be offered and shown in plain words before anything is saved, each reversible; the rule since makes anything that isn't destructive happen at once. _Chosen:_ memory, what the bot knows about the person and skills are brought in at once at the end of the first run and shown with **See what** and **Undo**, which #495 makes real; scheduled jobs are not moved. _Why:_ a copy is fully reversible (Undo removes it, and nothing is taken from the other bot), so it is not destructive; a job keeps acting after the fact, so it is the case the rule says not to do unasked, and moving it stays the person's own switch.
+
+### What is established and what is proposed
+
+Established: every gateway call the first run makes, on both versions (section 14), and the pieces on `main` it reuses: New bot's calls, the name a bot writes being read after its run (F-552), a task a bot starts and its card (F-565, F-587), a file a bot hands over (F-115), the guide's text, the gateway's own bot and other tools' sessions kept out of view (F-562, F-563). Proposed: everything the person sees in this section that `main` doesn't have: the Main Bot made at connect, its tile and star, the hello first, the name taken at once with Undo, the tour and its skip button, the account step, no command question, the start from another bot, and the clicks above (local connect, #653 and #244's changes are each their own pull request). Whether a real model follows the brief is seen only with a real model: the development gateway's scripted model checks what the app does, not what a model chooses (section 10).
+
+### What is built first
+
+Eight pull requests, in section 13. **The first a person can see and feel is the second, "Your Main Bot says hello"**: after Connect, Clawtrate makes the Main Bot, its tile and gold star appear above the person's bots, and the bot greets them and asks its name. The first is the test fixture's, which nobody sees. The name taken at once, the tour and the sign-in step follow, each on its own.
 
 ## Contents
 
 1. What changes
-2. The autonomy choice
-3. The first run
+2. Before the bot speaks: connecting, a model account, how bots run commands
+3. The first run's conversation
 4. The Main Bot
-5. The `clawtrate-bots` plugin
-6. The tool contract
-7. Who may change what
-8. Proposals: how every change is authorized
-9. For the avatar studio: Describe and proposal records
-10. External agents over MCP
-11. Live updates in core and the interface
-12. Safety
-13. Failure states
-14. The iPhone app
-15. Parity rows
-16. What is taken from #257, #246 and #147
-17. For builders
-18. The prototype's states
-19. Not covered
-20. Build order
+5. Every prompt the design had, and what it became
+6. Failure states
+7. The iPhone app
+8. Parity rows
+9. What is taken from #257, #246 and #147
+10. For builders
+11. The prototype's states
+12. Not covered
+13. Build order: the pull requests
+14. Gateway facts on OpenClaw 2026.10.6 and 2026.11.10
 
 ## 1. What changes
 
-| Today                                                                                                 | After                                                                                                                                                                                                                                   |
-| ----------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| After setup the app opens on the bot list, or on "Make your first bot" for an unused implicit `main`. | Clawtrate makes the Main Bot and opens its chat. It greets you, and a card asks its name, its picture and its role.                                                                                                                     |
-| New bot asks "Ask before acting" or "Run without routine approvals" each time, with nothing chosen.   | Setup asks once how bots run commands. New bot starts on that answer. Each bot can be changed later.                                                                                                                                    |
-| A bot can't change its own settings, except through shell commands.                                   | A bot asks, through Clawtrate's plugin, and you review the exact change and save it. On OpenClaw 2026.10.6 saving opens your own editor, filled with the proposed values (section 8). Clawtrate shows the result the gateway read back. |
-| Bots are created only in New bot.                                                                     | A bot you allowed can propose a new bot, its routines and changes to other bots. You confirm each.                                                                                                                                      |
-| External agents can't see bots.                                                                       | An agent you allow can see bots and suggest changes through MCP, on this Mac, while Clawtrate is open. You can see what it did and remove its access at once.                                                                           |
+| Today                                                                                                 | After                                                                                                                                                          |
+| ----------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| After setup the app opens on the bot list, or on "Make your first bot" for an unused implicit `main`. | Clawtrate makes the Main Bot and opens its conversation. The bot says hello and leads: its name, what to help with, and a short tour by doing.                 |
+| Nothing at setup asks how bots run commands (#257's step isn't on `main`).                            | The same: the first run asks nothing about commands and writes no command setting (section 2).                                                                 |
+| A bot that takes a name in the chat is renamed once the person confirms it on a card (F-552).         | The name is taken at once and shown with Undo, in the first run and after; the line says when the person didn't type that name (section 3).                    |
+| A bot can't change its own settings, except through shell commands.                                   | A bot's tools on Clawtrate, and the class of each, are `bots-in-clawtrate.md`'s (#669). This design uses one of them, for the name, once it is on the gateway. |
 
-## 2. The autonomy choice
+## 2. Before the bot speaks: connecting, a model account, how bots run commands
 
-### The question
+### Connecting
 
-One step, titled **"How should bots run commands?"**, with two cards. Each card is a button. Nothing is chosen at first and neither is marked as recommended (#257). Hands-off is first.
+The first run needs full control of the gateway: making a bot is admin (`agents.create`, `agents.files.set`, `config.patch`, `agents.update`, R17) and its conversation needs write (`sessions.create`, `chat.send`) _(OpenClaw, both)_. Giving a device that control is one of the few things that ask, since it lets the device control the gateway: on this computer it is the one Connect click.
 
-| Card                  | Line under it                                                            |
-| --------------------- | ------------------------------------------------------------------------ |
-| **Hands-off**         | "Run commands without routine approvals, where this computer allows it." |
-| **Ask before acting** | "Ask when a host command doesn't match an existing rule."                |
+- **On this computer**, local connect (`setup-effortless.md` §3) proves the gateway on this computer is this account's own, asks for all six scopes in the first hello and OpenClaw approves it silently: 1 click, 0 approvals. Its pieces are on `main` and off in every host _(on `main`: `apps/desktop/src/setup/local-connect.ts:12`)_. Until it ships, a typed loopback address pairs read-only and steps up three times, each by command (#653's count).
+- **On another computer**, a `wss://` address asks once for all six, and the gateway's owner approves once (#653). With another Clawtrate already connected with full control, that approval is one click in it (#658, #665).
+- **With no OpenClaw**, #244 sets it up. This design asks of #244 only what the counts above need: the facts on the not-found card itself, the computer's own dialog as the one question, and Connect by itself once the install's gateway is found.
+- **Without full control** (a device that paired with less, a host without secure storage, a narrower grant its owner chose), the top of the sidebar is the "Set up your Main Bot" tile with **Give full control**, #418's one request (section 4). The first run waits for it.
 
-Under the cards, two lines and a link:
+### A model account
 
-- "Either way, a bot asks you before it changes its own or another bot's settings, and you confirm each change with one click."
-- "Clawtrate's limits cover changes made through Clawtrate. A command a bot runs can still change things on the computer running OpenClaw."
-- **What this means** opens a sheet:
-  - "**Hands-off** runs a bot's commands without stopping for approval, as the computer's own user, where that computer's rules allow it. A command can change files and OpenClaw's own settings."
-  - "**Ask before acting** runs commands that match a rule already allowed on that computer, including rules you didn't add yourself, such as its safe commands. Anything else waits for you, unless this computer's or the task's own rules decide first. If nobody answers in 30 minutes, the computer's own fallback decides; by default it refuses."
-  - "Stopping a run stops what comes next. It doesn't undo a command that already ran."
-  - "Each computer can be stricter than this choice. Clawtrate shows what each bot can actually do, or says when it can't tell."
+The bot can't say hello without a model it can reach. Clawtrate decides this from what the gateway reports, never by trying a turn:
 
-Keyboard: the cards are a radio group with one tab stop; Enter or Space chooses the focused card.
+- The Main Bot is made with the gateway's default model, as New bot's "Let the gateway choose" does (`bots.md` §4). Right after, Clawtrate reads `models.authStatus {agentId: "clawtrate-main-bot", refresh: true}` _(on `main`: `packages/core/src/accounts-engine.ts:512`)_. When it lists an account for that model's provider whose state needs no sign-in (`bots.md` §7's state words), nothing is asked and the opening is sent.
+- **When it doesn't**, the conversation opens with Clawtrate's own message, drawn as the app's, not the bot's: "Before your Main Bot can talk, it needs an account with a model provider. Sign in with one you already have. Your gateway keeps the sign-in; Clawtrate never sees your password." Under it, the gateway's sign-in methods as `bots.md` §5 lists them, subscriptions first, each one click; an API key is last. The sign-in is started for the gateway's own bot when its folder is the gateway's shared one, so every bot can use the account, and for the Main Bot otherwise (`bots.md` §5, "Which store a sign-in lands in"). When the account reads back, the line becomes "Signed in with <provider>." and the opening is sent.
+- A gateway #244 set up always has none, since its onboarding skips the account (`setup.md` §10). A gateway the person already used usually has one.
 
-### What it means in OpenClaw 2026.10.6
+### How bots run commands
 
-The choice is about host commands. It is written per bot, never as the gateway's global default.
+Nothing is asked and nothing is written _(proposed)_. The Main Bot gets no command setting of its own: it runs commands as the gateway's own rules say, as every bot New bot makes on `main` does, and bots the gateway already had keep theirs. OpenClaw's own approval for a command, when its rules call for one, is untouched (R14, R19; both versions, section 14). What a bot may do on the person's computer, and how a person changes it, is being designed separately with its own security review; this design takes nothing from #257's or #246's command step and adds no setting for it.
 
-| What it governs                                                     | Hands-off                                                    | Ask before acting                                                                                                                                    |
-| ------------------------------------------------------------------- | ------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
-| The requested command policy, `agents.entries.<id>.tools.exec.mode` | `full`: security `full`, ask `off` (R14)                     | `ask`: security `allowlist`, ask `on-miss`; a miss raises `exec.approval.requested`, 30 minutes by default, then the host's `askFallback` (R14, R19) |
-| A change to any bot's settings from chat                            | A proposal you apply (section 8)                             | The same                                                                                                                                             |
-| Session permission mode (`sessions.patch {permissionMode}`)         | Not set (R14)                                                | Not set                                                                                                                                              |
-| Other tools                                                         | The bot's tool policy and the managed deny list (section 12) | The same                                                                                                                                             |
+## 3. The first run's conversation
 
-**Requested is not effective.** The effective policy also depends on the host's approvals file and its allowlist and safe bins, the node a command runs on, the sandbox and host placement, `strictInlineEval`, an existing session's permission mode (an explicit `full` session can override host approval floors), a native harness's own permissions, and elevated access with its own gates (R14, R20). So a bot's **Autonomy** row shows two facts, each as read:
+### What the app does, in order
 
-- the requested mode: "Hands-off" or "Ask before acting", or "Custom (Allowlist)" for anything else;
-- the effective access, per host Clawtrate can read: "On this computer: runs without approvals" or "On this computer: asks when no rule matches", or a stricter result ("this computer's approvals file asks before every command"), or "Clawtrate can't read this computer's command rules, so it can't say what will ask." Hosts are read with `exec.approvals.get` (admin) and the node policy where one applies.
+1. **Makes the Main Bot** with New bot's calls (section 4): `agents.create {name: "Clawtrate Main Bot", model}`, its `IDENTITY.md` with the Main Bot lines held to the template's hash (which also ends OpenClaw's own first-run script, R37), its fallbacks in one `config.patch`, and its main conversation, `sessions.create {key: "agent:clawtrate-main-bot:main", agentId, label: "Main"}` with no message, as New bot makes a bot's first task _(on `main`: `packages/core/src/client.ts:1792-1799`)_. Clawtrate's guide goes into its `AGENTS.md` right after, by #643's path for a bot just made.
+2. **Draws it**: the tile with the gold star above the person's bots, the conversation open, the composer empty and usable. On a gateway where another bot knows things, it brings that in now ("Starting from what another bot knows", below).
+3. **Checks the model account** (section 2), and signs in first when there is none.
+4. **Sends the opening**: Clawtrate's brief (below) to the main conversation with `chat.send {sessionKey, message, idempotencyKey: "<record>:<attempt>"}` (R33), once, as "The opening's delivery" says. It is drawn as the quiet line "Clawtrate started this conversation · Show", never as the person's message.
+5. **Follows the conversation**, acting only on what the gateway reports: a name the bot wrote (taken at once, below), a task it started (its card and its row under the bot), a file it handed over (the file card).
+6. **Ends the tour** (below), and leaves the Main Bot as an ordinary conversation.
 
-Clawtrate never says a bot "will ask" or "will be blocked" on a host whose policy it couldn't read.
+### Clawtrate's brief to the bot
 
-### Where it is chosen, and changed
+The first message of the main conversation, fixed text, public like the guide. It is the run's own input, so it reaches the bot exactly once and is gone from its later turns except as history:
 
-| Where                                         | What happens                                                                                                                                                                                                                                                                                                                                                                                                                                                                   |
-| --------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| Setup                                         | Always writes the gateway's new-bot default, `plugins.entries.clawtrate-bots.config.newBots.autonomy`, even when it matches what a bot already has. The Main Bot the first run makes (section 4) is a new bot, so it gets the choice and the managed tool policy too. A Main Bot already made from another device keeps its own policy: the step says "Juniper has its own command settings: Ask before acting." and offers a separate, unchecked "Also use this for Juniper". |
-| Setup, before the plugin is installed         | The choice is kept on this device, bound to this gateway's identity, as a pending choice. When the plugin is installed on that gateway, Clawtrate writes it and reads it back. It is never applied to another gateway, and an existing bot's mode is never taken as the answer.                                                                                                                                                                                                |
-| New bot (`bots.md` §3, #257's Approvals step) | The step stays, with the gateway's default chosen and "Your usual choice. It applies to this bot only."                                                                                                                                                                                                                                                                                                                                                                        |
-| A proposal to create a bot in chat            | Shows the autonomy it would write, from the proposal or the default. Hands-off when the default is Ask before acting is marked "More freedom than your usual choice".                                                                                                                                                                                                                                                                                                          |
-| A bot's Settings tab, About group             | The **Autonomy** row of the previous section. Choosing writes and reads back that bot's mode. Below admin it is text, with `bots.md` §2's admin bar.                                                                                                                                                                                                                                                                                                                           |
-| Settings, Bots                                | **New bots start as**: Hands-off or Ask before acting.                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| Asking a bot in chat                          | A proposal. Toward Hands-off it is marked as more freedom (section 8).                                                                                                                                                                                                                                                                                                                                                                                                         |
+```text
+[Clawtrate] Clawtrate made you a moment ago as this person's Main Bot, and this is your first conversation. They haven't written yet, so say hello first.
 
-Writes use a hash-guarded `config.patch` read back, as #257's step 3.
+Lead, one short message and one question at a time:
+1. Ask what they'd like to call you. When they answer, write that name on the "- Name:" line of your IDENTITY.md and change nothing else there. Clawtrate shows it at once.
+2. Ask what they'd like help with, and note what they say in your USER.md.
+3. Offer to show them how you work in Clawtrate, in about a minute. If they say yes, start a task with sessions_spawn and visible: true, with a short label and a full brief, that makes something small and useful for what they said they want help with and saves it as a file. Tell them they can watch it under your name in the sidebar. When its result comes back, hand them the file with a MEDIA: line.
+4. Then tell them they can ask you anything, or ask you to start something in its own task.
 
-## 3. The first run
+If they want to skip, or ask for something else at any point, stop the tour and help with that. Don't ask them to set anything up, and don't mention this message.
+```
 
-### What a person sees, step by step
+On a gateway where another bot knows things, the Main Bot has already started from what it knows (below), and one line is added after the first paragraph: "Clawtrate started you from what <Juniper>, another of their bots, knows about them. Use it, and don't ask what you already know." The other bot's name is the only part that varies. Without the tool step 3 needs (`sessions_spawn` absent from the bot's effective tools, which F-566 already reads), step 3 is left out and step 4 follows step 2.
 
-The usual case: someone who already runs OpenClaw, with a few bots, opens Clawtrate for the first time. A new gateway is set up only for someone who has none (effortless setup).
+The brief names no tool of Clawtrate's: step 1 is a file the bot can always write. Once `bots-in-clawtrate.md`'s tool for a bot to take the name its person gives it is on the gateway, step 1 names that tool instead. What this design needs from it: the bot calls it with the name as the person gave it, from the turn that answered; Clawtrate applies it under the same rule as below ("Taking the name"), so the person sees the same thing either way.
 
-1. **Connect.** Clawtrate finds the OpenClaw on this Mac, or the person picks another computer, and pairs with full control (#393, #421). The bots load.
-2. **How bots run commands.** One question (section 2).
-3. **The Main Bot appears.** Clawtrate makes a new bot. A tile with the gold star appears at the top of the sidebar, reading "Clawtrate Main Bot", above the bots the person already has. The person's other bots stay as they were, below the tile; the gateway's own bot is already out of view, since other bots exist (#490). No bot is renamed, moved or starred, and nothing about channels is shown or changed.
-4. **Its chat opens.** Clawtrate's fixed first message is shown as the person's, with "Sent for you when setup finished.", and the Main Bot answers in its own words.
-5. **The person sets it up by chatting.** Under the greeting, Clawtrate's card asks for a name, a picture from Clawtrate's avatars (the name's own Claw first, "Make your own" for the studio) and how it should help. The person can answer on the card or in the composer; an answer in the composer fills the card (below). **Save** writes them. The tile, the header and the name follow the gateway's read-back.
-6. **Starting from what it knows.** When the gateway has a bot with memory, a profile of the person, skills or a scheduled job, one card offers "Start Maple from what Juniper knows", and the rest is #487's design. Nothing is copied unless the person chooses it, and conversations and channel links are never copied.
-7. **The first real request.** The Main Bot replies under its new name and the composer is the person's.
+### Taking the name
 
-On a gateway whose only bot is its own one, step 3 is the moment the sidebar changes from that bot to the Main Bot's tile; the gateway's own bot is never removed before the Main Bot exists, so the sidebar is never empty. On a fresh gateway, made for someone who had none, the same steps run with no bots below the tile and no step 6.
+On `main`, after a run of a bot whose conversation is open, Clawtrate reads its `IDENTITY.md` once, and a `- Name:` line that names it otherwise becomes a card with **Rename** (F-552, `packages/core/src/bot-names.ts`). Under the rule the card goes, for every bot and not only in the first run _(proposed)_: the name is taken at once with one `agents.update {agentId, name}` on the person's admin connection, exactly what F-552's Rename sends, with its picture rule; the name's Claw goes with it once #302's name and picture contract is in core. The tile, the header and "Message Maple" change when `agents.list` reads it back, never before.
 
-On a second device, or for a second person on the same gateway, the Main Bot is already there: its tile and its chat open, and nothing is made or sent.
+The checks that used to choose between "at once" and "a card" still run, silently, and now choose only the words under the bot's reply:
 
-### Four things, kept apart
+- **"Named Maple · Undo"** when the run that wrote the name was started by a message this device's composer sent in that conversation (this device's own `chat.send` key), no other message landed there before the run ended (not a scheduled run, another device, a channel or another bot), and the name is in that message, word for word, ignoring case, after the gateway's whitespace rule (R26), within F-552's 40 characters.
+- **"Maple renamed itself Scout · Undo"** in every other case: the person said "you pick one", the name came from a page or a file the bot read, from another device's message, or from a run something else joined. It is still done, since a name is small and Undo puts it back fully; it is never shown as the person's.
 
-- **Setup is ready** when the gateway is paired, the bots are listed and the autonomy choice is written (or pending). That is effortless setup's composer point.
-- **The Main Bot is made** when `agents.create` answered with its id and the bot list shows it (section 4).
-- **The greeting** is the Main Bot's first visible reply.
-- **Identity is complete** when the guided card's name, picture and role read back from the gateway.
+**Undo is real.** The name before is kept where the person will find it after a restart and on their other devices: in their own `users.prefs` (`operator.write`, R17), keyed by the bot's id and `createdAt`; with Clawtrate's bot tools on the gateway, in the plugin's record of changes, for everyone (#669). Undo is one more `agents.update` back to that name, the person's own edit, and the line becomes "Back to Clawtrate Main Bot". When the name has changed again since, Undo isn't offered and the line says "Renamed again since". How often a bot may rename itself is #669's limit. A screen reader hears the line once, from the read-back. Another device that sees the name land shows the same line from the kept record.
 
-The first run's state is one gateway-owned record of the plugin, keyed by gateway and the Main Bot's incarnation (section 4), written once `agents.create` has made the bot. It holds the task and the opening's delivery as two separate facts:
+**What stays as it was.** `agents.update` takes no precondition on either version (R24, section 14), so a change another admin makes in the same moment can be overwritten, as with any rename. A channel message, a schedule, another bot or a tool's text can make a bot rename itself, as it always could by editing its file; now that shows, with Undo, instead of waiting on a card.
+
+Once `bots-in-clawtrate.md`'s `clawtrate_identity` is on the gateway, the bot calls it instead of editing its file, and the person sees the same line; the class of that tool is #669's.
+
+### When the bot does something else
+
+The bot is the person's, on their model; its words can't be fixed. The app guarantees what it drives, whatever the bot says:
+
+| What happens                                                      | What the person sees                                                                                                                                                                                                                            |
+| ----------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The model is slow                                                 | The working line under the conversation within a second (F-081), as for any reply. After 45 seconds with no reply: Clawtrate's line "Your Main Bot hasn't answered yet." with **Stop** and **Try again**. The composer stays usable throughout. |
+| The model fails (an account error, a rate limit, no reply at all) | The run's error as any conversation shows it, and, for an account error, **Check the account**, which opens the sign-in of section 2. Nothing is resent by itself.                                                                              |
+| It doesn't ask for a name, or never writes one                    | Nothing breaks. The Main Bot keeps "Clawtrate Main Bot" until the person names it, by asking it or with Rename in its settings. Its tile, star and place don't depend on a name.                                                                |
+| It writes a name the person didn't type                           | The name is taken, with "Maple renamed itself Scout · Undo" (above).                                                                                                                                                                            |
+| It skips the tour, or does only part of it                        | Nothing is missing that the person needs. The skip button goes when the tour ends (below).                                                                                                                                                      |
+| It goes off course, or refuses                                    | The conversation is the person's: whatever they write next is a normal message. The brief is never sent again by itself.                                                                                                                        |
+| The bot can't start tasks                                         | Step 3 isn't in its brief (above); if a start fails anyway, the bot says so in its reply.                                                                                                                                                       |
+| The person leaves, or closes the app                              | Everything stays as it was: the conversation, the name, a task that is running. Coming back opens the Main Bot's conversation where it was.                                                                                                     |
+
+### Skipping and stopping
+
+- **Skip the tour**, one button above the composer while the tour runs, sends "Let's skip the tour for now." as the person's message, shown as theirs, since they pressed it. The button goes. Writing anything else does the same in the person's own words.
+- **Stop** stops the reply in progress, as in any conversation. A command that already ran isn't undone.
+- **Nothing is lost** either way: a name taken stays, a task started keeps running and stays under the bot, and the bot keeps what it noted.
+- The tour ends, and the button goes, when the person presses it, when a task the Main Bot started from this conversation has handed back its result, when the person opens another bot or task, or after ten minutes. Which of these happened is kept on this device for that gateway and that Main Bot (its id and `createdAt`), so the button never comes back.
+
+### Where it ends
+
+The person is left with a Main Bot that has their name for it and its Claw, the gold star and the tile at the top of the sidebar; its main conversation, with the tour in it; Clawtrate's guide in its instructions; what it helps with in its `USER.md`; and, when the tour ran, one task under its name with a file. On a gateway with other bots, they stay below, as they were.
+
+### Starting from what another bot knows
+
+This is where the first run hands over to #495. On a gateway where another bot knows things (#495 says which bot, and what counts), Clawtrate brings in that bot's memory, what it knows about the person and its skills **right after making the Main Bot and before the opening**, so the bot can greet the person already knowing them _(proposed)_. Nothing is asked; it is a copy, and the other bot keeps everything. At the top of the conversation, under the quiet line, Clawtrate's line says what came: "Maple started from what Juniper knows: its memory, what it knows about you, 2 skills · **See what** · **Undo**". **See what** opens #495's list of what was brought; **Undo** removes all of it from Maple, as #495's Remove does, and works after a restart and from another device because #495 keeps the record on the gateway. Scheduled jobs are not moved: they keep running with the bot they belong to, and #495's list gives each its own switch. What is copied, what is left out (secrets, conversations, channel links) and how each part is removed are #495's.
+
+### Timing
+
+Estimates on a real model; the instrumented builds report each separately.
+
+| Point                                                             | Target                 |
+| ----------------------------------------------------------------- | ---------------------- |
+| Opening the app to the Main Bot's conversation, with its composer | 20 s (effortless PR 6) |
+| That to the bot's hello                                           | 3-8 s                  |
+| The person's answer to the name in the tile                       | 1-3 s after the reply  |
+| The whole tour, with the person's answers                         | under 2 minutes        |
+
+### The opening's delivery
+
+The opening is sent once per gateway and Main Bot, including across two devices, a restart and a lost reply. The record is the reviewed design's, now keyed to the main conversation:
 
 ```ts
 {
   bot: { id: string; createdAt: number };
-  task: { key: string; state: "unclaimed" | "created" | "unknown" };
   opening: {
     state: "unsent" | "sending" | "delivered" | "unknown";
-    attempt: number;                         // 1 for the first send, +1 per explicit resend
-    resend?: { device: string; at: number }; // who claimed the current explicit resend
-    via?: "create" | "send";                 // how the current attempt delivers
+    attempt: number;                         // 1 for the first send, 2 for its one resend
+    resend?: { device: string; at: number }; // who claimed the resend
   };
-  identity: "unsaved" | "saved";
   claim: { device: string; at: number };   // the gateway's clock; the device hashed
 }
 ```
 
-- **The task key is chosen before anything is sent**: `agent:<id>:clawtrate-getting-started-<record id>`, and `sessions.create` is called with that `key`. The record is claimed atomically (`registerIfAbsent`, R22) before the call, so a second device, or the same one after a restart, finds the record and the key.
-- **An existing key is adopted, not reset**, and a message sent with it would be sent again (R29). So Clawtrate calls `sessions.create {key, message}` only for a key it has just confirmed doesn't exist; otherwise it reads the task and decides from its history.
-- **`sending` is written before the call.** The record moves from `unsent` to `sending` (attempt 1) with `compareAndApply` (R22), and only then is `sessions.create` sent. A record that was ever `sending` never goes back to `unsent` by itself.
-- **After a lost reply, a restart or a device change**, Clawtrate reads the task by its key (`sessions.list`) and its history (`chat.history`). The fixed opening in the history makes the record `delivered`. Anything else after a `sending` (no task, an empty or incomplete history, an answer with `runStarted: false`) makes it `unknown`, and it stays `unknown` across recoveries until a person resends. `sessions.create`'s `idempotencyKey` deduplicates only in the gateway's memory, per caller, for five minutes after success (R21, R29), so it is a convenience, never a reason to resend or not.
-- **An unknown opening waits for a person**: "Clawtrate couldn't confirm the first message reached Maple." with **Send it again** and **Leave it**. Send it again claims the resend with `compareAndApply` from `unknown` to `sending`, with the attempt number plus one and `resend` set to that device. When two devices press it, one claim wins; the other shows "Another device is sending it again" and sends nothing. Nothing is resent by itself.
-- **How the winner delivers.** It reads the task by its key first. If the task doesn't exist, it calls `sessions.create {key, message}` (`via: "create"`). If it exists, empty or not, it never calls `sessions.create` on that key (R29): it sends the fixed opening with `chat.send {sessionKey: key, message, idempotencyKey: "<record id>:<attempt>"}` (`operator.write`, R33; `via: "send"`). The idempotency key names the attempt, so a retry of the same attempt can't become a second message where the gateway still remembers it.
-- **Every later update names its attempt.** Completion, a lost answer, a recovery read and `delivered` are each a `compareAndApply` that requires the record's `attempt` to equal the update's. A late answer from attempt 1 after attempt 2 was claimed changes nothing; it is kept only in the record's attempt log. If the history then shows the opening twice (the first attempt landed after all), the record is `delivered` and the task says "The first message was sent twice."
-- The record resumes only on the gateway that holds it. Without the plugin there is no gateway record, so the opening is sent only by the device whose `agents.create` made the Main Bot, once. Any other device shows "Maple is being set up on another device." and sends nothing until the bot's identity reads back; then it opens the Main Bot's chat as it is. Sharing the first run's task across devices needs the plugin's record.
+- **Without Clawtrate's bot tools on the gateway** there is no shared record: only the device whose `agents.create` made the Main Bot sends the opening, once, with `idempotencyKey` `<createdAt>:opening:1`, or, for a Main Bot found unfinished, the device that finds it (section 4). Any other device shows the conversation as it is.
+- **With them**, the record is one of the plugin's, keyed by gateway and the Main Bot's incarnation, claimed with `registerIfAbsent` and moved with `compareAndApply` (R22): `sending` is written before the call and never goes back to `unsent` by itself.
+- **After a lost reply, a restart or a device change**, Clawtrate reads the main conversation's history (`chat.history`). The opening there makes it `delivered`. Anything else after a `sending` makes it `unknown`. `chat.send`'s key deduplicates only in the gateway's memory, for a while (R21, R29, R33), so it is a convenience, never a reason to resend or not.
+- **An unknown opening is sent again once, by itself**: after a fresh read still shows no opening, Clawtrate sends attempt 2, and never a third. Nothing waits for a press: a second opening, if the first landed after all, only means the bot says hello twice, and Clawtrate's line then says "The first message was sent twice." With the plugin, the resend is claimed with `compareAndApply`, so two devices never both send it. The idempotency key names the attempt, and a late answer from an earlier attempt changes nothing. If attempt 2 isn't confirmed either, Clawtrate's line says "Clawtrate couldn't confirm your Main Bot got its first message. You can write to it yourself." and nothing more is sent.
+- **The main conversation is never created with a message** (R29: an existing key is adopted, and a message sent with it would start another run). It is made empty, as New bot makes it, and the opening goes by `chat.send`.
 
-### The steps, timed
+### A second device or a second person
 
-On a Mac with OpenClaw at its defaults and a model account. Estimates; the instrumented builds report each separately.
-
-| Step | What happens                                                                                                                                                                                                   | The person does            | Time                  | Total |
-| ---- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------- | --------------------- | ----- |
-| 1-3  | Effortless setup: settings read, Connect, paired with six scopes, bots loaded, channel chats hidden (#314). `clawtrate-bots.status` read.                                                                      | Clicks Connect             | 5-10 s                | 10 s  |
-| 4    | "How should bots run commands?"                                                                                                                                                                                | Chooses                    | 3-8 s                 | 18 s  |
-| 5    | Clawtrate makes the Main Bot (`agents.create`, its identity file, its model's fallbacks; section 4). Its tile appears with the gold star, its chat opens with an empty composer, and "Getting started" starts. | Nothing                    | 1-2 s                 | 20 s  |
-| 6    | The greeting, and under it the guided card: "Name", "Picture" and "How should it help?"                                                                                                                        | Reads                      | 3-8 s on a real model | 28 s  |
-| 7    | The person fills the card and presses Save.                                                                                                                                                                    | Types, picks, presses Save | 10-20 s               | 48 s  |
-| 8    | The name, the picture and the role are written; the tile, the title pill and the hero change when `agents.list` returns them.                                                                                  | Nothing                    | 1-3 s                 | 51 s  |
-| 9    | The card's answer is posted as the person's message, and the bot replies under its new name.                                                                                                                   | Reads                      | 3-8 s                 | 59 s  |
-
-Measured separately, with real provider latency, a cold plugin install and an owner's approval of a remote device each reported apart:
-
-1. opening the app to an interactive composer (effortless PR 6, target 20 s);
-2. the composer to the first visible reply (effortless PR 6's shared measurement);
-3. pressing Save to the confirmed name in the rail (this design).
-
-The 60 seconds are a target for the ready case: OpenClaw running, a model account, the plugin installed, one Save. Every waiting step has Stop and a retry state (section 13). No end-to-end time has been measured yet.
-
-### Getting started
-
-- **The opening message** is fixed and shown as the person's: "Hi! I just set up Clawtrate. What should I call you, and how can you help me?" with the caption "Sent for you when setup finished." (F-006). It asks for the name and role itself, so the first run doesn't depend on a model choosing a tool.
-- **The greeting is the bot's own**, written by its model in answer to the opening. OpenClaw's own first run (`BOOTSTRAP.md`, R13) would have the bot pick a vibe, make itself a picture and save an identity over Clawtrate's; Clawtrate's identity file, written when the bot is made, ends it before the first turn, as New bot does (#376, R37).
-- **The guided card is Clawtrate's**, drawn under the greeting from the record, not from anything the model wrote: "Name" (1-64 characters), "Picture" (a row of Clawtrate's avatars, the name's own Claw first and chosen, and "Make your own", which opens the avatar studio with Clawtrate's parts; never a generated image, #435), "How should it help?" (up to 500 characters, a short role section in `AGENTS.md`), and **Save**. Under Save: "Saves this name, picture and role. Clawtrate shows them once the gateway confirms." Before Save, the name is shown as the gateway will store it (whitespace collapsed and trimmed, R26).
-- **If the person answers in the composer instead**, the bot may propose the values with `clawtrate_bot_update`, or, without the plugin, write the name on its `- Name:` line as #431's rename card expects (F-552). Either way they fill the same card for the person to change. Nothing is written until Save.
-- **What Save writes on OpenClaw 2026.10.6.** The role goes through `agents.files.set AGENTS.md` with `expectedHash`, or `expectedMissing` for a new file (R23): a conditional write. The name has no conditional write on this gateway (`agents.update` takes no precondition, R24). So it is saved as **the person's own fresh edit**, exactly as a rename in Settings is (#147 §5): typed on this card a moment ago, never a stored value, sent with `agents.update` on the person's admin connection, read back, and carrying #302 §9's race caveat in its exact form. Just before sending, Clawtrate reads the bot again and checks it is the same incarnation with the name the card was drawn against; if not, nothing is sent. What it can't rule out on 2026.10.6 is a change another admin makes between that read and `agents.update`: the write can overwrite it without anyone being told, and the read-back confirms the value now stored but can't show that an edit was overwritten. The plugin-authorized conditional Save for the name is gated (section 17, "Gated on missing gateway primitives").
-- **The picture is saved with the name.** It goes in the same `agents.update {name, avatar}`, the person's own edit on a bot this device made moments before, with the same caveat. The chosen avatar is Clawtrate's own form, read back from `agents.list`. Without #302's shared name and PNG contract in core, the Picture row isn't shown and the bot keeps its id's Clawling until the person picks one in its settings.
-- **Each result** is shown as read back: "Name: Maple, read back", "Picture: read back", "Role: saved, read back", or partly saved with the field that didn't land.
-- **Its own task.** "Getting started" is a new task of the Main Bot. Channels don't reach the Main Bot (section 4), and even where a person later binds one to it, its direct messages land in the main conversation, never in this task (#314).
-- **Starting from what an existing bot knows.** After the first reply under the new name, when the gateway has a bot with memory, a profile of the person, skills or a scheduled job (#487 says exactly what triggers it), one card offers "Start Maple from what Juniper knows" with **Choose what to bring** and **Not now**. What can be brought, how it is shown and how it is undone are #487's design; this design only places the offer. It is never shown before identity is complete, and it is offered once per gateway.
-
-### When the plugin is missing
-
-The composer opens as usual and the greeting comes. The guided card's Save is the same person's own edit, with no record and no proposals: "Save in Clawtrate". A line says: "Clawtrate's bot tools aren't on your gateway yet, so bots can't ask to change their settings." Clawtrate doesn't rely on the bot saving its name another way. If the bot changes its identity by running a command, Clawtrate shows "Changed outside Clawtrate's tools" (section 11).
+The Main Bot is already there: its tile and its main conversation open as they are, and nothing is made, sent or renamed. A device that opens it during someone else's tour sees the same conversation, without the skip button, which belongs to the device that started it.
 
 ## 4. The Main Bot
 
@@ -251,7 +310,7 @@ Each shows while it waits on an approval or a question from the person, until th
 
 Which id Clawtrate reads as the Main Bot, in order: the plugin's `mainBot` when the plugin is there and names a listed bot with that `createdAt`; otherwise `clawtrate-main-bot` when it is listed; otherwise none.
 
-A bot someone made by hand with the name "Clawtrate Main Bot" before the first run has that id, and Clawtrate can't tell it from its own without the plugin; it is taken as the Main Bot. That is the one case where a bot the gateway already had becomes the Main Bot. Its identity file has no Main Bot lines, so a card in its chat offers to add them, held to the hash Clawtrate read.
+A bot someone made by hand with the name "Clawtrate Main Bot" before the first run has that id, and Clawtrate can't tell it from its own without the plugin; it is taken as the Main Bot. That is the one case where a bot the gateway already had becomes the Main Bot. Its identity file has no Main Bot lines, so Clawtrate adds them, held to the hash it read, with nothing asked: being the Main Bot is so by default, and the lines grant nothing. A file that changed between the read and the write is left alone, and its settings say "Clawtrate couldn't update what Juniper is told about being the Main Bot." with **Try again**.
 
 ### What it is told
 
@@ -261,18 +320,18 @@ Clawtrate writes the Main Bot's `IDENTITY.md` when it makes it, as New bot does 
 >
 > Your picture is one of Clawtrate's avatars, chosen in Clawtrate. Don't make or set a picture yourself.
 
-and New bot's line about a new name ("When the person gives you a new name, write it on the `- Name:` line above and tell them it shows once they confirm it in Clawtrate."). The file is the bot's to read, and the bot can edit it; the record above, not the file, decides which bot is the Main Bot. When the plugin's proposal tools arrive (section 20, step 5), that step rewrites the first line to name them.
+and, in place of New bot's line about a new name, "When the person gives you a new name, write it on the `- Name:` line above; Clawtrate takes it from there." New bot's own line says the name shows once the person confirms it, which isn't so for the Main Bot's first name (section 3). The file is the bot's to read, and the bot can edit it; the record above, not the file, decides which bot is the Main Bot. Being in Clawtrate is the guide's to say (#643), not these lines. When Clawtrate's bot tools arrive (section 13, pull request 7), the first line names them.
 
 ### Making another bot the Main Bot
 
-"Make Maple the Main Bot" in a bot's menu, or **Replace with different bot** on the Main Bot's menu, which opens "Choose your Main Bot" with the person's bots and **Confirm** (F-259). One bot at a time:
+"Make Maple the Main Bot" in a bot's menu, or **Replace with different bot** on the Main Bot's menu, which opens "Choose your Main Bot", a list of the person's bots (F-259). Choosing one does it at once, with no Confirm: "Maple is your Main Bot · **Undo**" shows at the top of the sidebar, and Undo moves everything back, from any device, from the plugin's record. One bot at a time:
 
 - **The new Main Bot** takes the tile and the star. Clawtrate adds the Main Bot lines to its `IDENTITY.md`, after the `- Name:` line, held to the hash it read (R23).
 - **The old Main Bot** becomes an ordinary bot. It keeps its name, picture, tasks, routines and settings, and goes to its place in the list below. Clawtrate replaces its Main Bot lines with New bot's ordinary ones, held to the hash it read; for a bot New bot never made, it removes them and adds nothing. If either file changed since it was read, nothing is overwritten: the bot's settings say "Clawtrate couldn't update what Juniper is told about being the Main Bot." with **Try again**.
 - **Where it is kept.** In the `clawtrate-bots` plugin's `mainBot` record, for every person and device on the gateway. Without the plugin, "Make … the Main Bot" and **Replace with different bot** aren't offered: the Main Bot is `clawtrate-main-bot`, and its menu says "Changing the Main Bot needs Clawtrate's bot tools on your gateway."
 - **The gateway's own bot is never offered**, and choosing changes nothing on the gateway beyond the two identity files: no binding, owner or order.
 
-Deleting the Main Bot (#82, #147) leaves the gateway without one, except when it was chosen later and the bot the first run made is still listed: then the read order above makes `clawtrate-main-bot` the Main Bot again, the delete dialog says so ("Juniper becomes your Main Bot again."), and its chat offers to add the Main Bot lines back, as for a hand-made one. Otherwise every device shows "Set up your Main Bot" at the top of the sidebar with **Set up**, and nothing is made until a person presses it on their own device: the first run starts by itself only on a device's first connection to a gateway, never after a Main Bot has been seen there. If the deleted bot's files were kept, a new Main Bot made under the same id starts from them; the delete dialog says so ("If you make a new Main Bot, it starts from these files.") when the files are kept. A create refused with `deletion-pending` shows "Clawtrate is still removing the old Main Bot. Try again in a moment." with **Try again**.
+Deleting the Main Bot (#82, #147) leaves the gateway without one, except when it was chosen later and the bot the first run made is still listed: then the read order above makes `clawtrate-main-bot` the Main Bot again, the delete dialog says so ("Juniper becomes your Main Bot again."), and Clawtrate adds the Main Bot lines back, held to the hash it read, as it does for a hand-made one. Deleting asks, once, in #82's delete dialog, since it can't be undone. Afterwards every device shows "Set up your Main Bot" at the top of the sidebar with **Set up**, which makes one at once when pressed, with no confirmation; nothing is made until a person presses it, since they have just deleted one: the first run starts by itself only on a device's first connection to a gateway, never after a Main Bot has been seen there. If the deleted bot's files were kept, a new Main Bot made under the same id starts from them; the delete dialog says so ("If you make a new Main Bot, it starts from these files.") when the files are kept. A create refused with `deletion-pending` shows "Clawtrate is still removing the old Main Bot. Try again in a moment." with **Try again**.
 
 ### The gateway's own bot
 
@@ -299,46 +358,52 @@ The first run never mentions channels, never offers to move them and writes no b
 
 ### What the Main Bot may do with other bots
 
-Being the Main Bot grants nothing by itself, and moving the star moves nothing else. What the Main Bot can do beyond any bot is propose making a bot or changing one, because, once the `clawtrate-bots` plugin is on the gateway, the first run gives it section 7's manager grant, shown on the guided card as "Maple can suggest new bots and changes to your other bots. You confirm each one." with a switch the person can turn off there or later in Maple's settings. Each proposal waits for the person's confirmation on its own card (section 8). Specialist bots with a stated job, made by the Main Bot on request, are #437's design.
+Being the Main Bot grants nothing by itself, and moving the star moves nothing else. Once Clawtrate's bot tools are on the gateway, the Main Bot may suggest new bots and changes to other bots by default, with nothing asked; its settings say so, with a switch. What a bot may do with other bots, and how each such change is done, shown or asked, are `bots-in-clawtrate.md`'s (#669). Specialist bots with a stated job, made by the Main Bot on request, are #437's design.
 
 ### A bot changing itself
 
-A change to a bot's own name or picture asks first, by default, in the first run and after: the bot proposes it and a card shows exactly what will be written (#436). The rename card from #431 (F-552) is the first of these. The guided card's Save in the first run is the same kind of confirmation: the person filled it in Clawtrate.
-
-- **The setting.** Settings → Advanced, **Apply a bot's changes to itself at once**, off by default, kept on this device for this gateway. On, a new name or picture is applied straight away only when this device's composer sent the last message of the run that made the change, that run was started by that message and no scheduled run or other client's message landed in the task before it ended, and the new name appears word for word in that message (a picture: the person named one of Clawtrate's avatars in it). Anything else shows the card. An applied change is shown with **Undo**.
-- **What never confirms.** A message that arrived through a channel, a scheduled run, another bot's message, text a tool returned, or another device's or another person's composer.
-- **What always asks**: a later change to a bot's instructions, anything about another bot, more freedom, another account (section 8).
+A bot's own name or picture is taken at once and shown with Undo, for every bot, in the first run and after; there is no card and no setting for it (section 3, "Taking the name"). Its other settings, and its instructions, are `bots-in-clawtrate.md`'s.
 
 ### Its incarnation
 
-A bot is the same bot while its id and `createdAt` are the same. Every record here binds to both. A bot the gateway lists with no `createdAt` has no reliable incarnation, and Clawtrate offers only the person's own edit in Settings for it (section 17).
+A bot is the same bot while its id and `createdAt` are the same. Every record here binds to both. A bot the gateway lists with no `createdAt` has no reliable incarnation, so a kept Undo can't be bound to it: its name is still taken, and Undo is offered only on the device that took it, until that device restarts.
 
-**No write on OpenClaw 2026.10.6 checks the incarnation when it commits.** The gateway keeps `createdAt` in its state database, not in the config (R34). So a bot deleted and re-created with the same id passes a file hash or a missing-file condition when its file is the same, passes a routine revision on a routine it inherited, and can pass the config hash when its entry is rebuilt the same way. A check made just before the write narrows the window but doesn't close it, and a lock that only Clawtrate takes can't stop another client. That is why the plugin doesn't apply a stored request to an existing bot on 2026.10.6 (sections 6 and 17).
+**No write on OpenClaw 2026.10.6 checks the incarnation when it commits.** The gateway keeps `createdAt` in its state database, not in the config (R34). So a bot deleted and re-created with the same id passes a file hash or a missing-file condition when its file is the same, passes a routine revision on a routine it inherited, and can pass the config hash when its entry is rebuilt the same way. A check made just before the write narrows the window but doesn't close it, and a lock that only Clawtrate takes can't stop another client. The same holds on 2026.11.10 (section 14). For the first run this matters only to Undo: Clawtrate reads the bot again before an Undo and sends nothing if its id and `createdAt` aren't the ones it kept.
 
 ### On the first run
 
-| What the gateway has                                                                             | The first run                                                                                                                                                                                                                           |
-| ------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| No Main Bot on this device's first connection to the gateway, and a connection that can make one | Section 3: the bot is made, then the record, "Getting started", the greeting and the guided card. Bots already there stay as they were, below the tile.                                                                                 |
-| A Main Bot made on another device or by another person                                           | Its latest task opens, or an empty chat with "Message Maple". Nothing is made or sent, and nothing is renamed.                                                                                                                          |
-| A Main Bot whose first run another device is running now                                         | With the plugin, the same task opens, with that device's progress; no second opening. Without it, "Maple is being set up on another device.", and nothing is sent until the bot's identity reads back.                                  |
-| No Main Bot, and a connection that can't make one                                                | Open with the owner (below). The default: "Set up your Main Bot" at the top of the sidebar, with the one request for full control.                                                                                                      |
-| A failed `agents.list`                                                                           | `bots.md`'s roster failure. Nothing is made or sent.                                                                                                                                                                                    |
-| An `agents.create` refused other than as `already-exists`, or not answered                       | Nothing more is sent. The bot list is read; a `clawtrate-main-bot` there is the Main Bot. Otherwise the tile says "Clawtrate couldn't make your Main Bot." with **Try again**, which creates again only after a read shows none (#257). |
+| What the gateway has                                                                             | The first run                                                                                                                                                                                                                                       |
+| ------------------------------------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No Main Bot on this device's first connection to the gateway, and a connection that can make one | Section 3: the bot is made, its main conversation opens, the account is checked, and the opening is sent; the bot says hello. Bots already there stay as they were, below the tile.                                                                 |
+| A Main Bot made on another device or by another person                                           | Its main conversation opens as it is, or an empty one with "Message Maple". Nothing is made or sent, and nothing is renamed.                                                                                                                        |
+| A Main Bot whose first run another device is running now                                         | The same conversation opens, with that device's tour in it, and no skip button; no second opening (section 3).                                                                                                                                      |
+| No Main Bot, and a connection that can't make one                                                | "Set up your Main Bot" at the top of the sidebar, with the one request for full control (below).                                                                                                                                                    |
+| A failed `agents.list`                                                                           | `bots.md`'s roster failure. Nothing is made or sent.                                                                                                                                                                                                |
+| An `agents.create` refused other than as `already-exists`, or not answered                       | The bot list is read; a `clawtrate-main-bot` there is the Main Bot, and the next section finishes it. Otherwise the tile says "Clawtrate couldn't make your Main Bot." with **Try again**, which creates again only after a read shows none (#257). |
 
-### Open with the owner: when Clawtrate can't make a bot yet
+### A Main Bot found unfinished
 
-Making the Main Bot needs admin access (`agents.create`, `agents.files.set`, `config.patch`, `agents.update`, R17) and write (`sessions.create`). A device paired read-only can't, and neither can a connection to OpenClaw on this Mac before the one-click local connection asks for full control (#421).
+A device can find `clawtrate-main-bot` listed without having made it: its own `agents.create` was answered but the answer was lost, or another device stopped part-way. The first run then finishes what is missing, at once and with nothing asked, on any device with full control _(proposed)_:
 
-- **Default: no stand-in.** The top of the sidebar is a tile reading "Set up your Main Bot", an empty avatar with the gold star in outline, and one line: "Clawtrate needs full control of your gateway to make your Main Bot." with **Give full control**, the one request #418 offers a device paired with less. The person's bots are listed below as ordinary rows, none starred (#490); on a gateway whose only bot is its own one, that bot is the row. The gateway's own bot is out of view too (#490 hides it once any other bot exists), so until full control is given the person sees neither it nor a Main Bot. Keeping it in view until the Main Bot exists would cost one condition in #490. Once full control is granted, the first run runs. _What it costs:_ the tile's empty state and wiring it to #418's offer; nothing that has to be undone later.
-- **Alternative: a stand-in star.** Until the Main Bot can be made, an existing bot (the gateway's default, or the person's choice) gets the gold star and the tile. When full control is granted, the first run makes the real Main Bot and the star moves to it; the stand-in goes back to an ordinary row, or leaves the sidebar if it is the gateway's own bot. _What it costs:_ a second source for the Main Bot, a move the person sees once, an exception to #490's rule, and a stand-in that can't be told it is the Main Bot, since its identity file can't be written read-only.
+- **The identity lines.** When its `IDENTITY.md` is still OpenClaw's template, or has no Main Bot lines, Clawtrate writes them held to the hash it read (R23). A file someone changed since is left alone, and the bot's settings say so (section 6).
+- **The fallbacks and the main conversation**, as New bot writes them: a `config.patch` held to the config hash, and `sessions.create` of the main key with no message, which adopts a conversation already there (R29).
+- **The opening**, only while the main conversation has no message at all and the bot was made less than ten minutes ago by the gateway's clock (`createdAt`), so an old, empty Main Bot is never greeted again by itself. It goes as section 3 says, with the attempt in its key. Two devices that both find it empty in the same moment can each send it; the bot then says hello twice, and Clawtrate's line says "The first message was sent twice." With Clawtrate's bot tools on the gateway the shared record makes it once.
 
-### Open with the owner: a bot already starred
+Every one of these writes binds to the bot it read only as far as the gateway allows: the file hash and the config hash are checked inside the write, `createdAt` is not (R34, on both versions, section 14). So Clawtrate reads the bot's id and `createdAt` again just before each write and sends nothing if they changed. A bot deleted and made again under the same id in that moment would get the same lines, which are right for it too: it is the Main Bot by its id.
 
-On `main` today the star is always on the gateway's default bot (F-015). Nobody has chosen one yet: the choice dialogs (F-007, F-259) are not built, and #147's `clawtrate.primary` is not on `main`.
+### When Clawtrate can't make a bot yet
 
-- **Default: the first run makes the new Main Bot.** On the update, the first connection to each gateway runs the first run once. The previously starred bot loses the star and stays as an ordinary bot with its chats intact; when it is the gateway's own bot, it leaves the sidebar once the Main Bot exists (#490), its chats intact on the gateway and one switch away. _What the person sees:_ after updating, the Main Bot's chat and its tile; the bot that was starred, which on today's builds is always the gateway's own bot, is no longer in the sidebar. Its chats stay on the gateway, behind "Show the gateway's own bot". _What it costs:_ nothing beyond the first run: it runs on each device's first connection after the update to a gateway with no Main Bot listed.
-- **Alternative: keep the starred bot if Clawtrate made it.** A starred bot that Clawtrate made in New bot (New bot's record of its account, `users.prefs` key `clawtrate.bot-account.<id>`, is the sign) stays the Main Bot: it gets the tile and the gold star, and a card asks to add the Main Bot lines to its identity file. Any other starred bot, the gateway's own included, is handled as in the default. _What the person sees:_ no first run when their bot qualifies. _What it costs:_ the New bot record is per person, so another person on the gateway would get a first run anyway and, without the plugin, a different Main Bot; plus a migration card and its tests. On `main` the starred bot is the gateway's default, which Clawtrate made only on a gateway that had no bots, so this path rarely applies.
+Making the Main Bot needs admin access (`agents.create`, `agents.files.set`, `config.patch`, `agents.update`, R17) and write (`sessions.create`, `chat.send`). A device paired read-only can't. With local connect on this computer and #653 elsewhere, that is now rare: a host without secure storage, a plain `ws://` address on a network, or a narrower grant the gateway's owner chose. This revision takes the reviewed design's default; the alternative is kept with its cost.
+
+- **Taken: no stand-in.** The top of the sidebar is a tile reading "Set up your Main Bot", an empty avatar with the gold star in outline, and one line: "Clawtrate needs full control of your gateway to make your Main Bot." with **Give full control**, the one request #418 offers a device paired with less. The person's bots are listed below as ordinary rows, none starred (#490); on a gateway whose only bot is its own one, that bot is the row. The gateway's own bot is out of view too (#490 hides it once any other bot exists), so until full control is given the person sees neither it nor a Main Bot. Keeping it in view until the Main Bot exists would cost one condition in #490. Once full control is granted, the first run runs. _What it costs:_ the tile's empty state and wiring it to #418's offer; nothing that has to be undone later.
+- **Not taken: a stand-in star.** Until the Main Bot can be made, an existing bot (the gateway's default, or the person's choice) gets the gold star and the tile. When full control is granted, the first run makes the real Main Bot and the star moves to it; the stand-in goes back to an ordinary row, or leaves the sidebar if it is the gateway's own bot. _What it costs:_ a second source for the Main Bot, a move the person sees once, an exception to #490's rule, and a stand-in that can't be told it is the Main Bot, since its identity file can't be written read-only.
+
+### A bot already starred
+
+On `main` today the star is always on the gateway's default bot (F-015). Nobody has chosen one yet: the choice dialogs (F-007, F-259) are not built, and #147's `clawtrate.primary` is not on `main`. This revision takes the reviewed design's default; the alternative is kept with its cost.
+
+- **Taken: the first run makes the new Main Bot.** On the update, the first connection to each gateway runs the first run once. The previously starred bot loses the star and stays as an ordinary bot with its chats intact; when it is the gateway's own bot, it leaves the sidebar once the Main Bot exists (#490), its chats intact on the gateway and one switch away. _What the person sees:_ after updating, the Main Bot's chat and its tile; the bot that was starred, which on today's builds is always the gateway's own bot, is no longer in the sidebar. Its chats stay on the gateway, behind "Show the gateway's own bot". _What it costs:_ nothing beyond the first run: it runs on each device's first connection after the update to a gateway with no Main Bot listed.
+- **Not taken: keep the starred bot if Clawtrate made it.** A starred bot that Clawtrate made in New bot (New bot's record of its account, `users.prefs` key `clawtrate.bot-account.<id>`, is the sign) stays the Main Bot: it gets the tile and the gold star, and Clawtrate adds the Main Bot lines to its identity file. Any other starred bot, the gateway's own included, is handled as in the default. _What the person sees:_ no first run when their bot qualifies. _What it costs:_ the New bot record is per person, so another person on the gateway would get a first run anyway and, without the plugin, a different Main Bot; plus a migration card and its tests. On `main` the starred bot is the gateway's default, which Clawtrate made only on a gateway that had no bots, so this path rarely applies.
 
 ### Several gateways
 
@@ -348,553 +413,153 @@ Clawtrate connects to one gateway at a time; #79 and #101 design switching. The 
 
 Copy, export, import and delete stay with #82 and #147 §8 to §10. No tool here deletes or duplicates a bot.
 
-## 5. The `clawtrate-bots` plugin
-
-A plugin under `plugins/clawtrate-bots`, in the form of `clawtrate-tool-rules`: plain JavaScript, `register(api)`, a `README.md`, tests with a harness, and a `clawtrate-dev-contract.json`.
-
-### What it adds
-
-| Kind              | What                                                                                                                                                                                                                                                                                                                                                                |
-| ----------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Tools (section 6) | `clawtrate_bots_list`, `clawtrate_bot_get`, `clawtrate_bot_update`, `clawtrate_bot_create`, `clawtrate_routine_propose`, `clawtrate_avatar_propose`. Every tool reads or proposes; none writes a bot's settings                                                                                                                                                     |
-| Gateway methods   | Read: `.status`, `.proposals.list`, `.proposals.get`, `.changes.list`, `.onboarding.get`, `.relay.grants.get`. Write: `.proposals.decline`. Admin: `.proposals.accept`, `.changes.undo`, `.onboarding.claim`, `.onboarding.update`, `.managers.set`, `.relay.grants.set`, `.relay.propose`. Describe's two methods are off until their primitive exists (section 9) |
-| An event          | `plugin.clawtrate-bots.changed`, empty, at `operator.read`                                                                                                                                                                                                                                                                                                          |
-| Records           | Proposals, the journal and the onboarding record, in the gateway's database (R9, R22)                                                                                                                                                                                                                                                                               |
-| Manifest          | `contracts.gatewayMethodDispatch: ["authenticated-request"]` (R7)                                                                                                                                                                                                                                                                                                   |
-
-### Its config
-
-Written only by Clawtrate on an admin connection, with `config.patch`, and read back. No tool writes it.
-
-```json5
-{
-  plugins: {
-    entries: {
-      "clawtrate-bots": {
-        enabled: true,
-        config: {
-          managers: [{ id: "clawtrate-main-bot", createdAt: 1795300000000 }], // explicit admin grants
-          newBots: { autonomy: "ask" }, // or "hands-off"
-          describe: { enabled: false }, // off on 2026.10.6 (section 9)
-        },
-        // Written only once Describe can run (section 9), with its disclosure.
-        // Model and auth-profile overrides stay off.
-        // llm: { allowAgentIdOverride: true },
-      },
-    },
-  },
-}
-```
-
-### Installing it
-
-Installation comes last (section 17) and has its own release gate: every consumer check passing on development gateways, a signed or pinned distribution, and an explicit production security review of this plugin. It depends on a shared plugin-installation issue to be filed (#29 covers only `clawtrate-computer`). Until then the plugin runs on development gateways only, like the others, and section 3's missing-plugin path is what a real gateway gets.
-
-When installed, `clawtrate-bots.status` (read) says it runs and which version, and lists its capabilities (proposals, onboarding, relay, and Describe, which is off on 2026.10.6). The install sheet names each config line it writes. It writes no `llm` line while Describe is off (section 9).
-
-### What OpenClaw 2026.10.6 gives it
-
-| Need                                        | What the gateway offers                                                                                                                                                            | Proven                         |
-| ------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------ |
-| Tools that know which bot called them       | v2 factories; `agentId`, `sessionKey`, `assertInvocationCurrent` (R1)                                                                                                              | live                           |
-| A tool per bot                              | A factory returns `null`; `tools.deny` removes it from the model and refuses it (R2)                                                                                               | live                           |
-| A write made by an owner's decision         | A plugin method with `dispatchGatewayMethod`, acting with the authenticated caller's own scopes, rechecked at the mutation's commit (R7)                                           | live                           |
-| Durable, atomic records                     | Keyed stores with `registerIfAbsent` and `compareAndApply`: bounded ones, which take `overflowPolicy: "reject-new"`, or retained ones, with no eviction and no TTL (R9, R22)       | live (store), source (compare) |
-| Preconditions inside the write              | `config.patch {baseHash}`; `agents.files.set {expectedHash \| expectedMissing}` (R23); `cron.update {expectedConfigRevision}` (R27); `agents.create` refusing an existing id (R28) | live (files), source           |
-| No precondition                             | `agents.update` (name, picture, R24); `cron.remove` (R27)                                                                                                                          | source                         |
-| A model call with no tools on a bound route | Not available: `api.runtime.llm.complete` can't require an expected route (R31)                                                                                                    | source                         |
-
-Not used, and why: writing from a tool with `callGatewayTool`. It carries the turn's operator authority (R4), but that authority is a connection's, not consent to the change the model chose, and routines carry their creator's authority (R18) while turns with no operator reach admin methods anyway (R6). The gateway's plugin approval card is not used either: it is resolved at `operator.approvals` and isn't bound to an admin principal and the values (R20). What 2026.10.6 lacks is listed in section 17, "Gated on missing gateway primitives".
-
-## 6. The tool contract
-
-Six tools. Each takes the calling bot from the tool's context, never from its arguments. `bot` names another bot only for a manager (section 7). Every write tool returns a proposal; its result says so, and says nothing changed yet.
-
-### Reading
-
-- **`clawtrate_bots_list {}`**: the bots the caller may see: itself, and every bot for a manager. For each: `id`, `name`, `label`, `isMain`, `picture` in words, `model`, `effort`, the requested `autonomy`, and `managesOthers`. For a manager, also the gateway's provider accounts by id and label, never a credential.
-- **`clawtrate_bot_get { bot? }`**: one bot's settings, its `AGENTS.md` and `SOUL.md` with each file's hash, and its routines (`cron.list` for that bot) with each routine's `configRevision`.
-
-### Proposing
-
-**`clawtrate_bot_update`**
-
-```ts
-{
-  bot?: string;                       // a manager only; default: the caller
-  name?: string;                      // 1-64 characters after trimming
-  label?: string | null;              // identity.theme; null removes it
-  instructions?: {
-    agents?: { text: string; baseHash: string | null };   // null: the file is missing
-    soul?: { text: string; baseHash: string | null };
-  };
-  model?: string;                     // one the gateway lists for the account
-  account?: string;                   // a provider account id
-  effort?: "off" | "minimal" | "low" | "medium" | "high" | "xhigh";
-  autonomy?: "hands-off" | "ask";
-  reason?: string;                    // up to 200 characters, shown on the card
-}
-```
-
-Each field below has a write and a precondition the gateway checks inside the write. None of them checks the bot's incarnation (section 4), so **on 2026.10.6 the plugin applies no stored request to an existing bot**. The card's **Review and save** opens the person's own editor for that setting, filled with the proposed values; the editor reads the bot afresh when it opens and saves with its own precondition and read-back, as any edit in Settings does. The plugin's apply path (section 8) is kept for when the gateway can bind a write to a bot's incarnation.
-
-| Field          | Write, once the plugin may apply (admin)                                       | Precondition inside the write              | Read back               | On 2026.10.6                                           |
-| -------------- | ------------------------------------------------------------------------------ | ------------------------------------------ | ----------------------- | ------------------------------------------------------ |
-| `label`        | `config.patch agents.entries.<id>.identity.theme`                              | `baseHash` (the whole config)              | `config.get`            | **Gated**: Review and save opens the label field       |
-| `instructions` | `agents.files.set` per file                                                    | `expectedHash`, or `expectedMissing` (R23) | `agents.files.get` hash | **Gated**: opens the Instructions page (#147 §6)       |
-| `model`        | `config.patch agents.entries.<id>.model`, same account, as #257 writes it      | `baseHash`                                 | `config.get`            | **Gated**: opens the Model select                      |
-| `account`      | Model patch for the chosen model and new profile, with `fallbacks: []` (below) | `baseHash`                                 | `config.get`            | **Gated**: opens the account choice; always marked     |
-| `effort`       | `config.patch agents.entries.<id>.thinkingDefault`                             | `baseHash`                                 | `config.get`            | **Gated**: opens the Effort select                     |
-| `autonomy`     | `config.patch agents.entries.<id>.tools.exec.mode`                             | `baseHash`                                 | `config.get`            | **Gated**: opens the Autonomy row; more freedom marked |
-| `name`         | needs `agents.update {name}`, which also writes `IDENTITY.md`                  | none (R24)                                 | `agents.list`           | **Gated**: "Rename Pip to Scout" (below)               |
-
-**When a proposal changes both account and model.** The card shows the destination account and the exact model together and marks the account change for confirmation. The model must be available for that account. If it isn't, the card asks for another selection. On 2026.10.6, **Review and save** opens the account editor with both selections filled in.
-
-Once Apply is available, resolve the account first and validate the proposed model against it. Bind the resulting model reference and empty fallback list to the card's digest. At the model step in the table above, write `agents.entries.<id>.model` once, using `formatModelRef` for the selected provider, proposed model ID and destination account. Replace the fallback list with `[]` in that same conditional patch, as the account editor does. Skip the separate account step. Read back the full reference and fallback list before continuing. The two selections share one reserved journal slot, one confirmed result and one Undo for the model entry. If the pair is no longer available, stop before writing it and ask for a fresh selection.
-
-**What each write binds**, so the gate can lift method by method:
-
-| Method                                 | Binds, inside the write                                                        | Doesn't bind                                                    |
-| -------------------------------------- | ------------------------------------------------------------------------------ | --------------------------------------------------------------- |
-| `config.patch {baseHash}`              | the whole config as read: the bot's entry, the manager grant, the bound fields | the incarnation, when a replacement rebuilds an identical entry |
-| `agents.files.set {expectedHash}`      | that file's content                                                            | the incarnation; the manager grant                              |
-| `agents.files.set {expectedMissing}`   | that the file is absent                                                        | the incarnation; the manager grant                              |
-| `cron.update {expectedConfigRevision}` | that routine's definition                                                      | the bot's incarnation; the manager grant                        |
-| `cron.add {declarationKey}`            | one routine per key                                                            | the bot's incarnation; the manager grant                        |
-| `agents.create`                        | that the id is absent (R28)                                                    | anything about the later writes to that id                      |
-| `agents.update`                        | nothing (R24)                                                                  | everything                                                      |
-
-**A config rebase, once the plugin may apply.** A `baseHash` covers the whole config. Even the proposal's own first write changes it. Before each config patch, the plugin reads `config.get` once. From that snapshot it checks the target's entry and, for a request about another bot, the proposer's manager grant. If the grant was removed, it refuses with "Juniper can no longer ask to change other bots."
-
-For each config path bound to the proposal, the expected value is the one the card was drawn against, including whether the path existed. Once this claim has written a path and journaled the read-back, its expected value becomes that recorded result. For example, after saving a label, the effort patch checks the new label and the original effort. A difference at either path stops the remaining writes and preserves the confirmed journal entries. Changes outside the bound paths can proceed so long as the target and grant checks still pass. The plugin sends only the next patch, with that snapshot's hash. Any intervening config change makes the gateway refuse it. Files, routines and create are not config writes and bind only what the table says, so for a request about another bot the grant is checked just before the write and a removal during that write isn't serialized with it.
-
-**The name.** The name's semantics include `IDENTITY.md`, which only `agents.update` writes, and that write takes no precondition. Writing the config identity alone with `config.patch` would leave the bot's own identity file saying the old name. So a proposed name is shown on the card with **"Rename Pip to Scout"**, which opens the person's own rename (#147 §5) filled with the proposed value: a fresh edit the person makes, read back, carrying #302 §9's race caveat in its exact form. Just before sending, Clawtrate reads the bot again and checks it is the same incarnation with the name the card was drawn against; if not, nothing is sent. What it can't rule out on 2026.10.6 is a change another admin makes between that read and `agents.update`: the write can overwrite it without anyone being told, and the read-back confirms the value now stored but can't show that an edit was overwritten.
-
-**`clawtrate_bot_create`** (managers only; the factory returns no tool to anyone else)
-
-```ts
-{ name: string; role: string; account?: string; model?: string; effort?: string;
-  autonomy?: "hands-off" | "ask"; routines?: RoutineDraft[]; reason?: string }
-```
-
-The proposal is drawn with **every resolved value**: the exact new id (derived from the name as the gateway derives it), the workspace path, the account and model, the effort, the autonomy, the managed tool policy, the role text, the name's Claw, and each routine. Accept binds all of them. For the role, the card says: "If the gateway gives Stride starting instructions, you'll confirm the role against them next."
-
-**On 2026.10.6, Create from a proposal opens New bot** (`bots.md` §3), filled with the proposal's name, role, account, model, effort, autonomy and routines, and the person creates the bot there with #257's sequence and the window #257 records. The plugin writes nothing: `agents.create` binds only the id's absence, and every follow-on below writes to that id with no incarnation check (section 4). Once the gateway can bind a write to the new bot's incarnation, the plugin runs #257's Create sequence on accept, with the accepting person's authority:
-
-1. `agents.create {name, workspace, model, avatar}` once. The gateway refuses an id that already exists, inside its own config transform (R28): that is the expected-absence check. The name's Claw goes in the same call, so the first picture needs no later write. If the answer names another id than the one shown, nothing more is written and the card shows what was created.
-2. The first `config.patch {baseHash}` with Never, the managed deny list (section 12) and the model with `fallbacks: []`; the second with the chosen mode.
-3. The role. `agents.create` seeds the workspace's starting files, `AGENTS.md` among them, unless `skipBootstrap` is set (R32). So the plugin reads `AGENTS.md` after the create:
-   - **missing** (an empty workspace): the role is written as the file with `expectedMissing`, the base the card showed for this case;
-   - **present** (seeded): the plugin writes nothing. A second card asks "Add Stride's role to its starting instructions?", showing the seeded file kept as it is and the role section added after it, bound to that file's hash. **Add** writes with `expectedHash`; a hash that changed asks again. The seeded instructions are never replaced.
-4. Each routine with `cron.add`, carrying a `declarationKey` derived from the proposal and the routine, so a resend converges on one routine (R27).
-
-Each step is read back. A step that doesn't read back leaves a held bot, as #257 says, and the card shows how far it got. The picture needs #302's shared name and PNG contract; until it lands, the create sends no `avatar` and the bot shows its id's Clawling.
-
-**`clawtrate_routine_propose`**
-
-```ts
-{ bot?: string; action: "add" | "update" | "pause" | "resume" | "remove";
-  id?: string; expectedConfigRevision?: string;
-  routine?: { name: string; schedule: string; prompt: string } }
-```
-
-| Action                | Applied on accept with                        | Precondition                                    | On 2026.10.6                                          |
-| --------------------- | --------------------------------------------- | ----------------------------------------------- | ----------------------------------------------------- |
-| add                   | `cron.add` with a `declarationKey`            | the key converges a resend on one routine (R27) | **Gated**: opens Routines, filled                     |
-| update, pause, resume | `cron.update {patch, expectedConfigRevision}` | the routine's revision when proposed (R27)      | **Gated**: opens the routine's editor, filled         |
-| remove                | `cron.remove`                                 | none: it takes only an id (R27)                 | **Gated**: "Remove it yourself", which opens Routines |
-
-Bots Clawtrate manages don't get the core `automations` tool (section 12), so this is their way to set routines, under the same target and approval rules.
-
-**`clawtrate_avatar_propose`**: #302 §9's tool. A bot proposes its own picture; a manager may propose another's. Proposals from channel turns and from MCP are held until their authority and delivery are established, as #302 §9 says. On 2026.10.6 a picture can't be applied from a proposal, for the same reason as the name: the card offers **Open in studio**, and the studio's Save is the person's own edit of the draft they see.
-
-### Results
-
-```json
-{
-  "status": "proposed",
-  "proposalId": "p_7f2c",
-  "fields": ["name", "instructions.agents"],
-  "said": "I've asked to rename myself Scout and update my instructions. Nothing changes until you apply it in Clawtrate."
-}
-```
-
-Or `refused`, with a reason the bot can act on: "Only bots you've allowed can ask to change other bots.", "AGENTS.md changed since you read it. Read it again.", "That model isn't available on this bot's account.", "Too many open requests from this bot. Wait for an answer." No result says a change happened.
-
-## 7. Who may change what
-
-| Caller                            | Itself  | Other bots                 | Create bots | See other bots    |
-| --------------------------------- | ------- | -------------------------- | ----------- | ----------------- |
-| A bot listed in `managers`        | propose | propose                    | propose     | yes               |
-| Any other bot                     | propose | no                         | no          | no                |
-| An external agent (section 10)    | —       | suggest, as its grant says | no in v1    | as its grant says |
-| A person with admin, in Clawtrate | change  | change                     | change      | yes               |
-
-- **Managers are an explicit admin grant** tied to a bot's incarnation (`id` and `createdAt`), set with `clawtrate-bots.managers.set` from Settings, a bot's Manage group, **"Can ask to change other bots"**. The star doesn't grant it. The first run sets it for the Main Bot it makes, with the switch on the guided card (section 4), and making another bot the Main Bot doesn't move it. When a bot without it tries, the tool refuses and Clawtrate shows "Juniper can't ask to change other bots." with **Allow** (admin) and **Not now**, once per bot.
-- **The plugin draws the line**, because the gateway doesn't (R5). It checks the caller and `managers` when the tool is built, again in `execute`, and again right before each write on accept. Managers live in the gateway's config, so removing a grant changes the config hash and a config-backed field written with the old hash is refused inside the gateway's write. A file or routine write has no config precondition: a removal that lands during that write isn't serialized with it, only checked just before it.
-- **No tool changes `managers`, `newBots`, any tool policy, or this plugin's config.**
-
-## 8. Proposals: how every change is authorized
-
-A change from chat is a **proposal**. It changes nothing until a person with admin decides, on a card that shows exactly what will be written, in the canonical form the gateway will store (a name's whitespace collapsed, R26; a file as its full text; a routine's schedule as normalized). The decision is bound to:
-
-- the gateway (its identity) and the bot's incarnation (section 4);
-- the fields and the proposed values, as a canonical digest computed by the plugin;
-- each field's precondition token when the card was drawn: the config hash, the file hash, the routine's `configRevision`.
-
-**On 2026.10.6 the card's button is Review and save** (section 6): it opens the person's own editor, filled with the proposed values, and the plugin writes nothing. Saving there is a fresh decision on the bot as the editor reads it. The proposal then shows "Saved by you", with what the editor read back.
-
-**Apply**, once the gateway can bind a write to a bot's incarnation, calls `clawtrate-bots.proposals.accept {id, digest}` on the person's own connection. The plugin then:
-
-1. claims the proposal in one ledger transition (section 9): it must still be `open`, its published version's digest must be the one the card showed, for an agent's suggestion the grant generation the ledger holds must equal the one the suggestion recorded, and the journal must have room for one entry per field, which the same transition reserves. All of it is compared and recorded in the one `compareAndApply` that moves it to `committing` (R22), so a revocation and an acceptance can't both win, and two claims can't both count on the last journal space;
-2. checks the proposer may still propose this (section 7);
-3. for each field in order (account and model together count as one field at the model step), sends the write with its precondition through `dispatchGatewayMethod`, using section 6's snapshot check for each config patch. Pending paths must match their values on the card, and previously written paths must match this claim's journaled results. The gateway rechecks the caller's live authority at the mutation's commit boundary (R7), and checks the precondition inside the write (section 6). The plugin doesn't rely on its own earlier read;
-4. reads each field back and journals each confirmed effect before the next write.
-
-If a precondition fails, that field and the ones after it aren't written, and the card says which changed. A field with no conditional write isn't applied (section 6). The person's own edits in Clawtrate's settings are not proposals: they are a fresh decision already.
-
-### Always confirmed, whoever asks
-
-These are always proposals and are marked on the card, in any mode and from any source: another bot's instructions (the card shows the exact diff); more freedom for any bot (toward Hands-off); another provider account; a picture a bot chose. An **Undo that would restore more freedom** (undoing a move to Ask before acting, for example) is the same: "Undo lets Otto run hands-off again." with **Undo and allow** and **Keep**.
-
-### The guided first-run card
-
-The guided card of section 3 saves exactly what it shows. Its role is a conditional write; its name and its picture, one of Clawtrate's avatars, are the person's own fresh edit on 2026.10.6, in one `agents.update` (section 3).
-
-### The cards
-
-Action cards (`conversation.md`), with the bot's Claw at 18 px:
-
-| Card                                | Title                                                              | Body                                                                                                                                                  | Actions                                                    |
-| ----------------------------------- | ------------------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------- |
-| Proposal                            | "Pip asks to rename itself Scout"; "Juniper asks to create Stride" | Old and new, per field, canonical; marks ("More freedom", "Uses another account", the diff); the reason, quoted; "Nothing changes until you save it." | Review and save, Not now; "Rename Pip to Scout" for a name |
-| Applying                            | the same                                                           | "Applying…"                                                                                                                                           | —                                                          |
-| Saved by you                        | "Pip's instructions changed"                                       | One line per field, as the editor read it back                                                                                                        | See change (instructions)                                  |
-| Applied (once the plugin may apply) | "Pip's instructions changed"                                       | One line per field, each "read back"; "Undo isn't available" for a field without a journal entry                                                      | Undo where available; See change                           |
-| Partly applied                      | "Some of this applied"                                             | Each confirmed field, each that wasn't, each unknown                                                                                                  | Check again (reads only)                                   |
-| Not applied                         | "Not applied: Pip's instructions changed since this was asked"     | What changed                                                                                                                                          | Ask again (tells the bot)                                  |
-| Unknown                             | "Couldn't confirm whether this applied"                            | What Clawtrate now reads, as observed values, not as an outcome                                                                                       | Check again (reads only)                                   |
-| Declined                            | "Kept Pip's instructions"                                          | —                                                                                                                                                     | —                                                          |
-
-Proposals also collect in a **Proposals** list in the gateway menu, with a count. Each proposal's other states are #302 §9's: below admin, expired, superseded, changed elsewhere, and decided on another device.
-
-### Undo
-
-Undo is its own record (section 9), a person's action, and a new bound change. It references the journal entry it undoes, which holds the field's value or hash **as the write left it**. On Undo, the plugin reads the field once and compares it with that journaled result:
-
-- **The same**: it restores the earlier value with the precondition token from **that same read** (the config hash, the file hash, the routine revision), so an edit landing after the read is refused inside the gateway's write.
-- **Different** (edited before Undo was opened, or between opening and pressing): nothing is written, and the card shows the comparison: "Pip's instructions changed again since then, so Undo would overwrite that." with the journaled result and the current value side by side, and "Open instructions".
-
-Undo exists only on the plugin's apply path, so on 2026.10.6 there is no Undo from a proposal: the person edits the setting again. Once it exists, a field with no conditional write or no journal entry has no Undo, and the card says "Undo isn't available for this change."
-
-## 9. For the avatar studio: Describe and proposal records
-
-### Describe: gated on 2026.10.6
-
-#302's Describe a Claw needs a completion that runs on exactly the route shown to the person: the prepared owner, transport, credential route and runtime generation, the same on both attempts. `api.runtime.llm.complete` accepts `execution.mode`, `authProfileId` and `timeoutMs` and nothing that names an expected route (R31). The isolated path resolves the harness or CLI owner and prepares credentials again after the plugin calls it, and a harness-owned branch can try other credential candidates. So the plugin can show a route but can't make the call refuse a different one before inference.
-
-**Describe stays unavailable on every route** until the gateway lets a caller require the exact prepared route before inference. The studio shows #302 §7's "Describe a Claw isn't available on this gateway." `clawtrate-bots.status` reports `describe: { available: false, reason: "route-binding" }`. What the design keeps for when it is available: eligibility (OpenClaw's own host-prepared isolated completion: one fresh user message and an empty tool list, R8 and R25; never the Agents API route; native and third-party runtimes only once verified); no fallback after a refusal, a timeout or a call that may have reached a model; #302's bounded reply, single retry and 45-second budget; cancel bound to the caller and attempt; `llm.allowAgentIdOverride` written only by the admin installer with its disclosure, model and auth-profile overrides off; no bot or MCP tool that forwards a completion. Its PR adds a check that changes the route during preparation and sees zero provider requests.
-
-### Proposal records
-
-Two kinds of storage, in keyed stores (R22). On OpenClaw 2026.10.6 a retained store has no eviction and rejects `maxEntries`, `overflowPolicy` and TTLs (`docs/plugins/sdk-runtime/state-and-system.md`, lines 162 and 174). So the ledger is retained, enforces the limits below and is swept by the plugin for expiry and retention, and the versions are in a bounded namespace with `overflowPolicy: "reject-new"`, which refuses new versions when full and leaves room for every ledger decision:
-
-- **Immutable versions**, written once and never changed: a proposal's details, an Undo's details, a grant's details, and each journal entry.
-- **One ledger row per gateway**, the only mutable record that decides anything. It references versions by id and digest.
-
-A proposal version:
-
-```ts
-{
-  id: string;                                    // also the version's key
-  gateway: string;                               // the gateway's identity
-  bot: { id: string; createdAt: number };
-  kind: "update" | "create" | "routine" | "avatar";
-  payload: object; digest: string;               // canonical, validated; the digest covers every field here
-  tokens: Record<string, string>;                // each field's precondition token
-  configBefore?: Record<string, { value: unknown } | { missing: true }>; // bound paths when the card was drawn
-  source: { kind: "bot"; bot; sessionKey; runId } | { kind: "agent"; grant: string; generation: number };
-  reason?: string;
-  createdAt: number; expiresAt: number;          // the gateway's clock, 24 hours
-}
-```
-
-Its entry in the ledger: `{ version: digest, state, claim?: { by, at, attempt }, effects: [journal ids], observed? }`, with `state` one of `open`, `committing`, `accepted`, `partial`, `unknown`, `declined`, `expired`, `superseded`, `stale` or `withdrawn`.
-
-- **Persist first, then publish.** Every proposal, Undo and grant version is written in full before the ledger refers to it. The ledger's conditional update then publishes its id and digest: admitting a proposal, starting an Undo, or setting a grant's generation. Readers use only versions the ledger references, and check the digest; a referenced version whose digest doesn't match is treated as unreadable, and the proposal shows "Clawtrate couldn't read this request." with nothing applied.
-- **Interrupted before publication**: the version exists and nothing refers to it, so nothing was admitted. The tool's caller gets an error. The service can reclaim an unpublished proposal, Undo or grant version after an hour of continuous non-reference: the hour starts when the sweep first sees the version unreferenced, on the process's monotonic clock, and a restart starts a fresh observation unless the deletion was already marked. Cleanup marks an unreferenced version in the ledger before deleting it. A publisher checks that the version exists and matches its digest, and the ledger update refuses a version marked for deletion. Both operations condition their ledger update on the row they observed.
-- **Interrupted after publication**: the ledger refers to a version that is already complete, so recovery has the payload, the Undo values and the grant details it needs.
-- **What the ledger decides**, each in one `compareAndApply` (R22): admitting a proposal (with the open count of 200, each source's 20, and the latest open proposal per target and field); superseding one; expiring one; claiming one for accept, decline or Undo, with the grant-generation check inside the claim (section 8); publishing a grant's version; and revoking a grant, which moves its generation on and withdraws that grant's `open` suggestions in the same transition.
-- **Journal entries** are versions too, keyed by proposal, claim attempt and field, and written right after the gateway confirms each effect. The ledger then adds them to the proposal's `effects`. If the process stops between the two, recovery finds the entries by that key and adds them. A journal entry is evidence of a confirmed effect, even while it has no ledger reference. The one-hour cleanup skips journal entries. Recovery attaches them before normal journal retention runs. An effect with no journal entry is `unknown` (below).
-- **Races, decided by the ledger.** A revocation and an acceptance on two devices: whichever transition lands first decides. If the claim landed first, the commit goes on and the audit says "accepted before access was removed"; if the revocation landed first, the claim fails its generation check and the accept is refused as `withdrawn`. A helper still connected when access is removed from another device learns it from the plugin's event and from the ledger check before its next call. Two submissions racing for the last slot, and a supersession racing a claim, are ordered the same way: a proposal already `committing` can't be superseded.
-- **Supersession**: a new proposal for the same bot and field supersedes the open one from any source; for a picture, #302 §9's rule (a newer one from the same proposing bot) applies, and a picture proposal from another source stays alongside it.
-- **Expiry** is a field on the gateway's clock; terminal records, and revoked grants, are kept 30 days, then removed.
-- **Storage full.** The ledger is one stored value, at most 1 MiB. A new proposal or grant is refused with `records-full` if the ledger, with room kept for every open proposal to settle and every grant to be revoked, wouldn't fit; deciding, expiring and revoking always can.
-- **The versions store fills only for a while.** A settled request keeps its body for the 30 days of history, so the 512 version rows hold the open requests (up to 200), the requests settled in the last 30 days, each grant's current version, revoked grants still in retention, and orphans awaiting cleanup. With few grants and few orphans, about 300 settled in 30 days with 200 open, or about 500 with few open, fill it. A full store refuses new records with `records-full` and accepts them again as cleanup reclaims rows; a store full of live grants with long deadlines can stay full for longer than 30 days. Dropping a settled request's body sooner, or a larger bound, can follow if real use needs them.
-- **Undo has its own version**: `{ id, undoes: <journal id>, field, restore: <the journaled before-value>, expect: <the journaled after-value or hash> }`, written before the ledger claim that starts it, and idempotent by id, so a second Undo or a retry after a lost answer finds the first. The values come from the journal, never from the caller.
-- **Crash and lost answers.** A proposal left in `committing` is settled from the journal: each effect journaled before the crash is `applied`. An effect not journaled is `unknown`, even when a read shows the proposed value, because an independent admin could have written the same value or restored the base; there is no durable receipt for a particular commit on this gateway. What a read shows is kept as `observed` and shown as "Now reads: …", never as an outcome. Clawtrate never resends an uncertain write; the person can apply again only as a new decision on a card drawn from a fresh read.
-- **Several fields** are applied one by one, and each confirmed effect is journaled before the next, so a partly applied proposal says exactly what landed.
-- **Studio Save** for a picture proposal is the person's own edit on 2026.10.6 (section 6). When a conditional picture write exists, the studio's commit will carry a new server-computed digest of the exact edited draft, bound to the same current-picture token.
-
-### The journal
-
-A retained store of immutable entries, at most 1,000 and 90 days: `id`, `at`, `gateway`, `bot`, `field`, before and after (short values; hashes, and text up to 64 KiB for Undo, for files), the precondition token used, the proposal, the deciding device (hashed), the source, and the outcome. `clawtrate-bots.changes.list` (read) pages through it, filtered by the caller's permissions (section 10). It gives F-041 its diff and Undo for changes the plugin applies, once it may apply them (section 8).
-
-**Room is reserved before any gateway write.** The ledger keeps the journal's count of entries and of reserved spaces. A claim reserves one space per field in the same transition that claims the proposal, and fails if that would pass 1,000. Each entry written uses one reserved space; settling a claim (applied, partial, not applied or unknown) releases the rest.
-
-- **A full journal.** First, the service removes the oldest entries whose Undo is no longer offered (Undo is offered for 7 days, until the next change to the same field). If that frees no room, the claim is refused before anything is written: "Clawtrate's change history is full, so it can't apply this now. Review and save it yourself instead."
-- **An interrupted reservation.** A reservation belongs to its claim. A claim left in `committing` keeps its reservation until recovery settles it from the journal (section 9), and then the unused spaces are released. A reservation is never released while its claim might still write.
-- **Partial effects.** Each field's space is used only when its entry is written; the card lists what applied, what didn't, and what is unknown, and Undo is offered only for fields with an entry.
-- **A journal write that fails after the gateway write.** Stop before the next field. The live worker can retry storing the confirmed entry once under the same journal key while it still holds the original gateway confirmation and read-back. After a restart, recovery looks up that key. If the entry is missing, the field stays `unknown` and has no Undo. A later read of the setting cannot establish who wrote it. In both cases settlement releases unused reservations. Only fields with journal entries count as applied. With none, the card says "Couldn't confirm whether this applied." With earlier confirmed entries, it says "Some of this applied" and names the fields. For each unknown field it says "Undo isn't available for this change."
-
-## 10. External agents over MCP
-
-### The transport: stdio, relayed by Clawtrate, macOS only in v1
-
-An external agent (Claude Code, Codex, Cursor) starts `clawtrate-mcp`, shipped inside Clawtrate, as a **stdio** MCP server. It relays each call to the running Clawtrate app over a Unix socket, and the app calls the plugin's methods on its gateway connection.
-
-- **Why**: stdio is what coding agents support, with no port. The gateway's own MCP (`attach.grant`) serves one task on the gateway's computer and runs as the bot with no operator (R10, R6). A plugin HTTP route can't carry admin from the shared token (R11).
-- **The socket**: a private, app-owned runtime folder (0700) and socket (0600), created safely (no link followed; a stale socket removed only when it is the app's own), cleaned up on quit. Both ends check the other's kernel peer credentials (`LOCAL_PEERCRED`) before the helper sends its secret.
-- **Clawtrate must be open and connected**; otherwise every tool answers "Clawtrate isn't connected to your gateway. Open Clawtrate and try again."
-- **macOS only** until another desktop OS has an equivalent local transport.
-
-### The principal, on both sides
-
-- **In the app**: a grant holds a high-entropy bearer secret, shown once; the app stores only its digest and compares in constant time. Its label is display text. Grants can be rotated and expire (30 days by default).
-- **On the gateway**: each grant's generation and revocation live in the plugin's ledger (section 9), which is what decides; its details (`scope`, `bots`, `includeInstructions`, `includeFuture`, `expiresAt`) are an immutable grant version, written by `clawtrate-bots.relay.grants.set` (admin) before the ledger publishes it. The gateway never holds the bearer. Every suggestion records the grant id and generation, and a claim on **any** device is refused when the ledger shows the grant revoked, expired or at another generation.
-- **The limit, said plainly** on the Add screen: "Anything that can read this secret can do what this grant allows. Programs running as you on this Mac can read your agent's settings, so give agents the least they need."
-- **A new connection.** When the helper connects, and whenever the app reconnects to the gateway, the app checks the gateway's identity is the one the grant was made for and reads the grant's record from the plugin. A missing record, another generation, revocation or expiry refuses every call until the owner acts. A grant never moves to another gateway.
-- Every request is typed and checked before each dispatch. The actor is assigned by the app from the grant, never taken from the caller.
-
-### What it may do
-
-| Scope (v1)          | Tools                                                                                                                                  |
-| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
-| **See bots**        | `bots_list`, `bot_get`, `routines_list`, `proposals_list`                                                                              |
-| **Suggest changes** | Also `propose_update` and `propose_routine`, through `clawtrate-bots.relay.propose`, which only records proposals for the grant's bots |
-
-See is the default. External agents can't ask to create bots in v1 (section 7) and can't change anything directly.
-
-**Instructions are a separate permission**, "Include bots' instructions", off by default. Without it the agent gets no `AGENTS.md` or `SOUL.md` text, no instruction diffs in `proposals_list` or the journal, no routine prompts in `routines_list`, and can't propose instructions or a routine's prompt. Lists, proposals, errors and audit answers are filtered by the same grant.
-
-An agent never gets credentials, devices, pairing, gateway config, tool policy, managers, deleting bots, completions or messages to bots.
-
-### Revoking, and the audit
-
-- **Remove access**, or expiry, is one ledger transition: the grant's generation moves on, it is marked revoked, and its open suggestions become `withdrawn`, so no device can apply them. A suggestion already claimed before that transition finishes and is audited as such. In the app, new and queued calls are refused ("This agent's access to Clawtrate was removed."), and the helper's sessions are closed.
-- **A call already sent to the gateway** finishes; the audit records what it did ("completed after access was removed", with its outcome), and its answer is not sent to the closed helper session. Nothing is rolled back.
-- **The audit** is the app's own, owner-only and bounded (5,000 records, 90 days), keyed by grant and gateway: each read, suggestion, refusal and removal, with no secret and no instruction text. It is kept after a grant is removed. "See its activity" shows it with the plugin's outcomes for its suggestions.
-
-## 11. Live updates in core and the interface
-
-- **Core** keeps one store of each bot's identity (name, label, picture) from `agents.list` and `config.get`, and which bot is the Main Bot and which is the gateway's own, from section 4's record and `agents.list`. It reads again on `plugin.clawtrate-bots.changed`, on a run's tool event for a `clawtrate_*` tool, on `config.changed`, and on reconnect.
-- **Only reads publish.** A proposal's values, a card's text and a tool's arguments never change the store. The rail, the title pill and the hero change when a read returns the new value, together, in one frame.
-- **A change from outside**: when a read finds a bot changed with no matching journal record, the bot's Settings and its chat show "Changed outside Clawtrate's tools" with the field and time.
-- **Motion**: the name cross-fades over `--dur-base`; the Claw follows #302's transitions; none under reduced motion. The live region says "Renamed to Maple" once.
-- **New in `@clawtrate/core`**: the identity store's triggers; the plugin's status, proposals and onboarding record (bounded in `state-bounds.ts`); bridge commands for apply, decline, Undo, the onboarding record, managers and grant records. **In `@clawtrate/ui`**: the Main Bot's tile and gold star, "Set up your Main Bot", the autonomy step and Autonomy row, the guided card, the proposal cards and their states, the Proposals list, the managers switch and offer, Agents with access.
-
-## 12. Safety
-
-- **No bot writes anything by itself.** Every change from chat waits for a person's decision bound to the exact values, with the precondition checked inside the gateway's write (sections 6 and 8). A turn's scopes, its owner bit or its source never authorize a write: an admin's chat can carry untrusted text from history, a tool result or another bot, and routines carry their creator's authority (R18).
-- **Text from a model is data.** Names, labels and reasons are trimmed, limited and shown as text; instructions as a diff in mono; a picture is only a parsed #302 choice.
-- **Credentials never pass through a tool.** Accounts are named by id and label.
-
-### The managed tool policy
-
-Every bot Clawtrate makes or migrates, in both modes, gets this policy. Clawtrate calls a bot **managed** only when its effective tool policy (`tools.effective`) shows every line below, in an interactive turn and in a scheduled turn, on the session and runtime it runs on.
-
-| Surface                                                                     | Policy                                                                                                                                                                                                 | Why, in the pinned package                                                                                    |
-| --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------- |
-| `gateway`, `plugins`, `openclaw`                                            | Denied                                                                                                                                                                                                 | Config, plugin and delegated-setup changes; `openclaw` applies any config change under a `full` posture (R12) |
-| `automations` and its alias `cron`                                          | Denied. A scheduled turn may still get the gateway's restricted tool that can only remove its own routine; that is allowed, and shows in the journal as observed                                       | Both names are the scheduler tool (R30)                                                                       |
-| `sessions_spawn`                                                            | Allowed with `runtime: "subagent"` only once the managed check shows the child carries the bot's denies; otherwise denied. ACP is refused by the gateway when an inherited deny can't be carried (R30) | Delegation must not shed the policy                                                                           |
-| `skill_workshop`                                                            | Denied                                                                                                                                                                                                 | Writes skills under the agent folder, outside the workspace (R30)                                             |
-| `terminal`                                                                  | Denied                                                                                                                                                                                                 | Types into an operator's shared terminal (R30)                                                                |
-| `personal_instructions`                                                     | Denied                                                                                                                                                                                                 | Writes a person's `USER.md` and takes another agent's id (R30)                                                |
-| `t3code__*`                                                                 | Denied, as #257 does                                                                                                                                                                                   | The optional T3 Code integration acts outside the gateway                                                     |
-| File tools                                                                  | `tools.fs.workspaceOnly: true`. Clawtrate never sets a `full` session permission mode on a managed bot; a task that has one shows "This task isn't under Clawtrate's limits"                           | An explicit `full` session takes precedence over `workspaceOnly` (R30)                                        |
-| Session offloading (`worker-turn`), native harnesses, provider-native tools | Not enforceable from OpenClaw's tool inventory: a bot whose model or runtime uses them is shown as "Not fully managed", with what isn't covered                                                        | The policy is checked on what OpenClaw constructs, not on a provider's own tools                              |
-
-- **Existing bots** keep their tools until the owner chooses **"Bring Juniper under Clawtrate's limits"**, a sheet that names each tool it turns off and each setting it changes. Until then the bot says "Clawtrate's limits don't apply to Juniper yet", and Clawtrate claims nothing about it.
-- **What the limits can't do.** With Hands-off, a bot's commands run as the computer's user and can change OpenClaw's settings or another bot's files. Clawtrate promises its limits for its own plugin actions only, and says so on the setup step (section 2). Keeping bots apart needs a separate host or workspace per bot and a reviewed tool policy; that is not part of this design.
-
-## 13. Failure states
-
-| Condition                                                                                                                                                                                           | Where              | Words                                                                                                                                                                        | Actions                  |
-| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ |
-| A write didn't confirm (autonomy, Save, Apply)                                                                                                                                                      | Where it was made  | "Clawtrate couldn't confirm whether this changed." Clawtrate reads it again and shows what it now reads.                                                                     | Check again (reads only) |
-| Below admin at setup                                                                                                                                                                                | Setup              | `bots.md` §2's admin bar: "Choosing how bots run commands needs admin access."                                                                                               | Request access; Skip     |
-| The greeting doesn't come in 45 s                                                                                                                                                                   | First run          | "Maple hasn't answered yet." The guided card is shown anyway.                                                                                                                | Stop; Try again          |
-| The opening's delivery is ambiguous                                                                                                                                                                 | First run          | "Clawtrate couldn't confirm the first message reached Maple."                                                                                                                | Send it again; Leave it  |
-| The first run is held by another device                                                                                                                                                             | First run          | With the plugin, opens the same task; no second opening. Without it, "Maple is being set up on another device." and nothing is sent.                                         | —                        |
-| The gateway refuses a second bot because its bindings live in an included file (`CONFIG_WRITE_REJECTED`, "Automatic agent ownership materialization cannot append to $include-owned bindings", R44) | The tile           | "OpenClaw won't add your Main Bot by itself, because your channel settings are kept in a separate file. Add a channel-wide binding for your channels there, then try again." | Try again                |
-| The Main Bot couldn't be made                                                                                                                                                                       | The tile           | "Clawtrate couldn't make your Main Bot." Section 4's table says when a create is tried again.                                                                                | Try again                |
-| A create refused with `deletion-pending`                                                                                                                                                            | The tile           | "Clawtrate is still removing the old Main Bot. Try again in a moment."                                                                                                       | Try again                |
-| The connection can't make a bot                                                                                                                                                                     | The tile           | Section 4's open choice; by default "Clawtrate needs full control of your gateway to make your Main Bot."                                                                    | Give full control        |
-| The Main Bot lines couldn't be moved to or from a bot                                                                                                                                               | Bot settings       | "Clawtrate couldn't update what Juniper is told about being the Main Bot."                                                                                                   | Try again                |
-| The bot changed since the card was drawn                                                                                                                                                            | Guided card, cards | "The name changed somewhere else since this card was shown, so nothing was saved."                                                                                           | Show the current name    |
-| A bot with no creation record                                                                                                                                                                       | Cards              | "Clawtrate can't confirm this is the same bot, so it can't apply a saved request. Make the change yourself."                                                                 | Open settings            |
-| Any stored request on 2026.10.6                                                                                                                                                                     | Card               | Section 6's button: "Review and save", "Rename Pip to Scout", "Open in studio", "Remove it yourself", or New bot filled                                                      | As there                 |
-| The plugin is missing                                                                                                                                                                               | First run          | Section 3's line, and "Save in Clawtrate" on the card                                                                                                                        | —                        |
-| Apply below admin                                                                                                                                                                                   | Card               | "**Admin access needed.** Applying this needs admin access."                                                                                                                 | Request access           |
-| The journal is full (plugin apply path)                                                                                                                                                             | Card               | Section 9's words                                                                                                                                                            | Review and save          |
-| A manager grant removed before the write (plugin apply path)                                                                                                                                        | Card               | "Juniper can no longer ask to change other bots."                                                                                                                            | —                        |
-| Not applied, partly applied, unknown, expired, superseded, withdrawn                                                                                                                                | Card               | Sections 8 and 10, and #302 §9                                                                                                                                               | As there                 |
-| Undo would give more freedom                                                                                                                                                                        | Card               | Section 8's words                                                                                                                                                            | Undo and allow; Keep     |
-| Too many open proposals                                                                                                                                                                             | The bot's result   | Section 6's words                                                                                                                                                            | —                        |
-| Describe                                                                                                                                                                                            | Studio             | "Describe a Claw isn't available on this gateway." (section 9)                                                                                                               | —                        |
-| An external agent while Clawtrate is closed, or after removal                                                                                                                                       | The agent          | Section 10's words                                                                                                                                                           | —                        |
-
-## 14. The iPhone app
-
-`apps/mobile` isn't on `main` and belongs to its own coordinator. Impact: core's stores and the copy are shared; the Main Bot's tile (the first item of the bot list, full width, with the gold star), the autonomy step, the guided card, the proposal cards and the Proposals list need the app's own screens at 44 pt; Agents with access is desktop only.
-
-## 15. Parity rows
+## 5. Every prompt the design had, and what it became
+
+Clawtrate does not prompt: it does the thing, shows what it did and offers Undo. A confirmation stays only for what is destructive: deleting something, anything that can't be undone, accounts and credentials (signing in, letting a device control a gateway, handing over a secret), spending money, and changing OpenClaw itself. Each place the reviewed design asked, confirmed or offered a card is one of three below; there is no fourth kind and no setting that turns asking on or off.
+
+| The reviewed design had                                                                                                                                                                                                       | Now                                                                                                                                                                                                                                                                      | Kind                                    |
+| ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ | --------------------------------------- |
+| "How should bots run commands?" at setup, with its sheet                                                                                                                                                                      | Gone. Nothing is asked or written about commands; the separate command design owns it (section 2)                                                                                                                                                                        | Not done                                |
+| "Also use this for Juniper" on that step                                                                                                                                                                                      | Gone with it                                                                                                                                                                                                                                                             | Not done                                |
+| The opening sent in the person's name, with its caption                                                                                                                                                                       | The bot speaks first; Clawtrate's brief is a quiet line with Show (section 3)                                                                                                                                                                                            | Done at once                            |
+| The guided card: name, picture, how it should help, Save                                                                                                                                                                      | The bot asks in conversation; the name is taken from the answer, the picture follows the name, what it helps with goes in the bot's own `USER.md`                                                                                                                        | Done at once, Undo                      |
+| "Use Maple's Claw as its picture?" after Save                                                                                                                                                                                 | The name's Claw is the picture, with the name                                                                                                                                                                                                                            | Done at once, Undo                      |
+| The manager switch on the guided card                                                                                                                                                                                         | On by default once Clawtrate's bot tools are on the gateway, shown in the Main Bot's settings (section 4)                                                                                                                                                                | Done at once                            |
+| F-552's rename card, for a name a bot wrote                                                                                                                                                                                   | The name is taken, "Named Maple · Undo" or "Maple renamed itself Scout · Undo" (section 3)                                                                                                                                                                               | Done at once, Undo                      |
+| "Apply a bot's changes to itself at once", a setting under Advanced                                                                                                                                                           | Gone: there is nothing left for it to turn on                                                                                                                                                                                                                            | Not done                                |
+| "Start Maple from what Juniper knows" and its "Choose what to bring" sheet                                                                                                                                                    | Brought in when the Main Bot is made, with See what and Undo; scheduled jobs not moved (section 3)                                                                                                                                                                       | Done at once, Undo                      |
+| "Send it again" and "Leave it" for an unconfirmed opening                                                                                                                                                                     | Sent again once by itself, then said plainly if still unconfirmed (section 3)                                                                                                                                                                                            | Done at once                            |
+| "Maple is being set up on another device" while waiting                                                                                                                                                                       | The same conversation, as it is (section 3)                                                                                                                                                                                                                              | Done at once                            |
+| A card to add the Main Bot lines to a hand-made "Clawtrate Main Bot", or after the chosen Main Bot is deleted                                                                                                                 | Added, held to the hash read; a changed file is left alone and said (section 4)                                                                                                                                                                                          | Done at once                            |
+| "Choose your Main Bot" with Confirm                                                                                                                                                                                           | Choosing does it, with Undo (section 4)                                                                                                                                                                                                                                  | Done at once, Undo                      |
+| "Set up your Main Bot" after the Main Bot was deleted                                                                                                                                                                         | Not made by itself, since the person just deleted one; **Set up** makes it when pressed, with nothing to confirm (section 4)                                                                                                                                             | Not done                                |
+| Deleting the Main Bot (#82's dialog)                                                                                                                                                                                          | Kept: one plain confirmation                                                                                                                                                                                                                                             | Asks: can't be undone                   |
+| "Give full control" on the "Set up your Main Bot" tile                                                                                                                                                                        | Kept: the one request #418 offers                                                                                                                                                                                                                                        | Asks: lets a device control the gateway |
+| Connect                                                                                                                                                                                                                       | Kept: one click                                                                                                                                                                                                                                                          | Asks: lets a device control the gateway |
+| Signing in to a model provider                                                                                                                                                                                                | Kept, as the one step before the hello when there is no account (section 2)                                                                                                                                                                                              | Asks: an account                        |
+| #244's not-found card, its explanation screen and the computer's dialog                                                                                                                                                       | The card's button and the computer's dialog; the explanation screen goes, its facts on the card (section 2)                                                                                                                                                              | Asks: changes OpenClaw itself           |
+| A bot's proposal cards ("Pip asks to rename itself", "Juniper asks to create Stride"), Review and save, the Proposals list, the journal's Undo, "Bring Juniper under Clawtrate's limits", and an external agent's suggestions | Withdrawn from this design. A bot's tools on Clawtrate and the class of each, under this rule, are `bots-in-clawtrate.md`'s (#669); external agents over MCP and the managed tool policy are not part of the first run and will be designed under this rule on their own | `bots-in-clawtrate.md`                  |
+
+**What the checks still do.** Nothing that used to decide "apply or ask" is dropped; it decides what the line says. For a name: whether this device's composer sent the message that started the run, whether anything else joined that run, and whether the name is in the person's words (section 3). A change that can't be shown to be the person's own ask is never presented as theirs.
+
+**What the first run uses of a bot's tools.** Only the name, and only once `clawtrate_identity` is on the gateway (#669); until then the bot writes its `- Name:` line, which every bot can. The task and the file in the tour are the gateway's own `sessions_spawn` and a `MEDIA:` line. Being the Main Bot gives a bot no extra tool, and its tools are #669's.
+
+**What the reviewed design's plugin sections still hold that this design relies on**, now in section 4 and section 14: a bot's incarnation is its id and `createdAt`, kept outside the config (R34); `agents.update` takes no precondition on either version (R24); `agents.create` refuses an id it already has (R28, R45); and the plugin's retained records (R9, R22), which the opening's shared record and Undo across devices use once Clawtrate's bot tools are on the gateway (#669 installs them).
+
+## 6. Failure states
+
+| Condition                                                                                                                                                                                           | Where        | Words                                                                                                                                                                        | Actions                  |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ |
+| No model account the Main Bot can use                                                                                                                                                               | First run    | Section 2's message: "Before your Main Bot can talk, it needs an account with a model provider."                                                                             | The sign-ins             |
+| The hello doesn't come in 45 s                                                                                                                                                                      | First run    | "Your Main Bot hasn't answered yet."                                                                                                                                         | Stop; Try again          |
+| The opening still unconfirmed after its one resend                                                                                                                                                  | First run    | "Clawtrate couldn't confirm your Main Bot got its first message. You can write to it yourself."                                                                              | —                        |
+| The name didn't read back after it was taken                                                                                                                                                        | First run    | "Clawtrate couldn't confirm the new name. It shows once the gateway does."                                                                                                   | Check again (reads only) |
+| Undo of a name that has changed again since                                                                                                                                                         | The line     | "Renamed again since"                                                                                                                                                        | —                        |
+| The gateway refuses a second bot because its bindings live in an included file (`CONFIG_WRITE_REJECTED`, "Automatic agent ownership materialization cannot append to $include-owned bindings", R44) | The tile     | "OpenClaw won't add your Main Bot by itself, because your channel settings are kept in a separate file. Add a channel-wide binding for your channels there, then try again." | Try again                |
+| The Main Bot couldn't be made                                                                                                                                                                       | The tile     | "Clawtrate couldn't make your Main Bot." Section 4's table says when a create is tried again.                                                                                | Try again                |
+| A create refused with `deletion-pending`                                                                                                                                                            | The tile     | "Clawtrate is still removing the old Main Bot. Try again in a moment."                                                                                                       | Try again                |
+| The connection can't make a bot                                                                                                                                                                     | The tile     | "Clawtrate needs full control of your gateway to make your Main Bot." (section 4)                                                                                            | Give full control        |
+| The Main Bot lines couldn't be added to or taken from a bot                                                                                                                                         | Bot settings | "Clawtrate couldn't update what Juniper is told about being the Main Bot."                                                                                                   | Try again                |
+
+## 7. The iPhone app
+
+`apps/mobile` isn't on `main` and belongs to its own coordinator. Impact: core's first-run engine and its words are shared; the Main Bot's tile (the first item of the bot list, full width, with the gold star), the first run's conversation with its account step, its "Named … · Undo" line and the skip button need the app's own screens at 44 pt.
+
+## 8. Parity rows
 
 **Reworded in `docs/parity.md` by this revision**, because the old text is no longer true. Each keeps its status:
 
-- **F-005**: the first run makes a new Bot, the Main Bot, and opens its chat, also on a gateway that already has Bots.
-- **F-006**: the Main Bot's chat starts with Clawtrate's fixed first message and its caption, then the Main Bot's greeting and Clawtrate's card for its name, picture and role.
+- **F-005**: the first run makes a new Bot, the Main Bot, and opens its chat, also on a gateway that already has Bots; with no model account the Main Bot can use, its conversation first offers the gateway's sign-ins.
+- **F-006**: the Main Bot speaks first: its hello and its first question, with Clawtrate's brief to it drawn as a quiet line, never as the person's message; the bot leads from there (section 3).
 - **F-007**: no existing Bot is offered as the Main Bot; with none on the gateway, the sidebar's top tile offers to set one up. Its gateway cell no longer suggests reordering `agents.entries`.
 - **F-008**, **F-200**, **F-242**: "primary Bot" reads "Main Bot".
 - **F-025**: "Replace with different Bot" is on the Main Bot's menu.
 - **F-245**: the share sheet pre-fills the Main Bot, which is no longer the gateway's `defaultId`.
-- **F-259**: choosing another Main Bot moves the star and the tile, and the old one stays as an ordinary Bot; it needs the plugin's gateway-wide record, and without the plugin the item isn't offered.
+- **F-259**: choosing another Main Bot moves the star and the tile at once, with Undo, and the old one stays as an ordinary Bot; it needs the plugin's gateway-wide record, and without the plugin the item isn't offered.
 
-Still to reword when its work lands: **F-015**: step 1 rewords it to "The Main Bot's avatar carries a gold star badge at its lower right." (`client only: the Main Bot from F-007`) and moves its three checks in the same pull request; until then it stays as it is, `done`. **F-041**'s gateway cell adds "a change applied through Clawtrate's bots plugin is journaled with its before and after, which gives the diff and Undo". Left as they are, because they stay true: F-013 and F-031 (pinned Bots; the Main Bot's tile is above them, F-574), F-027 (Hidden Bots; the gateway's own Bot is never there, #490), F-519 (channel chats; #433 adds to it), F-552 (the rename card; the gateway's own Bot gets none).
+**To reword in the pull request that builds it**: **F-015** (pull request 2): "The Main Bot's avatar carries a gold star badge at its lower right." (`client only: the Main Bot from F-007`), with its three checks moved in the same pull request; until then it stays as it is, `done`. **F-552** (pull request 3): "A Bot that takes a name in the chat is renamed at once, shown with Undo; the line says when the person didn't type that name." Until then it stays as it is. Left as they are, because they stay true: F-013 and F-031 (pinned Bots; the Main Bot's tile is above them, F-574), F-027 (Hidden Bots; the gateway's own Bot is never there, F-562), F-519 (channel chats; #433 adds to it).
 
-**The design's own rows.** F-540 to F-548 are held for this design and are not in `docs/parity.md` yet. Revised:
+**The design's own rows.** Of F-540 to F-548, held for the reviewed design and not in `docs/parity.md`, only **F-541** stays: "The first run sends its opening once per gateway and Main Bot, including across two devices, a restart and a lost reply, and sends it again once by itself when its delivery can't be confirmed." F-540 (the command question) is withdrawn with the question; F-542 to F-548 (proposals, managers, external agents, the managed policy) are withdrawn with the proposal cards, and a bot's tools have `bots-in-clawtrate.md`'s rows (#669).
 
-| Row   | Behaviour                                                                                                                                                                                                                                                                                            |
-| ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| F-540 | Setup asks how bots run commands; the new-bot default and the new Main Bot's mode are written and read back; requested and effective access are shown.                                                                                                                                               |
-| F-541 | The first run sends its opening once per gateway and Main Bot, including across two devices, a restart and a lost reply, and stops for an explicit retry when delivery is ambiguous; the guided card saves exactly its name, picture and role; the tile changes on the read-back.                    |
-| F-542 | A bot's request to change its own settings is a proposal; on 2026.10.6 Review and save opens the person's own editor filled with it and the plugin writes nothing; once the plugin may apply, each field is written with its precondition inside the gateway's write and a changed field is refused. |
-| F-543 | Another bot's instructions, more freedom, another account and a bot-chosen picture are always confirmed, and an Undo to more freedom asks.                                                                                                                                                           |
-| F-544 | A manager's proposal shows exactly the bot it would create; on 2026.10.6 Create opens New bot filled with those values and the plugin writes nothing; the new bot appears when listed.                                                                                                               |
-| F-545 | A bot that isn't a manager can't propose for other bots; the star grants nothing, and moving it moves no grant.                                                                                                                                                                                      |
-| F-546 | On 2026.10.6, concurrent submissions respect the open proposal limits, and published proposals survive restart. Once Apply is available, two devices deciding one proposal get one outcome, the claim reserves journal room before writing, and unjournaled effects stay unknown.                    |
-| F-547 | An external agent with a grant sees bots and suggests changes within its scope; removing access refuses its next call, and another device can't apply its old suggestion.                                                                                                                            |
-| F-548 | A managed bot's denied tools are absent in interactive and scheduled turns, and a bot whose runtime can't enforce them isn't called managed.                                                                                                                                                         |
+**New rows: F-570 to F-576**, one for each behaviour this revision adds that no row covers. No more are needed. In `docs/parity.md`'s form, all `both` and `todo`:
 
-**New rows: seven, F-570 to F-576**, one for each behaviour this revision adds that no row covers. In `docs/parity.md`'s form, all `both` and `todo`:
+| Row   | Area     | Behaviour                                                                                                                                                                                                        |
+| ----- | -------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| F-570 | Main Bot | The first run makes a new Bot and makes it the Main Bot, also on a gateway that already has Bots, and none of those Bots becomes the Main Bot.                                                                   |
+| F-571 | Main Bot | Two devices running the first run on one gateway at once end with one Main Bot, and every device and person on that gateway finds it.                                                                            |
+| F-572 | Main Bot | Clawtrate's requests while making the Main Bot write no channel binding and no gateway owner, and a channel message that matches no binding reaches the same Bot before and after.                               |
+| F-573 | Main Bot | The Main Bot's identity file tells it that it is the Main Bot and that this gives it no extra access.                                                                                                            |
+| F-574 | Main Bot | The Main Bot has a tile of its own at the top of the sidebar, above pinned Bots, that can't be unpinned, hidden or moved.                                                                                        |
+| F-575 | Main Bot | On a gateway with Clawtrate's bot tools, making another Bot the Main Bot moves the tile, the star and the Main Bot's identity lines at once, with Undo, and the old one stays as an ordinary Bot with its tasks. |
+| F-576 | Main Bot | The Main Bot leads a short tour by doing (a task under its name, a file it hands over), which the person can skip at any point with one button or in their own words, with nothing lost.                         |
 
-| Row   | Area      | Behaviour                                                                                                                                                                                                                                |
-| ----- | --------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| F-570 | Main Bot  | The first run makes a new Bot and makes it the Main Bot, also on a gateway that already has Bots, and none of those Bots becomes the Main Bot.                                                                                           |
-| F-571 | Main Bot  | Two devices running the first run on one gateway at once end with one Main Bot, and every device and person on that gateway finds it.                                                                                                    |
-| F-572 | Main Bot  | Clawtrate's requests while making the Main Bot write no channel binding and no gateway owner, and a channel message that matches no binding reaches the same Bot before and after.                                                       |
-| F-573 | Main Bot  | The Main Bot's identity file tells it that it is the Main Bot and that this gives it no extra access.                                                                                                                                    |
-| F-574 | Main Bot  | The Main Bot has a tile of its own at the top of the sidebar, above pinned Bots, that can't be unpinned, hidden or moved.                                                                                                                |
-| F-575 | Main Bot  | On a gateway with Clawtrate's bot tools, making another Bot the Main Bot moves the tile, the star and the Main Bot's identity lines, and the old one stays as an ordinary Bot with its tasks.                                            |
-| F-576 | Bot setup | A Bot's change to its own name or picture waits for the person's confirmation, unless a setting under Settings → Advanced applies at once a name or picture that this device's message, which started that run, asked for word for word. |
+The gateway's own Bot leaving the sidebar, and other tools' sessions leaving a task list, are F-562 and F-563, on `main`. Starting from another bot's knowledge is #495's rows. `bots-in-clawtrate.md` proposes F-605 for the first run's name by its tool; this design's naming, which needs no tool, is F-552's rewording, and the two are one behaviour once the tool lands.
 
-The gateway's own Bot leaving the sidebar, and other tools' sessions leaving a task list, are #490's and #491's rows.
+## 9. What is taken from #257, #246 and #147
 
-## 16. What is taken from #257, #246 and #147
+- **#257** (an open pull request): the implicit-`main` reading and the held-bot handling of a create that didn't read back. Not taken: its command modes, its Approvals step and its deny list, which belong to the separate command design.
+- **#246** (an open pull request): nothing; its command wording and its refusal to create without a choice go with the question.
+- **#147** (an open pull request): the dialog for choosing another bot (renamed Main Bot, section 4), now without Confirm; the read-back table. Not taken: its storage in `clawtrate.primary` and its fallback to the gateway's default, which section 4 replaces. Copy, export, import and delete stay with #82.
 
-- **#257** (an open pull request): the two modes and their writes; the Create sequence and held bots, now also run on accept of a create proposal; the deny list, extended (section 12); the approvals-file line; the implicit-`main` reading. Carried into the autonomy PR and the create PR.
-- **#246** (an open pull request): the mode wording, and the page and the host both refusing a Create without a choice. Not taken: its exact-path approval probe.
-- **#147** (an open pull request): the dialog for choosing another bot (renamed Main Bot, section 4). Not taken: its storage in `clawtrate.primary` and its fallback to the gateway's default, which section 4 replaces. Also taken: the read-back table; the instructions event line, extended with the journal's diff and Undo. Copy, export, import and delete stay with #82.
-
-## 17. For builders
-
-### Gated on missing gateway primitives
-
-OpenClaw 2026.10.6 lacks these. Each feature stays off until the gateway has the primitive; nothing here invents one.
-
-| Feature, off on 2026.10.6                                                                                                                                                                                      | Missing primitive                                                                                                                                                                                                                                                             | What the person gets instead                                                            |
-| -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------- |
-| Applying, or undoing, **any stored request to an existing bot** (label, instructions, model, account, effort, autonomy, routine add, edit, pause or resume), and the **follow-on writes of a proposed create** | A write that refuses unless the target bot's incarnation is the one the caller read: an incarnation precondition on `agents.files.set`, `config.patch` for an agent's entry, `cron.*` and `agents.update`, or a config hash covering incarnation for config writes only (R34) | "Review and save": the person's own editor, or New bot, filled with the proposed values |
-| Applying, or undoing, a proposed **name**; the guided card's plugin-authorized name Save                                                                                                                       | A conditional identity write: `agents.update` (or an equivalent) refusing unless the bot's identity, including `IDENTITY.md`, is what the caller read (R24)                                                                                                                   | The person's own fresh rename, read back, with #302 §9's race caveat                    |
-| Applying, or undoing, a proposed **picture** (#302 §9's "Use it")                                                                                                                                              | The same, for `avatar`                                                                                                                                                                                                                                                        | "Open in studio"; the studio's Save is the person's own edit                            |
-| **Removing a routine** from a proposal                                                                                                                                                                         | A revision precondition on `cron.remove` (R27)                                                                                                                                                                                                                                | "Remove it yourself", in Routines                                                       |
-| **Describe a Claw** (#302 §7)                                                                                                                                                                                  | A way for `api.runtime.llm.complete` to require the exact prepared owner, transport, credential route and runtime generation before inference (R31)                                                                                                                           | "Describe a Claw isn't available on this gateway."                                      |
-| Applying a saved request to a bot with **no creation record**                                                                                                                                                  | A gateway-issued incarnation for each bot                                                                                                                                                                                                                                     | The person's own edit in Settings                                                       |
-| Recognizing an unjournaled effect as **this** commit's                                                                                                                                                         | A durable receipt for a write                                                                                                                                                                                                                                                 | "Unknown", with what Clawtrate now reads                                                |
-| Calling a bot "managed" on **worker-turn, native-harness or provider-native-tool** routes                                                                                                                      | Tool-policy enforcement on those routes                                                                                                                                                                                                                                       | "Not fully managed", with what isn't covered                                            |
-
-### Order
-
-Each PR merges before the next one that needs it starts. The report has sizes.
-
-1. **Plugin: proposal records and the journal**: the admission ledger, records, claims, expiry and quotas, accept, decline, Undo records, crash settling, managers, status, the event, the gateway grant records for agents.
-2. **Plugin: reading and proposing tools**: list, get, update (with the gated name), routine (with the gated removal), avatar; the managed checks; the prompt-hook probe.
-3. **Plugin: create proposals** with #257's sequence and routines (needs #257 or its merged replacement, and #302's shared name and PNG contract for the first picture).
-4. **The autonomy step and the managed policy**: requested and effective access, the pending choice, the migration sheet, the managed check in interactive and scheduled turns (needs #257).
-5. **Live updates and proposal cards** in core and the interface, the Proposals list, the gated-field buttons (before #302's proposal card).
-6. **The first run's plugin parts**: the onboarding record and `mainBot` record, the opening's delivery state on the plugin, the Save-to-rail timing (after 1, 4 and 5, and effortless PR 6). The Main Bot itself, made without the plugin, is section 20's build order, which comes first.
-7. **Create by chat** in the interface (after 3 and 5).
-8. **The MCP relay** (after 1 and 2).
-9. **Agents with access** in Settings (after 8).
-10. **Installing the plugin**, behind its release gate (section 5).
-
-Describe's route (formerly its own PR) waits for its primitive. Effortless setup's PR 6 owns the pairing-to-composer timing and the first-reply measurement; step 6 adds the Save-to-rail timing to the same harness. #292 closes only when routines and accounts (step 2), create (steps 3 and 7) and the first run (step 6) are in.
+## 10. For builders
 
 ### Contract tests that must fail without each behaviour
 
-On a development gateway, against the plugin and the real app, each named for its parity row:
+On a development gateway, against the real app, each named for its row, on both OpenClaw versions:
 
-- **F-542**: on 2026.10.6, Review and save opening each editor filled with the proposal, including both selections in the account editor, and the plugin sending no write; a bot deleted and re-created with the same id and identical files between the card and saving, saved only through the editor's fresh read. Once the plugin may apply: a proposal accepted; a combined account and model change selecting a non-default model on the destination account (one model patch, final read-back of that exact model with that account and empty fallbacks, one Undo); an unavailable model refused without writing the model entry; a label and an effort change applied in order, including after an unrelated config edit; an external edit to the confirmed label or the still-pending effort stopping the second write and preserving the first journal entry; a file or routine refused when its precondition changed; a decider who lost admin before the commit; a name field shown with its own button and not applied.
-- **F-543**: each always-confirmed mark; an Undo to more freedom asking.
-- **F-544**: on 2026.10.6, Create opening New bot filled with exactly the proposal's values. Once the plugin may apply: an existing id refused by `agents.create`; a create answered with another id stopping; a lost answer on `cron.add` converging on one routine.
-- **F-545**: a non-manager refused; a star without a manager grant refused; once the plugin may apply, a grant removed before the rebase's snapshot refused, and one removed after it refused inside `config.patch`.
-- **F-546 on 2026.10.6, with Apply disabled.** Race two distinct proposals for the last open slot. Run the race once against the gateway limit of 200 and once against the per-source limit of 20. Each time, one proposal is admitted, the other is refused, and the open count stays at the limit. Restart after storing the version but before the ledger publishes it. The proposal list stays unchanged, cleanup can reclaim the version, and a delayed publisher cannot publish it after cleanup. Restart just after publication and verify that the list contains the proposal once, with its original payload and digest. Check that the gateway received no writes to bot settings.
-- **F-546 once the plugin may apply**: a full journal refusing the claim before any write, after the service frees what it can; two claims competing for the last journal space; a crash with a reservation held, settled by recovery before the space is released; a journal write failing on the first or a later field, followed by a restart with no entry for that field (unknown, further fields unwritten, Undo offered only for earlier journaled effects); a restart after more than an hour with a confirmed journal entry still awaiting its ledger reference (the effect is recovered and shown as applied); a revocation and a claim racing, decided by the claim's generation check; two devices deciding at once; a supersession racing a commit; a crash between the claim and the write; a lost answer after an independent admin writes the same value, and after one restores the base, both reported unknown with observed values; Undo retried after a lost answer finding its first record.
-- **F-541**: two devices opening the first run at once; a restart between the claim and the opening; a lost `sessions.create` answer; `runStarted: false`; an existing key never sent the opening through `sessions.create`; two devices pressing Send it again for an existing, empty task (one `chat.send`, one "Another device is sending it again"); a late answer from the first attempt changing nothing; real composer submission and the card's fill at phone width.
-- **F-547**: a grant used; revoked mid-call (the admitted call's outcome recorded, its answer withheld); refused after; another device trying to apply the revoked grant's suggestion; a reconnect with a new generation refused; instructions withheld without the permission.
-- **F-548**: each denied tool absent in an interactive and a scheduled turn; ACP refused; a `full` session task shown as not under the limits; a worker-turn bot shown as not fully managed.
-- The plugin missing; a gateway switch mid-proposal.
+- **F-570, F-571**: the first run on a gateway with several bots and on one whose only bot is its own makes `clawtrate-main-bot` once; two devices at once end with one Main Bot, the second refused `already-exists` and opening it.
+- **F-572**: section 4's channel test, for both shapes of gateway.
+- **F-573**: the Main Bot's `IDENTITY.md` holds the lines, written held to the template's hash, and its first turn carries no `BOOTSTRAP.md`.
+- **F-574**: the tile above pinned bots, with no Unpin, Hide or drag.
+- **F-541**: two devices opening the first run at once; a restart between the claim and the opening; a lost `chat.send` answer, sent again once and never a third time; the main conversation made empty and never given the opening through `sessions.create`; a late answer from the first attempt changing nothing.
+- **F-552 reworded**: a name the person typed, taken at once and read back with "Named … · Undo"; a name in a run another message joined, a name the person didn't type and a name from another device's message, each taken with "… renamed itself … · Undo"; Undo restoring the name before, after a restart and from another device of the same person; the tile and header changing only on the read-back.
+- **F-576**: the scripted model following the brief: a visible task started from the main conversation listed under the Main Bot, its file handed over and shown; Skip the tour sending its message and going; a model that never writes a name leaving the Main Bot named "Clawtrate Main Bot" with nothing broken.
+- **F-005's account step**: a gateway whose `models.authStatus` lists no usable account for the Main Bot's model opens on the sign-ins and sends the opening only once one reads back.
 
-Where these run, as the records PR (step 1) found them:
-
-- **Restarts.** The development gateway never reuses state (`tools/dev-gateway/src/cli.ts`, "State is never reused"), so F-546's restart cases are unit tests over the store until a gateway restart that keeps state exists.
-- **F-547's withheld answer** belongs to the relay (step 8). The records PR checks that an admitted call's outcome is recorded and that the next call is refused.
-- **F-545's refusals** need a bot's tool, so they are contract tests in step 2; step 1's second part unit-tests the rule and checks `managers.set` on a gateway.
-- **F-546 once the plugin may apply** runs as unit tests in step 1's second part; its gateway checks wait for the primitives in "Gated on missing gateway primitives".
-- **Step 1's second part, part one** adds the cleanup sweep with its deletion marker (reclaiming unpublished, replaced and retired versions) and grant updates that carry their generation, each with its test. The apply-path records (the claim, the journal, crash settling, Undo, `changes.*`, `managers.set`) follow in part two.
-- **Step 1's second part, part two** adds the claim with its journal reservation, the journal in a retained namespace of its own (so the orphan sweep, which scans only the versions, never sees an entry awaiting its reference), crash settling, Undo records, `changes.*` and `managers.set`. Apply and Undo need the conditional writes in "Gated on missing gateway primitives", so they run only in unit tests, through a stand-in for those writes: the shipped plugin is given none, and accept and Undo refuse with `apply-unavailable` and `undo-unavailable`. Every publication's deletion-marker check is in `Records.publish`.
+Whether a real model follows the brief is seen only on a real gateway with a real model. The development gateway's scripted model is told what to do by the check, so the checks prove what the app does with what the bot does, not what a model chooses.
 
 ### Not yet established
 
-Whether `messageChannel` is trusted per-turn provenance; whether a plugin's prompt guidance reaches the model before the first turn (step 2 probes it, and the first run doesn't depend on it); whether a subagent spawned by a managed bot carries its denies; proposal persistence across a real restart; the relay's socket and revoke behaviour; any measured first-run time; section 4's channel test on a gateway with several channel accounts and per-account bindings (only one Telegram account was tried, R43 and R44).
+Any measured first-run time; whether a real model leads as the brief asks, on the models people use; section 4's channel test on a gateway with several channel accounts and per-account bindings (only one Telegram account was tried, R43 and R44); whether a client may mark its own `chat.send` input as system input on either version (`systemInputProvenance`, section 14), which would let the brief be kept out of the transcript instead of drawn as a quiet line.
 
-## 18. The prototype's states
+## 11. The prototype's states
 
-`main-bot.html` takes `theme`, `width` and `chrome`, as the other pages, and:
+`main-bot.html` takes `theme`, `width`, `motion` and `chrome`, as the other pages, and:
 
-| Parameter  | Values                                                                                                                                                                              |
-| ---------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `view`     | `setup` (default), `first` (the first run), `rename` (a bot asks to rename itself), `create` (creating a bot by chat), `proposal` (proposals of other origins), `agents` (Settings) |
-| `at`       | `start`, `greeted`, `saving`, `done`: a point in the first run; `done` also saves a proposal through its editor                                                                     |
-| `card`     | `unconfirmed`, `stale` (the editor on a changed bot), `declined`: other outcomes                                                                                                    |
-| `opening`  | `ambiguous`: the first message's delivery couldn't be confirmed                                                                                                                     |
-| `existing` | `1`: a Main Bot already made, on another device                                                                                                                                     |
-| `plugin`   | `missing`                                                                                                                                                                           |
-| `grant`    | `0`: Juniper isn't a manager yet (create)                                                                                                                                           |
-| `step`     | `add`, `added` (agents)                                                                                                                                                             |
+| Parameter  | Values                                                                                                                   |
+| ---------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `at`       | a point in the first run: `start` (the hello is coming), `greeted` (it asks its name), `named`, `helped`, `task`, `done` |
+| `account`  | `none`: no model account yet, so the conversation opens with the sign-ins                                                |
+| `name`     | `bot`: the bot names itself without the person typing the name                                                           |
+| `slow`     | `1`: the hello doesn't come, so Clawtrate's line with Stop and Try again shows                                           |
+| `opening`  | `unconfirmed`: the first message's delivery couldn't be confirmed after its one resend                                   |
+| `from`     | `juniper`: another bot knew things, so the Main Bot started from it                                                      |
+| `existing` | `1`: a Main Bot already made, on another device                                                                          |
+| `plugin`   | `missing`: the Main Bot's menu without Clawtrate's bot tools                                                             |
 
-A stand-in gateway answers after a delay, and the rail changes only on its answer. The rail draws the Main Bot, `clawtrate-main-bot` ("Clawtrate Main Bot" until named, Juniper when it exists already), as its tile with the gold star above the other bots, and keeps the gateway's own bot, `main`, out of it, since other bots exist (check MB-20). The tile's menu offers **Replace with different bot** only with the plugin; with `plugin=missing` it says "Changing the Main Bot needs Clawtrate's bot tools on your gateway." (MB-21). Not drawn yet: the guided card's Picture row and manager switch, which still show as a separate picture offer after Save; the offer to start from what an existing bot knows (#487); the "Set up your Main Bot" tile; "Choose your Main Bot" and "Make … the Main Bot" (the menu's item opens nothing); the second device without the plugin; and the delete paragraph's states. The Claws are a stand-in drawn from the name, not #300's creatures, which aren't on `main`. The page is a fixture: it shows each state and proves no gateway effect.
+The first run plays as a conversation on a stand-in gateway and a stand-in bot: the bot's lines are a fixture of one way a real model might follow the brief, not words the product fixes. The person's answers are typed in the composer, or played to a point with `at`. The tile, the header and the composer's placeholder change only on the stand-in's read-back of the name, and Undo puts it back the same way. The "Started a task" card with its row under the Main Bot in the sidebar, and the file card, are drawn as section 3 describes them; Skip the tour, Undo, See what and the sign-in buttons work. The rail draws the Main Bot, `clawtrate-main-bot` ("Clawtrate Main Bot" until named, Juniper when it exists already), as its tile with the gold star above the other bots, and keeps the gateway's own bot, `main`, out of it, since other bots exist. The tile's menu offers **Replace with different bot** only with the plugin. Not drawn: the "Set up your Main Bot" tile, "Choose your Main Bot", #495's list behind See what, and the delete paragraph's states. The Claws are a stand-in drawn from the name, not #300's creatures. The page is a fixture: it shows each state and proves no gateway effect. The reviewed revision's other views (a bot's rename card, creating a bot by chat, proposals, external agents in Settings) are withdrawn with the cards they showed.
 
-## 19. Not covered
+## 12. Not covered
 
 - Deleting, duplicating, exporting and importing bots (#82).
-- Raster pictures (#302 §8's gate).
-- Direct changes by external agents, and agents on another computer from the Clawtrate app.
-- Keeping bots apart on one host under Hands-off.
-- Group chats (#83).
+- What a bot may do on the person's computer, and how a person changes it: the separate command design.
+- A bot's tools on Clawtrate and the class of each: `bots-in-clawtrate.md` (#669).
+- External agents over MCP, and the managed tool policy: to be designed under the same rule on their own.
+- Raster pictures (#302 §8's gate). Group chats (#83).
 
-## 20. Build order
+## 13. Build order: the pull requests
 
-The Main Bot needs no plugin on OpenClaw 2026.10.6: every write in sections 3 and 4 is one New bot already makes. So it is built first, in pieces a person notices, and the plugin's parts (section 17) join it later.
+Each pull request is small enough to review alone and merges before the next one that needs it. The Main Bot needs no plugin on either OpenClaw version: every write in sections 3 and 4 is one New bot already makes, so it is built first. Rows F-570 to F-576 are all used; no more are needed.
 
-**The fixture and the development gateway, settled first.** In the fixture, Juniper keeps its place and its tasks but becomes a bot Clawtrate made: its id and every `agent:main:` key of it become `clawtrate-main-bot` and `agent:clawtrate-main-bot:`, and a new gateway bot, id `main`, named "main", the default, with no picture and one channel-fed main conversation, is added; #490 keeps it out of view. The development gateway's seed does the same: it seeds Juniper as `clawtrate-main-bot` beside a default `main`. Build step 1 makes both changes, moves the three F-015 checks to the gold star on `clawtrate-main-bot`, and regenerates the visual baselines on macOS once, in a commit of its own that changes only baselines, listing in the pull request the shots that changed for any reason other than the sidebar's top. #490 renames nothing and re-records no baselines.
+1. **The fixture's Main Bot is a bot Clawtrate made.** Nothing a person sees. In the fixture, Juniper keeps its place and its tasks but becomes `clawtrate-main-bot` (every `agent:main:` key of it becomes `agent:clawtrate-main-bot:`), and a gateway bot `main`, named "main", the default, with no picture and one channel-fed main conversation, is added; F-562 keeps it out of view. The development gateway's seed does the same. The visual baselines are recorded again once, in a commit that changes only baselines, with the shots that moved for any reason other than the sidebar's top listed. _Rows_: none. _Needs_: nothing.
+2. **Your Main Bot says hello. The first one a person can see and feel.** On a first connection with full control to a gateway with no Main Bot, Clawtrate makes `clawtrate-main-bot` with New bot's calls and section 4's identity lines, shows its tile with the gold star above the person's bots, opens its main conversation, sends the opening once (the creating device, without the plugin's record), draws the brief as the quiet line, and the bot says hello and asks its name. A name it then writes gets F-552's card, as on `main`, until pull request 3. With no full control, the "Set up your Main Bot" tile and its one request. Includes section 4's channel contract test, on both versions, and rewords F-015 to the gold star with its three checks (`e2e/preview.spec.ts`, `apps/mobile/simulator/ios.test.ts`, `visual/bots.visual.spec.ts`). The rename card's test of the gateway's own bot (`isDefault`, `packages/core/src/mapping.ts`) takes section 4's `selectionRequired` exception (#471). _Rows_: F-005 (without the account step), F-006, F-007, F-015, F-541, F-570 to F-574. _Needs_: 1; full control, which works today at a `wss://` address and on this computer after the step-up approvals, and is one click on this computer with local connect; #643 for the guide in the Main Bot's instructions (without it, the bot still says hello; the tour waits for it).
+3. **A name is taken as it's given.** F-552's card becomes the line: one `agents.update`, the read-back, "Named Maple · Undo" or "Maple renamed itself Scout · Undo", the name before kept in the person's `users.prefs`, and Undo, for every bot (section 3). _Rows_: F-552 reworded. _Needs_: 2 for the Main Bot's case; the rest stands on `main`.
+4. **The tour.** The brief's steps 2 to 4, the skip button and its end, the 45-second line, and what the person sees when the bot does something else (section 3). The task and file cards are `main`'s. _Rows_: F-576. _Needs_: 3 and #643; on 2026.11.10, #661 for the file (F-115) and #634 for the started task's brief (F-565).
+5. **Signing in before the hello.** Section 2's account check and the sign-ins in the conversation, `bots.md` §5's connect component in place. _Rows_: F-005's account part. _Needs_: 2. Can be built beside 3 and 4.
+6. **Starting from another bot.** The bring-in right after the Main Bot is made, its line with See what and Undo, and the brief's added line. _Rows_: #495's. _Needs_: 2 and #495's first piece.
+7. **The plugin's parts**: the gateway-wide `mainBot` record, the opening's shared record, Undo records for everyone, the Main Bot's manager grant by default, the Main Bot lines naming the tools, and `clawtrate_identity` in the brief. _Needs_: `bots-in-clawtrate.md`'s plugin on the gateway (#669 installs it).
+8. **Making another bot the Main Bot** (F-259, F-575, F-025's item), at once with Undo. _Needs_: 7.
 
-1. **The Main Bot is a bot Clawtrate makes** (F-570 to F-574, F-015; the smallest change a person notices). Clawtrate reads section 4's record; with no Main Bot it shows "Set up your Main Bot", and with full control it makes `clawtrate-main-bot` with New bot's sequence (`agents.create`, the identity file with section 4's lines, the fallbacks, the first task) and opens its chat. The Main Bot gets its tile and the gold star; the old neutral star on the gateway's default goes. In this step the person names the bot in the chat, and #431's rename card (F-552, on `main`) confirms it; no guided card yet. Includes section 4's channel contract test, and rewords F-015 to the gold star with its checks in the same pull request: today `e2e/preview.spec.ts` (the rail check) and `apps/mobile/simulator/ios.test.ts` expect the star on the gateway's default bot, and `visual/bots.visual.spec.ts` expects the neutral badge. In the same step the rename card's test of the gateway's own bot (#431, `isDefault` in `packages/core/src/mapping.ts`) takes section 4's `selectionRequired` exception, so the card and the sidebar agree on which bot that is (#471). _Needs_: full control from the pairing (#393, still behind its flag, and #418's offer for a device paired with less), and, for OpenClaw on this Mac, the local connection's proof and its full-control pairing (#404, #417, #421). Without full control, the tile and its request are what a person sees. Works with #490 and #491 when they land; doesn't wait for them.
-2. **The first run's chat** (F-006, F-541 without the plugin's record). Clawtrate's opening and its caption, the greeting, the guided card with name, picture and role, one `agents.update` for name and picture, the role in `AGENTS.md`, the second-device and lost-reply cases. _Needs_: step 1; #302's shared name and PNG contract and #435 for the Picture row (until then the row isn't shown); effortless setup's first-run measurement.
-3. **Apply a bot's changes to itself at once** (F-576). The setting under Settings → Advanced, Undo, and section 4's rule for which message confirms. _Needs_: #431 (on `main`), full control for the write.
-4. **Starting from what an existing bot knows.** The first run's offer card (section 3), wired to #487's first piece. _Needs_: step 2 and #487.
-5. **The plugin's parts**: the gateway-wide `mainBot` record, the onboarding record, the Main Bot's manager grant and its switch on the guided card, the Main Bot lines rewritten to name the proposal tools, then section 17's order. _Needs_: the plugin's install gate (section 5).
-6. **Making another bot the Main Bot** (F-259, F-575, F-025's item). "Choose your Main Bot", the plugin's `mainBot` record changed for everyone, the identity lines moved. _Needs_: step 5 (the plugin's `mainBot` record).
+Outside this list and stood on: local connect (the next setup pull request) for one click and no approval on this computer; #653 for one approval on another computer; #658 and #665 for that approval as a click in another Clawtrate; #244 for setting up OpenClaw, with the three changes section 2 asks of it.
 
-The two choices still with the product owner change only step 1's tile: the default needs nothing more; the stand-in star would add a migration to step 1 and an exception to #490.
+`docs/decisions.md` needs, from this design, the rule in the product's own words (Clawtrate does the thing, shows it and offers Undo, and asks only for what is destructive) replacing the older text about cards, and under it: a bot's own name is taken at once for every bot, with the line saying when the person didn't type it; the Main Bot speaks first from Clawtrate's brief, drawn as a quiet line; the first run asks nothing about commands and writes no command setting.
