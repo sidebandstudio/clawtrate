@@ -544,7 +544,17 @@ export function Shell({
     const opener = routinesOpener.current;
     routinesOpener.current = null;
     requestAnimationFrame(() => {
-      if (canFocus(opener)) opener.focus();
+      if (canFocus(opener)) return opener.focus();
+      // What opened it is gone (Settings' link to a bot's routines closed with Settings): a
+      // live control of the shell, the rail's Routines button first.
+      const shell = shellRef.current;
+      [
+        shell?.querySelector<HTMLElement>('.rail button[aria-label="Routines"]') ?? null,
+        mainRef.current?.querySelector<HTMLElement>(".conversation h1") ?? null,
+        mainRef.current?.querySelector<HTMLElement>(".composer-input") ?? null,
+      ]
+        .find(canFocus)
+        ?.focus();
     });
   };
   const backToList = useCallback(() => {

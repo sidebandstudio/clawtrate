@@ -766,6 +766,22 @@ test("F-201: on an OpenClaw that keeps check-ins as routines, Check-ins say so, 
   expect((await sent(page)).filter((each) => each.type === "saveCheckIn")).toEqual([]);
 });
 
+test("F-201: leaving a bot's routines opened from Settings' Check-ins puts focus on the rail's Routines button", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&routines=on&checkins=routines`, "light");
+  await checkIns(page);
+  // By keyboard, as a person who can't use a pointer would.
+  await block(page, "marlow").getByRole("button", { name: "Marlow's routines" }).focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("dialog", { name: "Settings" })).toHaveCount(0);
+  await routinesView(page).getByRole("button", { name: "Back to conversation" }).click();
+  await expect(routinesView(page)).toHaveCount(0);
+  // The link that opened Routines closed with Settings: focus goes to a live control, not the page.
+  await expect(page.locator(".rail").getByRole("button", { name: "Routines" })).toBeFocused();
+  expect(await page.evaluate(() => document.activeElement === document.body)).toBe(false);
+});
+
 test("F-201: an open dialog closes when the gateway, updated while it was open, keeps check-ins as routines, and nothing is saved", async ({
   page,
 }) => {
