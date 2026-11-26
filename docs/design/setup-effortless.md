@@ -428,6 +428,7 @@ An earlier version of this section had the approver type a 16-character code and
 - **Another code** approves nothing: "That isn't this request's code, so nothing was approved." That request takes no other pick on this device. "Deny it" lets the device ask again.
 - **"None of these match"** sends nothing: "Nothing was approved." "Deny it" follows.
 - **"I didn't start this"** calls `device.pair.reject`: "Denied. The device can ask again."
+- **After a denial** the device's next connect learns of it and files one more request as it stops (§4). That request is listed, but for five minutes a request from that device doesn't open the sheet by itself on this host.
 - **Several windows and hosts.** Each decision reads the list again, so another window's or host's decision, an expiry or a supersession ends as "no longer pending". The app never names who decided.
 
 ### The waiting device

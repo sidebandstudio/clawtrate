@@ -379,6 +379,21 @@ describe("the waiting requests", () => {
     expect(t.state().prompt).toBeNull();
   });
 
+  it("doesn't open by itself the request a denied device's last retry files", async () => {
+    const row = pendingRow();
+    const t = await listed([row]);
+    expect(await t.engine.refuse(row.requestId as string, "not-mine")).toEqual({ kind: "denied" });
+    // The device's next connect learns of the denial, and files one more request as it stops.
+    t.gw.pending = [{ ...row, requestId: "req-again" }];
+    await t.engine.refresh();
+    expect(t.state().requests.map((each) => each.requestId)).toEqual(["req-again"]);
+    expect(t.state().prompt).toBeNull();
+    // Five minutes on, a request from it opens by itself again.
+    t.advance(5 * 60_000);
+    await t.engine.refresh();
+    expect(t.state().prompt).toBe("req-again");
+  });
+
   it("reads a burst of events once", async () => {
     const t = await listed([]);
     for (let i = 0; i < 5; i += 1)

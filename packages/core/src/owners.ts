@@ -349,11 +349,12 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
     row: "bookkeeping",
   },
   // Waiting devices (`device-approval.ts`): requests a pick here approved nothing for, requests
-  // this host opened by itself, and requests seen without admin with when each notice ends. Each
-  // is pruned to the listed requests, or by the time.
+  // this host opened by itself, requests seen without admin and devices denied here, each of the
+  // last two with when it ends. Each is pruned to the listed requests, or by the time.
   "deviceApprovals.spent": { max: MAX_DEVICE_REQUESTS, each: ID, row: "bookkeeping" },
   "deviceApprovals.prompted": { max: MAX_DEVICE_REQUESTS, each: ID, row: "bookkeeping" },
   "deviceApprovals.noticed": { max: MAX_DEVICE_REQUESTS, each: ID + N, row: "bookkeeping" },
+  "deviceApprovals.denied": { max: MAX_DEVICE_REQUESTS, each: ID + N, row: "bookkeeping" },
   "routines.updates": { max: MAX_ROUTINE_UPDATES, each: ID + N, row: "bookkeeping" },
   // File content on its way to a viewer, in chunks: the base64 of the largest content a reader
   // sends, its id and its counters; dropped once read, released, or idle past its time.

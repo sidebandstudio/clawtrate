@@ -293,6 +293,11 @@ export class DeviceApprovals {
   private readonly spent = new Set<string>();
   /** Requests this host already opened by itself: each opens by itself once. */
   private readonly prompted = new Set<string>();
+  /**
+   * Devices denied here, with when that ends: the retry that learns of a denial files one more
+   * request (§4), which is listed but not opened by itself again.
+   */
+  private readonly denied = new Map<string, number>();
   /** Requests seen asking without admin, with when the notice of each ends. */
   private readonly noticed = new Map<string, number>();
   /** Moves on with each connection: a read begun before changes nothing. */
@@ -340,6 +345,7 @@ export class DeviceApprovals {
     this.onClose();
     this.spent.clear();
     this.prompted.clear();
+    this.denied.clear();
   }
 
   /** `device.pair.requested`, `device.pair.resolved` and `device.pair.changed`. */
@@ -431,6 +437,8 @@ export class DeviceApprovals {
     const ids = new Set(requests.map((request) => request.requestId));
     for (const id of this.spent) if (!ids.has(id)) this.spent.delete(id);
     for (const id of this.prompted) if (!ids.has(id)) this.prompted.delete(id);
+    const now = this.ctx.now();
+    for (const [id, until] of this.denied) if (until <= now) this.denied.delete(id);
     const only = all.length === 1 ? requests[0]! : null;
     this.ctx.set({
       access: "admin",
@@ -438,7 +446,10 @@ export class DeviceApprovals {
       omitted: all.length - requests.length,
       noticed: 0,
       // More than one waiting is a quiet badge, never a stack of sheets.
-      prompt: only && !this.prompted.has(only.requestId) ? only.requestId : null,
+      prompt:
+        only && !this.prompted.has(only.requestId) && !this.denied.has(only.deviceId)
+          ? only.requestId
+          : null,
       error: null,
     });
   }
@@ -563,6 +574,8 @@ export class DeviceApprovals {
     }
     try {
       await this.ctx.request("device.pair.reject", { requestId });
+      if (this.denied.size < MAX_DEVICE_REQUESTS)
+        this.denied.set(shown.deviceId, this.ctx.now() + NOTICE_MS);
       void this.read();
       return { kind: "denied" };
     } catch (error) {
