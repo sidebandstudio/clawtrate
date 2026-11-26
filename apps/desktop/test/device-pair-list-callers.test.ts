@@ -14,7 +14,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join, relative } from "node:path";
+import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 
@@ -45,7 +45,7 @@ function senders(dir: string, tops: string[]): Record<string, number> {
   for (const top of tops) {
     for (const file of sources(join(dir, top))) {
       const count = readFileSync(file, "utf8").match(SEND)?.length ?? 0;
-      if (count > 0) found[relative(dir, file)] = count;
+      if (count > 0) found[relative(dir, file).split(sep).join("/")] = count;
     }
   }
   return found;
