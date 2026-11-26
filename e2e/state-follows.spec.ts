@@ -3,9 +3,9 @@
 // one instance of this file's own (`e2e-<id>-follow`), so nothing they keep there reaches another
 // spec. Paired devices with no signed-in user are the gateway's owner profile, one user.
 //
-// The second device starts with "Show sessions from other tools" turned on of its own: the first
-// time it reads the gateway's choices it merges that in, with nothing to click, and the first
-// device shows it too. A choice turned on on one shows on the other; turned off where it was
+// Each device pairs and asks for write access as a person does. The second device starts with
+// "Show sessions from other tools" turned on of its own: the first time its connection writes, it
+// merges that into the gateway's choices with nothing to click, and the first device shows it. A choice turned on on one shows on the other; turned off where it was
 // turned on, it goes off on the other, whose own was never on. A pin on one is a pin on the other.
 //
 // The instance is recorded in a run record of this file's own before it starts, as
@@ -17,6 +17,7 @@ import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { STATE_FILE } from "../packages/core/src/node/secure.ts";
+import { openInstance } from "../tools/dev-gateway/src/cli.ts";
 import { newRunId, ownIdentity } from "../tools/dev-gateway/src/state-guard.ts";
 import {
   devGateway,
@@ -74,6 +75,16 @@ async function device(browser: Browser, own: Record<string, string> = {}): Promi
     .poll(() => devGateway(MINE, "approve"), { timeout: 30_000, intervals: [1000] })
     .toMatch(/^Approved /m);
   await expect(page.getByTestId("bot").first()).toBeVisible({ timeout: 30_000 });
+  // A paired device reads; write access is asked as the person asks it, in otto's access bar.
+  await page.locator('[data-testid="bot"][data-bot="otto"]').click();
+  await page
+    .getByRole("region", { name: "Access" })
+    .getByRole("button", { name: "Request access" })
+    .click();
+  await expect
+    .poll(() => devGateway(MINE, "approve"), { timeout: 30_000, intervals: [1000] })
+    .toMatch(/^Approved /m);
+  await expect(page.getByTestId("composer-input")).toBeVisible({ timeout: 30_000 });
   return page;
 }
 
@@ -122,12 +133,24 @@ test("F-601: two devices on one gateway: a choice and a pin made on one show on 
   const runId = newRunId();
   record.instances.push({ name: MINE, runId });
   saveRecord(RECORDS, record);
-  cli("start", "--run-id", runId, "--instance", MINE);
+  // Unseeded: every instance declares the four bots, and this check needs nothing more.
+  cli("start", "--run-id", runId, "--instance", MINE, "--no-seed");
   const mine = listInstances().find((row) => row.name === MINE);
   if (!mine?.gatewayRunning) throw new Error(`instance ${MINE} is not running`);
   for (const port of [mine.gatewayPort, mine.providerPort])
     if (port === null || FORBIDDEN_PORTS.includes(port))
       throw new Error(`instance ${MINE} is on port ${port}, which e2e never uses`);
+
+  // Otto's main task, so the access bar shows there, made as the gateway's own command line makes it.
+  const made = await openInstance(MINE).runner.run([
+    "gateway",
+    "call",
+    "sessions.create",
+    "--params",
+    JSON.stringify({ key: "agent:otto:main", agentId: "otto", label: "Main" }),
+    "--json",
+  ]);
+  expect(made.status, `${made.stdout}${made.stderr}`).toBe(0);
 
   const one = await device(browser);
   expect(await shown(one, "Show sessions from other tools")).toBe("false");

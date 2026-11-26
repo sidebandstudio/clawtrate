@@ -151,7 +151,10 @@ describe("F-601: choices follow the person to each device on one gateway", () =>
       channelChats: true,
       otherTools: true,
     });
-    await until(() => a.client.state.showOtherToolSessions && b.client.state.showChannelChats);
+    await until(
+      () =>
+        a.client.state.showOtherToolSessions === true && b.client.state.showChannelChats === true,
+    );
     // The same choice: the gateway keeps the last write, by its revision on both devices.
     await a.client.changeChoices({ commands: true }, { stamp: a.stamp() });
     await b.client.changeChoices({ commands: false }, { stamp: b.stamp() });
@@ -178,6 +181,47 @@ describe("F-601: choices follow the person to each device on one gateway", () =>
     expect(
       shownChoice({ status: "unavailable", prefs: { on: { commands: true } } }, false, "commands"),
     ).toBe(false);
+    b.client.stop();
+  });
+
+  it("F-601: a value that tries to hide something or switch on an admin-only option, written by any device (a read-only one can, on 2026.11.10), is ignored", async () => {
+    const fake = prefsGateway();
+    const own = {
+      "show-channel-chats": "true",
+      "show-other-tool-sessions": "true",
+      "show-gateway-bot": "true",
+    };
+    const b = await device(fake, { own });
+    await until(() => sets(fake).length === 1);
+    const before = fake.gateway.requests.length;
+    // Written by anything that can write the store, then announced as the gateway announces it.
+    fake.store[CHOICES_PREF_KEY] = {
+      on: {
+        channelChats: false,
+        otherTools: false,
+        gatewayBot: false,
+        commands: false,
+        thinking: false,
+        guides: true,
+        newBots: true,
+        admin: true,
+      },
+      rev: 99,
+      guides: { newBots: true },
+    };
+    fake.gateway.emit("users.prefs.changed", { profileId: "owner", keys: [CHOICES_PREF_KEY] });
+    await until(() => b.client.state.choices?.prefs?.rev === 99);
+    // What this device turned on stays shown; the unknown names are dropped, not kept.
+    expect(b.client.state.showChannelChats).toBe(true);
+    expect(b.client.state.showOtherToolSessions).toBe(true);
+    expect(b.client.state.showGatewayBot).toBe(true);
+    expect(Object.keys(b.client.state.choices?.prefs?.on ?? {}).sort()).toEqual(
+      ["channelChats", "commands", "gatewayBot", "otherTools", "thinking"].sort(),
+    );
+    // Nothing was written or asked for because of it: only the read of the new value.
+    expect(fake.gateway.requests.slice(before).map((request) => request.method)).toEqual([
+      "users.prefs.get",
+    ]);
     b.client.stop();
   });
 
