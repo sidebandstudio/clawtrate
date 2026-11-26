@@ -1,6 +1,6 @@
 // What a task's chat shows, from its transcript: the task's title first, the
-// centred stamps, your messages and the bot's, and each of the bot's actions as
-// one line in the engine's own words (`lineOf`, `foldLineOf`, grouped by
+// centred stamps, your messages with the files they carried, the bot's, and each
+// of the bot's actions as one line in the engine's own words (`lineOf`, `foldLineOf`, grouped by
 // `groupFeed` as the desktop groups them). Reasoning stays folded away, as the
 // design says; it is not drawn here. A run that is going on shows its streaming
 // text and says what it does in the status line's words, in the past tense
@@ -17,6 +17,7 @@ import {
   readingContextOf,
   type FeedEntry,
   type Run,
+  type SentAttachment,
   type Step,
   type Task,
   type Transcript,
@@ -30,7 +31,15 @@ import { STATE_WORDS } from "./presentation/summary.ts";
 
 export type ChatRow =
   | { kind: "stamp"; id: string; text: string }
-  | { kind: "user"; id: string; text: string }
+  | {
+      kind: "user";
+      id: string;
+      text: string;
+      /** What names the message for its pictures (`readSentPicture`); null when nothing does. */
+      messageKey: string | null;
+      /** The files the person sent with it, in the order sent. */
+      files: readonly SentAttachment[];
+    }
   | { kind: "bot"; id: string; text: string }
   | {
       kind: "action";
@@ -170,7 +179,15 @@ export function chatRows(
         .map((block) => (block.kind === "text" ? block.text : ""))
         .join("\n\n")
         .trim();
-      if (text) rows.push({ kind: "user", id: item.id, text });
+      const files = item.attachments ?? [];
+      if (text || files.length > 0)
+        rows.push({
+          kind: "user",
+          id: item.id,
+          text,
+          messageKey: item.idempotencyKey ?? item.messageId ?? null,
+          files,
+        });
       rows.push(...noteRow(item));
       continue;
     }
