@@ -589,6 +589,11 @@ export type MachinesContext = {
    * goes (`readStatus`), the one way such a read is sent.
    */
   readStatus(botId: string, send: () => Promise<unknown>): Promise<unknown>;
+  /**
+   * `device.pair.list`, the gateway's whole answer: the device approval engine sends it, the one
+   * way it is sent, numbering it and applying its waiting requests (`device-approval.ts`).
+   */
+  listDevices(): Promise<unknown>;
   /** The key of a bot's most recently active task the client lists, or null. */
   latestTask(botId: string): string | null;
   deviceId(): string | null;
@@ -879,9 +884,7 @@ export class MachinesEngine {
     }
     const pairing = ctx.pairing();
     const deviceList = pairing
-      ? await settle(() =>
-          ctx.request("device.pair.list", {}).then((v) => readDevices(v, ctx.deviceId())),
-        )
+      ? await settle(() => ctx.listDevices().then((v) => readDevices(v, ctx.deviceId())))
       : ({ status: "needs-pairing" } as const);
     return {
       readAt: ctx.now(),
@@ -1129,7 +1132,7 @@ export class MachinesEngine {
       throw new PlacementWriteError("Enter a name.");
     if (own && !this.ctx.admin()) {
       // Below admin the gateway lets this device rename only an operator-only record.
-      const rows = list(rec(await this.ctx.request("device.pair.list", {})).paired);
+      const rows = list(rec(await this.ctx.listDevices()).paired);
       if (!isOperatorOnly(rec(rows.find((each) => rec(each).deviceId === deviceId))))
         throw new PlacementWriteError("Renaming this device needs admin access.");
     }
@@ -1139,7 +1142,7 @@ export class MachinesEngine {
     } catch (error) {
       throw this.refused("the name", error);
     }
-    const paired = list(rec(await this.ctx.request("device.pair.list", {})).paired);
+    const paired = list(rec(await this.ctx.listDevices()).paired);
     const row = rec(paired.find((each) => rec(each).deviceId === deviceId));
     if ((str(row.operatorLabel) ?? str(row.displayName)) !== label)
       throw new PlacementWriteError(
@@ -1157,7 +1160,7 @@ export class MachinesEngine {
     } catch (error) {
       throw this.refused("the removal", error);
     }
-    const again = rec(await this.ctx.request("device.pair.list", {}));
+    const again = rec(await this.ctx.listDevices());
     if (!wholeList(again.paired, "deviceId"))
       throw new PlacementWriteError(
         "The gateway did not return the pairing list. Removal could not be confirmed.",

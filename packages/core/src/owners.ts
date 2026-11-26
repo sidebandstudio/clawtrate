@@ -50,6 +50,7 @@ import {
   MAX_STREAMS_PER_TASK,
 } from "./client.ts";
 import { MAX_VIEWER_OPEN_TASKS } from "./bridge.ts";
+import { MAX_COLLIDED, MAX_DEVICE_REQUESTS } from "./device-approval.ts";
 import { MAX_INBOUND_REF_CHARS, MAX_SENT_SOURCES } from "./mapping.ts";
 import { ADMIN_SCOPES } from "./scopes.ts";
 import {
@@ -349,6 +350,17 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
     each: MAX_CHECKED_RUN_CHARS,
     row: "bookkeeping",
   },
+  // Waiting devices (`device-approval.ts`): requests a pick here approved nothing for, requests
+  // this host opened by itself, and requests seen without admin with when each notice ends. Each
+  // is pruned to the listed requests, or by the time.
+  "deviceApprovals.spent": { max: MAX_DEVICE_REQUESTS, each: ID, row: "bookkeeping" },
+  "deviceApprovals.prompted": { max: MAX_DEVICE_REQUESTS, each: ID, row: "bookkeeping" },
+  // Requests seen sharing a code, kept while each waits; past the bound every request is blocked.
+  "deviceApprovals.collided": { max: MAX_COLLIDED, each: ID, row: "bookkeeping" },
+  // Requests a decision is under way for, or the gateway may have acted on, until they leave,
+  // each with the token of the decision that holds it.
+  "deviceApprovals.deciding": { max: MAX_DEVICE_REQUESTS, each: ID + N, row: "bookkeeping" },
+  "deviceApprovals.noticed": { max: MAX_DEVICE_REQUESTS, each: ID + N, row: "bookkeeping" },
   "routines.updates": { max: MAX_ROUTINE_UPDATES, each: ID + N, row: "bookkeeping" },
   // Jobs read again after a `cron` event carried only their summary (OpenClaw 2026.11.10).
   "routines.reads": { max: MAX_ROUTINE_READS, each: ID + N, row: "bookkeeping" },
@@ -397,6 +409,8 @@ export const CLIENT_NOT_WALKED: Record<string, string> = {
     "Not now as read from the host's storage, at most `MAX_NAME_DECLINES` names, each bounded when read",
   "machines.ctx": "the client's own functions, handed to the machines engine, which keeps nothing",
   "openclawUpdates.ctx": "the client's own functions, handed to the OpenClaw update engine",
+  "deviceApprovals.ctx": "the client's own functions, handed to the device approval engine",
+  "deviceApprovals.secret": "32 random bytes the made-up codes come from, made once",
   "openclawUpdates.lookFor":
     "one lost press's gateway identity and time, at most one, read on the next hello",
   "openclawUpdates.refused":
@@ -415,6 +429,7 @@ export const CLIENT_PARTS: Record<string, string> = {
   usage: "UsageEngine",
   botNames: "BotNames",
   openclawUpdates: "OpenClawUpdates",
+  deviceApprovals: "DeviceApprovals",
   machines: "MachinesEngine",
   waiting: "WaitingIndex",
   computer: "ComputerViews",
