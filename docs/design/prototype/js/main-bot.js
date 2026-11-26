@@ -328,13 +328,15 @@
   // ---- the first run ----------------------------------------------------------
 
   const wait = (ms) => gateway.answer(ms, () => {});
+  // The words are chosen when they are posted (text may be a function), so a
+  // change during the wait, such as an Undo, is reflected.
   async function botSays(text, ms = 700) {
     const writing = { kind: "status", text: `${mainBot().name} is writing…` };
     items.push(writing);
     render();
     await wait(ms);
     items = items.filter((x) => x !== writing);
-    items.push({ kind: "bot", text });
+    items.push({ kind: "bot", text: typeof text === "function" ? text() : text });
     render();
   }
 
@@ -438,9 +440,10 @@
 
   async function hello() {
     tour = { active: true, step: "name" };
-    const text = state.fromKept
-      ? "Hi Sam! I'm your new bot in Clawtrate, and I've picked up what Juniper knew about you. First things first: what would you like to call me?"
-      : "Hi! I'm your new bot in Clawtrate. First things first: what would you like to call me?";
+    const text = () =>
+      state.fromKept
+        ? "Hi Sam! I'm your new bot in Clawtrate, and I've picked up what Juniper knew about you. First things first: what would you like to call me?"
+        : "Hi! I'm your new bot in Clawtrate. First things first: what would you like to call me?";
     await botSays(text, 900);
     if (state.at === "start") return;
     await fastForward();
@@ -505,11 +508,13 @@
     render();
     // Skipped while the name was being taken: the name stays, the tour doesn't
     // go on, and what the person wrote meanwhile is still answered.
+    // What the person writes while the help question is being written waits
+    // with the rest, and all of it is answered in order once it is asked.
     if (tour.active && tour.step === "naming") {
-      tour.step = "help";
       await botSays(
         `${read.name} it is. What would you like a hand with? Anything from your week to your code.`,
       );
+      if (tour.active && tour.step === "naming") tour.step = "help";
     }
     const waiting = waitingForName;
     waitingForName = [];

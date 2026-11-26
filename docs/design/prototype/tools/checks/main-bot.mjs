@@ -366,6 +366,16 @@ await check(
       /I've started a task[\s\S]*stop or archive it there/,
     );
     assert.equal(await page.getByText("Want me to show you how I work here?").count(), 0);
+    // A message sent while the help question is being written waits for it.
+    await open("at=greeted", "full");
+    await page.locator(".mb-msg.is-bot").first().waitFor();
+    await send(page, "Maple");
+    await page.getByTestId("named-line").waitFor();
+    await send(page, "I need help with code");
+    assert.equal(await page.locator(".mb-status").count(), 1, "one reply being written");
+    assert.equal(await page.getByTestId("card-task").count(), 0);
+    await page.getByText("What would you like a hand with?").waitFor();
+    await page.getByTestId("card-task").waitFor();
     // A Skip while the name is being taken: the name stays, no further tour
     // question, and a message written meanwhile is still answered.
     await open("", "full");
@@ -423,6 +433,14 @@ await check(
     await page.getByTestId("from-line").getByRole("button", { name: "Undo" }).click();
     await page.getByText("Removed what came from Juniper.").waitFor();
     await page.getByRole("button", { name: "Try again" }).click();
+    await page.locator(".mb-msg.is-bot").first().waitFor();
+    assert.doesNotMatch(await text(page, ".mb-msg.is-bot"), /picked up what Juniper knew/);
+    // Undo while the greeting is being written: it is chosen when it is posted.
+    await open("from=juniper&opening=failed");
+    await page.evaluate(() => (window.mbHold = true));
+    await page.getByRole("button", { name: "Try again" }).click();
+    await page.getByTestId("from-line").getByRole("button", { name: "Undo" }).click();
+    await page.evaluate(() => (window.mbHold = false));
     await page.locator(".mb-msg.is-bot").first().waitFor();
     assert.doesNotMatch(await text(page, ".mb-msg.is-bot"), /picked up what Juniper knew/);
     // Focus on Show stays there when the hello redraws the conversation.
