@@ -5,9 +5,17 @@
 //
 // It acts only on a named development instance this checkout started, through
 // the tool's own operator client (a new paired device per connection, approved
-// by request id through the tool's guarded runner). Every device it pairs is
+// by request id through the tool's guarded runner). The address and token are
+// the ones the tool handed to this run when it started the gateway: its run
+// record in this checkout, used only after the tool proves the gateway it
+// started is the one still running. It reads no saved gateway, no token store
+// and no OpenClaw profile or config. Its one disk write, the skill fixture, goes
+// only inside that instance's own state folder. Every device it pairs is
 // removed again before it exits. It never prints a token or a path outside the
 // instance's own workspaces.
+//
+// It runs on OpenClaw 2026.10.6, the tool's pin, and on 2026.11.10 through
+// OPENCLAW_BIN (docs/development/dev-gateway.md, "Which OpenClaw it runs").
 //
 // Experiments (run in this order on a fresh instance):
 //   knowledge  what a bot's memory, profile, notes and skills are, how each is
@@ -21,12 +29,12 @@
 //   record     a put-back record carried in the job's own description, written in
 //              the same cron.update as the move; and a move while a run is going
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { openInstance } from "../../../tools/dev-gateway/src/cli.ts";
 import { provenEndpoint } from "../../../tools/dev-gateway/src/endpoint.ts";
-import { readRunRecord } from "../../../tools/dev-gateway/src/state-guard.ts";
+import { ownership, readRunRecord } from "../../../tools/dev-gateway/src/state-guard.ts";
 import { OperatorSession } from "../../../tools/dev-gateway/src/operator.ts";
 
 const { values, positionals } = parseArgs({
@@ -140,7 +148,9 @@ async function seedSource(admin: OperatorSession): Promise<string> {
   // No gateway method writes a workspace skill (see the research note), so the
   // fixture writes one file into this development instance's own workspace.
   const ws = String((await call(admin, "agents.files.get", { agentId: SOURCE, name: "AGENTS.md" })).value.workspace ?? "");
-  const inside = path.relative(inst.home, ws);
+  // Only inside this instance's own state folder, and only while the tool's marker says it owns it.
+  if (ownership(inst.stateDir) !== "owned") throw new Error("The instance's state folder is not one the tool created");
+  const inside = path.relative(realpathSync(inst.stateDir), ws ? realpathSync(ws) : "");
   if (!ws || inside === "" || inside.startsWith("..") || path.isAbsolute(inside)) throw new Error("The source workspace is not inside the instance");
   mkdirSync(path.join(ws, "skills", "disk-check"), { recursive: true });
   writeFileSync(path.join(ws, "skills", "disk-check", "SKILL.md"), SOURCE_SKILL);
@@ -402,7 +412,30 @@ async function record(): Promise<void> {
     console.log(`  state.runningAtMs set: ${rec(during.state).runningAtMs !== undefined}`);
     show("cron.update agentId during the run", await call(admin, "cron.update", { id, patch: { agentId: TARGET }, expectedConfigRevision: during.configRevision }), (v) => ({ agentId: v.agentId }));
     show("cron.get after", await call(reader, "cron.get", { id }), (v) => ({ agentId: v.agentId }));
+    // Which bot finished the run that was going: its session key names the bot.
+    for (let waited = 0; waited < 30_000; waited += 2_000) {
+      const done = list((await call(reader, "cron.runs", { id, limit: 5 })).value.entries);
+      if (done.length > 0) {
+        console.log(`  the run that was going finished as: ${JSON.stringify(done.map((e) => ({ status: e.status, bot: String(e.sessionKey ?? "").split(":")[1] ?? null })))}`);
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 2_000));
+    }
   }
+
+  // OpenClaw 2026.11.10 adds `target: "owner"` and `displayName`; 2026.10.6 refuses them.
+  console.log("\nA job that announces to its owner, with a display name");
+  const owner = await call(admin, "cron.add", { name: "Rec owner", displayName: "Owner digest", agentId: SOURCE, payload: { kind: "agentTurn", message: "Summarise." }, delivery: { mode: "announce", target: "owner" }, ...base });
+  show("cron.add", owner, (v) => ({ name: v.name, displayName: v.displayName ?? null, delivery: v.delivery }));
+  if (owner.ok) {
+    const id = String(owner.value.id);
+    const listed = (await call(reader, "cron.list", { includeDisabled: true, limit: 200 })).value;
+    console.log(`  deliveryPreviews: ${JSON.stringify(rec(listed.deliveryPreviews)[id] ?? null)}`);
+    const moved = await call(admin, "cron.update", { id, patch: { agentId: TARGET }, expectedConfigRevision: owner.value.configRevision });
+    show("cron.update agentId only", moved, (v) => ({ agentId: v.agentId, deliveryPreview: v.deliveryPreview ?? null }));
+  }
+  const events = reader.events.filter((e) => e.event === "cron").slice(-1).map((e) => Object.keys(rec(rec(e.payload).job)));
+  console.log(`  the last cron event's job carries: ${JSON.stringify(events[0] ?? null)}`);
 }
 
 const experiments: Record<string, () => Promise<void>> = { knowledge, skills, selection, jobs, scopes, record };
