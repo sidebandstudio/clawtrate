@@ -4473,17 +4473,21 @@ export class ClawtrateClient {
         if (!now || now.steer === "withdrawn") throw error;
         // A question opened meanwhile holds the resend, as it holds any send: the gateway would
         // take a plain message as its answer. It goes, without the marker, once the question
-        // settles. The refused frame started nothing, so the message's own local run goes too:
-        // the release queues it a run, or steers it into the gateway's. A run the person asked
-        // to stop keeps the path below, where the resend's answer names it and it is aborted.
+        // settles. The refused frame started nothing, so the message's own local run waits too,
+        // queued in its place ahead of what was queued after it (`requeueLocalRun`); the release
+        // starts it, or steers the message into the gateway's run and drops it. A run the person
+        // asked to stop keeps the path below, where the resend's answer names it and it is aborted.
         const current = this.state.transcripts[key];
         const own = current ? findRun(current, messageId) : undefined;
-        const kept =
-          current && own?.state !== "stopping" ? dropUnboundRun(current, messageId) : null;
+        const requeue = (activity: TaskActivity) => {
+          const message = activity.outbox.find((each) => each.id === messageId);
+          return own && message ? requeueLocalRun(activity, message, this.now()) : activity;
+        };
+        const kept = current && own?.state !== "stopping" ? requeue(current) : null;
         const keptRun = kept ? activeRun(kept) : undefined;
         if (kept && questionPending(kept, keptRun)) {
           this.updateActivity(key, (activity) =>
-            updateMessage(dropUnboundRun(activity, messageId), messageId, {
+            updateMessage(requeue(activity), messageId, {
               status: "held",
               unmarked: true,
               leftAt: null,
@@ -8197,7 +8201,13 @@ export class ClawtrateClient {
           const message = next.outbox.find((each) => each.id === id);
           if (!message || message.status !== "held") continue;
           if (now && now.state !== "stopping" && message.mode !== "queue") {
-            next = updateMessage(next, id, { status: "sending", mode: "steer", runId: now.id });
+            // Into the gateway's run: a queued run of its own it waited with goes.
+            const waited = findRun(next, id)?.state === "queued" ? dropUnboundRun(next, id) : next;
+            next = updateMessage(waited, id, {
+              status: "sending",
+              mode: "steer",
+              runId: now.id,
+            });
             steered.push(id);
           } else if (gatewayRunning(next, id)) {
             // The gateway is running a run under this message's own id: the message is out.

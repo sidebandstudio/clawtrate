@@ -255,34 +255,72 @@ describe("a refusal of the marker", () => {
     client.stop();
   });
 
-  it("a held resend of a message that starts its own run leaves no run of its own behind", async () => {
+  it("a held resend of a message that starts its own run waits queued in its place, ahead of what was queued after it", async () => {
     const { client, gateway, transcript } = await openTask();
     gateway.handlers["question.resolve"] = () => ({ status: "cancelled" });
     const answer = deferred<unknown>();
     gateway.handlers["chat.send"] = () =>
-      sends(gateway).length === 1 ? answer.promise : { runId: "run-2", status: "started" };
+      sends(gateway).length === 1
+        ? answer.promise
+        : { runId: `run-${sends(gateway).length}`, status: "started" };
     const id = client.sendMessage(KEY, "cancel");
     await until(() => sends(gateway).length === 1);
     expect(transcript().runs.some((run) => run.id === id)).toBe(true);
+    // A message queued behind it.
+    const later = client.sendMessage(KEY, "and then this", { mode: "queue" });
+    await until(() => transcript().runs.some((run) => run.id === later));
     // Another run asks a question while the marked frame waits.
     gateway.emit("agent", agentEvent("run-z", 1, "lifecycle", { phase: "start" }, KEY));
     gateway.emit("question.requested", questionRecord("ask_1", "run-z"));
     await until(() => transcript().runs.some((run) => run.state === "waiting"));
     answer.reject(refusal(ORDINARY_ONLY));
     await until(() => transcript().outbox.find((m) => m.id === id)?.status === "held");
-    // The refused frame started nothing: no run is left under the message's id.
-    expect(transcript().runs.some((run) => run.id === id)).toBe(false);
+    // The refused frame started nothing: its run waits, queued, ahead of the later message's.
+    expect(
+      transcript()
+        .runs.filter((run) => run.state === "queued")
+        .map((run) => run.id),
+    ).toEqual([id, later]);
     // The asking run ends, and its question with it: nothing is running now.
     gateway.emit("agent", agentEvent("run-z", 2, "lifecycle", { phase: "end" }, KEY));
     await until(() => sends(gateway).length === 2);
-    // It starts a run of its own, as a message sent now would, never a steer into a run the
-    // gateway never started.
+    // It goes first, as a run of its own, never a steer into a run the gateway never started.
     expect(
       sends(gateway).map((p) => [p.message, p.idempotencyKey, p.queueMode, "workContext" in p]),
     ).toEqual([
       ["cancel", id, "followup", true],
       ["cancel", id, "followup", false],
     ]);
+    // The later message waits for that run, then goes.
+    gateway.emit("agent", agentEvent("run-2", 1, "lifecycle", { phase: "start" }, KEY));
+    gateway.emit("agent", agentEvent("run-2", 2, "lifecycle", { phase: "end" }, KEY));
+    await until(() => sends(gateway).length === 3);
+    expect(sends(gateway)[2]).toMatchObject({ message: "and then this", idempotencyKey: later });
+    client.stop();
+  });
+
+  it("a held resend released while the gateway runs another run steers into it, and its queued run goes", async () => {
+    const { client, gateway, transcript } = await openTask();
+    gateway.handlers["question.resolve"] = () => ({ status: "cancelled" });
+    const answer = deferred<unknown>();
+    gateway.handlers["chat.send"] = () =>
+      sends(gateway).length === 1 ? answer.promise : { runId: "run-z", status: "started" };
+    const id = client.sendMessage(KEY, "cancel");
+    await until(() => sends(gateway).length === 1);
+    gateway.emit("agent", agentEvent("run-z", 1, "lifecycle", { phase: "start" }, KEY));
+    gateway.emit("question.requested", questionRecord("ask_1", "run-z"));
+    await until(() => transcript().runs.some((run) => run.state === "waiting"));
+    answer.reject(refusal(ORDINARY_ONLY));
+    await until(() => transcript().outbox.find((m) => m.id === id)?.status === "held");
+    await client.dismissQuestion(KEY, "ask_1");
+    await until(() => sends(gateway).length === 2);
+    expect(sends(gateway)[1]).toMatchObject({
+      message: "cancel",
+      idempotencyKey: id,
+      queueMode: "steer",
+    });
+    expect("workContext" in sends(gateway)[1]!).toBe(false);
+    expect(transcript().runs.some((run) => run.id === id)).toBe(false);
     client.stop();
   });
 
