@@ -358,7 +358,7 @@ describe("what a caller is given", () => {
     );
     class Shifting extends Uint8Array {
       #changed = false;
-      override subarray(begin?: number, end?: number): Uint8Array {
+      override subarray(begin?: number, end?: number): Uint8Array<ArrayBuffer> {
         if (!this.#changed) {
           this.#changed = true;
           this[this.length - 1]! ^= 1;
