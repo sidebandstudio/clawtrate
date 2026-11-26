@@ -3167,6 +3167,25 @@ textarea {
   margin-bottom: var(--space-5);
 }
 
+/* The waiting device's own code, under the lede of its pairing screen. */
+.pair-code {
+  margin: 0 0 var(--space-5);
+  text-align: center;
+}
+
+.pair-code-value {
+  margin: 0 0 var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-title-sm);
+  letter-spacing: 0.08em;
+}
+
+.pair-code-note {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
 .settings-full {
   margin-top: var(--space-4);
 }

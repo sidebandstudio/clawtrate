@@ -21,6 +21,8 @@ import { MAX_BOT_NAME_CHARS } from "./bot-names.ts";
 import { modelIdProblem, type ModelList } from "./accounts.ts";
 import { parseInput, type ComputerFrame, type ComputerInput } from "./computer.ts";
 import type { MachineFacts } from "./machine.ts";
+import { FULL_SCOPES } from "./scopes.ts";
+import { type DeviceDecision } from "./device-approval.ts";
 import type { QuestionAnswer, RunRawRead, StepRead } from "./runs.ts";
 import {
   MAX_SIDEBAR_BOTS,
@@ -520,6 +522,17 @@ export type BridgeCommand =
   | { type: "removeMachine"; nodeId: string; stamp: GatewayStamp }
   | { type: "renameDevice"; deviceId: string; name: string }
   | { type: "removeDevice"; deviceId: string; stamp: GatewayStamp }
+  /** Waiting devices (setup-effortless.md §5): the list read again, the one opened by itself, a pick. */
+  | { type: "readDeviceRequests" }
+  | { type: "takeDevicePrompt"; requestId: string }
+  | {
+      type: "approveDevice";
+      requestId: string;
+      code: string;
+      scopes: string[];
+      stamp: GatewayStamp;
+    }
+  | { type: "refuseDevice"; requestId: string; why: "not-mine" | "none-match"; stamp: GatewayStamp }
   // Deleting a bot (`bot-delete.ts`). The read is `operator.read`; the delete needs admin.
   /** What the delete dialog lists for a bot, read now. */
   | { type: "readBotDelete"; botId: string }
@@ -537,7 +550,15 @@ export type BridgeCommand =
     };
 
 /** What each command answers with. */
-export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "readBotDelete" }
+export type BridgeResultFor<C extends BridgeCommand> = C extends {
+  type: "approveDevice" | "refuseDevice";
+}
+  ? DeviceDecision
+  : C extends { type: "takeDevicePrompt" }
+    ? { taken: boolean }
+    : BridgeResultStart<C>;
+
+type BridgeResultStart<C extends BridgeCommand> = C extends { type: "readBotDelete" }
   ? BotDeleteRead
   : C extends { type: "deleteBot" }
     ? BotDeleteOutcome
@@ -1976,6 +1997,28 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         deviceId: id(command.deviceId, "device"),
         stamp: gatewayStampOf(command.stamp),
       };
+    case "readDeviceRequests":
+      return { type: "readDeviceRequests" };
+    case "takeDevicePrompt":
+      return { type: "takeDevicePrompt", requestId: id(command.requestId, "request") };
+    case "approveDevice": {
+      if (!Array.isArray(command.scopes) || command.scopes.length > FULL_SCOPES.length)
+        throw new Error("invalid scopes");
+      return {
+        type: "approveDevice",
+        requestId: id(command.requestId, "request"),
+        code: shortText(command.code, 16, "code"),
+        scopes: command.scopes.map((scope) => oneOf(scope, FULL_SCOPES, "scope")),
+        stamp: gatewayStampOf(command.stamp),
+      };
+    }
+    case "refuseDevice":
+      return {
+        type: "refuseDevice",
+        requestId: id(command.requestId, "request"),
+        why: oneOf(command.why, ["not-mine", "none-match"] as const, "reason"),
+        stamp: gatewayStampOf(command.stamp),
+      };
     default:
       throw new Error("unknown command");
   }
@@ -2601,6 +2644,14 @@ class ViewerSession implements BridgeSession {
         return client.renameDevice(command.deviceId, command.name, { owner });
       case "removeDevice":
         return client.removeDevice(command.deviceId, command.stamp);
+      case "readDeviceRequests":
+        return client.readDeviceRequests();
+      case "takeDevicePrompt":
+        return { taken: client.takeDevicePrompt(command.requestId) };
+      case "approveDevice":
+        return client.approveDevice(command.requestId, command.code, command.scopes, command.stamp);
+      case "refuseDevice":
+        return client.refuseDevice(command.requestId, command.why, command.stamp);
     }
   }
 

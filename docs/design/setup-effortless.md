@@ -19,12 +19,12 @@ So two things change on purpose:
 
 The targets:
 
-| Gateway                                                          | Terminal commands                                                  | Approvals in total                                                     | Clicks to connect |
-| ---------------------------------------------------------------- | ------------------------------------------------------------------ | ---------------------------------------------------------------------- | ----------------- |
-| On this Mac, OpenClaw's defaults (§3's gate)                     | 0                                                                  | 0                                                                      | 1 (Connect)       |
-| On another computer reached by SSH, with OpenClaw's TLS on there | 0                                                                  | 0                                                                      | as `setup.md` §5  |
-| On another computer by a `wss://` address (Tailscale, VPS)       | 0 when another Clawtrate with its helper is connected; otherwise 1 | 1                                                                      | 1 + the approval  |
-| A phone or a second computer, once one Clawtrate is connected    | 0                                                                  | 1 approval in Clawtrate, once its helper plugin is on the gateway (§5) | —                 |
+| Gateway                                                          | Terminal commands                                                    | Approvals in total                                      | Clicks to connect |
+| ---------------------------------------------------------------- | -------------------------------------------------------------------- | ------------------------------------------------------- | ----------------- |
+| On this Mac, OpenClaw's defaults (§3's gate)                     | 0                                                                    | 0                                                       | 1 (Connect)       |
+| On another computer reached by SSH, with OpenClaw's TLS on there | 0                                                                    | 0                                                       | as `setup.md` §5  |
+| On another computer by a `wss://` address (Tailscale, VPS)       | 0 when another Clawtrate with full control is connected; otherwise 1 | 1                                                       | 1 + the approval  |
+| A phone or a second computer, once one Clawtrate is connected    | 0                                                                    | 1 click in Clawtrate on a device with full control (§5) | —                 |
 
 Every other approval or Terminal step is a defect. §12 lists the ones 2026.10.6 still forces, says why, and gives the smallest path around each.
 
@@ -32,7 +32,7 @@ The rules that stay:
 
 - No credential goes to a socket that fails the send gate (§3).
 - Local connect runs none of OpenClaw's programs (§3).
-- The approve prompt is bound to the device and the exact grant the person reviewed, and can't be clicked through (§5).
+- The approve sheet approves only the request whose code the person picked, after reading it again, and removes a pairing that differs from what it showed (§5).
 - A non-loopback address must be protected: `wss://` or SSH (§4).
 - A privileged credential is kept only in the system's secure storage (§2).
 
@@ -348,7 +348,7 @@ More rules for addresses:
 **Waiting for the one approval.** The screen is titled "Approve this Mac" and shows:
 
 - "Waiting for approval from the gateway's owner at ‹address›."
-- This device's code, large, in mono: 16 base32 characters of the SHA-256 of its public key, in four groups ("K7QF-2MXA-9TRB-W4HD"). Under it: "The approver types this code."
+- This device's code, large, in mono: 8 Crockford Base32 characters from the SHA-256 of its public key, in two groups ("K7QF-2MXA"), and where to pick it (§5).
 - "Asked for: full control", with the six in plain words.
 - Three ways to approve, in this order:
   1. In Clawtrate on a device already connected with full control.
@@ -372,94 +372,73 @@ So:
 
 ## 5. Approving a device from inside Clawtrate
 
-### What 2026.10.6 allows (live unless marked)
+A Clawtrate that already holds admin on a gateway approves a waiting device with one click, and nothing is typed. The waiting device shows a short code made from its own key. The approving device shows the request and a few codes; the person picks the one the waiting device shows. The app approves with the gateway's own `device.pair.approve` and checks afterwards that what was paired is what it showed.
 
-- **The events.**
-  - A connection holding `operator.pairing` (or admin, by implication) receives `device.pair.requested` and `device.pair.resolved`. Read and write connections receive neither.
-  - An event only prompts a list read.
-  - A superseded request can be broadcast as `rejected`.
-- **The payload** (`DevicePairRequestedEvent`): `requestId`, `deviceId`, `publicKey`, `displayName`, `platform`, `deviceFamily`, `clientId`, `clientMode`, `browserOrigin`, `role`, `roles`, `scopes`, `remoteIp`, `silent`, `isRepair`, `ts`.
-  - Name, platform, family, client id and mode are written by the device that asks.
-  - `remoteIp` is the gateway's observation, when present.
-- **`device.pair.list`.** An admin caller sees every request. A device-token caller without admin sees only its own (`devices-mOg4_HQd.mjs` lines 341-354).
-- **`device.pair.approve {requestId}` and `reject`.** These are pairing RPCs.
-  - A device-token caller without admin may decide only its own request (`authorizePairingDecision`, line 303).
-  - The approver must hold every scope it grants (`<openclaw>/dist/device-pairing-approval-uwflSfHu.mjs` lines 6-56).
-  - A shared-auth operator session can decide eligible operator requests within its scopes. Paired Clawtrate is never one.
-  - Live: a read-and-pairing device was refused for another device's request, even a read-only one. The admin device approved and rejected.
-  - Approving twice answers "unknown requestId". After a rejection, the device's next connect files a new request. §4 ("How the waiting device learns the request ended") says how Clawtrate notices that and stops.
-- **What a `requestId` binds (source).** A pending request is refreshed under the same id only when the public key, browser origin and role are unchanged, and the roles and scopes stay within the existing set (`canRefreshPendingDevicePairingRequest`, `<openclaw>/dist/device-pairing-core.worker-B-kYFMQS.mjs` lines 240-256). The refresh keeps the existing roles and scopes (lines 257-274). Any other change deletes the old request and makes a new id (lines 279-324).
-  - So under one id, `deviceId` (the hash of the key), `publicKey`, `browserOrigin`, roles and scopes are fixed.
-  - Only the reported metadata and `remoteIp` can drift.
-  - Approving by id after a fresh list read therefore approves the key and grant the person checked. This is a property of 2026.10.6's code, not a documented contract. A `pnpm scenarios` check holds it, and an upgrade of OpenClaw re-runs it.
-  - A repair's effect also depends on the device's current token. The prompt shows the current grant beside what is added.
+### Why this design
+
+An earlier version of this section had the approver type a 16-character code and installed a helper plugin on the gateway, with its own consent, so the comparison ran inside the gateway's approval. Both are gone. Typing a code and a consent step to install a plugin are the friction this is meant to remove: connecting takes one approval at most, and it is a click.
+
+- **No typing.** Picking a code is the one click, and it is also what shows the person looked at the right device: a request from somewhere else carries a code that isn't on their device's screen.
+- **No helper plugin.** The gateway keeps a request's key, roles and scopes fixed under one request id (below). So approving by id, after reading the request again and finding what was shown, approves what was shown. Reading the paired device back afterwards, and removing it if it differs, covers what slips between the read and the approval.
+- **The binding is OpenClaw's code, not its contract.** A scenario check holds it on each version the development gateway runs (`tools/dev-gateway/src/pairing-checks.ts`, `pnpm scenarios --pairing`).
+
+### What OpenClaw allows (2026.10.6 and 2026.11.10, source and live)
+
+`<openclaw>` is a scratch copy of each version's npm package. 2026.11.10's `dist/` is minified one-line files, so for it the file is named and the same function was read there. The pairing checks ran on both.
+
+- **Who files a request.** A connect is authenticated before pairing is considered (`rejectUnauthorized`, `message-handler-CRCo2VX0.mjs` lines 1263-1269). In token or password mode that means the shared secret, a setup code (`device.pair.setupCode`, admin, 10 minutes) or a device token. So a stranger's request comes from someone holding the shared secret, a code made for someone else, or, in other auth modes, a trusted proxy's identity header or no secret at all.
+- **The code check is still needed.** The shared secret is on every computer it was ever typed into and in the gateway's settings file. A code is a bearer pass for its 10 minutes. A device's name is whatever it reports. And the person may have two requests waiting, theirs and someone else's. Only the code tells them apart.
+- **What a request id binds.** A request is refreshed under the same id only when its public key, browser origin and role are unchanged and its roles and scopes stay within the existing set; a refresh keeps the existing roles and scopes (`canRefreshPendingDevicePairingRequest` and `refreshPendingDevicePairingRequest`, 2026.10.6 `device-pairing-core.worker-B-kYFMQS.mjs` lines 240-274; 2026.11.10 `device-pairing-core.worker-CXQtJOvQ.mjs`). Anything else deletes the device's pending request and makes a new id (lines 279-324), broadcast to the old id as `device.pair.resolved` `rejected`. Only reported fields and `remoteIp` move under one id. A browser origin is recorded only for OpenClaw's browser copilot client, so a Clawtrate request never has one (`resolveGatewayWsBrowserOrigin`, `ws-origin-policy-sYiBryoo.mjs` lines 148-156).
+- **Who decides.** `device.pair.approve` and `device.pair.reject` on a connection with `operator.admin` decide any request; the approver must hold every scope it grants, which admin does (`devices-mOg4_HQd.mjs` lines 355-365; `device-pairing-core.worker-B-kYFMQS.mjs` lines 127-143). A device-token connection without admin lists and decides only its own request (lines 303 and 341-354). So the six Clawtrate holds after a full pairing approve a request for the six or for fewer, and a read-and-pairing device approves nobody.
+- **Who is told.** `device.pair.requested` and `device.pair.resolved` go to connections holding `operator.pairing`, which admin satisfies (`EVENT_SCOPE_GUARDS`, `server-start-D6vaUNGz.mjs` lines 4309-4311; 2026.11.10 `gateway-prewarm.js`). `requested` is sent for a new request, not a refresh (`message-handler-CRCo2VX0.mjs` line 2141).
+- **The waiting device.** Every connect answers `PAIRING_REQUIRED` with its request id (line 2180), and Clawtrate retries every 3 seconds (§4). After an approval the next connect is let in, so its screen moves on by itself. A rejection deletes the request and revokes the device's setup codes (`rejectDevicePairingInWorker`, lines 327-341); the next connect files a new id and Clawtrate says "This request is no longer pending." A request lives 5 minutes from its last refresh (`DEVICE_PAIRING_PENDING_TTL_MS`, `device-pairing-identity-D438fF14.mjs` line 602), so it doesn't expire while the device retries.
+- **No bound.** Neither version caps pending device requests or rate-limits filing them, beyond one per device id and the five minutes; twenty keys make twenty requests. (2026.11.10's cap of 32 applies only to its own browser pairing requests.)
+
+### The code
+
+- **The waiting device's code** is 8 characters of Crockford's Base32 over the first 40 bits of SHA-256 of a fixed label and the raw 32-byte Ed25519 public key, in two groups: `K7QF-2MXA` (`pairCode` in `packages/core/src/device-approval.ts`). The approving device computes the same from the key the gateway lists, and checks that the device id is that key's hash.
+- **The choices** are the request's own code and three others, sorted. The others are SHA-256 over 32 random bytes the app makes once, the key and a counter, so the same key gets the same choices each time the sheet opens, and looking again gives nothing away. They never equal the request's code or each other. Sorting puts the real code at a uniformly random place, and nothing in the form tells it apart.
+- **The numbers.**
+  - A stranger's key shows the same code as the person's own device once in 2^40, about 1 in 1.1 trillion. Comparing only the first group, once in 2^20, about 1 in a million.
+  - Making a key whose code matches a code the attacker has seen takes about 2^40 tries, on the order of a hundred core-days, against a request that waits ten minutes at most.
+  - A pick made without looking approves a stranger's request one time in 4 among the codes, or one in 6 among every choice, and only once: a wrong pick takes no second pick for that request on this device.
 
 ### Who sees it
 
-- Only a connection with admin.
-- One prompt per app host, in its active window. Other windows show a badge.
-- A connection with pairing but no admin shows a passive notice: "A device is asking to connect. Approve it in Clawtrate on a device with full control."
-- Events are coalesced into a bounded list refresh, with dedupe and a rate limit. Outside an explicit pairing flow, more than one waiting request is one passive badge, "Devices asking", leading to Settings, Gateway, Devices.
+- **Only a connection with admin**, on a host that allows writes, lists requests (`device.pair.list`, read on each hello, once for a burst of events at most once a second, and every 30 seconds while any wait) and decides them.
+- **One sheet per app host.** It opens by itself only for the only waiting request, once, in the window that has focus. More than one waiting is one quiet line in the rail, "3 devices are asking to use this gateway.", with Review.
+- **A connection with pairing but no admin** shows a notice: "A device is asking to connect. Approve it in Clawtrate on a device with full control."
+- **Settings, Gateway, "Devices asking"** lists them, newest first, each opening the same sheet. At most 16 are kept; past that, "4 more are waiting." A flood of requests is a list, never a stack of sheets.
 
-### The prompt
+### The sheet
 
-The host keeps the snapshot of the request it shows.
+- **Title.** "A device is asking to use this gateway", then the gateway's name.
+- **Reported by the device.** Name, platform and app, each one line of at most 64 characters with control and format characters removed, each marked "(reported)".
+- **Seen by the gateway.** "From ‹remoteIp›" when it reports one, otherwise "Address not reported".
+- **What it would be allowed to do**, each scope in plain words.
+- **"Which code does the waiting device show?"**: "I didn't start this" and "None of these match" first, then the four codes. A screen reader reads each as "Code K 7 Q F, 2 M X A".
+- **Focus** starts on the title, outside the decisions. Tab reaches the two refusals before any code. Escape is "Not now", which decides nothing.
+- **Not approved here**, with no codes and only "I didn't start this": a request whose roles aren't exactly `operator` (machines, `device-node.md`), one from a device already paired asking for more, one asking for a scope outside the six, and one whose key doesn't match its device id.
 
-- **Title.** "Let a new device control this gateway?". For a repair: "Give this device more access?"
-- **The gateway**, by name and address.
-- **Reported by the device.** Name, platform and app, each as bounded text with control and bidi-override characters stripped, all three marked "(reported)". That includes a claim of being Clawtrate.
-- **Seen by the gateway.** "From ‹remoteIp›" when supplied, otherwise "Address not reported". No Tailscale identity is inferred.
-- **Roles and grant.**
-  - The whole role set. A request whose roles aren't exactly `operator` goes to Machines (`device-node.md`).
-  - The complete effective scope set in the words of §2's table.
-  - For a repair: what it holds now, and what is added.
-- **The code.** "Enter the code shown on the device you want to approve."
-  - The code is Crockford Base32 over the first 10 bytes of SHA-256 of the canonical raw Ed25519 public key: 16 characters, about 80 bits, in four groups of four.
-  - It is compared against the code the person reads off the intended device's own screen.
-  - One input. It is formatted and compared in place on every `input` event: groups are inserted, case is ignored, and `I`, `L` and `O` are read as `1`, `1` and `0`, as Crockford defines.
-  - The match or mismatch shows while the person types. Enter finishes editing and moves focus to Approve when the code matches; it never sends a decision.
-  - One explicit **Approve**, enabled only on a match. "Deny" sits beside it.
-  - Enter in the input never sends a decision.
-  - Focus starts outside the decisions. Escape dismisses ("Not now").
-  - At phone width, the request details scroll inside the sheet, and the input and both buttons stay pinned above the keyboard. Match, mismatch, Tab, Enter and Escape are checked at 390 px with the keyboard up.
-  - There are no multiple choices and no second guess on the same review. A wrong code says "That code doesn't match this request." and keeps Approve disabled.
-- **The click.** The comparison happens inside the gateway's own approval mutation, not in a list-then-approve wrapper. A wrapper inherits the race.
-  - **The plugin.** A small Clawtrate plugin, `clawtrate-pairing`, registers one admin method: `clawtrate-pairing.approve {requestId, expected}`.
-  - **What `expected` carries.** Everything the prompt showed: public key and device id, roles, scopes, the reported fields as displayed, `remoteIp`, and for a repair the paired record's roles and token scopes as shown.
-  - **How it approves.** The method calls `approveDevicePairing(requestId, { callerScopes, isApprovalCurrent })` from the pinned plugin SDK (`openclaw/plugin-sdk/device-bootstrap`; type `DevicePairingApprovalOptions`, `<openclaw>/dist/config-contracts-C65kIjn4.d.ts` lines 16344-16358). `callerScopes` are the caller's own scopes.
-  - **Where the comparison runs.** `isApprovalCurrent({pending, existing})` runs inside the pairing worker's admitted transaction, after the pairing lock (`approvalAdmission`, `<openclaw>/dist/device-pairing-approval-uwflSfHu.mjs` lines 17-38; `requestDevicePairingMutationAdmission`, `device-pairing-core.worker-B-kYFMQS.mjs` lines 82-89). It compares the authoritative pending row and paired record with `expected`, field by field. Any difference refuses the approval ("approval-policy-changed"), and nothing is approved.
-  - **The first decision wins.** It applies the stock rules too: expiry, and the cross-device and caller-scope rules, because the plugin method is admin-only, like every plugin method.
-  - **On a refusal,** the prompt re-reads the list, clears the code and asks for a fresh review.
-  - **Only a confirmed answer counts.** Success is reported only on a confirmed RPC answer: "Approved. The device connects in a moment."
-  - **Without the plugin.** When `clawtrate-pairing.approve` isn't in `hello-ok.features.methods`, Clawtrate doesn't approve from the app. The prompt becomes a passive notice with the gateway-owner route: the Control UI's Devices, or the command. Stock `device.pair.approve` takes only a `requestId` and can't hold the displayed snapshot.
-  - **The scenario check.** A pinned `pnpm scenarios` check covers:
-    - a same-envelope refresh keeping the id;
-    - an expansion or origin change superseding the id;
-    - role removal under an existing id (`removePairedDeviceRoleInWorker`, the same file lines 402-439);
-    - a repair whose existing token changed (`device.token.rotate`);
-    - a stale decision leaving the request unapproved.
-  - **Installing the plugin.** It needs `plugins.install` (`operator.admin`). Clawtrate offers it once, with its own consent: "Install Clawtrate's device approval helper on this gateway". It never installs it silently. How Clawtrate ships its plugins to a person's gateway is shared with the memory and rules plugins, and is PR 3a's dependency.
-- **Deny** calls `device.pair.reject`: "Denied. The device can ask again."
+### A pick
 
-### Several windows and hosts
+- **The request's own code.** The app reads `device.pair.list` again. If the request is gone: "This request is no longer pending." If its key, device id, roles, scopes or origin differ from what was shown, or it became a repair: nothing is approved, and the sheet says what changed. Otherwise `device.pair.approve {requestId}`. An "unknown requestId" answer is "no longer pending"; any other refusal is said as the gateway said it.
+- **Afterwards.** The app reads the paired device. Its key, its roles (exactly `operator`), its scopes and its one live operator token's scopes must be exactly what was shown. Then: "Approved. The device connects in a moment." If any differs, the app removes the pairing at once (`device.pair.remove`) and says what differed; if the removal fails, it says so and where to remove it.
+- **An answer that was lost** is read back the same way: a paired device is checked as above; otherwise "Clawtrate didn't get the gateway's answer, so it can't say whether the device was approved."
+- **Another code** approves nothing: "That isn't this request's code, so nothing was approved." That request takes no other pick on this device. "Deny it" lets the device ask again.
+- **"None of these match"** sends nothing: "Nothing was approved." "Deny it" follows.
+- **"I didn't start this"** calls `device.pair.reject`: "Denied. The device can ask again."
+- **Several windows and hosts.** Each decision reads the list again, so another window's or host's decision, an expiry or a supersession ends as "no longer pending". The app never names who decided.
 
-- Dropped broadcasts and racing decisions are reconciled against the list.
-- When the list can't tell apart another decision, expiry or supersession, the prompt closes with "This request is no longer pending". It never attributes the decision to another person.
+### The waiting device
 
-### Settings, Gateway, Devices (admin only)
+Its pairing screen shows its code, large, in mono, and one sentence: "Or approve it with one click: open Clawtrate on a device that already has full control of this gateway and pick this code there." The rest of that screen is §4's.
 
-- **Pending requests** at the top, each opening the prompt.
-- **Paired devices**, each with:
-  - the reported name, marked as such;
-  - platform;
-  - scopes in words;
-  - "Paired 3 days ago";
-  - "This device" on the current one.
-- **Remove.**
-  - Works by exact `deviceId`, after a confirmation that names the gateway and the device.
-  - Removing this device, or the last known admin device, needs a recovery path first. That means another admin device, or the gateway's owner.
-  - After it completes, the list refreshes: "Removed. This device's saved pairing no longer works."
-  - OpenClaw deletes the paired record and its pending repairs, and disconnects the device's clients (`<openclaw>/dist/devices-mOg4_HQd.mjs` lines 445-484). A holder of a valid shared secret or code can still ask to pair again.
+### Not here yet
+
+- Approving a scope upgrade of a device that is already paired: the same sheet fits, with what it holds beside what is added, once the after-check compares against that.
+- Removing or renaming paired devices: Settings, Machines.
+- The iPhone app's own code while it waits (§9).
 
 ## 6. Existing pairings: a one-time upgrade (F-500)
 
@@ -521,11 +500,11 @@ The iPhone app (#14, #52) isn't on `main`.
 
 - **Connecting.** It asks for all six, with the consent line and the same transport rules: `wss://` or nothing.
 - **Its first screen**: "Scan a code from Clawtrate", "Paste a setup code", "Enter an address and token".
-- **Waiting.** Its waiting screen shows its 16-character code: "Type this code into Clawtrate on your computer."
+- **Waiting.** Its waiting screen shows its code (§5), to pick in Clawtrate on a device with full control.
 - **"Connect a phone" on the desktop** (F-506) works with no command.
   - With admin, the desktop calls `device.pair.setupCode` with an address the phone can reach. It shows the QR code and expiry, and keeps the dialog open. The phone's request then opens §5's prompt.
   - Live: a full code made this way lived 600 s. A new device redeeming it for six waited; the admin device approved; the device's retry with the same code got all six. A limited code refused six.
-  - The request carries no `setupId`, so the typed code is what ties the phone to the prompt.
+  - The request carries no `setupId`, so the picked code is what ties the phone to the sheet.
 - **Addresses.** A loopback-only gateway has no address for a phone. A plain `ws://` LAN address is refused by the transport rule.
 - **Its key.** The phone keeps its device key and token in the iOS Keychain.
 
@@ -617,7 +596,7 @@ Each quote is from `docs/decisions.md`, `docs/design/setup.md` or `docs/parity.m
 - **F-500** becomes §6: the shared-token upgrade on a proved local socket, the remote request with one owner decision, and the owner's route when local auto-approval is off.
 - **F-506** becomes §9.
 - **F-509** changes as in §10.
-- **A new row** for the approve prompt: bound to the key and grant by `clawtrate-pairing.approve` inside the gateway's approval mutation, with a typed Crockford code.
+- **F-550** is the approve sheet: a picked code, the request read again before `device.pair.approve`, and the paired device checked after it.
 
 ## 12. What still needs an approval or a command, and why
 
@@ -628,7 +607,6 @@ Each quote is from `docs/decisions.md`, `docs/design/setup.md` or `docs/parity.m
 | A token kept as a SecretRef                                          | Typing the token once                   | The value is in OpenClaw's database, a service's environment or a command                                                                                                            | The address form                                                                       |
 | A socket whose other end can't be proved                             | No connection                           | §3                                                                                                                                                                                   | §13                                                                                    |
 | This Mac with TLS on and a certificate that isn't an owner-only file | One change to the file, then Look again | The pin is only as good as the file it is read from (§3)                                                                                                                             | A `wss://` address that isn't loopback, with a certificate the system trusts (§4)      |
-| Approving another device without `clawtrate-pairing` on the gateway  | The owner's route                       | The stock RPC can't bind the displayed request (§5)                                                                                                                                  | Install the helper once from the app, with consent                                     |
 | A changed platform or family                                         | One approval off loopback               | The gateway pins both                                                                                                                                                                | Never change them                                                                      |
 | A token its owner narrowed                                           | Keep the narrower grant                 | The owner's limit wins                                                                                                                                                               | None, by design                                                                        |
 

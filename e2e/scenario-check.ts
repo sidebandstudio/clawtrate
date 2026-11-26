@@ -25,11 +25,14 @@ import {
   browserPorts,
   instancePorts,
   lockOrder,
+  readDevConnection,
   openInstance,
   openOperator,
 } from "../tools/dev-gateway/src/cli.ts";
 import { ACCOUNT_CLIENTS, runAccountChecks } from "../tools/dev-gateway/src/account-checks.ts";
 import { runGuideChecks } from "../tools/dev-gateway/src/guide-checks.ts";
+import { runPairingChecks } from "../tools/dev-gateway/src/pairing-checks.ts";
+import { FULL_SCOPES } from "../packages/core/src/scopes.ts";
 import {
   COMPUTER_CLIENTS,
   runComputerChecks,
@@ -127,6 +130,9 @@ async function main(): Promise<number> {
       }
     }
     const inst = openInstance(name);
+    // What a pending request's id binds, and who may decide it (pairing-checks.ts).
+    const pairingFailed = await pairingChecks(inst);
+    if (PAIRING_ONLY) return pairingFailed === 0 ? 0 : 1;
     const providerUrl = `http://127.0.0.1:${instancePorts(inst).providerPort}`;
     const clients = await openCheckClients((label, scopes, caps) =>
       openOperator(inst, label, scopes, caps),
@@ -194,9 +200,15 @@ async function main(): Promise<number> {
     const computer = await computerChecks(computerName, computerRunId, startInstance);
     const rules = await rulesChecks(rulesName, rulesRunId, startInstance);
     const images = await imageChecks(imagesName, imagesRunId, startInstance);
-    return [scenariosFailed, accountsFailed, guidesFailed, computer, rules, images].every(
-      (n) => n === 0,
-    )
+    return [
+      pairingFailed,
+      scenariosFailed,
+      accountsFailed,
+      guidesFailed,
+      computer,
+      rules,
+      images,
+    ].every((n) => n === 0)
       ? 0
       : 1;
   } finally {
@@ -205,6 +217,31 @@ async function main(): Promise<number> {
       console.error(problems.join("\n"));
       process.exitCode = 1;
     }
+  }
+}
+
+/** `pnpm scenarios --pairing`: the pairing checks alone, on the first instance. */
+const PAIRING_ONLY = process.argv.includes("--pairing");
+
+/** The pairing checks, with an approver holding Clawtrate's six; how many failed. */
+async function pairingChecks(inst: ReturnType<typeof openInstance>): Promise<number> {
+  const connection = readDevConnection(inst.connectionFile);
+  if (!connection) throw new Error("the instance has no connection file");
+  const open = (label: string, scopes: string[]) => openOperator(inst, label, scopes, []);
+  const admin = await open("Clawtrate pairing check (admin)", [...FULL_SCOPES]);
+  try {
+    const { passed, failed } = await runPairingChecks({
+      admin,
+      open,
+      url: connection.url,
+      token: connection.token,
+    });
+    console.log(
+      `${passed} of ${passed + failed} pairing checks passed on OpenClaw ${admin.serverVersion}`,
+    );
+    return failed;
+  } finally {
+    await admin.close();
   }
 }
 

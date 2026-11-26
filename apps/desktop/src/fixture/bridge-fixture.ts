@@ -231,6 +231,8 @@ function pairing(): ClawtrateState {
         approveCommand: "openclaw devices approve 5d2a90c4-1b7e-4f0a-9c3d-2e8f6a1b0c55",
         approveNote: "The gateway's owner runs this on the gateway's machine.",
         requestedScopes: ["operator.read"],
+        // This device's pairing code (`pairCode`). Invented.
+        code: "K7QF-2MXA",
       },
     },
   };
