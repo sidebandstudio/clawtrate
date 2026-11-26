@@ -312,6 +312,22 @@ test.describe("F-588: Refresh in the Model menu", () => {
     ).toBeVisible();
   });
 
+  test("F-588: a model a refresh pushed past the menu's bound, still listed, stays under View more", async ({
+    page,
+  }) => {
+    await openMenu(page, `${SETTINGS}&refresh=pushed`);
+    await menu(page).getByRole("menuitem", { name: "View more", exact: true }).click();
+    await expect(
+      menu(page).getByRole("menuitemradio", { name: "gpt-5.4", exact: true }),
+    ).toBeVisible();
+    await press(page);
+    await expect(menu(page).getByText(/^New: gpt-6\.2-sol\./)).toBeVisible();
+    // Out of the picker, still the gateway's: View more offers it.
+    await expect(
+      menu(page).getByRole("menuitemradio", { name: "gpt-5.5-mini", exact: true }),
+    ).toHaveCount(1);
+  });
+
   test("F-588: focus a person moved while Refresh looked stays where they put it", async ({
     page,
   }) => {

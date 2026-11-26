@@ -35,9 +35,9 @@
 //   effort=none               the open bot keeps no effort
 //   openclaw=behind|beta      the gateway reports a newer OpenClaw than it runs: 2026.11.6, or
 //                             2026.11.10-beta.1 on the beta channel
-//   refresh=new|many|gone|asked|config|refused|unreached|pending|failed|cut|error|slow
+//   refresh=new|many|gone|pushed|asked|config|refused|unreached|pending|failed|cut|error|slow
 //                             what the Model menu's Refresh finds (#565): two new OpenAI models,
-//                             seven, one gone, nothing new from a provider asked again, nothing
+//                             seven, one gone, one new that pushes a listed one past the bound, nothing new from a provider asked again, nothing
 //                             from one the gateway's config lists, a provider that refused the
 //                             account, one that didn't answer, one still being looked for, a
 //                             refresh the gateway says failed, a list cut at its bound that grew,
@@ -608,6 +608,7 @@ function refreshCatalog(
     addedCount: 0,
     removed: [],
     removedCount: 0,
+    removedIds: [],
     outcome: null,
     configured: false,
     hostedList: true,
@@ -652,7 +653,41 @@ function refreshCatalog(
           ...a,
           models: a.models.filter((m) => !(m.provider === provider && m.id === "gpt-5.5-mini")),
         }));
-        return { ...nothing, removed: ["gpt-5.5-mini"], removedCount: 1, outcome: "ready" };
+        return {
+          ...nothing,
+          removed: ["gpt-5.5-mini"],
+          removedCount: 1,
+          removedIds: ["gpt-5.5-mini"],
+          outcome: "ready",
+        };
+      case "pushed": {
+        // A new model first, and the list now past the bound: gpt-5.5-mini, still listed, is
+        // pushed out of the menu, and nothing is gone.
+        const ids = [
+          "gpt-6.2-sol",
+          ...get()
+            .models.filter((m) => m.provider === provider)
+            .map((m) => m.id),
+        ];
+        put((a) => ({
+          ...a,
+          models: [
+            ...a.models.filter((m) => m.provider !== provider),
+            ...ids.filter((id) => id !== "gpt-5.5-mini").map(row),
+          ],
+          modelsCut: [
+            ...a.modelsCut.filter((c) => c.provider !== provider),
+            { provider, total: ids.length },
+          ],
+        }));
+        return {
+          ...nothing,
+          added: ["gpt-6.2-sol"],
+          addedCount: 1,
+          cut: { shown: ids.length - 1, now: ids.length },
+          outcome: "ready",
+        };
+      }
       case "asked":
         return { ...nothing, outcome: "ready" };
       case "config":

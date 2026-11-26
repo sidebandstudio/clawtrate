@@ -339,6 +339,24 @@ describe("F-588: Refresh in the Model menu", () => {
     client.stop();
   });
 
+  it("F-588: what a refresh found gone is only what the gateway no longer lists, never what the bound pushed out", async () => {
+    const fake = new AccountsGateway();
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    const rows = (ids: string[]) => ids.map((id) => row(id));
+    const ask = () => client.refreshModels("acme", stampOn("gateway-a", client));
+    const all = Array.from({ length: MAX_CATALOG_MODELS - 1 }, (_, i) => `m-${i}`);
+    fake.refreshed = { acme: rows(all) };
+    await ask();
+    // Two new models first and one gone: the menu's last Acme model is pushed past the bound,
+    // the gateway still lists it, and only the one it no longer lists is gone.
+    const last = all.at(-1)!;
+    fake.refreshed = { acme: rows(["m-new", "m-newer", ...all.filter((id) => id !== "m-0")]) };
+    const result = await ask();
+    expect(accounts().models.some((m) => m.id === last)).toBe(false);
+    expect(result).toMatchObject({ removedIds: ["m-0"], removedCount: 1 });
+    client.stop();
+  });
+
   it("F-588: an answer that comes back after a switch to another gateway is dropped, and the rows stay", async () => {
     const fake = new AccountsGateway();
     const { client, accounts } = await accountsClient({ gateway: fake });

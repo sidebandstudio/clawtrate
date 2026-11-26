@@ -491,13 +491,10 @@ export function ModelPair({
   /** The screen's polite announcer: what a Refresh found is said there once. */
   announce: (text: string) => void;
 }) {
-  // The picker's models when Refresh was pressed: one a refresh no longer lists is gone, and
-  // View more's answer from before it doesn't offer it again.
-  const [pressedIds, setPressedIds] = useState<string[]>([]);
-  const pickerNow = new Set(modelsOf(accounts, provider).map((m) => m.id));
-  const gone = new Set(
-    list.refresh?.status === "done" ? pressedIds.filter((id) => !pickerNow.has(id)) : [],
-  );
+  // The models a refresh found the gateway no longer lists: View more's answer from before it
+  // doesn't offer them again. Only those, not every model that left the picker: a cut at the
+  // picker's bound can push out a model the gateway still lists, and View more keeps it.
+  const gone = new Set(list.refresh?.status === "done" ? list.refresh.removedIds : []);
   const menu = modelMenu(accounts, provider, model, list.models, gone);
   const who = providerName(provider);
   // An update under way or just ended takes the notice's place, as a quiet line.
@@ -608,11 +605,7 @@ export function ModelPair({
             : {}),
         }
       : {}),
-    onSelect: () => {
-      if (looking) return;
-      setPressedIds(menu.picker.map((m) => m.id));
-      list.lookAgain();
-    },
+    onSelect: () => list.lookAgain(),
   });
   let section: SelectSection | undefined;
   if (held === null) rows.push({ label: "View more", expands: true, onSelect: () => list.ask() });

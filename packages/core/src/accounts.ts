@@ -224,6 +224,12 @@ export type ModelRefresh =
       removed: string[];
       removedCount: number;
       /**
+       * Every model the menu showed at the press that the gateway no longer lists, as its ids: at
+       * most the menu's bound. Not a model a cut pushed out of the menu while the gateway still
+       * lists it.
+       */
+      removedIds: string[];
+      /**
        * What the gateway reported for the provider (`providerOutcomes`): asked again and answered
        * (`ready`), asked and refused the account (`auth-rejected`), asked and failed or timed out
        * (`unavailable`), or not asked again (null): its list is the one the gateway already had.
@@ -890,6 +896,7 @@ export function readModelRefresh(
         addedCount: added.length,
         removed: named(removed),
         removedCount: removed.length,
+        removedIds: removed,
         counts: cutBefore === null ? null : { before: cutBefore, now: rows.length },
         cut:
           cutBefore === null && shown.length < rows.length
