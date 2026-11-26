@@ -550,9 +550,14 @@ export class AccountsEngine {
     // A few bots at a time. Sharing is decided only from refreshed answers (row 33).
     for (let i = 0; i < botIds.length; i += ACCOUNT_READ_CONCURRENCY) {
       const chunk = botIds.slice(i, i + ACCOUNT_READ_CONCURRENCY);
-      const answers = await Promise.all(
+      // Every request of the chunk is answered before a failure ends the read, so nothing of it
+      // is still out when a Refresh that waits for the read asks (#565); no later chunk starts.
+      const settled = await Promise.allSettled(
         chunk.map((agentId) => this.ctx.request("models.authStatus", { agentId, refresh: true })),
       );
+      const failed = settled.find((each) => each.status === "rejected");
+      if (failed) throw failed.reason;
+      const answers = settled.map((each) => (each as PromiseFulfilledResult<unknown>).value);
       for (let j = 0; j < chunk.length; j += 1) {
         const view = readBotView(answers[j]);
         // Not a reading: the last good one stands, and the screens say why there is none.

@@ -201,6 +201,34 @@ describe("F-588: Refresh in the Model menu", () => {
     client.stop();
   });
 
+  it("F-588: an account read whose bot's account read fails still waits for the other bots' before a refresh asks", async () => {
+    const fake = new AccountsGateway();
+    const { client } = await accountsClient({ gateway: fake });
+    expect(fake.bots.length).toBeGreaterThan(1);
+    const [first] = fake.bots;
+    const status = fake.gateway.handlers["models.authStatus"]!;
+    const held = deferred<void>();
+    let holding = true;
+    fake.gateway.handlers["models.authStatus"] = (params) => {
+      if (!holding) return status(params);
+      // One bot's account read is refused at once; the others' are still out.
+      if ((params as Json).agentId === first!.id)
+        throw new GatewayError({ code: "INVALID_REQUEST", message: "status refused" });
+      return held.promise.then(() => status(params));
+    };
+    const reading = client.refreshAccounts().catch(() => {});
+    const refreshing = client.refreshModels("acme", stampOn("gateway-a", client));
+    await settle();
+    await settle();
+    expect(fake.gateway.calls("models.list").filter((c) => (c as Json).refresh)).toEqual([]);
+    holding = false;
+    held.resolve();
+    await reading;
+    await refreshing;
+    expect(fake.gateway.calls("models.list").filter((c) => (c as Json).refresh)).toHaveLength(1);
+    client.stop();
+  });
+
   it("F-588: without the gateway's config, whether it checks OpenClaw's list online is unknown", async () => {
     const fake = new AccountsGateway();
     const { client } = await accountsClient({ gateway: fake });
