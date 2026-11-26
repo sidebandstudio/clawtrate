@@ -208,6 +208,8 @@ export function refreshWords(
   who: string,
   update: OpenClawUpdate | null,
   updating = false,
+  /** A typed model id runs as typed: false under a model list with a wildcard that limits it. */
+  typedRuns = true,
 ): string {
   if (result.status === "error") return `Couldn't refresh: ${result.error}`;
   const said: string[] = [];
@@ -239,7 +241,8 @@ export function refreshWords(
       );
       if (updating) said.push("The note below says where the OpenClaw update stands.");
       else if (update) said.push(`OpenClaw ${update.latest} is out: see the note below.`);
-      said.push("To use a model that isn't listed, choose Use another model and type its id.");
+      if (typedRuns)
+        said.push("To use a model that isn't listed, choose Use another model and type its id.");
     }
   }
   return said.join(" ");
@@ -264,14 +267,22 @@ export function noteBelow(
 
 /**
  * The OpenClaw versions on which what the config's model list limits was established, on a
- * development gateway of each: it limits what the gateway lists and what a task may switch to, and
- * not a bot's own model or the default (docs/research/model-catalog.md, section 8).
+ * development gateway of each: it limits what the gateway lists and what a task may switch to; a
+ * bot's own model or the default only when it has a wildcard, which makes them run on a model it
+ * names (docs/research/model-catalog.md, section 8).
  */
 export const MODEL_LIMIT_VERSIONS: readonly string[] = ["2026.10.6", "2026.11.10"];
 
+/** The config's model list has a wildcard and limits the provider: a model it doesn't name won't run. */
+export function wildcardLimits(accounts: AccountsState, provider: string): boolean {
+  const list = accounts.modelAllowlist;
+  return list !== null && list.wildcards && !list.whole.includes(provider);
+}
+
 /**
- * When the gateway's config limits a provider's models for the default bot (`modelAllowlist`), on
- * a version the gateway reports where what that limits is established; nothing elsewhere.
+ * When the gateway's config limits a provider's models for every bot (`modelAllowlist`: no bot has
+ * a list of its own), on a version the gateway reports where what that limits is established;
+ * nothing elsewhere.
  */
 export function allowlistLine(
   accounts: AccountsState,
@@ -282,7 +293,11 @@ export function allowlistLine(
   if (list === null || list.whole.includes(provider)) return null;
   if (serverVersion === null || !MODEL_LIMIT_VERSIONS.includes(serverVersion)) return null;
   const who = providerName(provider);
-  return `The gateway's config names which of ${who}'s models it lists and lets a task switch to; a bot's own model can still be one it doesn't name.`;
+  // With any wildcard in the list, a bot set to a model it doesn't name runs on the first one it
+  // allows; without one, it runs on its own (docs/research/model-catalog.md, section 8).
+  return list.wildcards
+    ? `The gateway's config names which of ${who}'s models it lists and lets a task switch to; a bot set to another model runs on one it names.`
+    : `The gateway's config names which of ${who}'s models it lists and lets a task switch to; a bot's own model can still be one it doesn't name.`;
 }
 
 /**
@@ -352,7 +367,13 @@ export function ModelPair({
   const note = noteBelow(state, updateRun, update);
   const foundWords =
     found && found.status !== "looking"
-      ? refreshWords(found, who, note?.offer ? update : null, note !== null && !note.offer)
+      ? refreshWords(
+          found,
+          who,
+          note?.offer ? update : null,
+          note !== null && !note.offer,
+          !wildcardLimits(accounts, provider),
+        )
       : null;
   const limits = allowlistLine(accounts, provider, state.connection.serverVersion);
   // What a Refresh found is said once, politely, when it arrives; focus stays where it was.

@@ -21,6 +21,7 @@ import {
   modelMenu,
   noteBelow,
   refreshWords,
+  wildcardLimits,
 } from "../src/bots/ModelPair.tsx";
 
 const model = (id: string, available = true): CatalogModel => ({
@@ -181,9 +182,13 @@ describe("F-588: Refresh in the Model menu", () => {
   });
 
   it("F-588: says what the config's model list limits, only where that is established for the gateway's version", () => {
-    const limited = (whole: string[] | null, version: string | null = "2026.10.6") =>
+    const limited = (
+      whole: string[] | null,
+      version: string | null = "2026.10.6",
+      wildcards = false,
+    ) =>
       allowlistLine(
-        { ...initialAccountsState, modelAllowlist: whole === null ? null : { whole } },
+        { ...initialAccountsState, modelAllowlist: whole === null ? null : { whole, wildcards } },
         "openai",
         version,
       );
@@ -197,6 +202,45 @@ describe("F-588: Refresh in the Model menu", () => {
     expect(limited([], "2026.11.6")).toBeNull();
     expect(limited([], "2027.1.1")).toBeNull();
     expect(limited([], null)).toBeNull();
+    // With a wildcard in the list, a bot set to a model it doesn't name runs on one it names.
+    const wild =
+      "The gateway's config names which of OpenAI's models it lists and lets a task switch to; a bot set to another model runs on one it names.";
+    expect(limited(["anthropic"], "2026.10.6", true)).toBe(wild);
+    expect(limited([], "2026.11.10", true)).toBe(wild);
+    expect(limited(["openai"], "2026.10.6", true)).toBeNull();
+    expect(limited([], "2026.11.6", true)).toBeNull();
+  });
+
+  it("F-588: under a model list with a wildcard that limits the provider, nothing offers a typed model id", () => {
+    const typeIt = "To use a model that isn't listed, choose Use another model and type its id.";
+    const at = (modelAllowlist: { whole: string[]; wildcards: boolean } | null) => ({
+      ...initialAccountsState,
+      modelAllowlist,
+    });
+    expect(wildcardLimits(at(null), "openai")).toBe(false);
+    expect(wildcardLimits(at({ whole: [], wildcards: false }), "openai")).toBe(false);
+    expect(wildcardLimits(at({ whole: ["anthropic"], wildcards: true }), "openai")).toBe(true);
+    expect(wildcardLimits(at({ whole: ["openai"], wildcards: true }), "openai")).toBe(false);
+    const nothing: ModelRefresh = {
+      status: "done",
+      provider: "openai",
+      added: [],
+      addedCount: 0,
+      removed: [],
+      removedCount: 0,
+      outcome: null,
+      configured: false,
+      hostedList: true,
+      counts: null,
+      partial: false,
+      failed: false,
+    };
+    expect(refreshWords(nothing, "OpenAI", null)).toContain(typeIt);
+    expect(refreshWords(nothing, "OpenAI", null, false, true)).toContain(typeIt);
+    expect(refreshWords(nothing, "OpenAI", null, false, false)).not.toContain(typeIt);
+    expect(refreshWords(nothing, "OpenAI", null, false, false)).toContain(
+      "The gateway didn't ask OpenAI again",
+    );
   });
   it("F-588: points to the note under the menu only as the pair shows it: the offer, where an update stands, or nothing", () => {
     const offer: OpenClawUpdate = { current: "2026.10.6", latest: "2026.11.6", channel: "latest" };

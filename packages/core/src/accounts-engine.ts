@@ -37,6 +37,8 @@ import {
   MAX_CATALOG_MODELS,
   MAX_KEY_PROVIDERS,
   MAX_REFRESH_ERROR_CHARS,
+  effectiveAllowlist,
+  limitsProvider,
   readModelAllowlist,
   readModelRefresh,
   REFRESH_MODELS_MS,
@@ -444,6 +446,8 @@ export class AccountsEngine {
       before,
       declaredModels(config, provider),
       checksHostedList(config),
+      // The rows are the default bot's picker, so its own list, or the default, filters them.
+      limitsProvider(effectiveAllowlist(config, defaultBot), provider),
     );
     let result: ModelRefresh | null = null;
     ctx.update((a) => {
@@ -470,17 +474,11 @@ export class AccountsEngine {
         ...a,
         models,
         modelsCut: cut.slice(0, MAX_KEY_PROVIDERS),
-        ...(config ? { modelAllowlist: readModelAllowlist(config, defaultBot) } : {}),
+        ...(config ? { modelAllowlist: readModelAllowlist(config) } : {}),
       };
     });
     if (result === null) throw new Error(MODELS_GATEWAY_CHANGED);
     return result;
-  }
-
-  /** The gateway's default bot, whose picker the Model menu reads for every bot. */
-  private defaultBot(): string {
-    const bots = this.ctx.bots();
-    return bots.find((bot) => bot.isDefault)?.id ?? bots[0]?.id ?? "main";
   }
 
   private async readViews(botIds: string[]): Promise<Map<string, BotView>> {
@@ -559,7 +557,7 @@ export class AccountsEngine {
       methods: readMethods(anyView?.capabilities ?? []),
       keyProviders: readKeyProviders(anyView),
       models: catalog,
-      modelAllowlist: readModelAllowlist(config, this.defaultBot()),
+      modelAllowlist: readModelAllowlist(config),
       bindings,
     };
   }

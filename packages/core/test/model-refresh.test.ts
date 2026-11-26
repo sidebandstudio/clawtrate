@@ -10,6 +10,7 @@ import {
   MAX_CATALOG_MODELS,
   MAX_REFRESH_NAME_CHARS,
   MAX_REFRESH_NAMES,
+  effectiveAllowlist,
   readModelAllowlist,
 } from "../src/accounts.ts";
 import { READ_SCOPES } from "../src/scopes.ts";
@@ -111,6 +112,42 @@ describe("F-588: Refresh in the Model menu", () => {
     expect(await ask()).toMatchObject({ hostedList: false });
     client.stop();
   });
+  it("F-588: a model list that filters the provider's rows says nothing of the config's list, the default's or the bot's own", async () => {
+    const fake = new AccountsGateway();
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    const ask = () => client.refreshModels("acme", stampOn("gateway-a", client));
+    const agents = fake.config.agents as Json;
+    fake.config.models = {
+      providers: {
+        acme: { baseUrl: "http://127.0.0.1:1/v1", models: [{ id: "dev-1" }, { id: "dev-2" }] },
+      },
+    };
+    // Two models declared, a list naming one: the gateway lists that one alone.
+    fake.refreshed = { acme: [row("dev-1")] };
+    agents.defaults = { ...(agents.defaults as Json), modelPolicy: { allow: ["acme/dev-1"] } };
+    fake.revision += 1;
+    expect(await ask()).toMatchObject({ outcome: null, configured: false });
+    // The same list as the default bot's own: the menu says no list, and still not the config's.
+    agents.defaults = { ...(agents.defaults as Json), modelPolicy: {} };
+    const entries = (agents.entries ?? {}) as Json;
+    agents.entries = {
+      ...entries,
+      main: { ...(entries.main as Json), modelPolicy: { allow: ["acme/dev-1"] } },
+    };
+    fake.revision += 1;
+    expect(await ask()).toMatchObject({ outcome: null, configured: false });
+    expect(accounts().modelAllowlist).toBeNull();
+    // A list that leaves acme whole doesn't filter it: the config's list is the whole list.
+    agents.entries = {
+      ...entries,
+      main: { ...(entries.main as Json), modelPolicy: { allow: ["acme/*"] } },
+    };
+    fake.refreshed = { acme: [row("dev-1"), row("dev-2")] };
+    fake.revision += 1;
+    expect(await ask()).toMatchObject({ outcome: null, configured: true });
+    client.stop();
+  });
+
   it("F-588: a provider the gateway couldn't ask, with the gateway's reason; one account that answered is enough", async () => {
     const fake = new AccountsGateway();
     const { client } = await accountsClient({ gateway: fake });
@@ -589,11 +626,12 @@ describe("F-588: the gateway config's model list for bots", () => {
     },
   });
   const legacy = { "acme/dev-1": {}, "globex/dev-1": {} };
+  const none = { whole: [], wildcards: false };
 
   it("F-588: the old agents.defaults.models limits only while the config is unmigrated and has no default policy", () => {
-    expect(readModelAllowlist(config({ legacy }), "main")).toEqual({ whole: [] });
-    expect(readModelAllowlist(config({ legacy, migrated: true }), "main")).toBeNull();
-    expect(readModelAllowlist(config({ legacy, policy: {} }), "main")).toBeNull();
+    expect(readModelAllowlist(config({ legacy }))).toEqual(none);
+    expect(readModelAllowlist(config({ legacy, migrated: true }))).toBeNull();
+    expect(readModelAllowlist(config({ legacy, policy: {} }))).toBeNull();
   });
 
   it("F-588: agents.defaults.modelPolicy.allow limits, migrated or not; empty or absent limits nothing", () => {
@@ -601,42 +639,63 @@ describe("F-588: the gateway config's model list for bots", () => {
       expect(
         readModelAllowlist(
           config({ policy: { allow: ["acme/dev-1", "globex/*"] }, legacy, migrated }),
-          "main",
         ),
-      ).toEqual({ whole: ["globex"] });
-      expect(
-        readModelAllowlist(config({ policy: { allow: [] }, legacy, migrated }), "main"),
-      ).toBeNull();
+      ).toEqual({ whole: ["globex"], wildcards: true });
+      expect(readModelAllowlist(config({ policy: { allow: [] }, legacy, migrated }))).toBeNull();
     }
-    expect(readModelAllowlist(config({ migrated: true }), "main")).toBeNull();
-    expect(readModelAllowlist(config({}), "main")).toBeNull();
+    expect(readModelAllowlist(config({ migrated: true }))).toBeNull();
+    expect(readModelAllowlist(config({}))).toBeNull();
   });
 
-  it("F-588: the bot's own modelPolicy.allow replaces the default's, an empty one included", () => {
+  it("F-588: a bot's own modelPolicy.allow replaces the default's for that bot, an empty one included", () => {
     const policy = { allow: ["acme/dev-1"] };
     expect(
-      readModelAllowlist(config({ policy, own: { allow: ["acme/*"] }, migrated: true }), "main"),
-    ).toEqual({ whole: ["acme"] });
+      effectiveAllowlist(config({ policy, own: { allow: ["acme/*"] }, migrated: true }), "main"),
+    ).toEqual({ whole: ["acme"], wildcards: true });
     expect(
-      readModelAllowlist(config({ policy, own: { allow: [] }, migrated: true }), "main"),
+      effectiveAllowlist(config({ policy, own: { allow: [] }, migrated: true }), "main"),
     ).toBeNull();
     // A policy of its own without `allow` keeps the default's.
-    expect(readModelAllowlist(config({ policy, own: {}, migrated: true }), "main")).toEqual({
-      whole: [],
-    });
-    // Another bot's policy is not the default bot's.
+    expect(effectiveAllowlist(config({ policy, own: {}, migrated: true }), "main")).toEqual(none);
+    // Another bot's policy is not this bot's; a bot with no entry has the default's.
     expect(
-      readModelAllowlist(config({ own: { allow: ["acme/dev-1"] }, migrated: true }), "pip"),
+      effectiveAllowlist(config({ own: { allow: ["acme/dev-1"] }, migrated: true }), "pip"),
     ).toBeNull();
+    expect(effectiveAllowlist(config({ policy, migrated: true }), null)).toEqual(none);
+  });
+
+  it("F-588: the menu says a list only when no bot has one of its own, so the default's is every bot's", () => {
+    const policy = { allow: ["acme/dev-1"] };
+    // The default list alone is the list for every bot, and for a new one.
+    expect(readModelAllowlist(config({ policy, migrated: true }))).toEqual(none);
+    // The default bot's own list, an empty one beside the default's, another bot's own list.
+    expect(
+      readModelAllowlist(config({ policy, own: { allow: ["acme/dev-1"] }, migrated: true })),
+    ).toBeNull();
+    expect(readModelAllowlist(config({ policy, own: { allow: [] }, migrated: true }))).toBeNull();
+    const otto = config({ policy, migrated: true }) as { config: { agents: { entries: Json } } };
+    otto.config.agents.entries.otto = { modelPolicy: { allow: ["globex/dev-1"] } };
+    expect(readModelAllowlist(otto)).toBeNull();
+    // A policy of its own without `allow` is no list of its own.
+    expect(readModelAllowlist(config({ policy, own: {}, migrated: true }))).toEqual(none);
   });
 
   it("F-588: only <provider>/* leaves a provider whole: * and */* are not wildcards, and a longer one limits within it", () => {
     expect(
       readModelAllowlist(
         config({ policy: { allow: ["*", "*/*", "openrouter/anthropic/*", "acme/*"] } }),
-        "main",
       ),
-    ).toEqual({ whole: ["acme"] });
+    ).toEqual({ whole: ["acme"], wildcards: true });
+  });
+
+  it("F-588: wildcards are entries OpenClaw reads as one, and only those", () => {
+    const read = (allow: string[]) =>
+      readModelAllowlist(config({ policy: { allow }, migrated: true }))?.wildcards;
+    expect(read(["acme/dev-1", "globex/dev-1"])).toBe(false);
+    expect(read(["acme/dev-1", "globex/*"])).toBe(true);
+    expect(read(["openrouter/anthropic/*"])).toBe(true);
+    // Not wildcards to OpenClaw: no provider before it, or a `*` that isn't a whole last segment.
+    expect(read(["acme/dev-1", "*", "*/*", "acme/dev-*", "/*"])).toBe(false);
   });
 
   it("F-588: it is read with the accounts, for the default bot", async () => {
@@ -646,7 +705,7 @@ describe("F-588: the gateway config's model list for bots", () => {
       modelPolicy: { allow: ["acme/dev-1"] },
     };
     const { client, accounts } = await accountsClient({ gateway: fake });
-    expect(accounts().modelAllowlist).toEqual({ whole: [] });
+    expect(accounts().modelAllowlist).toEqual({ whole: [], wildcards: false });
     client.stop();
   });
 });

@@ -248,14 +248,15 @@ export type ModelRefresh =
   | { status: "error"; error: string };
 
 /**
- * The models the gateway's config lets the default bot use, as the Model menu needs it: null when
- * nothing limits them. The bot's own `modelPolicy.allow`, else `agents.defaults.modelPolicy.allow`,
- * else the old `agents.defaults.models` while the config is unmigrated. The gateway lists, and
- * lets a task switch to, only what it names; a bot's own model and the default can still be
- * others (docs/research/model-catalog.md, section 8). `whole` is the providers a `<provider>/*`
- * entry leaves whole.
+ * The models the gateway's config lets a bot use, as the Model menu needs it: null when nothing
+ * limits them. The bot's own `modelPolicy.allow`, else `agents.defaults.modelPolicy.allow`, else
+ * the old `agents.defaults.models` while the config is unmigrated. The gateway lists, and lets a
+ * task switch to, only what it names; with no wildcard in it, a bot's own model and the default
+ * can still be others, and with one they run on the first model it allows
+ * (docs/research/model-catalog.md, section 8). `whole` is the providers a `<provider>/*` entry
+ * leaves whole; `wildcards` is whether any entry is a wildcard as OpenClaw reads one.
  */
-export type ModelAllowlist = { whole: string[] };
+export type ModelAllowlist = { whole: string[]; wildcards: boolean };
 
 /** The longest model id Clawtrate sends. */
 export const MAX_MODEL_ID_CHARS = 512;
@@ -488,7 +489,7 @@ export type AccountsState = {
   models: CatalogModel[];
   /** Providers whose picker rows were cut at `MAX_CATALOG_MODELS`, with how many it listed. */
   modelsCut: PickerCut[];
-  /** The config's model list for the default bot (`ModelAllowlist`), or null when it has none. */
+  /** The config's model list as every bot's menu can say it (`readModelAllowlist`), or null. */
   modelAllowlist: ModelAllowlist | null;
   bindings: BotBinding[];
   signIn: SignInState | null;
@@ -845,6 +846,8 @@ export function readModelRefresh(
   declared: ReadonlySet<string>,
   /** The gateway checks OpenClaw's model list online (`models.catalogRefresh`). */
   hostedList: boolean,
+  /** The config's model list for the bot asked for limits the provider, so filters its rows. */
+  limited: boolean,
 ): {
   rows: CatalogModel[];
   compare: (shown: readonly string[], cutBefore: number | null) => ModelRefresh;
@@ -856,8 +859,9 @@ export function readModelRefresh(
     : false;
   const outcome = outcomeOf(answer, provider);
   // The config's list is the whole list only when every model the gateway lists is one it
-  // declares: otherwise OpenClaw's own or a plugin's are listed beside them.
-  const configured = rows.length > 0 && rows.every((row) => declared.has(row.id));
+  // declares: otherwise OpenClaw's own or a plugin's are listed beside them. Rows a model list
+  // for bots filtered say nothing of that.
+  const configured = !limited && rows.length > 0 && rows.every((row) => declared.has(row.id));
   return {
     rows,
     compare: (shown, cutBefore) => {
@@ -899,17 +903,37 @@ export function checksHostedList(config: RawRecord | null): boolean {
   return asRecord(asRecord(root?.models)?.catalogRefresh)?.enabled !== false;
 }
 
-/** The config's model list for a bot, as the Model menu needs it (`ModelAllowlist`). */
-export function readModelAllowlist(config: RawRecord | null, botId: string): ModelAllowlist | null {
+/** A wildcard entry as OpenClaw reads one (`parseModelPolicyWildcardRef`): `<segment>/…/*`. */
+function isWildcard(key: string): boolean {
+  const segments = key.split("/").map((segment) => segment.trim());
+  return (
+    segments.length >= 2 &&
+    segments.at(-1) === "*" &&
+    segments
+      .slice(0, -1)
+      // eslint-disable-next-line no-control-regex
+      .every((segment) => segment.length > 0 && !/[*\s\u0000-\u001f\u007f]/.test(segment))
+  );
+}
+
+/**
+ * The config's model list for one bot (`ModelAllowlist`), as the gateway resolves it
+ * (`resolveConfiguredModelPolicyAllow`), with `botId` null for a bot with no entry of its own.
+ */
+export function effectiveAllowlist(
+  config: RawRecord | null,
+  botId: string | null,
+): ModelAllowlist | null {
   const root = asRecord(config?.config);
   const agents = asRecord(root?.agents);
   const defaults = asRecord(agents?.defaults);
-  const own = asRecord(asRecord(asRecord(agents?.entries)?.[botId])?.modelPolicy);
+  const own =
+    botId === null ? null : asRecord(asRecord(asRecord(agents?.entries)?.[botId])?.modelPolicy);
   const policy = asRecord(defaults?.modelPolicy);
   const migrated = asRecord(asRecord(root?.meta)?.migrations)?.modelPolicyAllowlist === true;
-  // As the gateway resolves it (`resolveConfiguredModelPolicyAllow`): the bot's own policy when it
-  // has an `allow`, then the default policy's; the old `agents.defaults.models` only while there
-  // is no default policy and the config hasn't been migrated, which any config write does.
+  // The bot's own policy when it has an `allow`, then the default policy's; the old
+  // `agents.defaults.models` only while there is no default policy and the config hasn't been
+  // migrated, which any config write does.
   let refs: unknown[] = [];
   if (own && Object.hasOwn(own, "allow")) refs = Array.isArray(own.allow) ? own.allow : [];
   else if (policy && Object.hasOwn(policy, "allow"))
@@ -931,7 +955,27 @@ export function readModelAllowlist(config: RawRecord | null, botId: string): Mod
     whole: [...whole]
       .filter((provider) => provider.length <= MAX_PREF_ID_CHARS)
       .slice(0, MAX_KEY_PROVIDERS),
+    wildcards: keys.some(isWildcard),
   };
+}
+
+/** Whether a bot's model list (`effectiveAllowlist`) limits a provider's models, so filters its rows. */
+export function limitsProvider(list: ModelAllowlist | null, provider: string): boolean {
+  return list !== null && !list.whole.includes(provider.toLowerCase());
+}
+
+/**
+ * The config's model list as every bot's Model menu can say it: only when no bot has a list of
+ * its own, so the default list is the one for each bot and for a new one; null otherwise, as
+ * which list applies to the menu shown isn't known there.
+ */
+export function readModelAllowlist(config: RawRecord | null): ModelAllowlist | null {
+  const entries = asRecord(asRecord(asRecord(config?.config)?.agents)?.entries);
+  const ownLists = Object.values(entries ?? {}).some((entry) => {
+    const policy = asRecord(asRecord(entry)?.modelPolicy);
+    return policy !== null && Object.hasOwn(policy, "allow");
+  });
+  return ownLists ? null : effectiveAllowlist(config, null);
 }
 
 /** Every model row of a `models.list` answer, in its order. */
