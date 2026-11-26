@@ -152,7 +152,9 @@ test("F-480 #663 #664: a message the gateway couldn't run says why; fixed and se
     "aria-selected",
     "true",
   );
-  await expect(page.getByTestId("bot-settings").locator("[data-bs='change']")).toBeVisible();
+  const settings = page.getByRole("tabpanel", { name: "Settings" });
+  await expect(settings.getByRole("heading", { name: "Account" })).toBeVisible();
+  await expect(settings).toContainText("Wren's account was disconnected");
 
   // The bot fixed on the gateway, the message sent again: a reply, and the mark gone at once.
   await setModel("acme/dev-1@acme:work");
