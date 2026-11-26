@@ -31,6 +31,7 @@ import {
   WORST_TASK_CHARS,
   worstCase,
   worstViewerChars,
+  DEVICE_REQUESTS,
 } from "@clawtrate/core";
 import { readFileSync } from "node:fs";
 import { assert, describe, expect, it } from "vitest";
@@ -240,6 +241,11 @@ const stateParts: Row[] = [
     size(S, "computer"),
   ],
   ["Bot names", [max(S, "botNames")], size(S, "botNames")],
+  [
+    "Waiting devices",
+    [max(DEVICE_REQUESTS, "requests"), max(DEVICE_REQUESTS, "requests.item.choices")],
+    size(S, "deviceRequests"),
+  ],
 ];
 const state: Row[] = [
   ...stateParts,

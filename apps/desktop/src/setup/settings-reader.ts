@@ -32,21 +32,22 @@ import {
   systemTempRoots,
   within,
 } from "./sandbox.ts";
-import { accountHome, SANDBOX_MARKERS, SetupRefusedError } from "./world.ts";
+import { accountHome, packagedApp, personsLaunch, SetupRefusedError } from "./world.ts";
 
 export const SETTINGS_LIMIT = 1024 * 1024;
 /** The helper's deadline, and the parse worker's. */
 export const READ_DEADLINE_MS = 2_000;
 const WORKER_LIMITS = { maxOldGenerationSizeMb: 32, maxYoungGenerationSizeMb: 8, stackSizeMb: 4 };
-/** All the helper may write: "ok\n" and at most the limit, or one refusal line. */
-const HELPER_OUTPUT_LIMIT = SETTINGS_LIMIT + 3;
+/** All the helper may write: "ok <device> <inode>\n" and at most the limit, or one refusal line. */
+const HELPER_OUTPUT_LIMIT = SETTINGS_LIMIT + 45;
 
 /** The two canonical profiles, by their folder under the home folder. */
 export const SETTINGS_PROFILES = [
   { profile: "default", folder: ".openclaw" },
   { profile: "clawtrate", folder: ".openclaw-clawtrate" },
 ] as const;
-const SETTINGS_FILE = "openclaw.json";
+/** The profile's settings file, in its folder: the one file the reader reads. */
+export const SETTINGS_FILE = "openclaw.json";
 
 const UNSAFE_WHY = [
   "link",
@@ -68,7 +69,16 @@ export type OpenRefusal =
   | { reason: "unsafe"; why: (typeof UNSAFE_WHY)[number] }
   | { reason: "unreadable"; why: "large" };
 
-export type Opened = { kind: "read"; bytes: Buffer } | ({ kind: "refused" } & OpenRefusal);
+/**
+ * The profile folder a file was read from, by its device and inode as decimal, "<dev>:<ino>":
+ * the folder as it was opened for the read. The proof is given it and refuses a profile folder
+ * at that path with another identity (local-prove.ts), and a gateway saved through local
+ * connect keeps it with its route.
+ */
+export type FolderIdentity = string;
+
+type Refusal = { kind: "refused" } & OpenRefusal;
+export type Opened = { kind: "read"; bytes: Buffer; identity: FolderIdentity } | Refusal;
 
 /**
  * A token from the settings file, held for one bounded attempt. The value is
@@ -94,7 +104,7 @@ export class HeldToken {
 export type Parsed = Extracted | { kind: "refused"; reason: "unreadable"; why: "worker" | "large" };
 
 export type SettingsOutcome =
-  | { kind: "found"; token: HeldToken; port: number }
+  | { kind: "found"; token: HeldToken; port: number; identity: FolderIdentity }
   | ({ kind: "refused" } & OpenRefusal)
   | Exclude<Parsed, { kind: "found" }>;
 
@@ -115,7 +125,7 @@ export type ReaderOptions = {
   deadlineMs?: number;
 };
 
-const refused = (why: (typeof UNSAFE_WHY)[number]): Opened => ({
+const refused = (why: (typeof UNSAFE_WHY)[number]): Refusal => ({
   kind: "refused",
   reason: "unsafe",
   why,
@@ -137,9 +147,12 @@ export const sameFolder = (a: HomeIdentity, b: HomeIdentity) => a.dev === b.dev 
 
 /**
  * Which home may be read, decided before anything in it is opened. A
- * production run (the caller says so, and no sandbox marker is present)
- * reads only the home the operating system reports for this account, and
- * nothing when that can't be determined. Any other run reads only a private
+ * production run (the caller says so, no sandbox marker is present, and this
+ * process is a packaged app's: `packagedApp`) reads only the home the
+ * operating system reports for this account, and nothing when that can't be
+ * determined. A caller that says production anywhere else (a development
+ * build, a test, a Node host) is refused outright: outside a person's
+ * packaged app there is no default home. Any other run reads only a private
  * folder of this account's, by its canonical path, below one of this
  * machine's temporary roots with no folder on the way that another account
  * could swap, and away from the account's real home; its identity is
@@ -150,10 +163,14 @@ export function guardHome(
   sandboxed: boolean | undefined,
   env: NodeJS.ProcessEnv = process.env,
   accountHomeOf: () => string | null = accountHome,
+  packaged: () => boolean = packagedApp,
+  argv: readonly string[] = process.argv,
 ): HomeIdentity | null {
   const real = accountHomeOf();
-  if (sandboxed === false && !SANDBOX_MARKERS.some((key) => Object.hasOwn(env, key))) {
-    if (real === null || home !== resolve(real)) throw new SetupRefusedError("home");
+  // A marker variable, or a switch that marks a driven app, makes a run sandboxed whatever
+  // its caller says; a production run outside a packaged app is refused (`personsLaunch`).
+  if (sandboxed === false && personsLaunch(env, argv, () => true)) {
+    if (!packaged() || real === null || home !== resolve(real)) throw new SetupRefusedError("home");
     return null;
   }
   const uid = process.geteuid?.() ?? null;
@@ -224,7 +241,12 @@ async function readProfile(
   opened.bytes.fill(0);
   const parsed = await parseInWorker(text, profile, options.worker, options.deadlineMs);
   if (parsed.kind !== "found") return parsed;
-  return { kind: "found", token: new HeldToken(parsed.token), port: parsed.port };
+  return {
+    kind: "found",
+    token: new HeldToken(parsed.token),
+    port: parsed.port,
+    identity: opened.identity,
+  };
 }
 
 /** The open flags every step needs; a platform without one of them reads nothing. */
@@ -385,11 +407,21 @@ export function runHelper(
 
 const HELPER_REFUSAL = /^refused ([a-z]{1,16})\n$/;
 
-/** "ok\n" and the file, or exactly one whitelisted refusal line; anything else is unverified. */
+const HELPER_READ = /^ok (0|[1-9]\d{0,19}) (0|[1-9]\d{0,19})\n/;
+
+/**
+ * "ok", the profile folder's device and inode, and the file, or exactly one whitelisted
+ * refusal line; anything else is unverified.
+ */
 function helperAnswer(output: Buffer): Opened {
-  if (output.subarray(0, 3).equals(Buffer.from("ok\n")))
-    return output.length - 3 <= SETTINGS_LIMIT
-      ? { kind: "read", bytes: Buffer.from(output.subarray(3)) }
+  const read = HELPER_READ.exec(output.subarray(0, 45).toString("latin1"));
+  if (read)
+    return output.length - read[0].length <= SETTINGS_LIMIT
+      ? {
+          kind: "read",
+          bytes: Buffer.from(output.subarray(read[0].length)),
+          identity: `${read[1]}:${read[2]}`,
+        }
       : refused("helper");
   const why = output.length <= 32 ? HELPER_REFUSAL.exec(output.toString("latin1"))?.[1] : null;
   if (why === "absent") return { kind: "refused", reason: "absent" };
@@ -422,7 +454,7 @@ async function openFailure(error: unknown, path: string): Promise<Opened> {
  * file of exactly 0600 in a folder without group or other bits grants nothing
  * to another account.
  */
-export async function checkOpened(handle: FileHandle, folder: boolean): Promise<Opened | null> {
+export async function checkOpened(handle: FileHandle, folder: boolean): Promise<Refusal | null> {
   const stat = await handle.stat();
   if (folder ? !stat.isDirectory() : !stat.isFile()) return refused("type");
   if (stat.uid !== process.geteuid?.()) return refused("owner");
@@ -434,7 +466,9 @@ export async function checkOpened(handle: FileHandle, folder: boolean): Promise<
 }
 
 /** Reads to the end, refusing more than the limit however large the file was when checked. */
-export async function readBounded(handle: FileHandle): Promise<Opened> {
+export async function readBounded(
+  handle: FileHandle,
+): Promise<{ kind: "read"; bytes: Buffer } | Refusal> {
   const buffer = Buffer.alloc(SETTINGS_LIMIT + 1);
   try {
     let length = 0;
@@ -482,6 +516,7 @@ async function readThroughProc(home: FileHandle, folder: string, file: string): 
     }
     const folderRefused = await checkOpened(dir, true);
     if (folderRefused) return folderRefused;
+    const { dev, ino } = await dir.stat({ bigint: true });
     const filePath = `/proc/self/fd/${dir.fd}/${file}`;
     const notFile = await preflight(filePath);
     if (notFile) return notFile;
@@ -490,7 +525,8 @@ async function readThroughProc(home: FileHandle, folder: string, file: string): 
     } catch (error) {
       return await openFailure(error, filePath);
     }
-    return (await checkOpened(handle, false)) ?? (await readBounded(handle));
+    const read = (await checkOpened(handle, false)) ?? (await readBounded(handle));
+    return read.kind === "read" ? { ...read, identity: `${dev}:${ino}` } : read;
   } catch {
     return refused("failed");
   } finally {

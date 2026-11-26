@@ -3,6 +3,7 @@
 
 import type { OpenClawUpdate } from "./gateway-update.ts";
 import type { OpenClawUpdateState } from "./openclaw-update.ts";
+import type { DeviceRequestsState } from "./device-approval.ts";
 import { initialAccountsState, type AccountsState } from "./accounts.ts";
 import { initialRoutinesState, type RoutinesState } from "./routines.ts";
 import type { ApprovalCard } from "./approvals.ts";
@@ -38,6 +39,8 @@ export type PairingRequest = {
   /** Where and by whom the command is run, when that is not obvious. */
   approveNote: string | null;
   requestedScopes: string[];
+  /** This device's pairing code (`pairCode`), shown while it waits; null without its key. */
+  code?: string | null;
 };
 
 export type ConnectionError = {
@@ -666,6 +669,11 @@ export type ClawtrateState = {
    * sent, and why the gateway can't update itself. Absent until the first.
    */
   openclawUpdating?: OpenClawUpdateState;
+  /**
+   * Devices waiting for approval, as an admin connection lists them, or a notice of them on a
+   * connection without admin (`device-approval.ts`). Absent until the first hello.
+   */
+  deviceRequests?: DeviceRequestsState;
   /** Paths of fields cut to their bound that nothing beneath records itself. */
   cut?: string[];
 };
