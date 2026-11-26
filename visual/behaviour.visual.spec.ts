@@ -1022,9 +1022,17 @@ for (const width of [320, 390]) {
         const strip = page.getByTestId("status-strip");
         // The scene's own state, once it has reached it: sync-failed passes through Reconnecting.
         await expect(strip.locator("strong")).toContainText(STRIP_STATES[scene]!);
-        await expect(strip.getByRole("button")).toBeVisible();
+        const retry = strip.getByRole("button", { name: /^(Retry now|Reconnect|Try again)$/ });
+        await expect(retry).toBeVisible();
+        if (scene === "discovery-error") {
+          // The gateway's message is behind its disclosure, and the state still reads in full.
+          await expect(strip.getByRole("button", { name: "Gateway's message" })).toBeVisible();
+          expect(
+            await strip.locator("strong").evaluate((el) => el.scrollWidth <= el.clientWidth),
+          ).toBe(true);
+        }
         const state = (await strip.locator("strong").boundingBox())!;
-        const action = (await strip.getByRole("button").boundingBox())!;
+        const action = (await strip.getByRole("button").first().boundingBox())!;
         const box = (await strip.boundingBox())!;
         expect(state.x + state.width, "the state ends before the action").toBeLessThanOrEqual(
           action.x,

@@ -2092,17 +2092,15 @@ test.describe("errors and resync", () => {
     await expect(page.locator(".app")).toHaveAttribute("data-connection", "lost");
     await set("hello");
     await expect(page.getByTestId("status-strip")).toContainText("catching up");
-    // Connected is not caught up: nothing moves, the line and the composer stay as they were.
-    await expect(page.locator(".app")).toHaveAttribute("data-connection", "lost");
+    // Connected is not caught up: the run line stays last seen until the task reloads, but
+    // nothing says the connection is down, and the composer sends (#592).
+    await expect(page.locator(".app")).not.toHaveAttribute("data-connection", "lost");
     await expect(page.getByTestId("status-phrase")).toHaveText(
       // The default status line names the kind of work (conversation.md, 7.11).
-      "Reconnecting. Last seen reading files",
+      "Catching up. Last seen reading files",
     );
     await expect(page.locator(".status-elapsed")).toHaveCount(0);
-    await expect(field(page)).toHaveAttribute(
-      "placeholder",
-      "Offline. Messages send when you reconnect.",
-    );
+    await expect(field(page)).toHaveAttribute("placeholder", "Message Otto");
     expect(
       await page
         .locator(".status-line .presence")
