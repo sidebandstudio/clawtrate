@@ -17,6 +17,8 @@ Each entry gives the decision, the reason, and what a later builder should know.
 | `@electron/fuses`               | 1.8.0                       | The version electron-builder 26.18.1 uses; imported directly for its fuse names.                                                                                                                                                                                            |
 | `@noble/*`                      | 2.4.0, exact pins           | X25519, Ed25519, ChaCha20-Poly1305, SHA-256 and HMAC for `packages/relay-protocol`. Pure TypeScript, so the same code runs in Node, Electron, Workers and Hermes.                                                                                                           |
 
+The pinned version is the gate. Every pull request, `pnpm e2e`, `pnpm scenarios` and the screenshot tests use it. The OpenClaw latest workflow also runs the scenario check and the end-to-end tests against npm's newest OpenClaw on `main` every night, because Update OpenClaw moves a person's gateway there. It reports differences in an issue and gates nothing ([testing.md](development/testing.md)). Moving the pin stays a deliberate change: the gateway, both client packages and these notes together.
+
 The client packages from 2026.11.x also report protocol 4. The gateway research notes found that they send request fields gateway 2026.10.6 rejects as "unexpected property"; this branch did not test them. Upgrade the packages and the gateway together, and retest `pnpm e2e`.
 
 ## Connecting to the gateway
