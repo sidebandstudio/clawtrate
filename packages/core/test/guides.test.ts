@@ -25,10 +25,10 @@ import {
 } from "../src/guides.ts";
 import { ADMIN_SCOPES, INTERACTIVE_SCOPES } from "../src/scopes.ts";
 import { parseBridgeCommand } from "../src/bridge.ts";
-import { agentEvent, openTask } from "./client-harness.ts";
-import { GatewayError, memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
+import { agentEvent, grantingGateway, openTask } from "./client-harness.ts";
+import { GatewayError, memoryStorage, sleep, testHost, tokenKey, until } from "./fake-gateway.ts";
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
-import { ClawtrateClient, CONNECTION_CHANGED } from "../src/client.ts";
+import { ClawtrateClient, CONNECTION_CHANGED, ROUTE_IDENTITY_CHANGED } from "../src/client.ts";
 import { PUBLISHED_SECTIONS } from "./guides-published.ts";
 import { FAST, URL_A } from "./client-harness.ts";
 
@@ -848,6 +848,108 @@ describe("the guides in the client", () => {
       expect(read.stamp.gatewayId).toBeNull();
       expect(read.folders.every((f) => f.error === CONNECTION_CHANGED)).toBe(true);
       expect(files.asked.slice(asked).length).toBeLessThanOrEqual(2);
+    } finally {
+      client.stop();
+    }
+  });
+
+  /** A client on a saved route bound to `gw-a`, whose gateway names itself as `named` gives. */
+  async function routed(files: ReturnType<typeof fakeFiles>, named: () => string) {
+    const gateway = withFiles(grantingGateway(), files);
+    const ROUTE = ".openclaw-guides-check";
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL_A, token: null, route: ROUTE, gatewayId: "gw-a" }),
+      [tokenKey(URL_A)]: JSON.stringify({
+        token: "device-token",
+        grantedScopes: ADMIN_SCOPES,
+        heldScopes: INTERACTIVE_SCOPES,
+        adminHeld: true,
+        route: ROUTE,
+      }),
+    });
+    // The connect's reads of the gateway's name fail, as on a gateway still starting: the
+    // client's own retry, half a second on, is the first to get it.
+    let reads = 0;
+    gateway.handlers["gateway.identity.get"] = () => {
+      reads += 1;
+      if (reads <= 2) throw new Error("not ready");
+      return { deviceId: named() };
+    };
+    const client = new ClawtrateClient(testHost(gateway, storage), {
+      ...FAST,
+      localConnect: () => ({
+        createSocket: (url) => gateway.createWebSocket(url),
+        verify: async () => true,
+      }),
+    });
+    await client.start();
+    return { client, gateway, reads: () => reads };
+  }
+
+  it("on a saved route, writes nothing while the gateway's name is unknown, and nothing ever when it names another gateway", async () => {
+    const files = fakeFiles({ pip: BOT_FILE });
+    const { client, reads } = await routed(files, () => "gw-other");
+    try {
+      await until(() => client.state.connection.error?.code === ROUTE_IDENTITY_CHANGED, 8_000);
+      expect(reads()).toBeGreaterThanOrEqual(2);
+      await sleep(600);
+      expect(files.sets).toEqual([]);
+      expect(files.store.get("pip")).toBe(BOT_FILE);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("on a saved route, keeps the section current once the gateway names itself as that route's, once", async () => {
+    const files = fakeFiles({ pip: BOT_FILE });
+    const { client, reads } = await routed(files, () => "gw-a");
+    try {
+      await until(() => client.state.connection.status === "connected" && reads() >= 2);
+      // Nothing while the name is unknown.
+      await sleep(100);
+      expect(client.state.connection.gatewayId).toBeNull();
+      expect(files.sets).toEqual([]);
+      // The retry names it: the change runs then, with no reconnect, and only once.
+      await until(() => files.sets.length === 1, 8_000);
+      expect(files.store.get("pip")).toBe(withSection(BOT_FILE));
+      await sleep(600);
+      expect(files.sets).toHaveLength(1);
+      // One pass: one read of Pip's file, and one write.
+      expect(files.asked).toEqual(["pip", "pip"]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("a read made while the connect's own reads are still under way shows what the change after them leaves", async () => {
+    const files = fakeFiles({ pip: BOT_FILE });
+    const { client, gateway } = await openTask({ storage: adminStorage() });
+    withFiles(gateway, files);
+    // The connect's read of the bots waits until Settings has asked.
+    let release = () => {};
+    const held = new Promise<void>((done) => (release = done));
+    const list = gateway.handlers["agents.list"]!;
+    let lists = 0;
+    gateway.handlers["agents.list"] = async (params) => {
+      lists += 1;
+      if (lists === 1) await held;
+      return list(params);
+    };
+    try {
+      const was = client.state.connection.connectedAt;
+      gateway.dropAll();
+      await until(
+        () =>
+          client.state.connection.status === "connected" &&
+          client.state.connection.connectedAt !== was &&
+          lists === 1,
+      );
+      // Settings is open, and reads now, before the connect's change is in line.
+      const read = client.readBotGuides();
+      await sleep(50);
+      release();
+      expect((await read).folders[0]?.state).toBe("current");
+      expect(files.sets).toHaveLength(1);
     } finally {
       client.stop();
     }
