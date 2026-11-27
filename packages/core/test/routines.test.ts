@@ -1283,6 +1283,55 @@ describe("F-191 on OpenClaw 2026.11.10: a cron event that carries only a summary
     await vi.advanceTimersByTimeAsync(RETRY_MS);
     expect(requests.some((each) => each.method === "cron.list")).toBe(false);
   });
+
+  it("a pause that answers after a read found its routine gone does not bring it back", async () => {
+    const reply = Promise.withResolvers<unknown>();
+    const sent = Promise.withResolvers<void>();
+    const { routines, state } = open(
+      {
+        "cron.get": (params) => {
+          throw missing(params.id as string);
+        },
+        "cron.update": () => {
+          sent.resolve();
+          return reply.promise;
+        },
+      },
+      loaded(job()),
+      ADMIN,
+    );
+    const pausing = routines.setEnabled(JOB, false);
+    await sent.promise;
+    // The gateway's `removed` event is lost; only the read says the job is gone.
+    routines.onEvent({ jobId: JOB, action: "updated", job: summaryOf(job({ name: "Renamed" })) });
+    await until(() => state().routines.length === 0);
+    reply.resolve(job({ enabled: false }));
+    expect(await pausing).toEqual({ status: "deleted" });
+    expect(state().routines).toEqual([]);
+  });
+
+  it("at the cap, a read that finds a shown routine gone reads the list to fill its place", async () => {
+    const many = Array.from({ length: MAX_ROUTINES }, (_, index) => job({ id: `h${index}` }));
+    const { routines, state } = open(
+      {
+        "cron.get": (params) => {
+          throw missing(params.id as string);
+        },
+        "cron.status": () => ({ enabled: true }),
+        "cron.list": () => ({
+          jobs: [...many.slice(1), job({ id: "h200" })],
+          total: 204,
+          hasMore: true,
+          nextOffset: MAX_ROUTINES,
+        }),
+      },
+      { ...loaded(...many), omitted: 5 },
+    );
+    routines.onEvent({ jobId: "h0", action: "updated", job: summaryOf(job({ id: "h0" })) });
+    await until(() => state().omitted === 4);
+    expect(state().routines).toHaveLength(MAX_ROUTINES);
+    expect(state().routines.some((each) => each.id === "h0")).toBe(false);
+  });
 });
 describe("F-355: a routine's runs", () => {
   it("are at most 20, in the gateway's order: newest finished first", async () => {
@@ -2109,6 +2158,38 @@ describe("F-189: changing a routine", () => {
     expect(requests.find((request) => request.method === "cron.update")?.params).toMatchObject({
       expectedConfigRevision: "r1",
     });
+  });
+
+  it("F-189: a conflict whose read is overtaken by a read that finds the routine gone ends deleted", async () => {
+    const theirs = { ...once, updatedAtMs: 31, name: "Theirs", configRevision: "r2" };
+    const held = Promise.withResolvers<unknown>();
+    let reads = 0;
+    const { routines, state } = engine(
+      {
+        "cron.get": (params) => {
+          reads += 1;
+          if (reads === 1) return { ...once, configRevision: "r1" };
+          if (reads === 2) return held.promise;
+          throw missing(params.id as string);
+        },
+        "cron.update": () => {
+          throw new GatewayProtocolRequestError({
+            code: "INVALID_REQUEST",
+            message: "cron job definition no longer matches the loaded version",
+            details: { code: "CRON_JOB_CHANGED" },
+          });
+        },
+      },
+      { ...initialRoutinesState, status: "loaded", routines: [expected] },
+      ADMIN,
+    );
+    const saving = routines.update(JOB, original, { ...original, name: "Mine" }, expected);
+    await until(() => reads === 2);
+    // The gateway's `removed` event is lost; another read finds the job gone.
+    routines.onEvent({ jobId: JOB, action: "updated", job: summaryOf(theirs) });
+    await until(() => state().routines.length === 0);
+    held.resolve(theirs);
+    expect(await saving).toEqual({ status: "deleted" });
   });
 
   it("F-350 F-351 F-352: after a reconnect, a row's pause, run and delete send nothing until this connection's list is read", async () => {
