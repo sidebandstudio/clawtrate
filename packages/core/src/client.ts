@@ -393,6 +393,7 @@ import { nameTask } from "./task-names.ts";
 import { endsRun, fromActivity, WaitingIndex } from "./waiting.ts";
 import {
   coveredRuns,
+  failedByRow,
   runAliases,
   QUIET_CHECK_CHARS,
   QUIET_CHECK_ROWS,
@@ -10969,11 +10970,17 @@ export class ClawtrateClient {
       // The gateway has a turn of this task in flight or queued: a run history only infers to
       // have ended is not ended by this read.
       const busy = inFlightId !== null || holdsInput(history);
-      const fromHistory = runsFromHistory(
+      // What the rows alone rebuild, the run the row says failed unseen failed too (#766).
+      const fromHistory = failedByRow(
+        runsFromHistory(
+          messages,
+          inFlight,
+          { ...ctx, raw: scratch },
+          { windowCut: history?.hasMore === true, busy },
+        ),
         messages,
-        inFlight,
-        { ...ctx, raw: scratch },
-        { windowCut: history?.hasMore === true, busy },
+        this.rows.get(key),
+        this.state.transcripts[key]?.queueAliases ?? {},
       );
       const current = this.state.transcripts[key] ?? this.emptyTranscript(key);
       const merge = mergeHistoryRuns(current.runs, fromHistory, ctx, busy);
