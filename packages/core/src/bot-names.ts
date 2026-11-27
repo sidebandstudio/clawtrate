@@ -551,7 +551,8 @@ type Applied = {
 
 const NOTHING_SENT = "The connection changed, so nothing was sent.";
 const NO_LONGER = "That change can no longer be undone.";
-const UNCONFIRMED = "Clawtrate couldn't read the bot list again, so this isn't confirmed.";
+const UNCONFIRMED = "Clawtrate couldn't read the bot list again, so Undo isn't confirmed.";
+const STILL = "Undo was sent, but the gateway still lists this name.";
 const UNRECORDED =
   "Clawtrate couldn't save this rename to the gateway's record yet, so its Undo and count may be missing.";
 
@@ -592,6 +593,11 @@ export class BotNames {
    * and bot, at most `MAX_NAME_CARDS`: read once, kept as they are.
    */
   private legacy: Map<string, string> | null = null;
+  /**
+   * This device's Undo claims left standing because their outcome couldn't be read
+   * (`MAX_NAME_CARDS`), by gateway and change: pressing Undo again takes the same claim.
+   */
+  private readonly heldUndos = new Map<string, string>();
   /** Moves on with every reset, so a read begun before it changes nothing after. */
   private epoch = 0;
 
@@ -1022,7 +1028,11 @@ export class BotNames {
         ...patch,
       });
     };
-    const opId = runTag(`undo\n${run}\n${this.ctx.now()}\n${Math.random()}`);
+    // A claim of this device's own, left by an Undo whose outcome it couldn't read, is taken again.
+    const held = `${stamp.gatewayId}\n${run}`;
+    const opId =
+      this.heldUndos.get(held) ?? runTag(`undo\n${run}\n${this.ctx.now()}\n${Math.random()}`);
+    this.heldUndos.delete(held);
     restore({ status: "undoing" });
     try {
       let sent = false;
@@ -1068,7 +1078,11 @@ export class BotNames {
         } catch (error) {
           // A refusal: nothing was written. Any other error: the answer was lost and the name
           // may be back, which the read below settles.
-          if (this.ctx.certainRefusal(error)) throw error;
+          // A refusal: nothing was written, and the claim goes, so Undo can be pressed again.
+          if (this.ctx.certainRefusal(error)) {
+            await this.release(op, opId, botId, run, false);
+            throw error;
+          }
           this.ctx.log(`no answer to ${botId}'s Undo: ${errorText(error)}`);
         }
         sent = true;
@@ -1089,13 +1103,19 @@ export class BotNames {
         () => false,
       ));
     if (!reread || !this.current(op)) {
-      restore({ status: "undone", after: null, error: UNCONFIRMED });
+      // Undo stays offered: pressed again, it takes this claim again.
+      this.heldUndos.set(held, opId);
+      if (this.heldUndos.size > MAX_NAME_CARDS)
+        this.heldUndos.delete(this.heldUndos.keys().next().value!);
+      restore({ status: "renamed", error: UNCONFIRMED });
       return;
     }
     // Said as it is.
     const after = this.ctx.bots().find((each) => each.id === botId)?.name ?? null;
     if (after !== change.from) {
-      await this.release({ stamp, generation: this.ctx.generation() }, opId, botId, run, false);
+      await this.release(op, opId, botId, run, false);
+      // Still the name the change gave: Undo didn't land, and stays offered.
+      if (after === change.to) return restore({ status: "renamed", error: STILL });
       restore({ status: "undone", after });
       return;
     }
@@ -1301,8 +1321,7 @@ export class BotNames {
         // Already this change's line; otherwise a refusal or failure it replaces, or now undone.
         const status = shown.line.status;
         if (!undone && (status === "renamed" || status === "undone")) continue;
-        // An Undo this device couldn't confirm gives way to the record's.
-        if (undone && status === "undone" && shown.line.error !== UNCONFIRMED) continue;
+        if (undone && status === "undone") continue;
       } else if (shown && shown.at > (latest.undone ?? latest.done ?? latest.at)) continue;
       this.setLine({
         botId: bot.id,

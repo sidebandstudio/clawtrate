@@ -1087,7 +1087,10 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
     await b.engine.afterRun("pip", KEY, "run-1");
     lost.state.update = "dropped";
     await b.engine.undo("pip", runTag("run-1"), "Pip", STAMP);
-    expect(b.line()).toMatchObject({ status: "undone", after: "Juniper" });
+    // Still the name the change gave: Undo stays offered, and says it didn't land.
+    expect(b.line()).toMatchObject({ status: "renamed", to: "Juniper" });
+    expect(b.line()!.error).toContain("still lists");
+    expect(undoable(b, lost)).toBe(true);
     expect(lost.kept().changes[0]!.undone).toBeUndefined();
     expect(lost.kept().claims).toEqual([]);
 
@@ -1111,7 +1114,8 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
           };
       };
       await c.engine.undo("pip", runTag("run-1"), "Pip", STAMP);
-      expect(c.line()).toMatchObject({ status: "undone", after: null });
+      // Not known to have landed: the line keeps its Undo, and says so.
+      expect(c.line()).toMatchObject({ status: "renamed", to: "Juniper" });
       expect(c.line()!.error).toContain("isn't confirmed");
       expect(unread.kept().declined).toEqual([]);
       expect(unread.kept().claims).toHaveLength(1);
@@ -1619,6 +1623,38 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
     gw.state.file = "- **Name:** Birch\n";
     await c.engine.afterRun("otto", KEY, "run-4");
     expect(gw.kept().changes.find((each) => each.bot === "pip")!.undone).toBe(NOW);
+  });
+
+  it("F-552: Undo can be pressed again: after a refusal its claim is let go, and after an unread outcome it takes its own claim again", async () => {
+    // Refused: nothing written, the claim goes, and a second press works.
+    const refused = gateway();
+    const a = device(refused);
+    await a.engine.afterRun("pip", KEY, "run-1");
+    refused.state.update = "refused";
+    await expect(a.engine.undo("pip", runTag("run-1"), "Pip", STAMP)).rejects.toThrow();
+    expect(refused.kept().claims).toEqual([]);
+    refused.state.update = "ok";
+    await a.engine.undo("pip", runTag("run-1"), "Pip", STAMP);
+    expect(refused.state.updates).toEqual(["Juniper", "Pip"]);
+
+    // No answer and no list: the claim stays, and pressing again takes it, not "busy".
+    const unread = gateway();
+    const b = device(unread);
+    await b.engine.afterRun("pip", KEY, "run-1");
+    unread.state.update = "dropped";
+    const listed = b.ctx.refreshBots;
+    unread.state.onUpdate = () =>
+      (b.ctx.refreshBots = async () => {
+        throw new Error("no answer");
+      });
+    await b.engine.undo("pip", runTag("run-1"), "Pip", STAMP);
+    expect(unread.kept().claims).toHaveLength(1);
+    b.ctx.refreshBots = listed;
+    unread.state.update = "ok";
+    await b.engine.undo("pip", runTag("run-1"), "Pip", STAMP);
+    expect(unread.state.updates).toEqual(["Juniper", "Pip"]);
+    expect(b.line()).toMatchObject({ status: "undone", after: "Pip" });
+    expect(unread.kept().claims).toEqual([]);
   });
 
   it("F-552: a claim's entry is never the one the record's room drops", () => {
