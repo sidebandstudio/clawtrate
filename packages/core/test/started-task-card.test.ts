@@ -483,11 +483,9 @@ describe("a task a bot starts shows as a card where it was asked (F-587)", () =>
     expect(cards(looksLike, listed("done"))[0]!.reportedBack).toBeNull();
   });
 
-  it("says nothing of a report whose run id the gateway's history redaction masked", () => {
+  it("matches the report when the gateway's history redaction masked part of its run id", () => {
     // Recorded on CI (OpenClaw 2026.10.6): the live run id, and the same id as `chat.history`
-    // gave it, a stretch from "893268" masked by the gateway's redaction. A later run's report in
-    // that task (the person's, on 2026.11.10) can keep the same characters around the mask, so a
-    // masked id doesn't say which run it reports.
+    // gave it, a stretch from "893268" masked by the gateway's redaction.
     const key = "agent:otto:dashboard:3a4879b7-2b95-4de8-b9b3-893268271164";
     const child = "324ec28d-e155-4f7f-9cdb-ba28ed88723c";
     const masked = "announce:v1:agent:otto:dashboard:3a4879b7-2b95-4de8-b9b3-893268…723c";
@@ -504,11 +502,36 @@ describe("a task a bot starts shows as a card where it was asked (F-587)", () =>
       ...startRows(VISIBLE, accepted),
       say(masked, T + 2_500, "Compare trail maps finished."),
     ];
-    expect(mapHistory(rows).at(-1)!.reportRunId).toBe(masked);
-    expect(cards(rows, { otto: [task] })[0]!.reportedBack).toBeNull();
-    // The exact id, once it is there, is this start's report.
-    const exact = [...rows, say(`announce:v1:${key}:${child}`, T + 3_000, "Finished.")];
-    expect(cards(exact, { otto: [task] })[0]!.reportedBack).toBe(mapHistory(exact).at(-1)!.id);
+    const [card] = cards(rows, { otto: [task] });
+    expect(card!.reportedBack).toBe(mapHistory(rows).at(-1)!.id);
+
+    // A follow-up to the same task whose run id the same mask also fits: two reports could be
+    // this one, so it is neither's.
+    const followUp = [
+      user("#follow-up", T + 3_000, "run-f"),
+      call("run-f", T + 3_100, "call_f", { sessionKey: key, message: "More." }, "sessions_send"),
+      result(
+        "run-f",
+        T + 3_200,
+        "call_f",
+        { runId: "9999aaaa-0000-4000-8000-00000000723c", status: "accepted", sessionKey: key },
+        false,
+        "sessions_send",
+      ),
+    ];
+    const both = [
+      ...startRows(VISIBLE, accepted),
+      ...followUp,
+      say(masked, T + 4_000, "Finished."),
+    ];
+    expect(cards(both, { otto: [task] })[0]!.reportedBack).toBeNull();
+
+    // A mask that another start's id fits, not this one's, is not this card's.
+    const other = "announce:v1:agent:otto:dashboard:0000aaaa-2b95-4de8-b9b3-893268…723c";
+    expect(
+      cards([...startRows(VISIBLE, accepted), say(other, T + 2_500, "Done.")], { otto: [task] })[0]!
+        .reportedBack,
+    ).toBeNull();
   });
 
   it("marks only a report turn with its run id", () => {
