@@ -119,8 +119,9 @@ export async function readGuidesLimits(
  * budgets are), so a device that has never seen the gateway knows a section removed on another
  * one was removed, and doesn't add it again. The device's own record can't carry that: it is kept
  * on the device. `full`: the bots didn't all fit, so a bot not listed has no known history.
+ * `folders`: the folder each bot was recorded in (`folderKeys`), as `GuidesRecord`'s.
  */
-export type GuidesHistory = { bots: string[]; full: boolean };
+export type GuidesHistory = { bots: string[]; full: boolean; folders?: Record<string, string> };
 export const GUIDES_HISTORY_KEY = "clawtrate.guides.history";
 /** The most the gateway keeps in one preference: 4,096 UTF-8 bytes of its JSON (`value-too-large`). */
 export const MAX_GUIDES_HISTORY_BYTES = 4_096;
@@ -157,19 +158,44 @@ export async function readGuidesHistory(request: Request): Promise<HistoryRead> 
   const bots = fields.bots
     .filter((bot): bot is string => typeof bot === "string" && bot !== "")
     .slice(0, MAX_GUIDES_HISTORY_BOTS);
+  const folders = foldersOf(fields.folders, bots);
   return {
     known: true,
-    history: { bots, full: fields.full === true || bots.length < fields.bots.length },
+    history: {
+      bots,
+      full: fields.full === true || bots.length < fields.bots.length,
+      ...(folders && { folders }),
+    },
     raw,
   };
 }
 
+/** A stored `folders`, for `bots` only; undefined when it holds none. */
+function foldersOf(value: unknown, bots: string[]): Record<string, string> | undefined {
+  const pairs = Object.entries(rec(value)).filter(
+    (pair): pair is [string, string] => typeof pair[1] === "string" && bots.includes(pair[0]),
+  );
+  return pairs.length > 0 ? Object.fromEntries(pairs) : undefined;
+}
+
 /** The history as written: as many bots as fit in one preference, and `full` when some don't. */
-export function fitGuidesHistory(history: GuidesHistory): { v: 1; bots: string[]; full?: true } {
+export function fitGuidesHistory(history: GuidesHistory): {
+  v: 1;
+  bots: string[];
+  full?: true;
+  folders?: Record<string, string>;
+} {
   const bots = [...new Set(history.bots)].slice(0, MAX_GUIDES_HISTORY_BOTS);
   let full = history.full || bots.length < new Set(history.bots).size;
-  const value = () =>
-    full ? { v: 1 as const, bots, full: true as const } : { v: 1 as const, bots };
+  const value = () => {
+    const folders = foldersOf(history.folders, bots);
+    return {
+      v: 1 as const,
+      bots,
+      ...(full && { full: true as const }),
+      ...(folders && { folders }),
+    };
+  };
   while (utf8Bytes(JSON.stringify(value())).length > MAX_GUIDES_HISTORY_BYTES) {
     bots.pop();
     full = true;
@@ -408,6 +434,12 @@ export type GuidesRecord = {
    * switch on.
    */
   refused?: Record<string, string>;
+  /**
+   * The folder each of `bots` was recorded in (`folderKeys`): a bot that reads another folder
+   * now has no history there. A bot without one, recorded before folders were kept, counts in
+   * any folder, as it did then.
+   */
+  folders?: Record<string, string>;
 };
 
 /** Where this device keeps its record for a gateway, by the gateway's identity. */
@@ -535,18 +567,32 @@ export async function changeGuideFile(
   }
 }
 
-/** Each bot's workspace folder, as `agents.list` names it; a bot without one stands alone. */
-export function guideFolders(agents: unknown): string[][] {
-  const groups = new Map<string, string[]>();
+/**
+ * Each bot's workspace folder, as `agents.list` names it, as 16 hex digits of its hash, so a
+ * record's entry has a fixed size; a bot without one stands alone.
+ */
+function folderKeys(agents: unknown): Map<string, string> {
+  const keys = new Map<string, string>();
   for (const agent of Array.isArray(rec(agents).agents) ? (rec(agents).agents as unknown[]) : []) {
     const id = rec(agent).id;
     if (typeof id !== "string" || id === "") continue;
     const workspace = rec(agent).workspace;
     const key = typeof workspace === "string" && workspace !== "" ? `w:${workspace}` : `b:${id}`;
-    groups.set(key, [...(groups.get(key) ?? []), id]);
+    keys.set(id, hash(key).slice(0, 16));
   }
+  return keys;
+}
+
+/** The bots that read each folder (`folderKeys`): bots can share a workspace folder. */
+export function guideFolders(agents: unknown): string[][] {
+  const groups = new Map<string, string[]>();
+  for (const [id, key] of folderKeys(agents)) groups.set(key, [...(groups.get(key) ?? []), id]);
   return [...groups.values()];
 }
+
+/** Whether a bot recorded in `folder` was recorded in the one it reads now; no folder is any. */
+const sameFolder = (where: Map<string, string>, bot: string, folder: string | undefined) =>
+  (folder ?? where.get(bot)) === where.get(bot);
 
 /**
  * The state of each folder's file, read now; `record` tells removed from never there, and keeps
@@ -561,11 +607,16 @@ export async function readGuideFolders(
     readGuidesHistory(request),
   ]);
   const folders = guideFolders(listed);
+  const where = folderKeys(listed);
   const limits = await readGuidesLimits(request, folders.flat());
   // A bot another of this person's devices recorded counts as one this device knew, while on.
+  // Each counts only in the folder it was recorded in: a bot moved to another has none there.
   const knew = (bot: string) =>
-    record?.bots.includes(bot) === true ||
-    (record?.on !== false && history.known && history.history.bots.includes(bot));
+    (record?.bots.includes(bot) === true && sameFolder(where, bot, record.folders?.[bot])) ||
+    (record?.on !== false &&
+      history.known &&
+      history.history.bots.includes(bot) &&
+      sameFolder(where, bot, history.history.folders?.[bot]));
   const refusedOf = (bots: string[]) =>
     bots.map((bot) => record?.refused?.[bot]).find((reason) => reason !== undefined) ?? null;
   return Promise.all(
@@ -637,9 +688,13 @@ export function parseGuidesRecord(value: string | null): GuidesRecord | null {
       const refused = Object.entries(rec(fields.refused)).filter(
         (pair): pair is [string, string] => typeof pair[1] === "string",
       );
-      return refused.length > 0
-        ? { on: true, bots, refused: Object.fromEntries(refused.slice(0, 512)) }
-        : { on: true, bots };
+      const folders = foldersOf(fields.folders, bots);
+      return {
+        on: true,
+        bots,
+        ...(refused.length > 0 && { refused: Object.fromEntries(refused.slice(0, 512)) }),
+        ...(folders && { folders }),
+      };
     }
     return fields.on === undefined && typeof fields.newBots === "boolean"
       ? { on: true, bots }
@@ -742,17 +797,30 @@ export async function applyGuidesChange(
     };
   if (on && change.action === "remove")
     return { record, errors: [GUIDES_ON], wrote: false, missing: [] };
-  const folders = guideFolders(await request("agents.list", {}));
+  const listedAgents = await request("agents.list", {});
+  const folders = guideFolders(listedAgents);
+  const where = folderKeys(listedAgents);
   // The gateway's history of the bots that held the section, from any of this person's devices.
   const history = await readGuidesHistory(request);
   const elsewhere = new Set(history.known ? history.history.bots : []);
+  /** A bot the history recorded in the folder it reads now. */
+  const elsewhereHere = (bot: string) =>
+    elsewhere.has(bot) &&
+    sameFolder(where, bot, history.known ? history.history.folders?.[bot] : undefined);
   /** Whether a folder's history is known: a bot not in a history that is full has none. */
   const historyKnown = (bots: string[]) =>
     history.known && (!history.history.full || bots.some((bot) => elsewhere.has(bot)));
   /** Bots whose folder held a marked section in this change, for the gateway's history. */
   const held = new Set<string>();
   const errors: string[] = [];
-  const kept = new Set(on ? (record?.bots ?? []) : []);
+  /** The bots this device knows held the section, each with the folder it held it in. */
+  const kept = new Map(
+    (on ? (record?.bots ?? []) : []).map((bot) => [bot, record?.folders?.[bot]] as const),
+  );
+  const keep = (bot: string) => kept.set(bot, where.get(bot));
+  const keptHere = (bot: string) => kept.has(bot) && sameFolder(where, bot, kept.get(bot));
+  const foldersIn = (bots: string[], of: (bot: string) => string | undefined) =>
+    Object.fromEntries(bots.flatMap((bot) => (of(bot) === undefined ? [] : [[bot, of(bot)!]])));
   /** Only bots still on the gateway's list are kept, so the record holds no deleted bot's id. */
   const onList = new Set(folders.flat());
   const listed = (bots: string[]) => bots.filter((bot) => onList.has(bot));
@@ -767,9 +835,14 @@ export async function applyGuidesChange(
   /** The record this change leaves, while the switch is on. */
   const onRecord = (): GuidesRecord => {
     const left = [...refused].filter(([bot]) => onList.has(bot));
-    return left.length > 0
-      ? { on: true, bots: listed([...kept]), refused: Object.fromEntries(left) }
-      : { on: true, bots: listed([...kept]) };
+    const bots = listed([...kept.keys()]);
+    const folders = foldersIn(bots, (bot) => kept.get(bot));
+    return {
+      on: true,
+      bots,
+      ...(left.length > 0 && { refused: Object.fromEntries(left) }),
+      ...(Object.keys(folders).length > 0 && { folders }),
+    };
   };
   /** Change one folder's file; whether it holds Clawtrate's section, or any marked one, after. */
   const each = async (
@@ -815,13 +888,15 @@ export async function applyGuidesChange(
       await saveGuidesHistory(request, history, (was) =>
         change.action === "switch" && change.on
           ? {
-              bots: [
-                ...[...kept].filter((bot) => onList.has(bot)),
-                ...was.bots.filter((bot) => !onList.has(bot)),
-              ],
+              bots: [...listed([...kept.keys()]), ...was.bots.filter((bot) => !onList.has(bot))],
               full: false,
+              folders: { ...was.folders, ...foldersIn([...kept.keys()], (bot) => kept.get(bot)) },
             }
-          : { bots: [...was.bots, ...held], full: was.full },
+          : {
+              bots: [...was.bots, ...held],
+              full: was.full,
+              folders: { ...was.folders, ...foldersIn([...held], (bot) => where.get(bot)) },
+            },
       );
     return result;
   };
@@ -855,6 +930,7 @@ export async function applyGuidesChange(
     const saved = await saveGuidesHistory(request, history, (was) => ({
       bots: [...was.bots, ...holding.flat()],
       full: was.full,
+      folders: { ...was.folders, ...foldersIn(holding.flat(), (bot) => where.get(bot)) },
     }));
     return saved ? holding : null;
   }
@@ -905,7 +981,7 @@ export async function applyGuidesChange(
               return withSection(file);
             },
       );
-      if (ours) for (const bot of bots) kept.add(bot);
+      if (ours) for (const bot of bots) keep(bot);
     }
     return finish({ record: onRecord(), errors, wrote, missing });
   }
@@ -933,7 +1009,7 @@ export async function applyGuidesChange(
     // known, nothing is added by itself, since the section may have been removed elsewhere: it
     // is tried again at the next occasion. Turning the switch on asks for it on every bot.
     const byItself = change.action === "auto";
-    let known = bots.some((bot) => kept.has(bot) || (byItself && elsewhere.has(bot)));
+    let known = bots.some((bot) => keptHere(bot) || (byItself && elsewhereHere(bot)));
     const unknown = byItself && !historyKnown(bots);
     const { marked } = await each(
       bots,
@@ -947,7 +1023,7 @@ export async function applyGuidesChange(
     );
     if (marked || known)
       for (const bot of bots) {
-        kept.add(bot);
+        keep(bot);
         held.add(bot);
       }
   }

@@ -1247,6 +1247,8 @@ describe("a bot made in New bot starts as itself, without OpenClaw's first-run q
         expect(JSON.parse(storage.data.get(guidesKey("gw-guides"))!)).toEqual({
           on: true,
           bots: ["viral"],
+          // The gateway names no workspace for it, so its folder is its own.
+          folders: { viral: sha256("b:viral").slice(0, 16) },
         });
       client.stop();
     }

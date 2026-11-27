@@ -50,6 +50,9 @@ import { FAST } from "./client-harness.ts";
 import { URL_A } from "./client-harness.ts";
 
 const hash = (text: string) => sha256Hex(utf8Bytes(text));
+/** The folders a record keeps for `bots` of `fakeFiles`: each reads `/w/<its name>`, or `shared`'s. */
+const at = (bots: string[], shared: Record<string, string> = {}) =>
+  Object.fromEntries(bots.map((bot) => [bot, hash(`w:/w/${shared[bot] ?? bot}`).slice(0, 16)]));
 /** What the section adds to each prompt, with the blank line after it. */
 const GUIDES_SIZE = GUIDES_SECTION.length + 1;
 const BOT_FILE = "# AGENTS.md\n\nYou help with the house.\n- Be brief.\n";
@@ -288,7 +291,11 @@ describe("the switch and the rows' changes", () => {
     const files = fakeFiles({ pip: BOT_FILE, shared: BOT_FILE, otto: BOT_FILE }, { shared: "pip" });
     const result = await applyGuidesChange(files.request, null, { action: "add", bots: ["pip"] });
     expect(result).toEqual({
-      record: { on: true, bots: ["pip", "shared"] },
+      record: {
+        on: true,
+        bots: ["pip", "shared"],
+        folders: at(["pip", "shared"], { shared: "pip" }),
+      },
       errors: [],
       wrote: true,
       missing: [],
@@ -439,7 +446,7 @@ describe("the switch and the rows' changes", () => {
     expect(files.store.get("otto")).toBe(BOT_FILE);
     expect(files.sets).toEqual([]);
     // Recorded as one it saw, so the next change leaves it too.
-    expect(result.record).toEqual({ on: true, bots: ["otto"] });
+    expect(result.record).toEqual({ on: true, bots: ["otto"], folders: at(["otto"]) });
     await applyGuidesChange(request, result.record, { action: "auto" });
     expect(files.store.get("otto")).toBe(BOT_FILE);
   });
@@ -455,7 +462,7 @@ describe("the switch and the rows' changes", () => {
         (await applyGuidesChange(files.request, { on: true, bots: ["gone", "pip"] }, change))
           .record,
         change.action,
-      ).toEqual({ on: true, bots: ["pip"] });
+      ).toEqual({ on: true, bots: ["pip"], folders: at(["pip"]) });
   });
 
   it("keeps a record it can read back, and refuses one it can't", () => {
@@ -647,15 +654,23 @@ describe("the switch and the rows' changes", () => {
     // Device A adds it, and the gateway's history says Pip had it.
     const a = await applyGuidesChange(files.request, null, { action: "auto" });
     expect(files.store.get("pip")).toBe(withSection(BOT_FILE));
-    expect(files.prefs.entries.get(GUIDES_HISTORY_KEY)).toEqual({ v: 1, bots: ["pip"] });
+    expect(files.prefs.entries.get(GUIDES_HISTORY_KEY)).toEqual({
+      v: 1,
+      bots: ["pip"],
+      folders: at(["pip"]),
+    });
     // Device A turns it off: the section comes out, and the history still has Pip.
     await applyGuidesChange(files.request, a.record, { action: "switch", on: false });
     expect(files.store.get("pip")).toBe(BOT_FILE);
-    expect(files.prefs.entries.get(GUIDES_HISTORY_KEY)).toEqual({ v: 1, bots: ["pip"] });
+    expect(files.prefs.entries.get(GUIDES_HISTORY_KEY)).toEqual({
+      v: 1,
+      bots: ["pip"],
+      folders: at(["pip"]),
+    });
     // Device B has no record of this gateway: it writes nothing, and shows Pip's as removed.
     const b = await applyGuidesChange(files.request, null, { action: "auto" });
     expect(files.sets).toHaveLength(2);
-    expect(b.record).toEqual({ on: true, bots: ["pip"] });
+    expect(b.record).toEqual({ on: true, bots: ["pip"], folders: at(["pip"]) });
     const [folder] = await readGuideFolders(files.request, null);
     expect(folder?.state).toBe("removed");
     // A section this device knew from before the gateway kept a history: Off records it there.
@@ -665,11 +680,19 @@ describe("the switch and the rows' changes", () => {
       { on: true, bots: ["otto"] },
       { action: "switch", on: false },
     );
-    expect(before.prefs.entries.get(GUIDES_HISTORY_KEY)).toEqual({ v: 1, bots: ["otto"] });
+    expect(before.prefs.entries.get(GUIDES_HISTORY_KEY)).toEqual({
+      v: 1,
+      bots: ["otto"],
+      folders: at(["otto"]),
+    });
     // Turning the switch on there asks for it on every bot, and starts the history again.
     await applyGuidesChange(files.request, null, { action: "switch", on: true });
     expect(files.store.get("pip")).toBe(withSection(BOT_FILE));
-    expect(files.prefs.entries.get(GUIDES_HISTORY_KEY)).toEqual({ v: 1, bots: ["pip"] });
+    expect(files.prefs.entries.get(GUIDES_HISTORY_KEY)).toEqual({
+      v: 1,
+      bots: ["pip"],
+      folders: at(["pip"]),
+    });
   });
 
   it("turning it on keeps a bot another device recorded meanwhile, when its save tries again", async () => {
@@ -686,7 +709,11 @@ describe("the switch and the rows' changes", () => {
     };
     await applyGuidesChange(racing, offRecord(), { action: "switch", on: true });
     expect(files.store.get("pip")).toBe(withSection(BOT_FILE));
-    expect(files.prefs.entries.get(GUIDES_HISTORY_KEY)).toEqual({ v: 1, bots: ["pip", "otto"] });
+    expect(files.prefs.entries.get(GUIDES_HISTORY_KEY)).toEqual({
+      v: 1,
+      bots: ["pip", "otto"],
+      folders: at(["pip"]),
+    });
   });
 
   it("a removal is recorded on the gateway first: when that fails, nothing is taken out, and it says so", async () => {
@@ -732,7 +759,11 @@ describe("the switch and the rows' changes", () => {
       },
     );
     // The history says Pip had it; the section is still there, and the change says why.
-    expect(files.prefs.entries.get(GUIDES_HISTORY_KEY)).toEqual({ v: 1, bots: ["pip"] });
+    expect(files.prefs.entries.get(GUIDES_HISTORY_KEY)).toEqual({
+      v: 1,
+      bots: ["pip"],
+      folders: at(["pip"]),
+    });
     expect(files.store.get("pip")).toBe(withSection(BOT_FILE));
     expect(off.errors).toEqual(["pip: Workspace document exceeds its write bound"]);
     // This device is off, so nothing is added; its row says the section is still there.
@@ -745,6 +776,33 @@ describe("the switch and the rows' changes", () => {
     expect(files.store.get("pip")).toBe(BOT_FILE);
     await applyGuidesChange(files.request, null, { action: "auto" });
     expect(files.store.get("pip")).toBe(BOT_FILE);
+  });
+
+  it("a bot moved to a new, empty folder never had the section there: it isn't removed, and is added by itself", async () => {
+    const workspaces: Record<string, string> = {};
+    const files = fakeFiles({ pip: BOT_FILE }, workspaces);
+    const a = await applyGuidesChange(files.request, null, { action: "auto" });
+    expect(files.store.get("pip")).toBe(withSection(BOT_FILE));
+    workspaces.pip = "fresh";
+    files.store.set("fresh", BOT_FILE);
+    // Neither this device's record nor the gateway's history knew it in this folder.
+    expect((await readGuideFolders(files.request, a.record))[0]?.state).toBe("none");
+    expect((await readGuideFolders(files.request, null))[0]?.state).toBe("none");
+    const moved = await applyGuidesChange(files.request, a.record, { action: "auto" });
+    expect(files.store.get("fresh")).toBe(withSection(BOT_FILE));
+    expect(moved.record).toEqual({ on: true, bots: ["pip"], folders: at(["pip"], workspaces) });
+  });
+
+  it("a record from before folders were kept reads a bot without its section as removed, in any folder", async () => {
+    const files = fakeFiles({ pip: BOT_FILE }, { pip: "fresh" });
+    files.store.set("fresh", BOT_FILE);
+    expect((await readGuideFolders(files.request, { on: true, bots: ["pip"] }))[0]?.state).toBe(
+      "removed",
+    );
+    files.prefs.entries.set(GUIDES_HISTORY_KEY, { v: 1, bots: ["pip"] });
+    expect((await readGuideFolders(files.request, null))[0]?.state).toBe("removed");
+    await applyGuidesChange(files.request, null, { action: "auto" });
+    expect(files.sets).toEqual([]);
   });
 
   it("by itself, adds nothing to a folder whose history the gateway can't say; turning it on, or Add, still does", async () => {
@@ -806,6 +864,7 @@ describe("the switch and the rows' changes", () => {
       on: true,
       bots: ["pip", "shared"],
       refused: { otto: "refused" },
+      folders: at(["pip", "shared"], { shared: "pip" }),
     });
   });
 
@@ -836,6 +895,7 @@ describe("the switch and the rows' changes", () => {
       on: true,
       bots: ["otto"],
       refused: { pip: "Workspace document exceeds its write bound" },
+      folders: at(["otto"]),
     });
     const [folder] = await readGuideFolders(files.request, first.record);
     expect(folder).toMatchObject({
@@ -864,7 +924,7 @@ describe("the switch and the rows' changes", () => {
       action: "add",
       bots: ["pip"],
     });
-    expect(added.record).toEqual({ on: true, bots: ["otto", "pip"] });
+    expect(added.record).toEqual({ on: true, bots: ["otto", "pip"], folders: at(["otto", "pip"]) });
     const switched = fakeFiles({ pip: BOT_FILE });
     await applyGuidesChange(switched.request, first.record, { action: "switch", on: true });
     expect(switched.sets.map((set) => set.agentId)).toEqual(["pip"]);
@@ -878,7 +938,7 @@ describe("the switch and the rows' changes", () => {
     expect(first.record).toEqual({ on: true, bots: [] });
     const again = await applyGuidesChange(files.request, first.record, { action: "auto" });
     expect(files.store.get("pip")).toBe(withSection(BOT_FILE));
-    expect(again.record).toEqual({ on: true, bots: ["pip"] });
+    expect(again.record).toEqual({ on: true, bots: ["pip"], folders: at(["pip"]) });
   });
 
   it("remembers as a refusal only a lasting answer that isn't UNAVAILABLE", () => {
@@ -1014,7 +1074,11 @@ describe("the guides in the client", () => {
       expect(files.store.get("pip")).toBe(withSection(BOT_FILE));
       expect(files.store.get("otto")).toBeNull();
       expect(files.sets).toHaveLength(1);
-      expect(recordIn(storage)).toEqual({ on: true, bots: ["pip", "shared"] });
+      expect(recordIn(storage)).toEqual({
+        on: true,
+        bots: ["pip", "shared"],
+        folders: at(["pip", "shared"], { shared: "pip" }),
+      });
       // Again on the next connect: nothing left to write.
       await reconnect(client, gateway, storage);
       expect(files.sets).toHaveLength(1);
@@ -1061,7 +1125,11 @@ describe("the guides in the client", () => {
       // It can't tell a bot never given the section from one cleared elsewhere: Otto gets it.
       expect(files.store.get("otto")).toBe(withSection(BOT_FILE));
       expect(files.store.get("marlow")).toBe(changed);
-      expect(recordIn(storage)).toEqual({ on: true, bots: ["pip", "otto", "marlow"] });
+      expect(recordIn(storage)).toEqual({
+        on: true,
+        bots: ["pip", "otto", "marlow"],
+        folders: at(["pip", "otto", "marlow"]),
+      });
       // Someone takes Pip's and Marlow's out outside Clawtrate: from now on this device's record
       // applies to both.
       files.store.set("pip", BOT_FILE);
@@ -1119,7 +1187,11 @@ describe("the guides in the client", () => {
       await reconnect(client, gateway, storage);
       expect(files.store.get("pip")).toBe(BOT_FILE);
       const again = await client.changeBotGuides({ action: "switch", on: true }, off.stamp);
-      expect(again.record).toEqual({ on: true, bots: ["pip", "otto"] });
+      expect(again.record).toEqual({
+        on: true,
+        bots: ["pip", "otto"],
+        folders: at(["pip", "otto"]),
+      });
       expect(again.folders.map((f) => f.state)).toEqual(["current", "current"]);
     } finally {
       client.stop();
@@ -1179,7 +1251,7 @@ describe("the guides in the client", () => {
     // Pip's section was removed outside Clawtrate; Otto's file doesn't exist yet, so Clawtrate's
     // own change leaves it, and only the person's Add makes it.
     const files = fakeFiles({ pip: BOT_FILE, otto: null });
-    const storage = diskFull({ on: true, bots: ["pip"] });
+    const storage = diskFull({ on: true, bots: ["pip"], folders: at(["pip"]) });
     const { client, gateway } = await openTask({ storage });
     withFiles(gateway, files);
     try {
@@ -1214,7 +1286,11 @@ describe("the guides in the client", () => {
         ["otto", "removed"],
       ]);
       expect(after.errors).toEqual([]);
-      expect(recordIn(storage)).toEqual({ on: true, bots: ["pip", "otto"] });
+      expect(recordIn(storage)).toEqual({
+        on: true,
+        bots: ["pip", "otto"],
+        folders: at(["pip", "otto"]),
+      });
       // A stale screen's stamp sends nothing.
       await expect(
         client.changeBotGuides(
@@ -1319,7 +1395,7 @@ describe("the guides in the client", () => {
         agentEvent("run-1", 1, "lifecycle", { phase: "end" }, "agent:otto:main"),
       );
       await until(() => files.store.get("otto") === withSection("# Otto's template\n"));
-      expect(recordIn(storage)).toEqual({ on: true, bots: ["otto"] });
+      expect(recordIn(storage)).toEqual({ on: true, bots: ["otto"], folders: at(["otto"]) });
     } finally {
       client.stop();
     }
@@ -1344,7 +1420,11 @@ describe("the guides in the client", () => {
       await until(() => refusals === 2);
       await until(() => files.sets.length === 2, 8_000);
       expect(files.store.get("pip")).toBe(withSection(BOT_FILE));
-      expect(recordIn(storage)).toEqual({ on: true, bots: ["pip", "otto"] });
+      expect(recordIn(storage)).toEqual({
+        on: true,
+        bots: ["pip", "otto"],
+        folders: at(["pip", "otto"]),
+      });
     } finally {
       client.stop();
     }
@@ -1505,7 +1585,11 @@ describe("the guides in the client", () => {
       // Turned on there: that gateway's own record says on, and the default stays.
       const on = await client.changeBotGuides({ action: "switch", on: true }, there.stamp);
       expect(JSON.parse(storage.data.get(GUIDES_DEFAULT_KEY)!)).toEqual({ on: false, bots: [] });
-      expect(recordIn(storage, "gw-b")).toEqual({ on: true, bots: ["otto"] });
+      expect(recordIn(storage, "gw-b")).toEqual({
+        on: true,
+        bots: ["otto"],
+        folders: at(["otto"]),
+      });
       expect(on.inherited).toBe(false);
       expect(on.folders[0]?.state).toBe("current");
       // A gateway with a record of its own keeps it whatever the default says.
@@ -2090,7 +2174,7 @@ describe("the sections earlier builds wrote", () => {
         const result = await applyGuidesChange(files.request, null, { action: "auto" });
         expect(result.errors).toEqual([]);
         expect(files.store.get("pip")).toBe(GUIDES_SECTION + below);
-        expect(result.record).toEqual({ on: true, bots: ["pip"] });
+        expect(result.record).toEqual({ on: true, bots: ["pip"], folders: at(["pip"]) });
         expect((await readGuideFolders(files.request, result.record))[0]?.state).toBe("current");
       }
   });
@@ -2136,7 +2220,11 @@ describe("the sections earlier builds wrote", () => {
       // Another device wrote it, recorded it in the gateway's history, and it was taken out since.
       const elsewhere = fakeFiles({ pip: `${section}\n${BOT_FILE}` });
       await applyGuidesChange(elsewhere.request, null, { action: "auto" });
-      expect(elsewhere.prefs.entries.get(GUIDES_HISTORY_KEY)).toEqual({ v: 1, bots: ["pip"] });
+      expect(elsewhere.prefs.entries.get(GUIDES_HISTORY_KEY)).toEqual({
+        v: 1,
+        bots: ["pip"],
+        folders: at(["pip"]),
+      });
       elsewhere.store.set("pip", BOT_FILE);
       const before = elsewhere.sets.length;
       await applyGuidesChange(elsewhere.request, null, { action: "auto" });
