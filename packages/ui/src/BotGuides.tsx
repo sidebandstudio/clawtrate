@@ -38,6 +38,8 @@ export function guideRow(
   // A file that isn't plain UTF-8 is never written: it says so, and offers nothing that writes.
   const notUtf8 = `${label}'s AGENTS.md isn't plain UTF-8 text, so Clawtrate can't change it. Save it as UTF-8 and Clawtrate can add, update or remove its section again.`;
   const long = `Its instructions are long: with this section, the gateway may leave part of them out of ${label}'s prompt, so Clawtrate doesn't add it by itself.`;
+  const spelledApart =
+    "Its bots' settings write this folder's path with different capital letters, so Clawtrate adds or updates its section only when you ask.";
   switch (folder.state) {
     case null:
       return {
@@ -57,9 +59,7 @@ export function guideRow(
           action: can("remove"),
         };
       return {
-        words: folder.long
-          ? "An older version. Its instructions are long, so Clawtrate doesn't update it by itself."
-          : "An older version.",
+        words: `${folder.spelledApart ? spelledApart : "An older version."}${folder.long ? " Its instructions are long, so Clawtrate doesn't update it by itself." : ""}`,
         action: can("update"),
       };
     case "changed":
@@ -80,6 +80,12 @@ export function guideRow(
     case "none":
       if (!on) return null;
       if (!folder.utf8) return { words: notUtf8, action: null };
+      // Add bypasses the length check, so a long file still says so here.
+      if (folder.spelledApart)
+        return {
+          words: folder.long ? `${spelledApart} ${long}` : spelledApart,
+          action: can("add"),
+        };
       // The gateway writes its own instructions into a missing file on the bot's next run, and
       // only while it is missing: Clawtrate waits for that.
       if (folder.missing)

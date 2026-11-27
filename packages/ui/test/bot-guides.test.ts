@@ -44,6 +44,7 @@ describe("a bot's row", () => {
     utf8: true,
     missing: false,
     refused: null,
+    spelledApart: false,
     changedText: null,
     error: null,
     ...over,
@@ -105,6 +106,21 @@ describe("a bot's row", () => {
       words: "Couldn't read its instructions file. missing scope: operator.read",
       action: null,
     });
+  });
+
+  it("F-566: a folder written with different capitals that is long says both", () => {
+    const spelledApart =
+      "Its bots' settings write this folder's path with different capital letters, so Clawtrate adds or updates its section only when you ask.";
+    expect(row({ state: "none", spelledApart: true, long: true })).toEqual({
+      words: `${spelledApart} Its instructions are long: with this section, the gateway may leave part of them out of Pip's prompt, so Clawtrate doesn't add it by itself.`,
+      action: "add",
+    });
+    expect(row({ state: "older", spelledApart: true, long: true })).toEqual({
+      words: `${spelledApart} Its instructions are long, so Clawtrate doesn't update it by itself.`,
+      action: "update",
+    });
+    expect(row({ state: "none", spelledApart: true })?.words).toBe(spelledApart);
+    expect(row({ state: "older", spelledApart: true })?.words).toBe(spelledApart);
   });
 });
 
