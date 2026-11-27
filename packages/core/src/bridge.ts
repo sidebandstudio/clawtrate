@@ -17,6 +17,7 @@ import { hostLimit, MAX_MESSAGE_CHARS, type ClawtrateClient } from "./client.ts"
 import type { CheckoutDiff, FileRead, TaskFileList, WorkspacePage } from "./files.ts";
 import type { ChatPictureRead, SentPictureRead } from "./pictures.ts";
 import type { ChatFileRead } from "./chat-files.ts";
+import { MAX_BOT_NAME_CHARS } from "./bot-names.ts";
 import { modelIdProblem, type ModelList, type ModelRefresh } from "./accounts.ts";
 import { parseInput, type ComputerFrame, type ComputerInput } from "./computer.ts";
 import type { MachineFacts } from "./machine.ts";
@@ -413,9 +414,10 @@ export type BridgeCommand =
     }
   /**
    * Undo a name a bot took, for the change `run` names (`ClawtrateState.botNames`,
-   * `botNameRecord`), and put a name line away on this device.
+   * `botNameRecord`), putting back `from`, the name its button showed; and put a name line away
+   * on this device.
    */
-  | { type: "undoBotName"; botId: string; run: string; stamp: GatewayStamp }
+  | { type: "undoBotName"; botId: string; run: string; from: string; stamp: GatewayStamp }
   | { type: "dismissBotName"; botId: string }
   /**
    * Update OpenClaw, after its confirmation (`ClawtrateState.openclawUpdating`): sent only to the
@@ -1373,6 +1375,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         type: "undoBotName",
         botId: botId(command.botId),
         run: shortText(command.run, 16, "change"),
+        from: shortText(command.from, MAX_BOT_NAME_CHARS * 2, "name"),
         stamp: gatewayStampOf(command.stamp),
       };
     case "dismissBotName":
@@ -2318,7 +2321,7 @@ class ViewerSession implements BridgeSession {
           command.stamp,
         );
       case "undoBotName":
-        return client.undoBotName(command.botId, command.run, command.stamp);
+        return client.undoBotName(command.botId, command.run, command.from, command.stamp);
       case "dismissBotName":
         return client.dismissBotName(command.botId);
       case "startOpenClawUpdate":

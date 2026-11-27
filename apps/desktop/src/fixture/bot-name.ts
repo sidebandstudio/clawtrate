@@ -3,9 +3,10 @@
 // recorded `#take-name`: the bot reads its IDENTITY.md and edits the
 // `- Name:` line. The line is the state the engine publishes then
 // (`botNames`), with the record of changes it read (`botNameRecord`):
-// `bot-name` renamed as asked, `bot-name-own` renamed by the bot after reading
-// a file, `bot-name-undone` put back, and in `bot-name-read-only` the
-// connection lacks admin, so nothing was renamed.
+// `bot-name` renamed as the person's own ask, `bot-name-own` renamed by the
+// bot after reading a file, `bot-name-file` a name picked up from the file with
+// no write of the run's, `bot-name-undone` put back, and in
+// `bot-name-read-only` the connection lacks admin, so nothing was renamed.
 
 import {
   ADMIN_SCOPES,
@@ -25,6 +26,7 @@ import { OPEN_TASK } from "./data.ts";
 export const BOT_NAME_SCENES = [
   "bot-name",
   "bot-name-own",
+  "bot-name-file",
   "bot-name-undone",
   "bot-name-read-only",
 ] as const;
@@ -121,7 +123,7 @@ export function botNameScene(
   const history = rows(start);
   const ctx: EngineContext = { sessionKey: NAMED_TASK, now, raw: new RawTable() };
   const admin = name !== "bot-name-read-only";
-  const renamed = name === "bot-name" || name === "bot-name-own";
+  const renamed = name === "bot-name" || name === "bot-name-own" || name === "bot-name-file";
   const stamp = gatewayStamp(base.connection);
   const run = runTag("3c1f4b7e-9a2d-4e51-8f0b-6d2a7c9e1b40");
   const line: NameLine = {
@@ -130,10 +132,11 @@ export function botNameScene(
     to: "Johnny",
     stamp,
     run,
-    asked: name === "bot-name",
+    whose: name === "bot-name" ? "person" : name === "bot-name-file" ? "file" : "bot",
     source: name === "bot-name-own" ? "file" : null,
     status: admin ? (renamed ? "renamed" : "undone") : "not-done",
     reason: admin ? null : "no-admin",
+    after: renamed || !admin ? null : "New bot",
     error: null,
   };
   const at = start + 33 * SECOND;
@@ -200,8 +203,9 @@ export function botNameScene(
               to: "Johnny",
               at,
               run,
-              asked: line.asked,
+              whose: line.whose,
               source: line.source,
+              file: runTag(FILE),
               done: at,
               ...(renamed ? {} : { undone: at + 60 * SECOND }),
             },
@@ -235,6 +239,12 @@ export function botNameCommand(
   const bot = state.bots.find((each) => each.id === command.botId);
   if (!record || !change || change.undone !== undefined || bot?.name !== change.to)
     return Promise.reject(new Error("That change can no longer be undone."));
+  if (change.from !== command.from)
+    return Promise.reject(
+      new Error(
+        `That change now puts back ${change.from}, not ${command.from}, so nothing was sent.`,
+      ),
+    );
   if (!sameStamp(gatewayStamp(state.connection), command.stamp))
     return Promise.reject(
       new Error("This change was read on another gateway, so nothing was sent."),
@@ -246,7 +256,7 @@ export function botNameCommand(
       each.id === command.botId ? { ...each, name: change.from } : each,
     ),
     botNames: (state.botNames ?? []).map((each) =>
-      each.run === command.run ? { ...each, status: "undone" } : each,
+      each.run === command.run ? { ...each, status: "undone", after: change.from } : each,
     ),
     botNameRecord: {
       ...record,

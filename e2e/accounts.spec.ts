@@ -532,10 +532,14 @@ test("F-552: a bot made in New bot takes a name in the chat and is renamed at on
       timeout: 60_000,
     });
 
-    // The person's ask: renamed at once, the line says what happened, and Undo is offered.
+    // Renamed at once, and Undo is offered. The scripted bot reads its IDENTITY.md before it
+    // edits it, and a read of that file counts as reading a file: the line is the bot's own.
     await field.fill("#take-name Johnny");
     await field.press("Enter");
-    await expect(line.getByRole("status")).toHaveText("Renamed to Johnny", { timeout: 60_000 });
+    await expect(line.getByRole("status")).toHaveText(
+      "New bot renamed itself to Johnny after reading a file",
+      { timeout: 60_000 },
+    );
     expect(await identity()).toBe("Johnny");
     const file = String((await workspaceFile("new-bot", "IDENTITY.md")).content);
     expect(file).toMatch(/^- Name: Johnny$/m);
@@ -546,35 +550,39 @@ test("F-552: a bot made in New bot takes a name in the chat and is renamed at on
     // The second client shows the first one's change, and made none of its own.
     await expect
       .poll(() => second.state.botNames?.[0], { timeout: 30_000 })
-      .toMatchObject({ to: "Johnny", status: "renamed", asked: true });
+      .toMatchObject({ to: "Johnny", status: "renamed", whose: "bot" });
     expect(second.state.botNameRecord?.changes).toHaveLength(1);
     expect(renames()).toEqual([]);
     await shots("bot-name-renamed");
 
-    // Undo puts the name before back, everywhere, and the same edit doesn't rename it again.
+    // Undo names the name it puts back, puts it back everywhere, and says so once the gateway
+    // lists it.
     await line.getByRole("button", { name: "Undo: back to New bot" }).click();
-    await expect(line.getByRole("status")).toContainText("Back to New bot", { timeout: 30_000 });
+    await expect(line.getByRole("status")).toHaveText("Back to New bot.", { timeout: 30_000 });
     expect(await identity()).toBe("New bot");
     await expect.poll(() => second.state.botNames?.[0]?.status, { timeout: 30_000 }).toBe("undone");
+    // A fresh request for the same name is a new edit: applied again, with its line.
     await field.fill("#take-name Johnny");
     await field.press("Enter");
     await ended("Johnny it is.", 2);
-    // Past the second client's wait before it would apply a run it didn't send.
-    await page.waitForTimeout(7_000);
-    expect(await identity()).toBe("New bot");
+    await expect(line.getByRole("status")).toHaveText(
+      "New bot renamed itself to Johnny after reading a file",
+      { timeout: 60_000 },
+    );
+    expect(await identity()).toBe("Johnny");
 
     // After a step that read a file first: renamed, as the bot's own doing. (Not Maple: the
     // bot an earlier check made has that name, and a name another bot has isn't applied.)
     await field.fill("#read\n#take-name Thistle");
     await field.press("Enter");
     await expect(line.getByRole("status")).toHaveText(
-      "New bot renamed itself to Thistle after reading a file",
+      "Johnny renamed itself to Thistle after reading a file",
       { timeout: 60_000 },
     );
     expect(await identity()).toBe("Thistle");
     await expect
       .poll(() => second.state.botNameRecord?.changes.length, { timeout: 30_000 })
-      .toBe(2);
+      .toBe(3);
     // Throughout, the second client renamed nothing, and only read the record and files.
     expect(renames()).toEqual([]);
     await shots("bot-name-own");

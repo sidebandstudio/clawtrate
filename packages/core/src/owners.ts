@@ -347,21 +347,30 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // rename was.
   "botNames.lines": {
     max: MAX_BOTS,
-    each: 3 * ID + 2 * MAX_NAME_CHARS + MAX_NAME_ERROR_CHARS + 4 * SHORT,
+    each: 3 * ID + 3 * MAX_NAME_CHARS + MAX_NAME_ERROR_CHARS + 4 * SHORT + 2 * N,
     row: "bookkeeping",
   },
-  // Undos whose decline couldn't be written to the gateway yet: a key, a stamp, a bot, a name
-  // and a run's tag each, one per listed bot.
+  // Undos whose decline couldn't be written to the gateway yet: a key, a stamp, a bot, a name,
+  // and the tags of a run, a file and a claim each, one per listed bot.
   "botNames.unrecorded": {
     max: MAX_BOTS,
-    each: 4 * ID + MAX_NAME_CHARS + N,
+    each: 6 * ID + MAX_NAME_CHARS + N,
     row: "bookkeeping",
   },
+  // Renames this device applied, for its own Undo: a key, a gateway, a bot, the name before and
+  // after, and the tags of the run and the file, one per listed bot.
+  "botNames.applied": {
+    max: MAX_BOTS,
+    each: 6 * ID + 2 * MAX_NAME_CHARS,
+    row: "bookkeeping",
+  },
+  // Changes whose line was closed on this device: their run's tag, one per listed bot.
+  "botNames.dismissed": { max: MAX_BOTS, each: ID, row: "bookkeeping" },
   "botNames.sentRuns": {
     max: MAX_SENT_RUNS,
     // The run id and the text as JSON writes them: up to six characters (`\uXXXX`) for each
     // one kept, and their quotes.
-    each: 6 * MAX_CHECKED_RUN_CHARS + ID + 6 * MAX_SENT_TEXT_CHARS + 6,
+    each: 6 * MAX_CHECKED_RUN_CHARS + ID + 6 * MAX_SENT_TEXT_CHARS + 6 + 2 * SHORT,
     row: "bookkeeping",
   },
   "botNames.reading": { max: MAX_FILE_READS, each: ID, row: "bookkeeping" },
@@ -415,6 +424,8 @@ export const CLIENT_NOT_WALKED: Record<string, string> = {
   "routines.ctx": "the client's own functions, handed to the routines engine",
   "usage.ctx": "the client's own functions, handed to the usage engine",
   "botNames.ctx": "the client's own functions, handed to the bot names engine",
+  "botNames.published":
+    "the record of changes as last published, the same object the state holds (`botNameRecord`)",
   "machines.ctx": "the client's own functions, handed to the machines engine, which keeps nothing",
   "openclawUpdates.ctx": "the client's own functions, handed to the OpenClaw update engine",
   "openclawUpdates.lookFor":

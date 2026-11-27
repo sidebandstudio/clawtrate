@@ -675,8 +675,19 @@ export type ClawtrateState = {
   cut?: string[];
 };
 
-/** Where a rename that wasn't the person's ask came from, when the run's steps say: a web page, a file, or a tool's output. */
-export type NameSource = "web" | "file" | "tool" | null;
+/**
+ * What a run read before it wrote a bot's name, when its steps say: a web page, a file (the bot's
+ * own IDENTITY.md included), another conversation's history or results, a tool's output, or the
+ * files the person's message carried.
+ */
+export type NameSource = "web" | "file" | "conversation" | "tool" | "attachment" | null;
+
+/**
+ * Whose a rename was, as the device that applied it judged it (`judgeRename`), and as every device
+ * shows it: shown to be the person's own ask (`person`); written by the run, but not shown to be
+ * the person's (`bot`); or picked up from the file with no write by the run seen (`file`).
+ */
+export type NameWhose = "person" | "bot" | "file";
 
 /**
  * A bot's IDENTITY.md named it otherwise than the gateway's config did (F-552): one line in that
@@ -691,12 +702,13 @@ export type NameLine = {
   stamp: GatewayStamp;
   /** The record's tag for the run (`runTag`), naming its change in the record of changes. */
   run: string;
-  /** All three checks passed: as far as Clawtrate can tell, the person's ask. Never proof. */
-  asked: boolean;
+  whose: NameWhose;
   source: NameSource;
   status: "renaming" | "renamed" | "undoing" | "undone" | "not-done" | "failed";
   /** Why a rename wasn't made: a name another bot has, the day's limit, no admin, no record. */
   reason: "taken" | "limit" | "full" | "no-admin" | "no-record" | null;
+  /** After Undo: the bot's name as the gateway's bot list gave it back, or null before. */
+  after: string | null;
   error: string | null;
 };
 
@@ -708,8 +720,10 @@ export type NameRecordChange = {
   to: string;
   at: number;
   run: string;
-  asked: boolean;
+  whose: NameWhose;
   source: NameSource;
+  /** The record's tag for IDENTITY.md as it was read (`runTag` of its text): what Undo declines. */
+  file: string;
   /** When the bot list confirmed the rename; a claim without it never landed, as far as known. */
   done?: number;
   /** When Undo put the name back, from any device. */

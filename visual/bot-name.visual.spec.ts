@@ -1,7 +1,8 @@
 // A bot that takes a name in the chat (F-552): it is renamed at once, and one line in its
-// conversation says what happened, with Undo. The lines match their baselines at 1440 and phone
-// width in both themes; Undo and Close are reached by keyboard and named for what they do; a name
-// the bot wrote is shown only as text; the bot's settings list its recent name changes. The scenes
+// conversation says what happened, with Undo naming the name it puts back. The lines match their
+// baselines at 1440 and phone width in both themes; Undo and Close are reached by keyboard and
+// named for what they do; a name the bot wrote is shown only as text; the bot's settings list its
+// recent name changes; a connection that can't change bots shows no Undo. The scenes
 // are written in the gateway's own shapes (apps/desktop/src/fixture/bot-name.ts); the live check
 // is in e2e/accounts.spec.ts.
 import { test, type Page } from "@playwright/test";
@@ -36,7 +37,7 @@ for (const size of [WIDE, PHONE]) {
       test.use(contextFor(size, theme));
       const scenes =
         size === WIDE && theme === "dark"
-          ? ["bot-name", "bot-name-own", "bot-name-undone", "bot-name-read-only"]
+          ? ["bot-name", "bot-name-own", "bot-name-file", "bot-name-undone", "bot-name-read-only"]
           : ["bot-name"];
       for (const scene of scenes) {
         test(`F-552: ${scene} matches its baseline`, async ({ page }) => {
@@ -60,7 +61,7 @@ for (const size of [WIDE, PHONE]) {
 test.describe("bot name behaviour", () => {
   test.use(contextFor(WIDE, "dark"));
 
-  test("F-552: the line says what happened, and never that the person asked; a screen reader hears it", async ({
+  test("F-552: the line says what happened in one of three forms; a screen reader hears it", async ({
     page,
   }) => {
     await open(page, "bot-name", "dark");
@@ -70,6 +71,11 @@ test.describe("bot name behaviour", () => {
     await expect(line(page).getByRole("status")).toHaveText(
       "New bot renamed itself to Johnny after reading a file",
     );
+    await open(page, "bot-name-file", "dark");
+    await expect(line(page).getByRole("status")).toHaveText(
+      "New bot is now Johnny, the name in its identity file",
+    );
+    await expect(line(page).getByRole("button", { name: "Undo: back to New bot" })).toBeVisible();
     expect(await sent(page)).toEqual([]);
   });
 
@@ -93,15 +99,14 @@ test.describe("bot name behaviour", () => {
         type: "undoBotName",
         botId: "new-bot",
         run: state.botNameRecord!.changes[0]!.run,
+        from: "New bot",
         stamp: { gatewayId, target },
       },
     ]);
-    await expect(line(page).getByRole("status")).toHaveText(
-      "Back to New bot. Johnny isn't used again unless you rename it yourself.",
-    );
+    await expect(line(page).getByRole("status")).toHaveText("Back to New bot.");
     await expect(line(page).getByRole("button", { name: /^Undo/ })).toHaveCount(0);
     await expect(page.locator(".title-pill-name")).toHaveText("New bot");
-    await expect(page.getByTestId("announcer")).toHaveText("Back to New bot");
+    await expect(page.getByTestId("announcer")).toHaveText("Back to New bot.");
   });
 
   test("F-552: an Undo refused announces the engine's words, and the name stays", async ({
@@ -119,6 +124,20 @@ test.describe("bot name behaviour", () => {
       "This change was read on another gateway, so nothing was sent.",
     );
     await expect(page.locator(".title-pill-name")).toHaveText("Johnny");
+  });
+
+  test("F-552: a connection that can't change bots shows the line without Undo", async ({
+    page,
+  }) => {
+    await open(page, "bot-name", "dark");
+    await page.evaluate(() =>
+      (window as unknown as Fixture).clawtrateFixture.setState((state) => ({
+        ...state,
+        connection: { ...state.connection, canAdmin: false },
+      })),
+    );
+    await expect(line(page).getByRole("status")).toHaveText("Renamed to Johnny");
+    await expect(line(page).getByRole("button", { name: /^Undo/ })).toHaveCount(0);
   });
 
   test("F-552: Close puts the line away and sends nothing to the gateway", async ({ page }) => {

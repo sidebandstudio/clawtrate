@@ -805,10 +805,11 @@ const nameLine = object<NameLine>()({
   to: NAME,
   stamp: object<NameLine["stamp"]>()({ gatewayId: ID, target: NUMBER }),
   run: ID,
-  asked: FLAG,
+  whose: ENUM,
   source: ENUM,
   status: ENUM,
   reason: ENUM,
+  after: NAME,
   error: text(MAX_MESSAGE_LINE_CHARS),
 });
 const nameRecordChange = object<NameRecordChange>()({
@@ -818,8 +819,9 @@ const nameRecordChange = object<NameRecordChange>()({
   to: NAME,
   at: NUMBER,
   run: ID,
-  asked: FLAG,
+  whose: ENUM,
   source: ENUM,
+  file: ID,
   done: NUMBER,
   undone: NUMBER,
 });

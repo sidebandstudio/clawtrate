@@ -1870,12 +1870,32 @@ export class ClawtrateClient {
       };
     },
     refreshBots: () => this.refreshBots(),
-    // A run some of whose steps aren't kept is a run whose steps aren't known.
-    runSteps: (sessionKey, runId) => {
-      const run = this.state.transcripts[sessionKey]?.runs.find((each) => each.id === runId);
-      return run && run.omittedSteps === 0
-        ? run.steps.map((step) => ({ toolName: step.toolName, args: step.argsText?.text ?? null }))
-        : null;
+    // A run some of whose steps aren't kept is a run whose steps aren't known. A person's message
+    // in the conversation after the run's own and before its end joined it as a steer.
+    runFacts: (sessionKey, runId) => {
+      const transcript = this.state.transcripts[sessionKey];
+      const run = transcript?.runs.find((each) => each.id === runId);
+      if (!transcript || !run) return { steps: null, steered: false };
+      const anchor = run.anchorItemId
+        ? transcript.items.findIndex((item) => item.id === run.anchorItemId)
+        : -1;
+      const end = run.endedAt ?? Number.POSITIVE_INFINITY;
+      const steered =
+        anchor !== -1 &&
+        transcript.items
+          .slice(anchor + 1)
+          .some((item) => item.role === "user" && item.timestamp !== null && item.timestamp <= end);
+      return {
+        steps:
+          run.omittedSteps === 0
+            ? run.steps.map((step) => ({
+                toolName: step.toolName,
+                args: step.argsText?.text ?? null,
+                ok: step.status === "done",
+              }))
+            : null,
+        steered,
+      };
     },
     missingScope: (error) => {
       this.noteMissingScope(error);
@@ -4461,8 +4481,11 @@ export class ClawtrateClient {
       // A send that starts its own run names that run's request: what a failed turn's
       // "Copy request ID" gives (F-301). A steer joins a run another frame started.
       const starts = message.mode !== "steer";
-      // A run it starts runs under the message's id: the name a bot takes in it is judged by it.
-      if (starts) this.botNames.sent(key, message.id, message.text);
+      // A run it starts runs under the message's id: the name a bot takes in it is judged by it,
+      // and by the files it carried. A steer makes the run it joins more than one message's.
+      const files = this.attachmentContent.get(messageId)?.files ?? [];
+      if (starts) this.botNames.sent(key, message.id, message.text, files.length > 0);
+      else if (message.runId) this.botNames.steered(message.runId);
       const sent = this.request("chat.send", params, {
         onSent: (requestId) => {
           if (!starts) return;
@@ -6744,12 +6767,13 @@ export class ClawtrateClient {
   }
 
   /**
-   * Undo a name a bot took (`bot-names.ts`): only for the change the record still holds, on the
-   * gateway the line or the settings read it from (`stamp`).
+   * Undo a name a bot took (`bot-names.ts`): only for the change the record still holds, only to
+   * put back `from`, the name the line or the settings showed, on the gateway they read it from
+   * (`stamp`).
    */
-  undoBotName(botId: string, run: string, stamp: GatewayStamp): Promise<void> {
+  undoBotName(botId: string, run: string, from: string, stamp: GatewayStamp): Promise<void> {
     if (this.options.readOnly) return Promise.reject(new Error("This host only reads."));
-    return this.botNames.undo(botId, run, stamp);
+    return this.botNames.undo(botId, run, from, stamp);
   }
 
   /**
