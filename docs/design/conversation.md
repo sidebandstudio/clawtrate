@@ -1335,14 +1335,14 @@ The row has no line of words and no time (#790): the picture carries the state, 
 
 Fixtures for the order:
 
-| The bot's tasks                                                       | The row shows                                                           |
-| --------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| One waiting, one working                                              | Waiting, with its badge                                                 |
-| One done with failures, one working                                   | Done with failures, its failed badge, and the unread dot                |
-| The same, after the done-with-failures task is opened                 | Working, the ring                                                       |
-| One waiting since ten minutes ago, another that finished a minute ago | Waiting, "Waiting for you: …", and the unread dot for the finished task |
-| One working, one unread                                               | Working, the working task's phrase, and the unread dot                  |
-| One stopped, one idle                                                 | Stopped, with its badge, and the latest message                         |
+| The bot's tasks                                                       | The row shows                                                     |
+| --------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| One waiting, one working                                              | Waiting, with its badge                                           |
+| One done with failures, one working                                   | Done with failures, its failed badge, and the unread dot          |
+| The same, after the done-with-failures task is opened                 | Working, the ring                                                 |
+| One waiting since ten minutes ago, another that finished a minute ago | Waiting, with its badge, and the unread dot for the finished task |
+| One working, one unread                                               | Working, the ring, and the unread dot                             |
+| One stopped, one idle                                                 | Stopped, with its badge                                           |
 
 A pinned tile shows the same avatar state, with the unread dot beside the name.
 
