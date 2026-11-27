@@ -219,6 +219,61 @@ describe("#766: no other run takes the row's failure, and a run that answered ne
   });
 });
 
+/**
+ * A row too large for `chat.history`, as both versions put it in its place: the placeholder's
+ * words, the run's id, and the mark, with no `stopReason` (2026.10.6
+ * `chat-history-response-page`, `buildOversizedHistoryPlaceholder`; 2026.11.10 `chat-history-budget`).
+ */
+const oversizedRow = (runId: string, seq: number, over: Row = {}) => ({
+  role: "assistant",
+  timestamp: T0 + 2_000 + seq,
+  content: [{ type: "text", text: "[chat.history omitted: message too large]" }],
+  __openclaw: { id: `o-${seq}`, runId, seq, truncated: true, reason: "oversized" },
+  ...over,
+});
+
+describe("#766: a row the gateway left out for its size says nothing the app can read", () => {
+  it("its placeholder is no answer: a run of it and reasoning only is the row's failure", async () => {
+    const { run } = await reload(markedRow("wake-6"), [
+      eventRow("evt-6", 1),
+      oversizedRow("wake-6", 2),
+      thinkingRow("wake-6", 3),
+    ]);
+    expect(run("wake-6")).toMatchObject({ state: "failed", error: { message: QUIET } });
+  });
+
+  it("only the gateway's own placeholder, on the row it marked, exactly: anything else is text", async () => {
+    const placeholder = "[chat.history omitted: message too large]";
+    for (const look of [
+      // A bot's reply of the same words, unmarked.
+      { __openclaw: { id: "o-2", runId: "wake-7", seq: 2 } },
+      // Marked for another reason.
+      {
+        __openclaw: { id: "o-2", runId: "wake-7", seq: 2, truncated: true, reason: "display-cap" },
+      },
+      // Other words on the marked row.
+      { content: [{ type: "text", text: `${placeholder} ` }] },
+      { content: [{ type: "text", text: "[chat.history omitted]" }] },
+    ]) {
+      const { run } = await reload(markedRow("wake-7"), [
+        eventRow("evt-7", 1),
+        oversizedRow("wake-7", 2, look),
+        thinkingRow("wake-7", 3),
+      ]);
+      expect(run("wake-7")).toMatchObject({ state: "completed", error: null });
+    }
+  });
+
+  it("a run whose last row is the placeholder ends as history can't say: it isn't touched", async () => {
+    const { run } = await reload(markedRow("wake-8"), [
+      eventRow("evt-8", 1),
+      thinkingRow("wake-8", 2),
+      oversizedRow("wake-8", 3),
+    ]);
+    expect(run("wake-8")).toMatchObject({ state: "completed", outcomeKnown: false });
+  });
+});
+
 describe("#766: only the gateway's mark, with the run and its words, makes the rule", () => {
   const rows = [eventRow("evt-1", 1), thinkingRow("wake-1", 2), thinkingRow("wake-1", 3)];
 
