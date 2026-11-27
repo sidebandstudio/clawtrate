@@ -89,7 +89,8 @@ describe("--install-plugin", () => {
     const typo = run("start", "--instance", "never-made", "--install-plugin", "clawtrate-vioce");
     expect(typo.status).toBe(1);
     expect(typo.stderr).toContain('--install-plugin takes clawtrate-voice, not "clawtrate-vioce"');
-  });
+    // Two Node processes start the tool's CLI, which takes more than Vitest's 5 s under load.
+  }, 40_000);
 
   /** An operator session over the engine tests' stand-in gateway, one connection at a time. */
   function session(gateway: FakeGateway): OperatorSession {
