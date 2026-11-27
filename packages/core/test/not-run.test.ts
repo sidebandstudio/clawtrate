@@ -695,6 +695,31 @@ describe("the rules underneath", () => {
       expect(index.failedAt(KEY)).toBe(1_500);
     });
 
+  for (const quiet of [false, true])
+    it(`a queued run's ${quiet ? "quiet" : "failed"} end after the run before it failed decides the mark`, () => {
+      const index = new WaitingIndex();
+      index.onAgent(
+        { sessionKey: KEY, runId: "r1", stream: "lifecycle", ts: 1_000, data: { phase: "start" } },
+        1_000,
+      );
+      // r2 is admitted while r1 runs, then r1 fails.
+      index.noteInput(KEY);
+      index.onChat({ sessionKey: KEY, runId: "r1", state: "error" }, 2_000);
+      expect(
+        index.onChat(
+          {
+            sessionKey: KEY,
+            runId: "r2",
+            state: "error",
+            ...(quiet ? { suppressErrorNotice: true } : {}),
+          },
+          3_000,
+        ),
+      ).toBe(true);
+      expect(index.latestRunId(KEY)).toBe("r2");
+      expect(index.failedAt(KEY)).toBe(quiet ? null : 3_000);
+    });
+
   it("an older run's late chat end says nothing while a newer run of the task is going", () => {
     const index = new WaitingIndex();
     index.onAgent(
