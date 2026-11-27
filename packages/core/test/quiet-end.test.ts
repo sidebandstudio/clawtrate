@@ -10,7 +10,12 @@
 
 import { describe, expect, it } from "vitest";
 import { answeredNothing, quietPending, settleQuietEnds, type Run } from "../src/runs.ts";
-import { MAX_QUIET_CHECKS, QuietChecks, quietInHistory } from "../src/quiet-end.ts";
+import {
+  MAX_QUIET_CHECKS,
+  QUIET_CHECK_ROWS,
+  QuietChecks,
+  quietInHistory,
+} from "../src/quiet-end.ts";
 import { neverRan } from "../src/not-run.ts";
 import { mergeSessionRow } from "../src/mapping.ts";
 import { agentEvent, grantingGateway, KEY, openTask } from "./client-harness.ts";
@@ -425,14 +430,20 @@ describe("a real failure is never hidden as a quiet answer (#680)", () => {
   }, 30_000);
 
   it("the run this client holds decides its row: a later read finding nothing doesn't make it quiet", async () => {
-    // Its history can't be read after the end; then every read finds no row of the run. The run
-    // failed when its history couldn't be read, and the task stays failed: no read of its row
-    // against history is made over the run this client holds.
+    // The task's own reads of its history fail after the end; then every read finds no row of the
+    // run, and a check of its row (`QUIET_CHECK_ROWS`) would always have. The run failed when its
+    // history couldn't be read, and the task stays failed: its row isn't checked over the run.
     let fail = false;
     const gateway = gatewayWith(
       [{ key: KEY, agentId: "otto", hasActiveRun: false, updatedAt: T0 }],
-      () => (fail ? new Error("history unavailable") : [eventRow]),
+      () => [eventRow],
     );
+    const read = gateway.handlers["chat.history"]!;
+    gateway.handlers["chat.history"] = (params) => {
+      const { limit } = params as { limit?: number };
+      if (fail && limit !== QUIET_CHECK_ROWS) throw new Error("history unavailable");
+      return read(params);
+    };
     const { client, transcript } = await openTask({ gateway, client: { readAgainMs: 1 } });
     fail = true;
     wakeAndEndMarked(gateway, "wake-15");
