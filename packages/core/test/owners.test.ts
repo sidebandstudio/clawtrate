@@ -51,6 +51,7 @@ const WALKED = new Set([
   "DeviceApprovals",
   "MachinesEngine",
   "WaitingIndex",
+  "QuietChecks",
   "ComputerViews",
 ]);
 /**

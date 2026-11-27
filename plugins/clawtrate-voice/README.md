@@ -59,7 +59,7 @@ These steps are for the gateway's owner. Clawtrate never writes the gateway's co
 
 4. Restart the gateway. The guide is added from the next system prompt the gateway builds for each bot.
 
-Until both settings permit it, the plugin's methods still answer. `get` reports each setting under `hook.settings`, and `hook.state` names the first that blocks it (`prompt-injection-off` or `needs-conversation-access`). Settings names both, says which blocks it, and links here.
+Until both settings permit it, the plugin's methods still answer. `get` reports each setting under `hook.settings`, and `hook.state` names the first that blocks it (`prompt-injection-off` or `needs-conversation-access`). Settings names both and says which blocks it.
 
 ## Where the guide doesn't reach
 

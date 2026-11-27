@@ -32,7 +32,7 @@
         - text: "Waiting for you: approve a command"
       - button "More for Marlow"
     - listitem:
-      - button "Juniper, 3 tasks, unread, research, primary bot":
+      - button "Juniper, 3 tasks, unread, research":
         - text: Juniper research
         - time: 5:24 PM
         - text: Ask these five, and get the answers in writing.
