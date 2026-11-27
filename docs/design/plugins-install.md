@@ -1,8 +1,8 @@
 # Clawtrate installs its own plugins
 
-How the app puts Clawtrate's own OpenClaw plugins on a person's gateway by itself, once, at first setup, and takes them off again, with no outside page, no terminal and no config file for the person (issue #796, part 3). This is a design: it builds nothing. Sections 3, 6 and 11 are written as the specification the install engine is built from.
+How the app puts Clawtrate's own OpenClaw plugins on a person's gateway by itself, once, at first setup, and takes them off again, with no outside page, no terminal and no config file for the person (issue #796, part 3). This is a design: it builds nothing. Sections 3, 6 and 11 are written as the specification the install engine is built from; section 3.5 walks every scenario through every step.
 
-It extends section 6 of `bots-in-clawtrate.md`, which designed this for `clawtrate-bots` alone, to all of Clawtrate's plugins. It settles what that section left open: what a gateway on another computer can take without a registry, whether loading needs a restart, and what a staged plugin does when the gateway starts again. Where the two documents differ, this one is later and corrects that section: an update or a preconfigured entry runs new code before any check (section 3); `plugins.uninstall` is not an Undo (section 12); and `setEnabled` must be told to preserve the gateway's allowlist (section 6).
+It extends section 6 of `bots-in-clawtrate.md`, which designed this for `clawtrate-bots` alone, to all of Clawtrate's plugins. It settles what that section left open: what a gateway on another computer can take without a registry, whether loading needs a restart, and what a staged plugin does when the gateway starts again. Where the two documents differ, this one is later and corrects that section: an update, a preconfigured entry, or a grant written beside a stage runs new code before any check (section 3); `plugins.uninstall` is not an Undo and the engine doesn't use it (section 12); and `setEnabled` must be told to preserve the gateway's allowlist (section 6).
 
 **Established** marks what both OpenClaw versions' published packages show (`openclaw@2026.10.6`, the pin, and `openclaw@2026.11.10`), or what a run on a development gateway of each showed. Each fact says which. **Proposed** marks this design's choice. **Not established** marks what was not shown (section 13). `<1006>/…` and `<1110>/…` are paths inside each package. 2026.11.10's `dist/` is minified onto few lines, so for it the file and the function are named instead of a line.
 
@@ -26,6 +26,15 @@ The revision added five cases on each version:
 - uninstall of a plugin in `plugins.deny`;
 - `setEnabled` against a `plugins.allow` that leaves the plugin out, with and without `allowlistPolicy: "preserve"`.
 
+The second revision ran section 3.4's sequence end to end on each version: an install, Add again, Turn on and an update. It also ran:
+
+- a grant written beside a fresh stage, without `enabled: false`;
+- an unrelated config write while a plugin was staged;
+- an owner's deny and an owner's revoked grant between the last check and the enable;
+- two devices staging at the same moment.
+
+Section 3.5 says which rows ran.
+
 A `git://` URL served on loopback by a `git daemon` of the run's own stood in for a network git source. `terminal.upload` ran on 2026.10.6 only.
 
 No gateway on another computer was reached. A development gateway listens on loopback, and a connection made to look remote with proxy headers is refused outright (`<1006>/dist/server-start-D6vaUNGz.mjs:7365-7372`). So what a remote connection may do was read from the source, and checked by calling OpenClaw's own rule (section 2).
@@ -33,25 +42,31 @@ No gateway on another computer was reached. A development gateway listens on loo
 ## The page to decide from
 
 - **On the gateway's own computer, nothing has to be published.** The app carries each plugin as a tarball outside its archive and gives the gateway the file's path. The gateway copies the file into its own managed folder, so the app writes nothing to disk (ran, both versions).
-- **The gateway checks nothing that ties the bytes it activates to the bytes Clawtrate checked.** `npm-pack` reads the archive twice. Enabling takes no expected artifact, and the consent token covers the declarations, not the code. Worse, an install with `enable: false` still runs the new code at once in two cases: an update of a plugin that is enabled, and a plugin whose entry is already `enabled: true` (ran, both versions). So the engine works as follows:
-  - It pins every identity and capability field.
-  - It never stages over an enabled entry; to update, it turns the plugin off first.
-  - It stops at any mismatch, any missing field and any lost reply.
-  - It says plainly what window is left (section 3).
-  - Full binding needs an operation on the gateway's side.
+- **The gateway installs exactly the bytes it inspected, but it doesn't tie its enable to them.** Enabling takes no expected artifact, and the consent token covers the declarations, not the code. Worse, the plugin's code runs before any check in three cases (ran, both versions):
+  - an install with `enable: false` over an entry that already says `enabled: true`;
+  - an update of a plugin that is enabled;
+  - a grant written beside a fresh stage.
+- **So the engine keeps an explicit `enabled: false` from its first write until its final enable.** It also:
+  - pins every identity and capability field, and the source digest per OpenClaw version;
+  - reads before every write;
+  - stops at any mismatch, missing field or lost reply;
+  - never removes anything.
+
+  One window is left, of seconds, open only to someone who can already rewrite the gateway (section 3.2). Closing it needs an operation on the gateway's side.
+
 - **No restart.** Install, enable, update, reload and uninstall all apply while the gateway runs, and so does the config write that lets a hook run (ran, both versions). If a gateway ever asks for a restart, the engine stops and says so (section 7).
 - **Over Clawtrate's SSH route, the gateway counts the connection as local**, because the forward arrives on its loopback. The app copies the tarball there over its own SSH connection (read, not run).
 - **A gateway reached by its address can't take the app's own copy. This one case needs a publish** (sections 5 and 8). Nothing else waits for it.
 - **Added at first setup: the reviewed release of `clawtrate-voice` only, and only on a gateway where section 3's checks pass.** The other four wait for their own reviews (section 9). The tool-rules plugin, and anything else that changes how a bot's commands are approved, is never switched on for anyone before its security review (issue #675, and the reviews of #678, #691 and #692).
 - **What the person is told is the owner's call, and section 10 is written for either answer.** Either one line installs it, or Clawtrate asks once, plainly, saying what the plugin can see. Each answer covers first setup and people already paired. Both name the hook grant: it lets the plugin's hook receive each bot's prompts and messages.
-- **Taking it off is "Take it off", not "Undo".** Removal edits the gateway's allow and deny lists and leaves a marker. It restores nothing (section 12).
-- **No automatic updates yet** (section 11). Separate calls can't be ordered, so an older Clawtrate could put an older plugin back.
+- **Taking it off is "Take it off", not "Undo".** It turns the plugin off and leaves it installed. Uninstall edits the gateway's allow and deny lists and takes no precondition, so the engine never calls it (section 12).
+- **No automatic updates yet** (section 11). The gateway accepts an older version over a newer one, and separate calls can't be ordered, so only the person starts an update.
 
 ## Contents
 
 1. Every way a gateway takes a plugin
 2. Local and remote, and which connection is which
-3. The engine on the gateway's own computer
+3. The engine
 4. The route over SSH
 5. The route by address
 6. Access, and the gateway's own policy
@@ -123,146 +138,250 @@ So, for Clawtrate's three kinds of route (`setup.md`):
 
 **Proposed:** the app chooses the route by the connection it made, and confirms it by the gateway's answer. A refusal with the local-artifact error moves it to the route by address, never the other way.
 
-## 3. The engine on the gateway's own computer
+## 3. The engine
 
 ### 3.1 What the gateway binds, and what it doesn't
 
 **Established:**
 
-- **`npm-pack` reads the archive twice.** The metadata and integrity that `plugins.inspect` later reports come from one read (`resolveNpmPackArchiveMetadata`, `<1006>/dist/install-TaW64_lP.mjs:661`). The file is then opened again and copied into the gateway's managed folder (`stageNpmPackArchiveInManagedRoot`, the same file, line 655), and npm installs from that copy. The same two steps appear in `<1110>`'s `installPluginFromNpmPackArchive`. Over RPC `npm-pack` takes no expected integrity: the schema refuses the field (ran, both).
-- **`enable: false` only skips the enabling step, and the change still applies at runtime.**
-  - It writes no new entry and leaves `plugins.allow` and `plugins.deny` alone (`<1006>/dist/management-install-CiDYuS33.mjs:198-208`, the `persistPluginInstall` region).
-  - It keeps an entry that already says `enabled: true`. Ran, both versions:
-    - **A preconfigured entry.** With `plugins.entries.clawtrate-voice.enabled: true` written before the plugin existed, an install with `enable: false` came back with the plugin's source digest. `plugins.list` showed it `runtime.state: "active"`, and its method answered: the code ran before anything was inspected.
-    - **An update.** With 0.1.0 enabled, `mode: "update"` with `enable: false` to 0.2.0 published a new runtime generation with a new source digest. `plugins.list` reported 0.2.0 active.
-  - Only a fresh install with no entry stayed unloaded, across `gateway.restart.request` and a cold start of the process as well (ran, both).
-- **Enabling takes no expected artifact.** `plugins.setEnabled` accepts `{pluginId, enabled, allowlistPolicy?, acknowledgeCapabilities?}` (`<1006>/dist/sessions-B6HQw2nf.mjs:909-914`; the same schema in `<1110>`).
-- **The consent token doesn't bind the code.** `reviewToken` is a hash of the declared surface (`computeDeclaredSurfaceHash(declared)`, `<1006>/dist/capability-summary-CFDZfvsK.mjs:147`), and the declared surface comes from the manifest (line 91), not from the code.
-- **After enabling, the runtime receipt names what was loaded.** `runtime.sourceDigests[<id>]` is a SHA-256 of the captured source. It was the same for the same package on both versions (voice 0.1.0: `ecb5bdf1…`), and it changed with the package (ran).
+- **The bytes installed are the bytes inspected.** `npm-pack` reads the archive's metadata first (`resolveNpmPackArchiveMetadata`, `<1006>/dist/install-TaW64_lP.mjs:661`), then opens the file again and copies it into the gateway's managed folder (`stageNpmPackArchiveInManagedRoot`, line 655), and npm installs from that copy. Before the install is published, the gateway compares the version and integrity npm recorded in its lockfile with the first read, and refuses a difference (`verifyInstalledNpmResolution`, the `install-managed-npm` region, lines 203-216). The same steps are in `<1110>`'s `installPluginFromNpmPackArchive`. So what `plugins.inspect` reports is what was installed. Over RPC `npm-pack` takes no expected integrity: the schema refuses the field (ran, both). So the engine compares the inspected integrity with its pin (step 4).
+- **Writing a plugin's entry can start it.** Ran on both versions:
+  - **A fresh stage is not explicitly off.** A fresh `npm-pack` stage leaves the entry `{config: {}}` with no `enabled` key, and the plugin unloaded.
+  - **A grant alone starts it.** Writing only the grant into that entry, `{hooks: {allowConversationAccess: true}}`, loaded the plugin and ran its hook before any `setEnabled`. A hook grant qualifies an otherwise eligible plugin to start when `enabled` is unset (`hasExplicitHookPolicyConfig`, `<1006>/dist/gateway-startup-plugin-loader-DycwJ6YX.mjs:49-51`; the same rule in `<1110>`'s startup loader).
+  - **An existing enable is kept.** An install with `enable: false` keeps an entry that already says `enabled: true`: with such an entry written before the plugin existed, the stage ran at once. An update with `enable: false` of an enabled plugin also published the new code at once.
+  - **Under an explicit `enabled: false`, nothing loads:** not the stage, not an update's stage, not the grant written beside it, and not an unrelated config write afterwards.
+- **Enabling takes no expected artifact.** `plugins.setEnabled` accepts `{pluginId, enabled, allowlistPolicy?, acknowledgeCapabilities?}` (`<1006>/dist/sessions-B6HQw2nf.mjs:909-914`; the same schema in `<1110>`). It enabled a plugin over an entry that said `enabled: false` (ran, both). It enforces `plugins.deny` always, and `plugins.allow` with `allowlistPolicy: "preserve"`, inside its own request (section 6; ran, both).
+- **The consent token doesn't bind the code.** `reviewToken` is a hash of the declared surface (`computeDeclaredSurfaceHash(declared)`, `<1006>/dist/capability-summary-CFDZfvsK.mjs:147`), and that surface comes from the manifest (line 91).
+- **After enabling, the runtime receipt names what loaded.** `runtime.sourceDigests[<id>]` is a SHA-256 of the captured source. It was the same for the same package on both versions (voice 0.1.0: `ecb5bdf1…`) and different for a different package (ran).
+- **No plugin mutation takes a precondition.** Neither `plugins.install` nor `plugins.setEnabled` nor `plugins.uninstall` takes an expected version, integrity, install hash or config hash. Only `plugins.reload` takes preconditions (`installHash`, `sourceDigests`; rpc page, `<1006>` line 118), and it doesn't enable. Each request takes its own lifecycle lease (`withPluginLifecycleLease`, `<1006>/dist/plugins-mutations-ClrWTX5-.mjs:37-43`), so a read and a later write are never under one lock. `config.patch` is the one write that takes a precondition, the `baseHash` of the whole config.
 
-So OpenClaw has no operation that says "activate exactly the archive with this SHA-512". **Full binding of bytes to activation needs one on the gateway's side**, for example `plugins.setEnabled` or `plugins.install` taking an expected integrity or install hash, checked under its own mutation lock against the copy it loads. `plugins.reload` already takes `installHash` and `sourceDigests` preconditions (rpc page, `<1006>` line 118), but it doesn't enable.
+**So full binding of the verified artifact to the enable needs an operation on the gateway's side**, for example `plugins.setEnabled` taking an expected integrity or install hash and comparing it, under its own lease, with the copy it loads. Until OpenClaw has one, the engine works within 3.2.
 
-### 3.2 The window that is left, and why it is accepted here
+### 3.2 What the engine guarantees, and the window that is left
 
-Two windows remain after the checks below:
+**The engine guarantees** that the plugin's code is never loaded before the final enable. From the first write until step 7, the entry says `enabled: false` (3.1). Every stop, crash and lost reply before step 7 therefore leaves the plugin off. The gateway itself guarantees that the bytes installed are the bytes inspected (3.1).
 
-- between the gateway's read of the archive's metadata and its copy of the archive;
-- between `plugins.inspect` and `plugins.setEnabled`, while the staged copy sits in the gateway's own state folder.
+**The window left is between step 6 (the last check) and step 7's commit:**
 
-To use either, a process has to write the app's tarball inside the app's resources, or the gateway's state folder, within seconds.
+- **Another admin can replace the staged package through RPC** (`plugins.install … mode: "update"`) in that interval.
+- **A process of the account the gateway runs as can write the gateway's managed folder** in that interval.
 
-On a gateway on the same computer, reached by one-click Connect, Clawtrate's check has already shown that the gateway runs as this account (#688). The processes that can write either place are this account's, and an administrator's. Each of them can already rewrite the gateway's config, its installed plugins and OpenClaw itself, and read the gateway's token. The window gives them nothing they don't already have.
+Both are seconds long. Who can use them:
 
-**So it is accepted for a gateway on the same computer after that check, and for the SSH route** (its folder is private to the account the person signs in as, which runs the gateway). It is not accepted for an address typed under Advanced: there is no such check there, and the engine doesn't run on it (3.3, step 0).
+- **An admin connection.** It can already install, enable and replace any plugin on that gateway, and change its config.
+- **A process of the gateway's own account.** It can already rewrite the gateway's config, its plugins and OpenClaw itself, and read its token.
 
-After activation, the engine compares `runtime.sourceDigests[<id>]` with the digest the release recorded (step 7). That detects different code once it has run, and turns it off. It does not prevent the code from running.
+The window gives neither of them anything they don't already have.
 
-### 3.3 The sequence
+**What catches it afterwards:** step 7's answer must carry the pin's `sourceDigest` for this OpenClaw version, and step 8 re-reads everything. A replaced package shows another digest, and the engine turns it off at once. This detects code that has already run once; it doesn't prevent it.
 
-**Proposed. This is the engine's specification.** Every step names its call, its comparison and where it stops.
+**Where it is accepted:**
 
-**Stops.** "Stop" means: no further write, a line from section 10, and the gateway's own answer kept behind an "i". A lost reply is a stop: a timeout, a closed connection, or an answer missing a field this section compares. On the next connection, the engine starts again from step 1 and decides from what it reads. It never repeats a write blindly.
+- on a gateway on the same computer, after one-click Connect's check that the gateway runs as this account (#688);
+- over Clawtrate's SSH route, whose folder is private to the signed-in account that runs the gateway;
+- on the route by address, where the gateway's own `expectedIntegrity` check covers the download (section 5).
 
-**The pin.** Built into the signed app, from the release's own packing, one entry per plugin the app carries. Any field missing from the pin means the plugin is not installed.
+**Where the engine doesn't run:** an address typed under Advanced that points at this computer. Nothing there shows which account runs the gateway, so it takes the route by address instead.
 
-- `packageName`
-- `version`, canonical `x.y.z`
-- `pluginId`
-- `integrity`, `sha512-…`
-- `declared`: every group `plugins.inspect` reports, each as a sorted list: `channels`, `providers`, `tools`, `contracts`, `hooks`, `mcpServers`, `cliCommands`, `cliBackends`, `skills`, `dangerousConfigFlags`. A group the pin lacks, or one the gateway reports that the pin doesn't list, is a mismatch.
+**An owner's change during the window is not lost, with one exception:**
+
+- **Deny, or an allowlist that leaves the plugin out.** `setEnabled` enforces both inside its own request ("blocked by denylist", ran, both).
+- **The grant revoked.** The plugin is enabled without its hook running. Step 8 compares the entry's grants and turns the plugin off (ran, both: the hook reported `needs-conversation-access` and the entry showed `allowConversationAccess: false`).
+- **The plugin uninstalled.** `setEnabled` answers "plugin not installed".
+- **The exception: the owner writing `enabled: false`.** It is already `false`, so the write changes nothing a client can see. The engine can't tell that intent apart, and step 7 enables over it. This is the one owner change the engine can't preserve. It needs the gateway-side precondition above.
+
+### 3.3 The pin, and what is read before every write
+
+**The pin.** Built into the signed app from the release's own packing. Each entry describes one plugin the app carries. If any field is missing, the plugin is not offered.
+
+- `packageName`, and `version` in canonical `x.y.z` form;
+- `pluginId`, and `integrity` (`sha512-…`) of the exact, dependency-free tarball;
+- `declared`: every group `plugins.inspect` reports, each as a sorted list. The groups are `channels`, `providers`, `tools`, `contracts`, `hooks`, `mcpServers`, `cliCommands`, `cliBackends`, `skills` and `dangerousConfigFlags`. A group missing on either side is a mismatch.
 - `grants`, kept separately: the exact config the plugin is given. For `clawtrate-voice` that is `{hooks: {allowConversationAccess: true}}`.
-- `sourceDigest`: `runtime.sourceDigests[<id>]` as the release's own run on a development gateway of each supported version recorded it, when the two agree.
+- `sourceDigests`: `runtime.sourceDigests[<id>]` for each OpenClaw version the release ran it on. This is mandatory: a gateway whose version has no recorded digest gets no install (step 0).
 
-**Step 0. Preconditions.**
+**Policy OK**, read from `config.get` and checked before every write:
 
-- The connection is the app's own loopback connection made by one-click Connect, after its check (#688), or the SSH route (section 4).
-- The gateway's confirmed grant on this connection includes `operator.admin` (section 6).
-- `hello-ok.server.version` is a version the pin was recorded on.
+- the plugin is not in `plugins.deny`;
+- `plugins.allow` is empty, or names the plugin;
+- the entry holds no keys besides `enabled`, `hooks` and an empty `config`;
+- its `hooks` are absent or equal to the pin's `grants`.
 
-If any of these fails, stop. The engine never asks for a scope.
+**Before every write**, the engine does all of these. If any fails, it stops without writing:
 
-**Step 1. Read.**
+1. It reads `config.get`, `plugins.list` and `sessions.list`.
+2. It requires **policy OK**.
+3. It requires the **expected state** the walk table (3.5) gives for that point: the entry's `enabled` value, whether the plugin is listed, its version and its `runtime.state`.
+4. It requires **not busy**. If `sessions.list` shows a run going (`hasActiveRun`), it waits for it to end, five minutes at most, then stops with "Clawtrate will finish adding Bot voice when your bots are idle". Every write here reloads plugins and disposes the gateway's MCP runtimes (section 7).
 
-- `config.get` gives `hash` as H1 and `plugins`. `plugins.list` and `sessions.list` follow.
-- Stop when any of these is true:
-  - the plugin is in `plugins.deny`;
-  - `plugins.allow` is non-empty and leaves it out;
-  - `plugins.entries.<id>` exists in any form. `enabled: true` would run the stage at once, as above. `enabled: false` is the person's "taken off" marker (section 12). Any other entry is the gateway owner's. The one exception: the person's own "Add again" goes on when the entry is exactly `{enabled: false}`, which keeps the stage off.
-  - `plugins.list` already lists the plugin. That case is section 11.
+**The device's record.** For each gateway and plugin, the device keeps one record of the attempt it is running: its mode, the pin's integrity, the last step it completed, and the `config.get` hash after its own last write. It lives in the device's own storage, one per gateway and plugin, and is registered with its bound in `owners.ts` by the engine's pull request. It is dropped when the attempt ends, enabled or stopped for good.
 
-**Step 2. Stage.** `plugins.install {source: "npm-pack", archivePath: <the app's tarball>, enable: false}`. Never `mode: "update"`, never `acknowledgeInstallPolicyWarning`, never `acknowledgeCapabilities`.
+**Resume.** At the next connection, a device with a record checks the gateway against the expected state after the record's last step. If it matches, the engine goes on from the next step. If it doesn't, the device drops the record, and the attempt is over.
 
-Compare the answer:
+A device without a record never takes over another device's attempt. When it finds an entry `{enabled: false}` it didn't write, it waits up to 60 seconds for `plugins.changed` before showing any line: the other device is probably finishing.
 
-- `ok: true`;
-- `restartRequired: false`;
-- `plugin.id`, `plugin.packageName` and `plugin.version` equal the pin;
-- `runtime.sourceDigests` and `runtime.selectedEntries` have no entry for the plugin, which is the gateway's own statement that nothing of it was loaded (ran: both empty on a fresh stage).
+**Stops and lost replies.** "Stop" means no further write, and a line from section 10 that says the state the last read confirmed. The gateway's own answer is kept behind an "i". A lost reply is a stop: a timeout, a closed connection, or an answer missing a field this section compares. The engine never repeats a write blindly. The next connection reads first and resumes only by the record. Because every state before step 7 is `enabled: false`, a stop there leaves nothing running.
 
-Stop on any difference. One case stops with a step: `runtime.selectedEntries` or `sourceDigests` naming the plugin means its code ran. The engine then calls `plugins.setEnabled {pluginId, enabled: false}` and stops, whatever that call answers.
+### 3.4 The steps
+
+**Modes.** The engine runs in one of four modes, chosen at step 1:
+
+- **Install**: the plugin is not listed and has no entry. First setup, or a person already paired (section 10).
+- **Add again**: the plugin is not listed and its entry is exactly `{enabled: false}`, which an uninstall elsewhere leaves. Only by the person's click.
+- **Turn on**: the plugin is listed at the pin's version, and its entry says `enabled: false`. It is the person's click after Take it off (section 12), or after a stop.
+- **Update**: the plugin is listed at an older release Clawtrate shipped, enabled, with the pin's grants. Only by the person's click (section 11).
+
+**Step 0. Preconditions, per source.**
+
+| Source             | The connections it runs on                                                                                                                                          |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `npm-pack` (local) | the app's own loopback socket after one-click Connect's check (#688), or Clawtrate's SSH route (section 4)                                                          |
+| `npm` (by address) | any connection to the gateway, `wss://`, Tailscale Serve, a LAN address, or an address typed under Advanced, once the pin's release is published (sections 5 and 8) |
+
+On either source, the gateway's confirmed grant on this connection must include `operator.admin` (section 6), and `hello-ok.server.version` must be one of the pin's `sourceDigests` versions. Otherwise stop. The engine never asks for a scope.
+
+**Step 1. Read and choose the mode.** Run the "before every write" read. Choose the mode by the table above. Every other state is a stop:
+
+- the plugin is listed at another version, or with another integrity;
+- an entry says `enabled: true` for a plugin that isn't listed;
+- deny or the allowlist keeps it out;
+- the entry has keys of the owner's;
+- and so on through section 10's lines.
+
+For **Update**, also call `plugins.inspect`: the installed integrity and version must be a release in this app's table of shipped releases, and older than the pin.
+
+**Step 2. Off first.**
+
+- **Install:** `config.patch {baseHash, raw: {plugins: {entries: {<id>: {enabled: false}}}}}`. A stale base hash goes back to step 1, once.
+- **Update:** `plugins.setEnabled {pluginId, enabled: false}`. Then read again. The disable must have applied: the entry says `enabled: false`, the grants are still there, and the plugin is listed `unloaded` (ran, both).
+- **Add again and Turn on:** the entry already says `enabled: false`. Nothing is written.
+
+Record the step.
+
+**Step 3. Stage.** Install, Add again and Update only. Call `plugins.install {source: "npm-pack", archivePath: <the app's tarball>, enable: false}`.
+
+- **Update** adds `mode: "update"`.
+- **The route by address** uses `{source: "npm", spec: "<packageName>@<version>", pin: true, expectedPluginId, expectedIntegrity}` in place of the archive (section 5).
+- **Never** `acknowledgeInstallPolicyWarning`, and never `acknowledgeCapabilities`.
+
+The answer must show:
+
+- `ok: true` and `restartRequired: false`;
+- `plugin.id`, `plugin.packageName` and `plugin.version` equal to the pin;
+- `plugin.enabled: false`;
+- no entry for the plugin in `runtime.sourceDigests` or `runtime.selectedEntries` (ran: none on every stage under `enabled: false`).
+
+If any of these is missing, stop.
+
+If a source digest or selected entry names the plugin, its code ran. The engine calls `plugins.setEnabled {pluginId, enabled: false}` and stops.
 
 Other answers:
 
-| Answer                                            | What the engine does                                                                   |
-| ------------------------------------------------- | -------------------------------------------------------------------------------------- |
-| `UNAVAILABLE` "already running" (ran, both)       | Wait (`retryAfterMs` when given, else 1, 2, 4 seconds), at most three tries, then stop |
-| "plugin already exists"                           | Another device staged it: go back to step 1, which then stops for section 11           |
-| The local-artifact error                          | Section 5's route                                                                      |
-| `install_policy_warning_acknowledgement_required` | Stop with the warning; the engine never acknowledges a warning                         |
-| Anything else                                     | Stop                                                                                   |
+| Answer                                            | What the engine does                                                                      |
+| ------------------------------------------------- | ----------------------------------------------------------------------------------------- |
+| `UNAVAILABLE` "already running" (ran, both)       | Wait (`retryAfterMs` when given, else 1, 2 and 4 seconds), three tries at most, then stop |
+| "plugin already exists"                           | Another device staged it. Stop; that device's record carries its attempt                  |
+| The local-artifact error                          | Stop, and use the route by address when it is eligible (step 0)                           |
+| `install_policy_warning_acknowledgement_required` | Stop, with the warning. Clawtrate never acknowledges one, and offers no way past it       |
+| Anything else                                     | Stop                                                                                      |
 
-**Step 3. Inspect.** `plugins.inspect {pluginId}`. Compare, each field required:
+Record the step.
 
-- `plugin.id`, `plugin.version`;
-- `source.kind` is `"npm"`, which is what an `npm-pack` install records (ran, both);
-- `source.packageName` and `source.spec` (`<name>@<version>`);
-- `source.integrity` equals the pin, with `source.integrityKind` `"ssri"`;
-- every group of `declared` equals the pin;
-- `reviewToken` is present.
+**Step 4. Verify the installed artifact.** All four modes. Call `plugins.inspect {pluginId}`. Each of these fields is required, and must equal the pin:
 
-On a difference, go to step 8.
+- `plugin.id` and `plugin.version`;
+- `source.kind` is `"npm"` (what both `npm-pack` and `npm` record; ran, both);
+- `source.packageName`, and `source.spec`, which is `<name>@<version>`;
+- `source.integrity`, with `source.integrityKind` `"ssri"`;
+- every group of `declared`;
+- `reviewToken`, which must be present. Keep it.
 
-**Step 4. Read again.** `config.get` gives H2. Every stop of step 1 applies again. The plugin's entry must still be absent, or exactly `{enabled: false}` for "Add again". `plugins.list` must show it with `runtime.state: "unloaded"`. Otherwise stop: another device or the owner acted in between.
+On a difference, stop. The plugin stays installed and off, and nothing is removed (3.6). Record the step.
 
-**Step 5. Grant.** Only when the pin's `grants` aren't empty. If `sessions.list` shows a run going (`hasActiveRun`), wait for it, at most five minutes, then stop (section 7). Then `config.patch {baseHash: H2, raw: <exactly the pin's grants under plugins.entries.<id>>}`.
+**Step 5. Grant.** Only when the entry lacks the pin's `grants`. Call `config.patch {baseHash, raw: {plugins: {entries: {<id>: {enabled: false, hooks: <the pin's grants>}}}}}`.
 
-- A stale base hash: back to step 4 once, then stop.
-- The new entry must hold only the grants, and for "Add again" the `enabled: false` it had; `enabled: true` in it is a stop.
+The `enabled: false` is written in the same patch as the grant, every time.
 
-**Step 6. Enable.** `plugins.setEnabled {pluginId, enabled: true, allowlistPolicy: "preserve", acknowledgeCapabilities: {reviewToken: <step 3's>}}`.
+Then read again. The entry must be `{enabled: false}` plus the grants (an empty `config` allowed), and the plugin must still be listed `unloaded` (ran, both). A stale base hash goes back to the read before this step, once. Record the step.
 
-- The answer must have `ok: true` and `restartRequired: false`.
-- "blocked by allowlist" and "blocked by denylist" (ran, both) are stops.
+**Step 6. The last check.** Run the "before every write" read, plus `plugins.inspect` again. All of these must hold:
 
-**Step 7. Confirm.**
+- the entry is exactly `{enabled: false}` plus the pin's grants;
+- policy OK;
+- the plugin is listed `unloaded` at the pin's version;
+- `source.integrity` still equals the pin.
 
-- `plugins.list`: the plugin is `runtime.state: "active"` at the pinned version.
-- `runtime.sourceDigests[<id>]` from step 6's answer equals the pin's `sourceDigest`, when the pin has one.
-- `plugins.inspect` again: `source.integrity` still equals the pin.
-- The plugin's own method answers, with the version it reports.
+**Step 7. Enable.** Call `plugins.setEnabled {pluginId, enabled: true, allowlistPolicy: "preserve", acknowledgeCapabilities: {reviewToken: <step 4's>}}`.
 
-On any difference: `plugins.setEnabled {pluginId, enabled: false}`, then stop. The line then says what the gateway reports, for example "turned off; its entry says `enabled: false`".
+The answer must show:
 
-**Step 8. Removing a stage that didn't match.**
+- `ok: true` and `restartRequired: false`;
+- `runtime.sourceDigests[<id>]` equal to the pin's digest for this OpenClaw version.
 
-- `plugins.uninstall {pluginId}` only when all of these still hold:
-  - the plugin was absent at step 1;
-  - step 2's answer named this id;
-  - `plugins.list` still shows it unloaded;
-  - neither `plugins.allow` nor `plugins.deny` names it (uninstall edits both, section 12).
-- Otherwise leave it as staged, unloaded, and stop: its ownership or identity can no longer be shown to be this attempt's.
-- After an uninstall, the line says what the gateway confirmed: "removed; the gateway reported it unloaded".
+"blocked by allowlist", "blocked by denylist" and "plugin not installed" are stops; the plugin stays as it was.
 
-**The copy is the gateway's.** The gateway extracts the archive into `<state>/npm/projects/<id>/node_modules/<package>`. With the app's folder moved away, the plugin kept answering, and `plugins.reload` reloaded it from that copy (ran, both). So an app update, a move, or macOS's translocated launch doesn't break an installed plugin.
+If the digest differs or is missing, call `plugins.setEnabled {pluginId, enabled: false}`, then stop. If the reply is lost, step 8 decides from what it reads.
 
-**Where the tarball lives.** The packaged app ships it outside `app.asar`: `Clawtrate.app/Contents/Resources/plugins/` on macOS, and `resources\plugins\` beside the executable on Windows (an `extraResources` entry in `apps/desktop/packaging/config.ts`). The gateway reads it with plain Node, which can't read inside an Electron archive. The app writes nothing on the person's disk. This keeps one-click Connect's rule that the app only reads OpenClaw's profile (#688).
+**Step 8. Confirm.** Read `config.get`, `plugins.list` and `plugins.inspect`, and call the plugin's own method. All of these must hold:
+
+- the entry says `enabled: true` with exactly the pin's grants;
+- policy OK;
+- the plugin is listed `runtime.state: "active"` at the pin's version;
+- `source.integrity` still equals the pin;
+- the method answers, with the version it reports.
+
+If all hold, the result is **enabled, confirmed**, and the record is dropped. Otherwise call `plugins.setEnabled {pluginId, enabled: false}` and stop. The line says what the next read shows.
+
+### 3.5 Every scenario, walked through every step
+
+**The walk table** gives the entry's `enabled` value after each step. It uses these short forms:
+
+- `F`: `enabled: false`;
+- `T`: `enabled: true`;
+- `—`: no entry, or nothing written;
+- `+g`: the pin's grants are in the entry;
+- `x`: the step doesn't apply.
+
+"Ran" means the row ran on development gateways of both versions in this design's runs, with the same result on each; "read" means it is derived from the source and the runs of the steps it uses. Every row ends at **enabled, confirmed**, or at a named stop with the plugin's code not loaded, except the two rows marked ⚠, which are 3.2's window.
+
+| #    | Scenario                                                   | 1 read | 2 off                                                           | 3 stage                                | 4 verify                 | 5 grant                             | 6 check       | 7 enable          | 8 confirm      | Ends with                                                                                 | Run               |
+| ---- | ---------------------------------------------------------- | ------ | --------------------------------------------------------------- | -------------------------------------- | ------------------------ | ----------------------------------- | ------------- | ----------------- | -------------- | ----------------------------------------------------------------------------------------- | ----------------- |
+| 1    | Install                                                    | —      | F                                                               | F, unloaded                            | F                        | F+g, unloaded                       | F+g           | T+g, active       | T+g            | enabled, confirmed                                                                        | ran               |
+| 2    | Add again (entry `{enabled: false}`, not listed)           | F      | F                                                               | F, unloaded                            | F                        | F+g, unloaded                       | F+g           | T+g, active       | T+g            | enabled, confirmed                                                                        | ran               |
+| 3    | Turn on (listed, entry `{enabled: false}`)                 | F      | F                                                               | x                                      | F                        | F+g                                 | F+g           | T+g, active       | T+g            | enabled, confirmed                                                                        | ran, steps 6 to 8 |
+| 4    | Update the person asks for (listed older, `T+g`)           | T+g    | F+g, unloaded                                                   | F+g, newer, unloaded                   | F+g                      | x (has g)                           | F+g           | T+g, active       | T+g            | enabled, confirmed at the new version                                                     | ran               |
+| 5a   | Stop or lost reply after step 2                            | —      | F                                                               | stop                                   |                          |                                     |               |                   |                | off; the record resumes at step 3; other devices wait, then "Add again"                   | read              |
+| 5b   | Stop after step 3 (busy, crash)                            | —      | F                                                               | F, unloaded, stop                      |                          |                                     |               |                   |                | off; resumes at step 4                                                                    | read              |
+| 5c   | Stop at step 4 (mismatch)                                  | —      | F                                                               | F                                      | stop                     |                                     |               |                   |                | installed, off; "didn't match", nothing removed                                           | read              |
+| 5d   | Stop after step 5 (busy five minutes, lost reply)          | —      | F                                                               | F                                      | F                        | F+g, stop                           |               |                   |                | off; resumes at step 6                                                                    | read              |
+| 5e   | Stop at step 6 (the state changed)                         | —      | F                                                               | F                                      | F                        | F+g                                 | stop          |                   |                | off; the line says what changed                                                           | read              |
+| 5f   | Lost reply at step 7                                       | —      | F                                                               | F                                      | F                        | F+g                                 | F+g           | ?                 | read           | step 8 confirms it, or turns it off                                                       | read              |
+| 5g   | Step 8 finds a difference                                  | —      | F                                                               | F                                      | F                        | F+g                                 | F+g           | T+g               | → F+g          | turned off; "what OpenClaw loaded didn't match"                                           | read              |
+| 6    | Two devices start at once (the second after the slash)     | — / —  | F / stale base hash: back to step 1, finds F without its record | F / x                                  | F / x                    | F+g / x                             | F+g / x       | T+g / x           | T+g / reads it | enabled, confirmed by the first; the second waits for `plugins.changed`, then shows it on | in part           |
+| 7a   | Owner denies after step 1, before step 6                   | —      | F                                                               | F (install leaves deny alone)          | F                        | stop at the read before step 5 or 6 |               |                   |                | off; "Turned off in the gateway's settings"                                               | read              |
+| 7b   | Owner denies between step 6 and step 7                     | —      | F                                                               | F                                      | F                        | F+g                                 | F+g           | blocked           |                | off; "Turned off in the gateway's settings"                                               | ran               |
+| 7c   | Owner writes `enabled: true` before step 3                 | —      | F → T                                                           | stop (read)                            |                          |                                     |               |                   |                | the owner's choice; Clawtrate stops and stages nothing                                    | read              |
+| 7d   | Owner writes `enabled: true` after step 3                  | —      | F                                                               | F → T: active                          | stop (unloaded expected) |                                     |               |                   |                | the owner ran it; Clawtrate stops; "Turned on in the gateway's settings"                  | read              |
+| 7e   | Owner revokes the grant between step 6 and step 7          | —      | F                                                               | F                                      | F                        | F+g                                 | F+g → F, no g | T, hook off       | → F            | turned off at step 8; "Turned off in the gateway's settings"                              | ran               |
+| 7f ⚠ | Owner writes `enabled: false` between step 6 and step 7    | —      | F                                                               | F                                      | F                        | F+g                                 | F+g           | T+g               | T+g            | enabled over the owner's no-op write (3.2's one exception)                                | read              |
+| 7g   | Owner uninstalls between step 6 and step 7                 | —      | F                                                               | F                                      | F                        | F+g                                 | F+g           | not installed     |                | stop; "Add again" (entry `{enabled: false}`)                                              | read              |
+| 8 ⚠  | Another admin replaces the stage between step 6 and step 7 | —      | F                                                               | F                                      | F                        | F+g                                 | F+g           | T+g, other digest | → F+g          | turned off at step 7; the replaced code ran once                                          | read              |
+| 9    | Route by address, with npm                                 | —      | F                                                               | F, unloaded (npm, `expectedIntegrity`) | F                        | F+g                                 | F+g           | T+g, active       | T+g            | enabled, confirmed                                                                        | read              |
+
+Rows 1, 2 and 4 ran end to end on both versions, with the calls of 3.4. Row 3 ran from step 6, from a listed plugin whose entry said `enabled: false` with its grant; its step 4 is row 2's. Row 1 ran with an unrelated config write between steps 5 and 6, which loaded nothing. Row 6 ran in part: a second device's stage, sent at the same moment, was answered "already running", and after the first device's install the entry was the stage's own. The two devices' `config.patch` race on one base hash was read, not run, because both test writes left the config unchanged. Rows 7b and 7e ran with the owner's change written between the step 6 read and step 7.
+
+### 3.6 Nothing is removed by the engine
+
+`plugins.uninstall` takes no precondition. It edits `plugins.allow` and `plugins.deny` (section 12), and it can't tell this attempt's stage from another device's later one. So the engine never calls it. A stage that didn't match stays installed under `enabled: false`, where it never loads. The line offers nothing that removes it. Removing it is OpenClaw's own plugin settings (#794).
+
+**Where the tarball lives.** The packaged app ships it outside `app.asar`: `Clawtrate.app/Contents/Resources/plugins/` on macOS, and `resources\plugins\` beside the executable on Windows (an `extraResources` entry in `apps/desktop/packaging/config.ts`). The gateway reads it with plain Node, which can't read inside an Electron archive. It copies it into `<state>/npm/projects/<id>/node_modules/<package>`. With the app's folder moved away, the plugin kept answering, and `plugins.reload` reloaded it from that copy (ran, both). The app writes nothing on the person's disk, which keeps one-click Connect's rule that it only reads OpenClaw's profile (#688).
 
 ## 4. The route over SSH
 
 **Proposed, read and not run.** The SSH screens aren't built yet (`docs/decisions.md`, "SSH to another computer", "Not done here").
 
 1. Over its existing SSH route, the app runs one more constant script, as it runs the LOOK. The script makes a private folder under that computer's temporary folder (`umask 077`, `mktemp -d`), writes the tarball from standard input, and prints the folder's path and the file's SHA-512. A SHA-512 that isn't the pin's is a stop.
-2. Section 3.3's steps 0 to 8 run through the forward, with that path. The gateway counts the forward as local (section 2).
+2. Section 3.4's steps 0 to 8 run through the forward, with that path. The gateway counts the forward as local (section 2).
 3. The app removes its folder by its exact path once the gateway has its copy, or at its next SSH contact if it couldn't then.
 
 `terminal.upload` would do step 1 through the gateway's own methods; section 1 says why it is not the route.
@@ -271,9 +390,9 @@ On any difference: `plugins.setEnabled {pluginId, enabled: false}`, then stop. T
 
 **Established:** no gateway method takes a plugin's bytes from a connection that isn't local. Such a connection can install only a package from a registry (`npm`, `clawhub`) or a git repository on the network.
 
-**Proposed: npm, used only to stage.** Step 2 of section 3.3 becomes `plugins.install {source: "npm", spec: "@clawtrate/<plugin>@<exact version>", pin: true, expectedPluginId, expectedIntegrity: <the pin's>, enable: false}`. Steps 0 and 1, and 3 to 8, are unchanged, with these differences:
+**Proposed: npm, used only to stage.** Step 3 of section 3.4 becomes `plugins.install {source: "npm", spec: "@clawtrate/<plugin>@<exact version>", pin: true, expectedPluginId, expectedIntegrity: <the pin's>, enable: false}`. Every other step is the same, under the same `enabled: false`.
 
-- **Step 0 also needs a confirmed admin grant on a remote connection**, and section 3.2's window is not accepted on its own merits here. The gateway's own `expectedIntegrity` check before it installs closes the archive window. Inspect-to-enable remains, open to processes of the account that runs the gateway on that computer, which can already rewrite that gateway.
+- **When the route by address is eligible** (section 3.4, step 0): on any connection with a confirmed admin grant, once the pin's release is published. The gateway's own `expectedIntegrity` check, before it installs, covers the download. The window between the last check and the enable is section 3.2's, open to an admin or to the account that runs that gateway. Both can already rewrite it.
 - **What the gateway checks** (`bots-in-clawtrate.md` §6.3 cites each line):
   - it downloads from its own registry setting;
   - it refuses a different integrity before it installs ("aborted: npm package integrity drift detected", `<1006>/dist/npm-integrity-C9ZL9MoY.mjs:3-27`);
@@ -323,8 +442,8 @@ With `clawtrate-bots` in `plugins.deny`, both calls answered "blocked by denylis
 
 - **Every write is gated on the connection's current, confirmed grant.** That is the scopes the gateway confirmed for this device in the current hello, not what the app asked for. This applies to `plugins.install`, `config.patch`, `plugins.setEnabled` and `plugins.uninstall`. A connection whose grant lacks `operator.admin` changes nothing; it shows what `plugins.list` says (section 10). If the gateway refuses a write with a scope error mid-sequence, that is a stop.
 - **The engine never asks for scopes.** Full control is asked for at pairing (`setup-effortless.md` §2) and through the consented upgrade, never here.
-- **`allowlistPolicy: "preserve"` on every `setEnabled`.** The engine never adds a plugin to `plugins.allow` and never removes one from `plugins.deny`.
-- **An explicit disable is honoured:** a plugin entry with `enabled: false`, installed or not, is the owner's, and so is a name in `plugins.deny`. Only the person's own "Add again" or "Turn on" in Clawtrate goes past it, and even then never past `plugins.deny`. Clearing deny is OpenClaw's own settings, in #794's design.
+- **`allowlistPolicy: "preserve"` on every `setEnabled`, enabling and disabling alike:** `plugins.setEnabled {pluginId, enabled: true, allowlistPolicy: "preserve", acknowledgeCapabilities: {reviewToken}}` and `plugins.setEnabled {pluginId, enabled: false, allowlistPolicy: "preserve"}`. The engine never adds a plugin to `plugins.allow` and never removes one from `plugins.deny`. It never calls `plugins.uninstall`, which does both (section 12).
+- **An explicit disable is honoured.** A plugin entry with `enabled: false`, installed or not, is the owner's, and so is a name in `plugins.deny`. The marker is checked before each write (section 3.3), not only at the start. Only the person's own "Add again" or "Turn on" in Clawtrate goes past `enabled: false`, and nothing goes past `plugins.deny`. Clearing deny belongs to OpenClaw's own settings, in #794's design. The one disable the engine can't see is described in section 3.2.
 
 ## 7. Restart
 
@@ -334,8 +453,8 @@ With `clawtrate-bots` in `plugins.deny`, both calls answered "blocked by denylis
 
 **Proposed:**
 
-- **Defer while the gateway is busy.** The grant's `config.patch` (section 3.3, step 5) waits until `sessions.list` shows no run going, at most five minutes, and otherwise stops with "Clawtrate will add Bot voice when your bots are idle." It is tried again at the next connection.
-- **Stop on an unexpected restart requirement.** Any answer with `restartRequired: true` (the docs name edited bundled code, which isn't Clawtrate's case) is a stop. The engine does not restart OpenClaw by itself. The line offers it: "OpenClaw needs a restart to finish adding Bot voice · Restart". That calls `gateway.restart.request {}`, which on both versions answered `status: "scheduled"` with a preflight ("safe to restart now", or the active work that defers it) and restarted the gateway in place (ran). Then the engine reads again from step 1. This is the owner's "one restart, for all plugins together, with one line", given to the person instead of done for them.
+- **Defer every write while the gateway is busy.** Each write in section 3.4 waits until `sessions.list` shows no run going, at most five minutes (section 3.3). Otherwise it stops with "Clawtrate will finish adding Bot voice when your bots are idle.", and the device's record resumes it at the next connection. Every state it can stop in is `enabled: false`.
+- **Stop on an unexpected restart requirement.** Any answer with `restartRequired: true` (the docs name edited bundled code, which isn't Clawtrate's case) is a stop. The engine does not restart OpenClaw by itself. The line offers it as the person's own action: "OpenClaw needs a restart to finish adding Bot voice · Restart". Only that click calls `gateway.restart.request {}`, which on both versions answered `status: "scheduled"` with a preflight ("safe to restart now", or the active work that defers it) and restarted the gateway in place (ran). After it, the engine resumes by its record, from the step it stopped at. This is the owner's "one restart, for all plugins together, with one line", given to the person instead of done for them.
 
 ## 8. Publishing, for the route by address
 
@@ -345,7 +464,7 @@ Needed only for section 5's npm route. Everything in `plugins-publish.md` and `b
 
 1. Each plugin to publish gets `"name": "@clawtrate/<folder>"` and a `files` list in its `package.json` (only `clawtrate-bots` has them).
 2. `plugin-npm.ts` and `plugins-publish.yml` take the plugin as an input, one of a fixed list, and the lock holds one entry per plugin. Their tests cover each plugin. The packer keeps refusing any dependency field, so the one integrity covers all the code.
-3. The release packs every plugin the app carries, from its own commit, and writes the pin (section 3.3) from that packing. It fails when a plugin's bytes changed but its version didn't.
+3. The release packs every plugin the app carries, from its own commit, and writes the pin (section 3.3) from that packing. That includes each source digest, recorded by the e2e spec on each supported OpenClaw version. It fails when a plugin's bytes changed but its version didn't, or when a digest is missing.
 
 **Once, by the owner in person, one sign-in for all five packages.** npm sets up trusted publishing only on a package that already exists (`docs.npmjs.com/trusted-publishers`, read 2026-11-26). The owner's bootstrap of each placeholder is required, and nobody else publishes anything by hand.
 
@@ -379,9 +498,9 @@ Read from each plugin's README and code. Each loaded and answered on both versio
 
 **What every variant says about the grant**, in these words or the owner's: "Bot voice adds a short guide to each bot's instructions. To do that, OpenClaw lets the plugin see each bot's prompts and messages; it uses none of them."
 
-**Where it applies.** These lines show only when section 3.3's step 0 can pass:
+**Where it applies.** These lines show only when section 3.4's step 0 can pass:
 
-- the route is this computer, after one-click Connect's check, or later the SSH route;
+- the route is this computer, after one-click Connect's check; later the SSH route; or, after the publish, a gateway reached by its address;
 - the grant being asked for, or held, is full control.
 
 On any other route, or without full control, no line promises an install; the table at the end says what shows.
@@ -392,7 +511,7 @@ On any other route, or without full control, no line promises an install; the ta
 
 > "Connecting also adds Clawtrate's plugin for Bot voice to this OpenClaw. It can see your bots' prompts and messages and uses none of them. You can take it off in Settings."
 
-Connect is the consent, as it is for full control. The engine runs after the pairing confirms admin, while the first run goes on. The install took 5 to 13 seconds per plugin on a heavily loaded machine (ran).
+Connect is the consent, as it is for full control. The engine runs after the pairing confirms admin, while the first run goes on. On the development gateways a stage took 5 to 13 seconds on a heavily loaded machine.
 
 **Variant B: asks once, plainly.** The card says nothing about it. After the first run's first screen, one card:
 
@@ -415,27 +534,29 @@ Connect is the consent, as it is for full control. The engine runs after the pai
 ### Afterwards, in both variants
 
 - Settings, Conversation, Bot voice works with no link and no setup steps.
-- Under it, quietly: "Clawtrate's voice plugin is on this gateway · Take it off". There is no Undo, because removing it restores nothing (section 12).
+- Under it, quietly: "Clawtrate's voice plugin is on this gateway · Take it off". There is no Undo, because taking it off restores nothing (section 12). When it is off: "Clawtrate's voice plugin is off on this gateway · Turn on".
 - The outside link Settings shows today (`packages/ui/src/Settings.tsx:392-413`) goes, as #796's first part asks.
 
 ### When it isn't installed
 
-One line in the same place, with the gateway's own words behind an "i" where it gave any. Each describes the state the gateway confirmed.
+One line in the same place, with the gateway's own words behind an "i" where it gave any. Each line describes only the state the engine's last read confirmed, never one it assumed.
 
-| What happened                                                                                      | What the person sees                                                                                                                       |
-| -------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------ |
-| No full control on this connection                                                                 | "Clawtrate needs full control of this gateway to add its voice plugin." with setup's existing way to get it                                |
-| A route the engine doesn't run on: by address before a publish, or an address typed under Advanced | "Clawtrate can't add its voice plugin to this gateway yet."                                                                                |
-| The gateway refused the stage                                                                      | "OpenClaw didn't add Clawtrate's voice plugin." · Try again                                                                                |
-| The install policy warned                                                                          | "OpenClaw warned about Clawtrate's voice plugin." with the warning, and Add anyway. Clawtrate never acknowledges a warning by itself.      |
-| A mismatch at step 3, removed at step 8                                                            | "The plugin OpenClaw got didn't match the one this Clawtrate carries. Clawtrate removed it; the gateway reported it unloaded." · Try again |
-| A mismatch it couldn't remove                                                                      | "The plugin OpenClaw got didn't match the one this Clawtrate carries. It is installed and not loaded; Clawtrate left it."                  |
-| Turned off at step 7                                                                               | "Clawtrate turned off its voice plugin: what OpenClaw loaded didn't match. Its entry says enabled: false." · Try again                     |
-| Busy                                                                                               | "Clawtrate will add Bot voice when your bots are idle."                                                                                    |
-| A restart asked for                                                                                | "OpenClaw needs a restart to finish adding Bot voice · Restart"                                                                            |
-| An entry that already exists, or a name in `plugins.allow` or `plugins.deny` that keeps it out     | "Turned off in the gateway's settings"                                                                                                     |
-| Taken off by the person                                                                            | "Bot voice's plugin isn't on this gateway · Add again"                                                                                     |
-| An installed version this app doesn't ship                                                         | Section 11's lines                                                                                                                         |
+| What happened                                                                             | What the person sees                                                                                                                                 |
+| ----------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| No full control on this connection                                                        | "Clawtrate needs full control of this gateway to add its voice plugin." with setup's existing way to get it                                          |
+| A route the engine doesn't run on yet (by address before a publish)                       | "Clawtrate can't add its voice plugin to this gateway yet."                                                                                          |
+| The gateway refused the stage                                                             | "OpenClaw didn't add Clawtrate's voice plugin." · Try again                                                                                          |
+| The install policy warned                                                                 | "OpenClaw warned about Clawtrate's voice plugin, so Clawtrate didn't add it." with the warning behind the "i". There is no way past it in Clawtrate. |
+| A mismatch at step 4                                                                      | "The plugin OpenClaw got didn't match the one this Clawtrate carries. OpenClaw has it installed and off."                                            |
+| Turned off at step 7 or 8                                                                 | "Clawtrate turned off its voice plugin: what OpenClaw loaded didn't match. Its entry says enabled: false." · Try again                               |
+| A lost reply                                                                              | "Clawtrate lost touch with OpenClaw while adding Bot voice. It is off; Clawtrate goes on when it reconnects."                                        |
+| Busy                                                                                      | "Clawtrate will finish adding Bot voice when your bots are idle."                                                                                    |
+| A restart asked for                                                                       | "OpenClaw needs a restart to finish adding Bot voice · Restart" (the person's own action)                                                            |
+| An entry of the owner's, or a name in `plugins.allow` or `plugins.deny` that keeps it out | "Turned off in the gateway's settings"                                                                                                               |
+| The owner turned it on in OpenClaw's settings before Clawtrate checked it (row 7d)        | "Turned on in the gateway's settings; Clawtrate didn't check this copy."                                                                             |
+| Not listed, with the entry `{enabled: false}`                                             | "Bot voice's plugin isn't on this gateway · Add again"                                                                                               |
+| Listed and off                                                                            | "Clawtrate's voice plugin is off on this gateway · Turn on"                                                                                          |
+| An installed version this app doesn't ship                                                | Section 11's lines                                                                                                                                   |
 
 No line links to a page outside the app.
 
@@ -450,31 +571,31 @@ No line links to a page outside the app.
 - **An update with `enable: false` of an enabled plugin runs the new code at once** (section 3.1).
 - **No plugin mutation takes a precondition on the installed version or digest.** The gateway runs one plugin or config change at a time (`UNAVAILABLE` "already running", ran, both), but each request takes its own lease (`withPluginLifecycleLease`, `<1006>/dist/plugins-mutations-ClrWTX5-.mjs:37-43`). A device's read and its later update are two requests, so another device's update can run between them.
 
-**Proposed: no automatic updates** until the gateway can compare the expected current version and digest under its own mutation lock. Until then, the read-before-write check narrows the race but doesn't remove it. If two devices raced, the gateway could end up running the older plugin until a person acts again. So nothing updates by itself.
+**Proposed: no automatic updates** until the gateway can compare the expected current version and digest under its own mutation lock.
 
-**Comparing versions.** A version is canonical only as `x.y.z`: three non-negative integers with no leading zeros and nothing after them. Two versions compare numerically, part by part, date-shaped triples included (`2026.11.10` is newer than `2026.9.30`). These are left alone, with "This gateway has another copy of Bot voice's plugin; Clawtrate leaves it as it is.":
+**The downgrade window, plainly.** The gateway accepts an older version over a newer one. Picture two devices with full control, each with a Clawtrate that ships a different version, whose people press Update within the same second or so:
 
-- a prerelease;
-- a build suffix;
-- any other form;
+- the older app's read can come before the newer app's install;
+- its own install can then commit after the newer app's.
+
+The gateway would then run the older release. That release is still one a signed Clawtrate shipped, and it passed that app's checks. The newer app's step 8 sees a version that isn't its own and turns the plugin off, so Bot voice stays off until a person presses Update again.
+
+Nobody else can use this window: it needs two people with full control pressing Update at nearly the same time. It can't be closed from the client. Because of it, nothing updates by itself.
+
+**Comparing versions.** A version is canonical only as `x.y.z`: three non-negative integers, with no leading zeros and nothing after them. Two versions compare numerically, part by part, date-shaped triples included (`2026.11.10` is newer than `2026.9.30`). These are left alone, with "This gateway has another copy of Bot voice's plugin; Clawtrate leaves it as it is.":
+
+- a prerelease, a build suffix, or any other form;
 - the same version with another integrity;
 - a package name, plugin id or source kind the pin doesn't know;
-- a plugin installed another way (a linked checkout, a path, git).
+- a plugin installed another way: a linked checkout, a path, or git.
 
-**An update the person asks for.** It is offered only when every one of these holds:
+**An update the person asks for** is section 3.4's Update mode, walked as row 4 of section 3.5. It is offered only when all of these hold:
 
-- the installed copy is one Clawtrate shipped: its name, version and integrity are in this app's table of shipped releases, which the release carries forward;
+- `plugins.inspect` shows the installed integrity and version as a release in this app's table of shipped releases, which the release carries forward;
 - it is older than the pin;
 - step 0 passes.
 
-Settings shows: "A newer Bot voice plugin comes with this Clawtrate · Update". Update runs:
-
-1. `config.get` and `plugins.list` (H1). The installed name, version and integrity are a shipped release older than the pin.
-2. `plugins.setEnabled {pluginId, enabled: false}`, so that the staged update can't run, given 3.1.
-3. `plugins.install {source: "npm-pack", archivePath, enable: false, mode: "update"}`, with step 2 of section 3.3's answer checks.
-4. Section 3.3's steps 3 to 7. The grant is already there, so step 5 checks it and writes only what is missing.
-
-A stop after step 2 leaves the plugin installed and turned off, and the line says so: "Bot voice's plugin is turned off; its entry says enabled: false. · Turn on". Bot voice is away for seconds during an update.
+Settings shows: "A newer Bot voice plugin comes with this Clawtrate · Update". During an update Bot voice is off for seconds. A stop after its step 2 leaves the plugin installed and off, and the line says so: "Clawtrate's voice plugin is off on this gateway · Turn on". Turn on then runs Turn on mode, verifying the installed artifact first (step 4). If the installed artifact is still the older shipped release, the line offers Update instead.
 
 **A newer copy than this app ships** is never touched. The app uses it when its methods are ones the app knows. Each plugin keeps its previous method shapes working for at least two releases, as `bots-in-clawtrate.md` §6.5 says for the bots plugin. Otherwise the app shows "Update Clawtrate on this device to use Bot voice."
 
@@ -493,20 +614,33 @@ A stop after step 2 leaves the plugin installed and turned off, and the line say
 
 **Proposed:**
 
-- **"Take it off", never "Undo".** Take it off is `plugins.uninstall`, offered only when neither `plugins.allow` nor `plugins.deny` names the plugin. Uninstall would change those lists, which are the owner's. Otherwise the plugin is turned off instead (`plugins.setEnabled {enabled: false}`). The line says what the gateway confirmed: "Taken off; the gateway's entry for it says enabled: false." A real Undo would have to restore the earlier version, config and grants without overwriting changes made since. No OpenClaw method offers that.
-- **The marker.** The `enabled: false` entry the gateway leaves is the record, on every device and across reinstalls, that the person took it off. Every write in section 3.3 checks for it first (step 1), and only the person's own "Add again" goes past it. Add again then enables the plugin explicitly, through the same steps.
+- **"Take it off", never "Undo".** Take it off turns the plugin off and removes its grant. It runs only after the before-write read of section 3.3, and makes two writes:
+  - `plugins.setEnabled {pluginId, enabled: false, allowlistPolicy: "preserve"}`;
+  - then `config.patch {baseHash, raw: {plugins: {entries: {<id>: {enabled: false, hooks: null}}}}}`.
+
+  The plugin stays installed, unloaded, under `enabled: false`. The line says what the next read confirmed: "Taken off; OpenClaw has it installed and off." It never calls `plugins.uninstall`:
+  - uninstall takes no precondition;
+  - it edits `plugins.allow` and `plugins.deny`, which are the owner's;
+  - a read before it can't protect those lists from an edit in between.
+
+  A real Undo would have to restore the earlier version, config and grants without overwriting changes made since. No OpenClaw method offers that.
+
+- **The marker.** An entry that says `enabled: false` is the record, on every device and across reinstalls, that the plugin is off on purpose. This holds whether the plugin is installed (Take it off, or a stop) or not (an uninstall elsewhere). Every write in section 3.4 checks it first. Only the person's own "Turn on" or "Add again" goes past it, and each verifies the installed artifact before it enables anything.
 - **Turn off** (the plugin's own switch, where it has one, such as Bot voice's) is the plugin's setting, not the plugin.
-- Taking off `clawtrate-voice` asks nothing: what it keeps, it keeps. A plugin whose removal loses something a person can't get back (the bots plugin's journal) asks once, as `bots-in-clawtrate.md` §6.6 says.
+- **Taking off `clawtrate-voice` asks nothing.** It removes nothing, and the voice setting survives (ran). A plugin whose removal loses something a person can't get back, such as the bots plugin's journal, asks once, as `bots-in-clawtrate.md` §6.6 says.
 
 ## 13. Not established
 
 - **A gateway on another computer:** no remote connection was made. Three things were read from both versions' source: the refusal of local sources to such a connection, the local attribution of an SSH forward, and the npm route's integrity check. OpenClaw's own local-host rule was called, and answered as section 2 says.
 - **The packaged app's own path:** that a gateway reads a tarball inside a signed `Clawtrate.app` (and a translocated one), and a Windows install's `resources` folder. The runs used a folder laid out the same way, on macOS.
-- **A gateway running as another account, in a container, or in WSL** on the same computer: its error for an unreadable or missing path was not seen. Step 0 keeps the engine off such a gateway.
+- **A gateway running as another account, in a container, or in WSL** on the same computer: its error for an unreadable or missing path was not seen. Step 0 keeps the `npm-pack` route off such a gateway.
 - **The manifest fix:** the exact form OpenClaw's manifest accepts for the voice plugin's hook. Step 1 of section 14 checks it with `plugins.inspect` on both versions.
 - **Whether `runtime.sourceDigests` is stable** across the versions a pin covers. It was the same on 2026.10.6 and 2026.11.10 for the same package; a newer OpenClaw may compute it differently, which is why the pin records it per version.
 - **`terminal.upload` on 2026.11.10:** run on 2026.10.6 only; the same method and words are in its rpc page.
 - **What disposing MCP runtimes does to an MCP call in flight.**
+- **Two devices' `config.patch` on one base hash** (section 3.5, row 6). `config.patch` takes `baseHash`, which the engine relies on to refuse the second. The run's two writes changed nothing, so the refusal wasn't seen.
+- **Rows 5, 7a, 7c, 7d, 7f, 7g, 8 and 9 of section 3.5:** read, as built from steps that ran.
+- **The local routes as people reach them.** The runs used a development gateway on macOS, reached through a direct loopback socket. One-click Connect's own checked socket, a gateway installed by OpenClaw's own setup, and the SSH forward weren't exercised.
 - **Whether `clawtrate-computer` registers nothing** when installed this way: its guard was read; the run asked it a method it doesn't have.
 
 ## 14. What must exist first, and the order of pull requests
@@ -514,10 +648,10 @@ A stop after step 2 leaves the plugin installed and turned off, and the line say
 **Before the engine can be built:**
 
 - Nothing new from OpenClaw: every method is on both versions.
-- A security review of section 3.3, which `bots-in-clawtrate.md` §10 step 4 already requires.
+- A security review of sections 3.3 and 3.4, which `bots-in-clawtrate.md` §10 step 4 already requires.
 - The owner's answer to section 10's question. Both variants are specified, so the engine doesn't wait for it; only step 3 does.
 - For the route by address only, section 8's publish.
-- For full binding of bytes to activation, a gateway operation, asked of OpenClaw (section 3.1). The engine ships without it, inside section 3.2's limits.
+- For full binding of the verified artifact to the enable, and for an update that can't be reordered, a gateway operation with a precondition, asked of OpenClaw (sections 3.1 and 11). The engine ships without it, inside section 3.2's limits.
 
 **The order.** Each is small enough to review alone, and each is run on development gateways of both versions.
 
@@ -530,10 +664,11 @@ A stop after step 2 leaves the plugin installed and turned off, and the line say
 
    Added to the same step: **the voice plugin's manifest declares its prompt hook**, so that `plugins.inspect` reports it and the pin compares it. Nothing installs yet.
 
-2. **The engine in core, from sections 3.3, 6 and 11:**
-   - each call, comparison and stop, tested against both versions' frames, including the preconfigured-entry and update cases of section 3.1;
+2. **The engine in core, from sections 3.3, 3.4, 6 and 11:**
+   - each call, comparison and stop, and the device's record with its bound in `owners.ts`;
+   - a test per row of section 3.5's table, against both versions' frames, including the preconfigured-entry, grant and update cases of section 3.1;
    - the development gateway gains `--install-plugin <name>`, which packs from the checkout and runs the sequence on a local connection (`bots-in-clawtrate.md` §6.8);
-   - one e2e spec installs, refuses a mismatch, turns off and takes off the voice plugin on each version;
+   - one e2e spec runs rows 1 to 4, 7b and 7e on each version;
    - the release records each plugin's `sourceDigest` from that spec's run.
 
    Its security review lands with it. `docs/decisions.md` records that Clawtrate writes a plugin's approved grants when it installs that plugin, and the voice plugin's README drops its manual steps.
@@ -542,14 +677,14 @@ A stop after step 2 leaves the plugin installed and turned off, and the line say
    - the first-setup line or card;
    - the already-paired line;
    - the Bot voice row without its link;
-   - Take it off and Add again;
+   - Take it off, Turn on and Add again;
    - section 10's lines, each tested by its exact words.
 
    Pictures at desktop and phone width.
 
-4. **The update a person asks for** (section 11).
+4. **The update a person asks for** (section 11; row 4 of section 3.5).
 5. **Over SSH**, once the SSH screens exist: the copy script and its removal.
 6. **By address**, once section 8's publish is done: the npm source with `expectedIntegrity`, and the packer and workflow for more than one plugin, which can land before the publish.
 7. **Each other plugin**, in the pull request after its review: added to the pin, and offered to gateways already set up.
 
-Steps 1 to 3 need no publish. They bring Bot voice only to a gateway on the person's own computer that Clawtrate reaches by one-click Connect, and that can read the app's tarball. A gateway reached any other way waits for step 5 or 6.
+Steps 1 to 3 need no publish. They bring Bot voice only to a gateway on the person's own computer that Clawtrate reaches by one-click Connect, and that can read the app's tarball. What ran was a development gateway on macOS over a direct loopback socket (section 13). A gateway reached any other way waits for step 5 or 6.
