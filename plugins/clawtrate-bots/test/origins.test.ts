@@ -509,9 +509,10 @@ describe("fix round: tasks a bot started", () => {
       channel: "webchat",
     })!;
     expect(early.kind).toBe("typed");
-    store.sawSpawned(parent, "agent:pip:dashboard:1");
+    store.sawSpawned(parent, "agent:pip:dashboard:1", "c1", "agent:pip:main");
     expect(early.kind).toBe("task");
-    expect(early.readOutside).toMatchObject({ source: "file" });
+    // No spawn seen for that result: what its starter had read can't be told.
+    expect(early.readOutside).toMatchObject({ source: "lost" });
   });
 
   it("a spawn's wait ends after a minute", () => {
@@ -620,5 +621,57 @@ describe("tasks and what their starter read", () => {
     expect(back.readOutside).toMatchObject({ source: "lost" });
     t += LIMITS.runMs + 1;
     expect(store.sawPrompt(prompt("fresh", "agent:pip:dashboard:3"))!.readOutside).toBeNull();
+  });
+});
+
+describe("fix round 2b", () => {
+  const at = (runId: string, sessionKey: string, agentId = "pip") => ({
+    runId,
+    sessionKey,
+    agentId,
+    trigger: "user",
+    channel: "webchat",
+  });
+
+  it("a run unseen past the retention is lost at its next prompt, not refreshed", () => {
+    let t = 1_000;
+    const store = new RunOrigins({ now: () => t });
+    store.sawPrompt(at("r1", "agent:pip:main"));
+    t += LIMITS.runMs + 1;
+    expect(store.sawPrompt(at("r1", "agent:pip:main"))).toBeNull();
+    expect(store.lookup("r1")).toMatchObject({ lost: true });
+  });
+
+  it("a task takes what its starter had read when the spawn passed, not what it read after", () => {
+    const store = new RunOrigins();
+    const parent = store.sawPrompt(at("r1", "agent:pip:main"))!;
+    store.sawSpawn(parent, "pip", "c1", "agent:pip:main");
+    store.markRead(parent, "web", "web_search"); // after the spawn passed
+    // The task's first run came before the result, then the result named it.
+    const early = store.sawPrompt(at("t1", "agent:pip:dashboard:1"))!;
+    store.sawSpawned(parent, "agent:pip:dashboard:1", "c1", "agent:pip:main");
+    expect(early.kind).toBe("task");
+    expect(early.readOutside).toBeNull();
+    expect(store.sawPrompt(at("t2", "agent:pip:dashboard:1"))!.readOutside).toBeNull();
+  });
+
+  it("a run's spawns that never named a task stop waiting when it ends", () => {
+    const store = new RunOrigins();
+    const parent = store.sawPrompt(at("r1", "agent:pip:main"))!;
+    store.sawSpawn(parent, "pip", "c1", "agent:pip:main");
+    store.sawEnd({ runId: "r1" });
+    expect(store.sawPrompt(at("p1", "agent:pip:dashboard:9"))!.kind).toBe("typed");
+  });
+
+  it("spawn waits are bounded across every bot; a run within a minute of one dropped is a lost task", () => {
+    const store = new RunOrigins({ limits: { ...LIMITS, spawning: 2 } });
+    const parent = store.sawPrompt(at("r1", "agent:pip:main"))!;
+    store.sawSpawn(parent, "marlow", "c1", "agent:pip:main");
+    store.sawSpawn(parent, "otto", "c2", "agent:pip:main");
+    store.sawSpawn(parent, "juniper", "c3", "agent:pip:main"); // drops marlow's
+    expect([...store.spawning.values()].flat()).toHaveLength(2);
+    const marlow = store.sawPrompt(at("m1", "agent:marlow:dashboard:1", "marlow"))!;
+    expect(marlow.kind).toBe("task");
+    expect(marlow.readOutside).toMatchObject({ source: "lost" });
   });
 });

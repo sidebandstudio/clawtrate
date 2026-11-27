@@ -29,6 +29,8 @@ export const LIMITS = Object.freeze({
   tasks: 512,
   /** How long a spawn waits for its task's first run before its session is known. */
   spawnWaitMs: 60_000,
+  /** Spawns waiting for their task's first run, across every bot, and their read snapshots. */
+  spawning: 64,
 });
 
 /**
@@ -200,7 +202,7 @@ function factsFrom(ctx) {
   };
 }
 
-/** @typedef {{ runs: number, runMs: number, calls: number, lost: number, tasks: number, spawnWaitMs: number }} Limits */
+/** @typedef {{ runs: number, runMs: number, calls: number, lost: number, tasks: number, spawnWaitMs: number, spawning: number }} Limits */
 
 export class RunOrigins {
   /** @param {{ now?: () => number, limits?: Limits }} [options] */
@@ -227,6 +229,10 @@ export class RunOrigins {
      * is admitted as having read something it lost track of.
      */
     this.lostForgotAt = null;
+    /** `${session}\0${callId}` -> what a spawn's starter had read as the call passed */
+    this.snapshots = new Map();
+    /** When a live spawn wait was last dropped at the bound (taskOf). */
+    this.spawnDroppedAt = null;
   }
 
   /** Whether the store may have forgotten a lost run, so a new one can't be vouched for. */
@@ -256,6 +262,11 @@ export class RunOrigins {
     if (!runId) return null;
     const known = this.runs.get(runId);
     if (known) {
+      // A run unseen past the retention is lost, as a lookup would find it, not refreshed.
+      if (known.lastSeenAt <= this.now() - this.limits.runMs) {
+        this.sweep();
+        return null;
+      }
       known.lastSeenAt = this.now();
       return known;
     }
@@ -306,16 +317,27 @@ export class RunOrigins {
   taskOf(facts) {
     const key = facts.sessionKey;
     if (key && this.tasks.has(key)) return this.tasks.get(key);
+    if (!key || /^agent:[^:]+:main$/i.test(key) || facts.trigger !== "user") return undefined;
     const waiting = facts.agentId ? this.spawning.get(facts.agentId) : undefined;
-    if (!waiting?.length || !key || /^agent:[^:]+:main$/i.test(key) || facts.trigger !== "user")
-      return undefined;
-    const fresh = waiting.filter((w) => w.at > this.now() - this.limits.spawnWaitMs);
+    const fresh = (waiting ?? []).filter((w) => w.at > this.now() - this.limits.spawnWaitMs);
     const taken = fresh.shift();
     if (fresh.length) this.spawning.set(facts.agentId, fresh);
-    else this.spawning.delete(facts.agentId);
-    if (!taken) return undefined;
-    this.rememberTask(key, taken.read);
-    return taken.read;
+    else if (facts.agentId) this.spawning.delete(facts.agentId);
+    if (taken) {
+      this.rememberTask(key, taken.read);
+      return taken.read;
+    }
+    // A live wait was dropped at the bound within the minute: this run may be its
+    // task, so it is one, having read something the plugin lost track of.
+    if (
+      this.spawnDroppedAt !== null &&
+      this.spawnDroppedAt > this.now() - this.limits.spawnWaitMs
+    ) {
+      const lost = { source: "lost", tool: null };
+      this.rememberTask(key, lost);
+      return lost;
+    }
+    return undefined;
   }
 
   rememberTask(key, read) {
@@ -331,9 +353,39 @@ export class RunOrigins {
    */
   sawSpawn(run, bot, callId = null, from = null) {
     if (!bot) return;
-    const list = (this.spawning.get(bot) ?? []).slice(-15);
-    list.push({ read: readOf(run), at: this.now(), callId: str(callId), from: str(from) });
-    this.spawning.set(bot, list);
+    const read = readOf(run);
+    const wait = {
+      read,
+      at: this.now(),
+      callId: str(callId),
+      from: str(from),
+      runId: run?.runId ?? null,
+    };
+    // What the starter had read as the call passed, kept until its result names the task.
+    if (wait.callId)
+      this.remember(this.snapshots, `${wait.from}\0${wait.callId}`, this.limits.spawning, read);
+    // Expired waits leave, across every bot; past the bound the oldest live one is
+    // dropped, and the minute after counts every new run as a lost task (taskOf).
+    const cutoff = this.now() - this.limits.spawnWaitMs;
+    for (const [key, list] of this.spawning) {
+      const live = list.filter((w) => w.at > cutoff);
+      if (live.length) this.spawning.set(key, live);
+      else this.spawning.delete(key);
+    }
+    this.spawning.set(bot, [...(this.spawning.get(bot) ?? []), wait]);
+    let total = 0;
+    for (const list of this.spawning.values()) total += list.length;
+    while (total > this.limits.spawning) {
+      let oldest = null;
+      for (const [key, list] of this.spawning)
+        if (list.length && (!oldest || list[0].at < oldest.w.at)) oldest = { key, w: list[0] };
+      if (!oldest) break;
+      const left = this.spawning.get(oldest.key).slice(1);
+      if (left.length) this.spawning.set(oldest.key, left);
+      else this.spawning.delete(oldest.key);
+      this.spawnDroppedAt = this.now();
+      total -= 1;
+    }
   }
 
   /**
@@ -347,6 +399,7 @@ export class RunOrigins {
     const id = str(callId);
     if (!id) return;
     const session = str(from);
+    this.snapshots.delete(`${session}\0${id}`);
     for (const [bot, list] of this.spawning) {
       const left = list.filter((w) => w.callId !== id || w.from !== session);
       if (left.length === list.length) continue;
@@ -363,8 +416,12 @@ export class RunOrigins {
    */
   sawSpawned(run, sessionKey, callId = null, from = null) {
     if (!sessionKey) return;
+    // What the starter had read when the call passed, not since; with no snapshot, lost.
+    const snapshot = `${str(from)}\0${str(callId)}`;
+    const read = this.snapshots.has(snapshot)
+      ? this.snapshots.get(snapshot)
+      : { source: "lost", tool: null };
     this.dropSpawn(callId, from);
-    const read = readOf(run);
     this.rememberTask(sessionKey, read);
     for (const held of this.runs.values()) {
       if (held.sessionKey !== sessionKey) continue;
@@ -401,10 +458,14 @@ export class RunOrigins {
     }
   }
 
-  remember(set, value, max) {
-    set.add(value);
+  /** Adds to a bounded set (or, with an entry, a bounded map), oldest first out. */
+  remember(set, value, max, entry = undefined) {
+    if (set instanceof Map) {
+      set.delete(value);
+      set.set(value, entry);
+    } else set.add(value);
     while (set.size > max) {
-      set.delete(set.values().next().value);
+      set.delete(set.keys().next().value);
       if (set === this.lost) this.lostForgotAt = this.now();
     }
   }
@@ -532,5 +593,12 @@ export class RunOrigins {
     run.ended = true;
     if (run.sessionKey && this.active.get(run.sessionKey) === runId)
       this.active.delete(run.sessionKey);
+    // Its spawns that never named a task wait no longer: no other run takes them.
+    for (const [bot, list] of this.spawning) {
+      const left = list.filter((w) => w.runId !== runId);
+      if (left.length === list.length) continue;
+      if (left.length) this.spawning.set(bot, left);
+      else this.spawning.delete(bot);
+    }
   }
 }

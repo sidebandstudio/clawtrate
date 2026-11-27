@@ -155,6 +155,15 @@ async function runOf(ctx: BotsContext, runId: string): Promise<JsonRecord> {
 
 type Revision = { hash?: string; configRevisionHash?: string; appliedConfigHash?: string };
 
+/** Whether a config holds what a merge patch set: each value, and each removed key gone. */
+export function holds(config: unknown, patch: unknown): boolean {
+  if (!isRecord(patch)) return JSON.stringify(config) === JSON.stringify(patch);
+  const have = isRecord(config) ? config : {};
+  return Object.entries(patch).every(([key, value]) =>
+    value === null ? !Object.hasOwn(have, key) : holds(have[key], value),
+  );
+}
+
 /** A merge patch, waited on until the gateway runs with it. */
 async function patchConfig(ctx: BotsContext, patch: JsonRecord): Promise<void> {
   const admin = ctx.clients.admin;
@@ -172,7 +181,9 @@ async function patchConfig(ctx: BotsContext, patch: JsonRecord): Promise<void> {
       read !== null &&
       typeof now.configRevisionHash === "string" &&
       (patched.noop === true || now.configRevisionHash !== before.configRevisionHash) &&
-      now.appliedConfigHash === now.configRevisionHash
+      now.appliedConfigHash === now.configRevisionHash &&
+      // The config applied is one holding what this patch set, not a later write's.
+      holds(rec(rec(read).config), patch)
     )
       return;
     await sleep(200);
@@ -419,14 +430,26 @@ export const BOTS_CHECKS: BotsCheck[] = [
     name: "a spawn the gateway refused leaves no wait behind: the person's next task is typed",
     covers: ["#hand-off-twice", "#hand-off-same"],
     async run(ctx, world) {
-      const t = await turn(ctx, await task(ctx, world, "pip", "twice"), "#hand-off-twice");
+      const twiceKey = await task(ctx, world, "pip", "twice");
+      const t = await turn(ctx, twiceKey, "#hand-off-twice");
       const spawns = t.calls.filter((c) => c.name === "sessions_spawn");
       expect(
-        spawns.length === 2 && /"status":\s*"error"/.test(spawns[1]!.text),
-        `the second spawn: ${show(spawns.map((c) => c.text.slice(0, 120)))}`,
+        spawns.length === 2 &&
+          /"status":\s*"accepted"/.test(spawns[0]!.text) &&
+          /"status":\s*"error"/.test(spawns[1]!.text),
+        `the two spawns: ${show(spawns.map((c) => c.text.slice(0, 120)))}`,
       );
-      // Once the first task has reported back, one refused spawn on its own, nothing after it.
-      await sleep(5000);
+      // Once the first task has reported back to the conversation it came from,
+      // one refused spawn on its own, with nothing after it.
+      const deadline = Date.now() + 90_000;
+      for (;;) {
+        const latest = rec(
+          await ctx.clients.reader.request("clawtrate-bots.runs.get", { sessionKey: twiceKey }),
+        );
+        if (latest.kind === "report" && latest.ended === true) break;
+        expect(Date.now() < deadline, `the first task didn't report back: ${show(latest)}`);
+        await sleep(1000);
+      }
       const again = await turn(ctx, await task(ctx, world, "pip", "same"), "#hand-off-same");
       const refused = again.calls.find((c) => c.name === "sessions_spawn");
       expect(
@@ -520,6 +543,8 @@ export const BOTS_CHECKS: BotsCheck[] = [
     covers: ["#read-history"],
     async run(ctx, world) {
       const t = await turn(ctx, await task(ctx, world, "pip", "history"), "#read-history #here");
+      const read = t.calls.find((c) => c.name === "sessions_history");
+      expect(read?.ok === true, `the history wasn't read: ${show(read)}`);
       expect(rec((await runOf(ctx, t.runId)).readOutside).source === "task", "not marked");
       expect(
         t.reply.includes("You've read a task's history in this run"),
@@ -1035,7 +1060,8 @@ async function withPairNames(ctx: BotsContext, body: () => Promise<void>): Promi
   const entries = rec(rec(rec(read.config).agents).entries);
   const patch: JsonRecord = {};
   for (const bot of SEED_BOTS.filter((b) => PAIR.includes(b.id))) {
-    if (typeof rec(rec(entries[bot.id]).identity).name === "string") continue;
+    // The checks look the pair up by its seed names: any other name is set aside for them.
+    if (rec(rec(entries[bot.id]).identity).name === bot.name) continue;
     patch[bot.id] = { identity: { name: bot.name } };
   }
   if (Object.keys(patch).length === 0) return body();
