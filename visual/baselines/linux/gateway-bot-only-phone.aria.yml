@@ -6,7 +6,7 @@
   - button "Search"
   - list:
     - listitem:
-      - button "Juniper, 3 tasks, unread, research, primary bot" [expanded]: Juniper research Ask these five, and get the answers in writing.
+      - button "Juniper, 3 tasks, unread, research, primary bot" [expanded]: Juniper research
       - button "More for Juniper"
       - list "Juniper's tasks":
         - listitem:

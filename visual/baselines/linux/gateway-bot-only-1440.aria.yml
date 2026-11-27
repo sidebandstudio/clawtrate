@@ -6,10 +6,7 @@
   - button "Search"
   - list:
     - listitem:
-      - button "Juniper, 3 tasks, unread, research, primary bot" [expanded]:
-        - text: Juniper research
-        - time: 5:24 PM
-        - text: Ask these five, and get the answers in writing.
+      - button "Juniper, 3 tasks, unread, research, primary bot" [expanded]: Juniper research
       - list "Juniper's tasks":
         - listitem:
           - button "Heat pump vs. gas furnace"
