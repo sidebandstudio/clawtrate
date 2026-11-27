@@ -802,17 +802,18 @@ export class BotNames {
             claims: [...record.claims.filter((each) => each.op !== opId), { ...claim, at: now }],
           };
           // Room now for what confirming it writes too: the day's count, kept with today's others,
-          // and the count each other rename still under way will write when it is confirmed.
-          let counted: NameRecord = next;
+          // and the count each other rename still under way will write when it is confirmed, on
+          // this device's day or on the day its own device took the claim, whichever it lands on.
+          let counted: NameRecord = withCount(next, botId, day);
           for (const other of next.claims) {
             if (other.undo || other.op === opId) continue;
             const pending = next.changes.find(
               (each) => each.run === other.run && each.bot === other.bot,
             );
             if (pending && pending.done === undefined && pending.undone === undefined)
-              counted = withCount(counted, other.bot, day);
+              for (const on of new Set([day, dayOf(other.at)]))
+                counted = { ...counted, counts: reserved(counted.counts, other.bot, on) };
           }
-          counted = withCount(counted, botId, day);
           if (!keepsWhatItAdds(record, counted, day)) return "full";
           return next;
         });
@@ -1454,6 +1455,14 @@ function withCount(record: NameRecord, bot: string, day: string): NameRecord {
       { bot, day, n: renamesOn(record, bot, day) + 1 },
     ],
   };
+}
+
+/** `counts` with one more of `bot` on `day`, dropping none: room a pending rename may need. */
+function reserved(counts: NameRecord["counts"], bot: string, day: string): NameRecord["counts"] {
+  const at = counts.findIndex((each) => each.bot === bot && each.day === day);
+  return at === -1
+    ? [...counts, { bot, day, n: 1 }]
+    : counts.map((each, n) => (n === at ? { ...each, n: each.n + 1 } : each));
 }
 
 /**

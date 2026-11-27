@@ -1292,6 +1292,40 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
     expect(me.line()).toMatchObject({ status: "failed" });
   });
 
+  it("F-552: room for a rename counts a rename under way on the day its own device took it: claims on either side of midnight", async () => {
+    const gw = gateway();
+    // Two devices seconds apart, on either side of midnight.
+    const beforeMidnight = Date.parse(`${dayOf(NOW)}T23:59:58Z`);
+    const afterMidnight = beforeMidnight + 4000;
+    const dayA = dayOf(beforeMidnight);
+    expect(dayOf(afterMidnight)).not.toBe(dayA);
+    // 31 counts on day A, Pip's among them.
+    const counts = Array.from({ length: MAX_RECORD_COUNTS - 1 }, (_, n) => ({
+      bot: n === 0 ? "pip" : `bot-${n}`,
+      day: dayA,
+      n: 1,
+    }));
+    gw.state.record = record({ counts });
+    // A device already on day B claims Pip's rename and pauses at its update.
+    gw.state.now = afterMidnight;
+    const held = deferred<void>();
+    gw.state.hold = held.promise;
+    const later = device(gw);
+    const pip = later.engine.afterRun("pip", KEY, "run-1");
+    await until(() => gw.kept().claims.length === 1);
+    // A device still on day A claims Otto's: Pip's count would need a place on day B.
+    gw.state.now = beforeMidnight;
+    gw.state.file = "- **Name:** Maple\n";
+    const earlier = device(gw);
+    await earlier.engine.afterRun("otto", KEY, "run-2");
+    expect(earlier.lines()).toEqual([
+      expect.objectContaining({ botId: "otto", status: "not-done", reason: "full" }),
+    ]);
+    held.resolve();
+    await pip;
+    expect(gw.state.updates).toEqual(["Juniper"]);
+  });
+
   it("F-552: a rename whose confirmation couldn't be saved says so in its line", async () => {
     const gw = gateway();
     const me = device(gw);
