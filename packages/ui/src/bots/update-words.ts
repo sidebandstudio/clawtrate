@@ -10,7 +10,10 @@ import {
   type UpdateRunView,
 } from "@clawtrate/core";
 
-/** OpenClaw's own update instructions: they differ by install. */
+/**
+ * OpenClaw's own update instructions, they differ by install: linked only where the gateway can't
+ * update itself, so Clawtrate's Update can't either.
+ */
 export const OPENCLAW_UPDATE_DOCS = "https://docs.openclaw.ai/install/updating";
 
 /** What a reason code the gateway gives for not updating itself means, in plain words. */
@@ -94,12 +97,15 @@ export function runHeading(run: UpdateRunView): string {
 }
 
 /** What the person can do after an outcome, or null while it runs or when it worked. */
-export function nextStep(run: UpdateRunView): string | null {
+export function nextStep(run: UpdateRunView, blocked = false): string | null {
   switch (run.outcome) {
     case "failed":
     case "rolled-back":
     case "skipped":
-      return "You can try again, or update OpenClaw on the gateway's machine with its update instructions.";
+      // A failure that says the gateway can't update itself leaves no Update to offer.
+      return blocked
+        ? "Dismiss this to see why the gateway can't update itself."
+        : "Dismiss this, and Update is offered again.";
     case "unconfirmed":
       return "Check the gateway's version in Settings, then try again if it wasn't updated.";
     case "late":
