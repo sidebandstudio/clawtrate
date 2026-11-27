@@ -407,6 +407,7 @@ const runEnding = object<RunEnding>()({
 });
 const preamble = object<Preamble>()({
   id: ID,
+  item: ID,
   text: text(MAX_BLOCK_CHARS),
   ended: FLAG,
   beforeCall: ID,
@@ -423,6 +424,7 @@ export const RUN: Bound = flagged<Run>()({
   text: text(MAX_RUN_TEXT_CHARS),
   textSource: ENUM,
   textItemId: ID,
+  textEarlier: FLAG,
   textComplete: FLAG,
   steps: list(MAX_STEPS_PER_TASK, STEP, { pool: "steps" }),
   pendingCards: list(MAX_PENDING_CARDS, pendingCard),
@@ -482,6 +484,7 @@ export const OUTGOING: Bound = object<OutgoingMessage>()({
   attachments: list(MAX_FILES_PER_MESSAGE, attachmentInfo),
   replyToId: ID,
   steer: ENUM,
+  unmarked: FLAG,
 });
 const questionOption = object<QuestionOption>()({
   index: NUMBER,

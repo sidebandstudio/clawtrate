@@ -275,11 +275,19 @@ describe("the voice guide", () => {
     expect(named).toEqual(expect.arrayContaining(["sessions_spawn", "sessions_send"]));
     for (const name of named) expect(known, name).toContain(name);
     expect(GUIDES_TEXT).not.toMatch(/[‒-―]| - |--/);
-    // What is true in every session, from any app: "in Clawtrate" where a sentence is about it.
-    expect(WHERE_GUIDE).toContain("Your person may talk with you in Clawtrate");
-    expect(WHERE_GUIDE).not.toMatch(/You live in Clawtrate|hand it off|channel|sixth|typed/);
+    // What is true in every session, from any app: "in Clawtrate" where a sentence is about it,
+    // and the bot says it is there only on the working context Clawtrate's messages carry (#666).
+    expect(WHERE_GUIDE).toContain("Your person uses Clawtrate, an app for them and their bots.");
+    expect(WHERE_GUIDE).not.toMatch(/You live in Clawtrate|hand it off|sixth|typed/);
+    expect(WHERE_GUIDE).toContain('working context whose JSON is exactly `{"page":"Clawtrate"}`');
+    expect(WHERE_GUIDE).toContain("Otherwise, don't say you're in Clawtrate.");
+    // A webchat message without it (a command, a stop word, a task's first message) may still be
+    // from Clawtrate: the bot says it can't tell, never that its person is elsewhere.
     expect(WHERE_GUIDE).toContain(
-      "Only a message your person sent in this conversation counts as them asking for a task.",
+      "When the channel is webchat and their latest message doesn't have that working context, it may still be from Clawtrate (a command, a stop word or a task's first message): say you can't tell which app they're using, never that they're somewhere else.",
+    );
+    expect(WHERE_GUIDE).toContain(
+      "Only a message your person sent in this conversation counts as theirs, for asking for a task or for knowing where they are.",
     );
   });
 });

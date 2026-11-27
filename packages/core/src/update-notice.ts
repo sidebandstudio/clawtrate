@@ -205,7 +205,7 @@ export function holdsUpdateNotice(
 }
 
 /** The longest list preview the gateway makes (`SESSION_LAST_MESSAGE_PREVIEW_DEFAULT_CHARS`). */
-const LIST_PREVIEW_MAX_CHARS = 240;
+export const LIST_PREVIEW_MAX_CHARS = 240;
 /**
  * Text whose flattening this does not repeat: links and images (`[`), autolinks (`<`), emphasis
  * and strikethrough (`*`, `_`, `~`), escapes, fenced code, and a heading, quote or list marker at

@@ -238,7 +238,13 @@ describe("sending (F-075, F-081, F-106)", () => {
     expect(transcript().live).toEqual({ runId: id, text: "" });
     await until(() => transcript().outbox[0]?.status === "sent");
     expect(gateway.calls("chat.send")).toEqual([
-      { sessionKey: KEY, message: "Clear it.", idempotencyKey: id, queueMode: "followup" },
+      {
+        sessionKey: KEY,
+        message: "Clear it.",
+        idempotencyKey: id,
+        queueMode: "followup",
+        workContext: { page: "Clawtrate" },
+      },
     ]);
     expect(transcript().runs[0]).toMatchObject({ id: "run-1", bound: true, messageId: id });
 
