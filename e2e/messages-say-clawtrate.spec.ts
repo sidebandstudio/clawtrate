@@ -304,7 +304,7 @@ test("#666: a command and a stop word, which can't carry the marker, still work"
   await expectNoMarker(page);
 });
 
-test("#666: a task's first message: a New task's carries the marker, Start as new task's can't, and each shows as typed", async () => {
+test("#666 #743: a task's first message carries the marker, from New task and from Start as new task, and each shows as typed", async () => {
   test.setTimeout(240_000);
   // New task from the rail: created empty, its first message sent as any other.
   const before = new Set(await marlowTasks());
@@ -328,7 +328,7 @@ test("#666: a task's first message: a New task's carries the marker, Start as ne
   await expect(userMessages(page).filter({ hasText: first })).toHaveCount(1, { timeout: 30_000 });
   expect((await userMessages(page).filter({ hasText: first }).innerText()).trim()).toBe(first);
 
-  // Start as new task: the words go with `sessions.create`, which takes no marker.
+  // Start as new task: created without the words, which follow by `chat.send`, marked (#743).
   const known = new Set(await marlowTasks());
   await openTask(page);
   const started = `Started apart, ${STAMP}`;
@@ -341,10 +341,26 @@ test("#666: a task's first message: a New task's carries the marker, Start as ne
     })
     .not.toBe("");
   made.add(apart);
-  await expect.poll(() => modelCopy(apart), { timeout: 60_000 }).toContain(started);
-  expect(await modelCopy(apart)).not.toContain(WORK_CONTEXT_LINE);
+  await expect
+    .poll(() => modelCopy(apart), { timeout: 60_000 })
+    .toContain(`${started}\n\n${MARKER}`);
   await openTask(page, apart);
   await expect(userMessages(page).filter({ hasText: started })).toHaveCount(1, { timeout: 30_000 });
   expect((await userMessages(page).filter({ hasText: started }).innerText()).trim()).toBe(started);
   await expectNoMarker(page);
+  // Another client of the gateway reads the words alone, once.
+  const apartHistory = await other.request<{ messages: { role: string; content: unknown }[] }>(
+    "chat.history",
+    { sessionKey: apart, limit: 50 },
+  );
+  const apartWords = apartHistory.messages
+    .filter((message) => message.role === "user")
+    .map((message) =>
+      typeof message.content === "string"
+        ? message.content
+        : (message.content as { text?: string }[]).map((part) => part.text ?? "").join(""),
+    );
+  expect(apartWords).toEqual([started]);
+  // The rail's title for it shows none of the marker.
+  await expect(page.locator(`.task[data-key="${apart}"]`)).not.toContainText("Working context");
 });
