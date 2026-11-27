@@ -1155,10 +1155,23 @@ export function liveCommand(
       set({ ...get(), showGatewayBot: command.on });
       return Promise.resolve();
     case "readComposerMenu":
-      // As the gateway lists them for Otto: its skills and commands, or the bots and a routine.
+      // As the gateway lists them for Otto's task: the library skills it has (the person's own and a
+      // team skill), its skills and commands; or the bots and a routine.
       return Promise.resolve(
         command.trigger === "/"
           ? [
+              {
+                kind: "your-skill",
+                name: "tide-table",
+                description: "Use when someone asks when the tide turns at the harbour.",
+                insert: "/skill s_tide_tabl_5ace502a23c5418a9319",
+              },
+              {
+                kind: "team-skill",
+                name: "ferry-times",
+                description: "Use when someone asks for the next ferry.",
+                insert: "/skill s_ferry_tim_8e7f5f9d4d4747729d35",
+              },
               {
                 kind: "skill",
                 name: "healthcheck",

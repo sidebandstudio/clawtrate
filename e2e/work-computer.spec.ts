@@ -458,9 +458,12 @@ test("F-144 F-145: a real question while Pip's browser can be taken: its card, W
       .filter({ hasText: "Which route should I plan for Saturday?" });
     await expect(card).toBeVisible();
     await expect(page.getByTestId("status-phrase")).toHaveText("Waiting for you");
-    await expect(botRow(page, "Pip").first().locator(".bot-preview")).toHaveText(
-      "Waiting for you: a question",
-      { timeout: 30_000 },
+    await expect(botRow(page, "Pip").first()).toHaveAccessibleName(/^Pip, waiting for you/, {
+      timeout: 30_000,
+    });
+    await expect(botRow(page, "Pip").first().locator(".presence")).toHaveAttribute(
+      "data-state",
+      "waiting",
     );
     await expect(page.getByTestId("task").filter({ hasText: label }).first()).toHaveAccessibleName(
       /, needs you$/,

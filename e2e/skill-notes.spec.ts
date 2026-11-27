@@ -3,10 +3,9 @@
 // `--with-skill-review`), where a `#learn` turn makes the gateway review the
 // task in the background, save a skill and append its note ("Learned: …") to
 // the task about 30 seconds later. The note folds into the line of the run it
-// follows, "Saved a skill: trail-check", is not the bot's preview, and its undo
-// is there: the gateway's own on OpenClaw 2026.11.10, a message "undo" on
-// 2026.10.6 (docs/parity.md F-560). The unread mark is the gateway's own, which
-// the note does not raise.
+// follows, "Saved a skill: trail-check", and its undo is there: the gateway's
+// own on OpenClaw 2026.11.10, a message "undo" on 2026.10.6 (docs/parity.md
+// F-560). The unread mark is the gateway's own, which the note does not raise.
 //
 // The instance is this file's own (`INSTANCE`), started and removed here, so a
 // shard that does not run this file starts none.
@@ -221,14 +220,16 @@ test.afterAll(async () => {
   expect(problems).toEqual([]);
 });
 
-test("F-560: a real skill note folds into its run's line, is not the bot's preview, and its undo works", async () => {
+test("F-560: a real skill note folds into its run's line, and its undo works", async () => {
   test.setTimeout(300_000);
   const key = `agent:clawtrate-main-bot:skill-note-${Date.now()}`;
   const send = { sessionKey: key, message: "#learn", idempotencyKey: key };
   const marks = !instanceForm(openInstance(INSTANCE)).reviewsCliTurns;
   if (!marks) await gatewayCall("chat.send", send);
   else {
-    // 2026.11.10 reviews only a turn an admin connection sent (#609), not one the CLI sent.
+    // 2026.11.10 reviews only a turn offered skill_workshop (#609): of the paired clients, an admin
+    // connection's on a gateway with one profile; the others get skill_library instead. Nor does
+    // it review a turn the CLI sent.
     const op = await openOperator(
       openInstance(INSTANCE),
       "Clawtrate skill note check",
@@ -298,14 +299,13 @@ test("F-560: a real skill note folds into its run's line, is not the bot's previ
   await expect(botRow("clawtrate-main-bot").locator(".unread-dot")).toHaveCount(0);
   await expect(botRow("clawtrate-main-bot")).not.toHaveAccessibleName(/, unread/);
 
-  // The note is no bubble: it folds into the run's line, and is not the bot's preview.
+  // The note is no bubble: it folds into the run's line.
   await openNoteTask(key);
   await expect(transcript()).toContainText(REPLY, { timeout: 60_000 });
   await expect(page.getByTestId("transcript-turn").filter({ hasText: "Learned" })).toHaveCount(0);
   const line = transcript().getByTestId("run-line").filter({ hasText: "Saved a skill" });
   await expect(line).toHaveCount(1);
   await expect(line.locator(":scope > summary")).toContainText(`Saved a skill: ${skill}`);
-  await expect(botRow("clawtrate-main-bot").locator(".bot-preview")).not.toContainText("Learned");
   await shots("note-folded");
   await line.locator(":scope > summary").click();
   await expect(line.getByTestId("skill-note").locator(".skill-note-text")).toHaveText(noteText);

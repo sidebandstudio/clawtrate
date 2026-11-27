@@ -2,13 +2,21 @@
 // the gateway when a menu opens and kept nowhere: the answer goes to the
 // viewer that asked, and nothing of it stays in the state.
 //
-// "/" lists the bot's skills a person may invoke (`skills.status {agentId}`,
-// `userInvocable` and `eligible`), tagged Skill, and the gateway's slash
-// commands that are not those skills (`chat.metadata` `commands`), tagged
-// Command. Choosing one inserts its text alias, sent with the message as
-// `chat.send` `message` text: the gateway runs a command or skill named that
-// way (`/weather`, `/skill <name>`). No app's action is listed: the gateway
-// lists apps' actions separately (`mcp.app.discover`), which this does not read.
+// "/" lists the skills from the gateway's skill library that the task has
+// (`skills.library.list {sessionKey}` `session.selections`): the person's own,
+// tagged Your skill, and the others, tagged Team skill. Then the bot's skills a
+// person may invoke (`skills.status {agentId}`, `userInvocable` and
+// `eligible`), tagged Bot skill, and the gateway's slash commands that are not
+// those skills (`chat.metadata` `commands`), tagged Command. Choosing one
+// inserts its text alias, sent with the message as `chat.send` `message` text:
+// the gateway runs a command or skill named that way (`/weather`, `/skill
+// <name>`). No app's action is listed: the gateway lists apps' actions
+// separately (`mcp.app.discover`), which this does not read.
+//
+// Neither `skills.status` nor `chat.metadata` lists a library skill, on
+// OpenClaw 2026.10.6 or 2026.11.10. A library skill runs only in a task that
+// has it, by its generated command name (`/skill s_tide_tabl_…`), never by its
+// slug; a task has the library's enabled skills from when it started.
 //
 // "@" lists the gateway's bots (`agents.list`, already in the state) and its
 // routines (`cron.list`). OpenClaw's structured `chat.send` `mentions` are
@@ -18,8 +26,9 @@ import { asRecord, type RawRecord } from "./mapping.ts";
 
 /** One row of a composer menu. */
 export type MenuRow = {
-  kind: "skill" | "command" | "bot" | "routine";
-  /** What the row shows. */
+  /** `skill` is the bot's; `your-skill` and `team-skill` are from the gateway's skill library. */
+  kind: "your-skill" | "team-skill" | "skill" | "command" | "bot" | "routine";
+  /** What the row shows: a library skill's slug, which is not what runs it. */
   name: string;
   description: string | null;
   /** The text the row puts in the message when chosen, a space after it. */
@@ -37,8 +46,39 @@ const cut = (text: string | null, max: number) =>
   text === null ? null : text.length > max ? `${text.slice(0, max - 1)}…` : text;
 const str = (value: unknown) => (typeof value === "string" && value.trim() ? value.trim() : null);
 
-/** The "/" menu from `skills.status` and `chat.metadata` answers. */
-export function slashRows(skillsAnswer: unknown, metadataAnswer: unknown): MenuRow[] {
+/** A library skill's generated command name (`s_<slug>_<id>`): one word, as `/skill` takes it. */
+const COMMAND_NAME = /^[A-Za-z0-9_-]{1,128}$/;
+
+/**
+ * The task's library skills from a `skills.library.list {sessionKey}` answer. Whose a skill is
+ * comes from the gateway alone: its `ownerProfileId` against the answer's own `profileId`, the
+ * profile this connection acts for. A skill with no owner the answer can match is the team's.
+ */
+function libraryRows(libraryAnswer: unknown): MenuRow[] {
+  const answer = asRecord(libraryAnswer);
+  const self = str(answer?.profileId);
+  const selections = asRecord(answer?.session)?.selections;
+  const rows: MenuRow[] = [];
+  for (const entry of Array.isArray(selections) ? selections : []) {
+    const skill = asRecord(entry);
+    const command = str(skill?.name);
+    if (!skill || !command || !COMMAND_NAME.test(command)) continue;
+    rows.push({
+      kind: self !== null && str(skill.ownerProfileId) === self ? "your-skill" : "team-skill",
+      name: cut(str(skill.slug) ?? command, MAX_NAME_CHARS)!,
+      description: cut(str(skill.description), MAX_DESCRIPTION_CHARS),
+      insert: `/skill ${command}`,
+    });
+  }
+  return rows;
+}
+
+/** The "/" menu from `skills.library.list`, `skills.status` and `chat.metadata` answers. */
+export function slashRows(
+  skillsAnswer: unknown,
+  metadataAnswer: unknown,
+  libraryAnswer: unknown = null,
+): MenuRow[] {
   const commands = (
     Array.isArray(asRecord(metadataAnswer)?.commands) ? asRecord(metadataAnswer)!.commands : []
   ) as unknown[];
@@ -52,8 +92,9 @@ export function slashRows(skillsAnswer: unknown, metadataAnswer: unknown): MenuR
     const aliases = Array.isArray(command?.textAliases) ? command.textAliases : [];
     return aliases.map(str).find((each): each is string => each?.startsWith("/") === true) ?? null;
   };
-  const rows: MenuRow[] = [];
-  const skillCommands = new Set<string>();
+  const rows = libraryRows(libraryAnswer);
+  // A library skill's command, should the gateway list it, is that skill's row, not a Command.
+  const skillCommands = new Set(rows.map((row) => row.insert.slice("/skill ".length)));
   const skills = (
     Array.isArray(asRecord(skillsAnswer)?.skills) ? asRecord(skillsAnswer)!.skills : []
   ) as unknown[];
