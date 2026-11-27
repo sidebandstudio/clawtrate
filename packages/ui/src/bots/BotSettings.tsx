@@ -18,7 +18,7 @@ import {
   type Task,
   type Transcript,
 } from "@clawtrate/core";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { useBridge } from "../bridge.tsx";
 import { screenStamp, shownStamp, type ShownStamp } from "../stamp.ts";
 import {
@@ -228,8 +228,17 @@ export function BotSettings({
   if (connection.gatewayId !== null && connection.gatewayId !== memoryGateway)
     setMemoryGateway(connection.gatewayId);
 
+  // The page is reused for every bot (#721): focus asked for one bot never lands on the next one's.
+  const drawnBot = useRef(bot.id);
+  useLayoutEffect(() => {
+    drawnBot.current = bot.id;
+  });
   const focusIn = useCallback((selector: string) => {
-    requestAnimationFrame(() => rootRef.current?.querySelector<HTMLElement>(selector)?.focus());
+    const forBot = drawnBot.current;
+    requestAnimationFrame(() => {
+      if (drawnBot.current === forBot)
+        rootRef.current?.querySelector<HTMLElement>(selector)?.focus();
+    });
   }, []);
   // Where the accounts Change account offers were read (`AccountsState.readOn`): its choices come
   // from that read and go with its stamp. After a reconnect the accounts stay until read again, and

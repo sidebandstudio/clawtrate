@@ -523,7 +523,7 @@ export function endingOf(run: Run, _transcript?: Transcript): RunEnding | null {
     if (run.ending?.timeoutPhase)
       return { kind: "gateway-timeout", reason: run.error?.message ?? null };
     if (neverRan(run)) return { kind: "not-run", cause: notRunCause(run.error?.message) };
-    return { kind: "failed", reason: run.error?.message ?? "The gateway gave no reason." };
+    return { kind: "failed", reason: run.error?.message || "The gateway gave no reason." };
   }
   return null;
 }
