@@ -210,7 +210,9 @@ test.describe("the gateway's own bot", () => {
     const found = messages.getByRole("option").filter({ hasText: "Caffeine cutoff time" });
     await expect(found).toHaveCount(1);
     await messages.getByRole("option", { name: "Search each bot for more" }).click();
-    await expect(messages).toContainText("bots answered");
+    // Each bot asked and answered: the action is gone and the palette no longer says Searching….
+    await expect(messages.getByRole("option", { name: "Search each bot for more" })).toHaveCount(0);
+    await expect(palette.getByTestId("search-status")).toHaveCount(0);
     await expect(found).toHaveCount(1);
   });
 

@@ -111,7 +111,7 @@
   color: var(--text-faint);
 }
 
-/* A group: its name and count, and the coverage line under it. */
+/* A group: its name and count, and under it only a failure or a status that changes its results. */
 .s-group + .s-group {
   margin-top: 6px;
 }
@@ -155,7 +155,7 @@
   color: var(--danger);
 }
 
-/* The one quiet line under the results: still searching, nothing found, or offline. */
+/* The quiet lines under the results: still searching, nothing found, still indexing, offline. */
 .s-status {
   margin: 0;
   padding: 10px 8px 4px;
@@ -163,6 +163,9 @@
   line-height: 1.4;
   color: var(--text-muted);
   overflow-wrap: anywhere;
+}
+.s-status + .s-status {
+  padding-top: 2px;
 }
 
 /* A row: 44 px for one line, 60 for two; the active one takes the selected fill. */

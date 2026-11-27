@@ -32,7 +32,7 @@ import { gatewayLabel, rowTime } from "../format.ts";
 import { ClockIcon, FileIcon, LinkIcon, SearchIcon, SettingsIcon } from "../icons.tsx";
 import { messageOf } from "../Messages.tsx";
 import { SETTINGS_SECTIONS, type SettingsSection } from "../Settings.tsx";
-import { findIn, indexLinks, listed, plural } from "./match.ts";
+import { findIn, indexLinks, plural } from "./match.ts";
 import "./search.css";
 
 /** Where an opened result goes; the shell takes it there. */
@@ -59,6 +59,8 @@ const POOL = 4;
 const LISTED = 500;
 /** The live region speaks this long after the last source in view answers. */
 const SAY_AFTER_MS = 400;
+/** The gateway's message search reported its index still catching up (`indexing`). */
+const INDEXING = "Some messages are still being indexed.";
 
 class Deadline extends Error {
   constructor() {
@@ -732,16 +734,15 @@ export function SearchPalette({
   );
 
   const links = useMemo(() => indexLinks(state.transcripts), [state.transcripts]);
-  const loadedConversations = Object.values(state.transcripts).filter(
-    (transcript) => transcript.status === "ready",
-  ).length;
 
   const groups = useMemo((): Group[] => {
     if (!query) return [];
     const gen = generation.current;
     const out: Group[] = [];
+    // A group's lines are only what a person acts on or what changes what its results mean: a
+    // failure, a list that is stale, messages still being indexed. How search works is in
+    // docs/design/search.md, not here.
     const discoveryFailed = state.discovery.status === "error";
-    const unloaded = state.bots.length === 0 && state.discovery.status !== "ready";
     const avatar = (id: string) => {
       const bot = botsById.get(id);
       return bot ? <Avatar bot={bot} /> : null;
@@ -765,9 +766,7 @@ export function SearchPalette({
       count: botRows.length,
       lines: discoveryFailed
         ? ["Couldn't load the gateway's bots. Showing the bots loaded before."]
-        : unloaded
-          ? ["The gateway's bots haven't loaded yet."]
-          : [],
+        : [],
       sections: [{ line: null, rows: botRows }],
       actions: [],
       searching: false,
@@ -788,16 +787,13 @@ export function SearchPalette({
           open: () => onOpen({ kind: "task", botId: task.botId, key: task.key }),
         };
       });
-    const tasksLine = discoveryFailed
-      ? "Couldn't load the task list. Titles in the tasks loaded before."
-      : state.discovery.partial
-        ? "Titles in this device's task list, which was cut short: it holds the most recent tasks only."
-        : `Titles in this device's task list, which keeps up to ${LISTED} tasks`;
     out.push({
       id: "tasks",
       name: "Tasks",
       count: taskRows.length,
-      lines: [tasksLine],
+      lines: discoveryFailed
+        ? ["Couldn't load the task list. Titles in the tasks loaded before."]
+        : [],
       sections: [{ line: null, rows: taskRows }],
       actions: [],
       searching: false,
@@ -851,10 +847,7 @@ export function SearchPalette({
       id: "links",
       name: "Links",
       count: linkRows.length,
-      // Drawn only with a link found, so at least one conversation is loaded.
-      lines: [
-        `Only from the ${plural(loadedConversations, "conversation")} this device has loaded`,
-      ],
+      lines: [],
       sections: [{ line: null, rows: linkRows }],
       actions: [],
       searching: false,
@@ -930,17 +923,6 @@ export function SearchPalette({
         });
     }
 
-    function replyFlags(reply: MessageSearch): string[] {
-      return [
-        ...(reply.indexing ? ["Some messages are still being indexed."] : []),
-        ...(reply.archivedExcluded > 0
-          ? [
-              `${plural(reply.archivedExcluded, "task has", "tasks have")} archived transcript content that wasn't searched.`,
-            ]
-          : []),
-      ];
-    }
-
     function messagesGroup(): Group {
       const base = { id: "messages" as const, name: "Messages" };
       if (messages.status === "offline") return notDrawn(base);
@@ -956,8 +938,7 @@ export function SearchPalette({
           searching: false,
         };
       const { reply, each } = messages;
-      const flags = replyFlags(reply);
-      const incomplete = reply.truncated || flags.length > 0;
+      const incomplete = reply.truncated || reply.indexing || reply.archivedExcluded > 0;
       // Offered only beside a match: a search that found none draws no Messages group.
       const eachAction =
         incomplete && !each && reply.hits.length > 0
@@ -975,31 +956,19 @@ export function SearchPalette({
         const notAsked = listedBotsNow
           .map((bot) => bot.id)
           .filter((id) => !each.bots.some((bot) => bot.botId === id));
-        const answered = each.bots.filter((bot) => bot.state === "done");
         const failed = each.bots.filter((bot) => bot.state === "failed");
-        const pending = each.bots.filter((bot) => bot.state === "pending").length;
-        const queued = each.bots.filter((bot) => bot.state === "queued").length;
-        const running = pending + queued > 0;
-        const first = running
-          ? `Searching ${plural(each.bots.length, "bot")}… ${answered.length} answered, ${failed.length ? `${failed.length} couldn't search, ` : ""}${pending} in progress, ${queued} queued.`
-          : `${answered.length} of ${plural(each.bots.length, "bot")} answered. ${plural(
-              answered.reduce((sum, bot) => sum + (bot.reply?.hits.length ?? 0), 0),
-              "message",
-            )} returned.`;
-        const lines = [
-          first,
-          ...(notAsked.length ? [`Not asked: ${listed(notAsked.map(botName))}.`] : []),
-        ];
+        const running = each.bots.some((bot) => bot.state === "pending" || bot.state === "queued");
         if (running)
           return {
             ...base,
             count: reply.hits.length,
-            lines,
+            lines: [],
             sections: [{ line: null, rows: messageRows(reply.hits, reply, messages.listed) }],
             actions: [],
             searching: true,
           };
-        // A bot whose own search found nothing has no line of its own; one that failed keeps it.
+        // A bot's rows carry no line of their own, except a failure (with its Try again below)
+        // and a bot whose index is still catching up. A bot that found nothing isn't named.
         const sections: Section[] = each.bots.flatMap((bot): Section[] => {
           const name = botName(bot.botId);
           if (bot.state === "failed")
@@ -1012,15 +981,9 @@ export function SearchPalette({
             ];
           const r = bot.reply!;
           if (r.hits.length === 0) return [];
-          const extra = replyFlags(r);
-          const head = r.truncated
-            ? `${name} · ${r.hits.length} returned. More match; add words to narrow them.`
-            : extra.length
-              ? `${name} · ${r.hits.length} returned.`
-              : `${name} · all ${plural(r.hits.length, "match", "matches")}`;
           return [
             {
-              line: [head, ...extra].join(" "),
+              line: r.indexing ? `${name} · ${INDEXING}` : null,
               rows: messageRows(r.hits, r, messages.listed),
             },
           ];
@@ -1030,10 +993,7 @@ export function SearchPalette({
         const asked = new Set(each.bots.map((bot) => bot.botId));
         const earlier = reply.hits.filter((hit) => !asked.has(hit.botId));
         if (earlier.length)
-          sections.push({
-            line: `Found earlier · ${plural(earlier.length, "message")} in bots not searched one by one`,
-            rows: messageRows(earlier, reply, messages.listed),
-          });
+          sections.push({ line: null, rows: messageRows(earlier, reply, messages.listed) });
         const actions = [
           ...failed.map((bot) =>
             action(`messages:retry:${bot.botId}`, `Try again for ${botName(bot.botId)}`, () =>
@@ -1053,25 +1013,17 @@ export function SearchPalette({
         return {
           ...base,
           count: sections.reduce((sum, section) => sum + section.rows.length, 0),
-          lines,
+          lines: [],
           sections,
           actions,
           searching: false,
         };
       }
-      const n = reply.hits.length;
-      const lines = reply.truncated
-        ? [
-            `Showing the ${n} matches the gateway returned, newest first. More indexed messages match.`,
-            ...flags,
-          ]
-        : flags.length
-          ? [`${plural(n, "match", "matches")} returned, newest first.`, ...flags]
-          : [`All ${plural(n, "matching message")}, newest first`];
       return {
         ...base,
-        count: n,
-        lines,
+        count: reply.hits.length,
+        // "No results" or a short list can be untrue while the gateway is still indexing.
+        lines: reply.indexing ? [INDEXING] : [],
         sections: [{ line: null, rows: messageRows(reply.hits, reply, messages.listed) }],
         actions: eachAction,
         searching: false,
@@ -1094,9 +1046,8 @@ export function SearchPalette({
       ];
       const settled = fileBots.every((bot) => bot.state !== "pending");
       const rows: Row[] = [];
+      // Only a failure, with its Try again, has a line.
       const lines: string[] = [];
-      const returned: string[] = [];
-      let searched = 0;
       const retries: Row[] = [];
       for (const bot of fileBots) {
         const name = botName(bot.botId);
@@ -1115,26 +1066,7 @@ export function SearchPalette({
           continue;
         }
         const result = bot.result!;
-        if (result.status === "unverified") {
-          lines.push(`Not searched: ${name}'s workspace could not be verified.`);
-          continue;
-        }
-        if (result.status === "no-root") {
-          lines.push(
-            `${name}: the gateway returned no workspace for its task, so nothing was searched.`,
-          );
-          continue;
-        }
-        searched += 1;
-        if (result.paths.length > 0) returned.push(name);
-        if (result.truncated)
-          lines.push(
-            `${name}: the gateway stopped at its limit of 500 names or 5,000 entries walked.`,
-          );
-        if (result.returned > result.paths.length)
-          lines.push(
-            `${name}: showing ${result.paths.length} of the ${result.returned} names returned.`,
-          );
+        if (result.status !== "searched") continue;
         for (const path of result.paths) {
           const slash = path.lastIndexOf("/");
           const file = path.slice(slash + 1);
@@ -1163,18 +1095,7 @@ export function SearchPalette({
           });
         }
       }
-      const head: string[] = [];
-      if (returned.length)
-        head.push(
-          `Names the gateway returned from the workspaces of ${listed(returned)}. Some folders may be skipped.`,
-        );
       const notAsked = roster.filter((id) => !fileBots.some((bot) => bot.botId === id));
-      const tail: string[] = [];
-      if (notAsked.length) tail.push(`Not asked yet: ${listed(notAsked.map(botName))}.`);
-      if (settled && searched < roster.length)
-        tail.push(
-          `${searched} of ${plural(roster.length, "bot's workspace", "bots' workspaces")} searched.`,
-        );
       const actions = settled
         ? [
             ...retries,
@@ -1192,7 +1113,7 @@ export function SearchPalette({
       return {
         ...base,
         count: rows.length,
-        lines: settled ? [...head, ...lines, ...tail] : ["Searching…", ...lines],
+        lines,
         sections: [{ line: null, rows }],
         actions,
         searching: !settled,
@@ -1239,9 +1160,9 @@ export function SearchPalette({
           open: () => onOpen({ kind: "routine", botId: routine.botId, id: routine.id }),
         };
       });
+      // Only what a person acts on, or a paging that stopped, has a line.
       const lines: string[] = [];
       const actions: Row[] = [];
-      const pagedOnce = last.offset > 0;
       if (more === "changed")
         lines.push(
           "The list of routines changed while more were loading. Search again to see it from the start.",
@@ -1255,24 +1176,15 @@ export function SearchPalette({
             () => void routinePage(gen, query, last.nextOffset ?? 0),
           ),
         );
-      } else if (last.hasMore && last.nextOffset !== null) {
-        lines.push(`First ${routines.routines.length} of ${total}`);
-        if (more === "loading") lines.push("Loading more…");
-        else
-          actions.push(
-            action(
-              "routines:more",
-              `Show ${Math.min(total - routines.routines.length, last.routines.length || 50)} more routines`,
-              () => void routinePage(gen, query, last.nextOffset!),
-            ),
-          );
-      } else if (pagedOnce)
-        lines.push(
-          routines.revision !== null
-            ? `All ${plural(total, "routine")}`
-            : `${plural(routines.routines.length, "routine result")} loaded`,
+      } else if (last.hasMore && last.nextOffset !== null && more !== "loading") {
+        actions.push(
+          action(
+            "routines:more",
+            `Show ${Math.min(total - routines.routines.length, last.routines.length || 50)} more routines`,
+            () => void routinePage(gen, query, last.nextOffset!),
+          ),
         );
-      else lines.push("Matches routine names, descriptions and bot details");
+      }
       return {
         ...base,
         count: rows.length,
@@ -1288,7 +1200,6 @@ export function SearchPalette({
     }
   }, [
     query,
-    state.bots,
     listedBotsNow,
     state.discovery,
     tasks,
@@ -1296,7 +1207,6 @@ export function SearchPalette({
     botsById,
     botName,
     links,
-    loadedConversations,
     messages,
     routines,
     files,
@@ -1317,18 +1227,23 @@ export function SearchPalette({
     .map((group) => (group.count > 0 || group.tone === "danger" ? group : { ...group, lines: [] }));
   const pending = groups.some((group) => group.searching);
   const found = groups.reduce((sum, group) => sum + group.count, 0);
-  // The one quiet line under the results: a source still answering, nothing found, or offline.
-  // A group still searching has found nothing yet, so it isn't drawn and this line stands for it.
+  // The quiet lines under the results: a source still answering, nothing found, messages the
+  // gateway is still indexing when the search found none (beside matches it is Messages' own
+  // line), or offline. A group still searching isn't drawn until it finds something.
+  const unindexed =
+    messages.status === "done" &&
+    messages.each === null &&
+    messages.reply.indexing &&
+    messages.reply.hits.length === 0;
   const status = !query
-    ? ""
+    ? []
     : [
         pending ? "Searching…" : found === 0 ? `No results for “${query}”.` : "",
+        !pending && unindexed ? INDEXING : "",
         connected
           ? ""
           : `Messages, files and routines weren't searched: ${gatewayName} isn't connected.`,
-      ]
-        .filter(Boolean)
-        .join(" ");
+      ].filter(Boolean);
 
   /** The rows and actions shown, in order, with the opening line and its action under its row. */
   const view = useMemo(() => {
@@ -1441,7 +1356,7 @@ export function SearchPalette({
     const timer = setTimeout(() => setSaid(announcement(drawn, status)), SAY_AFTER_MS);
     return () => clearTimeout(timer);
     // `drawn` follows from `groups`, and `status` from them, the query and the connection.
-  }, [query, pending, groups, status]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [query, pending, groups, status.join("\n")]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const dialog = dialogRef.current;
@@ -1592,10 +1507,14 @@ export function SearchPalette({
                 </div>
               ))}
             </div>
-            {status && (
-              <p className="s-status" data-testid="search-status">
-                {status}
-              </p>
+            {status.length > 0 && (
+              <div data-testid="search-status">
+                {status.map((line) => (
+                  <p className="s-status" key={line}>
+                    {line}
+                  </p>
+                ))}
+              </div>
             )}
           </div>
         )}
@@ -1667,7 +1586,7 @@ function Option({
 }
 
 /** The live region's words, drawn from the same groups and line as the list (search.md §12). */
-function announcement(drawn: Group[], status: string): string {
+function announcement(drawn: Group[], status: string[]): string {
   const found = drawn.filter((group) => group.count > 0);
   const total = found.reduce((sum, group) => sum + group.count, 0);
   const counts = found.map((group) =>
@@ -1678,7 +1597,7 @@ function announcement(drawn: Group[], status: string): string {
     ...drawn
       .filter((group) => group.tone === "danger")
       .map((group) => `${group.name} couldn't be searched.`),
-    status,
+    ...status,
   ]
     .filter(Boolean)
     .join(" ");
