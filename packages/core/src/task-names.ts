@@ -138,7 +138,14 @@ export async function nameTask(
   },
 ): Promise<string | null> {
   const message = namingSource(task.text);
-  if (!message || hasName(ctx.row())) return null;
+  const before = ctx.row();
+  if (!message || hasName(before)) return null;
+  // Bound to the task's own session, known before anything is awaited: a reset or a delete and
+  // recreate meanwhile gives the key another session, which this name is not for. The gateway
+  // refuses the patch for a task deleted meanwhile, which a patch by key alone would make again.
+  const sessionId =
+    task.sessionId ?? (typeof before?.sessionId === "string" ? before.sessionId : null);
+  if (!sessionId) return null;
   if (task.ownSends) {
     try {
       const history = await ctx.request("chat.history", {
@@ -177,10 +184,8 @@ export async function nameTask(
     if (!title) continue;
     const row = ctx.row();
     if (hasName(row)) return null;
-    // Bound to the task's own session: the gateway refuses it for a task deleted meanwhile, which a
-    // patch by key alone would make again.
-    const sessionId = task.sessionId ?? (typeof row?.sessionId === "string" ? row.sessionId : null);
-    if (!sessionId) return null;
+    // The row now names another session: the task was reset or made again under this key.
+    if (typeof row?.sessionId === "string" && row.sessionId !== sessionId) return null;
     const name = [...title].slice(0, MAX_TASK_NAME_CHARS).join("");
     try {
       await ctx.request("sessions.patch", {

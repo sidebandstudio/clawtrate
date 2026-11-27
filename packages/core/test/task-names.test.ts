@@ -161,6 +161,26 @@ describe("making a name", () => {
     expect(gone.patches()).toEqual([]);
   });
 
+  it("keeps no name for a task whose session changed while the name was made", async () => {
+    // A reset, or a delete and a new task under the same key, during the title call: the key's
+    // new session S2 is not the task the first message was sent to (S1). Whether S1 came from the
+    // creation's answer or from the row before the call.
+    for (const sessionId of [null, "s1"]) {
+      const g = namingGateway([{ title: "Lisbon" }], { sessionId: "s1" });
+      const ctx = {
+        ...g.ctx,
+        request: async (method: string, params: unknown) => {
+          const answer = await g.ctx.request(method, params);
+          if (method === "sessions.title.prepare") g.state.row = { key: KEY, sessionId: "s2" };
+          return answer;
+        },
+      };
+      expect(await nameTask(ctx, { ...TASK, sessionId })).toBeNull();
+      expect(g.titleCalls()).toHaveLength(1);
+      expect(g.patches()).toEqual([]);
+    }
+  });
+
   it("goes on past a refusal, an empty answer or a timeout, to the bot's own provider", async () => {
     // 2026.11.10 refuses a model the person's policy doesn't allow; any version answers a failed or
     // empty call, or one whose account is out of allowance, with no title; a call can time out.
@@ -710,8 +730,10 @@ describe("the device that sends the first message", () => {
   it("keeps at most MAX_NAMED_TASKS empty tasks waiting for their first message", async () => {
     const { gateway } = creatingGateway();
     let made = 0;
+    // As both versions answer it: each task's key and its session.
     gateway.handlers["sessions.create"] = () => ({
       key: `agent:main:dashboard:task-${(made += 1)}`,
+      sessionId: `session-${made}`,
     });
     const { client } = await openTask({ gateway });
     try {
