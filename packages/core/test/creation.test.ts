@@ -26,7 +26,7 @@ import {
   type FakeGateway,
 } from "./fake-gateway.ts";
 
-type CreateParams = { agentId: string; message: string; idempotencyKey: string; label?: string };
+type CreateParams = { agentId: string; idempotencyKey: string; label?: string };
 
 /**
  * `sessions.create` as the gateway answers it: per key, one piece of work,
@@ -48,7 +48,7 @@ function idempotentCreate(gateway: FakeGateway) {
     return pending;
   };
   return {
-    accept: () => first.resolve({ key: "agent:otto:original", runId: "original-run" }),
+    accept: () => first.resolve({ key: "agent:otto:original" }),
     created: () => created,
   };
 }
@@ -86,10 +86,16 @@ describe("a creation without an answer", () => {
       await until(() => client.state.creations[0]?.status === "created");
       expect(new Set(keysAsked(gateway)).size).toBe(1);
       expect(create.created()).toBe(1);
-      // The new task holds the message, as the gateway's own run.
-      const outbox = client.state.transcripts["agent:otto:original"]!.outbox;
-      expect(outbox).toMatchObject([
-        { text: "do this once", status: "sent", runId: "original-run" },
+      // The new task holds the message, sent once by chat.send under the creation's key.
+      await until(
+        () => client.state.transcripts["agent:otto:original"]!.outbox[0]?.status === "sent",
+      );
+      expect(gateway.calls("chat.send")).toMatchObject([
+        {
+          sessionKey: "agent:otto:original",
+          message: "do this once",
+          idempotencyKey: keysAsked(gateway)[0],
+        },
       ]);
       // Asking once more opens the same task rather than making a second.
       expect(await viewer.apply(command)).toEqual({ key: "agent:otto:original" });
