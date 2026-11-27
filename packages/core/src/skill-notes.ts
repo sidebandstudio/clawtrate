@@ -26,8 +26,9 @@ const SKILL_NAME = /^[a-z0-9][a-z0-9-]{0,62}$/;
 /** The longest such name. */
 export const MAX_SKILL_NAME_CHARS = 63;
 /** The verbs the note uses, one per kind of change (`ACTION_VERB`, both versions). */
-export const SKILL_NOTE_ACTIONS = ["created", "updated", "archived", "restored"] as const;
-export type SkillNoteAction = (typeof SKILL_NOTE_ACTIONS)[number];
+export type SkillNoteAction = "created" | "updated" | "archived" | "restored";
+const isSkillNoteAction = (value: unknown): value is SkillNoteAction =>
+  value === "created" || value === "updated" || value === "archived" || value === "restored";
 /** The most skills one note is folded with; a longer note shows as the message it is. */
 export const MAX_SKILL_NOTE_SKILLS = 8;
 /** The longest note text folded; a longer one shows as the message it is. */
@@ -123,9 +124,9 @@ function markedSkills(
   const skills: SkillNoteChange[] = [];
   for (const each of data.skills) {
     const skill = record(each);
-    const action = SKILL_NOTE_ACTIONS.find((verb) => verb === skill?.action);
-    if (!skill || !action || typeof skill.name !== "string" || !SKILL_NAME.test(skill.name))
-      return null;
+    const action = skill?.action;
+    if (!skill || !isSkillNoteAction(action) || typeof skill.name !== "string") return null;
+    if (!SKILL_NAME.test(skill.name)) return null;
     if (skill.summary !== undefined && (typeof skill.summary !== "string" || !skill.summary))
       return null;
     skills.push({
