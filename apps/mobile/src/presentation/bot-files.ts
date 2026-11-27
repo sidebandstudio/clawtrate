@@ -66,7 +66,9 @@ export function botFileView(file: ChatFile, phase: BotFilePhase, canLoad: boolea
     case "reading":
       return { state: "reading", note: W.reading, action: "save", busy: true };
     case "sharing":
-      return { state: "sharing", note: null, action: "save", busy: true };
+      // The sheet is over the row while it is open, so Save is pressed again only once it has
+      // gone: never stuck waiting for a sheet that didn't say it closed.
+      return { state: "sharing", note: null, action: "save", busy: false };
     case "saved":
       return { state: "saved", note: W.saved, action: "save", busy: false };
     case "shared":

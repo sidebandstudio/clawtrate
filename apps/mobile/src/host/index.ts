@@ -6,14 +6,14 @@ import { requireNativeModule } from "expo";
 import { getRandomBytes, randomUUID } from "expo-crypto";
 import { Directory, Paths } from "expo-file-system";
 import * as SecureStore from "expo-secure-store";
-import { Settings, Share } from "react-native";
+import { Settings } from "react-native";
 import { approvalInstructionsFor, devGatewayHint, type DevGatewayHint } from "./dev-gateway.ts";
 import { createHostFetch, type NativeFetch } from "./fetch.ts";
 import { createSocketFactory, type WebSocketConstructor } from "./socket.ts";
 import { createKeychainSigner } from "./signer.ts";
 import { createKeychainStore } from "./store.ts";
 import { createSecrets, learningStore, type Secrets } from "./secrets.ts";
-import { createShareFile, type ShareFile, type ShareSystem } from "./share.ts";
+import { createSharing, type ShareFile, type ShareSystem } from "./share.ts";
 
 export const APP_VERSION = "0.1.0";
 /** The name this device gives the gateway when it pairs. */
@@ -40,12 +40,17 @@ export type IosHost = {
 /** The app's own folder in its cache for files offered to the share sheet: nothing else is in it. */
 const SHARE_FOLDER = "clawtrate-share";
 
+/** What modules/clawtrate-share gives JavaScript: the sheet for one file, answered once it closes. */
+type NativeShare = {
+  share(uri: string): Promise<{ completed: boolean; activityType: string }>;
+};
+
 /**
  * The share sheet over a folder of the app's own in its cache (`expo-file-system`), each file in
- * a folder of its own so two names never meet. React Native's `Share` takes a file address on
- * iOS and settles once the sheet closes, with the activity chosen, if any.
+ * a folder of its own so two names never meet. The sheet is the app's own native module, which
+ * answers every way the sheet closes (modules/clawtrate-share).
  */
-function iosShareSystem(): ShareSystem {
+function iosShareSystem(native: NativeShare): ShareSystem {
   const root = () => new Directory(Paths.cache, SHARE_FOLDER);
   return {
     clear: () => {
@@ -62,16 +67,16 @@ function iosShareSystem(): ShareSystem {
           await file.write(bytes);
           return file.uri;
         },
-        remove: () => folder.delete(),
+        remove: () => {
+          if (folder.exists) folder.delete();
+        },
       };
     },
     sheet: async (uri) => {
-      const closed = await Share.share({ url: uri });
-      return {
-        completed: closed.action === Share.sharedAction,
-        activityType: closed.action === Share.sharedAction ? (closed.activityType ?? null) : null,
-      };
+      const closed = await native.share(uri);
+      return { completed: closed.completed, activityType: closed.activityType || null };
     },
+    later: (work) => void setTimeout(work, 2_000),
   };
 }
 
@@ -79,12 +84,15 @@ export function createIosHost(): IosHost {
   const accessible = SecureStore.WHEN_UNLOCKED_THIS_DEVICE_ONLY;
   const devGateway = devGatewayHint((key) => Settings.get(key));
   const secrets = createSecrets();
+  const sharing = createSharing(iosShareSystem(requireNativeModule<NativeShare>("ClawtrateShare")));
+  // What a run closed with the sheet open, or a delete that failed, left: gone before anything else.
+  sharing.sweep();
   return {
     devGateway,
     secrets,
     installedBefore: Settings.get(INSTALL_MARK) === "1",
     markInstalled: () => Settings.set({ [INSTALL_MARK]: "1" }),
-    shareFile: createShareFile(iosShareSystem()),
+    shareFile: sharing.share,
     host: {
       createWebSocket: createSocketFactory(WebSocket as unknown as WebSocketConstructor),
       storage: learningStore(createKeychainStore(SecureStore, accessible), secrets),
