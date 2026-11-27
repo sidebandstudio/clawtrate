@@ -146,11 +146,11 @@ test.describe("bot name behaviour", () => {
 
   test("F-552: Close puts the line away and sends nothing to the gateway", async ({ page }) => {
     await open(page, "bot-name", "dark");
-    const run = await page.evaluate(
-      () => (window as unknown as Fixture).clawtrateFixture.getState().botNames![0]!.run,
+    const { run, stamp } = await page.evaluate(
+      () => (window as unknown as Fixture).clawtrateFixture.getState().botNames![0]!,
     );
     await line(page).getByRole("button", { name: "Close" }).click();
-    expect(await sent(page)).toEqual([{ type: "dismissBotName", botId: "new-bot", run }]);
+    expect(await sent(page)).toEqual([{ type: "dismissBotName", botId: "new-bot", run, stamp }]);
     await expect(line(page)).toHaveCount(0);
     await expect(page.locator(".title-pill-name")).toHaveText("Johnny");
   });

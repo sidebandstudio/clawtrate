@@ -6983,8 +6983,8 @@ export class ClawtrateClient {
   }
 
   /** Put a bot's name line away on this device, only while it is the change `run` names. Nothing is sent. */
-  async dismissBotName(botId: string, run: string): Promise<void> {
-    this.botNames.dismiss(botId, run);
+  async dismissBotName(botId: string, run: string, stamp: GatewayStamp): Promise<void> {
+    this.botNames.dismiss(botId, run, stamp);
   }
 
   /** A new picture for a bot: a creature with its choice inside, or the person's own (`avatar.ts`). */

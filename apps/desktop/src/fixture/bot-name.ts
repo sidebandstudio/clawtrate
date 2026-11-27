@@ -245,7 +245,11 @@ export function botNameCommand(
     set({
       ...state,
       botNames: (state.botNames ?? []).filter(
-        (each) => each.botId !== command.botId || each.run !== command.run,
+        (each) =>
+          each.botId !== command.botId ||
+          each.run !== command.run ||
+          each.stamp.gatewayId !== command.stamp.gatewayId ||
+          each.stamp.target !== command.stamp.target,
       ),
     });
     return Promise.resolve();

@@ -420,7 +420,7 @@ export type BridgeCommand =
    * on this device.
    */
   | { type: "undoBotName"; botId: string; run: string; from: string; stamp: GatewayStamp }
-  | { type: "dismissBotName"; botId: string; run: string }
+  | { type: "dismissBotName"; botId: string; run: string; stamp: GatewayStamp }
   /**
    * Update OpenClaw, after its confirmation (`ClawtrateState.openclawUpdating`): sent only to the
    * gateway the screen showed (`stamp`). Dismiss puts away a finished update's line.
@@ -1411,6 +1411,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         type: "dismissBotName",
         botId: botId(command.botId),
         run: shortText(command.run, 16, "change"),
+        stamp: gatewayStampOf(command.stamp),
       };
     case "startOpenClawUpdate":
       return { type: "startOpenClawUpdate", stamp: gatewayStampOf(command.stamp) };
@@ -2379,7 +2380,7 @@ class ViewerSession implements BridgeSession {
       case "undoBotName":
         return client.undoBotName(command.botId, command.run, command.from, command.stamp);
       case "dismissBotName":
-        return client.dismissBotName(command.botId, command.run);
+        return client.dismissBotName(command.botId, command.run, command.stamp);
       case "startOpenClawUpdate":
         return client.startOpenClawUpdate(command.stamp);
       case "dismissOpenClawUpdate":

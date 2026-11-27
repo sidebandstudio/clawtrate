@@ -1109,11 +1109,13 @@ export class BotNames {
   }
 
   /**
-   * Put a line away on this device, only while it is the line of the change `run` names: a newer
-   * line that replaced it meanwhile stays. Nothing is sent.
+   * Put a line away on this device, only while it is the line of the change `run` names, read on
+   * the gateway and target `stamp` names: a newer line that replaced it meanwhile, or the same
+   * change's line restored after the target changed, stays. Nothing is sent.
    */
-  dismiss(botId: string, run: string): void {
-    if (this.lines.get(botId)?.line.run !== run) return;
+  dismiss(botId: string, run: string, stamp: GatewayStamp): void {
+    const shown = this.lines.get(botId)?.line;
+    if (shown?.run !== run || !sameStamp(shown.stamp, stamp)) return;
     {
       this.dismissed.add(run);
       if (this.dismissed.size > MAX_NAME_CARDS)

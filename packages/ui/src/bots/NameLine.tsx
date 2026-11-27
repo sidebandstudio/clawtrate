@@ -195,7 +195,12 @@ export function NameLine({ bot, onAnnounce }: { bot: Bot; onAnnounce: (text: str
             data-variant="quiet"
             aria-label="Close"
             onClick={() =>
-              void bridge.invoke({ type: "dismissBotName", botId: bot.id, run: line.run })
+              void bridge.invoke({
+                type: "dismissBotName",
+                botId: bot.id,
+                run: line.run,
+                stamp: line.stamp,
+              })
             }
           >
             <CloseIcon />

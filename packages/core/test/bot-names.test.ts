@@ -947,7 +947,7 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
     expect(restarted.line()).toMatchObject({ to: "Juniper", whose: "person", status: "renamed" });
     expect(restarted.record()!.changes).toHaveLength(1);
     expect(undoable(restarted, gw)).toBe(true);
-    restarted.engine.dismiss("pip", runTag("run-1"));
+    restarted.engine.dismiss("pip", runTag("run-1"), STAMP);
     await restarted.engine.onPrefsChanged([NAME_RECORD_KEY]);
     restarted.engine.onBots(gw.state.bots);
     expect(restarted.lines()).toEqual([]);
@@ -1217,10 +1217,29 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
     const gw = gateway();
     const me = device(gw);
     await me.engine.afterRun("pip", KEY, "run-1");
-    me.engine.dismiss("pip", runTag("another run"));
+    me.engine.dismiss("pip", runTag("another run"), STAMP);
     expect(me.line()).toMatchObject({ run: runTag("run-1") });
-    me.engine.dismiss("pip", runTag("run-1"));
+    me.engine.dismiss("pip", runTag("run-1"), STAMP);
     expect(me.lines()).toEqual([]);
+  });
+
+  it("F-552: a Close pressed before the target changed doesn't put away the same change's line read again after it", async () => {
+    const gw = gateway();
+    let stamp = STAMP;
+    const me = device(gw, { stamp: () => stamp });
+    await me.engine.afterRun("pip", KEY, "run-1");
+    // Connected again: the record brings back the same change's line under the new target.
+    stamp = { gatewayId: "gw-a", target: 2 };
+    me.engine.reset();
+    await me.engine.onPrefsChanged([NAME_RECORD_KEY]);
+    me.engine.onBots(gw.state.bots);
+    expect(me.line()).toMatchObject({ run: runTag("run-1"), stamp });
+    const sent = gw.state.sets;
+    me.engine.dismiss("pip", runTag("run-1"), STAMP);
+    expect(me.line()).toMatchObject({ run: runTag("run-1") });
+    me.engine.dismiss("pip", runTag("run-1"), stamp);
+    expect(me.lines()).toEqual([]);
+    expect(gw.state.sets).toBe(sent);
   });
 
   it("F-552: the default bot is never read", async () => {
