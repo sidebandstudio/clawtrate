@@ -193,6 +193,10 @@ export function stoppedWithLines(run: Run, nameOf: (sessionKey: string) => strin
     lines.push(`${nameOf(key)}'s run for this message may still be going: its stop got no answer.`);
   for (const key of also.uncertain)
     lines.push(`The message to ${nameOf(key)} may or may not have been delivered.`);
+  for (const key of also.followUps)
+    lines.push(
+      `Then stopped: the turn the gateway started here on its own once ${nameOf(key)}'s run was stopped.`,
+    );
   if (also.omitted > 0)
     lines.push(
       `${also.omitted} more ${also.omitted === 1 ? "run was" : "runs were"} asked to stop, not listed here.`,
@@ -201,12 +205,13 @@ export function stoppedWithLines(run: Run, nameOf: (sessionKey: string) => strin
 }
 
 /**
- * The person's message a run is known to have started from: its keyed anchor only (#686). A
- * position decides where a run is drawn, never what Try again sends.
+ * The person's message a run is known to have started from: its keyed anchor only (#686), and
+ * only a message of theirs: another session's message that started it (#645) is not sent again
+ * as theirs. A position decides where a run is drawn, never what Try again sends.
  */
 function keyedAnchor(run: Run, transcript: Transcript) {
   return run.anchorKeyed
-    ? transcript.items.find((item) => item.id === run.anchorItemId)
+    ? transcript.items.find((item) => item.id === run.anchorItemId && item.role === "user")
     : undefined;
 }
 
@@ -320,6 +325,12 @@ export function RunEnding({
             <p>
               <b>Stopped after {ending.timeouts} tool calls in a row timed out.</b> The machine{" "}
               {bot.name} works on may not be responding. Completed actions are not undone.
+            </p>
+          ) : ending.followUp ? (
+            <p>
+              <b>{ending.after ? `Stopped after ${ending.after}.` : "Stopped."}</b> The gateway
+              started this turn on its own after your Stop of the one before, so Clawtrate stopped
+              it too. Completed actions are not undone.
             </p>
           ) : (
             <p>
