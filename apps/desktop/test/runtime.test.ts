@@ -1,17 +1,10 @@
 // A1 and A3: what a host connects to, and what it tells people to run.
 import { createFileStore } from "@clawtrate/core/node";
-import {
-  mkdirSync,
-  mkdtempSync,
-  realpathSync,
-  renameSync,
-  symlinkSync,
-  writeFileSync,
-} from "node:fs";
+import { mkdirSync, realpathSync, renameSync, symlinkSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { tempDir } from "../../../test/temp-dir.ts";
 import {
   childFor,
   deadProcess,
@@ -63,7 +56,7 @@ afterAll(() => {
 });
 
 async function dataDirRemembering(url: string): Promise<string> {
-  const dataDir = mkdtempSync(join(tmpdir(), "clawtrate-runtime-"));
+  const dataDir = tempDir("clawtrate-runtime-");
   await createFileStore(join(dataDir, "state.json")).set(
     "connection",
     JSON.stringify({ url, token: null }),
@@ -115,7 +108,7 @@ describe("token-free development mode (A1)", () => {
     );
     await guarded.start();
     const before = attempts;
-    const staticDir = mkdtempSync(join(tmpdir(), "clawtrate-static-"));
+    const staticDir = tempDir("clawtrate-static-");
     writeFileSync(join(staticDir, "index.html"), "<!doctype html>");
     const host = startWebHost({
       runtime: { client: guarded, info: runtime.info, policy: {} },
@@ -159,8 +152,8 @@ function provenCheckout(
     port?: number;
   } = {},
 ) {
-  const home = mkdtempSync(join(tmpdir(), "clawtrate-home-"));
-  const repoRoot = realpathSync(mkdtempSync(join(tmpdir(), "clawtrate-checkout-")));
+  const home = tempDir("clawtrate-home-");
+  const repoRoot = realpathSync(tempDir("clawtrate-checkout-"));
   const runDir = devRunDir(repoRoot, instance);
   const gateway = options.gateway ?? liveProcess();
   const port = instance === null ? 19001 : (options.port ?? 19240);
@@ -202,7 +195,7 @@ describe("development eligibility needs proof, not two agreeing files (A1)", () 
   });
 
   it("refuses a run file and a connection file that agree when there is no marker", () => {
-    const repoRoot = realpathSync(mkdtempSync(join(tmpdir(), "clawtrate-checkout-")));
+    const repoRoot = realpathSync(tempDir("clawtrate-checkout-"));
     const runDir = devRunDir(repoRoot, "alpha");
     mkdirSync(runDir, { recursive: true });
     writeFileSync(join(runDir, "state.json"), JSON.stringify({ gatewayPort: 19200 }));
@@ -210,7 +203,7 @@ describe("development eligibility needs proof, not two agreeing files (A1)", () 
       join(runDir, "connection.json"),
       JSON.stringify({ instance: "alpha", url: "ws://127.0.0.1:19200", token: "probe" }),
     );
-    const home = mkdtempSync(join(tmpdir(), "clawtrate-home-"));
+    const home = tempDir("clawtrate-home-");
     expect(readDevConnection(repoRoot, { instance: "alpha", home })).toBeNull();
   });
 
@@ -278,7 +271,7 @@ describe("development eligibility needs proof, not two agreeing files (A1)", () 
       const runtime = await startHostRuntime({
         kind: "web",
         displayName: "Clawtrate Web",
-        dataDir: mkdtempSync(join(tmpdir(), "clawtrate-runtime-")),
+        dataDir: tempDir("clawtrate-runtime-"),
         devGateway,
         devOnly: true,
         recheckDevGateway: proven.read,
@@ -347,7 +340,7 @@ describe("development eligibility needs proof, not two agreeing files (A1)", () 
       const runtime = await startHostRuntime({
         kind: mode === "desktop" ? "desktop" : "web",
         displayName: "Clawtrate",
-        dataDir: mkdtempSync(join(tmpdir(), "clawtrate-runtime-")),
+        dataDir: tempDir("clawtrate-runtime-"),
         devGateway,
         autoConnectDev: true,
         recheckDevGateway: () => {
@@ -387,7 +380,7 @@ describe("development eligibility needs proof, not two agreeing files (A1)", () 
       startHostRuntime({
         kind: "web",
         displayName: "Clawtrate Web",
-        dataDir: mkdtempSync(join(tmpdir(), "clawtrate-runtime-")),
+        dataDir: tempDir("clawtrate-runtime-"),
         devGateway: null,
         devOnly: true,
         recheckDevGateway: () => null,
