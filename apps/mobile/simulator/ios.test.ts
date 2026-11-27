@@ -44,7 +44,7 @@ import { noTasksBody, TASK_WORDS } from "../src/presentation/summary.ts";
 import { CONVERSATION_WORDS } from "../src/presentation/conversation-words.ts";
 import { SENT_PICTURE_LINES, sentPictureAlt } from "../src/presentation/sent-files.ts";
 import { BOT_FILE_WORDS } from "../src/presentation/bot-files.ts";
-import { ATTACH_TEXT } from "../../../tools/dev-gateway/src/scripted-files.ts";
+import { ATTACH_TEXT, reviewsDraftPdf } from "../../../tools/dev-gateway/src/scripted-files.ts";
 import { rowTime, stampTime } from "../../../packages/ui/src/format.ts";
 import { addressWords, SETTINGS_WORDS } from "../src/presentation/gateway-state.ts";
 import { WebSocket, WebSocketServer } from "ws";
@@ -2100,15 +2100,26 @@ describe("the iOS app", () => {
     // A line the PDF holds, and nothing else the app keeps: where the shared file is.
     const inPdf = "Lake loop review";
     try {
-      await runOnGateway("pip", own.key, "#attach");
-      await until("the reply's files in history", async () => {
-        const history = await gatewayCall<{ messages?: unknown[] }>("chat.history", {
-          sessionKey: own.key,
-          limit: 20,
-        });
-        const text = JSON.stringify(history.messages ?? []);
-        return text.includes('"reviews-draft.pdf"') && text.includes('"reviews.txt"');
+      // Sent as a person's message from another client, as the desktop's end-to-end check does:
+      // the gateway stages the files of a chat run's answer.
+      await gatewayCall("chat.send", {
+        sessionKey: own.key,
+        message: "#attach",
+        idempotencyKey: `ios-attach-${Date.now().toString(36)}`,
       });
+      // The gateway writes the files into the row just after the run ends.
+      await until(
+        "the reply's files in history",
+        async () => {
+          const history = await gatewayCall<{ messages?: unknown[] }>("chat.history", {
+            sessionKey: own.key,
+            limit: 20,
+          });
+          const text = JSON.stringify(history.messages ?? []);
+          return text.includes('"type":"attachment"') && text.includes("reviews.txt");
+        },
+        180_000,
+      );
       // Files load only from a protected address, as a person's pictures do (F-557).
       front = await protectedFront(Number(new URL(env.gateway).port));
       launch({ fresh: true, devGateway: front.url });
@@ -2143,7 +2154,13 @@ describe("the iOS app", () => {
       );
 
       // Save: the sheet opens with no question first, for the file the app wrote of its own.
-      await steps("file-sheet", [tap(save), waitFor("Save to Files", 60_000)]);
+      // Its header names the file and its exact size, as iOS reads it from the file the app wrote.
+      await steps("file-sheet", [
+        tap(save),
+        waitFor("Save to Files", 60_000),
+        see("reviews-draft"),
+        see(lit(`PDF Document · ${reviewsDraftPdf().length} bytes`)),
+      ]);
       await shoot("bot-files-share-sheet");
       expect(containerHits([inPdf])[0]).toBeGreaterThan(0);
       const asked = front.requests.filter((request) => request.url.startsWith("/api/chat/media"));
@@ -2153,7 +2170,8 @@ describe("the iOS app", () => {
 
       // Closed without choosing: the row is ready again and the file is gone.
       await steps("file-sheet-closed", [
-        tap({ text: "Close" }),
+        // The sheet's own dismiss region, the area outside it.
+        tap({ id: "PopoverDismissRegion" }),
         waitGone("Save to Files", 30_000),
         see(save),
         notSee({ id: "bot-file-note", text: lit(BOT_FILE_WORDS.saved) }),
