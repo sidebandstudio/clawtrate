@@ -516,6 +516,8 @@ export function useConnect({
       try {
         await bridge.invoke({ type: "setAccountLabel", profileId: where.account, label: typed });
         announce("Label saved");
+        // Kept only for this account's label step, now done; a later Connect may keep another.
+        if (recall<KeptLabel>(LABEL_KEPT)?.account === where.account) remember(LABEL_KEPT, null);
         if (mounted.current) finish(where.account);
       } catch (error) {
         setLabelError(error instanceof Error ? error.message : String(error));

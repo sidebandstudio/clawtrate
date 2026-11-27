@@ -236,6 +236,12 @@ export function BotSettings({
   useLayoutEffect(() => {
     drawnBot.current = bot.id;
   });
+  // A save answers only while it is the latest one on the bot that sent it: one sent before a
+  // switch away and back would otherwise end the wait, or show its error, of the save after it.
+  const saveAttempt = useRef<object | null>(null);
+  useLayoutEffect(() => {
+    saveAttempt.current = null;
+  }, [bot.id]);
   const focusIn = useCallback((selector: string) => {
     const forBot = drawnBot.current;
     requestAnimationFrame(() => {
@@ -684,6 +690,8 @@ export function BotSettings({
     const ready = changed && listedNow && targetProvider !== null && model !== null;
     const save = async () => {
       if (!ready || !targetProvider || !model) return;
+      const attempt = {};
+      saveAttempt.current = attempt;
       setSaving(true);
       setError(null);
       try {
@@ -703,10 +711,10 @@ export function BotSettings({
         );
         go("account");
       } catch (failure) {
-        if (drawnBot.current === bot.id)
+        if (saveAttempt.current === attempt)
           setError(failure instanceof Error ? failure.message : String(failure));
       } finally {
-        if (drawnBot.current === bot.id) setSaving(false);
+        if (saveAttempt.current === attempt) setSaving(false);
       }
     };
     const was = account;
