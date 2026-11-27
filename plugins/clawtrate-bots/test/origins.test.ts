@@ -695,4 +695,12 @@ describe("fix round 2b", () => {
       source: "lost",
     });
   });
+
+  it("a spawn made by a run the store doesn't hold stops waiting when that run ends", () => {
+    const store = new RunOrigins();
+    const unheld = store.seen("r-unheld"); // first seen at its call: not held
+    store.sawSpawn(unheld, "pip", "c1", "agent:pip:main");
+    store.sawEnd({ runId: "r-unheld" });
+    expect(store.sawPrompt(at("p1", "agent:pip:dashboard:9"))!.kind).toBe("typed");
+  });
 });
