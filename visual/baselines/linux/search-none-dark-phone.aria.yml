@@ -87,7 +87,7 @@
 - dialog "Search":
   - combobox "Search" [expanded]: kayak
   - button "Cancel"
-  - listbox "Results"
   - paragraph: No results for “kayak”.
+  - listbox "Results"
   - status: No results for “kayak”.
 - status
