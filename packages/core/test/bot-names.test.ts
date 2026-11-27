@@ -290,6 +290,10 @@ function gateway(options: { prefs?: "ok" | "none"; file?: string } = {}) {
     /** Runs as each `users.prefs.get` arrives, with how many came before it. */
     onGet: null as null | ((before: number) => void),
     gets: 0,
+    /** The picture in the bot's config, which `config.get` answers with each time it is asked. */
+    picture: [] as Array<string | null>,
+    /** Every `agents.files.set` the gateway was sent. */
+    fileSets: [] as string[],
   };
   const request = async (method: string, raw: unknown): Promise<unknown> => {
     const params = raw as Record<string, unknown>;
@@ -297,7 +301,17 @@ function gateway(options: { prefs?: "ok" | "none"; file?: string } = {}) {
       state.reads += 1;
       return { file: { content: state.file, hash: "a".repeat(64) } };
     }
-    if (method === "config.get") return { config: {} };
+    if (method === "config.get") {
+      const picture =
+        state.picture.length > 1 ? state.picture.shift()! : (state.picture[0] ?? null);
+      return picture === null
+        ? { config: {} }
+        : { config: { agents: { entries: { pip: { identity: { avatar: picture } } } } } };
+    }
+    if (method === "agents.files.set") {
+      state.fileSets.push(String(params.content));
+      return { ok: true };
+    }
     if (method === "agents.update") {
       state.onUpdate?.();
       state.onUpdate = null;
@@ -1291,8 +1305,16 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
     const gw = gateway();
     let generation = "1:1";
     const me = device(gw, { generation: () => generation });
-    // Connected again just after the update was sent.
-    gw.state.onUpdate = () => void (generation = "2:1");
+    // Connected again just after the update was sent; the bot list isn't read on the new socket.
+    let reads = 0;
+    gw.state.onUpdate = () => {
+      generation = "2:1";
+      const refresh = me.ctx.refreshBots;
+      me.ctx.refreshBots = async () => {
+        reads += 1;
+        return refresh();
+      };
+    };
     const sets = () => gw.state.sets;
     await me.engine.afterRun("pip", KEY, "run-1");
     expect(gw.state.updates).toEqual(["Juniper"]);
@@ -1302,6 +1324,7 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
     expect(gw.kept().counts).toEqual([]);
     expect(sets()).toBe(1);
     expect(me.line()).toMatchObject({ status: "failed" });
+    expect(reads).toBe(0);
   });
 
   it("F-552: room for a rename counts a rename under way on the day its own device took it: claims on either side of midnight", async () => {
@@ -1496,6 +1519,56 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
     held.resolve();
     await pip;
     expect(gw.kept().counts).toContainEqual({ bot: "pip", day: dayA, n: 1 });
+  });
+
+  it("F-552: the picture's clean-up writes only on the connection the rename went on, with the config read again just before", async () => {
+    const PICTURE = "data:image/png;base64,AAAA";
+    const withPicture = (gw: ReturnType<typeof gateway>) => {
+      gw.state.picture = [PICTURE];
+      // The gateway writes the picture into the file with the name.
+      gw.state.onUpdate = () => (gw.state.file = `- Name: Juniper\n- Avatar: ${PICTURE}\n`);
+    };
+    const ok = gateway();
+    withPicture(ok);
+    await device(ok).engine.afterRun("pip", KEY, "run-1");
+    expect(ok.state.fileSets).toEqual(["- Name: Juniper\n"]);
+
+    // Connected again just after the update: nothing is written on the new socket.
+    const moved = gateway();
+    withPicture(moved);
+    let generation = "1:1";
+    const update = moved.state.onUpdate!;
+    moved.state.onUpdate = () => {
+      update();
+      generation = "2:1";
+    };
+    await device(moved, { generation: () => generation }).engine.afterRun("pip", KEY, "run-1");
+    expect(moved.state.updates).toEqual(["Juniper"]);
+    expect(moved.state.fileSets).toEqual([]);
+
+    // The picture leaves the config before the write: it lives only in the file now, and stays.
+    const gone = gateway();
+    withPicture(gone);
+    gone.state.picture = [PICTURE, null];
+    await device(gone).engine.afterRun("pip", KEY, "run-1");
+    expect(gone.state.updates).toEqual(["Juniper"]);
+    expect(gone.state.fileSets).toEqual([]);
+  });
+
+  it("F-552: a connection that may not change bots writes nothing to the record, an unsaved decline included", async () => {
+    const gw = gateway();
+    const me = device(gw, { admin: false });
+    me.engine["unrecorded"].set("gw-a\npip", {
+      stamp: STAMP,
+      botId: "pip",
+      name: "Juniper",
+      run: runTag("r0"),
+      file: FILE_TAG,
+      op: runTag("o0"),
+    });
+    await me.engine.afterRun("pip", KEY, "run-1");
+    expect(gw.state.sets).toBe(0);
+    expect(me.line()).toMatchObject({ status: "not-done", reason: "no-admin" });
   });
 
   it("F-552: a rename whose confirmation couldn't be saved says so in its line", async () => {

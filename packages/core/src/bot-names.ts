@@ -951,7 +951,7 @@ export class BotNames {
         });
       }
       if (!sent) throw new Error(NOTHING_SENT);
-      await this.keepPictureOutOfFile(botId, epoch);
+      await this.keepPictureOutOfFile(botId, op);
       // Read back and confirmed only on the connection the rename was sent on (`op`): after a
       // reconnect its claim stays, for the record to settle by the name the gateway lists.
       if (this.current(op)) await this.ctx.refreshBots().catch(() => {});
@@ -1092,7 +1092,7 @@ export class BotNames {
       restore({ status: "renamed", error: errorText(error).slice(0, MAX_NAME_ERROR_CHARS) });
       throw error;
     }
-    await this.keepPictureOutOfFile(botId, epoch);
+    await this.keepPictureOutOfFile(botId, op);
     // What the gateway lists now, read again on the very connection Undo was sent on (`op`). A
     // list that couldn't be read there says nothing of Undo: its claim stays, for the record to
     // settle by the name listed.
@@ -1425,6 +1425,8 @@ export class BotNames {
       if (typeof next === "string") return next;
       const value = fitNameRecord({ ...next, rev: record.rev + 1 });
       if (!keepsWhatItAdds(base, { ...next, rev: value.rev }, dayOf(this.ctx.now()))) return "full";
+      // Written only by a connection that may change bots, checked before each try.
+      if (!this.ctx.canRename()) return "unavailable";
       const result = await this.recordRequest(op, "users.prefs.set", {
         entries: { [NAME_RECORD_KEY]: value },
         expectedEntries: { [NAME_RECORD_KEY]: raw ?? null },
@@ -1447,7 +1449,10 @@ export class BotNames {
    * picture goes: a bot whose picture lives only in its file keeps it. The rename has landed
    * whatever happens here, so a failure is only logged.
    */
-  private async keepPictureOutOfFile(botId: string, epoch: number): Promise<void> {
+  private async keepPictureOutOfFile(botId: string, op: RecordOp): Promise<void> {
+    // Each request only on the connection the rename or Undo was sent on, and the write only
+    // while it may still change bots.
+    const live = () => this.current(op);
     // Within the client's file reads like every other read: with none free it is left for the
     // next rename, which a copied picture doesn't keep from coming.
     const release = this.ctx.takeRead();
@@ -1461,15 +1466,15 @@ export class BotNames {
         const entry = asRecord(asRecord(asRecord(config?.config)?.agents)?.entries)?.[botId];
         return asRecord(asRecord(entry)?.identity)?.avatar;
       };
+      if (!live()) return;
       const picture = await configPicture();
-      if (epoch !== this.epoch || typeof picture !== "string" || !picture.startsWith("data:"))
-        return;
+      if (!live() || typeof picture !== "string" || !picture.startsWith("data:")) return;
       const file = asRecord(
         asRecord(
           await this.ctx.request("agents.files.get", { agentId: botId, name: "IDENTITY.md" }),
         )?.file,
       );
-      if (epoch !== this.epoch) return;
+      if (!live()) return;
       const content = typeof file?.content === "string" ? file.content : null;
       const hash =
         typeof file?.hash === "string" && /^[a-f0-9]{64}$/i.test(file.hash) ? file.hash : null;
@@ -1481,7 +1486,7 @@ export class BotNames {
       if (kept === content) return;
       // Read again just before the write: a picture taken out of the config meanwhile lives only
       // in the file now, and its line stays. The gateway offers no precondition on the config.
-      if ((await configPicture()) !== picture || epoch !== this.epoch) return;
+      if ((await configPicture()) !== picture || !live() || !this.ctx.canRename()) return;
       await this.ctx.request("agents.files.set", {
         agentId: botId,
         name: "IDENTITY.md",
@@ -1495,7 +1500,6 @@ export class BotNames {
     }
   }
 
-  /** The earlier card kept Not now on this device; the record on the gateway replaces it. */
   /**
    * Whether an earlier build's "Not now" (`NAME_DECLINES_KEY`, `{"<gateway>\n<bot>": name}`)
    * declined this name for this bot on this gateway. Read once and kept as it is: those answers
