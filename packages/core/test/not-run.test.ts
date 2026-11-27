@@ -666,6 +666,19 @@ describe("the rules underneath", () => {
     expect(index.failedAt(KEY)).toBe(2_000);
   });
 
+  it("a run stopped elsewhere ends at its chat abort, so a later message failed before running still marks the task (#722)", () => {
+    const index = new WaitingIndex();
+    index.onAgent(
+      { sessionKey: KEY, runId: "r1", stream: "lifecycle", ts: 1_000, data: { phase: "start" } },
+      1_000,
+    );
+    // Its abort, and no lifecycle end ever arrives.
+    index.onChat({ sessionKey: KEY, runId: "r1", state: "aborted" }, 1_500);
+    index.noteInput(KEY);
+    expect(index.onChat({ sessionKey: KEY, runId: "r2", state: "error" }, 2_000)).toBe(true);
+    expect(index.failedAt(KEY)).toBe(2_000);
+  });
+
   it("an older run's late chat end says nothing while a newer run of the task is going", () => {
     const index = new WaitingIndex();
     index.onAgent(

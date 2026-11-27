@@ -68,7 +68,7 @@ const time = (value: unknown, fallback: number): number =>
 
 /** Whether a `chat` event ends a run: the only kind `WaitingIndex.onChat` reads. */
 export function endsRun(payload: RawRecord): boolean {
-  return payload.state === "error" || payload.state === "final";
+  return payload.state === "error" || payload.state === "final" || payload.state === "aborted";
 }
 
 /** What a held task's runs say: a run waiting on a card, or a latest run that was stopped or failed. */
@@ -265,7 +265,8 @@ export class WaitingIndex {
   /**
    * A `chat` event. Its error is the word that the run failed, the only one when the gateway
    * failed the message before any run of it started (OpenClaw 2026.11.10 leaves the row no
-   * status then); its final is the word that the run succeeded. Returns whether the rail's word
+   * status then); its final is the word that the run succeeded, and its abort that the run is
+   * over, whose stop the lifecycle end marks if it comes (#722). Returns whether the rail's word
    * may have changed.
    */
   onChat(payload: RawRecord, at: number): boolean {
