@@ -997,6 +997,38 @@ describe("rebuilding from history (F-107, F-093)", () => {
     expect(failedWith("provider down").errorItemId).toBe("a1:1");
   });
 
+  it("a failed run's error row stays when the live error its card keeps says something else (#723)", () => {
+    const history = (text: string) =>
+      runsFromHistory(
+        [
+          { role: "user", content: "a", __openclaw: { id: "u1", seq: 1 } },
+          {
+            role: "assistant",
+            content: [{ type: "text", text }],
+            stopReason: "error",
+            __openclaw: { id: "a1", seq: 2, runId: "run-1" },
+          },
+        ],
+        null,
+        ctx(),
+      );
+    const failed = (message: string) =>
+      play([
+        A("run-1", 1, "lifecycle", { phase: "start", startedAt: 1_001 }),
+        C("run-1", 2, "error", { errorMessage: message }),
+      ]).activity.runs;
+    // The card keeps the live error: the row says other words, so it is drawn.
+    const other = mergeHistoryRuns(failed("timeout"), history("provider down"), ctx()).runs[0]!;
+    expect(other.error?.message).toBe("timeout");
+    expect(other.errorItemId).toBeUndefined();
+    // The same words: the row is the card's, and is left out.
+    const same = mergeHistoryRuns(failed("provider down"), history("provider down"), ctx()).runs;
+    expect(same[0]!.errorItemId).toBe("a1:1");
+    // A mark an earlier read left goes when history no longer marks the row.
+    const stale = mergeHistoryRuns(same, history("timeout and more"), ctx()).runs;
+    expect(stale[0]!.errorItemId).toBeUndefined();
+  });
+
   it("merges a reload into live runs without duplicating runs or steps", () => {
     const live = play(toolRun()).activity;
     const history = runsFromHistory(toolRunHistory, null, ctx());

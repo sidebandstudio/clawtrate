@@ -3612,7 +3612,6 @@ export function mergeHistoryRuns(
       ...(fromRun.unansweredInHistory || current.unansweredInHistory
         ? { unansweredInHistory: true as const }
         : {}),
-      ...(fromRun.errorItemId ? { errorItemId: fromRun.errorItemId } : {}),
       // History's word that the gateway failed it before running it stays with the live error.
       ...(fromRun.error?.beforeReply && current.error && !current.error.beforeReply
         ? { error: { ...current.error, beforeReply: true as const } }
@@ -3634,7 +3633,12 @@ export function mergeHistoryRuns(
         endFromRows: true,
       };
     }
-    return run;
+    // The row history marks as the error is left out only while the card says its words: a live
+    // error the merge kept can say something else, and a mark from an earlier read goes (#723).
+    const { errorItemId: _earlier, ...unmarked } = run;
+    return fromRun.errorItemId !== undefined && run.error?.message === fromRun.error?.message
+      ? { ...unmarked, errorItemId: fromRun.errorItemId }
+      : unmarked;
   });
   const runs = [...merged, ...live.filter((run) => !historyIds.has(run.id))].sort(
     (a, b) => Number(a.state === "queued") - Number(b.state === "queued"),
