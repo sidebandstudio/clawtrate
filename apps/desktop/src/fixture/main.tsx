@@ -7,7 +7,7 @@
 //   &bot=otto&task=<key>   the bot and task to open (stored as the app stores them)
 //   &panel=open            the Work pane
 //   &theme=dark            the app's own theme override
-//   &pins=main,otto        pinned bots, in order (this device's rail arrangement for the gateway)
+//   &pins=clawtrate-main-bot,otto pinned bots, in order (this device's rail arrangement for the gateway)
 //   &hidden=marlow         hidden bots
 //   &sort=name             the rail's sort order: recent, name or manual
 //   &files=loaded          the Work pane's Files states (files.ts), with &checkout=1, &fileload=failed
