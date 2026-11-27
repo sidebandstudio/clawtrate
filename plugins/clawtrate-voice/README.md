@@ -4,60 +4,13 @@ Asks the bots on a gateway to talk to their person plainly and kindly, with no e
 
 ## Turning it on for a gateway
 
-It is built and checked against OpenClaw 2026.10.6, the version `docs/decisions.md` pins.
+It is built and checked against OpenClaw 2026.10.6, the version `docs/decisions.md` pins, and 2026.11.10.
 
-These steps are for the gateway's owner. Clawtrate never writes the gateway's config, at install or any other time: letting a hook run is a grant that only the owner gives, because a conversation hook can receive conversation data. (The development gateway in this repository sets it for its own throwaway instances, from the plugin's `clawtrate-dev-contract.json`.)
+The desktop app carries it, packed from its release's own commit (`apps/desktop/packaging/carried-plugins.ts`), and installs it on a gateway on the same computer through the gateway's own methods: staged off, checked against the copy the app carries, given its one grant, and only then turned on (`packages/core/src/plugin-install.ts`, `docs/design/plugins-install.md`). Nobody runs a command or edits a config for it.
 
-1. Name the profile the gateway runs with, and clear any path a shell carries over. `OPENCLAW_CONFIG_PATH` and `OPENCLAW_STATE_DIR` win over `--profile`, so with either set, a write can land in another gateway's config.
+Its one grant is `plugins.entries.clawtrate-voice.hooks.allowConversationAccess: true`, which OpenClaw requires before it registers `before_prompt_build` for a plugin it didn't bundle. Clawtrate writes it when it installs the plugin, and removes it when the plugin is taken off. The plugin reads nothing from the conversation. It only returns the guide. A config with `allowPromptInjection: false` for this plugin still blocks the hook, and the only other sign of that is a warning in the gateway's log.
 
-   ```bash
-   profile="clawtrate"   # the profile your gateway runs with
-   unset OPENCLAW_CONFIG_PATH OPENCLAW_STATE_DIR
-   openclaw --profile "$profile" config file
-   ```
-
-   Stop and check that the path it prints is the config of the gateway you mean. If it isn't, don't go on. Run every command below in the same shell, with the same `--profile "$profile"`.
-
-2. Install the plugin into that profile from a checkout of Clawtrate. `plugins install` writes the profile's config and enables the plugin, so run it only after the check in step 1.
-
-   ```bash
-   checkout="/path/to/clawtrate"   # your checkout of Clawtrate
-   openclaw --profile "$profile" plugins install --link "$checkout/plugins/clawtrate-voice"
-   ```
-
-3. Let its hook run. OpenClaw registers `before_prompt_build` for a plugin it didn't bundle only when both settings under `plugins.entries.clawtrate-voice.hooks` permit it. It checks `allowPromptInjection` first: absent is fine, `false` blocks the hook, and the only other sign of that is a warning in the gateway's log. Then `allowConversationAccess`, which must be `true`.
-
-   First check the path again, on its own:
-
-   ```bash
-   openclaw --profile "$profile" config file
-   ```
-
-   Stop and check that it is still the config of the gateway you mean. Only then grant the hook:
-
-   ```bash
-   openclaw --profile "$profile" config set plugins.entries.clawtrate-voice.hooks.allowConversationAccess true
-   ```
-
-   Then read back what the hook has:
-
-   ```bash
-   openclaw --profile "$profile" config get plugins.entries.clawtrate-voice.hooks
-   ```
-
-   It should show `allowConversationAccess: true` and no `allowPromptInjection: false`. That is this part of the config:
-
-   ```json
-   {
-     "plugins": {
-       "entries": { "clawtrate-voice": { "hooks": { "allowConversationAccess": true } } }
-     }
-   }
-   ```
-
-   The plugin reads nothing from the conversation. It only returns the guide.
-
-4. Restart the gateway. The guide is added from the next system prompt the gateway builds for each bot.
+On a development gateway, `pnpm dev-gateway start --instance <name> --with-plugin clawtrate-voice` loads it from the checkout with its grant, and `--install-plugin clawtrate-voice` installs it the way the app does (`docs/development/dev-gateway.md`).
 
 Until both settings permit it, the plugin's methods still answer. `get` reports each setting under `hook.settings`, and `hook.state` names the first that blocks it (`prompt-injection-off` or `needs-conversation-access`). Settings names both and says which blocks it.
 

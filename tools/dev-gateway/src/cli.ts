@@ -101,6 +101,7 @@ import {
   profileArgs,
   selectInstance,
 } from "./instance.ts";
+import { describeOutcome, installPlugin, packCarried } from "./install-plugin.ts";
 import { instanceLockPath, portLockPath, withLock } from "./lock.ts";
 import {
   OPENCLAW_VERSION,
@@ -1334,6 +1335,8 @@ export async function start(
     httpApi?: boolean;
     /** The background skill review (`StartOptions.skillReview`). */
     skillReview?: boolean;
+    /** Plugins the desktop app carries, installed through its install engine (install-plugin.ts). */
+    installPlugins?: string[];
   } = {},
 ): Promise<void> {
   assertInstanceStateDir(inst.stateDir, inst.name, inst.home);
@@ -1548,7 +1551,30 @@ export async function start(
     seedWorkspaceFiles(filesWorkspace);
     // Unseeded starts are for checks that need a running gateway, not its data.
     if (options.seed !== false) await seed(inst);
+    for (const plugin of options.installPlugins ?? []) await installCarried(inst, plugin);
   });
+}
+
+/** The scopes the install engine writes with: full control, as the app asks for at pairing. */
+const INSTALL_SCOPES = ["operator.admin", "operator.read", "operator.write"];
+
+/**
+ * Installs `plugin`, packed from the checkout, through the desktop app's install engine on a
+ * paired admin connection of its own, which it unpairs afterwards (install-plugin.ts).
+ */
+async function installCarried(inst: DevInstance, plugin: string): Promise<void> {
+  const packed = packCarried(inst.checkout, join(inst.runDir, "carried-plugins"), plugin);
+  const op = await openOperator(inst, "Clawtrate plugin install", INSTALL_SCOPES, []);
+  try {
+    const outcome = await installPlugin(op, packed);
+    console.log(describeOutcome(plugin, op.serverVersion, outcome));
+    if (outcome.kind !== "enabled") process.exitCode = 1;
+  } finally {
+    await op.close();
+    await must(inst, ["devices", "remove", op.deviceId]).catch((error: unknown) =>
+      console.log(`Could not unpair the install client: ${String(error)}`),
+    );
+  }
 }
 
 /**
@@ -2965,7 +2991,7 @@ export async function lockOrder(
 
 const USAGE =
   "usage: pnpm dev-gateway setup   (OpenClaw 2026.10.6 for this tool; start does it when needed)\n" +
-  "       pnpm dev-gateway <start|up|seed|routines|approve [requestId]|status|stop|reset> [--instance <name>] [--no-seed] [--run-id <id>] [--with-accounts] [--default-local-pairing] [--with-node] [--with-images] [--with-message-tool] [--with-http-api] [--with-skill-review] [--with-plugin <plugin>]... [--renew-timeout-ms <ms>]\n" +
+  "       pnpm dev-gateway <start|up|seed|routines|approve [requestId]|status|stop|reset> [--instance <name>] [--no-seed] [--run-id <id>] [--with-accounts] [--default-local-pairing] [--with-node] [--with-images] [--with-message-tool] [--with-http-api] [--with-skill-review] [--with-plugin <plugin>]... [--install-plugin <plugin>]... [--renew-timeout-ms <ms>]\n" +
   "       pnpm dev-gateway lock --instance <name> --agent <bot> --provider <provider> <profileId>\n" +
   "       pnpm dev-gateway unlock --instance <name> --agent <bot> --provider <provider>\n" +
   "       pnpm dev-gateway <list [--json]|prune>   (every instance on this machine)";
@@ -2979,6 +3005,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
       "no-seed": { type: "boolean", default: false },
       "run-id": { type: "string" },
       "with-plugin": { type: "string", multiple: true },
+      "install-plugin": { type: "string", multiple: true },
       "with-accounts": { type: "boolean", default: false },
       "with-node": { type: "boolean", default: false },
       "default-local-pairing": { type: "boolean", default: false },
@@ -3043,6 +3070,8 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
       throw new Error(`--${option} is a start option; ${command} does not take it`);
     }
   }
+  if (values["install-plugin"] && command !== "start" && command !== "up")
+    throw new Error(`--install-plugin is a start option; ${command} does not take it`);
   const renew = values["renew-timeout-ms"];
   if (renew !== undefined && command !== "start" && command !== "up") {
     throw new Error(`--renew-timeout-ms is a start option; ${command} does not take it`);
@@ -3059,6 +3088,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
         seed: !values["no-seed"],
         ...(runId ? { runId } : {}),
         plugins: values["with-plugin"] ?? [],
+        installPlugins: values["install-plugin"] ?? [],
         accounts: values["with-accounts"],
         defaultLocalPairing: values["default-local-pairing"],
         node: values["with-node"],

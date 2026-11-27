@@ -1,0 +1,588 @@
+{
+  "openclaw": "2026.11.10",
+  "captured": "A development gateway of this version, started --no-seed, reached by a paired admin operator connection; the gateway's state folder written /gateway-state and the instance name replaced. The config answer keeps its own top-level fields but the config's other copies (`raw`, `parsed`, `sourceConfig`, `resolved`, `runtimeConfig`), and of the config `plugins` and `meta`; the plugin list keeps three other plugins.",
+  "config": {
+    "path": "/gateway-state/openclaw.json",
+    "includedPaths": [],
+    "includeProvenance": [],
+    "agentRosterIncludeOwned": false,
+    "bindingsIncludeOwned": false,
+    "exists": true,
+    "valid": true,
+    "hash": "hmac-sha256:v1:QRe_a0fhwUz7d8ZFIXzMLR2amL5U_hSLXx-lcwVgV1k",
+    "issues": [],
+    "warnings": [],
+    "legacyIssues": [],
+    "configRevisionHash": "hmac-sha256:v1:KM6tDS4vtRCzQy8N_jA7uXidctvsoHBXu7Fp9KbtR3I",
+    "appliedConfigHash": "hmac-sha256:v1:KM6tDS4vtRCzQy8N_jA7uXidctvsoHBXu7Fp9KbtR3I",
+    "config": {
+      "plugins": {
+        "entries": {
+          "memory-core": {
+            "config": {
+              "dreaming": {
+                "enabled": false
+              }
+            }
+          },
+          "ollama": {
+            "config": {
+              "webSearch": {
+                "baseUrl": "http://127.0.0.1:19430"
+              }
+            }
+          },
+          "alibaba": {
+            "config": {}
+          },
+          "anthropic": {
+            "config": {}
+          },
+          "apple-fm": {
+            "config": {}
+          },
+          "azure-speech": {
+            "config": {}
+          },
+          "bifrost": {
+            "config": {}
+          },
+          "bonjour": {
+            "config": {}
+          },
+          "browser": {
+            "config": {}
+          },
+          "canvas": {
+            "config": {}
+          },
+          "clawrouter": {
+            "config": {}
+          },
+          "copilot-proxy": {
+            "config": {}
+          },
+          "cua-computer": {
+            "config": {}
+          },
+          "deep-research": {
+            "config": {}
+          },
+          "deepgram": {
+            "config": {}
+          },
+          "device-pair": {
+            "config": {}
+          },
+          "document-extract": {
+            "config": {}
+          },
+          "elevenlabs": {
+            "config": {}
+          },
+          "fal": {
+            "config": {}
+          },
+          "file-transfer": {
+            "config": {}
+          },
+          "geolocation": {
+            "config": {}
+          },
+          "github": {
+            "config": {}
+          },
+          "github-copilot": {
+            "config": {}
+          },
+          "google": {
+            "config": {}
+          },
+          "huggingface": {
+            "config": {}
+          },
+          "kie": {
+            "config": {}
+          },
+          "linux-node": {
+            "config": {}
+          },
+          "litellm": {
+            "config": {}
+          },
+          "lmstudio": {
+            "config": {}
+          },
+          "microsoft": {
+            "config": {}
+          },
+          "microsoft-foundry": {
+            "config": {}
+          },
+          "minimax": {
+            "config": {}
+          },
+          "nvidia": {
+            "config": {}
+          },
+          "omlx": {
+            "config": {}
+          },
+          "openai": {
+            "config": {
+              "personality": "friendly"
+            }
+          },
+          "openclaw-id-access": {
+            "config": {}
+          },
+          "opencode-go": {
+            "config": {}
+          },
+          "openrouter": {
+            "config": {}
+          },
+          "requesty": {
+            "config": {}
+          },
+          "rerank": {
+            "config": {}
+          },
+          "runway": {
+            "config": {}
+          },
+          "senseaudio": {
+            "config": {}
+          },
+          "sglang": {
+            "config": {}
+          },
+          "talk-voice": {
+            "config": {}
+          },
+          "together": {
+            "config": {}
+          },
+          "tts-local-cli": {
+            "config": {}
+          },
+          "vllm": {
+            "config": {}
+          },
+          "web-readability": {
+            "config": {}
+          },
+          "xai": {
+            "config": {}
+          }
+        }
+      }
+    }
+  },
+  "list": {
+    "plugins": [
+      {
+        "id": "workboard",
+        "name": "Workboard",
+        "installed": true,
+        "enabled": false,
+        "state": "disabled",
+        "removable": false,
+        "hasNativeUi": true,
+        "recommendedPrompts": [
+          "Help me get started with Workboard and choose between Cards and Sessions boards.",
+          "Propose prioritized Workboard cards for my project without creating or assigning them.",
+          "Summarize a Workboard board\u2019s progress, blockers, and evidence without changing it."
+        ],
+        "categories": ["productivity"],
+        "category": "tool",
+        "packageName": "@openclaw/workboard",
+        "description": "Dashboard workboard for agent-owned issues and sessions.",
+        "version": "2026.11.10",
+        "origin": "bundled",
+        "featured": true,
+        "order": 10,
+        "hasIcon": true,
+        "hasActivityIcon": true,
+        "compatibilityNotices": [],
+        "catalogId": "local_d29ya2JvYXJk",
+        "runtime": {
+          "state": "unloaded"
+        }
+      },
+      {
+        "id": "memory-wiki",
+        "name": "Memory Wiki",
+        "installed": true,
+        "enabled": false,
+        "state": "disabled",
+        "removable": false,
+        "hasNativeUi": false,
+        "recommendedPrompts": [
+          "Help me plan Memory Wiki setup alongside my current memory provider.",
+          "Preview how a few of my sources could become a navigable Memory Wiki.",
+          "Explore a topic in my Memory Wiki and trace claims to sources without editing pages."
+        ],
+        "categories": ["memory"],
+        "category": "tool",
+        "packageName": "@openclaw/memory-wiki",
+        "description": "Persistent wiki compiler and Obsidian-friendly knowledge vault for OpenClaw.",
+        "version": "2026.11.10",
+        "origin": "bundled",
+        "featured": true,
+        "order": 30,
+        "hasIcon": true,
+        "hasActivityIcon": true,
+        "compatibilityNotices": [],
+        "catalogId": "local_bWVtb3J5LXdpa2k",
+        "runtime": {
+          "state": "unloaded"
+        }
+      },
+      {
+        "id": "diffs",
+        "name": "Diffs",
+        "packageName": "@openclaw/diffs",
+        "clawhubPackage": "@openclaw/diffs",
+        "description": "OpenClaw diff viewer plugin",
+        "kind": ["plugin"],
+        "origin": "official",
+        "installed": false,
+        "enabled": false,
+        "state": "not-installed",
+        "featured": true,
+        "order": 40,
+        "install": {
+          "source": "official",
+          "pluginId": "diffs"
+        },
+        "compatibilityNotices": [],
+        "catalogId": "ch_QG9wZW5jbGF3L2RpZmZz",
+        "runtime": {
+          "state": "unloaded"
+        }
+      }
+    ],
+    "diagnostics": [
+      {
+        "level": "warn",
+        "message": "Official plugin catalog fallback: catalog refresh pending; refresh the plugin list to see completed enrichment"
+      }
+    ],
+    "mutationAllowed": true,
+    "generation": 2
+  },
+  "voiceRow": {
+    "id": "clawtrate-voice",
+    "name": "Clawtrate voice",
+    "installed": true,
+    "enabled": false,
+    "state": "disabled",
+    "removable": true,
+    "hasNativeUi": false,
+    "categories": ["developer-tools"],
+    "packageName": "@clawtrate/clawtrate-voice",
+    "description": "Asks the bots to talk in a plain, friendly voice with no em dashes, in the system prompt of each run whose runner invokes its hook, until a person turns it off. Needs plugins.entries.clawtrate-voice.hooks.allowConversationAccess set to true. Not made by or affiliated with OpenClaw.",
+    "version": "0.1.0",
+    "origin": "global",
+    "compatibilityNotices": [],
+    "catalogId": "local_Y2xhd3RyYXRlLXZvaWNl",
+    "runtime": {
+      "state": "unloaded"
+    }
+  },
+  "sessions": {
+    "ts": 1795773022448,
+    "path": "(multiple)",
+    "count": 0,
+    "totalCount": 0,
+    "limitApplied": 100,
+    "nextOffset": null,
+    "hasMore": false,
+    "owners": [],
+    "defaults": {
+      "modelProvider": "scripted",
+      "model": "dev-1",
+      "contextTokens": 128000,
+      "agentRuntime": {
+        "id": "auto",
+        "cloudPlacementSupported": false,
+        "devicePlacementSupported": false,
+        "source": "implicit"
+      },
+      "thinkingLevels": [
+        {
+          "id": "off",
+          "label": "off"
+        },
+        {
+          "id": "minimal",
+          "label": "minimal"
+        },
+        {
+          "id": "low",
+          "label": "low"
+        },
+        {
+          "id": "medium",
+          "label": "medium"
+        },
+        {
+          "id": "high",
+          "label": "high"
+        },
+        {
+          "id": "ultra",
+          "label": "ultra"
+        }
+      ],
+      "thinkingOptions": ["off", "minimal", "low", "medium", "high", "ultra"],
+      "thinkingDefault": "low",
+      "communication": {
+        "send": "always",
+        "receive": "always"
+      },
+      "modelSelectionTarget": "session"
+    },
+    "sessions": []
+  },
+  "patch": {
+    "ok": true,
+    "path": "/gateway-state/openclaw.json",
+    "hash": "hmac-sha256:v1:vcBxDv8VhkHhGQy6x4Wz8sUQYO-X-BD4jstzadO4Amo",
+    "changedPaths": ["plugins.entries.clawtrate-voice", "plugins.entries.skill-workshop"],
+    "sentinel": {
+      "persisted": true,
+      "payload": {
+        "kind": "config-patch",
+        "status": "ok",
+        "ts": 1795773023944,
+        "message": null,
+        "doctorHint": "Recommended follow-up: run openclaw --profile clawtrate-dev-dev doctor --non-interactive in a terminal or approvals-capable OpenClaw surface.",
+        "stats": {
+          "mode": "config.patch",
+          "root": "/gateway-state/openclaw.json",
+          "requiresRestart": false
+        }
+      }
+    }
+  },
+  "install": {
+    "ok": true,
+    "restartRequired": false,
+    "runtime": {
+      "operationId": "ac1fea1e-7d78-4569-895b-723dd739cf91",
+      "generation": 4,
+      "pluginIds": ["clawtrate-voice"],
+      "sourceDigests": {},
+      "selectedEntries": {}
+    },
+    "plugin": {
+      "id": "clawtrate-voice",
+      "name": "Clawtrate voice",
+      "installed": true,
+      "enabled": false,
+      "state": "disabled",
+      "removable": true,
+      "hasNativeUi": false,
+      "categories": ["developer-tools"],
+      "packageName": "@clawtrate/clawtrate-voice",
+      "description": "Asks the bots to talk in a plain, friendly voice with no em dashes, in the system prompt of each run whose runner invokes its hook, until a person turns it off. Needs plugins.entries.clawtrate-voice.hooks.allowConversationAccess set to true. Not made by or affiliated with OpenClaw.",
+      "version": "0.1.0",
+      "origin": "global",
+      "catalogId": "local_Y2xhd3RyYXRlLXZvaWNl"
+    }
+  },
+  "inspect": {
+    "ok": true,
+    "plugin": {
+      "id": "clawtrate-voice",
+      "name": "Clawtrate voice",
+      "description": "Asks the bots to talk in a plain, friendly voice with no em dashes, in the system prompt of each run whose runner invokes its hook, until a person turns it off. Needs plugins.entries.clawtrate-voice.hooks.allowConversationAccess set to true. Not made by or affiliated with OpenClaw.",
+      "version": "0.1.0",
+      "origin": "global",
+      "installed": true,
+      "enabled": false
+    },
+    "source": {
+      "kind": "npm",
+      "spec": "@clawtrate/clawtrate-voice@0.1.0",
+      "packageName": "@clawtrate/clawtrate-voice",
+      "integrity": "sha512-7cEUmNnRN1uCGhxcVN1XgsryIiZSn0SylLRmggowyv3rB/cXV75EfoteeJEckZR4uzfYWZNCCys8xc60+sI06w==",
+      "integrityKind": "ssri"
+    },
+    "declared": {
+      "channels": [],
+      "providers": [],
+      "tools": [],
+      "contracts": [],
+      "hooks": [],
+      "mcpServers": [],
+      "cliCommands": [],
+      "cliBackends": [],
+      "skills": [],
+      "dangerousConfigFlags": []
+    },
+    "grants": {
+      "hooks": {
+        "allowPromptInjection": {
+          "effective": true
+        },
+        "allowConversationAccess": {
+          "effective": false
+        }
+      }
+    },
+    "components": {
+      "mapped": [],
+      "skills": [],
+      "skillDetails": [],
+      "mcpServers": [],
+      "commands": [],
+      "hooks": [],
+      "lspServers": [],
+      "unavailable": {
+        "capabilities": [],
+        "mcpServers": [],
+        "lspServers": []
+      }
+    },
+    "overview": {
+      "hasNativeUi": false,
+      "capabilities": {
+        "providers": [],
+        "channels": [],
+        "contracts": {}
+      }
+    },
+    "credentials": [],
+    "reviewToken": "e9ee055fdf3a7d0f5c8f4db342886ceca40fecac78cbd94febb73acd562e45fd",
+    "runtimeRetention": null,
+    "decisions": []
+  },
+  "enable": {
+    "ok": true,
+    "restartRequired": false,
+    "runtime": {
+      "operationId": "324835ed-3335-4c06-9333-bed77a131be0",
+      "generation": 7,
+      "pluginIds": ["clawtrate-voice"],
+      "sourceDigests": {
+        "clawtrate-voice": "99dfd0ed8aedfd66ca983024dc0bd56510358a3236b8530d1943eb722556c760"
+      },
+      "selectedEntries": {
+        "clawtrate-voice": "/gateway-state/npm/projects/clawtrate-clawtrate-voice-8c38336a5b__openclaw-generation__g-d6915803cbfca52d/node_modules/@clawtrate/clawtrate-voice/index.js"
+      }
+    },
+    "plugin": {
+      "id": "clawtrate-voice",
+      "name": "Clawtrate voice",
+      "installed": true,
+      "enabled": true,
+      "state": "enabled",
+      "removable": true,
+      "hasNativeUi": false,
+      "categories": ["developer-tools"],
+      "packageName": "@clawtrate/clawtrate-voice",
+      "description": "Asks the bots to talk in a plain, friendly voice with no em dashes, in the system prompt of each run whose runner invokes its hook, until a person turns it off. Needs plugins.entries.clawtrate-voice.hooks.allowConversationAccess set to true. Not made by or affiliated with OpenClaw.",
+      "version": "0.1.0",
+      "origin": "global",
+      "catalogId": "local_Y2xhd3RyYXRlLXZvaWNl"
+    }
+  },
+  "disable": {
+    "ok": true,
+    "restartRequired": false,
+    "runtime": {
+      "operationId": "7b4ebaa1-a4f5-4886-9dfa-79ef7ece7a0b",
+      "generation": 8,
+      "pluginIds": ["clawtrate-voice"],
+      "sourceDigests": {},
+      "selectedEntries": {}
+    },
+    "plugin": {
+      "id": "clawtrate-voice",
+      "name": "Clawtrate voice",
+      "installed": true,
+      "enabled": false,
+      "state": "disabled",
+      "removable": true,
+      "hasNativeUi": false,
+      "categories": ["developer-tools"],
+      "packageName": "@clawtrate/clawtrate-voice",
+      "description": "Asks the bots to talk in a plain, friendly voice with no em dashes, in the system prompt of each run whose runner invokes its hook, until a person turns it off. Needs plugins.entries.clawtrate-voice.hooks.allowConversationAccess set to true. Not made by or affiliated with OpenClaw.",
+      "version": "0.1.0",
+      "origin": "global",
+      "catalogId": "local_Y2xhd3RyYXRlLXZvaWNl"
+    }
+  },
+  "voiceGet": {
+    "plugin": "clawtrate-voice",
+    "version": "0.1.0",
+    "on": true,
+    "changed": null,
+    "hook": {
+      "state": "allowed",
+      "settings": {
+        "allowPromptInjection": true,
+        "allowConversationAccess": true
+      },
+      "lastRanAt": null
+    },
+    "guide": "## How you talk to your person\n\nNever alter literal text: code, commands, URLs, tool arguments, exact quotes and text in another language keep their own punctuation. If they write in or ask for another language, follow its conventions. These two rules come first.\n\nTalk like a capable, friendly person in chat. Be warm, direct and specific. Lead with the answer, then add only what they need.\n\nIn your own English sentences, never use an em dash, or an en dash or spaced hyphen in its place. Use a comma, a period or parentheses instead.\n\nUse plain words and contractions. Keep most sentences short, with a longer one when it flows. Skip chatbot filler (\"Great question\", \"I'd be happy to\") and AI tells like \"delve\" or \"not just X, but Y.\" Keep simple replies brief. Use steps when they help someone follow.\n\nDon't narrate tools, skills or internal steps unless they ask. Ask when you need an answer to go on. Before anything destructive, or anything that needs approval, say what you propose and wait for a yes, showing the exact command if there is one, with any secret named rather than shown. Otherwise do the work and send one message when you have news, or a brief update if it takes a while.\n\nGive a real take when asked. Say upfront what failed or what you can't do, instead of hiding it: name what failed, quote the exact error when it's safe to share, and offer the simplest fix. If you get something wrong, own it plainly without groveling."
+  },
+  "errors": {
+    "busy": {
+      "message": "Another plugin or config operation is already running; retry when it completes.",
+      "code": "UNAVAILABLE",
+      "gatewayCode": "UNAVAILABLE",
+      "details": {
+        "mutationAccepted": false
+      },
+      "retryable": true,
+      "retryAfterMs": 1000
+    },
+    "alreadyExists": {
+      "message": "plugin already exists: /gateway-state/npm/projects/clawtrate-clawtrate-voice-8c38336a5b/node_modules/@clawtrate/clawtrate-voice (delete it first)",
+      "code": "UNAVAILABLE",
+      "gatewayCode": "UNAVAILABLE",
+      "details": {
+        "pluginInstallRejected": true
+      },
+      "retryable": false
+    },
+    "blockedAllow": {
+      "message": "plugin \"clawtrate-voice\" could not be enabled (blocked by allowlist)",
+      "code": "INVALID_REQUEST",
+      "gatewayCode": "INVALID_REQUEST",
+      "retryable": false
+    },
+    "blockedDeny": {
+      "message": "plugin \"clawtrate-voice\" could not be enabled (blocked by denylist)",
+      "code": "INVALID_REQUEST",
+      "gatewayCode": "INVALID_REQUEST",
+      "retryable": false
+    },
+    "notInstalled": {
+      "message": "plugin not installed: clawtrate-voice",
+      "code": "INVALID_REQUEST",
+      "gatewayCode": "INVALID_REQUEST",
+      "retryable": false
+    },
+    "staleHash": {
+      "message": "config changed since last load; re-run config.get and retry",
+      "code": "INVALID_REQUEST",
+      "gatewayCode": "INVALID_REQUEST",
+      "retryable": false
+    },
+    "missingArchive": {
+      "message": "archive not found: /app/resources/plugins/clawtrate-clawtrate-voice-0.1.0.tgz.missing",
+      "code": "UNAVAILABLE",
+      "gatewayCode": "UNAVAILABLE",
+      "details": {
+        "pluginInstallRejected": true
+      },
+      "retryable": false
+    }
+  }
+}

@@ -1,7 +1,7 @@
 // The OpenClaw plugins the desktop app carries, packed for a gateway on the
 // same computer to install from (issue #796).
 //
-//   node apps/desktop/packaging/carried-plugins.ts pack [out folder]
+//   node apps/desktop/packaging/carried-plugins.ts pack [out folder] [--unrecorded-digests]
 //   node apps/desktop/packaging/carried-plugins.ts record <plugin folder name>
 //   node apps/desktop/packaging/carried-plugins.ts bump <plugin folder name>
 //   node apps/desktop/packaging/carried-plugins.ts source-digest <plugin folder name> <OpenClaw version> <digest>
@@ -377,14 +377,26 @@ export function digestNow(folder: string, pluginsDir = PLUGINS_DIR, license = LI
  */
 export function packCarried(
   out: string,
-  { record = readRecord(), pluginsDir = PLUGINS_DIR, license = LICENSE } = {},
+  {
+    record = readRecord(),
+    pluginsDir = PLUGINS_DIR,
+    license = LICENSE,
+    /** For the development gateway's `--install-plugin`, which measures them: never a build. */
+    unrecordedDigests = false,
+  } = {},
 ): CarriedList {
   const packed = Object.keys(record.plugins)
     .sort()
     .map((folder) => {
       const recorded = record.plugins[folder];
       const one = packOne(folder, pluginsDir, license, recorded, record.openclaw);
-      requireRecorded(folder, one.entry.version, one.digest, recorded, record.openclaw);
+      requireRecorded(
+        folder,
+        one.entry.version,
+        one.digest,
+        recorded,
+        unrecordedDigests ? [] : record.openclaw,
+      );
       return one;
     });
   rmSync(out, { recursive: true, force: true });
@@ -426,9 +438,11 @@ export function packagedCarried(resources: string): { list: CarriedList; tarball
 
 function main(args: string[]): void {
   const [command, ...rest] = args;
-  if (command === "pack" && rest.length <= 1) {
-    const out = rest[0] ? resolve(rest[0]) : BUILD_OUT;
-    for (const plugin of packCarried(out).plugins)
+  const unrecordedDigests = rest.includes("--unrecorded-digests");
+  const operands = rest.filter((arg) => arg !== "--unrecorded-digests");
+  if (command === "pack" && operands.length <= 1) {
+    const out = operands[0] ? resolve(operands[0]) : BUILD_OUT;
+    for (const plugin of packCarried(out, { unrecordedDigests }).plugins)
       console.log(`Carried ${plugin.packageName} ${plugin.version} ${plugin.integrity}`);
   } else if (command === "record" && rest.length === 1) {
     const { version, digest } = digestNow(rest[0]!);

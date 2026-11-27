@@ -19,6 +19,7 @@ function hooks(file: string) {
 
 describe.each([
   { file: "e2e/bot-voice.spec.ts", suffix: "voice", plugin: '"--with-plugin", "clawtrate-voice"' },
+  { file: "e2e/plugin-install.spec.ts", suffix: "install", plugin: '"--no-seed"' },
   {
     file: "e2e/work-computer.spec.ts",
     suffix: "computer",

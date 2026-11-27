@@ -68,6 +68,14 @@ pnpm dev-gateway start --instance rules --with-plugin clawtrate-tool-rules
 
 Its rules are set from a connection with admin access (`clawtrate-tool-rules.set`), and its cards are the gateway's plugin approvals, answered from a client with `operator.approvals`. `pnpm scenarios` runs the rules checks on an instance of their own started this way, with an admin connection, Clawtrate's interactive tier, another device with approvals, one with read and write and a read-only one: rules lost with and without a copy (the check spoils the instance's own rules file and restores it), the methods' tiers and the empty event, an Ask's card and who receives it, Allow once and Deny, a Never, an Allow that does not pass an Ask, "Ask when nothing else decides", the limits, a Never on another spelling of a file's name, a card with approval forwarding on (to no destination) and with `cardDetails: "full"`, a routine's call, a setting changed while a card waits, the plugin turned off in the middle of a run, and a call in a run another bot's message started (`#message-read`). [The plugin's page](../../plugins/clawtrate-tool-rules/README.md#on-a-clawtrate-development-gateway) lists what each asserts. Turning the plugin off and on again, setting its `cardDetails`, or turning approval forwarding on, as the checks do, takes the config outside the contract until it is back.
 
+A named instance can also install a plugin the desktop app carries the way the app will, through its install engine, instead of loading it through the config:
+
+```bash
+pnpm dev-gateway start --instance install --no-seed --install-plugin clawtrate-voice
+```
+
+After the gateway starts, `start` packs the plugin from the checkout with the app's own packer (`apps/desktop/packaging/carried-plugins.ts`) into the instance's run folder, pairs a client of its own with full control, runs the install engine (`packages/core/src/plugin-install.ts`), prints what happened, and unpairs the client. Only the plugins the app carries are accepted. A packing whose source digest isn't recorded for the running OpenClaw installs as far as the enable, where the engine finds another digest and turns it off; `start` then prints the digest the gateway reported and the command that records it. `e2e/plugin-install.spec.ts` runs the engine on an instance of its own the same way.
+
 The default instance and `pnpm e2e` load no plugins. [The opening](../decisions.md#development-gateway) is described in `docs/decisions.md`.
 
 ## Scripted provider accounts
