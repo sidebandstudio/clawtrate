@@ -296,14 +296,21 @@ test("#872: while a run still draws its reply, history's row of that reply is kn
   let client: ClawtrateClient | null = null;
   const { client: engineClient, close } = await engine("reply drawn once check", {
     seen: (frame) => {
+      // The answer's own row: the bot's, with text and no call (the call's row comes first).
       const f = frame as {
         event?: string;
-        payload?: { sessionKey?: string; message?: { role?: string } };
+        payload?: { sessionKey?: string; message?: { role?: string; content?: unknown } };
       };
+      const message = f.payload?.message;
+      const parts = Array.isArray(message?.content)
+        ? (message.content as Array<{ type?: string }>)
+        : [];
       if (
         f.event === "session.message" &&
         f.payload?.sessionKey === key &&
-        f.payload.message?.role === "assistant"
+        message?.role === "assistant" &&
+        parts.some((part) => part.type === "text") &&
+        !parts.some((part) => part.type === "toolCall")
       )
         client?.reloadSession(key);
     },
@@ -311,7 +318,7 @@ test("#872: while a run still draws its reply, history's row of that reply is kn
   client = engineClient;
   const { held, stop } = heldReplies(engineClient, () => key);
   try {
-    for (let attempt = 0; attempt < 8 && held.length === 0; attempt++) {
+    for (let attempt = 0; attempt < 12 && held.length === 0; attempt++) {
       key = await openNewTask(engineClient, `reply-once-${attempt}`);
       // The scripted model thinks, its call fails, and it answers in a message of its own: F-551's run.
       engineClient.sendMessage(key, "Look for my old notes. #think #tool-fail");
