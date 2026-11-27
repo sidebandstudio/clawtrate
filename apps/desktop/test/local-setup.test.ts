@@ -280,7 +280,7 @@ function localApp(local: LocalConnect, options: { secure?: boolean; dataDir?: st
     log: (line) => lines.push(line),
     localConnect: { ...local, worker: WORKER },
   });
-  return { client, setup, dialog, lines, dataDir, writes };
+  return { client, setup, dialog, lines, dataDir, writes, local };
 }
 
 describe.skipIf(!mac)(
@@ -1427,6 +1427,84 @@ describe.skipIf(!mac)(
         await run.second.server.close();
       }
     });
+
+    for (const after of ["restart", "reconnect"] as const)
+      it(`F-602: Use This computer, Connect to another gateway, and Disconnect in Settings before it pairs: the earlier gateway stays saved, suspended, and nothing of the new one is (${after})`, async () => {
+        const gateway = silentGateway();
+        // The new gateway's hello is held: the frame reaches it and nothing answers.
+        let hellos = 0;
+        const make = gateway.createWebSocket.bind(gateway);
+        gateway.createWebSocket = (url) => {
+          const socket = make(url);
+          const send = socket.send.bind(socket);
+          socket.send = (data) => {
+            if ((JSON.parse(String(data)) as { method?: string }).method === "connect") hellos += 1;
+            else send(data);
+          };
+          return socket;
+        };
+        const run = await secondGateway("lock", gateway);
+        const records = () =>
+          run.app.writes.filter(({ key }) => key === "connection").map(({ value }) => value);
+        const earlier = records().at(-1)!;
+        try {
+          await run.press();
+          await run.session.apply({ type: "setupConnect" });
+          await until(() => hellos > 0, 60_000);
+          expect(run.app.setup.current.phase).toBe("connecting");
+          const before = records().length;
+          // Disconnect, as Settings, Gateway sends it.
+          await run.session.apply({ type: "suspend" });
+          // The earlier gateway's own record, with the suspension recorded on it.
+          expect(records().slice(before)).toEqual([
+            JSON.stringify({ ...JSON.parse(earlier), suspended: true }),
+          ]);
+          expect(run.app.client.state.connection).toMatchObject({
+            status: "disconnected",
+            gatewayUrl: run.url,
+          });
+          await until(() => run.app.setup.current.phase !== "connecting", 15_000);
+          if (after === "reconnect") {
+            // Reconnect: the earlier gateway, its suspension lifted, and still nothing of the new one.
+            await run.session.apply({ type: "retry" });
+            await until(() => records().length > before + 1, 15_000);
+            expect(JSON.parse(records().at(-1)!)).toEqual({
+              ...JSON.parse(earlier),
+              suspended: false,
+            });
+            expect(run.app.client.state.connection.gatewayUrl).toBe(run.url);
+          }
+          // Nothing of the new gateway was written at any point: no record, no pairing.
+          for (const { key, value } of run.app.writes) {
+            expect(key).not.toContain(encodeURIComponent(run.second.url));
+            expect(value ?? "").not.toContain(run.second.url);
+          }
+        } finally {
+          run.app.client.stop();
+        }
+        try {
+          if (after === "restart") {
+            // A restart comes back to the earlier gateway, suspended.
+            const again = localApp(run.app.local, { dataDir: run.app.dataDir });
+            try {
+              await again.client.start();
+              await sleep(300);
+              expect(await again.client.savedSettings()).toEqual({
+                ...JSON.parse(earlier),
+                suspended: true,
+              });
+              expect(again.client.state.connection).toMatchObject({ gatewayUrl: run.url });
+              expect(again.client.state.connection.status).not.toBe("connected");
+              expect(hellos).toBe(1);
+            } finally {
+              again.client.stop();
+            }
+          }
+        } finally {
+          await run.server.close();
+          await run.second.server.close();
+        }
+      });
 
     it("F-602: reads nothing in a home that isn't a private folder of the run's own", async () => {
       const dir = newHome();

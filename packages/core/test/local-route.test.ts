@@ -366,6 +366,58 @@ describe("a gateway set up through local connect", () => {
     }
   });
 
+  for (const when of ["after", "before"] as const)
+    it(`a setup code for another gateway during an unpaired Connect over the route, then Disconnect ${when} it pairs: ${when === "after" ? "nothing stays saved" : "the earlier gateway stays saved"}`, async () => {
+      const earlier = { url: "ws://gateway.example:19941", token: "earlier-token" };
+      const other = "ws://127.0.0.1:19943";
+      const storage = memoryStorage({ connection: JSON.stringify(earlier) });
+      const gateway = readGateway();
+      const { host: app } = host(gateway, storage);
+      const sockets = route(gateway, () => true);
+      const client = new ClawtrateClient(app, { ...FAST, localConnect: () => sockets.sockets });
+      try {
+        await client.start({ resume: false });
+        // The route's Connect never gets as far as its hello: its last check is held.
+        await client.connect(
+          { url: URL, token: "settings-token" },
+          {
+            createSocket: sockets.sockets.createSocket,
+            prove: () => new Promise<boolean>(() => {}),
+            route: ROUTE,
+            consent: () => true,
+          },
+        );
+        await until(() => sockets.made.length > 0);
+        // A setup code for another gateway, paired at once, or held before its hello.
+        await client.connectWithSetupCode(
+          { url: other, bootstrapToken: CODE, expiresAtMs: Date.now() + 60_000 },
+          when === "after" ? {} : { verify: () => new Promise<boolean>(() => {}) },
+        );
+        if (when === "after") {
+          await until(() => client.state.connection.status === "connected");
+          await until(() => JSON.parse(storage.data.get("connection") ?? "{}").url === other);
+        } else await sleep(100);
+        expect(
+          gateway.connects.some((hello) => JSON.stringify(hello).includes("settings-token")),
+        ).toBe(false);
+        await client.disconnect();
+        if (when === "after") expect(storage.data.has("connection")).toBe(false);
+        else expect(JSON.parse(storage.data.get("connection")!)).toEqual(earlier);
+      } finally {
+        client.stop();
+      }
+      // A restart opens what is saved: nothing, or the earlier gateway.
+      const again = new ClawtrateClient(testHost(gateway, storage), FAST);
+      try {
+        await again.start({ resume: false });
+        const saved = await again.savedSettings();
+        if (when === "after") expect(saved).toBeNull();
+        else expect(saved).toMatchObject(earlier);
+      } finally {
+        again.stop();
+      }
+    });
+
   it("is an ordinary gateway again once the person connects to it by its address", async () => {
     const storage = memoryStorage({
       connection: JSON.stringify({ url: URL, token: null, route: ROUTE }),
