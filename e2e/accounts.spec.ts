@@ -493,13 +493,23 @@ test("F-552: a bot made in New bot with no name takes one in the chat, and is re
   await card.getByRole("button", { name: "Rename" }).click();
   await expect(card).toHaveCount(0, { timeout: 30_000 });
   expect(await identity()).toBe("Johnny");
-  const file = String((await workspaceFile("new-bot", "IDENTITY.md")).content);
+  // The gateway wrote the picture into the file with the name; Clawtrate takes it out again, and
+  // the picture is still the one chosen, in the bot's settings. The card goes as soon as the bot
+  // list shows the new name, which can be before that write lands (seen on OpenClaw 2026.11.10),
+  // so the file is read until it has; a line that is never taken out still fails here (#608).
+  let file = "";
+  await expect
+    .poll(
+      async () => {
+        file = String((await workspaceFile("new-bot", "IDENTITY.md")).content);
+        return file;
+      },
+      { timeout: 30_000 },
+    )
+    .not.toMatch(/^- Avatar:/m);
   expect(file.match(/^- \*{0,2}Name:/gm)).toEqual(["- Name:"]);
   expect(file).toMatch(/^- Name: Johnny$/m);
   expect(file).not.toMatch(/New bot/);
-  // The gateway wrote the picture into the file with the name; Clawtrate took it out again, and
-  // the picture is still the one chosen, in the bot's settings.
-  expect(file).not.toMatch(/^- Avatar:/m);
   expect(file.length).toBeLessThan(1_000);
   expect(await picture()).toEqual(chosen);
   await expect(page.locator(".title-pill-name")).toHaveText("Johnny");
