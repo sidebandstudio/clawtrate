@@ -23,7 +23,10 @@
 // kind of gateway this is, is read on every read from its config schema
 // (`config.schema.lookup`, read tier), never from its version.
 
-import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
+import {
+  GatewayProtocolRequestError,
+  GatewayProtocolRequestTimeoutError,
+} from "@openclaw/gateway-client/browser";
 import { asRecord, type RawRecord } from "./mapping.ts";
 import type { GatewayStamp } from "./types.ts";
 
@@ -366,6 +369,22 @@ const emptyState = (): CheckInsState => ({
 
 const message = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
+const NO_ANSWER = "The gateway didn't answer in time.";
+const UNCONFIRMED = "The connection changed before Clawtrate could confirm the change.";
+const READ_CUT_OFF = "The connection changed before the gateway answered.";
+
+/**
+ * A failed request in words a person reads. The gateway's own answer is kept as it gave it.
+ * Anything the client made itself ("gateway client stopped", "gateway closed (1006): ", its
+ * timeout) is its own text, not a sentence: a timeout on a live link says the gateway didn't
+ * answer, anything else says `cutOff`.
+ */
+function said(error: unknown, alive: boolean, cutOff: string): string {
+  if (error instanceof GatewayProtocolRequestError) return error.message;
+  if (alive && error instanceof GatewayProtocolRequestTimeoutError) return NO_ANSWER;
+  return cutOff;
+}
+
 /**
  * Every page of heartbeat jobs: the list is read whole or not at all. Pages
  * of one read carry the same `snapshotRevision` and `total`; when either
@@ -447,11 +466,16 @@ async function read(
   { required = false, deadline }: { required?: boolean; deadline?: number } = {},
 ): Promise<Snapshot> {
   const bots = ctx.botIds();
+  const asked = (method: string, params: unknown, options?: { timeoutMs: number }) =>
+    link.request(method, params, options).catch((error: unknown) => {
+      if (error instanceof GatewayProtocolRequestError) throw error;
+      throw new Error(said(error, link.alive(), READ_CUT_OFF), { cause: error });
+    });
   const request = (method: string, params: unknown) => {
-    if (deadline === undefined) return link.request(method, params);
+    if (deadline === undefined) return asked(method, params);
     const left = deadline - ctx.now();
     if (left <= 0) return Promise.reject(new Error("The check-in confirmation timed out."));
-    return link.request(method, params, { timeoutMs: left });
+    return asked(method, params, { timeoutMs: left });
   };
   const model = await readModel(request);
   // A gateway without heartbeats has no check-in settings or jobs to read.
@@ -699,7 +723,6 @@ export async function saveCheckIn(
     save: { id: saveId, botId, status: "saving", error: null },
   });
   const gone = "The connection changed before the change was sent. Nothing changed.";
-  const unconfirmed = "The connection changed before Clawtrate could confirm the change.";
   let fresh: Snapshot;
   const latest = ctx.begin();
   try {
@@ -743,8 +766,12 @@ export async function saveCheckIn(
       await loadCheckIns(ctx, undefined, link);
       return;
     }
-    if (certainlyNotApplied(error)) return settle("failed", message(error));
-    return settle("unknown", link.alive() ? message(error) : unconfirmed);
+    if (error instanceof Error && error.name === "NotSentError")
+      return settle("failed", "The connection changed before the change was sent.");
+    return settle(
+      certainlyNotApplied(error) ? "failed" : "unknown",
+      said(error, link.alive(), UNCONFIRMED),
+    );
   }
   const deadline = ctx.now() + READ_BACK_MS;
   while (link.alive() && ctx.now() < deadline) {
@@ -767,7 +794,7 @@ export async function saveCheckIn(
     "unknown",
     link.alive()
       ? "Clawtrate couldn't confirm the change: the gateway's config and check-in jobs didn't both show it."
-      : unconfirmed,
+      : UNCONFIRMED,
   );
   await loadCheckIns(ctx, undefined, link);
 }
