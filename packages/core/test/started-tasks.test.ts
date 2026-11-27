@@ -1,11 +1,14 @@
 // A task a bot started with the gateway's `sessions_spawn` (F-565): who started it, from which
 // task, and which row is the bot's brief. The rows are the shapes OpenClaw 2026.10.6 returns on a
-// development gateway for a visible spawn, a forked one, a hidden one and one under another bot.
+// development gateway for a visible spawn, a forked one, a hidden one and one under another bot,
+// and at the end a visible spawn's as 2026.11.10 returns them.
 
 import { describe, expect, it } from "vitest";
+import { interSessionMessages } from "../src/cards.ts";
 import { mapHistory, mapSessionRow, startedTaskSince } from "../src/mapping.ts";
 import { isOtherToolSession } from "../src/origins.ts";
 import { SESSION_ROW } from "../src/state-bounds.ts";
+import { grantingGateway, openTask } from "./client-harness.ts";
 
 const PARENT = "agent:pip:main";
 const CHILD = "agent:pip:dashboard:0fcf7cc4-7434-467a-bae5-d830db7970f5";
@@ -280,5 +283,120 @@ describe("F-565: the bot's brief in a task it started", () => {
     const replyFirst = [botRow("Hello.", CREATED + 10, FIRST_RUN), ...spawnedHistory];
     expect(briefs(replyFirst, sessionInfo())).toEqual([]);
     expect(briefs(spawnedHistory, sessionInfo({ createdAt: "soon" }))).toEqual([]);
+  });
+});
+
+// The same task's rows as OpenClaw 2026.11.10 returns them on a development gateway (#634): the
+// brief also carries the provenance of the task it came from, and names the bot as its sender.
+const BRIEF_1110 = {
+  role: "user",
+  content: BRIEF,
+  timestamp: CREATED + 145,
+  idempotencyKey: `${FIRST_RUN}:user`,
+  provenance: { kind: "inter_session", sourceSessionKey: PARENT, sourceTool: "sessions_spawn" },
+  __openclaw: {
+    senderIsOwner: false,
+    senderId: "agent:pip",
+    suppressCommandInterpretation: true,
+    chatSendRuntime: { timeoutMs: 0 },
+    id: "7d750b3d-f411-4079-9d70-5dc5ede81bdb",
+    idempotencyKey: `${FIRST_RUN}:user`,
+    recordTimestampMs: CREATED + 264,
+    seq: 1,
+  },
+};
+
+const FOLLOW_UP_1110 = {
+  role: "assistant",
+  content: "Also say which route has more shade.",
+  timestamp: CREATED + 5_700,
+  idempotencyKey: "7d544a52:user",
+  provenance: {
+    kind: "inter_session",
+    sourceSessionKey: PARENT,
+    sourceChannel: "webchat",
+    sourceTool: "sessions_send",
+  },
+  senderLabel: "Forwarded from pip",
+  senderSession: { sessionKey: PARENT, agentId: "pip" },
+  __openclaw: { id: "forwarded", idempotencyKey: "7d544a52:user", seq: 3 },
+};
+
+const history1110 = [
+  BRIEF_1110,
+  botRow("The lake loop suits a relaxed Saturday.", CREATED + 2_546, FIRST_RUN),
+  FOLLOW_UP_1110,
+  botRow("The ridge trail has more shade.", CREATED + 6_500, "7d544a52"),
+];
+
+describe("F-565: the brief is the bot's, not a message from the task it came from (#634)", () => {
+  const incoming = (messages: unknown[], history: unknown) =>
+    interSessionMessages(
+      messages,
+      mapHistory(messages, { startedAt: startedTaskSince(history) }),
+    ).map((message) => [message.sourceTool, message.text]);
+
+  it("F-565: on OpenClaw 2026.11.10 the brief is marked, and only the follow-up is a message", () => {
+    const items = mapHistory(history1110, { startedAt: startedTaskSince(sessionInfo()) });
+    expect(items[0]).toMatchObject({ role: "user", brief: true });
+    expect(incoming(history1110, sessionInfo())).toEqual([
+      ["sessions_send", "Also say which route has more shade."],
+    ]);
+  });
+
+  it("F-565: on OpenClaw 2026.10.6, with no provenance on the brief, the messages are as before", () => {
+    expect(incoming(spawnedHistory, sessionInfo())).toEqual(
+      interSessionMessages(spawnedHistory).map((message) => [message.sourceTool, message.text]),
+    );
+    expect(incoming(spawnedHistory, sessionInfo())).toEqual([
+      ["sessions_send", "Also say which route has more shade."],
+    ]);
+  });
+
+  it("F-565: the same row stays a message wherever it is not the brief", () => {
+    const asMessage = [["sessions_spawn", BRIEF]];
+    // A task no bot started, a history that doesn't reach the task's start, a row stored later
+    // than the task was made, and a row with no time.
+    expect(incoming([BRIEF_1110], sessionInfo({ createdVia: "operator" }))).toEqual(asMessage);
+    expect(incoming([BRIEF_1110], { ...sessionInfo(), hasMore: true })).toEqual(asMessage);
+    expect(incoming([{ ...BRIEF_1110, timestamp: CREATED + 30_001 }], sessionInfo())).toEqual(
+      asMessage,
+    );
+    expect(incoming([{ ...BRIEF_1110, timestamp: undefined }], sessionInfo())).toEqual(asMessage);
+    // Not first: the brief before it ends the search, so a second such row is a message.
+    expect(
+      incoming([BRIEF_1110, { ...BRIEF_1110, timestamp: CREATED + 200 }], sessionInfo()),
+    ).toEqual(asMessage);
+    // A follow-up a bot sends is a message even as the first row a history read reaches.
+    expect(incoming([FOLLOW_UP_1110], sessionInfo())).toEqual([
+      ["sessions_send", "Also say which route has more shade."],
+    ]);
+  });
+
+  it("F-565: items of another page, or none, leave every message in place", () => {
+    const all = interSessionMessages(history1110);
+    expect(all.map((message) => message.sourceTool)).toEqual(["sessions_spawn", "sessions_send"]);
+    // An item marked as a brief whose id is no row of this page drops nothing.
+    const other = mapHistory(history1110.slice(0, 1), {
+      startedAt: startedTaskSince(sessionInfo()),
+    }).map((item) => ({ ...item, id: `${item.id}-elsewhere` }));
+    expect(interSessionMessages(history1110, other)).toEqual(all);
+  });
+
+  it("F-565: the task's transcript keeps the brief out of its incoming messages", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["chat.history"] = () => ({
+      messages: history1110,
+      sessionInfo: spawnRow(),
+      hasMore: false,
+    });
+    const { client, transcript } = await openTask({ gateway, key: CHILD });
+    expect(
+      transcript()
+        .items.filter((item) => item.brief)
+        .map((item) => item.id),
+    ).toEqual(["7d750b3d-f411-4079-9d70-5dc5ede81bdb:0"]);
+    expect(transcript().interSession.map((message) => message.itemId)).toEqual(["forwarded:2"]);
+    client.stop();
   });
 });

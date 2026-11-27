@@ -172,6 +172,79 @@ describe("F-535: a picture in history", () => {
   });
 });
 
+describe("F-535: a picture the gateway writes into the task as a row of its own (OpenClaw 2026.11.10)", () => {
+  const DELIVERY = `image_generate:${TASK}:ok:agent-loop`;
+  /** 2026.11.10's row: no run, the gateway's mirror fields, and the delivery's key on it and under `__openclaw`. */
+  const row = (
+    key: unknown = `${DELIVERY}:generated-media-host-transcript`,
+    extra: Record<string, unknown> = {},
+  ) => ({
+    role: "assistant",
+    content: [imageBlock],
+    api: "openclaw-transcript",
+    provider: "openclaw",
+    model: "delivery-mirror",
+    stopReason: "stop",
+    idempotencyKey: key,
+    __openclaw: { id: "a3", seq: 7, idempotencyKey: key },
+    ...extra,
+  });
+  /** The bot's run, its answer, then the picture's row. */
+  const history = (picture: Record<string, unknown>) => [
+    ...rows().slice(0, 3),
+    {
+      role: "assistant",
+      content: [{ type: "text", text: "I asked for the picture." }],
+      __openclaw: { id: "a2", seq: 4, runId: "run-1" },
+    },
+    picture,
+  ];
+  const promptOf = (picture: Record<string, unknown>) =>
+    mapHistory(history(picture)).at(-1)!.pictures?.[0]?.prompt;
+
+  it("F-535: the row's key names the delivery, so the picture keeps the description of the call whose task it completes", () => {
+    const items = mapHistory(history(row()));
+    expect(items.at(-1)!.pictures).toEqual([
+      expect.objectContaining({ artifactId: ARTIFACT, prompt: PROMPT, messageId: "a3" }),
+    ]);
+    // The same delivery tried again: the gateway puts the attempt before the suffix.
+    expect(promptOf(row(`${DELIVERY}:attempt:2:generated-media-host-transcript`))).toBe(PROMPT);
+  });
+
+  it("F-535: a bot's message tool copy under that key names the bot's run, and gets no description", () => {
+    const copy = row(undefined, {
+      __openclaw: {
+        id: "a3",
+        seq: 7,
+        runId: "run-2",
+        idempotencyKey: `${DELIVERY}:generated-media-host-transcript`,
+      },
+    });
+    expect(promptOf(copy)).toBeNull();
+  });
+
+  it("F-535: a row of another writer, another key, or a key of another shape gets no description", () => {
+    expect(promptOf(row(undefined, { model: "dev-1" }))).toBeNull();
+    expect(promptOf(row(undefined, { model: undefined }))).toBeNull();
+    for (const key of [
+      DELIVERY,
+      `${DELIVERY}:generated-media-host-transcript:x`,
+      `x:${DELIVERY}:generated-media-host-transcript`,
+      `${DELIVERY}:attempt:two:generated-media-host-transcript`,
+      `image_generate:tool:image_generate:other-task:ok:agent-loop:generated-media-host-transcript`,
+      `video_generate:${TASK}:ok:agent-loop:generated-media-host-transcript`,
+      "send-picture-1",
+      42,
+      null,
+    ])
+      expect(promptOf(row(key)), String(key)).toBeNull();
+  });
+
+  it("F-535: with the call outside the history read, the picture shows without a description", () => {
+    expect(mapHistory([row()]).at(-1)!.pictures?.[0]?.prompt).toBeNull();
+  });
+});
+
 describe("F-535: reading a picture", () => {
   it("F-535: a download that ends before its first byte sent no picture, a read to try again", async () => {
     const { ctx } = context({ url: ISSUED, expiresAt: LATER }, () =>

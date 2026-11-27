@@ -4,6 +4,14 @@
 // The interface can ask for a look, for Back and for Connect; it can't name
 // a program, a port or a profile, and Connect does nothing until the host's
 // dialog says yes.
+//
+// With local connect (docs/design/setup-effortless.md §3) the look reads
+// OpenClaw's settings and checks that what listens at their port is held by
+// this account and matches this account's OpenClaw profile instead
+// (local-look.ts), and runs none of OpenClaw's programs. Pressing Connect is
+// the consent: Connect reads the gateway's token afresh, dials each socket
+// itself and checks it the same way, and pairs asking for full control where
+// this device may hold it.
 
 import {
   GatewayChangedError,
@@ -11,18 +19,21 @@ import {
   SETUP_ENDPOINT_CHANGED,
   SETUP_PAIRING_APPEARED,
   SETUP_PAIRING_GONE,
+  PROOF_REFUSAL_LINES,
   type ClawtrateClient,
   type ClawtrateState,
   type SetupFailure,
   type SetupHost,
   type SetupState,
 } from "@clawtrate/core";
-import { basename, dirname } from "node:path";
-import { proveFor, provedSockets, type LocalConnect } from "./local-connect.ts";
+import { proveFor, provedSockets, routeOf, type LocalConnect } from "./local-connect.ts";
+import { lookLocally, readToken, type LocalFound } from "./local-look.ts";
+import { refusalKind, type ProveRefusal } from "./local-prove.ts";
 import { boundedFileIdentity, LIMITS, lookHere, type FoundGateway } from "./look.ts";
 import { parseAuthMode, parseSetupCode, parseStatus } from "./parse.ts";
 import type { ProgramResult } from "./programs.ts";
 import type { Opened } from "./sandbox.ts";
+import type { HeldToken } from "./settings-reader.ts";
 import { guardPort, programPath, SetupRefusedError } from "./world.ts";
 
 /** A prepared operation expires after this long and can't be repeated (§2). */
@@ -59,11 +70,13 @@ export type SetupControllerOptions = {
   log?: (line: string) => void;
   now?: () => number;
   /**
-   * Local connect (docs/design/setup-effortless.md §3): every socket of a setup
-   * connection is dialled by the host and its far end proved, before its first
-   * byte and again before its credential. Off in every shipped host.
+   * Local connect (docs/design/setup-effortless.md §3), with the settings
+   * reader's parse worker: the look reads OpenClaw's settings, and every socket
+   * of a setup connection is dialled by the host and its far end matched to this
+   * account's OpenClaw profile, before its first byte and again before its credential. No shipped host turns it
+   * on yet (`localConnectFor`).
    */
-  localConnect?: LocalConnect;
+  localConnect?: LocalConnect & { worker: URL };
 };
 
 /**
@@ -106,6 +119,8 @@ export class SetupController implements SetupHost {
   /** Counts looks and connects; anything finishing for an older one is dropped. */
   private attempt = 0;
   private found: FoundGateway | null = null;
+  /** With local connect: what its look found. */
+  private localFound: LocalFound | null = null;
   /** The connection this setup attempt opened, by attempt and address: the only one Back closes. */
   private owned: Owned | null = null;
   /** Closing `owned`, while that is under way: one at a time, for that owner only. */
@@ -176,7 +191,10 @@ export class SetupController implements SetupHost {
     this.options.stopPrograms();
     const attempt = (this.attempt += 1);
     this.found = null;
+    this.localFound = null;
     this.clearSlow();
+    const local = this.options.localConnect;
+    if (local) return this.lookLocally(local, attempt);
     let opened: Opened;
     try {
       opened = await this.open();
@@ -251,6 +269,40 @@ export class SetupController implements SetupHost {
     });
   }
 
+  /**
+   * The look with local connect: OpenClaw's settings, and one socket whose far end is checked
+   * against this account's OpenClaw profile, with nothing sent.
+   */
+  private async lookLocally(local: LocalConnect & { worker: URL }, attempt: number): Promise<void> {
+    this.publish({ ...initialSetupState, phase: "looking" });
+    let report;
+    try {
+      report = await lookLocally(
+        local,
+        local.worker,
+        (step) => {
+          if (attempt === this.attempt && this.state.phase === "looking")
+            this.publish({ ...this.state, step });
+        },
+        () => attempt !== this.attempt,
+      );
+    } catch (error) {
+      if (attempt === this.attempt) this.refused(error);
+      return;
+    }
+    if (attempt !== this.attempt || !report) return;
+    this.localFound = report.found;
+    const access = report.found
+      ? await this.options.client.deviceAccess(report.found.url).catch(() => "new" as const)
+      : null;
+    if (attempt !== this.attempt) return;
+    this.publish({
+      ...initialSetupState,
+      phase: "found",
+      look: access ? { ...report.look, access } : report.look,
+    });
+  }
+
   cancel(): void {
     const phase = this.state.phase;
     this.attempt += 1;
@@ -287,6 +339,7 @@ export class SetupController implements SetupHost {
     this.stopWatching();
     this.options.stopPrograms();
     this.found = null;
+    this.localFound = null;
     void this.closeOwned();
     this.publish(initialSetupState);
   }
@@ -338,6 +391,8 @@ export class SetupController implements SetupHost {
   }
 
   async connect(): Promise<void> {
+    const local = this.options.localConnect;
+    if (local) return this.connectLocally(local);
     const found = this.found;
     const phase = this.state.phase;
     if (
@@ -455,17 +510,6 @@ export class SetupController implements SetupHost {
         return false;
       }
     };
-    // With local connect, the host dials each socket itself and proves its far end first, and
-    // again last before its credential; the gateway is saved with that route, so its sockets
-    // after setup, and after a restart, are proved the same way.
-    const local = this.provedRoute(found);
-    const proved = local
-      ? {
-          createSocket: local.sockets.createWebSocket,
-          prove: provedWhile(() => attempt === this.attempt, local.sockets.verify),
-          route: local.folder,
-        }
-      : {};
     // Once each socket is up and again just before its credential goes, the endpoint's
     // listener is read again: the port's listener by PID and start time, the endpoint, the
     // program file, as the look found them. Any difference sends nothing (docs/decisions.md).
@@ -497,7 +541,6 @@ export class SetupController implements SetupHost {
         check: listening,
         verify,
         consent: () => !expired(),
-        ...proved,
       });
       return;
     }
@@ -529,24 +572,90 @@ export class SetupController implements SetupHost {
       check: listening,
       verify,
       consent: () => !expired(),
-      ...proved,
     });
   }
 
   /**
-   * Local connect's sockets for the gateway found, or null when it is off. The
-   * profile's folder must be directly in the home the host named; otherwise
-   * every socket is refused before it is dialled.
+   * Connect with local connect. Pressing Connect is the consent (§3): no dialog
+   * follows, and it holds for this attempt's two minutes. The token is read
+   * afresh from the settings of the profile the look found, at the port it
+   * found, and handed to the client for this one pairing; this host drops its
+   * copy once the client has it. Every socket is dialled here and checked against
+   * the profile before its first byte and again just before its credential; the
+   * first that fails ends the attempt, with nothing sent. The gateway is saved with its profile's
+   * folder and that folder's identity as its route (`routeOf`), never as a typed
+   * address.
    */
-  private provedRoute(found: FoundGateway) {
-    const local = this.options.localConnect;
-    if (!local) return null;
-    const folder =
-      dirname(found.profile.stateDir) === local.home ? basename(found.profile.stateDir) : "";
-    const prove = proveFor(local, folder, found.port, (why) =>
-      this.log(`couldn't verify what is listening at port ${found.port} (${why})`),
-    );
-    return { sockets: provedSockets(found.port, prove), folder };
+  private async connectLocally(local: LocalConnect & { worker: URL }): Promise<void> {
+    const found = this.localFound;
+    const phase = this.state.phase;
+    if (
+      (phase !== "found" && phase !== "failed") ||
+      !found ||
+      this.state.look?.outcome !== "running"
+    ) {
+      throw new Error("There is nothing to connect to. Look again.");
+    }
+    const before = this.attempt;
+    if (this.owned && !(await this.closeOwned())) return;
+    if (this.localFound !== found || this.attempt !== before) return;
+    const attempt = (this.attempt += 1);
+    const at = this.now();
+    const current = () => attempt === this.attempt;
+    const consent = () => current() && this.now() - at <= OPERATION_LIFETIME_MS;
+    this.publish({ ...this.state, phase: "connecting", step: 0, failure: null });
+    let token: HeldToken | null = null;
+    try {
+      token = await readToken(local, local.worker, found);
+      if (!current()) return;
+      if (!token) return this.fail({ kind: "changed" });
+      await this.letGo();
+      if (!current()) return;
+      // The first socket the check refuses, at its dial or before its credential, ends this
+      // attempt: nothing went on it, and setup's connection is closed. Once setup is done, a
+      // refused socket is the client's to say (`refusal`): the connection stays the person's.
+      let latest: ProveRefusal | null = null;
+      const unverified = (why: ProveRefusal) => {
+        latest = why;
+        this.log(`couldn't verify what is listening at port ${found.port} (${why})`);
+        if (!current() || this.state.phase === "failed" || this.state.phase === "done") return;
+        this.stopWatching();
+        void this.closeOwned();
+        this.fail({ kind: "unverified", port: found.port, reason: refusalKind(why) });
+      };
+      const proveOne = proveFor(local, found, found.port, unverified);
+      const prove = async (localPort: number) => {
+        const proved = await proveOne(localPort);
+        if (proved) latest = null;
+        if (proved && current() && this.state.step === 0) this.publish({ ...this.state, step: 1 });
+        return proved;
+      };
+      const sockets = provedSockets(found.port, prove);
+      const client = this.options.client;
+      const selection = client.nextSelection();
+      this.owned = { attempt, url: found.url, selection };
+      this.watch(attempt, found.url, found.port, selection, true);
+      await client.connect(
+        { url: found.url, token: token.reveal() },
+        {
+          createSocket: sockets.createWebSocket,
+          prove: provedWhile(current, sockets.verify),
+          route: routeOf(found),
+          consent,
+          refusal: () =>
+            latest === null ? null : PROOF_REFUSAL_LINES[refusalKind(latest)](found.port),
+        },
+      );
+    } catch (error) {
+      if (!current()) return;
+      this.stopWatching();
+      void this.closeOwned();
+      if (error instanceof SetupRefusedError) this.refused(error);
+      else this.fail({ kind: "other" });
+    } finally {
+      // The client holds the token for its pairing now; this host keeps no copy.
+      token?.drop();
+    }
   }
 
   /**
@@ -621,7 +730,13 @@ export class SetupController implements SetupHost {
 
   /** Follows the connection Connect started, until it is in or has failed. */
   /** Follows this attempt's connection to `url` only: another route's state says nothing about it. */
-  private watch(attempt: number, url: string, port: number, selection: number): void {
+  private watch(
+    attempt: number,
+    url: string,
+    port: number,
+    selection: number,
+    local = false,
+  ): void {
     this.stopWatching();
     let seen = false;
     const check = (state: ClawtrateState) => {
@@ -656,6 +771,21 @@ export class SetupController implements SetupHost {
         } else if (this.state.step !== 2) this.publish({ ...this.state, step: 2 });
         return;
       }
+      // Local connect's first socket ended before the gateway answered (`UNREACHABLE`): what the
+      // settings file says isn't how the gateway there listens now (it stopped, or runs on
+      // settings changed since it started, TLS for one). Not retried for ever behind
+      // Connecting: the attempt ends with Advanced and a look again.
+      if (
+        local &&
+        connection.status === "connecting" &&
+        connection.error?.code === "UNREACHABLE" &&
+        this.state.phase === "connecting"
+      ) {
+        this.stopWatching();
+        void this.closeOwned();
+        this.fail({ kind: "unanswered", port });
+        return;
+      }
       if (connection.status === "error") {
         this.stopWatching();
         const code = connection.error?.code;
@@ -670,10 +800,14 @@ export class SetupController implements SetupHost {
               : code === "AUTH_BOOTSTRAP_TOKEN_INVALID"
                 ? "code-refused"
                 : code === "UNREACHABLE"
-                  ? "unreachable"
+                  ? local
+                    ? "unanswered"
+                    : "unreachable"
                   : code === SETUP_ENDPOINT_CHANGED
                     ? "changed"
-                    : "other",
+                    : code === "LOCAL_UNVERIFIED"
+                      ? "unverified"
+                      : "other",
           port,
         });
       }

@@ -30,6 +30,8 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/bot-names.ts:SOURCES": "static, the five sources a record entry may name",
   "packages/core/src/bot-names.ts:WHOSE":
     "static, the three classifications a record entry may hold",
+  "packages/core/src/send-marker.ts:ABORT_WORDS": "static, the gateway's 43 stop words",
+  "packages/core/src/send-marker.ts:MARKER_SENTENCES": "static, the marker's two sentences",
   "packages/core/src/openclaw-update.ts:UPDATE_PHASES": "static, the gateway's eight update phases",
   "packages/core/src/openclaw-update.ts:RUN_STATUSES": "static, the gateway's five run statuses",
   "packages/core/src/openclaw-update.ts:UPDATE_ASK_WAITS_MS":
@@ -126,6 +128,8 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/types.ts:initialConnectionState.requestedScopes":
     "static, an empty list copied on write",
   "packages/core/src/types.ts:initialState.bots": "static, an empty list copied on write",
+  "packages/core/src/device-approval.ts:initialDeviceRequests.requests":
+    "static, an empty list copied on write",
   "packages/core/src/types.ts:initialState.unroutedApprovals":
     "static, an empty list copied on write",
   "packages/core/src/types.ts:initialState.creations": "static, an empty list copied on write",

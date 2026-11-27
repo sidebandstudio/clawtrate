@@ -6,6 +6,7 @@
 
 import type { ApprovalCard } from "./approvals.ts";
 import { asRecord, type RawRecord } from "./mapping.ts";
+import type { TranscriptItem } from "./types.ts";
 import {
   isOpenStep,
   isTerminal,
@@ -662,16 +663,26 @@ export function selectMessageCards(input: CardInput, options: CardOptions): Sele
 /**
  * Inter-session messages in a history page: rows with `provenance.kind:
  * "inter_session"`. The map names the fields but not whether they sit on the
- * row or under `__openclaw`, so both are read.
+ * row or under `__openclaw`, so both are read. The brief of a task a bot started
+ * (`TranscriptItem.brief` in `items`, the same page as `mapHistory` made it) is
+ * none: OpenClaw 2026.11.10 stores it with the provenance of the task it came
+ * from (`sourceTool: "sessions_spawn"`), 2026.10.6 with none, and either way it
+ * shows as the bot's brief (F-565).
  */
-export function interSessionMessages(messages: unknown): InterSessionMessage[] {
+export function interSessionMessages(
+  messages: unknown,
+  items: readonly TranscriptItem[] = [],
+): InterSessionMessage[] {
   const out: InterSessionMessage[] = [];
+  const briefs = new Set(items.filter((item) => item.brief).map((item) => item.id));
   (Array.isArray(messages) ? messages : []).forEach((entry, index) => {
     const row = asRecord(entry);
     if (!row) return;
     const meta = asRecord(row["__openclaw"]) ?? {};
     const provenance = asRecord(row.provenance) ?? asRecord(meta.provenance);
     if (provenance?.kind !== "inter_session") return;
+    const itemId = `${str(meta.id) ?? `row-${index}`}:${index}`;
+    if (briefs.has(itemId)) return;
     const senderSession = asRecord(row.senderSession) ?? asRecord(meta.senderSession);
     const content = row.content;
     const text =
@@ -684,7 +695,7 @@ export function interSessionMessages(messages: unknown): InterSessionMessage[] {
             })
             .join("");
     out.push({
-      itemId: `${str(meta.id) ?? `row-${index}`}:${index}`,
+      itemId,
       text,
       sourceSessionKey: str(provenance.sourceSessionKey),
       sourceTool: str(provenance.sourceTool),

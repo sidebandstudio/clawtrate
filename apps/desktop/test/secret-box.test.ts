@@ -166,7 +166,18 @@ describe("the Keychain through safeStorage", () => {
     // Every socket is the setup's own factory, with its last proof, retries on it included, or
     // the route the gateway was saved with; the gate reads exactly that, and nothing looser.
     expect(client).toContain(
-      "? { createSocket: this.setupCheck.createSocket, prove: this.setupCheck.prove }",
+      [
+        "      proved && this.setupCheck?.createSocket",
+        "        ? {",
+        "            createSocket: this.setupCheck.createSocket,",
+        "            prove: this.setupCheck.prove,",
+        "            refusal: this.setupCheck.refusal,",
+        "          }",
+        "        : undefined;",
+      ].join("\n"),
+    );
+    expect(client).toContain(
+      "? { createSocket: check.createSocket, prove: check.prove, refusal: check.refusal }",
     );
     expect(client).toContain(
       "const create = own?.createSocket ?? (fromRoute ? fromRoute.createSocket : undefined);",
