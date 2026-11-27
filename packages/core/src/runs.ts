@@ -286,6 +286,25 @@ export function timeoutsInARow(run: Run): number {
   return count;
 }
 
+/** The run is being stopped as the gateway's follow-up to a Stop of this client's (#645). */
+export function markStoppedAsFollowUp(activity: TaskActivity, runId: string): TaskActivity {
+  return updateRun(activity, runId, (run) => ({ ...run, stoppedAsFollowUp: true }));
+}
+
+/**
+ * That stop was refused or given up: the turn goes on as it was, with nothing said about it. It
+ * was this client's own doing, never the person's Stop, so no error is shown for it (#645).
+ */
+export function unmarkStoppedAsFollowUp(activity: TaskActivity, runId: string): TaskActivity {
+  // Only a run still marked: one rebuilt since (the task closed and opened again) may be stopping
+  // for the person's own Stop, which a late answer to this client's abort must not undo.
+  if (!findRun(activity, runId)?.stoppedAsFollowUp) return activity;
+  return updateRun(revertStop(activity, runId, ""), runId, ({ stoppedAsFollowUp: _, ...run }) => ({
+    ...run,
+    stopError: null,
+  }));
+}
+
 /** The run is being stopped because its tool calls kept timing out. */
 export function markStoppedForTimeouts(
   activity: TaskActivity,
@@ -321,6 +340,11 @@ export type StoppedWith = {
   refused: string[];
   /** Session keys of recipients' runs whose stop got no answer: they may still be going. */
   unanswered: string[];
+  /**
+   * Session keys whose recipient's stopped run then made the gateway start a turn of its own in
+   * this task (its note that the delivery failed), which this client stopped as well (#645).
+   */
+  followUps: string[];
   /** Names not kept past `MAX_STOPPED_NAMED` of a kind; every one of them was still asked. */
   omitted: number;
   /** The recipients have been asked to stop (once per run). */
@@ -334,6 +358,7 @@ const noCompanions = (): StoppedWith => ({
   uncertain: [],
   refused: [],
   unanswered: [],
+  followUps: [],
   omitted: 0,
   recipientsAsked: false,
 });
@@ -359,6 +384,7 @@ export function noteStoppedWith(
         uncertain: keep(next.uncertain),
         refused: keep(next.refused),
         unanswered: keep(next.unanswered),
+        followUps: keep(next.followUps),
         omitted,
         recipientsAsked: next.recipientsAsked,
       },
@@ -528,10 +554,14 @@ export type Run = {
    * run `completed` with nothing to show, as 2026.10.6 ends one, unless the gateway's history
    * holds a row of it that answered nothing (`unansweredInHistory`): then it is the failure the
    * gateway sent. `pending` until a history read asked after the end has looked, `settled` once
-   * one found no such row (#680).
+   * one found no such row (#680); `unread` while it is the failure because that read failed, until
+   * a later read of the task's history looks (#767).
    */
-  quietEnd?: "pending" | "settled";
-  /** While `quietEnd` is `pending`: the end as the gateway sent it, the run's error if it failed. */
+  quietEnd?: "pending" | "settled" | "unread";
+  /**
+   * While `quietEnd` is `pending` or `unread`: the end as the gateway sent it, the run's error if
+   * it failed.
+   */
   quietError?: RunError;
   /**
    * History holds an assistant row of this run that answered nothing: no text and no tool call (a
@@ -576,6 +606,13 @@ export type Run = {
    * Absent otherwise.
    */
   stoppedForTimeouts?: number;
+  /**
+   * This client stopped the run on its own because it is the turn the gateway starts in a task
+   * once a recipient's run that this client stopped for a Stop in the task has ended (#645): the
+   * gateway's note that the delivery failed, which may resend the stopped message. Absent
+   * otherwise.
+   */
+  stoppedAsFollowUp?: boolean;
   /**
    * The run passed the "Turn time limit" (F-100), in minutes, and this client asked the gateway
    * to stop it, as any Stop: it is `stopping` until the gateway confirms. 0 when the limit was
@@ -1302,23 +1339,36 @@ export function answeredNothing(message: RawRecord): boolean {
 /**
  * Settle the quiet ends a history read has looked at (#680). A run whose history says it answered
  * nothing fails as the gateway sent it, whenever that row was read. Any other run whose marked end
- * was `pending` before the read was asked (`pendingBefore`) is a quiet answer, unless the read
- * failed or could not be made (`unread`): then, with nothing to say otherwise, it is the failure.
+ * waited for that read (`pendingBefore`) is a quiet answer when the read was made (`read`); the
+ * failure the gateway sent when it was made and didn't show the run whole (`failed`); and the
+ * failure, still to be read (`quietEnd: "unread"`), when it failed or couldn't be made
+ * (`unread`). A later read that looks settles an unread end as it would a pending one (#767).
  */
 export function settleQuietEnds(
   runs: Run[],
   pendingBefore: ReadonlySet<string>,
-  unread = false,
+  outcome: "read" | "unread" | "failed" = "read",
 ): Run[] {
   let changed = false;
   const settled = runs.map((run) => {
-    if (run.quietEnd !== "pending") return run;
-    const failed = run.unansweredInHistory === true || (unread && pendingBefore.has(run.id));
-    if (!failed && !pendingBefore.has(run.id)) return run;
+    if (run.quietEnd !== "pending" && run.quietEnd !== "unread") return run;
+    const unanswered = run.unansweredInHistory === true;
+    if (!unanswered && !pendingBefore.has(run.id)) return run;
+    if (!unanswered && outcome === "unread") {
+      if (run.quietEnd === "unread") return run;
+      changed = true;
+      return {
+        ...run,
+        state: "failed" as const,
+        error: run.quietError ?? null,
+        quietEnd: "unread" as const,
+      };
+    }
     changed = true;
-    const { quietEnd: _pending, quietError, ...rest } = run;
-    if (!failed) return { ...rest, quietEnd: "settled" as const };
-    return { ...rest, state: "failed" as const, error: quietError ?? null };
+    const { quietEnd: _waiting, quietError, ...rest } = run;
+    if (unanswered || outcome === "failed")
+      return { ...rest, state: "failed" as const, error: quietError ?? null };
+    return { ...rest, state: "completed" as const, error: null, quietEnd: "settled" as const };
   });
   return changed ? settled : runs;
 }
@@ -1326,6 +1376,18 @@ export function settleQuietEnds(
 /** The runs of a task whose quiet end waits for a history read (#680). */
 export function quietPending(runs: readonly Run[]): Set<string> {
   return new Set(runs.filter((run) => run.quietEnd === "pending").map((run) => run.id));
+}
+
+/**
+ * The runs of a task a read of its own history may settle: those whose quiet end waits for one,
+ * and those a read failed for, which stay the failure until one is made (#767).
+ */
+export function quietToRead(runs: readonly Run[]): Set<string> {
+  return new Set(
+    runs
+      .filter((run) => run.quietEnd === "pending" || run.quietEnd === "unread")
+      .map((run) => run.id),
+  );
 }
 
 /**
@@ -1483,13 +1545,17 @@ export function requeueLocalRun(
 
 /**
  * A queued run that is about to be sent goes from `queued` to `running`: the queued one with
- * that id, beside an earlier run of the same message the gateway named.
+ * that id, beside an earlier run of the same message the gateway named. A held steer released
+ * this way is a run of its own from here, so its alias to the run it was sent into goes: Stop
+ * and the composer then find this run before its first event.
  */
 export function startQueuedRun(activity: TaskActivity, runId: string, now: number): TaskActivity {
   const queued = activity.runs.find((run) => run.id === runId && run.state === "queued");
   if (!queued) return activity;
+  const { [runId]: _joined, ...steerAliases } = activity.steerAliases;
   return {
     ...activity,
+    steerAliases,
     runs: activity.runs.map((run) =>
       run === queued ? { ...run, state: "running", startedAt: now } : run,
     ),
@@ -3261,8 +3327,12 @@ export function runsFromHistory(
               state: "running",
               origin: "history",
               bound: true,
-              anchorItemId: keyedBy.get(inFlightRunId) ?? anchor,
-              ...(keyedBy.has(inFlightRunId) ? { anchorKeyed: true as const } : {}),
+              // As for a run with rows: the message from another session that started it, or
+              // the person's keyed row (#645).
+              anchorItemId: startedBy.get(inFlightRunId) ?? keyedBy.get(inFlightRunId) ?? anchor,
+              ...(startedBy.has(inFlightRunId) || keyedBy.has(inFlightRunId)
+                ? { anchorKeyed: true as const }
+                : {}),
               reportedStartAt: num(snapshot?.startedAt),
             },
             num(snapshot?.startedAt),
@@ -4002,9 +4072,11 @@ export function parkAfterStop(
   after: TaskActivity,
   now: number,
 ): TaskActivity {
+  // A turn this client stopped on its own as the gateway's follow-up to a Stop (#645) parks
+  // nothing: what the person sent after their Stop is theirs to send.
   const stopped = after.runs.some((run) => {
     const was = findRun(before, run.id)?.state;
-    return run.state === "stopped" && was !== undefined && isActive(was);
+    return run.state === "stopped" && was !== undefined && isActive(was) && !run.stoppedAsFollowUp;
   });
   if (!stopped) return after;
   const parked = after.outbox.filter(notLeft);

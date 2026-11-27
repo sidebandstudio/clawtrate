@@ -2,6 +2,7 @@
 // state, and the form that sets it. A budget is a warning, everywhere: it is
 // marked "Shown only", and nothing here says it stops a run or a send.
 
+import { InfoCard, InfoTip } from "../InfoTip.tsx";
 import {
   BUDGET_UNCONFIRMED,
   budgetPercent,
@@ -134,26 +135,34 @@ export function BudgetForm({
         options={PERIOD_OPTIONS}
         onChange={setPeriod}
       />
-      <label>
-        Tokens
+      <div className="c-field">
+        <span className="c-field-label">
+          <label htmlFor={`${ids}-tokens`}>Tokens</label>
+          <InfoTip id={`${ids}-help`} about="Tokens" />
+        </span>
         <input
+          id={`${ids}-tokens`}
           ref={field}
           className="input"
           inputMode="numeric"
           data-testid="budget-tokens"
           value={value}
           aria-invalid={shownError ? true : undefined}
-          aria-describedby={`${ids}-help${shownError ? ` ${ids}-error` : ""}`}
+          aria-describedby={`${ids}-help ${ids}-warning${shownError ? ` ${ids}-error` : ""}`}
           onChange={(event) => setValue(event.target.value)}
           onKeyDown={(event) => {
             if (event.key === "Enter") void save();
           }}
         />
-      </label>
-      <p className="b-hint" id={`${ids}-help`} style={{ margin: 0 }}>
-        A whole number of 1,000 or more. Counts the total the gateway reports for {name}{" "}
-        {period === "daily" ? "each day" : "each week"}, {zoneWords(zone)}: input, output and cache.
-        A warning: nothing on the gateway stops a bot at its budget.
+      </div>
+      <InfoCard id={`${ids}-help`}>
+        A whole number of 1,000 or more: the total the gateway reports for {name}{" "}
+        {period === "daily" ? "each day" : "each week"}, {zoneWords(zone)}, input, output and cache
+        together.
+      </InfoCard>
+      {/* A warning to read before setting one: it stays in view. */}
+      <p className="b-hint" id={`${ids}-warning`} style={{ margin: 0 }}>
+        A warning only: nothing on the gateway stops a bot at its budget.
       </p>
       {shownError && (
         <p className="b-field-error" id={`${ids}-error`} style={{ margin: 0 }}>

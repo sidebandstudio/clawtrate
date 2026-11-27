@@ -5,7 +5,8 @@
 // ends the quiet answer with an error it marks not to show, its row `failed` beside the mark. Either
 // way the conversation shows no failure, and the task and its bot are not marked failed, whether
 // the task is open or not. A look-alike: on 2026.11.10 a wake the bot answers with reasoning only
-// gets the very same end and row from the gateway; it is a failure, and shows as one.
+// gets the very same end and row from the gateway; it is a failure, and shows as one, after a
+// reload too (#766).
 import { expect, test, type Page } from "@playwright/test";
 import { randomBytes } from "node:crypto";
 import { instanceForm, openInstance } from "../tools/dev-gateway/src/cli.ts";
@@ -200,6 +201,24 @@ test("#680: a quiet answer to a turn the gateway started is no failure; a turn t
       await expect(await taskRow(page, openTitle)).toHaveAccessibleName(/last run failed/, {
         timeout: 20_000,
       });
+    }
+    // A reload rebuilds the conversation from history, which keeps neither end; the row still
+    // names that run as failed, and the conversation says so too (#766).
+    await page.reload();
+    await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 30_000 });
+    await (await taskRow(page, openTitle)).click();
+    await expect(transcript.locator('.msg[data-role="assistant"] .bubble')).toHaveCount(1, {
+      timeout: 30_000,
+    });
+    if (form.heartbeat) {
+      await page.waitForTimeout(2_000);
+      await expect(failure).toHaveCount(0);
+    } else {
+      const card = transcript.getByTestId("turn-error");
+      await expect(card).toBeVisible({ timeout: 30_000 });
+      await expect(card).toContainText(/otto couldn't finish an earlier turn/i);
+      await expect(card).toContainText("No answer was returned.");
+      await expect(await taskRow(page, openTitle)).toHaveAccessibleName(/last run failed/);
     }
   } finally {
     await removeTask(openKey);
