@@ -391,9 +391,10 @@ const SCENES: Scene[] = [
     query: `${page$("stale")}&version=2026.11.10`,
     ready: accountPage,
   },
+  // Below admin the unlock and the clear stay the gateway's steps; with admin they are buttons.
   {
     name: "bot-account-unlock-stopped",
-    query: `${page$("locked")}&version=2026.11.10`,
+    query: `${page$("locked", "write")}&version=2026.11.10`,
     ready: async (page) => {
       await accountPage(page);
       await page.locator("details.b-disclosure", { hasText: "Unlock" }).locator("summary").click();
@@ -402,8 +403,28 @@ const SCENES: Scene[] = [
   },
   {
     name: "bot-account-retained-stopped",
-    query: `${page$("retained")}&version=2026.11.10`,
+    query: `${page$("retained", "write")}&version=2026.11.10`,
     ready: accountPage,
+  },
+  // Unlock with a button (F-592): its confirmation, and the page after the gateway's read.
+  {
+    name: "bot-account-unlock-confirm",
+    query: `${page$("locked")}&version=2026.11.10`,
+    ready: async (page) => {
+      await accountPage(page);
+      await page.getByRole("button", { name: "Unlock…" }).click();
+      await expect(page.getByRole("alertdialog")).toBeVisible();
+    },
+  },
+  {
+    name: "bot-account-unlocked",
+    query: page$("locked"),
+    ready: async (page) => {
+      await accountPage(page);
+      await page.getByRole("button", { name: "Unlock…" }).click();
+      await page.getByRole("button", { name: "Unlock", exact: true }).click();
+      await expect(page.getByTestId("clear-outcome")).toBeVisible();
+    },
   },
   {
     name: "bot-change-account",

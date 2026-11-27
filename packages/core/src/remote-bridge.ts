@@ -31,6 +31,17 @@ export class BridgeFrameTooLargeError extends Error {
   }
 }
 
+/**
+ * A command's answer lost with the socket: the host may have carried the command out, so what it
+ * did isn't known. Any other refusal came from the host itself, or the command was never sent.
+ */
+export class HostReplyLost extends Error {
+  constructor() {
+    super("Lost the preview host");
+    this.name = "HostReplyLost";
+  }
+}
+
 /** Encode a bridge message, refusing one the host would reject for its size. */
 export function encodeBridgeFrame(message: BridgeClientMessage): string {
   const text = JSON.stringify(message);
@@ -139,7 +150,7 @@ export function createRemoteBridge(options: RemoteBridgeOptions): Promise<Clawtr
       current.onclose = (event) => {
         if (socket !== current) return;
         socket = null;
-        for (const waiter of pending.values()) waiter.reject(new Error("Lost the preview host"));
+        for (const waiter of pending.values()) waiter.reject(new HostReplyLost());
         pending.clear();
         if (event.code === ACCESS_REFUSED_CLOSE_CODE) {
           rejectBridge(new Error("This preview needs the access link printed by the host."));

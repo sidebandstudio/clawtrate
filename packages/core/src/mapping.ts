@@ -6,8 +6,10 @@ import { cutText, jsonTextLength } from "./bounds.ts";
 import { utf8Length } from "./encoding.ts";
 import { channelChatTitle, externalChannelOf, stripChannelMetadata } from "./channels.ts";
 import { isOtherToolSession } from "./origins.ts";
+import { previewWithoutMarker, titleWithoutMarker } from "./send-marker.ts";
 import {
   gatewayPreviewOf,
+  LIST_PREVIEW_MAX_CHARS,
   rowIdempotencyKey,
   UPDATE_NOTICE_KEY_PREFIX,
   updateNoticeLine,
@@ -143,6 +145,16 @@ export function isSessionRemoval(payload: unknown): boolean {
 }
 
 /**
+ * A title the gateway made from a task's first message: a sentence of the model's copy of it, or
+ * a model's name for the task from that copy, which ends with the marker a message from Clawtrate
+ * carries. The marker comes off, and a title of nothing else is none.
+ */
+function derivedTitle(value: unknown): string | null {
+  const title = str(value);
+  return title === null ? null : str(titleWithoutMarker(title));
+}
+
+/**
  * Gateway previews are the start of the last message, often markdown, and for
  * a channel turn wrapped in what the gateway wrote around it. Reduce them to
  * readable plain text for a two-line list preview.
@@ -161,7 +173,11 @@ export function plainPreview(text: string | null): string | null {
     .replace(/^\s*·\s*|\s*·\s*$/g, "")
     .replace(/\s+/g, " ")
     .trim();
-  return plain || null;
+  // A person's message from Clawtrate is listed with the marker the gateway keeps after its words,
+  // and cut, as any preview, to 240 characters with "..." (`gatewayPreviewOf`).
+  const atLimit =
+    text.length >= LIST_PREVIEW_MAX_CHARS - 1 && text.length <= LIST_PREVIEW_MAX_CHARS;
+  return previewWithoutMarker(plain, atLimit) || null;
 }
 
 function taskStatus(row: RawRecord): TaskStatus {
@@ -229,7 +245,10 @@ export function mapSessionRow(row: RawRecord): Task | null {
     sessionId: str(row.sessionId),
     title: channel
       ? channelChatTitle(row, channel)
-      : (str(row.label) ?? str(row.derivedTitle) ?? str(row.displayName) ?? fallbackTitle(key)),
+      : (str(row.label) ??
+        derivedTitle(row.derivedTitle) ??
+        derivedTitle(row.displayName) ??
+        fallbackTitle(key)),
     preview: plainPreview(str(row.lastMessagePreview)),
     updatedAt: num(row.updatedAt) ?? num(row.lastActivityAt) ?? num(row.createdAt),
     status: taskStatus(row),
@@ -569,12 +588,14 @@ function assistantBlocks(content: unknown): TranscriptBlock[] {
 }
 
 /**
- * The description an earlier `image_generate` call asked for, when `runId` is the
- * turn the gateway runs by itself to deliver that call's background task
- * (`image_generate:<taskId>:ok:…`): the call whose result named the task.
+ * The description an earlier `image_generate` call asked for, when `delivery` is the
+ * gateway's delivery of that call's background task (`image_generate:<taskId>:ok:…`,
+ * `pictureDelivery`): the call whose result named the task.
  */
-function imagePrompt(runId: string | null, items: TranscriptItem[]): string | null {
-  const task = runId ? /^image_generate:(tool:image_generate:[^:\s]+):ok:/.exec(runId)?.[1] : null;
+function imagePrompt(delivery: string | null, items: TranscriptItem[]): string | null {
+  const task = delivery
+    ? /^image_generate:(tool:image_generate:[^:\s]+):ok:/.exec(delivery)?.[1]
+    : null;
   if (!task) return null;
   for (const item of [...items].reverse())
     for (const block of item.blocks)
@@ -591,6 +612,26 @@ function imagePrompt(runId: string | null, items: TranscriptItem[]): string | nu
         }
       }
   return null;
+}
+
+/**
+ * The delivery a row with pictures names, for `imagePrompt`. On OpenClaw 2026.10.6 it is the row's
+ * run: the turn the gateway runs by itself to deliver the picture. On 2026.11.10 the gateway
+ * writes the picture into the task as a row of its own, with no run and `model: "delivery-mirror"`,
+ * under that delivery's key with `:generated-media-host-transcript` after it
+ * (`persistQueuedGeneratedMedia`). A bot's message tool send can give its copy any key, but the
+ * copy in the bot's own task names the bot's run, so it is never read as a delivery.
+ */
+function pictureDelivery(message: RawRecord, runId: string | null): string | null {
+  if (runId !== null) return runId;
+  if (message.model !== "delivery-mirror") return null;
+  const key = rowIdempotencyKey(message);
+  const delivery = key
+    ? /^(image_generate:tool:image_generate:[^:\s]+:ok:agent-loop)(?::attempt:\d+)?:generated-media-host-transcript$/.exec(
+        key,
+      )
+    : null;
+  return delivery?.[1] ?? null;
 }
 
 function meta(message: RawRecord): RawRecord {
@@ -820,7 +861,8 @@ export function mapHistory(
         const runId = str(info.runId);
         const pictures = assistantPictures(message.content);
         const files = assistantFiles(message.content);
-        const prompt = pictures.length > 0 ? imagePrompt(runId, items) : null;
+        const prompt =
+          pictures.length > 0 ? imagePrompt(pictureDelivery(message, runId), items) : null;
         for (const picture of pictures) picture.prompt = prompt;
         if (runId !== null && runId === precedingRun) {
           for (const user of pendingUsers) user.steered = true;

@@ -1756,6 +1756,57 @@ describe("sign-ins, through the gateway's own methods", () => {
     client.stop();
   });
 
+  it("a sign-in's read afterwards that fails for a bot is that bot's newest attempt, as a failed Check now", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    await client.startSignIn(CHOICES.device, null);
+    // Otto's next status read fails (the sign-in's second read); the load after it is held.
+    const status = fake.gateway.handlers["models.authStatus"]!;
+    let failOnce = true;
+    fake.gateway.handlers["models.authStatus"] = (params) => {
+      if ((params as { agentId: string }).agentId === "otto" && failOnce) {
+        failOnce = false;
+        throw new GatewayError({ code: "UNAVAILABLE", message: "otto's status down" });
+      }
+      return status(params);
+    };
+    const get = fake.gateway.handlers["config.get"]!;
+    const held = deferred<void>();
+    fake.gateway.handlers["config.get"] = async (params) => {
+      const answer = get(params);
+      if (!failOnce) await held.promise;
+      return answer;
+    };
+    const before = binding(accounts(), "otto").evidence;
+    fake.answerDevice();
+    await until(() => accounts().signIn?.result != null);
+    expect(accounts().signIn?.result?.readFailed).toBe(true);
+    expect(binding(accounts(), "otto").evidence).toMatchObject({
+      status: "failed",
+      error: "otto's status down",
+      readSeq: before.readSeq,
+    });
+    expect(binding(accounts(), "otto").evidence.attemptSeq).toBeGreaterThan(before.readSeq!);
+    held.resolve();
+    client.stop();
+  });
+
+  for (const [shape, answer] of [
+    ["no payload", undefined],
+    ["a record with no providers list", { ts: 1 }],
+  ] as const)
+    it(`a sign-in whose read afterwards gets ${shape} is unverified, never refreshed`, async () => {
+      const { client, fake, accounts } = await accountsClient();
+      await client.startSignIn(CHOICES.device, null);
+      fake.blankStatus = { agentId: "main", answer };
+      fake.answerDevice();
+      await until(() => accounts().signIn?.result != null);
+      expect(accounts().signIn).toMatchObject({
+        stage: "unverified",
+        result: { readFailed: true, added: [] },
+      });
+      client.stop();
+    });
+
   it("a sign-in that finishes with no new account is refreshed, not connected", async () => {
     const fake = new AccountsGateway();
     fake.nextEnding = { outcome: "approve", account: "work" };

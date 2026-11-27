@@ -18,6 +18,7 @@ import {
   GUIDES_OFF,
   GUIDES_ON,
   guidesLimit,
+  guidesWouldBeCut,
   findSection,
   GUIDES_LONG_CHARS,
   GUIDES_PINNED_SHA256,
@@ -44,6 +45,7 @@ import { agentEvent, grantingGateway, openTask } from "./client-harness.ts";
 import { GatewayError, memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { ClawtrateClient, CONNECTION_CHANGED } from "../src/client.ts";
+import { PUBLISHED_SECTIONS } from "./guides-published.ts";
 import { FAST } from "./client-harness.ts";
 import { URL_A } from "./client-harness.ts";
 
@@ -162,7 +164,7 @@ function fakeFiles(
 describe("the section", () => {
   it("is the two guides between Clawtrate's markers, with the hash of what's between them", () => {
     const lines = GUIDES_SECTION.split("\n");
-    expect(lines[0]).toMatch(/^<!-- clawtrate:guides begin v1 sha256=[a-f0-9]{64} -->$/);
+    expect(lines[0]).toMatch(/^<!-- clawtrate:guides begin v2 sha256=[a-f0-9]{64} -->$/);
     expect(lines[1]).toBe(GUIDES_NOTICE);
     expect(GUIDES_NOTICE).toContain("Turn it off in Clawtrate: Settings, Conversation.");
     expect(GUIDES_SECTION.endsWith("<!-- clawtrate:guides end -->\n")).toBe(true);
@@ -170,7 +172,8 @@ describe("the section", () => {
     expect(GUIDES_SECTION.split(VOICE_GUIDE)).toHaveLength(2);
     expect(GUIDES_SECTION.split(WHERE_GUIDE)).toHaveLength(2);
     // It is in every run's prompt: bounded, and said in Settings.
-    expect(GUIDES_SIZE).toBeLessThanOrEqual(3_200);
+    expect(GUIDES_SIZE).toBe(3_966);
+    expect(GUIDES_SIZE).toBeLessThanOrEqual(4_000);
   });
 
   it("adds at the top and takes out again, leaving every other byte as it was", () => {
@@ -1948,7 +1951,7 @@ describe("files Clawtrate leaves alone", () => {
         `^<!-- clawtrate:guides begin v${GUIDES_VERSION} sha256=${GUIDES_PINNED_SHA256}[a-f0-9]{48} -->$`,
       ),
     );
-    expect(GUIDES_VERSION).toBe(1);
+    expect(GUIDES_VERSION).toBe(2);
   });
 
   it("says a long file would be cut, and never makes one longer than the limit in the background", async () => {
@@ -2044,6 +2047,101 @@ describe("files Clawtrate leaves alone", () => {
       expect(files.store.get("pip")).toBe(
         file.startsWith("\uFEFF") ? `\uFEFF${BOT_FILE}` : BOT_FILE,
       );
+    }
+  });
+});
+
+// Every section a released build wrote (guides-published.ts) reads as Clawtrate's own and older,
+// so it is brought up to date by itself under the same rules as any by-itself write (#666).
+describe("the sections earlier builds wrote", () => {
+  /** A published section's "Where you live", as it wrote it. */
+  const whereOf = (section: string) =>
+    section.slice(section.indexOf("## Where you live"), section.lastIndexOf("\n<!-- clawtrate:"));
+
+  it("each is pinned, of a lower version, and reads as Clawtrate's own, unedited and older", () => {
+    expect(PUBLISHED_SECTIONS.map((each) => each.version)).toEqual([1]);
+    for (const { version, pin, section } of PUBLISHED_SECTIONS) {
+      expect(section.split("\n")[0]).toMatch(
+        new RegExp(`^<!-- clawtrate:guides begin v${version} sha256=${pin}[a-f0-9]{48} -->$`),
+      );
+      expect(version).toBeLessThan(GUIDES_VERSION);
+      expect(findSection(section + BOT_FILE)).toMatchObject({ kind: "ours", current: false });
+    }
+  });
+
+  it("changes only Where you live: 1,453 characters before, 2,270 now, and still fits", () => {
+    const v1 = PUBLISHED_SECTIONS.find((each) => each.version === 1)!.section;
+    expect(whereOf(v1).length).toBe(1_453);
+    expect(WHERE_GUIDE.length).toBe(2_270);
+    expect(whereOf(GUIDES_SECTION)).toBe(WHERE_GUIDE);
+    expect(GUIDES_SECTION.length - v1.length).toBe(817);
+    expect(v1.split(VOICE_GUIDE)).toHaveLength(2);
+    // The limits #643 set: Replace takes out at most what Show shows, and a file with only the
+    // section is far from the gateway's default cut.
+    expect(GUIDES_SECTION.length).toBeLessThanOrEqual(MAX_CHANGED_SECTION_CHARS);
+    expect(guidesWouldBeCut(withSection(""), GUIDES_LONG_CHARS)).toBe(false);
+  });
+
+  it("an unedited one is brought up to date by itself, and nothing else in the file changes", async () => {
+    for (const { section } of PUBLISHED_SECTIONS)
+      for (const below of [`\n${BOT_FILE}`, "\n", ""]) {
+        const files = fakeFiles({ pip: section + below });
+        expect((await readGuideFolders(files.request, null))[0]?.state).toBe("older");
+        const result = await applyGuidesChange(files.request, null, { action: "auto" });
+        expect(result.errors).toEqual([]);
+        expect(files.store.get("pip")).toBe(GUIDES_SECTION + below);
+        expect(result.record).toEqual({ on: true, bots: ["pip"] });
+        expect((await readGuideFolders(files.request, result.record))[0]?.state).toBe("current");
+      }
+  });
+
+  it("an unedited one waits while the gateway's limit can't be read, as any write by itself does", async () => {
+    for (const { section } of PUBLISHED_SECTIONS) {
+      const files = fakeFiles({ pip: `${section}\n${BOT_FILE}` }, {}, {}, null);
+      await applyGuidesChange(files.request, null, { action: "auto" });
+      expect(files.sets).toEqual([]);
+    }
+  });
+
+  it("an edited one is left as it is, by itself, and Settings offers Replace", async () => {
+    for (const { section } of PUBLISHED_SECTIONS) {
+      const edited = section.replace("Be warm", "Be warmer") + `\n${BOT_FILE}`;
+      expect(edited).not.toBe(section + `\n${BOT_FILE}`);
+      const files = fakeFiles({ pip: edited });
+      await applyGuidesChange(files.request, null, { action: "auto" });
+      await applyGuidesChange(files.request, null, { action: "switch", on: true });
+      expect(files.sets).toEqual([]);
+      const [folder] = await readGuideFolders(files.request, null);
+      expect(folder).toMatchObject({ state: "changed", replaceable: true });
+      // Replace, the person's own, puts this version in its place.
+      const shown = folder!.changedText!;
+      await applyGuidesChange(files.request, null, { action: "replace", bot: "pip", shown });
+      expect(files.store.get("pip")).toBe(`${GUIDES_SECTION}\n${BOT_FILE}`);
+    }
+  });
+
+  it("one removed on purpose stays out, by this device's record or the gateway's history", async () => {
+    for (const { section } of PUBLISHED_SECTIONS) {
+      // This device wrote it, and it was taken out since.
+      const known = fakeFiles({ pip: BOT_FILE });
+      const own = await applyGuidesChange(
+        known.request,
+        { on: true, bots: ["pip"] },
+        {
+          action: "auto",
+        },
+      );
+      expect(known.sets).toEqual([]);
+      expect((await readGuideFolders(known.request, own.record))[0]?.state).toBe("removed");
+      // Another device wrote it, recorded it in the gateway's history, and it was taken out since.
+      const elsewhere = fakeFiles({ pip: `${section}\n${BOT_FILE}` });
+      await applyGuidesChange(elsewhere.request, null, { action: "auto" });
+      expect(elsewhere.prefs.entries.get(GUIDES_HISTORY_KEY)).toEqual({ v: 1, bots: ["pip"] });
+      elsewhere.store.set("pip", BOT_FILE);
+      const before = elsewhere.sets.length;
+      await applyGuidesChange(elsewhere.request, null, { action: "auto" });
+      expect(elsewhere.sets).toHaveLength(before);
+      expect((await readGuideFolders(elsewhere.request, null))[0]?.state).toBe("removed");
     }
   });
 });

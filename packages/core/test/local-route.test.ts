@@ -5,7 +5,13 @@
 // retries and restarts included. Stand-in proofs on a fake gateway.
 
 import { describe, expect, it } from "vitest";
-import { ClawtrateClient, SETUP_ENDPOINT_CHANGED, type ProvedRoute } from "../src/client.ts";
+import {
+  ClawtrateClient,
+  LOCAL_ROUTE_ONLY,
+  ROUTE_IDENTITY_CHANGED,
+  SETUP_ENDPOINT_CHANGED,
+  type ProvedRoute,
+} from "../src/client.ts";
 import type { WebSocketLike } from "../src/host.ts";
 import { READ_SCOPE } from "../src/scopes.ts";
 import { FAST } from "./client-harness.ts";
@@ -244,7 +250,14 @@ describe("a gateway set up through local connect", () => {
         }
         await client.connect({ url: URL, token: "typed" });
       }
-      await until(() => client.state.connection.error?.code === "LOCAL_UNVERIFIED");
+      // Said as it is: the pairing belongs to This computer, and that is the way to it.
+      await until(() => client.state.connection.error?.code === LOCAL_ROUTE_ONLY);
+      expect(client.state.connection.error).toMatchObject({
+        message: expect.stringMatching(
+          /^This device is paired for This computer, .*No credential was sent\.$/,
+        ) as unknown,
+        hint: "Choose This computer to connect to it.",
+      });
       await sleep(100);
       // The route's own connection, before Disconnect, is the only frame there is.
       expect(gateway.connects).toHaveLength(how === "Disconnect, then a typed connect" ? 1 : 0);
@@ -270,9 +283,47 @@ describe("a gateway set up through local connect", () => {
     const { host: app } = host(gateway, storage);
     const client = new ClawtrateClient(app, FAST);
     await client.start();
-    await until(() => client.state.connection.error?.code === "LOCAL_UNVERIFIED");
+    await until(() => client.state.connection.error?.code === LOCAL_ROUTE_ONLY);
     await sleep(100);
     expect(gateway.connects).toHaveLength(0);
+    client.stop();
+  });
+
+  it("F-492: a token saved over another route goes on none of this route's sockets, and its first pairing replaces it", async () => {
+    // Saved through This computer when the profile folder was another one; found again since,
+    // with the folder put in its place, and connected on its own route.
+    const earlier = `${ROUTE}@1:1`;
+    const now = `${ROUTE}@1:2`;
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL, token: null, route: earlier }),
+      [tokenKey(URL)]: JSON.stringify({
+        ...JSON.parse(SAVED),
+        token: "earlier-device-token",
+        route: earlier,
+      }),
+    });
+    const gateway = readGateway();
+    const { host: app, plain } = host(gateway, storage);
+    const sockets = route(gateway, () => true);
+    const client = new ClawtrateClient(app, { ...FAST, localConnect: () => sockets.sockets });
+    await client.start({ resume: false });
+    await client.connect(
+      { url: URL, token: "settings-token" },
+      {
+        createSocket: sockets.sockets.createSocket,
+        prove: sockets.sockets.verify,
+        route: now,
+        consent: () => true,
+      },
+    );
+    await until(() => client.state.connection.status === "connected");
+    expect(JSON.stringify(gateway.connects)).not.toContain("earlier-device-token");
+    expect(JSON.stringify(gateway.connects[0])).toContain("settings-token");
+    // The pairing on this route replaces the other route's, and the gateway is saved with it.
+    await until(() => JSON.parse(storage.data.get(tokenKey(URL))!).route === now);
+    expect(JSON.parse(storage.data.get(tokenKey(URL))!).token).toBe("device-token");
+    await until(() => JSON.parse(storage.data.get("connection")!).route === now);
+    expect(plain).toHaveLength(0);
     client.stop();
   });
 
@@ -289,5 +340,83 @@ describe("a gateway set up through local connect", () => {
     expect(plain).toHaveLength(1);
     expect(JSON.parse(storage.data.get("connection")!)).not.toHaveProperty("route");
     client.stop();
+  });
+});
+
+describe("a gateway saved with a route is the gateway that route first reported", () => {
+  /** A device paired over the route, saved as local connect saves it, at a gateway named `id`. */
+  async function routed(identity: { id: string }) {
+    const gateway = readGateway();
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: identity.id });
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL, token: null, route: ROUTE }),
+      [tokenKey(URL)]: JSON.stringify({ ...JSON.parse(SAVED), route: ROUTE }),
+    });
+    const client = new ClawtrateClient(testHost(gateway, storage), {
+      ...FAST,
+      localConnect: () => route(gateway, () => true).sockets,
+    });
+    await client.start();
+    await until(() => client.state.connection.status === "connected");
+    return { gateway, storage, client };
+  }
+
+  it("saves the identity at the first hello, and keeps the pairing while it answers the same", async () => {
+    const identity = { id: "gateway-a" };
+    const { gateway, storage, client } = await routed(identity);
+    try {
+      await until(() => storage.data.get("connection")!.includes("gateway-a"));
+      expect(JSON.parse(storage.data.get("connection")!)).toMatchObject({
+        route: ROUTE,
+        gatewayId: "gateway-a",
+      });
+      gateway.dropAll();
+      await until(
+        () => gateway.connects.length === 2 && client.state.connection.status === "connected",
+      );
+      await sleep(100);
+      expect(storage.data.has(tokenKey(URL))).toBe(true);
+      expect(client.state.connection.status).toBe("connected");
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("drops this device's token, and stops, when the route reports another identity", async () => {
+    const identity = { id: "gateway-a" };
+    const { gateway, storage, client } = await routed(identity);
+    try {
+      await until(() => storage.data.get("connection")!.includes("gateway-a"));
+      // Another gateway answers on the same profile and port now.
+      identity.id = "gateway-b";
+      gateway.dropAll();
+      await until(() => client.state.connection.error?.code === ROUTE_IDENTITY_CHANGED);
+      expect(storage.data.has(tokenKey(URL))).toBe(false);
+      expect(client.state.connection.status).toBe("error");
+      // Not used again until this device pairs there again: nothing reconnects by itself.
+      const connects = gateway.connects.length;
+      await sleep(300);
+      expect(gateway.connects).toHaveLength(connects);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("an ordinary gateway, saved without a route, saves no identity and loses nothing", async () => {
+    const gateway = readGateway();
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway-a" });
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL, token: null }),
+      [tokenKey(URL)]: SAVED,
+    });
+    const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+    try {
+      await client.start();
+      await until(() => client.state.connection.gatewayId === "gateway-a");
+      await sleep(100);
+      expect(JSON.parse(storage.data.get("connection")!)).toEqual({ url: URL, token: null });
+    } finally {
+      client.stop();
+    }
   });
 });

@@ -199,9 +199,9 @@ export function testHost(gateway: FakeGateway, storage = memoryStorage()): Clawt
 
 /** Poll until `check` passes or a few seconds elapse. */
 export async function until(check: () => boolean, timeoutMs = 4000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (!check()) {
-    if (Date.now() > deadline) throw new Error("condition not met in time");
+  // Counted in waits, not read from a clock: a test can pin `Date.now` to one millisecond.
+  for (let waits = Math.ceil(timeoutMs / 10); !check(); waits -= 1) {
+    if (waits <= 0) throw new Error("condition not met in time");
     await sleep(10);
   }
 }

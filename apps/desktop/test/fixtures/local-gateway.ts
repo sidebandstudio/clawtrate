@@ -89,10 +89,13 @@ export type DevGateway = {
  * Starts the instance and waits until it listens. `approval`: the gateway's
  * local auto-approval off, as every development instance has it; otherwise
  * at OpenClaw's own default, as `--default-local-pairing` leaves it.
+ * `elsewhere`: the gateway loads its settings from a file outside its profile
+ * folder (OpenClaw's `OPENCLAW_CONFIG_PATH`), and the profile's own
+ * `openclaw.json` says the same.
  */
 export async function startGateway(
   bin: string,
-  options: { approval: boolean },
+  options: { approval: boolean; elsewhere?: boolean },
 ): Promise<DevGateway> {
   const home = realpathSync(mkdtempSync(join(tmpdir(), "clawtrate-local-gateway-")));
   chmodSync(home, 0o700);
@@ -100,22 +103,24 @@ export async function startGateway(
   mkdirSync(state, { mode: 0o700 });
   const port = await freePort();
   const token = randomBytes(24).toString("hex");
-  const config = join(state, "openclaw.json");
-  writeFileSync(
-    config,
-    JSON.stringify({
-      gateway: {
-        mode: "local",
-        port,
-        bind: "loopback",
-        auth: { mode: "token", token },
-        ...(options.approval ? { nodes: { pairing: { autoApproveLocal: false } } } : {}),
-      },
-      discovery: { mdns: { mode: "off" } },
-      update: { checkOnStart: false },
-    }),
-    { mode: 0o600 },
-  );
+  const canonical = join(state, "openclaw.json");
+  let config = canonical;
+  if (options.elsewhere) {
+    mkdirSync(join(home, "elsewhere"), { mode: 0o700 });
+    config = join(home, "elsewhere", "openclaw.json");
+  }
+  const settings = JSON.stringify({
+    gateway: {
+      mode: "local",
+      port,
+      bind: "loopback",
+      auth: { mode: "token", token },
+      ...(options.approval ? { nodes: { pairing: { autoApproveLocal: false } } } : {}),
+    },
+    discovery: { mdns: { mode: "off" } },
+    update: { checkOnStart: false },
+  });
+  for (const file of new Set([canonical, config])) writeFileSync(file, settings, { mode: 0o600 });
   const node = process.env.OPENCLAW_NODE ?? process.execPath;
   const env = {
     HOME: home,
