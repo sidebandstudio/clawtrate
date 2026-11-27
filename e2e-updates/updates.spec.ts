@@ -23,6 +23,7 @@ import { join } from "node:path";
 import { sidebarGateway } from "../apps/desktop/test/update/sidebar-gateway.ts";
 import { captureHostState } from "../apps/desktop/test/update/host-state.ts";
 import { readSteps } from "../apps/desktop/test/update/screen-test-steps.ts";
+import { observeRefusal } from "../apps/desktop/test/update/refusal-observation.ts";
 import { feedFor, feedServer, json, payload } from "../apps/desktop/test/update/harness.ts";
 import { fileKeyFor, FILE_EXTENSION } from "../apps/desktop/src/main/update/feed.ts";
 import { PRIVATE_DIRECTORIES_TIMEOUT_MS } from "../apps/desktop/src/main/private-update-directory.ts";
@@ -890,19 +891,22 @@ test.describe("installer refusals", () => {
           timeout: folderWait,
         })
         .toBeGreaterThan(fetched);
-      await expect
-        .poll(() =>
-          page.evaluate(async () => {
-            const s = await (window as unknown as ProbeWindow).clawtrateHost.desktopUpdates.get();
-            return (
-              (s.state.kind === "verified" ||
-                (s.state.kind === "failed" && s.state.reason === "artifact-changed")) &&
-              s.install.kind === "unavailable-in-this-build" &&
-              s.install.reason
-            );
-          }),
-        )
-        .toBe(reason);
+      // Timed, so the log says how long the host took to report it or that the wait ran out (#577).
+      await observeRefusal(reason, () =>
+        expect
+          .poll(() =>
+            page.evaluate(async () => {
+              const s = await (window as unknown as ProbeWindow).clawtrateHost.desktopUpdates.get();
+              return (
+                (s.state.kind === "verified" ||
+                  (s.state.kind === "failed" && s.state.reason === "artifact-changed")) &&
+                s.install.kind === "unavailable-in-this-build" &&
+                s.install.reason
+              );
+            }),
+          )
+          .toBe(reason),
+      );
       await expect(page.locator(".update-result dd")).toContainText(
         reason === "artifact-changed"
           ? "Couldn't verify the saved update again."
