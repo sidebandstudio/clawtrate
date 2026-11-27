@@ -1181,11 +1181,15 @@ export class OutcomeUnknownError extends Error {
   }
 }
 
-/** The parameters of a creation, identical on every ask, as the gateway's idempotency requires. */
+/**
+ * The parameters of a creation, identical on every ask, as the gateway's idempotency requires.
+ * Without its message: `sessions.create` takes no `workContext` on OpenClaw 2026.10.6 or
+ * 2026.11.10, so the first message follows by `chat.send`, which says it comes from Clawtrate
+ * (`send-marker.ts`, #743).
+ */
 function creationParams(creation: TaskCreation) {
   return {
     agentId: creation.botId,
-    message: creation.text,
     idempotencyKey: creation.id,
     ...(creation.label ? { label: creation.label } : {}),
   };
@@ -4114,8 +4118,9 @@ export class ClawtrateClient {
 
   /**
    * Create a task under a bot with its first message. `sessions.create`
-   * carries only `agentId`, `message`, `idempotencyKey` and `label`, which keep
-   * it at `operator.write`. The caller holds one interest in the new task, as
+   * carries only `agentId`, `idempotencyKey` and `label`, which keep it at
+   * `operator.write`; the message follows by `chat.send`, under the same key
+   * (`completeCreation`). The caller holds one interest in the new task, as
    * if it had called `openSession`, and releases it with `closeSession`.
    */
   async createTask(
@@ -4233,7 +4238,11 @@ export class ClawtrateClient {
     }
   }
 
-  /** The new task from a `sessions.create` answer: opened, its first message in its outbox. */
+  /**
+   * The new task from a `sessions.create` answer: opened, its first message in its outbox and on
+   * its way by `chat.send`, under the creation's key, as any message is sent (`deliver`). From
+   * here it is the task's message: a send that fails leaves it Not sent there, with Try again.
+   */
   private completeCreation(
     creation: TaskCreation,
     result: RawRecord | null,
@@ -4246,18 +4255,18 @@ export class ClawtrateClient {
       throw new OutcomeUnknownError(CREATION_UNKNOWN_WARNING);
     }
     const id = creation.id;
-    const runId = typeof result?.runId === "string" ? result.runId : null;
+    // The task was made, but the gateway says what it needs after that failed: the message waits,
+    // Not sent, for the person's Try again, rather than going to a task that may not take it.
     const runError = asRecord(result?.runError);
     const now = this.now();
     const message: OutgoingMessage = {
       id,
       text: creation.text,
       mode: "new",
-      status: runError ? "failed" : "sent",
-      runId,
-      messageSeq: typeof result?.messageSeq === "number" ? result.messageSeq : null,
-      // It went out with the task's creation.
-      leftAt: now,
+      status: runError ? "failed" : "sending",
+      runId: null,
+      messageSeq: null,
+      leftAt: null,
       createdAt: now,
       error: runError ? String(runError.message ?? "The run did not start.") : null,
       attachments: [],
@@ -4266,27 +4275,24 @@ export class ClawtrateClient {
     this.openSession(key, true);
     this.updateActivity(key, (activity, ctx) => {
       if (activity.outbox.some((each) => each.id === id)) return activity;
-      let next = startLocalRun(
+      const next = startLocalRun(
         { ...activity, outbox: [...activity.outbox, message] },
         message,
         now,
       );
-      if (runId) next = bindRun(next, id, runId);
-      if (runError) {
-        next = failRunStart(
-          next,
-          runId ?? id,
-          {
-            message: message.error!,
-            kind: typeof runError.code === "string" ? runError.code : "not-started",
-          },
-          ctx,
-        );
-      } else if (!runId) {
-        next = dropUnboundRun(next, id);
-      }
-      return next;
+      if (!runError) return next;
+      return failRunStart(
+        next,
+        id,
+        {
+          message: message.error!,
+          kind: typeof runError.code === "string" ? runError.code : "not-started",
+        },
+        ctx,
+      );
     });
+    // As any message is sent: once, under its key, while it is still to be sent.
+    if (!runError) this.enqueueDelivery(key, id);
     if (byCaller) {
       this.creations.delete(id);
       this.releaseCheckingSlot(id);
