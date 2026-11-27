@@ -23,7 +23,7 @@ import { ChevronIcon } from "../icons.tsx";
 import { type MenuEntry } from "../Menu.tsx";
 import { screenStamp, type ShownStamp } from "../stamp.ts";
 import { draftOf } from "./draft.ts";
-import { notSentDelete, notSentNote } from "./refusals.ts";
+import { notSentDelete, notSentNote, runNoteWords, switchNote, type RunNote } from "./refusals.ts";
 import { viewerZone, when, zoneCity } from "./schedule.ts";
 
 export function canAdmin(connection: ConnectionState, info: HostInfo): boolean {
@@ -32,8 +32,7 @@ export function canAdmin(connection: ConnectionState, info: HostInfo): boolean {
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
-export type RunNote =
-  { status: "starting" } | { status: "already" } | { status: "failed"; error: string };
+export type { RunNote };
 
 function assign<T>(all: Record<string, T>, id: string, value: T | null): Record<string, T> {
   const next = { ...all };
@@ -99,19 +98,7 @@ export function useRoutineActions(
         });
         if (result.status === "saved")
           announce(`${enabled ? "Resumed" : "Paused"} ${routine.name}`);
-        else
-          putNote(
-            routine.id,
-            `Couldn't ${word}: ${
-              result.status === "refused" || result.status === "unknown"
-                ? result.error
-                : result.status === "deleted"
-                  ? "it was deleted."
-                  : result.status === "not-sent"
-                    ? notSentNote(result.reason)
-                    : "it changed meanwhile."
-            }`,
-          );
+        else putNote(routine.id, switchNote(word, result));
       } catch (error) {
         putNote(routine.id, `Couldn't ${word}: ${errorText(error)}`);
       } finally {
@@ -145,15 +132,12 @@ export function useRoutineActions(
         routine.id,
         result.status === "already-running"
           ? { status: "already" }
-          : {
-              status: "failed",
-              error:
-                result.status === "not-sent"
-                  ? notSentNote(result.reason)
-                  : result.status === "unknown"
-                    ? `the gateway didn't answer (${result.error}).`
-                    : result.error,
-            },
+          : result.status === "unknown"
+            ? { status: "unknown", error: result.error }
+            : {
+                status: "failed",
+                error: result.status === "not-sent" ? notSentNote(result.reason) : result.error,
+              },
       );
       if (result.status === "already-running") {
         clearTimeout(timers.current.get(routine.id));
@@ -263,13 +247,7 @@ export function RunNoteLine({ note, paused }: { note: RunNote | undefined; pause
       data-testid="run-note"
       data-tone={note.status === "failed" ? "danger" : undefined}
     >
-      {note.status === "starting"
-        ? paused
-          ? "Starting a run. It stays paused."
-          : "Starting…"
-        : note.status === "already"
-          ? "It's already running."
-          : `Couldn't start a run: ${note.error}`}
+      {runNoteWords(note, paused)}
     </p>
   );
 }

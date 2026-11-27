@@ -11,6 +11,8 @@ import type {
 } from "@clawtrate/core";
 import {
   browserUse,
+  isTerminal,
+  lastSaidItem,
   LIVE_UPDATES_NOT_STARTED,
   updateNoticeLine,
   updateNoticeScope,
@@ -57,6 +59,7 @@ import { BudgetLine, UsageNotes } from "./usage/ConversationUsage.tsx";
 import { ArrowDownIcon, BackIcon, PanelIcon, ScreenIcon } from "./icons.tsx";
 import { SystemLine } from "./GatewayEventLine.tsx";
 import { UpdateLine } from "./UpdateLine.tsx";
+import { SkillNoteLine, type SkillNoteItem } from "./SkillNotes.tsx";
 import { Markdown } from "./Markdown.tsx";
 import { itemText, MessageProvider, MessageUnit, ReplyQuote, ThreadView } from "./Messages.tsx";
 import { SentFiles } from "./SentFiles.tsx";
@@ -325,7 +328,8 @@ function TranscriptView({
   // its identity, never a count: a row pushed off the top of a full page, even a merged turn's
   // first row, and the "Show commands" switch are not new activity.
   const contentSize = `${items.length}:${itemIdentity(items.at(-1)?.id)}:${live.signature}`;
-  const lastSaid = items.at(-1);
+  // A skill note, folded or not, is not new activity: it is not what the bot said (F-560).
+  const lastSaid = lastSaidItem(items);
   const activity = `${lastSaid?.messageId ?? itemIdentity(lastSaid?.id)}:${live.signature}`;
   const [atEnd, setAtEnd] = useState(true);
   const [seenActivity, setSeenActivity] = useState(activity);
@@ -440,6 +444,8 @@ function TranscriptView({
   let previous: number | null = null;
   const endingsBefore = live.endingsBefore;
   for (const item of items) {
+    // A skill note folded into its run's line is drawn there (F-560).
+    if (live.folded.has(item.id)) continue;
     if (item.role === "user") {
       // What ended the turn before this message sits under that turn: above the time
       // that introduces this message, which is not when that turn's work happened.
@@ -466,6 +472,8 @@ function TranscriptView({
             line={updateLine}
             {...(item.messageId ? { messageId: item.messageId } : {})}
           />
+        ) : item.skillNote ? (
+          <SkillNoteLine notes={[item as SkillNoteItem]} taskKey={task.key} botName={bot.name} />
         ) : item.role === "system" ? (
           <SystemLine item={item} />
         ) : live.echoes.has(item.id) ? null : (
@@ -621,6 +629,8 @@ type LiveParts = {
   incomplete: Set<string>;
   /** History items that only repeat a failed run's error, which its card already says. */
   echoes: Set<string>;
+  /** Skill notes folded into the line of the run they follow, which draws them (F-560). */
+  folded: Set<string>;
   /** Runs whose cards the foot draws under their message, so the trailing cards leave them out. */
   drawsCards: Set<string>;
   /** Runs drawn from the engine's state rather than from history. */
@@ -673,6 +683,23 @@ export function buildLive(
   const incomplete = new Set<string>();
   const echoes = new Set<string>();
   const drawsCards = new Set<string>();
+  const folded = new Set<string>();
+  const itemIndex = (id: string | null) =>
+    id === null ? transcript.items.length : transcript.items.findIndex((item) => item.id === id);
+  // The gateway's skill notes between a run's message and the next message of yours: they follow
+  // that run, and fold into its line.
+  const notesAfter = (anchor: string, next: string | null): SkillNoteItem[] => {
+    const from = itemIndex(anchor);
+    const to = itemIndex(next);
+    if (from < 0 || to < 0) return [];
+    const notes = transcript.items
+      .slice(from + 1, to)
+      .filter(
+        (item): item is SkillNoteItem => item.skillNote !== undefined && !folded.has(item.id),
+      );
+    for (const note of notes) folded.add(note.id);
+    return notes;
+  };
   const shown = new Set(transcript.items.map((item) => item.id));
   const signature: string[] = [];
 
@@ -699,7 +726,12 @@ export function buildLive(
         transcript={transcript}
         taskKey={task.key}
       />,
-      <RunLine key={`line-${run.id}`} run={run} />,
+      <RunLine
+        key={`line-${run.id}`}
+        run={run}
+        notes={isTerminal(run.state) ? notesAfter(run.anchorItemId, at) : []}
+        botName={bot.name}
+      />,
     );
     endingsBefore.set(at, list);
     if (run.state === "stopped" || run.state === "failed") {
@@ -768,6 +800,8 @@ export function buildLive(
     }
     if (run !== active) {
       if (run.state === "failed" && run.errorItemId) echoes.add(run.errorItemId);
+      // A finished run the engine still draws folds the notes after its message, as above.
+      const anchor = run.anchorItemId;
       foot.push(
         <RunEnding
           key={`end-${run.id}`}
@@ -776,7 +810,16 @@ export function buildLive(
           transcript={transcript}
           taskKey={task.key}
         />,
-        <RunLine key={`line-${run.id}`} run={run} />,
+        <RunLine
+          key={`line-${run.id}`}
+          run={run}
+          notes={
+            anchor && shown.has(anchor) && isTerminal(run.state)
+              ? notesAfter(anchor, nextUser(anchor))
+              : []
+          }
+          botName={bot.name}
+        />,
       );
     }
   }
@@ -830,6 +873,7 @@ export function buildLive(
     endingsBefore,
     incomplete,
     echoes,
+    folded,
     drawsCards,
     engineRuns,
     signature: signature.join("|"),

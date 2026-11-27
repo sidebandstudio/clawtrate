@@ -1,0 +1,34 @@
+- status
+- region "Conversation":
+  - button "Back to bots"
+  - button "Otto, Disk almost full on the media box. Show details.": Otto
+  - button "Show work panel"
+  - region "Transcript":
+    - heading "Disk almost full on the media box" [level=1]
+    - paragraph: "Context: 18,432 of 128,000 tokens"
+    - text: Today 5:38 PM
+    - paragraph: How much space is left on the disk?
+    - toolbar "Message actions":
+      - button "Add a reaction"
+      - button "Reply in a thread"
+      - button "More"
+    - paragraph: About 40 GB are free. The cache uses most of the rest.
+    - toolbar "Message actions":
+      - button "Add a reaction"
+      - button "Reply in a thread"
+      - button "More"
+    - group:
+      - text: "Worked 1 action Saved a skill: disk-check"
+      - group: Ran a command Call made
+      - paragraph: "💾 Learned: created `disk-check` (check free space before a big download). Say \"undo\" to revert this skill change."
+      - 'button "Undo: Saved a skill: disk-check"': Undo
+      - status
+      - paragraph:
+        - text: model not reported · effort not reported run-1
+        - button "Copy run id"
+    - status
+  - button "Attach files"
+  - textbox "Message Otto"
+  - button "Send" [disabled]
+  - status
+- status
