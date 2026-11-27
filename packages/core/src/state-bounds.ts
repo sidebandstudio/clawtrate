@@ -1021,6 +1021,8 @@ export const APPROVAL_OUTCOME: Bound = object<ApprovalResolution>()({
 const SESSION_ROW_FIELDS = [
   "agentId",
   "archived",
+  // A small model's name for a task Clawtrate made (`task-names.ts`).
+  "autoLabel",
   "category",
   "channel",
   "classification",

@@ -154,6 +154,43 @@ describe("the order of a task's names", () => {
   });
 });
 
+describe("a small model's name in the order (#750)", () => {
+  // The task list, the archived list and search, each from the same row as 2026.11.10 sends it.
+  const first = (key: string) => (key === KEY ? "What I asked" : null);
+  const searched = (row: Record<string, unknown>) =>
+    readMessageSearch({
+      results: [{ sessionKey: KEY, messageId: "m1", role: "assistant", snippet: "A plan." }],
+      sessions: [row],
+    }).titles[KEY];
+  const titles = (row: Record<string, unknown>) => [
+    mapSessionRow(row, { firstMessage: first(KEY) })?.title,
+    mapArchivedRow({ ...row, archived: true }, "main", first)?.title,
+    searched(row),
+  ];
+
+  it("a typed name over the small model's, and the small model's over the gateway's title and the first message's", () => {
+    const named = { ...ROW_1110, autoLabel: "Garden plan" };
+    expect(titles({ ...named, label: "Typed" })).toEqual(["Typed", "Typed", "Typed"]);
+    // Over the gateway's placeholder, and over the title the first message makes.
+    expect(titles(named)).toEqual(["Garden plan", "Garden plan", "Garden plan"]);
+    // Over a real title the gateway supplied.
+    const titled = { ...named, displayName: "A model's title", derivedTitle: "A model's title" };
+    expect(titles(titled)).toEqual(["Garden plan", "Garden plan", "Garden plan"]);
+    // Until it arrives, the first message's title (search has none of its own: the key's).
+    expect(titles(ROW_1110)).toEqual(["What I asked", "What I asked", "New task"]);
+  });
+
+  it("an archived row that carries only `sessionKey` is read as the task list reads it", () => {
+    const { key: _key, ...row } = ROW_1110;
+    const archived = mapArchivedRow({ ...row, sessionKey: KEY, archived: true }, "main", first);
+    const listed = mapSessionRow({ ...row, sessionKey: KEY }, { firstMessage: first(KEY) });
+    expect(archived?.key).toBe(KEY);
+    expect(archived?.key).toBe(listed?.key);
+    expect(archived?.title).toBe("What I asked");
+    expect(archived?.title).toBe(listed?.title);
+  });
+});
+
 describe("a task titled from its first message", () => {
   it("made here: its message titles it once the placeholder lands (2026.11.10's event)", async () => {
     const gateway = grantingGateway();
