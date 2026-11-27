@@ -1346,10 +1346,16 @@ describe("where the Codex harness may answer a card (#606)", () => {
       { action: "ask", tools: ["write"] },
       { action: "never", tools: ["exec"] },
     ]);
+    // Where the gateway would load an installed Codex plugin, as both versions decide it.
     for (const plugins of [
       { entries: { codex: { enabled: true } } },
-      { entries: { codex: {} } },
+      { entries: { Codex: {} } },
       { allow: ["codex", "clawtrate-tool-rules"] },
+      { allow: [" CODEX ", "clawtrate-tool-rules"], entries: { codex: { enabled: true } } },
+      { installs: { codex: { source: "npm" } } },
+      { load: { paths: ["/srv/plugins/openclaw-codex"] } },
+      // A slot that names it loads it past the allow list.
+      { allow: ["clawtrate-tool-rules"], slots: { contextEngine: "codex" } },
     ]) {
       config.plugins = plugins;
       const result = h.before("main", "write", { path: "a" });
@@ -1359,11 +1365,14 @@ describe("where the Codex harness may answer a card (#606)", () => {
       );
       expect(h.before("main", "exec", { command: "ls" })?.blockReason).toMatch(/^Blocked by/);
     }
+    // Where it cannot load: off, denied, turned off in its entry, left out of an allow list.
     for (const plugins of [
       {},
       { entries: { codex: { enabled: false } } },
       { deny: ["codex"], entries: { codex: { enabled: true } } },
       { allow: ["clawtrate-tool-rules"] },
+      { allow: ["clawtrate-tool-rules"], entries: { codex: { enabled: true } } },
+      { allow: ["clawtrate-tool-rules"], installs: { codex: {} } },
     ]) {
       config.plugins = plugins;
       expect(h.before("main", "write", { path: "a" })?.requireApproval).toBeDefined();

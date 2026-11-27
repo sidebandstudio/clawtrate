@@ -368,19 +368,43 @@ export function uncheckableReason(result, why) {
 export const CHANGED_ARGUMENTS_REASON =
   "Refused by Clawtrate's rules plugin: the call's arguments changed after the plugin asked about it (another plugin's policy rewrote them). The answer was for the call the card showed. The call did not run.";
 
+const CODEX = "codex";
+/** A plugin id as the gateway compares it in its plugin lists (`normalizePluginPolicyId`). */
+const policyId = (value) => (typeof value === "string" ? value.trim().toLowerCase() : "");
+const namesCodex = (list) => Array.isArray(list) && list.some((id) => policyId(id) === CODEX);
+
 /**
  * Whether the gateway may run the Codex harness, whose native tool relay
  * defers a plugin's card to Codex's own approval and runs the call without
- * this plugin's hook after the answer: its plugin entry not turned off, or an
- * allow list naming it.
+ * this plugin's hook after the answer. It follows how OpenClaw 2026.10.6 and
+ * 2026.11.10 decide that an installed plugin loads
+ * (`resolvePluginActivationStateShared`): never with `plugins.enabled` false,
+ * `codex` in `plugins.deny` or its entry's `enabled` false; always when a
+ * memory or context-engine slot names it; never when a non-empty
+ * `plugins.allow` leaves it out. Otherwise an installed Codex plugin loads,
+ * and the plugin takes it as installed wherever the config names it at all:
+ * its entry, the allow list, its install record or a load path.
  */
 export function codexHarnessMayRun(config) {
   const plugins = isPlainObject(config?.plugins) ? config.plugins : {};
   if (plugins.enabled === false) return false;
-  if (Array.isArray(plugins.deny) && plugins.deny.includes("codex")) return false;
-  const entry = isPlainObject(plugins.entries) ? plugins.entries.codex : undefined;
-  if (isPlainObject(entry)) return entry.enabled !== false;
-  return Array.isArray(plugins.allow) && plugins.allow.includes("codex");
+  if (namesCodex(plugins.deny)) return false;
+  const entries = isPlainObject(plugins.entries) ? plugins.entries : {};
+  const entryKey = Object.keys(entries).find((key) => policyId(key) === CODEX);
+  const entry = entryKey === undefined ? undefined : entries[entryKey];
+  if (isPlainObject(entry) && entry.enabled === false) return false;
+  const slots = isPlainObject(plugins.slots) ? plugins.slots : {};
+  if (policyId(slots.memory) === CODEX || policyId(slots.contextEngine) === CODEX) return true;
+  const allow = Array.isArray(plugins.allow) ? plugins.allow : [];
+  if (allow.length > 0 && !namesCodex(allow)) return false;
+  const installs = isPlainObject(plugins.installs) ? plugins.installs : {};
+  const paths = isPlainObject(plugins.load) ? plugins.load.paths : undefined;
+  return (
+    entryKey !== undefined ||
+    namesCodex(allow) ||
+    Object.keys(installs).some((key) => policyId(key) === CODEX) ||
+    (Array.isArray(paths) && paths.some((path) => typeof path === "string" && /codex/i.test(path)))
+  );
 }
 
 /** A key-order-free text of a call's arguments, or null where it has none. */
