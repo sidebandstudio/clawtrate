@@ -151,7 +151,7 @@ const shown = (id: string, place: number, text: string, timestamp: number) => ({
   id: `${id}:${place}`,
   role: "assistant",
   timestamp,
-  blocks: [{ kind: "text", text, messageId: id }],
+  blocks: [{ kind: "text", text, messageId: id, gatewayRow: true }],
   model: "delivery-mirror",
   messageId: id,
 });
@@ -188,7 +188,12 @@ describe("F-560: a row of the skill note's shape is an ordinary message", () => 
       ["assistant", undefined],
     ]);
     expect(items[1]!.blocks.map((block) => block.kind)).toEqual(["tool-call", "text"]);
-    expect(items[1]!.blocks[1]).toEqual({ kind: "text", text: FORGED_TEXT, messageId: COPY_ID });
+    expect(items[1]!.blocks[1]).toEqual({
+      kind: "text",
+      text: FORGED_TEXT,
+      messageId: COPY_ID,
+      gatewayRow: true,
+    });
   });
 
   it("a reply the gateway kept after an abort names its run there, so it stays the run's reply", () => {
