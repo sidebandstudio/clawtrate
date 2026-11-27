@@ -426,7 +426,8 @@ export type RunError = {
   beforeReply?: true;
   /**
    * The gateway marked the end as one not to show (`suppressErrorNotice`, OpenClaw 2026.11.10),
-   * as it does for a turn it started itself that the bot answered quietly (#680).
+   * as it does for a turn no person asked for that ended with no answer (#680). Such a run fails
+   * only when its history says it answered nothing (`Run.quietEnd`).
    */
   quiet?: true;
 };
@@ -547,6 +548,22 @@ export type Run = {
    * order it came in (`not-run.ts`, #686).
    */
   startSaid?: true;
+  /**
+   * The gateway ended the run with an end it marked not to show (`suppressErrorNotice`, OpenClaw
+   * 2026.11.10): a turn no person asked for that ended with no answer. It is a quiet answer, the
+   * run `completed` with nothing to show, as 2026.10.6 ends one, unless the gateway's history
+   * holds a row of it that answered nothing (`unansweredInHistory`): then it is the failure the
+   * gateway sent. `pending` until a history read asked after the end has looked, `settled` once
+   * one found no such row (#680).
+   */
+  quietEnd?: "pending" | "settled";
+  /** While `quietEnd` is `pending`: the end as the gateway sent it, the run's error if it failed. */
+  quietError?: RunError;
+  /**
+   * History holds an assistant row of this run that answered nothing: no text and no tool call (a
+   * turn that ended with reasoning only, or empty), or one that failed. Kept through every merge.
+   */
+  unansweredInHistory?: true;
   /**
    * The anchor the run's next reasoning block is numbered from: `t.<toolCallId>`
    * of the latest tool call, `c` when a history window began inside the run
@@ -1280,6 +1297,68 @@ export function finishRun(
     finishedBeforeStop: run.state === "stopping" && to === "completed",
     textComplete: run.textComplete || to === "completed",
   };
+}
+
+/**
+ * An end the gateway marked not to show (`suppressErrorNotice`, #680): a quiet answer, ended with
+ * nothing to show and `pending` until history has been read, unless what history already holds of
+ * the run says it answered nothing. Then it is the failure the gateway sent.
+ */
+function endMarkedQuiet(run: Run, ctx: EngineContext, error: RunError, at: number | null): Run {
+  if (run.unansweredInHistory === true) return finishRun(run, "failed", ctx, error, at);
+  const ended = finishRun(run, "completed", ctx, null, at);
+  return ended === run ? run : { ...ended, quietEnd: "pending", quietError: capRunError(error)! };
+}
+
+/**
+ * An assistant row that answered nothing: no text and no tool call (reasoning only, or empty), or
+ * one that failed. OpenClaw 2026.11.10's history leaves out a row whose answer was its silent
+ * token (`NO_REPLY`), reasoning or not, and keeps every other (`shouldDropAssistantHistoryMessage`).
+ */
+export function answeredNothing(message: RawRecord): boolean {
+  if (message.role !== "assistant") return false;
+  const stopReason = str(message.stopReason);
+  if (stopReason === "aborted" || asRecord(message.openclawAbort)) return false;
+  if (stopReason === "error") return true;
+  // A row 2026.11.10's history replaced for its size: what it answered can't be told.
+  const shown = meta(message);
+  if (shown.truncated === true && shown.reason === "oversized") return true;
+  if (typeof message.content === "string") return !message.content.trim();
+  const content = Array.isArray(message.content) ? message.content : [];
+  return !content.some((part) => {
+    const block = asRecord(part);
+    if (block?.type === "toolCall" || block?.type === "tool_use") return true;
+    return block?.type === "text" && typeof block.text === "string" && block.text.trim() !== "";
+  });
+}
+
+/**
+ * Settle the quiet ends a history read has looked at (#680). A run whose history says it answered
+ * nothing fails as the gateway sent it, whenever that row was read. Any other run whose marked end
+ * was `pending` before the read was asked (`pendingBefore`) is a quiet answer, unless the read
+ * failed or could not be made (`unread`): then, with nothing to say otherwise, it is the failure.
+ */
+export function settleQuietEnds(
+  runs: Run[],
+  pendingBefore: ReadonlySet<string>,
+  unread = false,
+): Run[] {
+  let changed = false;
+  const settled = runs.map((run) => {
+    if (run.quietEnd !== "pending") return run;
+    const failed = run.unansweredInHistory === true || (unread && pendingBefore.has(run.id));
+    if (!failed && !pendingBefore.has(run.id)) return run;
+    changed = true;
+    const { quietEnd: _pending, quietError, ...rest } = run;
+    if (!failed) return { ...rest, quietEnd: "settled" as const };
+    return { ...rest, state: "failed" as const, error: quietError ?? null };
+  });
+  return changed ? settled : runs;
+}
+
+/** The runs of a task whose quiet end waits for a history read (#680). */
+export function quietPending(runs: readonly Run[]): Set<string> {
+  return new Set(runs.filter((run) => run.quietEnd === "pending").map((run) => run.id));
 }
 
 /**
@@ -2261,13 +2340,18 @@ export function applyChatEvent(
       }
       case "aborted":
         return finishRun({ ...run, ending: endingOf(payload, run.ending) }, "stopped", ctx);
-      case "error":
-        return finishRun({ ...run, ending: endingOf(payload, run.ending) }, "failed", ctx, {
+      case "error": {
+        const ended = { ...run, ending: endingOf(payload, run.ending) };
+        const error: RunError = {
           message: str(payload.errorMessage) ?? "The run failed.",
           kind: str(payload.errorKind),
           raw: rawEvent(ctx, run.id, "chat-event", payload),
           ...(payload.suppressErrorNotice === true ? { quiet: true as const } : {}),
-        });
+        };
+        return error.quiet
+          ? endMarkedQuiet(ended, ctx, error, ctx.now)
+          : finishRun(ended, "failed", ctx, error);
+      }
       default:
         return run;
     }
@@ -2553,19 +2637,17 @@ function terminalFromLifecycle(
       );
     case "blocked":
     case "abandoned":
-    case "failed":
-      return finishRun(
-        run,
-        "failed",
-        ctx,
-        {
-          message: message ?? "The run failed.",
-          kind: reason,
-          raw: rawEvent(ctx, run.id, "lifecycle-data", data),
-          ...(data.suppressErrorNotice === true ? { quiet: true as const } : {}),
-        },
-        at,
-      );
+    case "failed": {
+      const error: RunError = {
+        message: message ?? "The run failed.",
+        kind: reason,
+        raw: rawEvent(ctx, run.id, "lifecycle-data", data),
+        ...(data.suppressErrorNotice === true ? { quiet: true as const } : {}),
+      };
+      return error.quiet
+        ? endMarkedQuiet(run, ctx, error, at)
+        : finishRun(run, "failed", ctx, error, at);
+    }
   }
 }
 
@@ -3091,6 +3173,8 @@ export function runsFromHistory(
     if (message.role === "assistant") {
       lastAssistant.set(runId, message);
       run = { ...run, model: str(message.model) ?? run.model, endedAt: at ?? run.endedAt };
+      // What tells a quiet answer from a turn that ended with none (#680).
+      if (answeredNothing(message)) run = { ...run, unansweredInHistory: true };
       const content = Array.isArray(message.content) ? message.content : [];
       if (typeof message.content === "string" && message.content.trim())
         trailingThinking.set(runId, false);
@@ -3542,6 +3626,10 @@ export function mergeHistoryRuns(
       reasoningRevision: current.reasoningRevision + (reasoningIdsChanged(current, steps) ? 1 : 0),
       // A row of the run in history is the gateway's word that it ran: kept once seen.
       ...(fromRun.ranInHistory || current.ranInHistory ? { ranInHistory: true as const } : {}),
+      // So is a row of it that answered nothing (#680).
+      ...(fromRun.unansweredInHistory || current.unansweredInHistory
+        ? { unansweredInHistory: true as const }
+        : {}),
       // History's word that the gateway failed it before running it stays with the live error.
       ...(fromRun.error?.beforeReply && current.error && !current.error.beforeReply
         ? { error: { ...current.error, beforeReply: true as const } }
