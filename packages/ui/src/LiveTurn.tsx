@@ -500,7 +500,7 @@ export function RunEnding({
       {(retry?.kind === "words-cut" ||
         ((retry?.kind === "files-gone" || retry?.kind === "files-unknown") && retry.wordsCut)) && (
         <p className="turn-error-reason" data-testid="retry-words-cut">
-          This message is too long to send again from here. To try again, send it again in full.
+          The full text of this message isn't available here. To try again, send it again in full.
         </p>
       )}
       {(resend || requestId || raw || (notRun?.ways.length ?? 0) > 0) && (

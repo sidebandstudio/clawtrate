@@ -13,11 +13,15 @@ import {
   registerRunAlias,
   runsFromHistory,
   throughRunAliases,
+  type Bot,
+  type ClawtrateBridge,
   type Run,
   type TaskActivity,
   type Transcript,
   wordsCut,
 } from "@clawtrate/core";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import {
   requestBotSettings,
@@ -33,7 +37,13 @@ import {
   notRunWords,
   type RunEnding,
 } from "../src/live.ts";
-import { messageReplyOf, messageTextOf, retryPlan } from "../src/LiveTurn.tsx";
+import { BridgeProvider } from "../src/bridge.tsx";
+import {
+  messageReplyOf,
+  messageTextOf,
+  retryPlan,
+  RunEnding as RunEndingCard,
+} from "../src/LiveTurn.tsx";
 
 const KEY = "agent:otto:disk-space";
 
@@ -422,6 +432,33 @@ describe("#686: a not-run line sits only under the message its run is known to h
         withCut({ truncated: true, attachments: [{ name: "a.jpg", mimeType: "image/jpeg" }] }),
       ),
     ).toEqual({ kind: "files-gone", wordsCut: true });
+  });
+
+  it("a short message whose text the transcript's shared blocks let go is not called too long (#726)", () => {
+    const { transcript, run } = reloaded([userRow("run-a", "Hi", 1), failedRow("run-a", 2)]);
+    // Newer messages filled the transcript's blocks: this one kept no text, and says so.
+    const dropped = {
+      ...transcript,
+      items: transcript.items.map((item) =>
+        item.id === run.anchorItemId ? { ...item, blocks: [], cut: ["blocks"] } : item,
+      ),
+    } as Transcript;
+    expect(retryPlan(run, dropped)).toEqual({ kind: "words-cut" });
+    const html = renderToStaticMarkup(
+      createElement(BridgeProvider, {
+        bridge: { getState: () => ({ bots: [] }) } as unknown as ClawtrateBridge,
+        children: createElement(RunEndingCard, {
+          run,
+          bot: { id: "otto", name: "Otto" } as Bot,
+          transcript: dropped,
+          taskKey: KEY,
+        }),
+      }),
+    );
+    expect(html).toContain(
+      "The full text of this message isn&#x27;t available here. To try again, send it again in full.",
+    );
+    expect(html).not.toContain("too long");
   });
 
   it("a run that started, then failed before replying: the gateway's row says nothing more", () => {
