@@ -69,13 +69,17 @@ function shownAddress(text: string, destination: URL): boolean {
   return source?.href === destination.href && writtenHost(label) === destination.hostname;
 }
 
-/** The host as an address is written: after the scheme and any user name, before the port and path. */
+/**
+ * The host as an address is written: after the scheme and any user name, before the port and
+ * path. Only ASCII letters are lowered: any other letter, such as the Kelvin sign that the URL
+ * parser and `toLowerCase` both turn into "k", stays as written, so it never matches a parsed host.
+ */
 function writtenHost(address: string): string {
   const authority = address.replace(/^[a-z][a-z\d+.-]*:\/\//i, "").split(/[/?#\\]/, 1)[0]!;
   return authority
     .slice(authority.lastIndexOf("@") + 1)
     .replace(/:\d*$/, "")
-    .toLowerCase();
+    .replace(/[A-Z]/g, (letter) => letter.toLowerCase());
 }
 
 /** Where a link goes when it isn't out on the internet: this iPhone, or the person's own network. */

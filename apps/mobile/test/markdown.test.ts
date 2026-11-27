@@ -242,6 +242,19 @@ describe("the bot's markdown on iOS", () => {
     );
   });
 
+  it("shows the host beside text that spells it with a letter the parser folds into ASCII", () => {
+    // The Kelvin sign, which the URL parser and toLowerCase both make a Latin "k".
+    const kelvin = "\u212A.example";
+    const [hidden, written] = links(
+      `See [https://${kelvin}/](https://k.example/) and https://${kelvin}/notes.`,
+    );
+    expect(hidden).toMatchObject({ url: "https://k.example/", plain: false });
+    expect(besideLink(hidden!)).toBe("k.example");
+    expect(besideLink(written!)).toBe("k.example");
+    // Capitals in ASCII are still the address.
+    expect(besideLink(links("[HTTPS://K.EXAMPLE/](https://k.example/)")[0]!)).toBeNull();
+  });
+
   it("shows raw HTML as text", () => {
     const html = parseMarkdown("<b>bold</b>")[0]!;
     expect(
