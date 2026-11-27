@@ -19,6 +19,8 @@ import {
   MAX_SECTION_SPAN_CHARS,
   oldGuidesKeys,
   readGuideFolders,
+  SECTION_FIRST_LINES,
+  SECTION_LAST_LINES,
   withSection,
 } from "../src/guides.ts";
 import { ADMIN_SCOPES, INTERACTIVE_SCOPES } from "../src/scopes.ts";
@@ -227,6 +229,37 @@ describe("the section", () => {
     expect(findSection("See `<!-- clawtrate:guides begin` in the docs.\n").kind).toBe("none");
   });
 
+  it("writes nothing when it can't tell where its section ends, the person's text below included", () => {
+    const rules = "# My own rules\n- Never book anything on Fridays.\n- Ask before spending.\n";
+    // The real end marker deleted; the person keeps a literal one further down, in an HTML block.
+    const noEnd = edited().replace(END_LINE, "");
+    const cases = {
+      "a later end marker in a <pre> block": `${noEnd}\n${rules}\n<pre>\n${END_LINE}</pre>\n`,
+      "a later end marker on a line of its own": `${noEnd}\n${rules}\n${END_LINE}\nMore of mine.\n`,
+      "a quoted end marker, which isn't a marker line": `${noEnd}\n${rules}\n> ${END_LINE}`,
+      "a start marker with no end": `${noEnd}\n${rules}`,
+      "its first line edited": edited().replace(GUIDES_NOTICE, "<!-- mine now -->") + rules,
+      "its last line edited":
+        edited().replace("anyone else never does.", "anyone else does.") + rules,
+    };
+    for (const [name, file] of Object.entries(cases)) {
+      expect(findSection(file), name).toMatchObject({ kind: "changed", replaceable: false });
+      expect(withSection(file), name).toBe(file);
+      expect(file.endsWith(rules) || file.includes(rules), name).toBe(true);
+    }
+    // Edited in its middle, with its own first and last lines: Clawtrate's, and written over.
+    expect(findSection(edited() + rules)).toMatchObject({ kind: "changed", replaceable: true });
+    expect(withSection(edited() + rules)).toBe(`${GUIDES_SECTION}\n${BOT_FILE}${rules}`);
+  });
+
+  it("knows the first and last line of every section a build has written", () => {
+    for (const section of [GUIDES_SECTION, ...PUBLISHED_SECTIONS.map((each) => each.section)]) {
+      const inner = section.split("\n").slice(1, -2);
+      expect(SECTION_FIRST_LINES).toContain(inner[0]);
+      expect(SECTION_LAST_LINES).toContain(inner.at(-1));
+    }
+  });
+
   it("pins the text to its version: changing the text means a new version", () => {
     expect(GUIDES_SECTION.split("\n")[0]).toMatch(
       new RegExp(
@@ -432,6 +465,7 @@ describe("keeping the section current", () => {
 
   it("writes nothing to a file whose markers are out of shape, or whose section moved", async () => {
     for (const file of [
+      `${edited().replace(END_LINE, "")}\n# Mine\n- keep\n\n<pre>\n${END_LINE}</pre>\n`,
       edited().replace(END_LINE, ""),
       `# Mine\nmy rules\n\n${GUIDES_SECTION}\nMore.\n`,
       `# Mine\n\n\`\`\`\n${olderSection()}\`\`\`\nMore.\n`,
