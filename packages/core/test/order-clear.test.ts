@@ -1168,23 +1168,19 @@ describe("F-592: never clear what the person didn't confirm", () => {
     client.stop();
   });
 
-  it("a newer load reads Home for Otto but fails for Pip, so Otto's reading is dropped: nothing is sent", async () => {
+  it("a newer load reads Home for Otto but fails for Pip: Otto shows Home, and nothing is sent", async () => {
     const { client, fake, accounts, release, restore } = await heldPress();
     try {
       fake.orders.otto = { acme: ["acme:home"] };
       fake.failStatusFor = "pip";
       await client.refreshAccounts();
       expect(accounts().status).toBe("error");
-      // Otto's own read answered; it went with the rest of the load, so the page still shows Work.
-      expect(otto(accounts()).order).toMatchObject({ ids: ["acme:work"], stored: true });
+      expect(otto(accounts()).order).toMatchObject({ ids: ["acme:home"], stored: true });
       fake.failStatusFor = null;
       await release();
       expect(fake.gateway.calls("models.authOrderSet")).toHaveLength(0);
       expect(fake.orders.otto?.acme).toEqual(["acme:home"]);
-      expect(accounts().clear).toMatchObject({
-        status: "unsent",
-        error: unconfirmedOrder("unlock"),
-      });
+      expect(accounts().clear?.status).toBe("moved");
     } finally {
       restore();
     }
@@ -1397,6 +1393,34 @@ describe("F-592: never clear what the person didn't confirm", () => {
     client.stop();
   });
 
+  for (const pip of ["fails", "is still out"] as const)
+    it(`a newer load whose read for Pip ${pip} reads Work alone for Otto: the press goes on`, async () => {
+      const { client, fake, accounts, release, restore } = await heldPress();
+      try {
+        const held = holdStatusOf(fake, "pip");
+        if (pip === "fails") {
+          fake.failStatusFor = "pip";
+          held.release();
+        }
+        const loading = client.refreshAccounts();
+        await until(
+          () => otto(accounts()).evidence.readSeq === otto(accounts()).evidence.startedSeq,
+        );
+        if (pip === "fails") await loading;
+        await release();
+        expect(fake.gateway.calls("models.authOrderSet")).toEqual([
+          { provider: "acme", agentId: "otto" },
+        ]);
+        expect(accounts().clear?.status).toBe("cleared");
+        held.release();
+        await loading;
+        expect(accounts().status).toBe(pip === "fails" ? "error" : "ready");
+      } finally {
+        restore();
+      }
+      client.stop();
+    });
+
   it("the read before the send that fails: unsent, and the bot's page says the read failed", async () => {
     const { client, fake, accounts, press } = await locked();
     fake.failStatusFor = "otto";
@@ -1410,7 +1434,7 @@ describe("F-592: never clear what the person didn't confirm", () => {
     client.stop();
   });
 
-  it("a load that fails to read one bot says so on that bot alone; the others keep their reading", async () => {
+  it("a load that fails to read one bot says so on that bot alone; the others show what it read", async () => {
     const { client, fake, accounts } = await locked();
     const pip = () => accounts().bindings.find((each) => each.botId === "pip")!;
     const before = pip().evidence;
@@ -1423,9 +1447,9 @@ describe("F-592: never clear what the person didn't confirm", () => {
     });
     // As after a failed Check now: the last confirmation stands.
     expect(accountWord(otto(accounts()))).toBe("locked");
-    // Its reading is as it was; only the load's read, sent for it too, is stamped as begun.
-    expect(pip().evidence).toEqual({ ...before, startedSeq: expect.any(Number) });
-    expect(pip().evidence.startedSeq).toBeGreaterThan(before.startedSeq ?? 0);
+    expect(pip().evidence).toMatchObject({ status: before.status, error: null });
+    expect(pip().evidence.readSeq).toBe(pip().evidence.startedSeq);
+    expect(pip().evidence.readSeq).toBeGreaterThan(before.readSeq ?? 0);
     client.stop();
   });
 
