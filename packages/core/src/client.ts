@@ -394,7 +394,7 @@ import {
   type CreatedTask,
   type TaskActionContext,
 } from "./task-actions.ts";
-import { fromActivity, WaitingIndex } from "./waiting.ts";
+import { endsRun, fromActivity, WaitingIndex } from "./waiting.ts";
 import { mentionRows, slashRows, type MenuRow } from "./composer-menus.ts";
 import { listedBots } from "./gateway-bot.ts";
 import {
@@ -10897,7 +10897,9 @@ export class ClawtrateClient {
       }
       case "chat": {
         const payload = asRecord(event.payload);
-        if (payload) {
+        // Only a run's end can change the rail's word, so a streaming delta skips the scan of the
+        // task list.
+        if (payload && endsRun(payload)) {
           const before = this.keptKeys();
           // The gateway's time for it, as its row last gave it: what a later run's start is
           // compared with (`settleFailure`).
