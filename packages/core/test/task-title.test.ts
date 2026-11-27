@@ -454,6 +454,44 @@ describe("a task titled from its first message", () => {
     }
   });
 
+  it("is not a search hit's title in another session, when only its history is left to make it from", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["sessions.subscribe"] = () => ({
+      subscribed: true,
+      list: { sessions: [ROW_1110], hasMore: false },
+    });
+    gateway.handlers["chat.history"] = (params) =>
+      (params as { sessionKey: string }).sessionKey === KEY
+        ? {
+            messages: [
+              { role: "user", content: [{ type: "text", text: "Plan the garden" }], timestamp: 1 },
+            ],
+            hasMore: false,
+          }
+        : { messages: [], hasMore: false };
+    let hit = ROW_1110;
+    gateway.handlers["sessions.search"] = () => ({
+      results: [{ sessionKey: KEY, messageId: "m1", role: "assistant", snippet: "A plan." }],
+      sessions: [hit],
+    });
+    const { client } = await openTask({ gateway });
+    const kept = (client as unknown as { firstMessageTitles: Map<string, unknown> })
+      .firstMessageTitles;
+    try {
+      client.openSession(KEY);
+      await until(() => kept.has(KEY));
+      // Gone from the cache, the title is made again from this session's history.
+      kept.delete(KEY);
+      hit = { ...ROW_1110, sessionId: "0f1e2d3c-4b5a-4697-8877-665544332211" };
+      expect((await client.searchMessages("plan", null)).titles[KEY]).not.toBe("Plan the garden");
+      kept.delete(KEY);
+      hit = ROW_1110;
+      expect((await client.searchMessages("plan", null)).titles[KEY]).toBe("Plan the garden");
+    } finally {
+      client.stop();
+    }
+  });
+
   /** The key's task deleted and made again while this client didn't see it: another session. */
   const madeAgain = (gateway: { emit(event: string, payload: unknown): void }) => {
     const again = { ...ROW_1110, sessionId: "7e6d5c4b-3a29-4180-9f7e-6d5c4b3a2918" };

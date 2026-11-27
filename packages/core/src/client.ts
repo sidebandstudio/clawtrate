@@ -11803,9 +11803,11 @@ export class ClawtrateClient {
     };
     return this.search((request) =>
       searchMessages(request, query, botId, hidden, (key, session) => {
-        // A title made in another session under this key was another task's.
+        // Made first, as it may be made again from history: a title made in another session under
+        // this key was another task's.
+        const title = this.firstMessageTitle(key);
         const made = this.firstMessageTitles.get(capId(key, MAX_ID_CHARS))?.session;
-        return made && session && made !== session ? null : this.firstMessageTitle(key);
+        return made && session && made !== session ? null : title;
       }),
     );
   }
