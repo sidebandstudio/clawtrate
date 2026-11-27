@@ -272,7 +272,7 @@ for (const size of [SIZES[0]!, SIZES.at(-1)!]) {
   for (const theme of THEMES) {
     test.describe(`a start refused for Otto's own model ${size.name} ${theme}`, () => {
       test.use(contextFor(size, theme));
-      test(`#799: Couldn't start with Allow matches its baseline, ${theme}, ${size.name}`, async ({
+      test(`F-587 #799: Couldn't start with Allow matches its baseline, ${theme}, ${size.name}`, async ({
         page,
       }) => {
         await openFixture(page, MODEL_LIST, theme);
@@ -328,7 +328,7 @@ test.describe("a started task's card", () => {
     await expect(refused.getByRole("button", { name: /^Open/ })).toHaveCount(0);
   });
 
-  test("#799: Allow on a start refused for the bot's own model puts it on the list, with the same line", async ({
+  test("F-587 #799: Allow on a start refused for the bot's own model puts it on the list, with the same line", async ({
     page,
   }) => {
     await openFixture(page, MODEL_LIST);
@@ -344,7 +344,7 @@ test.describe("a started task's card", () => {
     );
   });
 
-  test("#799: below admin access the card offers no press", async ({ page }) => {
+  test("F-587 #799: below admin access the card offers no press", async ({ page }) => {
     await openFixture(page, MODEL_LIST.replace("access=admin", "access=write"));
     await scene(page, [], refusedForModel());
     const refused = page.getByRole("group", {

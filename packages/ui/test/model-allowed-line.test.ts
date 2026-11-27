@@ -15,7 +15,7 @@ const added: ModelAllowed = {
   at: 0,
 };
 
-describe("the model list's line (#799)", () => {
+describe("F-042 F-587: the model list's line (#799)", () => {
   it("says what was added to which list, and what Undo did", () => {
     expect(allowedWords(added, "Pip")).toBe(
       "Added OpenAI's gpt-5.5 to the models this gateway allows.",

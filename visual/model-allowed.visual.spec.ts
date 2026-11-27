@@ -16,7 +16,7 @@ for (const size of [SIZES[0]!, SIZES.at(-1)!]) {
     test.describe(`model list ${size.name} ${theme}`, () => {
       test.use(contextFor(size, theme));
       for (const scene of SCENES) {
-        test(`#799: ${scene.name} matches its baseline, ${theme}, ${size.name}`, async ({
+        test(`F-042 #799: ${scene.name} matches its baseline, ${theme}, ${size.name}`, async ({
           page,
         }) => {
           await openFixture(page, scene.query, theme);
@@ -35,7 +35,7 @@ for (const size of [SIZES[0]!, SIZES.at(-1)!]) {
 test.describe("the model list's line", () => {
   test.use(contextFor(SIZES[0]!));
 
-  test("#799: Allow puts the model on the list and says so, and Undo takes it out again", async ({
+  test("F-042 #799: Allow puts the model on the list and says so, and Undo takes it out again", async ({
     page,
   }) => {
     await openFixture(page, `${SETTINGS}&modellist=refused`);
@@ -54,7 +54,7 @@ test.describe("the model list's line", () => {
     await expect(settings.getByTestId("model-allowed")).toHaveCount(0);
   });
 
-  test("#799: without admin access, the reason and no button", async ({ page }) => {
+  test("F-042 #799: without admin access, the reason and no button", async ({ page }) => {
     await openFixture(
       page,
       `scene=main&${OTTO_DISK}&panel=open&tab=settings&access=write&lock=bound&modellist=refused`,

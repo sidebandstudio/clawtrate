@@ -19,7 +19,7 @@ const cfg = (config: Record<string, unknown>) => ({
 });
 const gpt = { provider: "openai", model: "gpt-5.5" };
 
-describe("which list a chosen model goes on (#799)", () => {
+describe("F-042: which list a chosen model goes on (#799)", () => {
   it("the bot's own list, when it has one: only that entry appended, nothing else", () => {
     const config = cfg({
       agents: {
@@ -125,7 +125,7 @@ describe("which list a chosen model goes on (#799)", () => {
   });
 });
 
-describe("Undo takes out that one entry, only while it is there (#799)", () => {
+describe("F-042: Undo takes out that one entry, only while it is there (#799)", () => {
   it("the entry, and nothing else, from the list that governs the bot", () => {
     const config = cfg({
       agents: {
@@ -183,7 +183,7 @@ describe("Undo takes out that one entry, only while it is there (#799)", () => {
   });
 });
 
-describe("a bot whose own model its list refuses (#799)", () => {
+describe("F-042: a bot whose own model its list refuses (#799)", () => {
   it("its own model, else the default; its account dropped", () => {
     const config = cfg({
       agents: {
@@ -210,7 +210,7 @@ function limited(fake: AccountsGateway, allow: string[]) {
   fake.config.meta = { migrations: { modelPolicyAllowlist: true } };
 }
 
-describe("setting a bot's model puts it on the list that limits the bot (#799)", () => {
+describe("F-042: setting a bot's model puts it on the list that limits the bot (#799)", () => {
   it("in the same write as the model, with the line, and Undo takes out that entry alone", async () => {
     const fake = new AccountsGateway();
     limited(fake, ["acme/dev-1"]);
@@ -317,7 +317,7 @@ describe("setting a bot's model puts it on the list that limits the bot (#799)",
   });
 });
 
-describe("Allow <model>, for a bot whose own model its list refuses (#799)", () => {
+describe("F-042 F-587: Allow <model>, for a bot whose own model its list refuses (#799)", () => {
   it("is read with the accounts, and one press writes the entry and shows the same line", async () => {
     const fake = new AccountsGateway();
     limited(fake, ["acme/dev-2"]);
