@@ -125,6 +125,10 @@ describe("#663: a message the gateway couldn't run says so, and why", () => {
         }),
       ),
     ).toBe("The gateway couldn't run this message | The gateway didn't say why.");
+    // Words that are only control and format characters are none once made one plain line (#783).
+    expect(words(failed("Error: \u0007​"))).toBe(
+      "The gateway couldn't run this message | The gateway didn't say why.",
+    );
   });
 
   it("a message the gateway accepted and then ended with no run and no word", () => {
