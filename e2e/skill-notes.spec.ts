@@ -231,8 +231,9 @@ test("F-560: a real skill note shows in the default conversation and as the bot'
   const send = { sessionKey: key, message: "#learn", idempotencyKey: key };
   if (instanceForm(openInstance(INSTANCE)).reviewsCliTurns) await gatewayCall("chat.send", send);
   else {
-    // 2026.11.10 reviews only a turn offered skill_workshop: with a profile, an admin connection's
-    // on a gateway with one profile (#609). The CLI's and the others get skill_library instead.
+    // 2026.11.10 reviews only a turn offered skill_workshop (#609): of the paired clients, an admin
+    // connection's on a gateway with one profile; the others get skill_library instead. Nor does
+    // it review a turn the CLI sent.
     const op = await openOperator(
       openInstance(INSTANCE),
       "Clawtrate skill note check",

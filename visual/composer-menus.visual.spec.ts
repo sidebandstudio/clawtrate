@@ -226,7 +226,7 @@ for (const size of SIZES) {
         await open(page, theme);
         await field(page).click();
         await page.keyboard.type("/");
-        await expect(page.getByRole("option")).toHaveCount(4);
+        await expect(page.getByRole("option")).toHaveCount(6);
         await settle(page);
         await expect(page).toHaveScreenshot(`composer-menu-${theme}-${size.name}.png`);
       });

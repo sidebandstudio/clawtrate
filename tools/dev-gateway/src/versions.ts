@@ -25,9 +25,10 @@ export type Shape = {
   extraDeniedTools: readonly string[];
   /**
    * The background skill review runs after a turn the CLI sent (`gateway call chat.send`).
-   * 2026.11.10 reviews a turn only when it was offered `skill_workshop`. A sender with a user
-   * profile, as the CLI and every paired client here are, is offered it only with `operator.admin`
-   * on a gateway with one profile; otherwise `skill_library`, its own library, takes its place.
+   * 2026.11.10 reviews a turn only when it was offered `skill_workshop`. A paired client, which
+   * has a user profile, is offered it only with `operator.admin` on a gateway with one profile;
+   * otherwise `skill_library`, the person's own library, takes its place. The CLI's shared token
+   * has no profile, and its turns weren't reviewed either.
    */
   reviewsCliTurns: boolean;
   /** The tools a start with the background skill review allows. */

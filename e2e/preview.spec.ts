@@ -5,7 +5,12 @@ import { cpSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { protocolMismatch } from "../packages/core/src/connect-errors.ts";
-import { instanceForm, openInstance, recordedStartOptions } from "../tools/dev-gateway/src/cli.ts";
+import {
+  instanceForm,
+  openInstance,
+  openOperator,
+  recordedStartOptions,
+} from "../tools/dev-gateway/src/cli.ts";
 import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
 import {
   devGateway,
@@ -1931,14 +1936,19 @@ test("F-071: / lists a skill the person saved to their own library, as theirs, i
   // A task that started before the save: the gateway has not given it the skill.
   const before = await ownTask(page, "Before the skill");
   const slug = `tide-table-${randomBytes(3).toString("hex")}`;
-  const saved = await gatewayCall<{ entry: { skillId: string; name: string; revision: string } }>(
-    "skills.library.save",
-    {
-      expectedRevision: null,
-      slug,
-      content: `---\nname: ${slug}\ndescription: Use when someone asks when the tide turns at the harbour.\n---\n\nRead the harbour's tide table and give the next high and low water.\n`,
-    },
+  // The person's own save, from a paired connection: the CLI's shared token has no profile, and
+  // the gateway keeps no personal library for it. The dev gateway has one profile, the app's too.
+  const person = await openOperator(
+    openInstance(INSTANCE),
+    "Clawtrate skill library check",
+    ["operator.read", "operator.write"],
+    [],
   );
+  const saved = (await person.request("skills.library.save", {
+    expectedRevision: null,
+    slug,
+    content: `---\nname: ${slug}\ndescription: Use when someone asks when the tide turns at the harbour.\n---\n\nRead the harbour's tide table and give the next high and low water.\n`,
+  })) as { entry: { skillId: string; name: string; revision: string } };
   try {
     const listed = (row: Locator) => row.and(page.locator(`[data-name="${slug}"]`));
     const rows = page.getByRole("listbox", { name: "Skills and commands" }).getByRole("option");
@@ -1976,11 +1986,15 @@ test("F-071: / lists a skill the person saved to their own library, as theirs, i
     expect(reply).toContain("Use the following explicitly referenced skills");
     expect(reply).toContain(saved.entry.name);
   } finally {
-    await gatewayCall("skills.library.mutate", {
-      skillId: saved.entry.skillId,
-      expectedRevision: saved.entry.revision,
-      action: "remove",
-    });
+    try {
+      await person.request("skills.library.mutate", {
+        skillId: saved.entry.skillId,
+        expectedRevision: saved.entry.revision,
+        action: "remove",
+      });
+    } finally {
+      await person.close();
+    }
   }
 });
 
