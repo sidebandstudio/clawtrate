@@ -22,7 +22,13 @@ const STAMP = Date.now().toString(36);
 const NY = "America/New_York";
 
 type Job = { id: string; name: string; state?: { nextRunAtMs?: number } };
-type RunEntry = { runId: string; runAtMs: number; status: string; sessionKey?: string };
+type RunEntry = {
+  runId: string;
+  runAtMs: number;
+  status: string;
+  sessionKey?: string;
+  usage?: Record<string, number>;
+};
 
 /** "Tue Nov 17, 8:00 AM", with "Today, " or "Tomorrow, " before it when it is: the page's words for a time. */
 function spelled(ms: number, tz: string): string {
@@ -355,6 +361,13 @@ test("F-190: shared routine runs open the recorded conversation", async () => {
     expect(ran.run?.status).toBe("ok");
     await openRoutines();
     await row(name).click();
+    if (target === "main") {
+      // On both versions the reminder is a turn of the bot's own in its main conversation:
+      // 2026.10.6 wakes its heartbeat with it, 2026.11.10 runs it as an ordinary turn (#752).
+      await expect(view()).toContainText(
+        "Juniper gets this reminder in its main conversation and answers it there with its model, or says nothing:",
+      );
+    }
     await view().getByTestId("run-row").first().click();
     if (target === "current") {
       // The run's recorded session is its own execution key, so it reads as
@@ -371,7 +384,14 @@ test("F-190: shared routine runs open the recorded conversation", async () => {
           await expect(view().getByTestId("run-not-kept")).toContainText(
             "Clawtrate can't confirm which conversation this run used.",
           );
+          // 2026.10.6 records the reminder's own text as the run's summary, not the bot's answer.
+          await expect(view().getByTestId("run-summary")).toHaveText(
+            "What the gateway recorded: A reminder.",
+          );
         } else {
+          // 2026.11.10 records the bot's answer as the run's summary, with its model and tokens.
+          await expect(view().getByTestId("run-summary")).toContainText("What the run returned: ");
+          expect(ran.run?.usage).toBeDefined();
           await expect(view().getByTestId("run-not-kept")).toContainText(
             "This run happened in Juniper's main conversation.",
           );
@@ -393,7 +413,8 @@ test("F-190: shared routine runs open the recorded conversation", async () => {
 test("F-355: a routine's page lists the 20 runs that finished most recently, in the gateway's order, when it has more", async () => {
   test.setTimeout(240_000);
   const name = `Many runs ${STAMP}`;
-  // The list needs recorded runs, so use a reminder that does not wait on a model turn.
+  // The list needs recorded runs, so use a reminder: on OpenClaw 2026.10.6 its run doesn't wait
+  // for the bot's turn; on 2026.11.10 it does, and the scripted model answers it at once (#752).
   const job = await add({
     ...scriptedRoutine(name, "main"),
     sessionTarget: "main",

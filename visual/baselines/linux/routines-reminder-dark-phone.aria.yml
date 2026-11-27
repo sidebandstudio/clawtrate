@@ -5,7 +5,7 @@
   - paragraph: Juniper
   - status: Runs every 2 hours.
   - heading "Instruction" [level=3]
-  - paragraph: "Posts a reminder in Juniper's main conversation:"
+  - paragraph: "Juniper gets this reminder in its main conversation and answers it there with its model, or says nothing:"
   - paragraph: Time to stand up and stretch.
   - heading "When to run" [level=3]
   - term: Schedule

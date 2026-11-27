@@ -381,10 +381,15 @@ function resultsWords(routine: Routine): string {
 
 function Instruction({ routine, bot }: { routine: Routine; bot: string }) {
   if (routine.payload === "agentTurn") return <p className="r-instruction">{routine.text}</p>;
+  // On both OpenClaw versions the bot gets the reminder in a turn of its own and may answer it
+  // (docs/decisions.md, "What a reminder does").
   if (routine.payload === "systemEvent")
     return (
       <>
-        <p className="r-hint">Posts a reminder in {bot}&apos;s main conversation:</p>
+        <p className="r-hint">
+          {bot} gets this reminder in its main conversation and answers it there with its model, or
+          says nothing:
+        </p>
         <p className="r-instruction">{routine.text}</p>
       </>
     );
@@ -692,7 +697,9 @@ function RunView({
             <strong>Clawtrate can&apos;t confirm which conversation this run used.</strong> The
             gateway recorded no session for it, and the routine may have been edited since it ran.
           </p>
-          {returned}
+          {/* A reminder's run on OpenClaw 2026.10.6 records the reminder's own text here, not the
+              bot's answer (docs/decisions.md, "What a reminder does"). */}
+          <p data-testid="run-summary">What the gateway recorded: {run.summary ?? outcome.text}</p>
         </Note>
       ) : read.status === "loading" ? (
         <p className="r-hint">Loading this run…</p>
