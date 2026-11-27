@@ -24,6 +24,7 @@ export const JOBS: readonly (readonly string[])[] = [
     "F-427:", // 6
     "F-063 F-065:", // 24, waits ten minutes after its first message for a stamp
     "F-020 F-323:", // 18
+    "F-115:", // not run there yet: about 15, as F-557, which pairs at a protected address too
   ],
   [
     "on iPhone at the largest text size", // 10
@@ -55,6 +56,7 @@ export const OWN_START: readonly string[] = [
   "on iPhone, a long bot name",
   "F-017:",
   "F-557:", // pairs at a loopback address and at a protected one of its own
+  "F-115:", // pairs at a protected address of its own
 ];
 
 /** A check that starts where another leaves the app, so both run in one job, in this order. */

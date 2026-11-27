@@ -43,6 +43,8 @@ import { ENSEMBLE } from "../src/presentation/ensemble.ts";
 import { noTasksBody, TASK_WORDS } from "../src/presentation/summary.ts";
 import { CONVERSATION_WORDS } from "../src/presentation/conversation-words.ts";
 import { SENT_PICTURE_LINES, sentPictureAlt } from "../src/presentation/sent-files.ts";
+import { BOT_FILE_WORDS } from "../src/presentation/bot-files.ts";
+import { ATTACH_TEXT } from "../../../tools/dev-gateway/src/scripted-files.ts";
 import { rowTime, stampTime } from "../../../packages/ui/src/format.ts";
 import { addressWords, SETTINGS_WORDS } from "../src/presentation/gateway-state.ts";
 import { WebSocket, WebSocketServer } from "ws";
@@ -2084,6 +2086,80 @@ describe("the iOS app", () => {
       ]);
     } finally {
       await loopback?.stop();
+      await front?.close();
+      await gatewayCall("sessions.delete", { key: own.key, deleteTranscript: true }).catch(
+        () => {},
+      );
+    }
+  });
+
+  it("F-115: on iPhone, a file a bot attaches shows under its message with a document icon, its name and size, and Save opens the share sheet for it at once, from a file of the app's own that is gone once the sheet closes", async () => {
+    // The scripted bot writes a two-page PDF and a text note and hands both over (`#attach`).
+    const own = await gatewayTask("pip", "File check");
+    let front: Awaited<ReturnType<typeof protectedFront>> | null = null;
+    // A line the PDF holds, and nothing else the app keeps: where the shared file is.
+    const inPdf = "Lake loop review";
+    try {
+      await runOnGateway("pip", own.key, "#attach");
+      await until("the reply's files in history", async () => {
+        const history = await gatewayCall<{ messages?: unknown[] }>("chat.history", {
+          sessionKey: own.key,
+          limit: 20,
+        });
+        const text = JSON.stringify(history.messages ?? []);
+        return text.includes('"reviews-draft.pdf"') && text.includes('"reviews.txt"');
+      });
+      // Files load only from a protected address, as a person's pictures do (F-557).
+      front = await protectedFront(Number(new URL(env.gateway).port));
+      launch({ fresh: true, devGateway: front.url });
+      await steps("file-connect", [
+        waitFor({ id: "welcome" }),
+        tap({ id: "connect-a-gateway" }),
+        ...typeAddress(front.url, env.token),
+        waitFor({ id: "pairing" }, 90_000),
+      ]);
+      devGateway("approve");
+      const pdf = { id: "bot-file-info", text: lit("reviews-draft.pdf, 1 KB") };
+      const save = { id: "bot-file-save", text: lit("Save reviews-draft.pdf") };
+      await steps("file-row", [
+        waitFor({ id: "bot-pip" }, 120_000),
+        tap({ id: "bot-pip" }),
+        waitFor({ id: `task-${lit(own.key)}` }, 60_000),
+        tap({ id: `task-${lit(own.key)}` }),
+        waitFor(lit(ATTACH_TEXT), 60_000),
+        scrollTo({ id: "bot-file-info", text: lit("reviews.txt, 1 KB") }, "DOWN"),
+        see(pdf),
+        see({ id: "bot-file-info", text: lit("reviews.txt, 1 KB") }),
+        see(save),
+        see({ id: "bot-file-save", text: lit("Save reviews.txt") }),
+        notSee("MEDIA:"),
+        // Nothing is read before Save.
+        notSee({ id: "bot-file-note" }),
+      ]);
+      await shoot("bot-files-ready");
+      expect(containerHits([inPdf])).toEqual([0]);
+      expect(front.requests.filter((request) => request.url.startsWith("/api/chat/media"))).toEqual(
+        [],
+      );
+
+      // Save: the sheet opens with no question first, for the file the app wrote of its own.
+      await steps("file-sheet", [tap(save), waitFor("Save to Files", 60_000)]);
+      await shoot("bot-files-share-sheet");
+      expect(containerHits([inPdf])[0]).toBeGreaterThan(0);
+      const asked = front.requests.filter((request) => request.url.startsWith("/api/chat/media"));
+      expect(asked).toHaveLength(1);
+      expect(asked[0]!.method).toBe("GET");
+      expect(asked[0]!.cookie).toBeUndefined();
+
+      // Closed without choosing: the row is ready again and the file is gone.
+      await steps("file-sheet-closed", [
+        tap({ text: "Close" }),
+        waitGone("Save to Files", 30_000),
+        see(save),
+        notSee({ id: "bot-file-note", text: lit(BOT_FILE_WORDS.saved) }),
+      ]);
+      await until("the shared file deleted", async () => containerHits([inPdf])[0] === 0);
+    } finally {
       await front?.close();
       await gatewayCall("sessions.delete", { key: own.key, deleteTranscript: true }).catch(
         () => {},
