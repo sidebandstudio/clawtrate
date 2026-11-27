@@ -27,16 +27,17 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 type Engine = { client: ClawtrateClient; close: () => Promise<void> };
 
-/** A run's end, as the gateway sends it: a lifecycle end or error, or a terminal chat event. */
-function endsRun(data: unknown): boolean {
+/** A run's end in the task, as the gateway sends it: a lifecycle end or error, or a terminal chat event. */
+function endsRun(data: unknown, key: string): boolean {
   if (typeof data !== "string") return false;
   const frame = JSON.parse(data) as {
     type?: string;
     event?: string;
-    payload?: { stream?: string; state?: string; data?: { phase?: string } };
+    payload?: { sessionKey?: string; stream?: string; state?: string; data?: { phase?: string } };
   };
   if (frame.type !== "event") return false;
   const p = frame.payload;
+  if (p?.sessionKey !== key) return false;
   return (
     (frame.event === "agent" &&
       p?.stream === "lifecycle" &&
@@ -46,11 +47,12 @@ function endsRun(data: unknown): boolean {
 }
 
 /**
- * Sockets on which a run's end, and every event after it, reach the client `ms` late and in their
- * order, while answers to its requests come at once: a loaded machine's slow end, made sure. A
- * history read the gateway answers in that time is answered while the client still draws the run.
+ * Sockets on which the end of a run in the task `key()` names, and every event after it, reach the
+ * client `ms` late and in their order, while answers to its requests come at once: a loaded
+ * machine's slow end, made sure. A history read the gateway answers in that time is answered while
+ * the client still draws the run.
  */
-function slowEnds(create: WebSocketFactory, ms: number): WebSocketFactory {
+function slowEnds(create: WebSocketFactory, ms: number, key: () => string): WebSocketFactory {
   return (url) => {
     const socket = create(url);
     let held: Array<{ data: unknown }> | null = null;
@@ -73,7 +75,7 @@ function slowEnds(create: WebSocketFactory, ms: number): WebSocketFactory {
         typeof event.data === "string" &&
         (JSON.parse(event.data) as { type?: string }).type === "event";
       if (held && isEvent) return void held.push(event);
-      if (!held && endsRun(event.data)) {
+      if (!held && endsRun(event.data, key())) {
         held = [event];
         setTimeout(() => {
           const out = held ?? [];
@@ -89,7 +91,10 @@ function slowEnds(create: WebSocketFactory, ms: number): WebSocketFactory {
 }
 
 /** A client paired with this run's instance, with write access. */
-async function engine(name: string, options: { slowEndMs?: number } = {}): Promise<Engine> {
+async function engine(
+  name: string,
+  options: { slowEnd?: { ms: number; key: () => string } } = {},
+): Promise<Engine> {
   const inst = openInstance(INSTANCE);
   const connection = readDevConnection(inst.connectionFile)!;
   const dataDir = mkdtempSync(join(tmpdir(), "clawtrate-e2e-engine-"));
@@ -97,8 +102,9 @@ async function engine(name: string, options: { slowEndMs?: number } = {}): Promi
     dataDir,
     client: { displayName: `Clawtrate ${name}`, version: "0.0.0", platform: process.platform },
   });
-  const host = options.slowEndMs
-    ? { ...node, createWebSocket: slowEnds(node.createWebSocket, options.slowEndMs) }
+  const slow = options.slowEnd;
+  const host = slow
+    ? { ...node, createWebSocket: slowEnds(node.createWebSocket, slow.ms, slow.key) }
     : node;
   const client = new ClawtrateClient(host, {});
   await client.start();
@@ -315,10 +321,12 @@ function heldReplies(client: ClawtrateClient, key: () => string) {
 }
 
 test("#872: while a run still draws its reply, history's row of that reply is known as the reply's", async () => {
-  // The run's end reaches this client two seconds late, so the history read the answer's row
+  // The run's end reaches this client three seconds late, so the history read the answer's row
   // brings is answered while the run is still drawn: the moment F-551 met on loaded runners.
-  const { client, close } = await engine("reply drawn once check", { slowEndMs: 2_000 });
   let key = "";
+  const { client, close } = await engine("reply drawn once check", {
+    slowEnd: { ms: 3_000, key: () => key },
+  });
   const { held, stop } = heldReplies(client, () => key);
   try {
     key = await openNewTask(client, "reply-once");
