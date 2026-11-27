@@ -26,7 +26,7 @@
         - listitem:
           - button "Show all 14"
     - listitem:
-      - button "Juniper, waiting for you, 3 tasks, unread, research, primary bot":
+      - button "Juniper, waiting for you, 3 tasks, unread, research":
         - text: Juniper research
         - time: now
         - text: Waiting for you

@@ -107,7 +107,7 @@ describe("the computer plugin's contract addition", () => {
       botBrowsers: { bots: ["nobody"], drainTimeoutMs: 1, renewTimeoutMs: 1 },
     };
     expect(additionProblems(addition, { ...PLUGIN_RULE, manifestId: "p" })).toEqual([
-      "botBrowsers.bots must be 1 to 4 different seeded bots (main, otto, marlow, pip)",
+      "botBrowsers.bots must be 1 to 4 different seeded bots (main, clawtrate-main-bot, otto, marlow, pip)",
       "botBrowsers.drainTimeoutMs must be one of 2000, 5000, 15000",
       "botBrowsers.renewTimeoutMs must be one of 6000, 10000, 20000",
     ]);

@@ -4,7 +4,7 @@
 // spec. A preview host of its own, granted the interactive tier, turns
 // the setting off and on in Settings; the scripted model's record of each
 // request shows whether the guide reached the system prompt of each of the
-// four seeded bots. The switch showing at all proves the hello lists the
+// five seeded bots. The switch showing at all proves the hello lists the
 // plugin's methods. The setting is left on, as it started.
 //
 // The instance is this file's own: started in its beforeAll and reset in its
@@ -140,7 +140,7 @@ test.beforeAll(async ({ browser }) => {
   saveRecord(RECORDS, record);
   // Its own gateway, never the one the other specs share: what it leaves stays there.
   expect(INSTANCE).not.toBe(process.env.CLAWTRATE_DEV_INSTANCE);
-  // Seeded for its four bots, with the voice plugin and its conversation hook (F-527).
+  // Seeded for its five bots, with the voice plugin and its conversation hook (F-527).
   process.stdout.write(
     devGateway(INSTANCE, "start", "--run-id", runId, "--with-plugin", "clawtrate-voice"),
   );
@@ -270,9 +270,10 @@ async function openVoice() {
 
 test("F-527: with Bot voice on each seeded bot's prompt carries the plugin's guide, and turning it off removes it", async () => {
   test.setTimeout(300_000);
-  // The four seeded bots, each with a task that already exists.
+  // The five seeded bots (the gateway's own `main`, Juniper the Main Bot, Marlow, Otto and Pip),
+  // each with a task that already exists.
   const { agents } = await gateway.request<{ agents: { id: string }[] }>("agents.list", {});
-  expect(agents).toHaveLength(4);
+  expect(agents).toHaveLength(5);
   // One task per bot, kept across the toggle: a guide cached in an open conversation would show.
   const tasks: string[] = [];
   for (const agent of agents) {
