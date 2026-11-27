@@ -24,17 +24,20 @@ export function filesSayUntouched(answer: unknown, botId: string): boolean {
   const record = asRecord(answer);
   if (!record || !Array.isArray(record.files)) return false;
   if (record.agentId !== undefined && record.agentId !== botId) return false;
-  const files: { name: string; missing: boolean }[] = [];
+  let bootstrap = false;
+  let memory = false;
+  let anyPresent = false;
   for (const entry of record.files) {
     const file = asRecord(entry);
     if (!file || typeof file.name !== "string") return false;
     if (file.missing !== undefined && typeof file.missing !== "boolean") return false;
-    files.push({ name: file.name, missing: file.missing === true });
+    if (file.missing === true) continue;
+    anyPresent = true;
+    if (file.name === "BOOTSTRAP.md") bootstrap = true;
+    if (file.name === "MEMORY.md") memory = true;
   }
-  if (files.length === 0) return false;
-  const present = (name: string) => files.some((file) => file.name === name && !file.missing);
-  if (present("MEMORY.md")) return false;
-  return present("BOOTSTRAP.md") || files.every((file) => file.missing);
+  if (record.files.length === 0 || memory) return false;
+  return bootstrap || !anyPresent;
 }
 
 type Deps = {
