@@ -1392,7 +1392,16 @@ export class BotNames {
     for (let attempt = 0; attempt < RECORD_WRITE_ATTEMPTS; attempt += 1) {
       const { record, raw } = await this.readRecord(op);
       if (!record) return "unavailable";
-      const base = settled(record, this.ctx.bots(), this.ctx.now());
+      // An Undo's claim in what was just read is confirmed only from a list fetched now, after it,
+      // on this operation's connection.
+      let fresh = false;
+      if (record.claims.some((each) => each.undo) && this.current(op)) {
+        fresh = await this.ctx.refreshBots().then(
+          () => this.current(op),
+          () => false,
+        );
+      }
+      const base = settled(record, this.ctx.bots(), this.ctx.now(), fresh);
       const next = change(base);
       if (typeof next === "string") return next;
       const value = fitNameRecord({ ...next, rev: record.rev + 1 });
@@ -1511,17 +1520,25 @@ export class BotNames {
  * The record with its claims settled against the name the gateway lists. A claim whose change
  * the bot list shows has landed is let go whatever its age: a rename whose bot has its name is
  * marked done and counted, an Undo whose bot has the name before is marked undone and its edit
- * declined. A claim abandoned past `CLAIM_EXPIRY_MS` is let go too, and a rename it held that
- * never landed is taken back. Any other claim stays as it is.
+ * declined, but only from a bot list fetched after the record holding that claim was read
+ * (`fresh`): a list from before could show the name before and confirm an Undo that never landed.
+ * A claim abandoned past `CLAIM_EXPIRY_MS` is let go too, and a rename it held that never landed
+ * is taken back. Any other claim stays as it is.
  */
-export function settled(record: NameRecord, bots: readonly Bot[], now: number): NameRecord {
+export function settled(
+  record: NameRecord,
+  bots: readonly Bot[],
+  now: number,
+  fresh = false,
+): NameRecord {
   let next: NameRecord = record;
   for (const claim of record.claims) {
     const name = bots.find((bot) => bot.id === claim.bot)?.name;
     const entry = next.changes.find((each) => each.run === claim.run && each.bot === claim.bot);
     const stale = now - claim.at >= CLAIM_EXPIRY_MS;
     const live = !!entry && entry.undone === undefined;
-    const landedHere = live && name === (claim.undo ? entry.from : entry.to);
+    const landedHere =
+      live && name === (claim.undo ? entry.from : entry.to) && (!claim.undo || fresh);
     if (!landedHere && !stale) continue;
     next = { ...next, claims: next.claims.filter((each) => each !== claim) };
     if (!live) continue;

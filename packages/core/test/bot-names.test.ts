@@ -1579,6 +1579,48 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
     expect(gw.kept().claims).toEqual([]);
   });
 
+  it("F-552: another device's Undo is confirmed only from a bot list fetched after its claim", async () => {
+    const gw = gateway();
+    // B's and C's bot lists are from before the rename: they still show Pip.
+    const b = device(gw, { cached: true });
+    const c = device(gw, { cached: true });
+    const a = device(gw);
+    await a.engine.afterRun("pip", KEY, "run-1");
+    // A has claimed its Undo, which hasn't landed: the gateway lists Juniper.
+    const kept = gw.kept();
+    gw.state.record = {
+      ...kept,
+      claims: [{ bot: "pip", op: runTag("undo-a"), run: runTag("run-1"), at: NOW, undo: true }],
+    } as unknown;
+    // B writes the record for a rename of its own.
+    gw.state.file = "- **Name:** Maple\n";
+    await b.engine.afterRun("otto", KEY, "run-2");
+    expect(gw.state.updates).toEqual(["Juniper", "Maple"]);
+    const after = gw.kept();
+    expect(after.changes.find((each) => each.bot === "pip")!.undone).toBeUndefined();
+    expect(after.declined).toEqual([]);
+    expect(after.claims.some((each) => each.undo)).toBe(true);
+
+    // The list can't be fetched as the record is written: C's own, from before, confirms nothing.
+    const refresh = c.ctx.refreshBots;
+    let fails = 1;
+    c.ctx.refreshBots = async () => {
+      if (fails-- > 0) throw new Error("no answer");
+      return refresh();
+    };
+    gw.state.file = "- **Name:** Thistle\n";
+    await c.engine.afterRun("otto", KEY, "run-3");
+    expect(gw.kept().changes.find((each) => each.bot === "pip")!.undone).toBeUndefined();
+
+    // A's Undo lands: a list fetched now shows it, and the next write here confirms it.
+    gw.state.bots = gw.state.bots.map((each) =>
+      each.id === "pip" ? { ...each, name: "Pip" } : each,
+    );
+    gw.state.file = "- **Name:** Birch\n";
+    await c.engine.afterRun("otto", KEY, "run-4");
+    expect(gw.kept().changes.find((each) => each.bot === "pip")!.undone).toBe(NOW);
+  });
+
   it("F-552: a claim's entry is never the one the record's room drops", () => {
     const changes = Array.from({ length: 9 }, (_, n) =>
       change({ bot: `bot-${n}`, run: runTag(`r${n}`), done: NOW }),
