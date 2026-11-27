@@ -129,7 +129,7 @@
       return `<div class="gs-row"><div class="gs-row-main"><span class="gs-row-title">${b.name}</span><span class="gs-row-sub">${sub}</span></div><div class="gs-row-end">${btn("Change", `data-size="sm" aria-label="Change ${b.name}'s model"`, "quiet")}</div></div>`;
     }).join("");
     const done = state.done
-      ? `<div class="gs-done" role="status">${ICON.check}<span class="gs-done-text">Default model is now ${esc(m.name)}, on ${esc(m.account)}.</span><button type="button" class="gs-link" data-action="undo-model">Undo</button></div>`
+      ? `<div class="gs-done" role="status">${ICON.check}<span class="gs-done-text">Default model is now ${esc(m.name)}, on ${esc(m.account)}.</span><button type="button" class="gs-link" data-action="undo-model">Put back ${esc(model(state.undoModel).name)}</button></div>`
       : "";
     const body =
       readOnlyNote() +
@@ -157,7 +157,7 @@
       (state.telegram
         ? `<div class="gs-row"><span class="gs-mark" style="--mark:#2a9fd6" aria-hidden="true">T</span><div class="gs-row-main"><span class="gs-row-title">Telegram</span><span class="gs-row-sub">Juniper answers · only you can message it</span></div><div class="gs-row-end"><span class="gs-tag" data-tone="ok">Connected</span>${btn("Open", 'data-size="sm"', "quiet")}</div></div>`
         : "") +
-      `</div>${state.telegram && state.done ? `<div class="gs-done" role="status">${ICON.check}<span class="gs-done-text">Telegram is connected. Only you can message Juniper there.</span><button type="button" class="gs-link">Undo</button></div>` : ""}<div class="gs-group">Connect a chat app</div><div class="gs-tiles">${tiles}</div>`;
+      `</div>${state.telegram && state.done ? `<div class="gs-done" role="status">${ICON.check}<span class="gs-done-text">Telegram is connected. Only you can message Juniper there.</span><button type="button" class="gs-link">Disconnect</button></div>` : ""}<div class="gs-group">Connect a chat app</div><div class="gs-tiles">${tiles}</div>`;
     return { title: "Chat apps", body };
   }
 
@@ -194,7 +194,7 @@
     const row = (id, name, sub, extra = "") =>
       `<div class="gs-row"><div class="gs-row-main"><span class="gs-row-title">${name}</span><span class="gs-row-sub">${sub}</span></div><div class="gs-row-end">${extra}${sw(id, state.plugins[id], name, !state.admin)}</div></div>`;
     const done = state.done
-      ? `<div class="gs-done" role="status">${ICON.check}<span class="gs-done-text">Web search is on.</span><button type="button" class="gs-link">Undo</button></div>`
+      ? `<div class="gs-done" role="status">${ICON.check}<span class="gs-done-text">Web search is on.</span><button type="button" class="gs-link">Turn off</button></div>`
       : "";
     const body =
       readOnlyNote() +
@@ -272,17 +272,30 @@
 
   // ---- the conversation: a bot changing a setting when asked ---------------------
 
+  // A bot never applies a setting by itself: every proposal is one card (gateway-settings.md section 8).
+  function card(lines, note, primary, state_) {
+    const done = state_ ? `<p class="gs-card-state">${state_}</p>` : "";
+    const buttons = state_ ? "" : `<div class="gs-actions">${btn(primary, 'data-size="sm"', "primary")}${btn("Keep", 'data-size="sm"', "quiet")}</div>`;
+    return (
+      `<div class="gs-ask" role="group" aria-label="Juniper proposes a change">` +
+      lines.map((l) => `<p class="gs-change">${l}</p>`).join("") +
+      (note ? `<p>${note}</p>` : "") +
+      `<p class="gs-quiet">You'll see what OpenClaw changed after you press.</p>${buttons}${done}</div>`
+    );
+  }
+
   function botView() {
     const t =
       `<div class="gs-msg-you">Make Swift 2 the default for everyone</div>` +
-      `<div class="gs-msg-bot">Done. Every bot without a model of its own now uses Swift 2.</div>` +
-      `<div class="gs-line" role="status">${ICON.check}Default model is now Swift 2, on Work · <button type="button" class="gs-link">Undo</button></div>` +
+      `<div class="gs-msg-bot">Here it is. Press Change and every bot without a model of its own uses Swift 2.</div>` +
+      card(["<strong>Default model:</strong> Swift 1 → Swift 2, on Work"], "", "Change", "Changed") +
+      `<div class="gs-line" role="status">${ICON.check}Default model is now Swift 2, on Work · <button type="button" class="gs-link">Put back Swift 1</button></div>` +
       `<div class="gs-msg-you">And let my laptop reach you over Tailscale</div>` +
-      `<div class="gs-ask" role="group" aria-labelledby="ask-title"><h4 id="ask-title">Change who can reach OpenClaw?</h4>` +
-      `<p class="gs-change">This computer only → Your private network (Tailscale)</p>` +
-      `<p>Devices on your Tailscale network could then connect, with a token or an approved device.</p>` +
-      `<p>${restartWords()}</p>` +
-      `<div class="gs-actions">${btn("Change and restart", 'data-size="sm"', "primary")}${btn("Keep", 'data-size="sm"', "quiet")}</div></div>`;
+      card(
+        ["<strong>Who can reach OpenClaw:</strong> This computer only → Your private network (Tailscale)"],
+        `Devices on your Tailscale network could then connect, with a token or an approved device. ${restartWords()}`,
+        "Change and restart",
+      );
     root.innerHTML =
       banner() +
       `<div class="gs-chat"><div class="gs-chat-head"><span class="gs-avatar" aria-hidden="true">J</span>Juniper</div>` +
@@ -305,6 +318,12 @@
     // The section list on its own: what Back leads to at phone width.
     if (state.screen === "list" && !narrow) state.screen = "models";
     const views = { models: modelsSection, chat: chatSection, telegram: telegramSection, pair: pairSection, plugins: pluginsSection, all: allSection };
+    // Sections as built today: this design doesn't change them, so the prototype says so instead of drawing them.
+    const unchanged = (id) => () => ({
+      title: NAV.find(([n]) => n === id)[1],
+      body: `<p class="gs-note" style="margin-top:12px">As built today. This design doesn't change this section.</p>`,
+    });
+    for (const [id] of NAV) if (!views[id]) views[id] = unchanged(id);
     const list = state.screen === "list";
     const view = list ? { title: "", body: "" } : (views[state.screen] || modelsSection)();
     const current = navFor(state.screen);
@@ -344,9 +363,11 @@
     if (t.dataset.action === "its-me") {
       // The stand-in read-back: pairing on and only that sender let in, so "only you" is true.
       state.telegram = true;
-      go("chat");
+      state.screen = "chat";
       state.done = true;
+      state.tip = null;
       render();
+      root.querySelector("#gs-title")?.focus();
       say("Telegram is connected. Only you can message Juniper there.");
       return;
     }
