@@ -28,7 +28,7 @@ function BotFile({
   drawnOn: ShownStamp;
   canLoad: boolean;
 }) {
-  const { send, client, shareFile } = useRuntime();
+  const { send, client, shareFile, redact } = useRuntime();
   const { c } = useTheme();
   const [phase, setPhase] = useState<BotFilePhase>({ status: "ready" });
   // A row that has left the screen reads nothing more and opens no sheet.
@@ -39,11 +39,14 @@ function BotFile({
       shown.current = false;
     };
   }, []);
+  // Only the latest Save's states are shown: one taken as closed by a later share says nothing.
+  const attempt = useRef(0);
   const view = botFileView(file, phase, canLoad);
   const size = file.sizeBytes === null ? "" : fileSize(file.sizeBytes);
 
   const save = () => {
     if (view.busy) return;
+    const mine = ++attempt.current;
     const source = { getState: client.store.get, subscribe: client.store.subscribe };
     void saveBotFile(
       send,
@@ -53,13 +56,14 @@ function BotFile({
       file,
       shareFile,
       (next) => {
-        if (!shown.current) return;
+        if (!shown.current || mine !== attempt.current) return;
         setPhase(next);
         // Each state is said as it comes, as the desktop's live region says it.
         const note = botFileView(file, next, true).note;
         if (note) AccessibilityInfo.announceForAccessibility(note);
       },
       () => !shown.current,
+      redact,
     );
   };
 

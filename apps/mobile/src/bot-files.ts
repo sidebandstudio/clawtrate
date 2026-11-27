@@ -51,7 +51,9 @@ export function historyStamps(source: StateSource): {
 /**
  * Save one file: read it through core, then offer it in the share sheet, saying each state
  * as it comes (`set`). A closed sheet goes back to ready. `gone` says the row has left the
- * screen: from then on nothing more is asked or offered, and bytes already read are let go.
+ * screen: from then on nothing more is asked or offered, and bytes already read are let go; it is
+ * asked last just before the sheet would open. Why a Save failed is shown and read out only with
+ * every credential this host holds scrubbed out (`redact`): a gateway's error can echo one.
  */
 export async function saveBotFile(
   send: Send,
@@ -62,9 +64,11 @@ export async function saveBotFile(
   shareFile: ShareFile,
   set: (phase: BotFilePhase) => void,
   gone: () => boolean,
+  redact: (text: string) => string,
 ): Promise<void> {
   const artifactId = file.artifactId;
   if (artifactId === null) return;
+  const fail = (message: string) => set({ status: "failed", message: redact(message) });
   set({ status: "reading" });
   try {
     // Right after a connect this waits for the gateway to name itself.
@@ -72,19 +76,19 @@ export async function saveBotFile(
     if (gone()) return;
     const read = await send({ type: "readChatFile", key: taskKey, artifactId, stamp });
     if (read.status === "too-large") return set({ status: "too-large" });
-    if (read.status !== "content") return set({ status: "failed", message: read.message });
+    if (read.status !== "content") return fail(read.message);
     if (gone()) {
       if (read.transfer.id)
         void send({ type: "releaseFile", id: read.transfer.id }).catch(() => {});
       return;
     }
     const bytes = await collectPicture(send, read.transfer, read.bytes);
-    if (!bytes) return set({ status: "failed", message: "The file's content could not be read." });
+    if (!bytes) return fail("The file's content could not be read.");
     if (gone()) return;
     set({ status: "sharing" });
-    const outcome = await shareFile(file.name, bytes);
+    const outcome = await shareFile(file.name, bytes, () => !gone());
     set(outcome === "dismissed" ? { status: "ready" } : { status: outcome });
   } catch (error) {
-    set({ status: "failed", message: error instanceof Error ? error.message : String(error) });
+    fail(error instanceof Error ? error.message : String(error));
   }
 }
