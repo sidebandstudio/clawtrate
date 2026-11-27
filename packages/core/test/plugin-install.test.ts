@@ -465,6 +465,39 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
       expect(g.loaded).toBe(false);
     });
 
+    it("row 5i: the gateway doesn't report the hook's grant in effect: no enable", async () => {
+      // The one gateway report of the hook the plugin's code registers (its grant): a plugin
+      // that isn't a bundle can't declare its hooks.
+      const g = at(version, "fresh");
+      g.hooks.push({
+        method: "plugins.inspect",
+        nth: 2,
+        answer: (a) => ({
+          ...a,
+          grants: { hooks: { ...a.grants.hooks, allowConversationAccess: { effective: false } } },
+        }),
+      });
+      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, ARCHIVE, CONFIRM);
+      expect(outcome).toMatchObject({ stop: "mismatch", mayBeRunning: false });
+      expect(g.calls.some((c) => c.method === "plugins.setEnabled")).toBe(false);
+      expect(g.loaded).toBe(false);
+    });
+
+    it("row 5i: the hook's grant not in effect after the enable: turned off", async () => {
+      const g = at(version, "fresh");
+      g.hooks.push({
+        method: "plugins.inspect",
+        nth: 3,
+        answer: (a) => ({
+          ...a,
+          grants: { hooks: { ...a.grants.hooks, allowPromptInjection: { effective: false } } },
+        }),
+      });
+      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, ARCHIVE, CONFIRM);
+      expect(outcome).toMatchObject({ stop: "turned-off", mayBeRunning: false });
+      expect(g.loaded).toBe(false);
+    });
+
     it("row 9: a gateway reached by its address gets nothing yet", async () => {
       const g = at(version, "fresh");
       const outcome = await new PluginInstaller(contextFor(g, { route: "other" })).install(

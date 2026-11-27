@@ -238,6 +238,22 @@ export class FakeGateway {
         answer.source.spec = `@clawtrate/clawtrate-voice@${this.staged.version}`;
         answer.source.integrity = this.staged.integrity;
         answer.reviewToken = this.token;
+        // As the gateway resolves them from the entry (`buildPluginCapabilitySummary`).
+        const hooks = (this.entry?.hooks ?? {}) as Json;
+        answer.grants.hooks = {
+          allowPromptInjection: {
+            effective: hooks.allowPromptInjection !== false,
+            ...(typeof hooks.allowPromptInjection === "boolean"
+              ? { configured: hooks.allowPromptInjection }
+              : {}),
+          },
+          allowConversationAccess: {
+            effective: hooks.allowConversationAccess === true,
+            ...(typeof hooks.allowConversationAccess === "boolean"
+              ? { configured: hooks.allowConversationAccess }
+              : {}),
+          },
+        };
         return answer;
       }
       case "plugins.setEnabled": {

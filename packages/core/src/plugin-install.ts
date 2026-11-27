@@ -417,6 +417,23 @@ export class PluginInstaller {
   }
 
   /** Step 4's comparison of `plugins.inspect` with the pin, every field required. */
+  /**
+   * The hook grants the gateway reports in `plugins.inspect`'s `grants.hooks`, as it resolved
+   * them from the entry: each one the pin grants is in effect and configured as pinned, and
+   * prompt injection isn't turned off for it. A plugin that isn't a bundle can't declare its
+   * hooks (OpenClaw reports `declared.hooks: []`), so this is the gateway's one report about the
+   * hook its code registers.
+   */
+  private hookGrantsInEffect(answer: Json, pin: PluginPin): boolean {
+    const reported = rec(rec(answer.grants).hooks);
+    const pinned = rec(pin.grants.hooks);
+    if (rec(reported.allowPromptInjection).effective !== true) return false;
+    return Object.entries(pinned).every(
+      ([key, value]) =>
+        rec(reported[key]).effective === value && rec(reported[key]).configured === value,
+    );
+  }
+
   private verified(answer: Json, pin: PluginPin): string | null {
     const plugin = rec(answer.plugin);
     const source = rec(answer.source);
@@ -839,7 +856,7 @@ export class PluginInstaller {
         const inspected = await this.inspect(epoch, pin);
         // The token comes from this inspect, on a resume too (#832, 3).
         token = this.verified(inspected, pin);
-        if (token === null) throw new Stop("mismatch");
+        if (token === null || !this.hookGrantsInEffect(inspected, pin)) throw new Stop("mismatch");
         await save({ step: 6 });
       } else if (step === 7) {
         if (token === null) throw new Stop("lost", "no review token");
@@ -888,6 +905,7 @@ export class PluginInstaller {
           read.listed?.active === true &&
           read.listed.version === pin.version &&
           rec(inspected.source).integrity === pin.integrity &&
+          this.hookGrantsInEffect(inspected, pin) &&
           reported === pin.version;
         if (!ok)
           await disable(read.keptOut || read.shape === null ? "owner-settings" : "turned-off");
