@@ -276,10 +276,50 @@ describe("the bots' states", () => {
         utf8: true,
         missing: false,
         refused: null,
+        spelledApart: false,
         changedText: null,
         error: "missing scope: operator.read",
       },
     ]);
+  });
+});
+
+describe("a folder its bots' settings write two ways", () => {
+  /** Pip's and Otto's files are one file; Pip's settings name it `/srv/bots`, Otto's `path`. */
+  const written = (path: string) => {
+    const files = fakeFiles({ pip: BOT_FILE, otto: BOT_FILE }, { otto: "pip" });
+    const request = async (method: string, params: unknown) => {
+      const answer = await files.request(method, params);
+      return method === "agents.list"
+        ? {
+            ...(answer as object),
+            agents: [
+              { id: "pip", workspace: "/srv/bots" },
+              { id: "otto", workspace: path },
+            ],
+          }
+        : answer;
+    };
+    return { ...files, request };
+  };
+
+  it("is one folder when the paths differ only by a trailing separator", async () => {
+    const files = written("/srv/bots/");
+    const folders = await readGuideFolders(files.request, null);
+    expect(folders.map((f) => [f.bots, f.spelledApart])).toEqual([[["pip", "otto"], false]]);
+    await applyGuidesChange(files.request, null, { action: "auto" });
+    expect(files.sets).toHaveLength(1);
+  });
+
+  it("is one group, written only on the person's choice, when the paths differ only by case", async () => {
+    const files = written("/srv/Bots");
+    const folders = await readGuideFolders(files.request, null);
+    expect(folders.map((f) => [f.bots, f.spelledApart])).toEqual([[["pip", "otto"], true]]);
+    await applyGuidesChange(files.request, null, { action: "auto" });
+    expect(files.sets).toHaveLength(0);
+    await applyGuidesChange(files.request, null, { action: "add", bots: ["otto"] });
+    expect(files.sets).toHaveLength(1);
+    expect(files.store.get("pip")).toBe(withSection(BOT_FILE));
   });
 });
 

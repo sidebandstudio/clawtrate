@@ -108,6 +108,7 @@ export function guidesCommands(
       utf8: !notUtf8(bot),
       missing: states.get(bot) === "none" && missing.has(bot),
       refused: states.get(bot) === "none" ? (refused.get(bot) ?? null) : null,
+      spelledApart: false,
       changedText:
         states.get(bot) === "changed"
           ? GUIDES_SECTION.replace("Lead with the answer", "Lead with a short joke")

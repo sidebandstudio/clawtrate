@@ -387,6 +387,11 @@ export type GuideFolder = {
   missing: boolean;
   /** The gateway refused Clawtrate's own write of this file, and why: not tried again by itself. */
   refused: string | null;
+  /**
+   * Its bots' paths differ only by case, so it may be two folders (`guideFolders`): Clawtrate adds
+   * or updates its section only when the person asks.
+   */
+  spelledApart: boolean;
   /** The text between the markers of a changed section, for Show, cut to its bound. */
   changedText: string | null;
   error: string | null;
@@ -535,17 +540,34 @@ export async function changeGuideFile(
   }
 }
 
-/** Each bot's workspace folder, as `agents.list` names it; a bot without one stands alone. */
-export function guideFolders(agents: unknown): string[][] {
-  const groups = new Map<string, string[]>();
+/**
+ * Each bot's workspace folder, as `agents.list` names it; a bot without one stands alone. A
+ * trailing separator doesn't change the folder. Paths that differ only by case are one group too,
+ * since on a disk that ignores case they are one folder; on one that doesn't they are two, and the
+ * app can't tell which, so their bots are `spelledApart` and Clawtrate writes nothing there by
+ * itself.
+ */
+export function guideFolders(agents: unknown): { groups: string[][]; spelledApart: Set<string> } {
+  const groups = new Map<string, { bots: string[]; paths: Set<string> }>();
   for (const agent of Array.isArray(rec(agents).agents) ? (rec(agents).agents as unknown[]) : []) {
     const id = rec(agent).id;
     if (typeof id !== "string" || id === "") continue;
     const workspace = rec(agent).workspace;
-    const key = typeof workspace === "string" && workspace !== "" ? `w:${workspace}` : `b:${id}`;
-    groups.set(key, [...(groups.get(key) ?? []), id]);
+    const path =
+      typeof workspace === "string" && workspace !== ""
+        ? workspace.replace(/(?<=.)[\\/]+$/, "")
+        : null;
+    const key = path === null ? `b:${id}` : `w:${path.toLowerCase()}`;
+    const group = groups.get(key) ?? { bots: [], paths: new Set<string>() };
+    group.bots.push(id);
+    if (path !== null) group.paths.add(path);
+    groups.set(key, group);
   }
-  return [...groups.values()];
+  const all = [...groups.values()];
+  return {
+    groups: all.map((group) => group.bots),
+    spelledApart: new Set(all.filter((group) => group.paths.size > 1).flatMap((g) => g.bots)),
+  };
 }
 
 /**
@@ -560,7 +582,7 @@ export async function readGuideFolders(
     request("agents.list", {}),
     readGuidesHistory(request),
   ]);
-  const folders = guideFolders(listed);
+  const { groups: folders, spelledApart } = guideFolders(listed);
   const limits = await readGuidesLimits(request, folders.flat());
   // A bot another of this person's devices recorded counts as one this device knew, while on.
   const knew = (bot: string) =>
@@ -593,6 +615,7 @@ export async function readGuideFolders(
           utf8,
           missing,
           refused: state === "none" ? refusedOf(bots) : null,
+          spelledApart: spelledApart.has(bots[0]!),
           changedText:
             found.kind === "changed" ? found.text.slice(0, MAX_CHANGED_SECTION_CHARS) : null,
           error: null,
@@ -607,6 +630,7 @@ export async function readGuideFolders(
           utf8: true,
           missing: false,
           refused: null,
+          spelledApart: spelledApart.has(bots[0]!),
           changedText: null,
           error: error instanceof Error ? error.message : String(error),
         };
@@ -742,7 +766,7 @@ export async function applyGuidesChange(
     };
   if (on && change.action === "remove")
     return { record, errors: [GUIDES_ON], wrote: false, missing: [] };
-  const folders = guideFolders(await request("agents.list", {}));
+  const { groups: folders, spelledApart } = guideFolders(await request("agents.list", {}));
   // The gateway's history of the bots that held the section, from any of this person's devices.
   const history = await readGuidesHistory(request);
   const elsewhere = new Set(history.known ? history.history.bots : []);
@@ -935,11 +959,12 @@ export async function applyGuidesChange(
     const byItself = change.action === "auto";
     let known = bots.some((bot) => kept.has(bot) || (byItself && elsewhere.has(bot)));
     const unknown = byItself && !historyKnown(bots);
+    const askFirst = byItself && spelledApart.has(bots[0]!);
     const { marked } = await each(
       bots,
       (file, found) => {
         if (found.kind !== "none") known = true;
-        return found.kind === "none" && (known || unknown)
+        return askFirst || (found.kind === "none" && (known || unknown))
           ? null
           : addOrUpdate(true, bots)(file, found);
       },

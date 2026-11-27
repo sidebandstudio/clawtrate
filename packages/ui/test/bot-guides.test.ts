@@ -44,6 +44,7 @@ describe("a bot's row", () => {
     utf8: true,
     missing: false,
     refused: null,
+    spelledApart: false,
     changedText: null,
     error: null,
     ...over,
