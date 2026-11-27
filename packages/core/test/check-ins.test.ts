@@ -844,6 +844,23 @@ describe("F-201 F-366 saving", () => {
     expect(lost.state().save).toMatchObject({ status: "unknown" });
   });
 
+  it("a patch cut off by a dropped connection is unknown, in Clawtrate's words and not the client's", async () => {
+    const { gateway, ctx, state } = fakeGateway({
+      patch: () => {
+        // As a suspend does: the connection ends, then the client rejects what it was waiting on.
+        gateway.linkAlive = false;
+        throw new Error("gateway client stopped");
+      },
+    });
+    await loadCheckIns(ctx);
+    await saveCheckIn(ctx, "s1", "marlow", draft(state(), "marlow", { every: "24h" }));
+    expect(gateway.attempts).toHaveLength(1);
+    expect(state().save).toMatchObject({
+      status: "unknown",
+      error: "The connection changed before Clawtrate could confirm the change.",
+    });
+  });
+
   it("a config changed between the read and the patch is a conflict: the patch carried the hash read, and the save settles before the list is read again", async () => {
     const { gateway, ctx, state, elsewhere } = fakeGateway();
     await loadCheckIns(ctx);
