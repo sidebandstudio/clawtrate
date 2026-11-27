@@ -580,6 +580,39 @@ export type AccountsState = {
   write: AccountWrite | null;
   /** The last Unlock or Clear, for the line that says how it went. */
   clear: OrderClear | null;
+  /**
+   * The bots whose own model (or the default they run on) their model list doesn't allow, so a
+   * task they start is refused (#799): read with the config, as the version the gateway reports
+   * reads the list. At most one per bot the gateway lists.
+   */
+  modelsRefused: RefusedBotModel[];
+  /** The last model Clawtrate added to a bot's model list, for its line and Undo (#799). */
+  allowed: ModelAllowed | null;
+};
+
+/** A bot whose own model its model list refuses for the tasks it starts (#799). */
+export type RefusedBotModel = { botId: string; provider: string; model: string };
+
+/**
+ * A model Clawtrate put on the model list that governs a bot (#799), in the same write as the
+ * model itself or by "Allow <model>": the line that says so, and its Undo, which takes that one
+ * entry out again while it is still there.
+ */
+export type ModelAllowed = {
+  botId: string;
+  provider: string;
+  model: string;
+  /** The exact entry written, `<provider>/<model>`. */
+  entry: string;
+  /** `bot`: the bot's own list; `gateway`: the gateway's default list (or its old model map). */
+  scope: "bot" | "gateway";
+  /**
+   * `added`: written. `undoing`: Undo under way. `undone`: taken out. `kept`: Undo found it gone
+   * or the list's last entry, and wrote nothing. `failed`: Undo's write failed, with `error`.
+   */
+  status: "added" | "undoing" | "undone" | "kept" | "failed";
+  error: string | null;
+  at: number;
 };
 
 export const initialAccountsState: AccountsState = {
@@ -601,6 +634,8 @@ export const initialAccountsState: AccountsState = {
   creation: null,
   write: null,
   clear: null,
+  modelsRefused: [],
+  allowed: null,
 };
 
 export const unreadEvidence: LockEvidence = {

@@ -7,6 +7,7 @@
 import { refusedModelLine, type StartedTaskCard } from "@clawtrate/core";
 import { useContext, useEffect, useRef } from "react";
 import { Avatar } from "../Avatar.tsx";
+import { ModelAllowedLine } from "../bots/ModelAllowedLine.tsx";
 import { CardThoughtContext, useCardEnv } from "./context.tsx";
 import { botFor, callRaw } from "./MessagedCard.tsx";
 import { STARTED_STATES } from "./model.ts";
@@ -131,6 +132,15 @@ export function StartedTaskCardView({ card, read }: { card: StartedTaskCard; rea
           </p>
         )}
         {note && <p className="exchange-note">{note}</p>}
+        {/* Refused for the bot's own model (#799): "Allow <model>" with admin, then what it did. */}
+        {refused && card.refusedModel && (card.agentId ?? env.bot?.id) && (
+          <ModelAllowedLine
+            botId={(card.agentId ?? env.bot?.id)!}
+            botName={worker.name}
+            reason={false}
+            only={card.refusedModel}
+          />
+        )}
         {refused && card.reason && !card.refusedModel && (
           <>
             <p className="exchange-note">The gateway says:</p>

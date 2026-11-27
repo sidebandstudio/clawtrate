@@ -397,6 +397,10 @@ export type BridgeCommand =
       stamp: GatewayStamp;
     }
   | { type: "removeBotFallbacks"; botId: string; stamp: GatewayStamp }
+  /** "Allow <model>" (#799): the bot's own model onto the model list that refuses it. */
+  | { type: "allowBotModel"; botId: string; stamp: GatewayStamp }
+  /** Undo of the line that says a model was added to a bot's model list (#799). */
+  | { type: "undoModelAllowed"; stamp: GatewayStamp }
   /**
    * Unlock, or Clear a kept order, after its confirmation (#660): `account` is the one account
    * the order named on screen, and nothing is sent unless it still does, on the gateway `stamp`
@@ -1361,6 +1365,14 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         botId: botId(command.botId),
         stamp: gatewayStampOf(command.stamp),
       };
+    case "allowBotModel":
+      return {
+        type: "allowBotModel",
+        botId: botId(command.botId),
+        stamp: gatewayStampOf(command.stamp),
+      };
+    case "undoModelAllowed":
+      return { type: "undoModelAllowed", stamp: gatewayStampOf(command.stamp) };
     case "clearBotOrder":
       return {
         type: "clearBotOrder",
@@ -2334,6 +2346,10 @@ class ViewerSession implements BridgeSession {
         return client.setBotModel(command.botId, command.model, command.effort, command.stamp);
       case "removeBotFallbacks":
         return client.removeBotFallbacks(command.botId, command.stamp);
+      case "allowBotModel":
+        return client.allowBotModel(command.botId, command.stamp);
+      case "undoModelAllowed":
+        return client.undoModelAllowed(command.stamp);
       case "clearBotOrder":
         return client.clearBotOrder(
           command.press,

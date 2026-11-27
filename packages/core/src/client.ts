@@ -1922,6 +1922,7 @@ export class ClawtrateClient {
       })),
     connected: () => this.state.connection.status === "connected",
     admin: () => this.holds(ADMIN_SCOPE) && this.state.connection.scopes.includes(ADMIN_SCOPE),
+    serverVersion: () => this.state.connection.serverVersion,
     refreshBots: () => this.refreshBots(),
     gateway: () => this.readGatewayIdentity(),
     gatewayNow: () => this.state.connection.gatewayId,
@@ -7047,6 +7048,23 @@ export class ClawtrateClient {
     if (stamp === undefined) return this.accounts.setModel(botId, model, effort);
     await this.requireSameGateway(stamp);
     return this.accounts.setModel(botId, model, effort, this.sameConnection(stamp));
+  }
+
+  /**
+   * "Allow <model>" (#799): the bot's own model onto the model list that refuses it. With
+   * `stamp`, as for `changeBotAccount`.
+   */
+  async allowBotModel(botId: string, stamp?: GatewayStamp): Promise<void> {
+    if (stamp === undefined) return this.accounts.allowModel(botId);
+    await this.requireSameGateway(stamp);
+    return this.accounts.allowModel(botId, this.sameConnection(stamp));
+  }
+
+  /** Undo of "Added <model> to …" (#799): that one entry out again. With `stamp`, as above. */
+  async undoModelAllowed(stamp?: GatewayStamp): Promise<void> {
+    if (stamp === undefined) return this.accounts.undoAllowed();
+    await this.requireSameGateway(stamp);
+    return this.accounts.undoAllowed(this.sameConnection(stamp));
   }
 
   /** With `stamp`, as for `changeBotAccount`. */

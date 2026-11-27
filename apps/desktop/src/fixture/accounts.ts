@@ -115,6 +115,11 @@ export type AccountParams = {
   version: string | null;
   /** How Unlock or Clear order ends, when the address names it. */
   clear: string | null;
+  /**
+   * The open bot's model and its model list (#799): `refused`, the list doesn't allow the bot's
+   * own model; `added`, Clawtrate has just added it, with Undo.
+   */
+  modellist: "refused" | "added" | null;
 };
 
 export function accountParams(params: URLSearchParams): AccountParams {
@@ -158,6 +163,10 @@ export function accountParams(params: URLSearchParams): AccountParams {
         : null,
     refresh: params.get("refresh"),
     allowlist: params.get("allowlist") === "1",
+    modellist:
+      params.get("modellist") === "refused" || params.get("modellist") === "added"
+        ? (params.get("modellist") as "refused" | "added")
+        : null,
     openclawRun: isUpdateRunScene(params.get("openclawRun"))
       ? (params.get("openclawRun") as UpdateRunScene)
       : null,
@@ -193,6 +202,7 @@ export const NO_ACCOUNT_PARAMS: AccountParams = {
   openclawRun: null,
   version: null,
   clear: null,
+  modellist: null,
 };
 
 /** The fixture's endings of an Unlock or Clear that keep the order, with the words each carries. */
@@ -510,11 +520,33 @@ export function fixtureAccounts(now: number, params: AccountParams): AccountsSta
         ),
       }
     : state;
+  if (params.modellist) {
+    const botId = params.bot ?? "otto";
+    const binding = own.bindings.find((b) => b.botId === botId);
+    const ref = { provider: binding?.provider ?? "openai", model: binding?.model ?? "gpt-5.5" };
+    return withLock(
+      params.modellist === "refused"
+        ? { ...own, modelsRefused: [{ botId, ...ref }] }
+        : { ...own, allowed: allowedLine(botId, ref, now) },
+      params,
+      now,
+    );
+  }
   // The picker arrives after the accounts, when the page calls releasePicker().
   if (params.catalog === "latepicker") return withLock({ ...own, models: [] }, params, now);
   if (params.catalog === "pickercut")
     return withLock({ ...own, modelsCut: [{ provider: "openai", total: 140 }] }, params, now);
   return withLock(own, params, now);
+}
+
+/** The line after a model went on a bot's model list (#799): the gateway's default list. */
+function allowedLine(
+  botId: string,
+  ref: { provider: string; model: string },
+  at: number,
+): AccountsState["allowed"] {
+  const entry = `${ref.provider}/${ref.model}`;
+  return { botId, ...ref, entry, scope: "gateway", status: "added", error: null, at };
 }
 
 /**
@@ -1553,6 +1585,41 @@ export function accountCommand(
           return { ...next, evidence: { ...b.evidence, status, checkedAt: Date.now() } };
         }),
       }));
+      // Under a model list that refuses the bot's model, the model goes on it in the same write.
+      if (params.modellist) {
+        const provider =
+          command.type === "changeBotAccount"
+            ? command.provider
+            : (accounts().bindings.find((b) => b.botId === command.botId)?.provider ?? "openai");
+        put((a) => ({
+          ...a,
+          modelsRefused: a.modelsRefused.filter((each) => each.botId !== command.botId),
+          allowed: allowedLine(command.botId, { provider, model: command.model }, Date.now()),
+        }));
+      }
+      return Promise.resolve();
+    }
+    case "allowBotModel": {
+      const refused = accounts().modelsRefused.find((each) => each.botId === command.botId);
+      if (refused)
+        put((a) => ({
+          ...a,
+          modelsRefused: a.modelsRefused.filter((each) => each.botId !== command.botId),
+          allowed: allowedLine(command.botId, refused, Date.now()),
+        }));
+      return Promise.resolve();
+    }
+    case "undoModelAllowed": {
+      const allowed = accounts().allowed;
+      if (allowed?.status === "added")
+        put((a) => ({
+          ...a,
+          modelsRefused: [
+            ...a.modelsRefused.filter((each) => each.botId !== allowed.botId),
+            { botId: allowed.botId, provider: allowed.provider, model: allowed.model },
+          ],
+          allowed: { ...allowed, status: "undone", at: Date.now() },
+        }));
       return Promise.resolve();
     }
     case "setBotPicture": {

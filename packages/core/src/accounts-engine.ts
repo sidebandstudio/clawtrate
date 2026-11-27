@@ -64,6 +64,8 @@ import {
   type AccountWrite,
   type BindingIntent,
   type BotBinding,
+  type ModelAllowed,
+  type RefusedBotModel,
   type BotView,
   type LockCheck,
   type ModelRef,
@@ -78,6 +80,7 @@ import {
   GatewayProtocolRequestTimeoutError,
 } from "@openclaw/gateway-client/browser";
 import { isKeepablePicture, MAX_PICTURE_CHARS } from "./avatar.ts";
+import { allowAddition, allowRemoval, botModelRef, ownModelRefused } from "./model-allow.ts";
 import { cleanLine } from "./gateway-names.ts";
 import { asRecord, type RawRecord } from "./mapping.ts";
 import { sameStamp, type GatewayStamp, type ReadStamp } from "./types.ts";
@@ -108,6 +111,8 @@ export type AccountsContext = {
   connected(): boolean;
   /** The connection holds `operator.admin`. */
   admin(): boolean;
+  /** The OpenClaw version the gateway reports, which says how it reads a model list (#799). */
+  serverVersion?(): string | null;
   /** Read the bot list again (`agents.list`). */
   refreshBots(): Promise<void>;
   /** The connected gateway's identity (`gateway.identity.get`), or null when it names none. */
@@ -756,7 +761,17 @@ export class AccountsEngine {
       models: catalog,
       modelAllowlist: readModelAllowlist(config),
       bindings,
+      modelsRefused: this.refusedIn(config, bindings),
     };
+  }
+
+  /** The bots of `bindings` whose own model their model list refuses (#799), from `config`. */
+  private refusedIn(config: RawRecord | null, bindings: BotBinding[]): RefusedBotModel[] {
+    const version = this.ctx.serverVersion?.() ?? null;
+    return bindings.flatMap(({ botId }) => {
+      const ref = ownModelRefused(config, botId, version);
+      return ref ? [{ botId, ...ref }] : [];
+    });
   }
 
   private binding(
@@ -1834,25 +1849,47 @@ export class AccountsEngine {
     replacePaths: string[] = [],
     ctx: AccountsContext = this.ctx,
   ): Promise<void> {
+    await this.patchFrom(() => ({ patch, replacePaths }), ctx);
+  }
+
+  /**
+   * A merge patch made from the config it is held to: `build` reads the same `config.get` answer
+   * whose hash the patch carries, so what it adds was read in the config it changes; null sends
+   * nothing. Returns what `build` made and the last config read: after the write, the applied one.
+   */
+  private async patchFrom<T extends { patch: RawRecord; replacePaths: string[] }>(
+    build: (config: RawRecord | null) => T | null,
+    ctx: AccountsContext = this.ctx,
+  ): Promise<{ sent: T | null; config: RawRecord | null }> {
     const before = asRecord(await ctx.request("config.get", {}));
+    const sent = build(before);
+    if (!sent) return { sent, config: before };
     const baseHash = typeof before?.hash === "string" ? before.hash : undefined;
     await ctx.request("config.patch", {
-      raw: JSON.stringify(patch),
+      raw: JSON.stringify(sent.patch),
       ...(baseHash ? { baseHash } : {}),
-      ...(replacePaths.length > 0 ? { replacePaths } : {}),
+      ...(sent.replacePaths.length > 0 ? { replacePaths: sent.replacePaths } : {}),
     });
     // A gateway that reports no revisions has nothing to wait for.
-    if (before?.configRevisionHash === undefined) return;
+    if (before?.configRevisionHash === undefined) return { sent, config: null };
     const started = ctx.now();
+    let now: RawRecord | null = null;
     // At most 20 seconds, and at most 100 reads whatever the clock says.
     for (let reads = 0; reads < 100 && ctx.now() - started < 20_000; reads += 1) {
-      const now = asRecord(await ctx.request("config.get", {}));
+      now = asRecord(await ctx.request("config.get", {}));
       const revised = now?.configRevisionHash !== before.configRevisionHash;
-      if (revised && now?.appliedConfigHash === now?.configRevisionHash) return;
+      if (revised && now?.appliedConfigHash === now?.configRevisionHash) break;
       // A patch that changed nothing leaves the revision as it was.
-      if (!revised && (ctx.now() - started > 3_000 || reads >= 15)) return;
+      if (!revised && (ctx.now() - started > 3_000 || reads >= 15)) break;
       await new Promise<void>((resolve) => setTimeout(() => resolve(), 200));
     }
+    return { sent, config: now };
+  }
+
+  /** The refused models read again from a config read after a write (#799). */
+  private refusedAfter(config: RawRecord | null): void {
+    if (!config) return;
+    this.ctx.update((a) => ({ ...a, modelsRefused: this.refusedIn(config, a.bindings) }));
   }
 
   /** A label, `auth.profiles.<id>.displayName` (row 9). */
@@ -2544,13 +2581,25 @@ export class AccountsEngine {
   ): Promise<void> {
     const entry: RawRecord = { model: { primary: formatModelRef(ref), fallbacks: [] } };
     if (effort) entry.thinkingDefault = effort;
+    const model = { agents: { entries: { [botId]: entry } } };
+    const paths = [`agents.entries.${botId}.model.fallbacks`];
+    const version = ctx.serverVersion?.() ?? null;
     try {
-      await this.patch(
-        { agents: { entries: { [botId]: entry } } },
-        [`agents.entries.${botId}.model.fallbacks`],
-        ctx,
-      );
+      // The model goes on the list that limits the bot in the same write (#799), so a task the
+      // bot starts on it isn't refused; and with it nothing is written if the model is refused.
+      const { sent, config } = await this.patchFrom((read) => {
+        const added = allowAddition(read, botId, ref, version);
+        return added
+          ? {
+              patch: mergePatch(model, added.patch),
+              replacePaths: [...paths, ...added.replacePaths],
+              added,
+            }
+          : { patch: model, replacePaths: paths, added: null };
+      }, ctx);
       if (owns()) this.unwritten.delete(botId);
+      this.allowedBy(botId, ref, sent?.added ?? null);
+      this.refusedAfter(config);
     } catch (error) {
       if (!creating) throw error;
       // The bot exists; its Account page offers the write again (bots.md section 3).
@@ -2693,6 +2742,80 @@ export class AccountsEngine {
     await this.checkLock(botId);
   }
 
+  // A model on a bot's model list (#799) -------------------------------------------------
+
+  /** The line for what one write put on a bot's list; a write for the bot that added none clears it. */
+  private allowedBy(
+    botId: string,
+    ref: { provider: string; model: string },
+    added: { entry: string; place: string } | null,
+  ): void {
+    this.ctx.update((a) => {
+      if (!added) return a.allowed?.botId === botId ? { ...a, allowed: null } : a;
+      const allowed: ModelAllowed = {
+        botId,
+        provider: ref.provider,
+        model: ref.model,
+        entry: added.entry,
+        scope: added.place === "bot" ? "bot" : "gateway",
+        status: "added",
+        error: null,
+        at: this.ctx.now(),
+      };
+      return { ...a, allowed };
+    });
+  }
+
+  /**
+   * "Allow <model>": the bot's own model (or the default it runs on) onto the list that refuses
+   * it, as the model write does; nothing when the list, read now, already allows it or no list
+   * limits the bot. Admin only; nothing asks for wider access.
+   */
+  async allowModel(botId: string, beforeSend?: (sent: boolean) => void): Promise<void> {
+    this.requireAdmin("Changing a bot's settings");
+    const { ctx, check } = this.checked(beforeSend);
+    const version = ctx.serverVersion?.() ?? null;
+    const read: { ref: { provider: string; model: string } | null } = { ref: null };
+    const { sent, config } = await this.patchFrom((config) => {
+      read.ref = botModelRef(config, botId);
+      return read.ref ? allowAddition(config, botId, read.ref, version) : null;
+    }, ctx);
+    check();
+    if (sent && read.ref) this.allowedBy(botId, read.ref, sent);
+    this.refusedAfter(config);
+  }
+
+  /**
+   * Undo of the line: the one entry Clawtrate added, taken out of the list that governs the bot
+   * while it is still there, held to the config's hash. Nothing else is written: not the bot's
+   * earlier model, and not an entry left as the list's last, which would lift the limit.
+   */
+  async undoAllowed(beforeSend?: (sent: boolean) => void): Promise<void> {
+    this.requireAdmin("Changing a bot's settings");
+    const allowed = this.ctx.get().allowed;
+    if (!allowed || allowed.status === "undoing" || allowed.status === "undone") return;
+    const settle = (status: ModelAllowed["status"], error: string | null = null) =>
+      this.ctx.update((a) =>
+        a.allowed?.entry === allowed.entry && a.allowed.botId === allowed.botId
+          ? { ...a, allowed: { ...a.allowed, status, error, at: this.ctx.now() } }
+          : a,
+      );
+    settle("undoing");
+    try {
+      const { ctx, check } = this.checked(beforeSend);
+      const { sent, config } = await this.patchFrom((read) => {
+        const removal = allowRemoval(read, allowed.botId, allowed.entry);
+        return typeof removal === "string" ? null : removal;
+      }, ctx);
+      check();
+      settle(sent ? "undone" : "kept");
+      this.refusedAfter(config);
+    } catch (error) {
+      settle("failed", this.scrub(errorText(error)));
+      throw error;
+    }
+  }
+
   /** "Remove fallbacks": the bot's model keeps its account; its fallback list becomes empty. */
   async removeFallbacks(botId: string, beforeSend?: (sent: boolean) => void): Promise<void> {
     this.requireAdmin("Changing a bot's settings");
@@ -2785,6 +2908,20 @@ export class AccountsEngine {
  * The gateway a read was answered by: the identity its connection named, when the read ended on
  * the connection it began on; null when that identity wasn't known, or the connection changed.
  */
+/** One JSON merge patch made of two: objects merged key by key, anything else from `b`. */
+function mergePatch(a: RawRecord, b: RawRecord): RawRecord {
+  const out: RawRecord = { ...a };
+  for (const [key, value] of Object.entries(b)) {
+    const left = asRecord(out[key]);
+    const right = asRecord(value);
+    out[key] =
+      left && right && !Array.isArray(left) && !Array.isArray(right)
+        ? mergePatch(left, right)
+        : value;
+  }
+  return out;
+}
+
 function answeredBy(began: ReadStamp, ended: ReadStamp): string | null {
   if (ended.target !== began.target || ended.connectedAt !== began.connectedAt) return null;
   if (began.gatewayId !== null && ended.gatewayId !== began.gatewayId) return null;

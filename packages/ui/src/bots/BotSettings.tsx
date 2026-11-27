@@ -35,6 +35,7 @@ import { AccountChoices, GATEWAY_CHOICE, gatewayLine } from "./AccountChoices.ts
 import { ClearOrderConfirm, ClearOutcome, type ClearAsk } from "./ClearOrder.tsx";
 import { settleBotSettingsRequest, settlement, useBotSettingsRequest } from "./settings-request.ts";
 import { Connect } from "./Connect.tsx";
+import { ModelAllowedLine } from "./ModelAllowedLine.tsx";
 import { ModelPair, rowFor, useModelList } from "./ModelPair.tsx";
 import { UpdateOpenClawNote } from "./UpdateOpenClaw.tsx";
 import { ManageGroup } from "./DeleteBot.tsx";
@@ -591,6 +592,8 @@ export function BotSettings({
             <UpdateOpenClawNote />
           </>
         )}
+        {/* The model and the list that limits it (#799): what was added, or why tasks can't start. */}
+        <ModelAllowedLine botId={bot.id} botName={name} />
         <MemoryRow onOpen={() => go("memory")} />
         <StartTasksRow name={name} botId={bot.id} transcripts={transcripts} />
         {extraGroups}
