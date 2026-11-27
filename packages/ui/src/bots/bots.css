@@ -1879,24 +1879,3 @@ button.b-open > .icon {
 .b-update-section {
   margin-top: var(--space-5);
 }
-
-/* "Bots know how Clawtrate works" (BotGuides.tsx): a row per instructions file that needs a look. */
-.bot-guides-list {
-  display: grid;
-  gap: 10px;
-  margin: 12px 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.bot-guides-row {
-  display: grid;
-  gap: 1px;
-  min-width: 0;
-  padding-left: 2px;
-}
-
-.bot-guides-row small {
-  color: var(--text-muted);
-  font-size: var(--text-sm);
-}

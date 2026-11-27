@@ -832,9 +832,12 @@ export class SetupController implements SetupHost {
       // settings file says isn't how the gateway there listens now (it stopped, or runs on
       // settings changed since it started, TLS for one). Not retried for ever behind
       // Connecting: the attempt ends with Advanced and a look again. A connection at the address
-      // whose bots are still shown says `reconnecting` for the same.
+      // whose bots are still shown says `reconnecting` for the same. Only while the connection
+      // is still setup's own: once its first paired hello made it the person's, a drop while the
+      // bots load is a reconnect like any other, and setup goes on watching for them.
       if (
         local &&
+        this.owned?.attempt === attempt &&
         (connection.status === "connecting" || connection.status === "reconnecting") &&
         connection.error?.code === "UNREACHABLE" &&
         this.state.phase === "connecting"
