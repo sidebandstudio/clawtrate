@@ -127,6 +127,8 @@ describe("on OpenClaw 2026.10.6", () => {
           "config",
           "describeHolds",
           "ended",
+          "notes",
+          "notesOf",
           "sessions",
           "slots",
           "version",

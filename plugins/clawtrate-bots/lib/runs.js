@@ -212,9 +212,13 @@ export function createRuns(api, options = {}) {
     observe();
     origins.sawAttachments(ctx, event);
   });
-  api.on("before_prompt_build", (_event, ctx) => {
+  api.on("before_prompt_build", (event, ctx) => {
     observe();
-    origins.sawPrompt(ctx);
+    const run = origins.sawPrompt(ctx);
+    // A check-in's notes as its prompt shows them, for the holds (lib/hooks.js).
+    if (run && run.kind === "check-in" && run.checkInNotes === undefined && options.notesOf)
+      run.checkInNotes =
+        typeof event?.prompt === "string" ? options.notesOf(event.prompt) : undefined;
   });
   api.on("before_message_write", (event, ctx) => {
     observe();
@@ -241,7 +245,7 @@ export function createRuns(api, options = {}) {
     if (readsOutside(event) && run && !run.lost)
       origins.markRead(run, sourceOf(event.toolName), event.toolName);
     // The holds' own bookkeeping of a call's result (lib/hooks.js).
-    return options.afterToolCall?.(event);
+    return options.afterToolCall?.(event, ctx, run);
   });
 
   /**

@@ -22,7 +22,11 @@ const CONFIG = {
   plugins: { entries: { "clawtrate-bots": { hooks: { allowConversationAccess: true } } } },
 };
 
-function host({ version = "2026.10.6", config = CONFIG as Json, sessions = [] as Json[] } = {}) {
+function host({
+  version = "2026.10.6",
+  config = CONFIG as Json,
+  sessions = [] as Json[] | ((agentId: string) => Json[]),
+} = {}) {
   const hooks = new Map<string, Handler>();
   const tools = new Map<
     string,
@@ -32,6 +36,7 @@ function host({ version = "2026.10.6", config = CONFIG as Json, sessions = [] as
   >();
   const methods = new Map<string, (opts: Json) => Promise<void>>();
   const ended = memoryStore();
+  const notes = memoryStore();
   const api = {
     on: (name: string, handler: Handler) => hooks.set(name, handler),
     registerTool: (factory: never, opts: { name: string }) => tools.set(opts.name, factory),
@@ -42,8 +47,9 @@ function host({ version = "2026.10.6", config = CONFIG as Json, sessions = [] as
   const plugin = createHooks(api, {
     slots: {},
     config: () => config,
-    sessions: () => sessions,
+    sessions: (agentId: string) => (typeof sessions === "function" ? sessions(agentId) : sessions),
     ended,
+    notes,
   } as never);
   const fire = (name: string, event: Json, ctx: Json = {}) => hooks.get(name)!(event, ctx);
   const tool = async (name: string, ctx: Json, callId: string, params: Json = {}) =>
@@ -64,7 +70,7 @@ function host({ version = "2026.10.6", config = CONFIG as Json, sessions = [] as
     });
     return payload;
   };
-  return { plugin, fire, tool, runGet, runGetBy, ended, hooks };
+  return { plugin, fire, tool, runGet, runGetBy, ended, notes, hooks };
 }
 
 const typed = {
@@ -342,5 +348,171 @@ describe("the read tools and the holds", () => {
         toolCtx,
       ),
     ).toMatchObject({ block: true });
+  });
+});
+
+describe("fix round 2", () => {
+  const ok = (text: Json) => ({ content: [{ type: "text", text: JSON.stringify(text) }] });
+
+  it("D4: whether a routine is on comes from the gateway's last report, not the plugin's own copy", async () => {
+    const h = host();
+    // The owner's routine, made on at once through a call the plugin held: its own copy says on.
+    const owner = {
+      ...typed,
+      runId: "r-o",
+      sessionKey: "agent:pip:dashboard:o",
+      channel: "discord",
+    };
+    await h.fire("before_prompt_build", {}, owner);
+    const ownerCtx = {
+      ...toolCtx,
+      sessionKey: owner.sessionKey,
+      requester: { channel: "discord", senderIsOwner: true },
+    };
+    const add = {
+      ...call("automations", { action: "add", job: { name: "x", enabled: true } }, "a1"),
+      runId: "r-o",
+    };
+    await h.fire("before_tool_call", add, ownerCtx);
+    await h.fire("after_tool_call", { ...add, result: ok({ id: "j1" }) }, ownerCtx);
+    await h.fire("cron_changed", {
+      jobId: "j1",
+      action: "added",
+      job: { id: "j1", enabled: true },
+    });
+    // An operator turns it off: a typed run with nothing read can't start it now.
+    await h.fire("cron_changed", {
+      jobId: "j1",
+      action: "updated",
+      job: { id: "j1", enabled: false },
+    });
+    await h.fire("before_prompt_build", {}, typed);
+    const run = call("automations", { action: "run", jobId: "j1", runMode: "force" }, "r1c");
+    expect(await h.fire("before_tool_call", run, toolCtx)).toMatchObject({ block: true });
+    // And back on: a fresh typed run may.
+    await h.fire("cron_changed", {
+      jobId: "j1",
+      action: "updated",
+      job: { id: "j1", enabled: true },
+    });
+    await h.fire("before_prompt_build", {}, { ...typed, runId: "r2" });
+    expect(
+      await h.fire("before_tool_call", { ...run, runId: "r2", toolCallId: "r2c" }, toolCtx),
+    ).toBeUndefined();
+  });
+
+  it("D1: a label is resolved among every bot's sessions, then the reach decides", async () => {
+    const rows: Record<string, Json[]> = {
+      pip: [{ sessionKey: "agent:pip:dashboard:1", entry: { label: "Compare trail maps" } }],
+      marlow: [{ sessionKey: "agent:marlow:dashboard:2", entry: { label: "Review the route" } }],
+      otto: [{ sessionKey: "agent:otto:dashboard:3", entry: { label: "Otto's list" } }],
+    };
+    const h = host({ sessions: (id) => rows[id] ?? [] });
+    // A send's reply is outside content, so each send is its own fresh typed run.
+    const send = (label: string, id: string) => {
+      void h.fire("before_prompt_build", {}, { ...typed, runId: id });
+      return { ...call("sessions_send", { label, message: "m" }, id), runId: id };
+    };
+    expect(
+      await h.fire("before_tool_call", send("Compare trail maps", "l1"), toolCtx),
+    ).toBeUndefined();
+    expect(
+      await h.fire("before_tool_call", send("Review the route", "l2"), toolCtx),
+    ).toBeUndefined();
+    expect(await h.fire("before_tool_call", send("Otto's list", "l3"), toolCtx)).toMatchObject({
+      block: true,
+    });
+    expect(await h.fire("before_tool_call", send("Nobody's", "l4"), toolCtx)).toMatchObject({
+      block: true,
+    });
+  });
+
+  it("D8: check-in notes are written over empty notes or the bot's own, journaled, and not over a person's", async () => {
+    const h = host();
+    const checkIn = (runId: string) => ({ ...typed, runId, trigger: "heartbeat" });
+    const write = (runId: string, scratch: string, id: string) => ({
+      ...call("heartbeat_respond", { status: "ok", scratch }, id),
+      runId,
+    });
+    // No notes yet: the prompt has no scratch section.
+    await h.fire("before_prompt_build", { prompt: "Follow the notes." }, checkIn("h1"));
+    expect(
+      await h.fire("before_tool_call", write("h1", "- water plants", "n1"), toolCtx),
+    ).toBeUndefined();
+    await h.fire(
+      "after_tool_call",
+      { ...write("h1", "- water plants", "n1"), result: ok({ ok: true }) },
+      toolCtx,
+    );
+    const journal = [...h.notes.rows.keys()].filter((k) => k.startsWith("journal:check-in:pip:"));
+    expect(journal).toHaveLength(1);
+    // Its own notes, as the next check-in's prompt shows them: it may replace them.
+    await h.fire(
+      "before_prompt_build",
+      { prompt: "Follow the notes.\n\nHeartbeat monitor scratch:\n- water plants" },
+      checkIn("h2"),
+    );
+    expect(
+      await h.fire("before_tool_call", write("h2", "- feed cat", "n2"), toolCtx),
+    ).toBeUndefined();
+    // A person's notes: not replaced.
+    await h.fire(
+      "before_prompt_build",
+      { prompt: "Follow the notes.\n\nHeartbeat monitor scratch:\n- my list" },
+      checkIn("h3"),
+    );
+    expect(
+      await h.fire("before_tool_call", write("h3", "- feed cat", "n3"), toolCtx),
+    ).toMatchObject({
+      block: true,
+      blockReason: SAID.notesTheirs,
+    });
+  });
+
+  it("D8: a routine's notes on 2026.11.10 need its run's scratch_get, and the revision it read", async () => {
+    const h = host({ version: "2026.11.10" });
+    const routine = {
+      ...typed,
+      runId: "rr",
+      sessionKey: "agent:pip:cron:j9:run:rr",
+      trigger: "cron",
+      jobId: "j9",
+    };
+    const ctx = { ...toolCtx, sessionKey: routine.sessionKey };
+    await h.fire("before_prompt_build", {}, routine);
+    const set = (rev: number, id: string) => ({
+      ...call(
+        "automations",
+        { action: "scratch_set", content: "- step two", expectedRevision: rev },
+        id,
+      ),
+      runId: "rr",
+    });
+    // Without a scratch_get, the plugin hasn't seen the notes it would replace.
+    expect(await h.fire("before_tool_call", set(3, "s0"), ctx)).toMatchObject({
+      blockReason: SAID.notesUnseen,
+    });
+    const get = { ...call("automations", { action: "scratch_get" }, "g1"), runId: "rr" };
+    await h.fire("before_tool_call", get, ctx);
+    await h.fire(
+      "after_tool_call",
+      {
+        ...get,
+        result: ok({ scratch: { content: "- a person's step", revision: 3 }, currentRevision: 3 }),
+      },
+      ctx,
+    );
+    expect(await h.fire("before_tool_call", set(3, "s1"), ctx)).toMatchObject({
+      blockReason: SAID.notesTheirs,
+    });
+    await h.fire(
+      "after_tool_call",
+      { ...get, result: ok({ scratch: null, currentRevision: 0 }) },
+      ctx,
+    );
+    expect(await h.fire("before_tool_call", set(5, "s3"), ctx)).toMatchObject({
+      blockReason: SAID.notesUnseen,
+    });
+    expect(await h.fire("before_tool_call", set(0, "s2"), ctx)).toBeUndefined();
   });
 });

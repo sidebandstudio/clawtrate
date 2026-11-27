@@ -887,6 +887,81 @@ export const SCENARIOS: Scenario[] = [
     ],
   },
   {
+    name: "keep-routine-on",
+    phrase: "set up my reminder switched on",
+    summary: `Sets up "${KEPT_ROUTINE.name}" as \`#keep-routine\` does, with \`enabled: true\` written out in the job. Then says whether it is on.`,
+    steps: () => [
+      tool("automations", {
+        action: "add",
+        job: {
+          name: KEPT_ROUTINE.name,
+          enabled: true,
+          schedule: { kind: "cron", expr: "0 8 * * *" },
+          sessionTarget: "isolated",
+          payload: { kind: "agentTurn", message: KEPT_ROUTINE.message },
+        },
+      }),
+      (ctx) => [say(routineSaid(ctx, "set up"))],
+    ],
+  },
+  {
+    name: "run-routine-id",
+    phrase: "run that routine now",
+    summary:
+      "Runs the routine whose id follows the directive (`#run-routine-id <id>`) now, with `run` and `runMode: force`, reading nothing first.",
+    steps: () => [
+      {
+        kind: "tool-from",
+        build: (ctx) =>
+          tool("automations", {
+            action: "run",
+            jobId: /#run-routine-id[ \t]+([\w-]+)/.exec(ctx.prompt ?? "")?.[1] ?? "none",
+            runMode: "force",
+          }),
+      },
+      (ctx) => [say(routineSaid(ctx, "run"))],
+    ],
+  },
+  {
+    name: "notes-set",
+    phrase: "keep this in your notes",
+    summary:
+      "In a routine's own run on 2026.11.10: reads its notes (`automations` `scratch_get`), then replaces them with the text after the directive (`scratch_set` with the revision it read).",
+    steps: () => [
+      tool("automations", { action: "scratch_get" }),
+      {
+        kind: "tool-from",
+        build: (ctx) =>
+          tool("automations", {
+            action: "scratch_set",
+            content: /#notes-set[ \t]+(.+)$/m.exec(ctx.prompt ?? "")?.[1]?.trim() ?? "notes",
+            expectedRevision: Number(lastResult(ctx, "automations")?.currentRevision ?? 0),
+          }),
+      },
+      (ctx) => [say(routineSaid(ctx, "noted"))],
+    ],
+  },
+  {
+    name: "goal",
+    phrase: "make that your goal",
+    summary:
+      'Sets this conversation\'s goal (`create_goal`, "Plan the Saturday route"), which keeps the bot working on it.',
+    steps: () => [
+      tool("create_goal", { objective: "Plan the Saturday route" }),
+      (ctx) => [say(`The goal tool answered: ${(ctx.results.at(-1)?.text ?? "").split("\n")[0]}`)],
+    ],
+  },
+  {
+    name: "rearm",
+    phrase: "check again later",
+    summary:
+      "In a routine's own run: re-arms it to run again in 30 minutes (`automations` `next_check`).",
+    steps: () => [
+      tool("automations", { action: "next_check", in: "30m" }),
+      (ctx) => [say(routineSaid(ctx, "re-armed"))],
+    ],
+  },
+  {
     name: "run-routine",
     phrase: "run my morning reminder now",
     summary: `Runs "${KEPT_ROUTINE.name}" now (\`automations\` \`list\`, then \`run\` with \`runMode: force\`).`,

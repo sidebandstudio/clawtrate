@@ -105,6 +105,16 @@ export function readsOutside(event) {
   if (NOT_OUTSIDE.has(name)) return false;
   if (CODE_MODE_TOOLS.has(name) && event?.toolKind === "code_mode_exec") return false;
   if (name.startsWith("clawtrate_")) return false;
+  // A routine's own notes, read back in its own run (2026.11.10's scratch_get,
+  // which scratch_set needs first): its own context, as the check-in's notes
+  // are in the check-in's prompt. Whose words they are, the notes hold decides.
+  if (
+    (name === "automations" || name === "cron") &&
+    String(event?.params?.action ?? "")
+      .trim()
+      .toLowerCase() === "scratch_get"
+  )
+    return false;
   return true;
 }
 

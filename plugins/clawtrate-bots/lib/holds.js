@@ -20,7 +20,7 @@
 
 import { realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { basename, dirname, isAbsolute, join, resolve } from "node:path";
+import nodePath from "node:path";
 import { fileURLToPath } from "node:url";
 import { Ambiguous, botOfKey, readFirst, readParam } from "./params.js";
 
@@ -53,7 +53,15 @@ export const SAID = Object.freeze({
   failed: "Not done: Clawtrate couldn't check this call, so it wasn't made.",
   ambiguous:
     "Not done: this call names its target twice, differently, so Clawtrate can't tell what it would change. Nothing was changed.",
+  notesTheirs:
+    "Not done: these notes hold someone else's words, your person's or ones brought in. Clawtrate lets a bot replace only notes it wrote itself. Nothing was changed.",
+  notesTooLong: "Not done: a bot's own notes are at most 2 KiB. Nothing was changed.",
+  notesUnseen:
+    "Not done: Clawtrate couldn't see the notes this would replace, so it can't tell whose they are. Nothing was changed.",
 });
+
+/** A bot's own notes, at most (design 3.2 and 9). */
+export const NOTES_MAX_BYTES = 2 * 1024;
 
 /** The scheduler's action, as the tool reads it. */
 const actionOf = (params) => (readParam(params, "action") ?? "").toLowerCase();
@@ -81,6 +89,18 @@ export function storedOff(params) {
   return next;
 }
 
+/**
+ * The notes a call writes: `heartbeat_respond`'s `scratch`, or the scheduler's
+ * `scratch_set` `content` (null clears them). Undefined when the call names none.
+ */
+export function notesWritten(event) {
+  const params = isRecord(event?.params) ? event.params : {};
+  if (String(event?.toolName ?? "").toLowerCase() === "heartbeat_respond")
+    return typeof params.scratch === "string" ? params.scratch : undefined;
+  if (params.content === null) return null;
+  return typeof params.content === "string" ? params.content : undefined;
+}
+
 /** The paths a file tool call writes, as given: `path` (and its aliases), or a patch's file headers. */
 export function writtenPaths(event) {
   const params = isRecord(event?.params) ? event.params : {};
@@ -99,17 +119,32 @@ export function writtenPaths(event) {
 }
 
 /**
+ * A Windows drive alias as 2026.11.10's file tools map it on Windows
+ * (dist/path-utils-CpYoiF7W.mjs, `normalizeLocalWindowsDrivePath`): `/c/…`,
+ * `/mnt/c/…` and `/cygdrive/c/…`, with or without a leading `@`, become `C:\…`.
+ */
+export function driveAlias(path) {
+  return path.replace(
+    /^(@?)\/(?:(?:cygdrive|mnt)\/)?([a-z])(?:\/|$)(.*)$/i,
+    (_m, at, drive, rest) => `${at}${drive.toUpperCase()}:\\${rest.replaceAll("/", "\\")}`,
+  );
+}
+
+/**
  * A path as the file tools expand it (2026.10.6 dist/path-utils-S10YpSZj.mjs:27-43,
  * dist/sandbox-paths-B9nRw-P0.mjs:20-28, dist/agent-tools.before-tool-call.decision-C9Brjb-Y.mjs:75-81;
  * the same in 2026.11.10): a malformed `</arg_value>` suffix cut, one leading
  * `@` dropped, `file://` read as a file URL, `~` as the home folder, and a
- * relative path taken from the bot's workspace.
+ * relative path taken from the bot's workspace. With `drive`, a Windows drive
+ * alias is mapped first, as 2026.11.10 does on Windows.
+ * @param {{ drive?: boolean, pathApi?: typeof nodePath }} [options]
  */
-export function expandPath(raw, cwd) {
+export function expandPath(raw, cwd, { drive = false, pathApi = nodePath } = {}) {
   let path = String(raw);
   const xml = path.indexOf("</arg_value>");
   if (xml !== -1) path = path.slice(0, xml);
   path = path.trim();
+  if (drive) path = driveAlias(path);
   if (path.startsWith("@")) path = path.slice(1);
   if (path.toLowerCase().startsWith("file://")) {
     try {
@@ -120,39 +155,59 @@ export function expandPath(raw, cwd) {
   }
   const home = process.env.HOME || homedir();
   if (path === "~") path = home;
-  else if (path.startsWith("~/")) path = join(home, path.slice(2));
-  return isAbsolute(path) ? path : resolve(cwd ?? ".", path);
+  else if (path.startsWith("~/") || (pathApi === nodePath.win32 && path.startsWith("~\\")))
+    path = pathApi.join(home, path.slice(2));
+  return pathApi.isAbsolute(path) ? path : pathApi.resolve(cwd ?? ".", path);
+}
+
+/**
+ * Every path a call's spelling can mean on this gateway: as both versions'
+ * file tools read it, and on Windows also with the drive alias mapped
+ * (2026.11.10 maps it; 2026.10.6 doesn't, so either may be the one written).
+ * @param {{ platform?: string, pathApi?: typeof nodePath }} [options]
+ */
+export function pathForms(raw, cwd, { platform = process.platform, pathApi = nodePath } = {}) {
+  const forms = [expandPath(raw, cwd, { pathApi })];
+  if (platform === "win32") forms.push(expandPath(raw, cwd, { drive: true, pathApi }));
+  return [...new Set(forms)];
 }
 
 /** A path resolved as far as it exists, so a link or `..` can't hide a bootstrap file. */
-function real(path) {
+function real(path, pathApi = nodePath) {
+  if (pathApi !== nodePath) return pathApi.resolve(path);
   try {
     return realpathSync(path);
   } catch {
     try {
-      return join(realpathSync(dirname(path)), basename(path));
+      return nodePath.join(realpathSync(nodePath.dirname(path)), nodePath.basename(path));
     } catch {
-      return resolve(path);
+      return nodePath.resolve(path);
     }
   }
 }
 
 /**
  * Which held file a path is, and whose: one of the bootstrap files or
- * HEARTBEAT.md at the top of a bot's workspace, compared without case.
- * `workspaces` maps each bot to its workspace. With no workspace known for
- * the caller, any path so named counts as its own.
+ * HEARTBEAT.md at the top of a bot's workspace, compared without case, in any
+ * of the forms the path can take (pathForms). `workspaces` maps each bot to its
+ * workspace. With no workspace known for the caller, any path so named counts
+ * as its own.
  *   { file, bot } | null
+ * @param {{ platform?: string, pathApi?: typeof nodePath }} [forms]
  */
-export function heldFile(raw, caller, workspaces = {}) {
+export function heldFile(raw, caller, workspaces = {}, forms = {}) {
+  const pathApi = forms.pathApi ?? nodePath;
   const own = workspaces[caller] ?? null;
-  const full = real(expandPath(raw, own));
-  const file = basename(full).toLowerCase();
-  if (!HELD_FILES.has(file)) return null;
-  const dir = dirname(full).toLowerCase();
-  for (const [bot, ws] of Object.entries(workspaces))
-    if (ws && real(ws).toLowerCase() === dir) return { file, bot };
-  return own ? null : { file, bot: caller };
+  for (const form of pathForms(raw, own, forms)) {
+    const full = real(form, pathApi);
+    const file = pathApi.basename(full).toLowerCase();
+    if (!HELD_FILES.has(file)) continue;
+    const dir = pathApi.dirname(full).toLowerCase();
+    for (const [bot, ws] of Object.entries(workspaces))
+      if (ws && real(ws, pathApi).toLowerCase() === dir) return { file, bot };
+    if (!own) return { file, bot: caller };
+  }
+  return null;
 }
 
 /**
@@ -163,10 +218,11 @@ export function heldFile(raw, caller, workspaces = {}) {
  * the same in 2026.11.10), then to a label, then to `agentId`'s main
  * conversation, else the caller's own. Null when it can't be told, which
  * counts as another bot: a bare session id, a chat conversation, a label
- * with no `agentId` (the gateway looks it up among every bot's sessions), or
- * a call whose `agentId` names another bot than its session key does.
+ * with no `agentId` that no single session has, or a call whose `agentId`
+ * names another bot than its session key does.
  */
-export function targetBot(event, caller) {
+/** @param {((label: string) => string | null) | null} [resolveLabel] */
+export function targetBot(event, caller, resolveLabel = null) {
   const p = event?.params;
   const name = String(event?.toolName ?? "").toLowerCase();
   if (name === "conversations_send" || name === "conversations_turn") return null;
@@ -177,7 +233,12 @@ export function targetBot(event, caller) {
     const target = botOfKey(key) ?? (key === "main" || key === "current" ? caller : null);
     return agent && agent !== target ? null : target;
   }
-  if (readParam(p, "label")) return agent ?? null;
+  // A label with no agentId is looked up among every bot's sessions, as the
+  // gateway does (2026.10.6 dist/sessions-resolve-DAzKLWTo.mjs:300-324, an exact
+  // match on the trimmed label; the same in 2026.11.10): its bot when exactly one
+  // session has it, else it can't be told.
+  const label = readParam(p, "label");
+  if (label) return agent ?? (resolveLabel ? resolveLabel(label) : null);
   return agent ?? caller;
 }
 
@@ -194,14 +255,17 @@ const strangerIn = (requester) =>
   requester.senderIsOwner !== true;
 
 /** Which hold a call is under, or null when it is none of section 3.3's side doors. */
-export function holdOf(event, caller) {
+/** @param {((label: string) => string | null) | null} [resolveLabel] */
+export function holdOf(event, caller, resolveLabel = null) {
   const name = String(event?.toolName ?? "").toLowerCase();
   if (SCHEDULER.has(name)) {
     const action = actionOf(event.params);
     if (action === "bind") return "scheduler-update";
     if (action === "scratch_set") return "notes";
+    // A routine's own run re-arming it for later: more work scheduled.
+    if (action === "next_check") return "rearm";
     if (action === "wake") {
-      const target = targetBot(event, caller);
+      const target = targetBot(event, caller, resolveLabel);
       return target === caller ? "scheduler-wake" : "message";
     }
     return ["add", "update", "remove", "run"].includes(action) ? `scheduler-${action}` : null;
@@ -211,8 +275,13 @@ export function holdOf(event, caller) {
     return actionOf(event.params) === "set" ? "user-file" : null;
   if (name === "heartbeat_respond")
     return isRecord(event.params) && "scratch" in event.params ? "notes" : null;
-  if (MESSAGE_TOOLS.has(name)) return targetBot(event, caller) === caller ? null : "message";
-  if (HAND_OFF_TOOLS.has(name)) return targetBot(event, caller) === caller ? null : "hand-off";
+  // A conversation's goal keeps the bot working on it, turn after turn
+  // (2026.11.10 binds a continuation to it as it is made).
+  if (name === "create_goal") return "goal";
+  if (MESSAGE_TOOLS.has(name))
+    return targetBot(event, caller, resolveLabel) === caller ? null : "message";
+  if (HAND_OFF_TOOLS.has(name))
+    return targetBot(event, caller, resolveLabel) === caller ? null : "hand-off";
   if (OPENCLAW_TOOLS.has(name)) {
     if (name === "gateway" && GATEWAY_READS.has(actionOf(event.params))) return null;
     return "openclaw";
@@ -245,8 +314,10 @@ function decideCall({
   workspaces = {},
   enabled = () => null,
   requester,
+  resolveLabel = null,
+  notes = null,
 }) {
-  const hold = holdOf(event, caller);
+  const hold = holdOf(event, caller, resolveLabel);
   if (!hold) return { pass: true };
   const { origin: o, read } = origin;
   const ownerNothingRead = o === "O" && !read;
@@ -272,7 +343,14 @@ function decideCall({
     }
 
     case "scheduler-wake":
+    case "goal":
+      // More work for its own conversation: not after reading, nor from C.
       return read || o === "C" ? no : { pass: true };
+
+    case "rearm":
+      // Only a routine's own run can re-arm it (the gateway refuses any other):
+      // not after reading something from outside.
+      return read ? no : { pass: true };
 
     case "scheduler-remove": {
       if (ownerNothingRead)
@@ -317,15 +395,26 @@ function decideCall({
       // personal_instructions set writes a person's USER.md: the instructions row.
       return ownerNothingRead ? { pass: true } : no;
 
-    case "notes":
-      // The check-in's notes, and a routine's own notes: not after reading
-      // something from outside; as on plain OpenClaw otherwise.
-      return read ? no : { pass: true };
+    case "notes": {
+      // The check-in's notes and a routine's own notes (design 3.2): not after
+      // reading something from outside; at most 2 KiB; and only over notes that
+      // are empty or that this bot wrote itself through a journaled write.
+      if (read) return no;
+      const next = notesWritten(event);
+      if (next === undefined) return no;
+      if (Buffer.byteLength(next ?? "") > NOTES_MAX_BYTES)
+        return { block: true, reason: SAID.notesTooLong };
+      if (!notes || typeof notes.current !== "string")
+        return { block: true, reason: SAID.notesUnseen };
+      if (notes.current.trim() !== "" && notes.owned !== true)
+        return { block: true, reason: SAID.notesTheirs };
+      return { pass: true, notesWrite: { scope: notes.scope, previous: notes.current, next } };
+    }
 
     case "message":
     case "hand-off": {
       if (ownerNothingRead) return { pass: true };
-      const target = targetBot(event, caller);
+      const target = targetBot(event, caller, resolveLabel);
       if (o === "B" && !read && target !== null && reach.includes(target)) return { pass: true };
       return no;
     }

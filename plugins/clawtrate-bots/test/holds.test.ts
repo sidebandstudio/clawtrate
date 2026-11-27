@@ -3,11 +3,13 @@
 
 import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, win32 } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  NOTES_MAX_BYTES,
   SAID,
   decide,
+  driveAlias,
   expandPath,
   heldFile,
   describeHolds,
@@ -299,15 +301,45 @@ describe("messages and hand-offs to other bots", () => {
 });
 
 describe("the check-in's notes", () => {
-  it("not done after reading something from outside; as on plain OpenClaw otherwise", () => {
-    expect(outcomes(call("heartbeat_respond", { scratch: "new notes" }))).toEqual({
-      B: "done",
-      Bread: "not done",
-      O: "done",
-      Oread: "not done",
-      C: "done",
-      stranger: "done",
+  const empty = { notes: { scope: "check-in:pip", current: "", owned: false } };
+  const own = { notes: { scope: "check-in:pip", current: "- water plants", owned: true } };
+  const theirs = { notes: { scope: "check-in:pip", current: "- my own list", owned: false } };
+  const write = call("heartbeat_respond", { scratch: "- water plants\n- feed cat" });
+
+  it("over empty notes or its own: done, journaled; not after reading something from outside", () => {
+    for (const notes of [empty, own])
+      expect(outcomes(write, notes)).toEqual({
+        B: "done",
+        Bread: "not done",
+        O: "done",
+        Oread: "not done",
+        C: "done",
+        stranger: "done",
+      });
+    expect(on(write, C, own)).toEqual({
+      pass: true,
+      notesWrite: {
+        scope: "check-in:pip",
+        previous: "- water plants",
+        next: "- water plants\n- feed cat",
+      },
     });
+  });
+
+  it("over someone else's notes, or notes it couldn't see, not done", () => {
+    expect(on(write, C, theirs)).toEqual({ block: true, reason: SAID.notesTheirs });
+    expect(on(write, C, { notes: { scope: "check-in:pip", current: undefined } })).toEqual({
+      block: true,
+      reason: SAID.notesUnseen,
+    });
+    expect(on(write, C)).toEqual({ block: true, reason: SAID.notesUnseen });
+  });
+
+  it("at most 2 KiB", () => {
+    const big = call("heartbeat_respond", { scratch: "x".repeat(NOTES_MAX_BYTES + 1) });
+    expect(on(big, C, empty)).toEqual({ block: true, reason: SAID.notesTooLong });
+    const fits = call("heartbeat_respond", { scratch: "x".repeat(NOTES_MAX_BYTES) });
+    expect(on(fits, C, empty)).toMatchObject({ pass: true });
   });
 });
 
@@ -512,10 +544,11 @@ describe("fix round: the scheduler's other actions", () => {
     expect(holdOf(call("automations", { action: "bind", jobId: "j1" }), "pip")).toBe(
       "scheduler-update",
     );
-    expect(outcomes(call("automations", { action: "scratch_set", jobId: "j1" }))).toMatchObject({
-      B: "done",
-      Bread: "not done",
-    });
+    expect(
+      outcomes(call("automations", { action: "scratch_set", content: "x", expectedRevision: 2 }), {
+        notes: { scope: "routine:j1", current: "", owned: false },
+      }),
+    ).toMatchObject({ B: "done", Bread: "not done", C: "done" });
   });
 
   it("D8: a routine's own remove names its job as the tool reads it, and two ids that disagree are refused", () => {
@@ -561,5 +594,74 @@ describe("fix round: other tool names", () => {
       Oread: "not done",
     });
     expect(holdOf(call("personal_instructions", { action: "get" }), "pip")).toBeNull();
+  });
+});
+
+describe("fix round 2", () => {
+  it("D2: a Windows drive alias is mapped as 2026.11.10 maps it, and held on Windows in either form", () => {
+    expect(driveAlias("/c/Users/pip/AGENTS.md")).toBe("C:\\Users\\pip\\AGENTS.md");
+    expect(driveAlias("/mnt/d/ws/SOUL.md")).toBe("D:\\ws\\SOUL.md");
+    expect(driveAlias("/cygdrive/e/x")).toBe("E:\\x");
+    expect(driveAlias("@/c/ws/AGENTS.md")).toBe("@C:\\ws\\AGENTS.md");
+    expect(driveAlias("/home/pip/AGENTS.md")).toBe("/home/pip/AGENTS.md");
+    const workspaces = { pip: "C:\\Users\\pip\\ws" };
+    const windows = { platform: "win32", pathApi: win32 };
+    for (const raw of [
+      "/c/Users/pip/ws/AGENTS.md",
+      "/mnt/c/Users/pip/ws/agents.md",
+      "@/c/Users/pip/ws/AGENTS.md",
+    ])
+      expect(heldFile(raw, "pip", workspaces, windows as never), raw).toEqual({
+        file: "agents.md",
+        bot: "pip",
+      });
+    // Elsewhere the alias is a plain absolute path.
+    expect(heldFile("/c/Users/pip/ws/AGENTS.md", "pip", { pip: "/w/pip" })).toBeNull();
+  });
+
+  it("D4: a routine's run is decided by the enablement the gateway last reported", () => {
+    const run = call("automations", { action: "run", jobId: "j1" });
+    expect(on(run, B, { enabled: () => true })).toEqual({ pass: true });
+    expect(on(run, B, { enabled: () => false })).toMatchObject({ block: true });
+  });
+
+  it("D1: a label is resolved as the gateway resolves it, then the reach decides", () => {
+    const send = (label: string) => call("sessions_send", { label, message: "m" });
+    const resolveLabel = (label: string) =>
+      ({ "Compare trail maps": "pip", "Review the route": "marlow", "Otto's list": "otto" })[
+        label
+      ] ?? null;
+    // Its own task: not held at all.
+    expect(holdOf(send("Compare trail maps"), "pip", resolveLabel)).toBeNull();
+    // Another bot's session within reach: a message, done with nothing read.
+    expect(on(send("Review the route"), B, { reach: ["marlow"], resolveLabel })).toEqual({
+      pass: true,
+    });
+    // Another bot's session out of reach, or a label no single session has: held.
+    expect(on(send("Otto's list"), B, { reach: ["marlow"], resolveLabel })).toMatchObject({
+      block: true,
+    });
+    expect(on(send("Nobody's"), B, { reach: ["marlow"], resolveLabel })).toMatchObject({
+      block: true,
+    });
+    expect(on(send("Review the route"), Bread, { reach: ["marlow"], resolveLabel })).toMatchObject({
+      block: true,
+    });
+  });
+
+  it("create_goal and next_check schedule no more work from a run that read from outside, nor create_goal from C", () => {
+    expect(outcomes(call("create_goal", { objective: "x" }))).toEqual({
+      B: "done",
+      Bread: "not done",
+      O: "done",
+      Oread: "not done",
+      C: "not done",
+      stranger: "not done",
+    });
+    expect(holdOf(call("update_goal", { status: "complete" }), "pip")).toBeNull();
+    const rearm = call("automations", { action: "next_check", in: "10m" });
+    expect(holdOf(rearm, "pip")).toBe("rearm");
+    expect(on(rearm, origin("C", null, "routine"))).toEqual({ pass: true });
+    expect(on(rearm, origin("C", "web", "routine"))).toMatchObject({ block: true });
   });
 });

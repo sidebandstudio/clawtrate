@@ -158,6 +158,14 @@ export function memoryStore({ maxEntries = Infinity } = {}) {
       rows.set(key, { json: json(value), rev: ++rev });
       return true;
     },
+    /** Writes a key whether or not it is there, as the host's `register` does. */
+    async register(key: string, value: unknown) {
+      await tick();
+      await pass(key, "write");
+      if (!rows.has(key) && rows.size >= maxEntries)
+        throw Object.assign(new Error("limit"), { code: "PLUGIN_STATE_LIMIT_EXCEEDED" });
+      rows.set(key, { json: json(value), rev: ++rev });
+    },
   };
   return store;
 }

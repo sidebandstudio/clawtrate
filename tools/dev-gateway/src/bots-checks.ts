@@ -272,6 +272,29 @@ async function routineFinished(ctx: BotsContext, id: string): Promise<JsonRecord
   }
 }
 
+/** A routine's runs once `count` of them have finished; the latest. */
+async function routineFinishedAgain(
+  ctx: BotsContext,
+  id: string,
+  count: number,
+): Promise<JsonRecord> {
+  const deadline = Date.now() + 90_000;
+  for (;;) {
+    const runs = rec(
+      await ctx.clients.admin.request("cron.runs", { id, limit: 10 }).catch(() => ({})),
+    );
+    const entries = (
+      Array.isArray(runs.entries) ? runs.entries : Array.isArray(runs.runs) ? runs.runs : []
+    ) as JsonRecord[];
+    const done = entries.filter(
+      (e) => e.status === "ok" || e.status === "error" || e.action === "finished",
+    );
+    if (done.length >= count) return done.sort((a, b) => Number(b.ts ?? 0) - Number(a.ts ?? 0))[0]!;
+    expect(Date.now() < deadline, `routine ${id} did not finish ${count} runs within 90 seconds`);
+    await sleep(1000);
+  }
+}
+
 /** The bot's own file, as the gateway reads it. */
 async function fileOf(ctx: BotsContext, bot: string, name: string): Promise<string> {
   const got = rec(await ctx.clients.admin.request("agents.files.get", { agentId: bot, name }));
@@ -716,13 +739,23 @@ export const BOTS_CHECKS: BotsCheck[] = [
     },
   },
   {
-    name: "fix round D2: a typed run can't change its AGENTS.md through a ~/ or file:// path",
+    name: "fix round D2: a typed run can't change its AGENTS.md through a ~/, file://, @, .. or lower-case path",
     covers: ["#edit-path"],
     async run(ctx, world) {
       const file = join(ctx.stateDir, "workspaces", "pip", "AGENTS.md");
       const before = await fileOf(ctx, "pip", "AGENTS.md");
       try {
-        for (const path of [`~/${relative(homedir(), file)}`, `file://${file}`]) {
+        const dir = join(ctx.stateDir, "workspaces", "pip");
+        for (const path of [
+          `~/${relative(homedir(), file)}`,
+          `file://${file}`,
+          `@${file}`,
+          `${dir}/notes/../AGENTS.md`,
+          // The development machine's own filesystem doesn't tell case apart.
+          ...(process.platform === "darwin" || process.platform === "win32"
+            ? [join(dir, "agents.md")]
+            : []),
+        ]) {
           const t = await turn(ctx, await task(ctx, world, "pip", "path"), `#edit-path ${path}`);
           expect(
             t.calls.some((c) => c.name === "edit" && c.text.includes(NOT_DONE)),
@@ -788,6 +821,97 @@ export const BOTS_CHECKS: BotsCheck[] = [
       } finally {
         await clearRoutines(ctx, world);
       }
+    },
+  },
+  {
+    name: "fix round 2 D4: whether a routine may run now is what the gateway last reported, both ways, from a fresh run that read nothing",
+    covers: ["#keep-routine-on", "#run-routine-id"],
+    async run(ctx, world) {
+      const admin = ctx.clients.admin;
+      const runs = async (id: string) => {
+        const got = rec(await admin.request("cron.runs", { id, limit: 5 }).catch(() => ({})));
+        return (Array.isArray(got.entries) ? got.entries : []) as JsonRecord[];
+      };
+      const runNow = async (id: string, tag: string) =>
+        (await turn(ctx, await task(ctx, world, "pip", tag), `#run-routine-id ${id}`)).calls.find(
+          (c) => c.name === "automations",
+        );
+      try {
+        // On, in the plugin's own copy (the owner's request in a chat app); an operator turns it off.
+        const out = await ctx.cli([
+          "agent",
+          "--agent",
+          "pip",
+          "--session-key",
+          await task(ctx, world, "pip", "owner-on"),
+          "--channel",
+          "discord",
+          "--message",
+          "#keep-routine-on",
+          "--json",
+        ]);
+        expect(out.status === 0, `openclaw agent failed: ${out.stderr.slice(0, 300)}`);
+        const on = (await kept(ctx))[0];
+        expect(on && on.enabled !== false, `the owner's routine: ${show(await kept(ctx))}`);
+        await admin.request("cron.update", { id: on!.id, patch: { enabled: false } });
+        const refused = await runNow(String(on!.id), "run-after-off");
+        expect(refused?.text.includes(NOT_DONE), `run after it was turned off: ${show(refused)}`);
+        expect(
+          (await runs(String(on!.id))).length === 0,
+          "the routine ran after it was turned off",
+        );
+        await clearRoutines(ctx, world);
+        // Off, in the plugin's own copy (stored turned off); an operator turns it on.
+        await turn(ctx, await task(ctx, world, "pip", "stored-off"), "#keep-routine");
+        const off = (await kept(ctx))[0];
+        expect(off && off.enabled === false, `the stored-off routine: ${show(await kept(ctx))}`);
+        await admin.request("cron.update", { id: off!.id, patch: { enabled: true } });
+        const ran = await runNow(String(off!.id), "run-after-on");
+        expect(
+          ran && ran.ok && !ran.text.includes(NOT_DONE),
+          `run after it was turned on: ${show(ran)}`,
+        );
+      } finally {
+        await clearRoutines(ctx, world);
+      }
+    },
+  },
+  {
+    name: "fix round 2 D8: on 2026.11.10 a routine writes its own notes, is journaled, and doesn't replace a person's",
+    covers: ["#notes-set"],
+    async run(ctx, world) {
+      if (ctx.clients.admin.serverVersion === "2026.10.6") return; // no routine notes there
+      const own = await routineRun(ctx, world, "#notes-set first notes");
+      const said = String(rec(await routineFinished(ctx, own)).summary ?? "");
+      expect(!said.includes(NOT_DONE), `its first notes: ${said}`);
+      const scratch = async () =>
+        rec(rec(await ctx.clients.admin.request("cron.scratch.get", { id: own })).scratch);
+      expect((await scratch()).content === "first notes", `the notes: ${show(await scratch())}`);
+      // A person's notes: not replaced by the routine's run.
+      const rev = rec(
+        await ctx.clients.admin.request("cron.scratch.get", { id: own }),
+      ).currentRevision;
+      await ctx.clients.admin.request("cron.scratch.set", {
+        id: own,
+        content: "my own list",
+        expectedRevision: rev,
+      });
+      await ctx.clients.admin.request("cron.run", { id: own, mode: "force" });
+      const second = String(rec(await routineFinishedAgain(ctx, own, 2)).summary ?? "");
+      expect(second.includes(NOT_DONE), `over a person's notes: ${second}`);
+      expect((await scratch()).content === "my own list", `the notes: ${show(await scratch())}`);
+    },
+  },
+  {
+    name: "fix round 2: create_goal and next_check schedule no more work after reading a web page",
+    covers: ["#goal", "#rearm"],
+    async run(ctx, world) {
+      const goal = await turn(ctx, await task(ctx, world, "pip", "goal"), "#search #goal");
+      const made = goal.calls.find((c) => c.name === "create_goal");
+      expect(made?.text.includes(NOT_DONE), `create_goal after reading: ${show(made)}`);
+      const job = await routineRun(ctx, world, "#search #rearm");
+      const said = String(rec(await routineFinished(ctx, job)).summary ?? "");
+      expect(said.includes(NOT_DONE), `next_check after reading: ${said}`);
     },
   },
   {

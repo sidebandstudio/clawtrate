@@ -4,8 +4,9 @@
 // when this hook throws or takes 15 seconds (their global hook runner runs
 // before_tool_call fail-closed); the hook doesn't rely on that.
 
+import { createHash } from "node:crypto";
 import { SAID, decide, describeHolds, holdOf } from "./holds.js";
-import { readFirst } from "./params.js";
+import { botOfKey, readFirst } from "./params.js";
 import { createRuns, reachOf } from "./runs.js";
 
 /** Routines the plugin knows, newest last: what the gateway reported, and its own full copy. */
@@ -25,6 +26,36 @@ export const NOT_REPORTED = Object.freeze([
   "deleteAfterRun",
   "failureAlert",
 ]);
+/**
+ * Notes a bot wrote itself, through a held and journaled write: per notes
+ * (`check-in:<bot>`, `routine:<job>`), who wrote them last and their hash, and
+ * one journal entry per write with the notes before and after (design 3.2, 9).
+ */
+export const NOTES = Object.freeze({
+  namespace: "notes-written",
+  maxEntries: 512,
+  overflowPolicy: "evict-oldest",
+  defaultTtlMs: 365 * 24 * 60 * 60 * 1000,
+});
+/** The notes as their hash compares them: the gateway shows them trimmed. */
+export const notesHash = (text) =>
+  createHash("sha256")
+    .update(String(text ?? "").trim())
+    .digest("hex");
+/**
+ * A check-in's notes as the run's own prompt shows them: 2026.10.6 appends
+ * them last, after "Heartbeat monitor scratch:" (dist/heartbeat-runner-run-PCcyazhe.mjs,
+ * `appendHeartbeatScratch`), and leaves them out when there are none.
+ */
+export function checkInNotesOf(prompt) {
+  const marker = "\n\nHeartbeat monitor scratch:\n";
+  const at = String(prompt).lastIndexOf(marker);
+  return at === -1
+    ? ""
+    : String(prompt)
+        .slice(at + marker.length)
+        .trim();
+}
 /** Removals let through and waiting for their result, at most this many. */
 const ENDING_MAX = 64;
 const DEFINITIONS_KEY = Symbol.for("clawtrate-bots.definitions.v1");
@@ -58,6 +89,19 @@ export function addedId(result) {
   return null;
 }
 
+/** A tool result's JSON: its details, else its first text block parsed. */
+function resultJson(result) {
+  if (isRecord(result?.details) && Object.keys(result.details).length > 0) return result.details;
+  for (const block of Array.isArray(result?.content) ? result.content : []) {
+    try {
+      return JSON.parse(String(block?.text ?? ""));
+    } catch {
+      // not JSON
+    }
+  }
+  return null;
+}
+
 /** Whether a scheduler call's result says it failed. */
 const failedResult = (event) =>
   Boolean(event?.error) ||
@@ -66,9 +110,11 @@ const failedResult = (event) =>
 
 export function createHooks(api, options = {}) {
   const slots = options.slots ?? globalThis;
-  slots[DEFINITIONS_KEY] ??= { definitions: new Map(), ending: new Map() };
-  const { definitions, ending } = slots[DEFINITIONS_KEY];
+  slots[DEFINITIONS_KEY] ??= { definitions: new Map(), ending: new Map(), noting: new Map() };
+  slots[DEFINITIONS_KEY].noting ??= new Map();
+  const { definitions, ending, noting } = slots[DEFINITIONS_KEY];
   const ended = options.ended ?? api.runtime?.state?.openKeyedStore?.(ENDED);
+  const notesStore = options.notes ?? api.runtime?.state?.openKeyedStore?.(NOTES);
   const now = options.now ?? Date.now;
   const config = () => options.config?.() ?? api.runtime?.config?.current?.() ?? {};
 
@@ -102,10 +148,68 @@ export function createHooks(api, options = {}) {
     });
   }
 
-  async function afterToolCall(event) {
-    if (!SCHEDULER.has(String(event?.toolName))) return;
-    const action = String(event?.params?.action ?? "").toLowerCase();
+  /** A notes write let through, journaled once it succeeded, and its writer kept. */
+  async function settleNotes(pending) {
+    const at = now();
+    const entry = { ...pending, nextHash: notesHash(pending.next), at };
+    await notesStore?.register(
+      `journal:${pending.scope}:${String(at).padStart(16, "0")}:${pending.runId}`,
+      entry,
+    );
+    await notesStore?.register(`owner:${pending.scope}`, {
+      agentId: pending.agentId,
+      nextHash: entry.nextHash,
+      at,
+    });
+  }
+
+  /** What a notes write would replace, and whether this bot wrote it: see holds.js "notes". */
+  async function notesContext(event, run, caller) {
+    const name = String(event?.toolName ?? "").toLowerCase();
+    let scope;
+    let current;
+    if (name === "heartbeat_respond") {
+      scope = caller ? `check-in:${caller}` : null;
+      current = run?.checkInNotes;
+    } else {
+      // 2026.11.10's scratch_set needs the revision its run's scratch_get read.
+      const job = run?.jobId ?? null;
+      scope = job ? `routine:${job}` : null;
+      const seen = run?.routineNotes;
+      const expected = event?.params?.expectedRevision ?? event?.params?.expected_revision;
+      if (seen && seen.jobId === job && seen.revision === expected) current = seen.content;
+    }
+    if (!scope || typeof current !== "string") return { scope, current: undefined };
+    if (current.trim() === "") return { scope, current, owned: false };
+    const owner = await notesStore?.lookup(`owner:${scope}`);
+    return {
+      scope,
+      current,
+      owned: owner?.agentId === caller && owner?.nextHash === notesHash(current),
+    };
+  }
+
+  async function afterToolCall(event, _ctx, run) {
+    const name = String(event?.toolName ?? "");
+    const callId = String(event?.toolCallId ?? "");
     const failed = failedResult(event);
+    const wrote = noting.get(callId);
+    if (wrote) {
+      noting.delete(callId);
+      if (!failed) await settleNotes(wrote);
+    }
+    if (!SCHEDULER.has(name)) return;
+    const action = String(event?.params?.action ?? "").toLowerCase();
+    if (action === "scratch_get" && !failed && run && !run.lost) {
+      // The routine's notes and their revision, as its own run read them.
+      const read = resultJson(event.result);
+      if (isRecord(read))
+        run.routineNotes = {
+          jobId: run.jobId ?? null,
+          content: typeof read.scratch?.content === "string" ? read.scratch.content : "",
+          revision: read.currentRevision,
+        };
+    }
     if (action === "add" && !failed) {
       // The plugin's own full copy of a routine made through a call it held.
       const id = addedId(event.result);
@@ -117,7 +221,6 @@ export function createHooks(api, options = {}) {
       const id = jobIdOf(event.params);
       if (id) know(id, { full: undefined });
     }
-    const callId = String(event?.toolCallId ?? "");
     const pending = ending.get(callId);
     if (pending) {
       ending.delete(callId);
@@ -125,7 +228,12 @@ export function createHooks(api, options = {}) {
     }
   }
 
-  const runs = createRuns(api, { ...options, describeHolds, afterToolCall });
+  const runs = createRuns(api, {
+    ...options,
+    describeHolds,
+    afterToolCall,
+    notesOf: checkInNotesOf,
+  });
 
   api.on("cron_changed", async (event) => {
     const id = typeof event?.jobId === "string" ? event.jobId : null;
@@ -165,6 +273,36 @@ export function createHooks(api, options = {}) {
     { scope: "operator.read" },
   );
 
+  const sessionsOf = (agentId) =>
+    options.sessions?.(agentId) ??
+    api.runtime?.agent?.session?.listSessionEntries?.({
+      agentId,
+      readOnly: true,
+      includeParticipants: false,
+    }) ??
+    [];
+
+  /**
+   * The bot a label with no agentId reaches, as the gateway resolves it: the one
+   * session among every bot's whose label is exactly that, trimmed; null when
+   * none or several have it (the gateway refuses either), so it is held.
+   */
+  function labelBot(cfg, label) {
+    const want = String(label).trim();
+    const ids = new Set([
+      ...Object.keys(cfg?.agents?.entries ?? {}),
+      ...(Array.isArray(cfg?.agents?.list) ? cfg.agents.list.map((a) => a?.id) : []),
+    ]);
+    const keys = new Set();
+    for (const id of ids) {
+      if (typeof id !== "string" || !id) continue;
+      for (const row of sessionsOf(id) ?? [])
+        if (row?.entry?.label === want && typeof row.sessionKey === "string")
+          keys.add(row.sessionKey);
+    }
+    return keys.size === 1 ? botOfKey([...keys][0]) : null;
+  }
+
   /** Every bot's workspace, so a write to another bot's files is told from the caller's own. */
   function workspaces(cfg, caller, run) {
     if (options.workspaces) return options.workspaces(caller);
@@ -202,12 +340,21 @@ export function createHooks(api, options = {}) {
         caller,
         reach: reachOf(cfg, caller),
         workspaces: workspaces(cfg, caller, run),
-        enabled: (id) => {
-          const known = definitions.get(id);
-          return known?.full?.enabled ?? known?.enabled ?? null;
-        },
+        // Whether a routine is on, as the gateway last reported it (cron_changed):
+        // never the plugin's own copy, which an operator's change makes stale.
+        enabled: (id) => definitions.get(id)?.enabled ?? null,
         requester: ctx?.requester,
+        resolveLabel: (label) => labelBot(cfg, label),
+        notes: holdOf(event, caller) === "notes" ? await notesContext(event, run, caller) : null,
       });
+      if (decision.notesWrite) {
+        noting.set(String(event?.toolCallId ?? ""), {
+          ...decision.notesWrite,
+          agentId: caller,
+          runId: run?.runId ?? null,
+        });
+        while (noting.size > ENDING_MAX) noting.delete(noting.keys().next().value);
+      }
       if (decision.endsRoutine) {
         ending.set(String(event?.toolCallId ?? ""), {
           jobId: decision.endsRoutine,
@@ -242,5 +389,5 @@ export function createHooks(api, options = {}) {
     return undefined;
   });
 
-  return { ...runs, definitions, ending };
+  return { ...runs, definitions, ending, noting };
 }
