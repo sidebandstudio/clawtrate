@@ -18,13 +18,8 @@ import { openInstance, openOperator } from "../tools/dev-gateway/src/cli.ts";
 import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
 import { newRunId, ownIdentity } from "../tools/dev-gateway/src/state-guard.ts";
-import {
-  devGateway,
-  FORBIDDEN_PORTS,
-  listInstances,
-  startHost,
-  stopChild,
-} from "./global-setup.ts";
+import { approveDevice } from "./approve.ts";
+import { FORBIDDEN_PORTS, listInstances, startHost, stopChild } from "./global-setup.ts";
 import { cleanUp, saveRecord, type RunRecord } from "./run-record.ts";
 
 const INSTANCE = process.env.CLAWTRATE_DEV_INSTANCE!;
@@ -121,9 +116,7 @@ async function pairedPage(browser: Browser, instance: string): Promise<Page> {
   await expect(page.getByRole("heading", { name: "Approve this device" })).toBeVisible({
     timeout: 20_000,
   });
-  await expect
-    .poll(() => devGateway(instance, "approve"), { timeout: 30_000, intervals: [1000] })
-    .toMatch(/^Approved /m);
+  await approveDevice(instance);
   await expect(page.getByTestId("bot").first()).toBeVisible({ timeout: 30_000 });
   return page;
 }
@@ -230,9 +223,7 @@ test("F-562: with other bots, the gateway's own bot is absent from the sidebar, 
   await botRow(page, "Pip").first().click();
   const bar = page.getByRole("region", { name: "Access" });
   await bar.getByRole("button", { name: "Request access" }).click();
-  await expect
-    .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000, intervals: [1000] })
-    .toMatch(/^Approved /m);
+  await approveDevice(INSTANCE);
   await expect(page.getByTestId("composer-input")).toBeVisible({ timeout: 30_000 });
   await expect(botRow(page, "Juniper")).toHaveCount(0);
   // A task of its own, with a question asked in it. The gateway asks a run's question of the

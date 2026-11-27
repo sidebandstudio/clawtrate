@@ -7,8 +7,8 @@ import { join } from "node:path";
 import { protocolMismatch } from "../packages/core/src/connect-errors.ts";
 import { instanceForm, openInstance, recordedStartOptions } from "../tools/dev-gateway/src/cli.ts";
 import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
+import { approveDevice } from "./approve.ts";
 import {
-  devGateway,
   FORBIDDEN_PORTS,
   listInstances,
   runningOthers,
@@ -364,9 +364,7 @@ async function pairOn(page: Page, url: string): Promise<void> {
   await expect(page.getByRole("heading", { name: "Approve this device" })).toBeVisible({
     timeout: 20_000,
   });
-  await expect
-    .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000, intervals: [1000] })
-    .toMatch(/^Approved /m);
+  await approveDevice(INSTANCE);
   await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 30_000 });
 }
 
@@ -394,9 +392,7 @@ test.beforeAll(async ({ browser }) => {
     const asking = bar.getByRole("button", { name: /^Request (access|again)$/ });
     if ((await asking.count()) > 0) {
       await asking.click();
-      await expect
-        .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000, intervals: [1000] })
-        .toMatch(/^Approved /m);
+      await approveDevice(INSTANCE);
     }
     await expect(composer(page)).toBeVisible({ timeout: 30_000 });
   } finally {
@@ -492,7 +488,7 @@ test("F-002 F-003 F-009: pairs with the development gateway in steps, says when 
   await expect(page.getByRole("heading", { name: "Approve this device" })).toBeVisible();
   await expect(page.locator(".connect-foot")).not.toContainText(request.requestId.slice(0, 8));
 
-  devGateway(INSTANCE, "approve");
+  await approveDevice(INSTANCE);
 
   // The pairing screen reconnects by itself once the request is approved.
   const bots = page.getByTestId("bot");
@@ -1523,7 +1519,7 @@ test("F-456: a refused request leaves the read tier as it was; an approved one g
   // Asked again and approved: the composer takes the bar's place.
   await bar.getByRole("button", { name: "Request again" }).click();
   await expect(bar).toContainText("Waiting for the gateway's owner.");
-  devGateway(INSTANCE, "approve");
+  await approveDevice(INSTANCE);
   await expect(composer(page)).toBeVisible({ timeout: 20_000 });
   await expect(page.getByRole("region", { name: "Access" })).toHaveCount(0);
   await expect(page.getByTestId("status-strip")).toContainText("Access granted");

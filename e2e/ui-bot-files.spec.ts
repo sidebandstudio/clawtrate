@@ -11,7 +11,8 @@ import { readFileSync } from "node:fs";
 import { openInstance } from "../tools/dev-gateway/src/cli.ts";
 import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
 import { ATTACH_TEXT, reviewsDraftPdf } from "../tools/dev-gateway/src/scripted-files.ts";
-import { devGateway, listInstances } from "./global-setup.ts";
+import { approveDevice } from "./approve.ts";
+import { listInstances } from "./global-setup.ts";
 
 const INSTANCE = process.env.CLAWTRATE_DEV_INSTANCE!;
 
@@ -40,7 +41,7 @@ async function openShell(page: Page) {
   if (await connect.isVisible()) {
     await connect.click();
     await expect(page.getByRole("heading", { name: "Approve this device" })).toBeVisible();
-    devGateway(INSTANCE, "approve");
+    await approveDevice(INSTANCE);
   }
   await expect(bots).toHaveCount(4, { timeout: 20_000 });
 }

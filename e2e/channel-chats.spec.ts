@@ -14,7 +14,8 @@ import { join } from "node:path";
 import { plainPreview } from "../packages/core/src/mapping.ts";
 import { openInstance, openOperator } from "../tools/dev-gateway/src/cli.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
-import { devGateway, startHost, stopChild } from "./global-setup.ts";
+import { approveDevice } from "./approve.ts";
+import { startHost, stopChild } from "./global-setup.ts";
 
 const INSTANCE = process.env.CLAWTRATE_DEV_INSTANCE!;
 const STATIC = process.env.CLAWTRATE_E2E_STATIC!;
@@ -159,9 +160,7 @@ test.beforeAll(async ({ browser }) => {
   await expect(page.getByRole("heading", { name: "Approve this device" })).toBeVisible({
     timeout: 20_000,
   });
-  await expect
-    .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000, intervals: [1000] })
-    .toMatch(/^Approved /m);
+  await approveDevice(INSTANCE);
   await railShowsBot();
 });
 

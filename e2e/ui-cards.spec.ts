@@ -24,7 +24,8 @@ import { MAX_MCP_TOOLS } from "../packages/core/src/state-bounds.ts";
 import { openInstance, openOperator } from "../tools/dev-gateway/src/cli.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
 import { openCheckClients, type ClientName } from "../tools/dev-gateway/src/scenario-check.ts";
-import { devGateway, startHost, stopChild } from "./global-setup.ts";
+import { approveDevice } from "./approve.ts";
+import { startHost, stopChild } from "./global-setup.ts";
 import { leaveIdle } from "./teardown.ts";
 
 const INSTANCE = process.env.CLAWTRATE_DEV_INSTANCE!;
@@ -64,9 +65,7 @@ async function pairedPage(browser: Browser, host: Host): Promise<Page> {
   await expect(next.getByRole("heading", { name: "Approve this device" })).toBeVisible({
     timeout: 20_000,
   });
-  await expect
-    .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000, intervals: [1000] })
-    .toMatch(/^Approved /m);
+  await approveDevice(INSTANCE);
   await expect(next.getByTestId("bot")).toHaveCount(4, { timeout: 30_000 });
   return next;
 }
@@ -135,9 +134,7 @@ async function requestAccess(on: Page): Promise<void> {
         socket.onerror = () => reject(new Error("bridge socket error"));
       }),
   );
-  await expect
-    .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000, intervals: [1000] })
-    .toMatch(/^Approved /m);
+  await approveDevice(INSTANCE);
   await on.keyboard.press("ControlOrMeta+,");
   const dialog = on.getByRole("dialog", { name: "Settings" });
   await expect(dialog.getByTestId("granted-scopes")).toContainText("operator.approvals", {

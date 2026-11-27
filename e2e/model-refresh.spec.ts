@@ -13,7 +13,8 @@ import { grownModels, LATER_MODELS } from "../tools/dev-gateway/src/accounts.ts"
 import { openInstance, openOperator } from "../tools/dev-gateway/src/cli.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
 import { ACCOUNTS, test } from "./accounts-instance.ts";
-import { devGateway, listInstances, startHost, stopChild } from "./global-setup.ts";
+import { approveDevice } from "./approve.ts";
+import { listInstances, startHost, stopChild } from "./global-setup.ts";
 
 const INSTANCE = ACCOUNTS;
 const STATIC = process.env.CLAWTRATE_E2E_STATIC!;
@@ -27,9 +28,7 @@ let page: Page;
 let admin: OperatorSession;
 
 async function approve(): Promise<void> {
-  await expect
-    .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000, intervals: [1000] })
-    .toMatch(/^Approved /m);
+  await approveDevice(INSTANCE);
 }
 
 /** One bridge command, over the host's own bridge socket. */

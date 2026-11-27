@@ -19,13 +19,8 @@ import { openInstance, openOperator, readDevConnection } from "../tools/dev-gate
 import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
 import { newRunId, ownIdentity, processIdentity } from "../tools/dev-gateway/src/state-guard.ts";
-import {
-  devGateway,
-  FORBIDDEN_PORTS,
-  listInstances,
-  startHost,
-  stopChild,
-} from "./global-setup.ts";
+import { approveDevice } from "./approve.ts";
+import { FORBIDDEN_PORTS, listInstances, startHost, stopChild } from "./global-setup.ts";
 import { cleanUp, saveRecord, TEMP_PREFIX, type RunRecord } from "./run-record.ts";
 
 const ROOT = join(import.meta.dirname, "..");
@@ -86,9 +81,7 @@ function apiTurn(bot: string, user: string, message: string): Promise<Response> 
 }
 
 async function approve(): Promise<void> {
-  await expect
-    .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000, intervals: [1000] })
-    .toMatch(/^Approved /m);
+  await approveDevice(INSTANCE);
 }
 
 /** One bridge command, over the host's own bridge socket, as another viewer of the page sends it. */

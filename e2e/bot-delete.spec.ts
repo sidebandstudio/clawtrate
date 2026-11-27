@@ -11,7 +11,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openInstance, openOperator } from "../tools/dev-gateway/src/cli.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
-import { devGateway, startHost, stopChild } from "./global-setup.ts";
+import { approveDevice } from "./approve.ts";
+import { startHost, stopChild } from "./global-setup.ts";
 
 const INSTANCE = process.env.CLAWTRATE_DEV_INSTANCE!;
 const STATIC = process.env.CLAWTRATE_E2E_STATIC!;
@@ -163,9 +164,7 @@ async function pairedPage(browser: Browser): Promise<Page> {
   await expect(next.getByRole("heading", { name: "Approve this device" })).toBeVisible({
     timeout: 20_000,
   });
-  await expect
-    .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000, intervals: [1000] })
-    .toMatch(/^Approved /m);
+  await approveDevice(INSTANCE);
   await expect
     .poll(() => next.getByTestId("bot").count(), { timeout: 30_000 })
     .toBeGreaterThanOrEqual(4);
@@ -221,9 +220,7 @@ test("F-050: a read-only connection sees what goes and why it can't delete, then
   await expect(dialog.getByRole("button", { name: `Delete ${name}` })).toHaveCount(0);
   await dialog.getByRole("button", { name: "Request admin access" }).click();
   await expect(dialog.getByTestId("admin-bar")).toContainText("Waiting for the gateway's owner.");
-  await expect
-    .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000, intervals: [1000] })
-    .toMatch(/^Approved /m);
+  await approveDevice(INSTANCE);
   await expect(dialog.getByRole("button", { name: `Delete ${name}` })).toBeVisible({
     timeout: 30_000,
   });

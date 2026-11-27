@@ -14,7 +14,8 @@ import { zonedTime } from "../packages/ui/src/routines/schedule.ts";
 import { openInstance, openOperator } from "../tools/dev-gateway/src/cli.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
 import { scriptedRoutine, SCRIPTED_ROUTINES } from "../tools/dev-gateway/src/routines.ts";
-import { devGateway, startHost, stopChild } from "./global-setup.ts";
+import { approveDevice } from "./approve.ts";
+import { startHost, stopChild } from "./global-setup.ts";
 
 const INSTANCE = process.env.CLAWTRATE_DEV_INSTANCE!;
 const STATIC = process.env.CLAWTRATE_E2E_STATIC!;
@@ -105,9 +106,7 @@ test.beforeAll(async ({ browser }) => {
   await expect(page.getByRole("heading", { name: "Approve this device" })).toBeVisible({
     timeout: 20_000,
   });
-  await expect
-    .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000, intervals: [1000] })
-    .toMatch(/^Approved /m);
+  await approveDevice(INSTANCE);
   await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 30_000 });
   // These checks read a routine's runs under its bot, which "Show sessions from other tools"
   // lists (F-563): turned on as a person turns it on.

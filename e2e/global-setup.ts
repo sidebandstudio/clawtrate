@@ -30,8 +30,8 @@ import {
 } from "../tools/dev-gateway/src/state-guard.ts";
 import { cleanUp, recoverDeadRuns, saveRecord, TEMP_PREFIX, type RunRecord } from "./run-record.ts";
 
-const ROOT = join(import.meta.dirname, "..");
-const CLI = join(ROOT, "tools/dev-gateway/src/cli.ts");
+export const ROOT = join(import.meta.dirname, "..");
+export const CLI = join(ROOT, "tools/dev-gateway/src/cli.ts");
 /** Run records of this checkout's end-to-end runs. Git-ignored. */
 const RECORDS = join(ROOT, "tools/dev-gateway/.run/e2e");
 import { STATE_FILE } from "../packages/core/src/node/secure.ts";
@@ -48,7 +48,7 @@ export type ListedInstance = {
   gatewayState: "none" | "dead" | "alive" | "unknown";
 };
 
-function cliEnv(): NodeJS.ProcessEnv {
+export function cliEnv(): NodeJS.ProcessEnv {
   // The instance is named by the flag alone, never inherited from the environment.
   const env = { ...process.env };
   delete env.CLAWTRATE_DEV_INSTANCE;

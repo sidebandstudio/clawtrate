@@ -22,13 +22,8 @@ import { instanceForm, openInstance, openOperator } from "../tools/dev-gateway/s
 import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
 import { scriptedFinalText } from "../tools/dev-gateway/src/scenario-check.ts";
 import { newRunId, ownIdentity, processIdentity } from "../tools/dev-gateway/src/state-guard.ts";
-import {
-  devGateway,
-  FORBIDDEN_PORTS,
-  listInstances,
-  startHost,
-  stopChild,
-} from "./global-setup.ts";
+import { approveDevice } from "./approve.ts";
+import { FORBIDDEN_PORTS, listInstances, startHost, stopChild } from "./global-setup.ts";
 import {
   cleanUp,
   readRecord,
@@ -90,9 +85,7 @@ async function gatewayCall<T>(method: string, params: unknown): Promise<T> {
 }
 
 async function approve(): Promise<void> {
-  await expect
-    .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000, intervals: [1000] })
-    .toMatch(/^Approved /m);
+  await approveDevice(INSTANCE);
 }
 
 /** One bridge command, over the host's own bridge socket, as another viewer of the page sends it. */

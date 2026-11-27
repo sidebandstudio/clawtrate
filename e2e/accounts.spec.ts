@@ -18,6 +18,7 @@ import { ACCOUNT_CLIENTS, SIGNIN_CHOICES } from "../tools/dev-gateway/src/accoun
 import { openInstance, openOperator } from "../tools/dev-gateway/src/cli.ts";
 import { TERMINAL_CHAT_STATES, type OperatorSession } from "../tools/dev-gateway/src/operator.ts";
 import { ACCOUNTS, test } from "./accounts-instance.ts";
+import { approveDevice } from "./approve.ts";
 import { devGateway, listInstances, startHost, stopChild } from "./global-setup.ts";
 
 const INSTANCE = ACCOUNTS;
@@ -94,9 +95,7 @@ const botRow = (name: string) =>
   page.getByTestId("bot-list").getByRole("button", { name: new RegExp(`^${name}\\b`) });
 
 async function approve(): Promise<void> {
-  await expect
-    .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000, intervals: [1000] })
-    .toMatch(/^Approved /m);
+  await approveDevice(INSTANCE);
 }
 
 /** One bridge command, over the host's own bridge socket, as another viewer of the page sends it. */

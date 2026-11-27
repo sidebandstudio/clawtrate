@@ -11,7 +11,8 @@ import { join } from "node:path";
 import { openInstance } from "../tools/dev-gateway/src/cli.ts";
 import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
 import { CHECKOUT_PATH, FILES_BOT } from "../tools/dev-gateway/src/seed-files.ts";
-import { devGateway, listInstances } from "./global-setup.ts";
+import { approveDevice } from "./approve.ts";
+import { listInstances } from "./global-setup.ts";
 
 const INSTANCE = process.env.CLAWTRATE_DEV_INSTANCE!;
 const SHOTS = process.env.CLAWTRATE_FILES_SHOTS ?? null;
@@ -55,7 +56,7 @@ async function openShell(page: Page) {
   if (await connect.isVisible()) {
     await connect.click();
     await expect(page.getByRole("heading", { name: "Approve this device" })).toBeVisible();
-    devGateway(INSTANCE, "approve");
+    await approveDevice(INSTANCE);
   }
   await expect(bots).toHaveCount(4, { timeout: 20_000 });
 }

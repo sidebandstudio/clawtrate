@@ -15,7 +15,8 @@ import { openInstance, openOperator } from "../tools/dev-gateway/src/cli.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
 import { setHooks, withScheduler } from "../tools/dev-gateway/src/routine-gateway.ts";
 import { scriptedRoutine } from "../tools/dev-gateway/src/routines.ts";
-import { devGateway, startHost, stopChild } from "./global-setup.ts";
+import { approveDevice } from "./approve.ts";
+import { startHost, stopChild } from "./global-setup.ts";
 
 const INSTANCE = process.env.CLAWTRATE_DEV_INSTANCE!;
 const STATIC = process.env.CLAWTRATE_E2E_STATIC!;
@@ -73,9 +74,7 @@ const row = (name: string) => view().getByTestId("routine-row").filter({ hasText
 const save = () => editor().getByRole("button", { name: "Save", exact: true });
 
 async function approve(): Promise<void> {
-  await expect
-    .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000, intervals: [1000] })
-    .toMatch(/^Approved /m);
+  await approveDevice(INSTANCE);
 }
 
 async function openRoutines(): Promise<void> {

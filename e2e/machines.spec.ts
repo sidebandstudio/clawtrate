@@ -18,7 +18,8 @@ import { ACCOUNT_CLIENTS } from "../tools/dev-gateway/src/account-checks.ts";
 import { openInstance, openOperator } from "../tools/dev-gateway/src/cli.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
 import { ACCOUNTS, test } from "./accounts-instance.ts";
-import { devGateway, listInstances, startHost, stopChild } from "./global-setup.ts";
+import { approveDevice } from "./approve.ts";
+import { listInstances, startHost, stopChild } from "./global-setup.ts";
 
 const INSTANCE = ACCOUNTS;
 const STATIC = process.env.CLAWTRATE_E2E_STATIC!;
@@ -49,9 +50,7 @@ const entry = (cfg: Json, bot: string) =>
   (((cfg.agents as Json).entries as Json)[bot] ?? {}) as Json;
 
 async function approve(): Promise<void> {
-  await expect
-    .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000, intervals: [1000] })
-    .toMatch(/^Approved /m);
+  await approveDevice(INSTANCE);
 }
 
 async function shots(page: Page, name: string): Promise<void> {

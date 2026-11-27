@@ -24,7 +24,8 @@ import {
 import { openInstance, openOperator } from "../tools/dev-gateway/src/cli.ts";
 import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
-import { devGateway, startHost, stopChild } from "./global-setup.ts";
+import { approveDevice } from "./approve.ts";
+import { startHost, stopChild } from "./global-setup.ts";
 
 const INSTANCE = process.env.CLAWTRATE_DEV_INSTANCE!;
 const STATIC = process.env.CLAWTRATE_E2E_STATIC!;
@@ -174,9 +175,7 @@ async function pairedPage(browser: Browser, host: Host, timezoneId?: string): Pr
   await expect(next.getByRole("heading", { name: "Approve this device" })).toBeVisible({
     timeout: 20_000,
   });
-  await expect
-    .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000, intervals: [1000] })
-    .toMatch(/^Approved /m);
+  await approveDevice(INSTANCE);
   await expect(next.getByTestId("bot")).toHaveCount(4, { timeout: 30_000 });
   return next;
 }
@@ -321,9 +320,7 @@ test.beforeAll(async ({ browser }) => {
   await botRow(page, "Pip").first().click();
   const bar = page.getByRole("region", { name: "Access" });
   await bar.getByRole("button", { name: "Request access" }).click();
-  await expect
-    .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000, intervals: [1000] })
-    .toMatch(/^Approved /m);
+  await approveDevice(INSTANCE);
   await expect(page.getByTestId("composer-input")).toBeVisible({ timeout: 30_000 });
   reader = await pairedPage(browser, await startOwnHost(true), READER_ZONE);
 });

@@ -24,6 +24,7 @@ import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
 import { SYSTEM_PROMPT_PATH } from "../tools/dev-gateway/src/fake-provider.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
 import { newRunId, ownIdentity, processIdentity } from "../tools/dev-gateway/src/state-guard.ts";
+import { approveDevice } from "./approve.ts";
 import {
   devGateway,
   FORBIDDEN_PORTS,
@@ -197,9 +198,7 @@ test.beforeAll(async ({ browser }) => {
   await expect(page.getByRole("heading", { name: "Approve this device" })).toBeVisible({
     timeout: 20_000,
   });
-  await expect
-    .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000, intervals: [1000] })
-    .toMatch(/^Approved /m);
+  await approveDevice(INSTANCE);
   await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 30_000 });
   // Interactive access, asked as the person asks it: Request access in the access bar.
   await page
@@ -209,9 +208,7 @@ test.beforeAll(async ({ browser }) => {
     .click();
   const bar = page.getByRole("region", { name: "Access" });
   await bar.getByRole("button", { name: "Request access" }).click();
-  await expect
-    .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000, intervals: [1000] })
-    .toMatch(/^Approved /m);
+  await approveDevice(INSTANCE);
   await expect(page.getByTestId("composer-input")).toBeVisible({ timeout: 30_000 });
 });
 

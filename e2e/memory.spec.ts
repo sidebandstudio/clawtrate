@@ -2,7 +2,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { openInstance, openOperator } from "../tools/dev-gateway/src/cli.ts";
 import { messageText, type ChatMessage } from "../tools/dev-gateway/src/scripts.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
-import { devGateway } from "./global-setup.ts";
+import { approveDevice } from "./approve.ts";
 
 const INSTANCE = process.env.CLAWTRATE_DEV_INSTANCE!;
 const agentId = "otto";
@@ -22,9 +22,7 @@ async function root() {
 }
 
 async function approve() {
-  await expect
-    .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000 })
-    .toMatch(/^Approved /m);
+  await approveDevice(INSTANCE);
 }
 
 async function openMemory(page: Page) {

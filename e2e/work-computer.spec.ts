@@ -23,6 +23,7 @@ import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
 import { PAGES_RECORD_PATH } from "../tools/dev-gateway/src/scripted-pages.ts";
 import { newRunId, ownIdentity, readMarker } from "../tools/dev-gateway/src/state-guard.ts";
 import { execFileSync } from "node:child_process";
+import { approveDevice } from "./approve.ts";
 import {
   devGateway,
   FORBIDDEN_PORTS,
@@ -162,9 +163,7 @@ async function pair(page: Page, url: string, instance: string) {
   await expect(page.getByRole("heading", { name: "Approve this device" })).toBeVisible({
     timeout: 20_000,
   });
-  await expect
-    .poll(() => devGateway(instance, "approve"), { timeout: 30_000, intervals: [1000] })
-    .toMatch(/^Approved /m);
+  await approveDevice(instance);
   await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 30_000 });
 }
 
@@ -172,9 +171,7 @@ async function pair(page: Page, url: string, instance: string) {
 async function grant(page: Page, instance: string) {
   const bar = page.getByRole("region", { name: "Access" });
   await bar.getByRole("button", { name: /^Request (access|again)$/ }).click();
-  await expect
-    .poll(() => devGateway(instance, "approve"), { timeout: 30_000, intervals: [1000] })
-    .toMatch(/^Approved /m);
+  await approveDevice(instance);
   await expect(page.getByTestId("composer-input")).toBeVisible({ timeout: 30_000 });
 }
 

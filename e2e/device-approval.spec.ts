@@ -18,7 +18,8 @@ import { createNodeHost } from "../packages/core/src/node/index.ts";
 import { FULL_SCOPES } from "../packages/core/src/scopes.ts";
 import { openInstance, openOperator, readDevConnection } from "../tools/dev-gateway/src/cli.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
-import { devGateway, startHost, stopChild } from "./global-setup.ts";
+import { approveDevice } from "./approve.ts";
+import { startHost, stopChild } from "./global-setup.ts";
 
 const INSTANCE = process.env.CLAWTRATE_DEV_INSTANCE!;
 const STATIC = process.env.CLAWTRATE_E2E_STATIC!;
@@ -34,9 +35,7 @@ const waiting: ClawtrateClient[] = [];
 let approvedCode = "";
 
 async function approveHost(): Promise<void> {
-  await expect
-    .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000, intervals: [1000] })
-    .toMatch(/^Approved /m);
+  await approveDevice(INSTANCE);
 }
 
 /** A device that asks to pair, under a name of its own, and waits. */

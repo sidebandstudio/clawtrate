@@ -20,6 +20,7 @@ import {
 } from "../tools/dev-gateway/src/scenarios.ts";
 import { scriptedPicture } from "../tools/dev-gateway/src/scripted-images.ts";
 import { trailMap } from "../tools/dev-gateway/src/seed-files.ts";
+import { approveDevice } from "./approve.ts";
 import { devGateway, listInstances, startHost, stopChild } from "./global-setup.ts";
 import { protectedGateway } from "./protected-gateway.ts";
 
@@ -50,7 +51,7 @@ async function openShell(page: Page) {
   if (await connect.isVisible()) {
     await connect.click();
     await expect(page.getByRole("heading", { name: "Approve this device" })).toBeVisible();
-    devGateway(INSTANCE, "approve");
+    await approveDevice(INSTANCE);
   }
   await expect(bots).toHaveCount(4, { timeout: 20_000 });
 }
@@ -266,9 +267,7 @@ test.describe("F-557: a picture you attach", () => {
     await expect(on.getByRole("heading", { name: "Approve this device" })).toBeVisible({
       timeout: 20_000,
     });
-    await expect
-      .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000, intervals: [1000] })
-      .toMatch(/^Approved /m);
+    await approveDevice(INSTANCE);
     await expect(on.getByTestId("bot")).toHaveCount(4, { timeout: 30_000 });
   }
 
@@ -294,9 +293,7 @@ test.describe("F-557: a picture you attach", () => {
     await openTask(page, "Pip", OWN_TASK);
     const bar = page.getByRole("region", { name: "Access" });
     await bar.getByRole("button", { name: "Request access" }).click();
-    await expect
-      .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000, intervals: [1000] })
-      .toMatch(/^Approved /m);
+    await approveDevice(INSTANCE);
     await expect(page.getByTestId("composer-input")).toBeVisible({ timeout: 30_000 });
 
     const shot = Buffer.from(solidPng(48, 32, [220, 40, 40]));

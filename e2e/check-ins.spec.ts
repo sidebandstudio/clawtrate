@@ -29,7 +29,8 @@ import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
 import { programVersion } from "../tools/dev-gateway/src/pinned.ts";
 import { PINNED_OPENCLAW, shapeOf } from "../tools/dev-gateway/src/versions.ts";
 import { ACCOUNTS, test } from "./accounts-instance.ts";
-import { devGateway, listInstances, startHost, stopChild } from "./global-setup.ts";
+import { approveDevice } from "./approve.ts";
+import { listInstances, startHost, stopChild } from "./global-setup.ts";
 
 const INSTANCE = ACCOUNTS;
 const STATIC = process.env.CLAWTRATE_E2E_STATIC!;
@@ -93,9 +94,7 @@ async function onePatch(run: () => Promise<void>): Promise<void> {
 }
 
 async function approve(): Promise<void> {
-  await expect
-    .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000, intervals: [1000] })
-    .toMatch(/^Approved /m);
+  await approveDevice(INSTANCE);
 }
 
 const block = (bot: string) => page.locator(`[data-testid="check-in"][data-bot="${bot}"]`);

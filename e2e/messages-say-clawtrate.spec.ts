@@ -18,7 +18,8 @@ import { SYSTEM_PROMPT_PATH } from "../tools/dev-gateway/src/fake-provider.ts";
 import { plainPreview } from "../packages/core/src/mapping.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
 import { WORK_CONTEXT_LINE } from "../tools/dev-gateway/src/scripts.ts";
-import { devGateway, startHost, stopChild } from "./global-setup.ts";
+import { approveDevice } from "./approve.ts";
+import { startHost, stopChild } from "./global-setup.ts";
 import { leaveIdle } from "./teardown.ts";
 
 const INSTANCE = process.env.CLAWTRATE_DEV_INSTANCE!;
@@ -71,9 +72,7 @@ async function pairedDevice(browser: Browser, name: string): Promise<Page> {
   await expect(next.getByRole("heading", { name: "Approve this device" })).toBeVisible({
     timeout: 20_000,
   });
-  await expect
-    .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000, intervals: [1000] })
-    .toMatch(/^Approved /m);
+  await approveDevice(INSTANCE);
   await expect(next.getByTestId("bot")).toHaveCount(4, { timeout: 30_000 });
   return next;
 }
@@ -157,9 +156,7 @@ test.beforeAll(async ({ browser }) => {
     .getByRole("region", { name: "Access" })
     .getByRole("button", { name: "Request access" })
     .click();
-  await expect
-    .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000, intervals: [1000] })
-    .toMatch(/^Approved /m);
+  await approveDevice(INSTANCE);
   await expect(page.getByTestId("composer-input")).toBeVisible({ timeout: 30_000 });
 });
 

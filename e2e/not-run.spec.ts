@@ -12,7 +12,8 @@ import { ACCOUNT_CLIENTS } from "../tools/dev-gateway/src/account-checks.ts";
 import { openInstance, openOperator } from "../tools/dev-gateway/src/cli.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
 import { ACCOUNTS, test } from "./accounts-instance.ts";
-import { devGateway, listInstances, startHost, stopChild } from "./global-setup.ts";
+import { approveDevice } from "./approve.ts";
+import { listInstances, startHost, stopChild } from "./global-setup.ts";
 
 const INSTANCE = ACCOUNTS;
 const STATIC = process.env.CLAWTRATE_E2E_STATIC!;
@@ -29,9 +30,7 @@ let admin: OperatorSession;
 type Json = Record<string, unknown>;
 
 async function approve(): Promise<void> {
-  await expect
-    .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000, intervals: [1000] })
-    .toMatch(/^Approved /m);
+  await approveDevice(INSTANCE);
 }
 
 /** A merge patch, after which the gateway runs with it (as account-checks.ts waits for one). */

@@ -5,7 +5,7 @@ import { expect, test, type Page } from "@playwright/test";
 import { randomBytes } from "node:crypto";
 import { openInstance } from "../tools/dev-gateway/src/cli.ts";
 import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
-import { devGateway } from "./global-setup.ts";
+import { approveDevice } from "./approve.ts";
 
 /** This run's own development gateway instance, created by global setup. */
 const INSTANCE = process.env.CLAWTRATE_DEV_INSTANCE!;
@@ -20,9 +20,7 @@ async function gatewayCall<T>(method: string, params: unknown): Promise<T> {
 }
 
 async function approve() {
-  await expect
-    .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000, intervals: [1000] })
-    .toMatch(/^Approved /m);
+  await approveDevice(INSTANCE);
 }
 
 /** The shared preview host, paired, with the access to send. */
