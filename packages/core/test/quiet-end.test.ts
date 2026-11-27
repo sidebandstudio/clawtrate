@@ -19,11 +19,13 @@ import {
   type Run,
 } from "../src/runs.ts";
 import {
+  coveredRuns,
   historyCoversRun,
   MAX_QUIET_CHECKS,
   QUIET_CHECK_ROWS,
   QuietChecks,
   quietInHistory,
+  runAliases,
 } from "../src/quiet-end.ts";
 import { neverRan } from "../src/not-run.ts";
 import { mergeSessionRow } from "../src/mapping.ts";
@@ -780,6 +782,8 @@ describe("a read that doesn't hold the whole run proves nothing (#680)", () => {
       [{ ...whole("wake-21"), omission: { omittedCount: 2, byteLimited: true } }, "failed"],
       [whole("wake-21", placeholder), "failed"],
       [{ messages: [eventRow, ...toolRows("wake-21")] }, "failed"],
+      // `hasMore: false` without the rows themselves.
+      [{ hasMore: false }, "failed"],
     ] as const) {
       const gateway = gatewayWith(
         [
@@ -923,6 +927,85 @@ describe("a read that doesn't hold the whole run proves nothing (#680)", () => {
     client.stop();
   }, 30_000);
 
+  it("a run followed for a card, its pair known: a failed row under the gateway's id fails it", async () => {
+    // The pair is the session's own, already kept; the page alone doesn't show it.
+    type Activity = { runs: Run[]; queueAliases: Record<string, string> };
+    const foreign = (client: unknown) => (client as { foreign: Map<string, Activity> }).foreign;
+    const gateway = gatewayWith(
+      [{ key: KEY, agentId: "otto", hasActiveRun: false, updatedAt: T0 }],
+      () => [],
+    );
+    const { client } = await openTask({ gateway });
+    const failedRow = {
+      role: "assistant",
+      content: [],
+      stopReason: "error",
+      timestamp: T0 + 2_100,
+      __openclaw: { runId: "gw-28", id: "f-1", seq: 4 },
+    };
+    gateway.handlers["chat.history"] = (params) =>
+      keyOf(params) === OTHER
+        ? { messages: [eventRow, failedRow], hasMore: false }
+        : { messages: [], hasMore: false };
+    gateway.emit("agent", {
+      ...agentEvent("send-28", 3, "lifecycle", { phase: "start" }, OTHER),
+      ts: T0 + 2_000,
+    });
+    await until(() => foreign(client).get(OTHER) !== undefined);
+    const kept = foreign(client).get(OTHER)!;
+    foreign(client).set(OTHER, { ...kept, queueAliases: { "gw-28": "send-28" } });
+    gateway.emit("chat", markedChat("send-28", OTHER));
+    const run = () =>
+      foreign(client)
+        .get(OTHER)
+        ?.runs.find((each) => each.id === "send-28");
+    await until(
+      () => run() !== undefined && run()!.quietEnd !== "pending" && isTerminal(run()!.state),
+    );
+    expect(run()?.state).toBe("failed");
+    client.stop();
+  }, 30_000);
+
+  it("a task not open, its row naming the gateway's id: the run's input under the send's id shows the page holds it", async () => {
+    const input = {
+      role: "user",
+      content: "#text",
+      timestamp: T0 + 2_000,
+      __openclaw: { id: "u-29", seq: 3, idempotencyKey: "send-29:user" },
+    };
+    const gateway = gatewayWith(
+      [
+        { key: KEY, agentId: "otto", status: "done", hasActiveRun: false, updatedAt: T0 },
+        markedRow("gw-29", OTHER),
+      ],
+      () => [],
+    );
+    let asked = 0;
+    gateway.handlers["chat.history"] = (params) => {
+      if (keyOf(params) !== OTHER) return { messages: [], hasMore: false };
+      asked += 1;
+      return { messages: [input, ...toolRows("gw-29")], hasMore: true };
+    };
+    const { client } = await openTask({ gateway });
+    await until(() => asked > 0);
+    await sleep(50);
+    expect(task(client, OTHER)?.status).toBe("done");
+    client.stop();
+  }, 30_000);
+
+  it("the rule alone: a run is held whole under either of its ids", () => {
+    const page = (rows: Row[]) => ({ messages: rows, hasMore: true });
+    const input = (key: string): Row => ({ role: "user", __openclaw: { idempotencyKey: key } });
+    const pairs = { gw: "send" };
+    expect(runAliases("gw", pairs)).toEqual(["gw", "send"]);
+    expect(runAliases("send", pairs)).toEqual(["send", "gw"]);
+    expect(runAliases("other", pairs)).toEqual(["other"]);
+    const ids = new Set(["gw", "send"]);
+    expect(coveredRuns(page([input("send:user")]), ids, () => null, pairs)).toEqual(ids);
+    expect(coveredRuns(page([input("gw:user")]), ids, () => null, pairs)).toEqual(ids);
+    expect(coveredRuns(page([input("send:user")]), new Set(["gw"]), () => null)).toEqual(new Set());
+  });
+
   it("the rule alone: the transcript's start or the run's input, and nothing left out", () => {
     const page = (rows: Row[], more?: boolean, extra: Row = {}) => ({
       messages: rows,
@@ -940,6 +1023,8 @@ describe("a read that doesn't hold the whole run proves nothing (#680)", () => {
     );
     expect(historyCoversRun(page([], false, { omission: { omittedCount: 1 } }), "r")).toBe(false);
     expect(historyCoversRun(null, "r")).toBe(false);
+    expect(historyCoversRun({ hasMore: false }, "r")).toBe(false);
+    expect(historyCoversRun({ messages: null, hasMore: false }, "r")).toBe(false);
   });
 });
 
@@ -1011,20 +1096,37 @@ describe("a long main session: a row of an earlier run shows where this one star
   }, 30_000);
 
   it("an open task: a quiet wake is settled from the read on; one whose reasoning row is on an older page fails", async () => {
-    for (const [onward, state] of [
-      [longPage([...earlier(999), eventRow]), "completed"],
-      [longPage([...ownRows("wake-32", 999), laterOther]), "failed"],
+    // One transcript per case, read as its latest 200 rows (the task's read) and its latest 1,000
+    // (the read on): the larger holds the smaller.
+    const latest = (rows: Row[], count: number) => ({
+      messages: rows.slice(-count),
+      hasMore: true,
+    });
+    for (const [rows, state] of [
+      // Quiet: an earlier run's rows are outside the latest 200 and inside the latest 1,000.
+      [[...earlier(999), eventRow, ...ownRows("wake-32", 300)], "completed"],
+      // Reasoning only, its row older than both windows: neither holds the run.
+      [
+        [...earlier(999), eventRow, thinkingRow("wake-32", 4), ...ownRows("wake-32", 1_000)],
+        "failed",
+      ],
     ] as const) {
-      let page: unknown = { messages: [], hasMore: false };
+      let ready = false;
       const gateway = gatewayWith(
         [{ key: KEY, agentId: "otto", hasActiveRun: false, updatedAt: T0 }],
         () => [],
       );
       gateway.handlers["chat.history"] = (params) =>
-        limitOf(params) === QUIET_CHECK_ROWS ? onward : page;
+        ready ? latest([...rows], limitOf(params) ?? 200) : { messages: [], hasMore: false };
       const { client, transcript } = await openTask({ gateway });
-      // The task's own read: the last 200 rows, none of them an earlier run's.
-      page = longPage([...ownRows("wake-32", 199), eventRow]);
+      ready = true;
+      // The task's own read holds no earlier run's row: only the read on can show the boundary.
+      const earlierIn = (count: number) =>
+        latest([...rows], count).messages.some((row) =>
+          String((row as { __openclaw?: { runId?: string } }).__openclaw?.runId).startsWith("old-"),
+        );
+      expect(earlierIn(200)).toBe(false);
+      expect(earlierIn(QUIET_CHECK_ROWS)).toBe(state === "completed");
       wakeAndEndMarked(gateway, "wake-32");
       await until(() => {
         const run = runOf(transcript, "wake-32");
@@ -1094,6 +1196,9 @@ describe("the sidebar and the run this client holds agree (#680)", () => {
     await until(() => client.state.transcripts[OTHER]?.status === "ready");
     const run = client.state.transcripts[OTHER]!.runs.find((each) => each.id === "wake-22");
     expect(run).toMatchObject({ origin: "history", state: "completed" });
+    // Opening it changes nothing, before any refresh of its row republishes the list.
+    await sleep(50);
+    expect(task(client, OTHER)?.status).toBe("done");
     // An ordinary refresh of its row.
     changed(gateway, { ...markedRow("wake-22", OTHER), updatedAt: T0 + 9_000 });
     await sleep(100);
@@ -1156,6 +1261,63 @@ describe("the sidebar and the run this client holds agree (#680)", () => {
     expect(task(client, OTHER)?.status).toBe("failed");
     client.stop();
   });
+});
+
+describe("a sender's card follows a recipient open beside it (#680)", () => {
+  it("the recipient's read failing restores its failure on the sender's card too", async () => {
+    let fail = false;
+    const gateway = gatewayWith(
+      [
+        { key: KEY, agentId: "otto", hasActiveRun: false, updatedAt: T0 },
+        { key: OTHER, agentId: "otto", hasActiveRun: false, updatedAt: T0 },
+      ],
+      () => [],
+    );
+    gateway.handlers["chat.history"] = (params) => {
+      if (fail && (params as { sessionKey: string }).sessionKey === OTHER)
+        throw new Error("history unavailable");
+      return { messages: [], hasMore: false };
+    };
+    const { client, transcript } = await openTask({ gateway });
+    client.openSession(OTHER);
+    await until(() => client.state.transcripts[OTHER]?.status === "ready");
+    gateway.emit("agent", {
+      ...agentEvent("wake-33", 3, "lifecycle", { phase: "start" }, OTHER),
+      ts: T0 + 2_000,
+    });
+    // This task's bot messages the other task; the result names its run.
+    gateway.emit("agent", agentEvent("run-s", 1, "lifecycle", { phase: "start" }));
+    gateway.emit(
+      "agent",
+      agentEvent("run-s", 2, "tool", {
+        phase: "start",
+        name: "sessions_send",
+        toolCallId: "c1",
+        args: { sessionKey: OTHER, message: "Anything new?" },
+      }),
+    );
+    gateway.emit(
+      "agent",
+      agentEvent("run-s", 3, "tool", {
+        phase: "result",
+        name: "sessions_send",
+        toolCallId: "c1",
+        isError: false,
+        result: {
+          content: [{ type: "text", text: "{}" }],
+          details: { runId: "wake-33", sessionKey: OTHER, status: "accepted" },
+        },
+      }),
+    );
+    await until(() => transcript().linkedRuns["wake-33"]?.state === "running");
+    fail = true;
+    gateway.emit("chat", markedChat("wake-33", OTHER));
+    const recipient = () =>
+      client.state.transcripts[OTHER]?.runs.find((run) => run.id === "wake-33");
+    await until(() => recipient()?.state === "failed");
+    await until(() => transcript().linkedRuns["wake-33"]?.state === "failed");
+    client.stop();
+  }, 30_000);
 });
 
 describe("the rules, alone", () => {

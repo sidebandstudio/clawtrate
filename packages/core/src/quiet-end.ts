@@ -57,9 +57,10 @@ export function historyCoversRun(
   runId: string,
   startedAt: number | null = null,
 ): boolean {
-  if (!history || asRecord(history.omission)) return false;
+  // A reply without its rows says nothing of them, `hasMore: false` or not.
+  if (!history || asRecord(history.omission) || !Array.isArray(history.messages)) return false;
   if (history.hasMore === false) return true;
-  const rows = Array.isArray(history.messages) ? history.messages : [];
+  const rows = history.messages;
   return rows.some((entry) => {
     const row = asRecord(entry);
     if (!row) return false;
@@ -80,13 +81,34 @@ export function historyCoversRun(
   });
 }
 
-/** The runs among `ids` that a history read holds whole (`historyCoversRun`), with each one's start. */
+/**
+ * A run's ids: its own, and the other id of each queue pair naming it (the send's and the
+ * gateway's own, `historyQueuePairs`), as `{ gateway: client }`.
+ */
+export function runAliases(runId: string, pairs: Readonly<Record<string, string>>): string[] {
+  return [
+    runId,
+    ...Object.entries(pairs).flatMap(([gateway, client]) =>
+      gateway === runId ? [client] : client === runId ? [gateway] : [],
+    ),
+  ];
+}
+
+/**
+ * The runs among `ids` that a history read holds whole (`historyCoversRun`), under any of the
+ * run's ids (`runAliases`), with each one's start.
+ */
 export function coveredRuns(
   history: RawRecord | null,
   ids: ReadonlySet<string>,
   startOf: (runId: string) => number | null,
+  pairs: Readonly<Record<string, string>> = {},
 ): Set<string> {
-  return new Set([...ids].filter((id) => historyCoversRun(history, id, startOf(id))));
+  return new Set(
+    [...ids].filter((id) =>
+      runAliases(id, pairs).some((each) => historyCoversRun(history, each, startOf(id))),
+    ),
+  );
 }
 
 /** Whether history holds no row of the run that answered nothing (`answeredNothing`). */

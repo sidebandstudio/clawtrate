@@ -404,7 +404,7 @@ import { nameTask } from "./task-names.ts";
 import { endsRun, fromActivity, WaitingIndex } from "./waiting.ts";
 import {
   coveredRuns,
-  historyCoversRun,
+  runAliases,
   QUIET_CHECK_CHARS,
   QUIET_CHECK_ROWS,
   QuietChecks,
@@ -6296,10 +6296,13 @@ export class ClawtrateClient {
         token.cancelled
       )
         return false;
-      const aliases = Object.fromEntries([
-        ...(terminal?.pairs ?? []),
-        ...historyQueuePairs(history?.messages),
-      ]);
+      // The page's pairs, then those already known, which win: the session's own (retained) and
+      // the terminal frame's.
+      const aliases: Record<string, string> = {
+        ...Object.fromEntries(historyQueuePairs(history?.messages)),
+        ...(this.foreign.get(capId(sessionKey, MAX_ID_CHARS))?.queueAliases ?? {}),
+        ...Object.fromEntries(terminal?.pairs ?? []),
+      };
       const { messages, inFlight } = throughRunAliases(
         history?.messages,
         asRecord(history?.inFlightRun),
@@ -6355,7 +6358,7 @@ export class ClawtrateClient {
           runs.length === merged.length && runs.every((run, i) => run === merged[i])
             ? merged
             : runs,
-          coveredRuns(history, quietBefore, (id) => startOf(merged, id)),
+          coveredRuns(history, quietBefore, (id) => startOf(merged, id), aliases),
         );
         return {
           ...aliased,
@@ -6418,21 +6421,14 @@ export class ClawtrateClient {
       return null;
     }
     // The page's own pairs too: a queued run's rows can be under the gateway's id for it.
+    // A pair the client already knows wins over one inferred from the page.
     const pairs: Readonly<Record<string, string>> = {
-      ...aliases,
       ...Object.fromEntries(historyQueuePairs(history?.messages)),
+      ...aliases,
     };
-    const both = (id: string) => [
-      id,
-      ...Object.entries(pairs).flatMap(([gateway, client]) =>
-        gateway === id ? [client] : client === id ? [gateway] : [],
-      ),
-    ];
     return new Set(
-      [...ids].filter(
-        (id) =>
-          historyCoversRun(history, id, started(id)) &&
-          both(id).every((each) => quietInHistory(history?.messages, each)),
+      [...coveredRuns(history, ids, started, pairs)].filter((id) =>
+        runAliases(id, pairs).every((each) => quietInHistory(history?.messages, each)),
       ),
     );
   }
@@ -11098,7 +11094,12 @@ export class ClawtrateClient {
           ctx,
         ),
         // Only what the read holds whole: the others are read on (`settleQuietLater`).
-        coveredRuns(history, quietBefore, (id) => startOf(merge.runs, id)),
+        coveredRuns(
+          history,
+          quietBefore,
+          (id) => startOf(merge.runs, id),
+          this.state.transcripts[key]?.queueAliases ?? {},
+        ),
       );
       // A Stop asked before the gateway named its run: the run in flight under the send's id
       // is that run, named now, and is stopped; so is one settled earlier with no known outcome.
@@ -11163,6 +11164,7 @@ export class ClawtrateClient {
       if (current.workspaceRoot === undefined) void this.readWorkspaceRoot(key, generation);
     } catch (error) {
       if (stale()) return;
+      const before = this.state.transcripts[key]?.runs ?? [];
       // Without its subscription, that is what the task says: Try again reads both again.
       this.setTranscript(key, (current) => ({
         ...(current ?? this.emptyTranscript(key)),
@@ -11171,6 +11173,8 @@ export class ClawtrateClient {
         status: "error",
         error: live ? errorMessage(error) : LIVE_UPDATES_NOT_STARTED,
       }));
+      // A run it failed may be a recipient another open task's card follows (as a read does).
+      this.refreshLinkersOf(key, before, this.state.transcripts[key]?.runs ?? []);
     }
   }
 
