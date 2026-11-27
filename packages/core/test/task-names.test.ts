@@ -603,6 +603,44 @@ describe("the device that sends the first message", () => {
     }
   });
 
+  it("names a task from the message after a command the gateway handled", async () => {
+    const { gateway } = creatingGateway(["Lisbon"]);
+    const send = gateway.handlers["chat.send"]!;
+    // `/stop` is answered as a command: handled, with no run and no row in history.
+    gateway.handlers["chat.send"] = (params) =>
+      (params as { message: string }).message === "/stop"
+        ? { ok: true, aborted: false, runIds: [] }
+        : send(params);
+    const { client } = await openTask({ gateway });
+    try {
+      const key = await client.newTask("main");
+      client.openSession(key);
+      await until(() => client.state.transcripts[key]?.status === "ready");
+      const stop = client.sendMessage(key, "/stop");
+      await until(
+        () =>
+          client.state.transcripts[key]?.outbox.find((each) => each.id === stop)?.status ===
+          "handled",
+      );
+      const id = client.sendMessage(key, MESSAGE);
+      gateway.handlers["chat.history"] = () => ({
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "text", text: MESSAGE }],
+            timestamp: 1,
+            __openclaw: { id: "row-a", idempotencyKey: `${id}:user` },
+          },
+        ],
+        hasMore: false,
+      });
+      await until(() => patches(gateway).length === 1);
+      expect(titleCalls(gateway)).toEqual([{ agentId: "main", message: MESSAGE }]);
+    } finally {
+      client.stop();
+    }
+  });
+
   it("names a task when another device's message came after its first one", async () => {
     const { gateway } = creatingGateway(["Lisbon"]);
     const { client } = await openTask({ gateway });

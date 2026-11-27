@@ -4835,7 +4835,11 @@ export class ClawtrateClient {
       }
     }
     // Accepted is not confirmed: the files stay until history holds the message or the user deletes it.
-    if (command) this.dropAttachments(messageId);
+    if (command) {
+      this.dropAttachments(messageId);
+      // A command names no task: one waiting to be named from it waits for the next message.
+      this.releaseFirst(key, messageId);
+    }
     // Accepted: the message a task waits to be named from may be shown to a model now.
     else this.nameAccepted(key, messageId, message.text);
     this.scheduleHistory(key);
@@ -11677,11 +11681,12 @@ export class ClawtrateClient {
   }
 
   /**
-   * The person deleted or took back a message before the gateway accepted it. If it was the one a
-   * task waits to be named from, the next with text sent after it there takes its place, and names
-   * the task now if the gateway accepted it already. Only the person's own act frees the place: a
-   * message history confirmed leaves the outbox too, and still names the task once its answer
-   * comes. Messages before it in the outbox can be another session's under the same key.
+   * The person deleted or took back a message before the gateway accepted it, or the gateway
+   * handled it as a command. If it was the one a task waits to be named from, the next with text
+   * sent after it there takes its place, and names the task now if the gateway accepted it
+   * already. Only those free the place: a message history confirmed leaves the outbox too, and
+   * still names the task once its answer comes. Messages before it in the outbox can be another
+   * session's under the same key.
    */
   private releaseFirst(key: string, messageId: string): void {
     const kept = this.taskNames.get(key);
@@ -11689,7 +11694,7 @@ export class ClawtrateClient {
     const outbox = this.state.transcripts[key]?.outbox ?? [];
     const next = outbox
       .slice(outbox.findIndex((each) => each.id === messageId) + 1)
-      .find((each) => each.text && each.status !== "cancelled");
+      .find((each) => each.text && each.status !== "cancelled" && each.status !== "handled");
     kept.first = next?.id ?? null;
     if (next?.status === "sent") this.nameAccepted(key, next.id, next.text);
   }
