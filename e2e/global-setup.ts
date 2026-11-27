@@ -21,6 +21,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { childrenReport, readProcessTable } from "../tools/dev-gateway/src/children.ts";
 import { gatedSpawn, type Gated } from "../tools/dev-gateway/src/env.ts";
 import {
   newRunId,
@@ -114,6 +115,26 @@ export const resetInstance = (name: string, runId: string) => {
     );
   }
 };
+
+/**
+ * What each of this run's running gateways holds after the specs, before the reset stops it: the
+ * count grows with the tasks the specs ran turns in when servers are kept (#845). Said, never
+ * thrown: a loaded machine can be slow to end a server.
+ */
+function reportGatewayChildren(own: string[]): void {
+  try {
+    const rows = readProcessTable();
+    for (const row of listInstances()) {
+      if (row.name === null || !own.includes(row.name) || row.gatewayState !== "alive") continue;
+      if (row.gatewayPid === null) continue;
+      const { line, warning } = childrenReport(rows, row.gatewayPid);
+      console.log(`Gateway children of ${row.name}: ${line}`);
+      if (warning) console.log(`Warning: ${warning}`);
+    }
+  } catch (error) {
+    console.log(`Could not count the gateways' children: ${String(error)}`);
+  }
+}
 
 const sleepSync = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
@@ -319,6 +340,7 @@ export default async function globalSetup() {
   const alreadyRunning = runningOthers(own);
   const teardown = async () => {
     if (host) await stopChild(host);
+    reportGatewayChildren(own);
     const problems = [...cleanUpOnce()];
     const after = runningOthers(own);
     const gone = alreadyRunning.filter((row) => !after.includes(row));
