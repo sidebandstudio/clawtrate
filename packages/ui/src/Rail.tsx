@@ -21,6 +21,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type DragEvent,
   type KeyboardEvent,
   type MouseEvent,
@@ -508,6 +509,17 @@ type MenuState =
       shown: ShownStamp;
     };
 
+/**
+ * Where a button's menu opens: under it, ending at its right edge; in the rail of pictures, whose
+ * buttons are at the bottom, beside it, ending at its bottom edge.
+ */
+function menuAt(trigger: HTMLElement, pictures: boolean): CSSProperties {
+  const rect = trigger.getBoundingClientRect();
+  if (!pictures) return { left: Math.max(8, rect.right - 232), top: rect.bottom + 6 };
+  const rail = trigger.closest(".rail")?.getBoundingClientRect().right ?? rect.right;
+  return { left: rail + 8, top: "auto", bottom: Math.max(8, window.innerHeight - rect.bottom) };
+}
+
 /** Drop the separators a menu would start or end with, or show twice in a row. */
 function tidy(entries: MenuEntry[]): MenuEntry[] {
   return entries.filter(
@@ -518,6 +530,8 @@ function tidy(entries: MenuEntry[]): MenuEntry[] {
 }
 
 export function Rail({
+  id,
+  pictures = false,
   bots,
   tasksByBot,
   discovery,
@@ -549,6 +563,12 @@ export function Rail({
   paletteKeys = "⌘K",
   updating = null,
 }: {
+  id?: string;
+  /**
+   * The rail of pictures only (#792): each bot is its picture, named by its tooltip and its
+   * accessible name; no task is listed under a bot, and the buttons stack at the bottom.
+   */
+  pictures?: boolean;
   bots: Bot[];
   tasksByBot: Record<string, Task[]>;
   discovery: DiscoveryState;
@@ -725,9 +745,10 @@ export function Rail({
   );
   const pinHasRoutines = (botId: string) =>
     arranged.pinned.some((bot) => bot.id === botId && runsUnder(bot).length > 0);
-  const owner = matches
-    ? undefined
-    : arranged.pinned.find((bot) => selection.isOpen(bot.id, pinHasRoutines(bot.id)));
+  const owner =
+    matches || pictures
+      ? undefined
+      : arranged.pinned.find((bot) => selection.isOpen(bot.id, pinHasRoutines(bot.id)));
 
   useEffect(() => {
     if (!announcement) return;
@@ -1005,7 +1026,8 @@ export function Rail({
   });
 
   const clickBot = (bot: Bot, count: number) => {
-    if (count < 2) {
+    // In the rail of pictures no tasks are listed: a picture opens its bot.
+    if (count < 2 || pictures) {
       selection.selectBot(bot.id);
       onOpen();
     } else if (onePane || bot.id === selection.bot?.id) {
@@ -1020,7 +1042,7 @@ export function Rail({
   // A pinned tile. The grid has one task block, with one owner at a time.
   const clickPin = (bot: Bot, count: number) => {
     const hasRoutines = pinHasRoutines(bot.id);
-    if (count < 2 && !hasRoutines) {
+    if ((count < 2 && !hasRoutines) || pictures) {
       selection.selectBot(bot.id);
       onOpen();
     } else if (bot.id === owner?.id) {
@@ -1034,10 +1056,12 @@ export function Rail({
   };
 
   const openSearch = useCallback(() => {
+    // The rail of pictures has no room for a search field: search opens there instead.
+    if (pictures && onOpenPalette) return onOpenPalette();
     focusAfter.current = "search";
     setQuery((current) => current ?? "");
     onShowList();
-  }, [onShowList]);
+  }, [onShowList, pictures, onOpenPalette]);
 
   const closeSearch = (refocus: boolean) => {
     if (refocus) focusAfter.current = "search-button";
@@ -1262,6 +1286,7 @@ export function Rail({
       rows[event.key === "Home" ? 0 : rows.length - 1]?.focus();
     } else if (
       event.key === "ArrowRight" &&
+      !pictures &&
       isBot &&
       botId &&
       !selection.isOpen(botId, hasPinRoutines)
@@ -1269,7 +1294,7 @@ export function Rail({
       event.preventDefault();
       if (isPin) selection.unfoldOnly(botId, pinnedIds, hasPinRoutines);
       else selection.toggleFold(botId);
-    } else if (event.key === "ArrowLeft") {
+    } else if (event.key === "ArrowLeft" && !pictures) {
       event.preventDefault();
       if (!isBot) {
         const block = row.closest(".pin-tasks");
@@ -1915,10 +1940,11 @@ export function Rail({
       summarize(tasks, selection.seen, onScreenKey, selection.unreadSeen),
       running,
     );
-    const open = place !== "search" && selection.isOpen(bot.id);
-    const several = tasks.length > 1;
-    const routineRuns = place !== "search" && (open || !several) ? runsUnder(bot) : [];
-    const showTasks = open || (place !== "search" && interactive && archivedOpen.has(bot.id));
+    const open = place !== "search" && !pictures && selection.isOpen(bot.id);
+    const several = tasks.length > 1 && !pictures;
+    const routineRuns = place !== "search" && !pictures && (open || !several) ? runsUnder(bot) : [];
+    const showTasks =
+      open || (place !== "search" && !pictures && interactive && archivedOpen.has(bot.id));
     const selected = bot.id === selection.bot?.id;
     return (
       <li
@@ -1955,12 +1981,14 @@ export function Rail({
             label: bot.theme,
             loading: discovery.status === "loading",
           })}
+          title={pictures ? bot.name : undefined}
           onClick={() =>
             clickBot(bot, place === "search" ? Math.min(tasks.length, 1) : tasks.length)
           }
           onContextMenu={onContextMenu(bot)}
         >
           <Presence bot={bot} state={summary.state} primary={bot.isDefault} />
+          {pictures && summary.unread && <span className="unread-dot rail-unread" />}
           {/* The name and a larger picture: no preview and no time (#790). The picture carries
               the state; the dot says something is unread. */}
           <span className="bot-line">
@@ -2034,6 +2062,7 @@ export function Rail({
           onContextMenu={onContextMenu(bot)}
         >
           <Presence bot={bot} state={summary.state} primary={bot.isDefault} />
+          {pictures && summary.unread && <span className="unread-dot rail-unread" />}
           <span className="pin-name">
             <span>{bot.name}</span>
             {summary.unread && <span className="unread-dot" />}
@@ -2051,7 +2080,13 @@ export function Rail({
   };
 
   return (
-    <nav className="rail" aria-label="Bots" inert={inert}>
+    <nav
+      id={id}
+      className="rail"
+      aria-label="Bots"
+      data-width={pictures ? "pictures" : undefined}
+      inert={inert}
+    >
       <div className="rail-top">
         {top}
         {query === null ? (
@@ -2220,6 +2255,8 @@ export function Rail({
                     type="button"
                     className="hidden-toggle"
                     aria-expanded={showHidden}
+                    aria-label={pictures ? `Hidden bots, ${arranged.hidden.length}` : undefined}
+                    title={pictures ? "Hidden bots" : undefined}
                     onClick={() => setShowHidden((open) => !open)}
                   >
                     <ChevronIcon />
@@ -2287,6 +2324,7 @@ export function Rail({
           aria-haspopup="menu"
           aria-expanded={menu?.kind === "gateway"}
           aria-label={gatewayName}
+          title={pictures ? gatewayName : undefined}
           onClick={(event) => openGatewayMenu(event.currentTarget)}
           onKeyDown={onGatewayKey}
         >
@@ -2320,10 +2358,7 @@ export function Rail({
         <Menu
           label="Sort bots"
           className="rail-menu sort-menu"
-          style={{
-            left: Math.max(8, menu.trigger.getBoundingClientRect().right - 232),
-            top: menu.trigger.getBoundingClientRect().bottom + 6,
-          }}
+          style={menuAt(menu.trigger, pictures)}
           entries={sortEntries}
           onClose={closeMenu}
           trigger={menu.trigger}
@@ -2346,10 +2381,7 @@ export function Rail({
         <Menu
           label="New"
           className="rail-menu plus-menu"
-          style={{
-            left: Math.max(8, menu.trigger.getBoundingClientRect().right - 232),
-            top: menu.trigger.getBoundingClientRect().bottom + 6,
-          }}
+          style={menuAt(menu.trigger, pictures)}
           entries={[
             ...(interactive && selection.bot ? plusEntries(selection.bot) : []),
             ...(onNewBot

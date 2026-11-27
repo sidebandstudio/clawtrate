@@ -17,12 +17,21 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type ReactNode,
   type RefObject,
 } from "react";
 import { useBridge, useCommand } from "./bridge.tsx";
 import { Conversation } from "./Conversation.tsx";
 import { DOCK_FROM, ONE_PANE_BELOW, useElementWidth } from "./layout.ts";
+import { RailEdge } from "./RailEdge.tsx";
+import {
+  RAIL_PICTURES,
+  railDefault,
+  railWidthShown,
+  readRailWidth,
+  writeRailWidth,
+} from "./rail-width.ts";
 import {
   readPreference,
   writePreference,
@@ -179,6 +188,20 @@ export function Shell({
   const shellWidth = useElementWidth(shellRef);
   const mainWidth = useElementWidth(mainRef);
   const onePane = shellWidth !== null && shellWidth < ONE_PANE_BELOW;
+  // The sidebar's width (#792): the one this device keeps, else the default, fitted to the window.
+  // At phone width the sidebar is the list pane and has no width of its own.
+  const [railKept, setRailKept] = useState(readRailWidth);
+  // While a drag crosses into or out of the rail of pictures, the width it reached.
+  const [railLive, setRailLive] = useState<number | null>(null);
+  const railWidth =
+    shellWidth === null || onePane
+      ? null
+      : (railLive ?? railWidthShown(railKept ?? railDefault(shellWidth), shellWidth));
+  const keepRailWidth = useCallback((width: number | null) => {
+    setRailLive(null);
+    setRailKept(width);
+    writeRailWidth(width);
+  }, []);
 
   // Whether Work is a drawer is decided here, from the width of .main-pane, and
   // in the stylesheet by the same width (DOCK_FROM); nowhere else.
@@ -880,9 +903,12 @@ export function Shell({
         ref={shellRef}
         data-panel={panelOpen && !routines ? "open" : "closed"}
         data-view={view}
+        style={railWidth === null ? undefined : ({ "--rail": `${railWidth}px` } as CSSProperties)}
         inert={inert}
       >
         <Rail
+          id="bots-rail"
+          pictures={railWidth === RAIL_PICTURES}
           bots={selection.listed}
           tasksByBot={state.tasksByBot}
           discovery={state.discovery}
@@ -916,6 +942,16 @@ export function Shell({
           sidebar={state.sidebar}
           newTaskHint={info.kind === "desktop" ? "⌘T" : "⌥T"}
         />
+        {railWidth !== null && (
+          <RailEdge
+            width={railWidth}
+            windowWidth={shellWidth}
+            shellRef={shellRef}
+            controls="bots-rail"
+            onLive={setRailLive}
+            onChange={keepRailWidth}
+          />
+        )}
         <div className="main-pane" ref={mainRef}>
           {routines ? (
             <RoutinesView
