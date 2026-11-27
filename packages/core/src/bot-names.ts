@@ -1311,12 +1311,15 @@ export function settled(record: NameRecord, bots: readonly Bot[], now: number): 
   return next;
 }
 
-/** One more confirmed rename of `bot` on `day`; other days' counts go, today's others stay. */
+/**
+ * One more confirmed rename of `bot` on `day`. Earlier days' counts go; the day's others stay, and
+ * so do later days', which a device whose clock is already past midnight wrote.
+ */
 function withCount(record: NameRecord, bot: string, day: string): NameRecord {
   return {
     ...record,
     counts: [
-      ...record.counts.filter((each) => each.day === day && each.bot !== bot),
+      ...record.counts.filter((each) => each.day > day || (each.day === day && each.bot !== bot)),
       { bot, day, n: renamesOn(record, bot, day) + 1 },
     ],
   };

@@ -670,6 +670,17 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
     }
   });
 
+  it("F-552: a confirmed rename keeps a later day's counts that a device past midnight wrote", async () => {
+    const gw = gateway();
+    const tomorrow = dayOf(NOW + 24 * 60 * 60 * 1000);
+    gw.state.record = record({ counts: [{ bot: "otto", day: tomorrow, n: 3 }] });
+    await device(gw).engine.afterRun("pip", KEY, "run-1");
+    expect(gw.kept().counts).toEqual([
+      { bot: "otto", day: tomorrow, n: 3 },
+      { bot: "pip", day: dayOf(NOW), n: 1 },
+    ]);
+  });
+
   it("F-552: a confirmed rename keeps every bot's count for today and drops other days'", async () => {
     const gw = gateway();
     const others = Array.from({ length: 8 }, (_, n) => ({
