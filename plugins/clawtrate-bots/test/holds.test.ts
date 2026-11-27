@@ -1,10 +1,10 @@
 // The holds on the tools a bot already has (lib/holds.js): each row of design
 // section 3.3's side-door table, for each origin this build can tell apart.
 
-import { mkdirSync, mkdtempSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, win32 } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import {
   NOTES_MAX_BYTES,
   SAID,
@@ -18,6 +18,17 @@ import {
   targetBot,
   writtenPaths,
 } from "../lib/holds.js";
+
+/** A temporary folder of this file's own, removed when the file's tests are done. */
+const made: string[] = [];
+const tempDir = (prefix: string) => {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  made.push(dir);
+  return dir;
+};
+afterAll(() => {
+  for (const dir of made.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
 
 type Json = Record<string, unknown>;
 const origin = (
@@ -180,7 +191,7 @@ describe("the scheduler", () => {
 });
 
 describe("the bot's instruction files", () => {
-  const ws = mkdtempSync(join(tmpdir(), "clawtrate-bots-holds-"));
+  const ws = tempDir("clawtrate-bots-holds-");
   mkdirSync(join(ws, "notes"));
   writeFileSync(join(ws, "AGENTS.md"), "");
   symlinkSync(join(ws, "AGENTS.md"), join(ws, "notes", "alias.md"));
@@ -442,7 +453,7 @@ describe("fix round: reading a call as the tool reads it", () => {
 
   it("D2: the bot's own AGENTS.md by ~/ or file:// is held; another bot's files by absolute path are clawtrate_bot's change", () => {
     // A home folder of the test's own, as the tools read it ($HOME).
-    const home = mkdtempSync(join(tmpdir(), "clawtrate-bots-home-"));
+    const home = tempDir("clawtrate-bots-home-");
     const saved = process.env.HOME;
     process.env.HOME = home;
     const pip = join(home, "pip");
@@ -470,7 +481,7 @@ describe("fix round: reading a call as the tool reads it", () => {
   });
 
   it("D6: an unknown run's IDENTITY.md write from a chat-app sender who isn't the owner, by the hook's own requester", () => {
-    const ws = mkdtempSync(join(tmpdir(), "clawtrate-bots-holds-"));
+    const ws = tempDir("clawtrate-bots-holds-");
     const unknown = { origin: "C", read: "lost", kind: "unknown" };
     const event = call("edit", { path: "IDENTITY.md" });
     expect(
@@ -496,7 +507,7 @@ describe("fix round: reading a call as the tool reads it", () => {
   });
 
   it("HEARTBEAT.md is held as the check-in's notes: not after reading", () => {
-    const ws = mkdtempSync(join(tmpdir(), "clawtrate-bots-holds-"));
+    const ws = tempDir("clawtrate-bots-holds-");
     expect(
       outcomes(call("write", { path: "HEARTBEAT.md" }), { workspaces: { pip: ws } }),
     ).toMatchObject({ B: "done", Bread: "not done", C: "done", Oread: "not done" });
