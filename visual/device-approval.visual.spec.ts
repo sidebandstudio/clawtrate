@@ -656,3 +656,33 @@ test("F-550: from Settings with Work as a drawer, the sheet keeps Tab, and Escap
   await expect(settings).toHaveCount(0);
   await expect(drawer).toBeVisible();
 });
+
+test("F-550: the fixture keeps a request whose approval's answer was lost taken, as the host does", async ({
+  page,
+}) => {
+  await openFixture(page, "scene=device-request&device=unknown", "dark");
+  const sheet = sheetOf(page);
+  await sheet.getByRole("button", { name: "Code K 7 Q F, 2 M X A", exact: true }).click();
+  await expect(sheet.getByTestId("device-outcome")).toContainText("can't say whether");
+  // A second approval of the same request, as another window would send it: not allowed.
+  const again = await page.evaluate(() => {
+    const fixture = (
+      window as unknown as {
+        clawtrateFixture: {
+          getState: () => ClawtrateState;
+          invoke: (command: Record<string, unknown>) => Promise<{ kind: string }>;
+        };
+      }
+    ).clawtrateFixture;
+    const listed = fixture.getState().deviceRequests!;
+    return fixture.invoke({
+      type: "approveDevice",
+      requestId: listed.requests[0]!.requestId,
+      code: "K7QF-2MXA",
+      scopes: listed.requests[0]!.scopes,
+      listedOn: listed.listedOn,
+      stamp: { gatewayUrl: null, gatewayId: null },
+    });
+  });
+  expect(again).toEqual({ kind: "not-allowed" });
+});
