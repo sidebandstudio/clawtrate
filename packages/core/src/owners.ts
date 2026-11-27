@@ -41,6 +41,8 @@ import {
   MAX_APPROVAL_OUTCOMES,
   MAX_APPROVAL_READERS,
   MAX_DEFERRED_STOPS,
+  MAX_NAMED_TASKS,
+  MAX_TEXTLESS_SENDS,
   MAX_FIRST_MESSAGE_TITLES,
   MAX_FOLLOW_UPS,
   MAX_OUTCOME_LOOKUPS,
@@ -78,6 +80,7 @@ import {
   WAITING_HELD_CHARS,
   WAITING_MARKER_CHARS,
   WAITING_RUN_CHARS,
+  MAX_OLDER_RUNS,
 } from "./waiting.ts";
 import {
   APPROVAL_ATTEMPTS,
@@ -202,6 +205,7 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   "waiting.sessions.*": { max: MAX_WAITING_MARKERS, each: WAITING_MARKER_CHARS, row: null },
   // Each task's latest run by id, and whether it was stopped.
   "waiting.runs": { max: MAX_WAITING_SESSIONS, each: WAITING_RUN_CHARS, row: "bookkeeping" },
+  "waiting.runs.*.older": { max: MAX_OLDER_RUNS, each: MAX_WAITING_ID_CHARS, row: null },
   // Tasks the engine follows, as their runs describe them.
   // A task's read on opening, while it is on its way.
   openedReads: { max: MAX_OPENED_READS, each: ID, row: "bookkeeping" },
@@ -318,6 +322,20 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
     row: "bookkeeping",
   },
   "sentSources.*": { max: MAX_SENT_SOURCES, each: 2 * MAX_INBOUND_REF_CHARS + N, row: null },
+  // Tasks this client names, or waits to name from their first message with text, by key: the stage,
+  // the session the task was created as, the message it is named from once the gateway accepts it,
+  // and the ids of this client's messages there with no text.
+  taskNames: {
+    max: MAX_NAMED_TASKS,
+    each: 3 * ID + SHORT + MAX_TEXTLESS_SENDS * ID,
+    row: "bookkeeping",
+  },
+  "taskNames.*.textless": {
+    max: MAX_TEXTLESS_SENDS,
+    each: ID,
+    row: null,
+    opaque: "counted in `taskNames`",
+  },
   // The title each task's first message makes, by task key, with the outgoing message it was
   // made from until history holds it.
   firstMessageTitles: {

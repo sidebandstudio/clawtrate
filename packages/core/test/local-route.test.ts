@@ -327,6 +327,97 @@ describe("a gateway set up through local connect", () => {
     client.stop();
   });
 
+  it("a Connect over the route with no token, by a device already paired there, replaces the saved gateway at its hello", async () => {
+    const earlier = { url: "ws://gateway.example:19941", token: "earlier-token" };
+    const storage = memoryStorage({
+      connection: JSON.stringify(earlier),
+      [tokenKey(URL)]: JSON.stringify({ ...JSON.parse(SAVED), route: ROUTE }),
+    });
+    const gateway = readGateway();
+    const { host: app, plain } = host(gateway, storage);
+    const sockets = route(gateway, () => true);
+    const client = new ClawtrateClient(app, { ...FAST, localConnect: () => sockets.sockets });
+    await client.start({ resume: false });
+    await client.connect(
+      { url: URL },
+      {
+        createSocket: sockets.sockets.createSocket,
+        prove: sockets.sockets.verify,
+        route: ROUTE,
+        consent: () => true,
+      },
+    );
+    try {
+      await until(() => client.state.connection.status === "connected");
+      // Paired before: the hello carried this device's token, and no gateway token went.
+      expect(JSON.stringify(gateway.connects[0])).toContain("device-token");
+      await until(() => JSON.parse(storage.data.get("connection")!).url === URL);
+      expect(JSON.parse(storage.data.get("connection")!)).toEqual({
+        url: URL,
+        token: null,
+        route: ROUTE,
+      });
+      // The earlier gateway isn't what Disconnect brings back: the route's gateway is forgotten.
+      await client.disconnect();
+      expect(storage.data.has("connection")).toBe(false);
+      expect(plain).toHaveLength(0);
+    } finally {
+      client.stop();
+    }
+  });
+
+  for (const when of ["after", "before"] as const)
+    it(`a setup code for another gateway during an unpaired Connect over the route, then Disconnect ${when} it pairs: ${when === "after" ? "nothing stays saved" : "the earlier gateway stays saved"}`, async () => {
+      const earlier = { url: "ws://gateway.example:19941", token: "earlier-token" };
+      const other = "ws://127.0.0.1:19943";
+      const storage = memoryStorage({ connection: JSON.stringify(earlier) });
+      const gateway = readGateway();
+      const { host: app } = host(gateway, storage);
+      const sockets = route(gateway, () => true);
+      const client = new ClawtrateClient(app, { ...FAST, localConnect: () => sockets.sockets });
+      try {
+        await client.start({ resume: false });
+        // The route's Connect never gets as far as its hello: its last check is held.
+        await client.connect(
+          { url: URL, token: "settings-token" },
+          {
+            createSocket: sockets.sockets.createSocket,
+            prove: () => new Promise<boolean>(() => {}),
+            route: ROUTE,
+            consent: () => true,
+          },
+        );
+        await until(() => sockets.made.length > 0);
+        // A setup code for another gateway, paired at once, or held before its hello.
+        await client.connectWithSetupCode(
+          { url: other, bootstrapToken: CODE, expiresAtMs: Date.now() + 60_000 },
+          when === "after" ? {} : { verify: () => new Promise<boolean>(() => {}) },
+        );
+        if (when === "after") {
+          await until(() => client.state.connection.status === "connected");
+          await until(() => JSON.parse(storage.data.get("connection") ?? "{}").url === other);
+        } else await sleep(100);
+        expect(
+          gateway.connects.some((hello) => JSON.stringify(hello).includes("settings-token")),
+        ).toBe(false);
+        await client.disconnect();
+        if (when === "after") expect(storage.data.has("connection")).toBe(false);
+        else expect(JSON.parse(storage.data.get("connection")!)).toEqual(earlier);
+      } finally {
+        client.stop();
+      }
+      // A restart opens what is saved: nothing, or the earlier gateway.
+      const again = new ClawtrateClient(testHost(gateway, storage), FAST);
+      try {
+        await again.start({ resume: false });
+        const saved = await again.savedSettings();
+        if (when === "after") expect(saved).toBeNull();
+        else expect(saved).toMatchObject(earlier);
+      } finally {
+        again.stop();
+      }
+    });
+
   it("is an ordinary gateway again once the person connects to it by its address", async () => {
     const storage = memoryStorage({
       connection: JSON.stringify({ url: URL, token: null, route: ROUTE }),
@@ -397,6 +488,108 @@ describe("a gateway saved with a route is the gateway that route first reported"
       const connects = gateway.connects.length;
       await sleep(300);
       expect(gateway.connects).toHaveLength(connects);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("a changed route drops only the token its connection used: a pairing another connection on this store saved since stays", async () => {
+    const identity = { id: "gateway-a" };
+    const { gateway, storage, client } = await routed(identity);
+    const newer = JSON.stringify({
+      ...JSON.parse(SAVED),
+      token: "newer-device-token",
+      route: ROUTE,
+    });
+    // Another connection on this store pairs there again and saves its token as this one stops,
+    // before this one's clean-up runs.
+    const unsubscribe = client.store.subscribe((state) => {
+      if (state.connection.error?.code === ROUTE_IDENTITY_CHANGED && !storage.data.has("newer")) {
+        storage.data.set("newer", "1");
+        storage.data.set(tokenKey(URL), newer);
+      }
+    });
+    try {
+      await until(() => storage.data.get("connection")!.includes("gateway-a"));
+      identity.id = "gateway-b";
+      gateway.dropAll();
+      await until(() => client.state.connection.error?.code === ROUTE_IDENTITY_CHANGED);
+      await sleep(100);
+      expect(storage.data.get("newer")).toBe("1");
+      expect(storage.data.get(tokenKey(URL))).toBe(newer);
+      expect(client.state.connection.status).toBe("error");
+    } finally {
+      unsubscribe();
+      client.stop();
+    }
+  });
+
+  it("a route another client on this store saved with another identity since this one started is stopped, and that identity kept", async () => {
+    const gateway = readGateway();
+    let answer!: () => void;
+    const asked = new Promise<void>((done) => (answer = done));
+    // The gateway names itself only once the other client has saved the route's identity.
+    gateway.handlers["gateway.identity.get"] = async () => {
+      await asked;
+      return { deviceId: "gateway-b" };
+    };
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL, token: null, route: ROUTE }),
+      [tokenKey(URL)]: JSON.stringify({ ...JSON.parse(SAVED), route: ROUTE }),
+    });
+    const client = new ClawtrateClient(testHost(gateway, storage), {
+      ...FAST,
+      localConnect: () => route(gateway, () => true).sockets,
+    });
+    try {
+      await client.start();
+      await until(() => client.state.connection.status === "connected");
+      await storage.set(
+        "connection",
+        JSON.stringify({ url: URL, token: null, route: ROUTE, gatewayId: "gateway-a" }),
+      );
+      answer();
+      await until(() => client.state.connection.error?.code === ROUTE_IDENTITY_CHANGED);
+      expect(JSON.parse(storage.data.get("connection")!)).toMatchObject({ gatewayId: "gateway-a" });
+      expect(storage.data.has(tokenKey(URL))).toBe(false);
+      const connects = gateway.connects.length;
+      await sleep(300);
+      expect(gateway.connects).toHaveLength(connects);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("a changed route stops before its token is dropped, publishes no other identity, and says so when the token can't be dropped", async () => {
+    const identity = { id: "gateway-a" };
+    const { gateway, storage, client } = await routed(identity);
+    const published: Array<string | null> = [];
+    client.store.subscribe((state) => void published.push(state.connection.gatewayId));
+    const atDelete: string[] = [];
+    const remove = storage.delete.bind(storage);
+    storage.delete = async (key) => {
+      if (key !== tokenKey(URL)) return remove(key);
+      atDelete.push(client.state.connection.status);
+      throw new Error("the store refused");
+    };
+    try {
+      await until(() => storage.data.get("connection")!.includes("gateway-a"));
+      identity.id = "gateway-b";
+      gateway.dropAll();
+      await until(() => atDelete.length > 0);
+      // The connection had stopped before the token's deletion was asked.
+      expect(atDelete).toEqual(["error"]);
+      await until(
+        () => client.state.connection.error?.message.includes("couldn't remove") === true,
+      );
+      expect(client.state.connection.status).toBe("error");
+      expect(published).not.toContain("gateway-b");
+      // The token stayed, and nothing reconnects by itself.
+      expect(storage.data.has(tokenKey(URL))).toBe(true);
+      const connects = gateway.connects.length;
+      await sleep(300);
+      expect(gateway.connects).toHaveLength(connects);
+      expect(client.state.connection.status).toBe("error");
     } finally {
       client.stop();
     }

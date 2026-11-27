@@ -49,6 +49,7 @@ import {
   type HostRuntime,
 } from "../host/runtime.ts";
 import { SetupController } from "../setup/controller.ts";
+import { localConnectFor, provedRouteFor } from "../setup/local-connect.ts";
 import { ProgramRunner } from "../setup/programs.ts";
 import { resolveSetupLaunch, sandboxOpener, type Opened } from "../setup/sandbox.ts";
 import { startSyntheticGateway } from "../setup/synthetic-gateway.ts";
@@ -154,6 +155,26 @@ const KEYCHAIN_CHECK = keychainCheckName(
   hasSwitch(MOCK_KEYCHAIN_SWITCH),
 );
 if (KEYCHAIN_CHECK) app.setName(KEYCHAIN_CHECK);
+
+/**
+ * Local connect (docs/design/setup-effortless.md §3): a person's packaged Mac app only, with its
+ * Keychain, its native helper in Contents/Helpers and the account's own home. Off in every other
+ * launch: a development build, an automated run and a launch check have no default home
+ * (`localConnectFor`), and a launch without the Keychain couldn't keep a full grant.
+ */
+const LOCAL_CONNECT =
+  SETUP.kind === "production" &&
+  process.platform === "darwin" &&
+  usesSecureStorage(SETUP, process.platform, KEYCHAIN_CHECK, hasSwitch(MOCK_KEYCHAIN_SWITCH))
+    ? localConnectFor(
+        { packaged: app.isPackaged, env: process.env, switches: hasSwitch },
+        {
+          // packaging/config.ts `LOCAL_GATEWAY_HELPER`, built and signed with the app.
+          helper: join(process.resourcesPath, "..", "Helpers", "ClawtrateLocalGateway"),
+          platform: process.platform,
+        },
+      )
+    : null;
 
 /**
  * The checkout whose run records prove a sandbox's run: this development
@@ -413,6 +434,14 @@ async function main(): Promise<void> {
       recheckDevGateway: () => readDevConnection(REPO_ROOT, { instance: devInstance }),
       autoConnectDev: STARTUP.autoConnectDev,
       resume: STARTUP.resume,
+      // A gateway set up through local connect reopens only on sockets proved the same way.
+      ...(LOCAL_CONNECT
+        ? {
+            localConnect: provedRouteFor(LOCAL_CONNECT, (why) =>
+              console.log(`[setup] couldn't verify what is listening (${why})`),
+            ),
+          }
+        : {}),
     });
   } catch (error) {
     // Nothing has connected and no window is open: say so in fixed words, and leave.
@@ -484,9 +513,21 @@ async function main(): Promise<void> {
     stopPrograms: () => programs.stopAll(),
     confirm: confirmNatively,
     log: (line) => console.log(line),
+    // The settings reader's parse worker is an entry of the main bundle (electron.vite.config.ts).
+    ...(LOCAL_CONNECT
+      ? {
+          localConnect: {
+            ...LOCAL_CONNECT,
+            worker: new URL("./settings-parse.js", import.meta.url),
+          },
+        }
+      : {}),
   });
   policy.setup = setup;
-  info.setup = { look: true, pair: true, platform: process.platform };
+  info.setup = { look: true, pair: true, platform: process.platform, local: !!LOCAL_CONNECT };
+  // With local connect, the look only reads files and proves a socket, so it runs before the
+  // person is asked anything: a gateway found here is offered on the first screen.
+  if (LOCAL_CONNECT && client.state.connection.gatewayUrl === null) void setup.lookAtStart();
 
   ipcMain.handle("clawtrate:hello", (): { info: HostInfo; state: ClawtrateState } => ({
     info,
