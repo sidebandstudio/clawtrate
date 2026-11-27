@@ -179,6 +179,16 @@ describe("a small model's name in the order (#750)", () => {
     // Until it arrives, the first message's title (search has none of its own: the key's).
     expect(titles(ROW_1110)).toEqual(["What I asked", "What I asked", "New task"]);
   });
+
+  it("an archived row that carries only `sessionKey` is read as the task list reads it", () => {
+    const { key: _key, ...row } = ROW_1110;
+    const archived = mapArchivedRow({ ...row, sessionKey: KEY, archived: true }, "main", first);
+    const listed = mapSessionRow({ ...row, sessionKey: KEY }, { firstMessage: first(KEY) });
+    expect(archived?.key).toBe(KEY);
+    expect(archived?.key).toBe(listed?.key);
+    expect(archived?.title).toBe("What I asked");
+    expect(archived?.title).toBe(listed?.title);
+  });
 });
 
 describe("a task titled from its first message", () => {
