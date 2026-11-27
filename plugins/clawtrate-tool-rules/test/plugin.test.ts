@@ -993,6 +993,34 @@ describe("a run another bot's message started or reached (#606)", () => {
     );
   });
 
+  it("a run that takes a bot's attribution is no longer a person's, on a steer or at its start, after its notes are let go", async () => {
+    const h = host();
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    const { origins } = h.handle.shared;
+    /** Its note and its forgotten mark let go past their bounds, and track lost. */
+    const evict = (run: string) => {
+      origins.runs.delete(run);
+      origins.forgotten.delete(run);
+      origins.lostTrack = true;
+    };
+    // On a steer: a person's run under way, then Marlow's message, whose own run starts.
+    personRun(h, "run-p");
+    h.write(PIP, fromMarlow("run-m"));
+    h.modelCall("run-m", PIP);
+    expect(origins.people.has("run-p")).toBe(false);
+    evict("run-p");
+    expect(read(h, "run-p")?.requireApproval).toBeUndefined();
+    // At its start: a person's message whose run starts while Marlow's message waits.
+    const T = "agent:pip:t2";
+    h.write(T, fromPerson("run-x"));
+    h.write(T, fromMarlow("run-m2"));
+    h.modelCall("run-x", T);
+    h.modelCall("run-m2", T);
+    expect(origins.people.has("run-x")).toBe(false);
+    evict("run-x");
+    expect(read(h, "run-x", T)?.requireApproval).toBeUndefined();
+  });
+
   it("a waiting bot's message is read before a person's note: a busy run whose task the plugin no longer holds as under way still loses its cards", async () => {
     const h = host();
     await h.save("pip", [{ action: "ask", tools: ["read"] }]);

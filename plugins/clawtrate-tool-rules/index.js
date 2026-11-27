@@ -700,6 +700,8 @@ export function createToolRules(api, options = {}) {
       const running = origins.current.get(sessionKey);
       if (running !== undefined && !noteOf(origins.runs, running)) {
         remember(origins.runs, running, origin, MARKS);
+        // A run a bot's message reached is no person's, whatever named it before.
+        origins.people.delete(running);
       }
       const waiting = [...waitingIn(sessionKey)];
       // Its send's result came first (2026.10.6 answers a steer before the run takes it in).
@@ -762,7 +764,10 @@ export function createToolRules(api, options = {}) {
     // An expired mark's run goes among the forgotten first; a bot's run let go stays there.
     waitingIn(sessionKey);
     if (forgotten.has(runId)) return;
-    remember(origins.runs, runId, originAtStart(sessionKey, runId), MARKS);
+    const origin = originAtStart(sessionKey, runId);
+    // A run that starts as a bot's is no person's, though a person's message named it.
+    if (origin) origins.people.delete(runId);
+    remember(origins.runs, runId, origin, MARKS);
   }
 
   /**
