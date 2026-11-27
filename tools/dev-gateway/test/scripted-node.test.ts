@@ -2,10 +2,11 @@
 // declare, where its state lives, which pairing requests it approves, and that
 // its process is a recorded process of the instance like the gateway. No real
 // node host or gateway is started.
-import type { spawn } from "node:child_process";
+import type { spawn, SpawnOptions } from "node:child_process";
+import { rmSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
-import { OpenclawRunner } from "../src/env.ts";
+import { OpenclawRunner, SpawnRefusedError } from "../src/env.ts";
 import { stateDirFor } from "../src/instance.ts";
 import {
   nodeCommandRequest,
@@ -16,8 +17,16 @@ import {
   scriptedNodeDir,
   scriptedNodeEnv,
 } from "../src/scripted-node.ts";
-import { activityRefusal, markerProblems, readMarker } from "../src/state-guard.ts";
-import { deadProcess, liveProcess, seedInstance, stopChildren, tempDir } from "./fixtures.ts";
+import { activityRefusal, markerProblems, readMarker, type Identify } from "../src/state-guard.ts";
+import {
+  CHECKOUT,
+  deadProcess,
+  liveProcess,
+  seedInstance,
+  stopChildren,
+  tempDir,
+  writeRun,
+} from "./fixtures.ts";
 
 afterAll(stopChildren);
 
@@ -95,6 +104,71 @@ describe("the scripted node", () => {
     expect(() =>
       runner.spawnNodeGated(["node", "run"], { OPENCLAW_STATE_DIR: stateDir }, {}),
     ).toThrow(/inside the instance's/);
+  });
+
+  it("is spawned in exactly the folder scriptedNodeEnv names, with this platform's separators", () => {
+    const home = tempDir("clawtrate-home-");
+    try {
+      // Synthetic processes: the injected lookup answers for them, so no real process is involved.
+      const gateway = { pid: 424242, identity: "synthetic-gateway" };
+      const { stateDir, runId } = seedInstance(home, "alpha", {
+        start: { pid: 424241, identity: "synthetic-start" },
+        gateway,
+      });
+      const runFile = join(home, "run.json");
+      writeRun(runFile, {
+        runId,
+        instance: "alpha",
+        checkout: CHECKOUT,
+        gatewayPort: 19240,
+        providerPort: 19250,
+        startedAt: "",
+      });
+      let gatewayAlive = true;
+      const lookups: number[] = [];
+      const identify: Identify = (pid) => {
+        lookups.push(pid);
+        return pid === gateway.pid && gatewayAlive
+          ? { state: "alive", identity: gateway.identity }
+          : { state: "exited", how: "absent" };
+      };
+      const calls: { args: readonly string[]; options: SpawnOptions }[] = [];
+      const fakeSpawn = ((_command: string, args: readonly string[], options: SpawnOptions) => {
+        calls.push({ args, options });
+        return { stdio: [] };
+      }) as unknown as typeof spawn;
+      const runner = new OpenclawRunner({
+        instance: "alpha",
+        // A stand-in path: the fake spawn above records it, never runs it.
+        bin: "/test/openclaw",
+        stateDir,
+        runFile,
+        spawnImpl: fakeSpawn,
+        identify,
+        checkout: CHECKOUT,
+      });
+      const env = scriptedNodeEnv(stateDir, "token-1");
+
+      runner.spawnNodeGated(scriptedNodeArgs(19240), env, {}).abort();
+      expect(calls).toHaveLength(1);
+      expect(calls[0]!.args[2]).toBe("/test/openclaw");
+      expect(calls[0]!.options.cwd).toBe(scriptedNodeDir(stateDir));
+      expect(calls[0]!.options.env?.OPENCLAW_STATE_DIR).toBe(scriptedNodeDir(stateDir));
+      expect(calls[0]!.options.env?.OPENCLAW_GATEWAY_TOKEN).toBe("token-1");
+
+      for (const dir of [stateDir, join(stateDir, "agents"), join(home, "elsewhere"), undefined]) {
+        expect(() =>
+          runner.spawnNodeGated(["node", "run"], { ...env, OPENCLAW_STATE_DIR: dir }, {}),
+        ).toThrow(SpawnRefusedError);
+      }
+      // The ownership and process checks still come first, for the node's own folder too.
+      gatewayAlive = false;
+      expect(() => runner.spawnNodeGated(["node", "run"], env, {})).toThrow(/is not running/);
+      expect(calls).toHaveLength(1);
+      expect(new Set(lookups)).toEqual(new Set([gateway.pid]));
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   it("is a recorded process: a live node keeps the folder in use, a valid record passes", () => {
