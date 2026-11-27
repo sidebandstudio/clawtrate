@@ -41,25 +41,52 @@ type Check = { runId: string; connection: number; verdict: QuietVerdict };
 
 /**
  * Whether a history read holds every row of the run, so that no row of it answering nothing can
- * be outside it: it reaches the transcript's start (`hasMore: false`) or the run's own input (the
- * row keyed `<runId>:user`, or by the run's id), which the gateway writes before any row of the
- * run; and it left no row out for size (`omission`, 2026.11.10's byte budget). A read that says
- * neither (a full page, `hasMore` missing) proves nothing.
+ * be outside it, and left no row out for size (`omission`, 2026.11.10's byte budget). It holds
+ * them when it reaches the transcript's start (`hasMore: false`); or holds the run's own input, a
+ * `user` row keyed `<runId>:user` (or by the run's id), which the gateway writes before any row of
+ * the run; or holds a row the gateway's run machinery wrote for another run (an `assistant` or
+ * `toolResult` row with another `__openclaw.runId`) before this run started (`startedAt`, the
+ * gateway's time). A session runs one turn at a time on both versions (2026.10.6's per-session
+ * lane, 2026.11.10's session controller), so every row of this run was written after that one.
+ * A turn the gateway starts from an event has no input of its own: its input row is keyed by the
+ * event, so in a long session only that last way shows it whole. A read that says none of these
+ * (a full page, `hasMore` missing, no start known) proves nothing.
  */
-export function historyCoversRun(history: RawRecord | null, runId: string): boolean {
+export function historyCoversRun(
+  history: RawRecord | null,
+  runId: string,
+  startedAt: number | null = null,
+): boolean {
   if (!history || asRecord(history.omission)) return false;
   if (history.hasMore === false) return true;
   const rows = Array.isArray(history.messages) ? history.messages : [];
   return rows.some((entry) => {
     const row = asRecord(entry);
-    const key = row ? rowIdempotencyKey(row) : null;
-    return key === `${runId}:user` || key === runId;
+    if (!row) return false;
+    if (row.role === "user") {
+      const key = rowIdempotencyKey(row);
+      return key === `${runId}:user` || key === runId;
+    }
+    if (row.role !== "assistant" && row.role !== "toolResult") return false;
+    const other = asRecord(row.__openclaw)?.runId;
+    const at = typeof row.timestamp === "number" ? row.timestamp : null;
+    return (
+      startedAt !== null &&
+      typeof other === "string" &&
+      other !== runId &&
+      at !== null &&
+      at < startedAt
+    );
   });
 }
 
-/** The runs among `ids` that a history read holds whole (`historyCoversRun`). */
-export function coveredRuns(history: RawRecord | null, ids: ReadonlySet<string>): Set<string> {
-  return new Set([...ids].filter((id) => historyCoversRun(history, id)));
+/** The runs among `ids` that a history read holds whole (`historyCoversRun`), with each one's start. */
+export function coveredRuns(
+  history: RawRecord | null,
+  ids: ReadonlySet<string>,
+  startOf: (runId: string) => number | null,
+): Set<string> {
+  return new Set([...ids].filter((id) => historyCoversRun(history, id, startOf(id))));
 }
 
 /** Whether history holds no row of the run that answered nothing (`answeredNothing`). */

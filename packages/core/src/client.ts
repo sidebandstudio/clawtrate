@@ -1324,6 +1324,10 @@ function withAlarm(state: ClawtrateState): ClawtrateState {
 export const ALARM_FRACTION = 0.8;
 
 /** A finite number, or null. */
+/** When the gateway said the run started (its lifecycle `start`), for `historyCoversRun`. */
+const startOf = (runs: readonly Run[], id: string): number | null =>
+  runs.find((run) => run.id === id)?.reportedStartAt ?? null;
+
 const numberOr = (value: unknown): number | null =>
   typeof value === "number" && Number.isFinite(value) ? value : null;
 
@@ -6213,7 +6217,7 @@ export class ClawtrateClient {
           runs.length === merged.length && runs.every((run, i) => run === merged[i])
             ? merged
             : runs,
-          coveredRuns(history, quietBefore),
+          coveredRuns(history, quietBefore, (id) => startOf(merged, id)),
         );
         return {
           ...aliased,
@@ -6238,7 +6242,9 @@ export class ClawtrateClient {
     const held = this.foreign.get(sessionKey);
     const left = quietPending((held?.runs ?? []).filter((run) => ids.has(run.id)));
     const quiet =
-      left.size > 0 ? await this.readQuiet(sessionKey, left, held?.queueAliases ?? {}) : null;
+      left.size > 0 && held
+        ? await this.readQuiet(sessionKey, left, held.queueAliases, (id) => startOf(held.runs, id))
+        : null;
     if (!this.foreign.has(sessionKey)) return;
     this.updateForeign(sessionKey, (activity) => {
       const runs = settleQuietEnds(settleQuietEnds(activity.runs, quiet ?? new Set()), ids, true);
@@ -6257,6 +6263,7 @@ export class ClawtrateClient {
     sessionKey: string,
     ids: ReadonlySet<string>,
     aliases: Readonly<Record<string, string>>,
+    started: (runId: string) => number | null,
   ): Promise<Set<string> | null> {
     let history: RawRecord | null;
     try {
@@ -6272,7 +6279,9 @@ export class ClawtrateClient {
     }
     const { messages } = throughRunAliases(history?.messages, null, aliases);
     return new Set(
-      [...ids].filter((id) => historyCoversRun(history, id) && quietInHistory(messages, id)),
+      [...ids].filter(
+        (id) => historyCoversRun(history, id, started(id)) && quietInHistory(messages, id),
+      ),
     );
   }
 
@@ -10325,7 +10334,9 @@ export class ClawtrateClient {
   private async checkQuiet(key: string, runId: string): Promise<void> {
     const epoch = this.epoch;
     // Unread: the failure stays, and a later connection reads again.
-    const quiet = await this.readQuiet(key, new Set([runId]), {});
+    // The row's start is its latest run's: the gateway writes the two together.
+    const started = numberOr(this.rows.get(key)?.startedAt);
+    const quiet = await this.readQuiet(key, new Set([runId]), {}, () => started);
     const verdict = quiet === null ? "unread" : quiet.has(runId) ? "quiet" : "failed";
     this.quietChecks.settle(key, runId, epoch, verdict);
     if (verdict !== "quiet" && epoch === this.epoch) this.publishTasks();
@@ -10818,7 +10829,7 @@ export class ClawtrateClient {
           ctx,
         ),
         // Only what the read holds whole: the others are read on (`settleQuietLater`).
-        coveredRuns(history, quietBefore),
+        coveredRuns(history, quietBefore, (id) => startOf(merge.runs, id)),
       );
       // A Stop asked before the gateway named its run: the run in flight under the send's id
       // is that run, named now, and is stopped; so is one settled earlier with no known outcome.
@@ -10899,7 +10910,10 @@ export class ClawtrateClient {
    * each is a quiet answer only if that read shows it, and otherwise the failure it was sent as.
    */
   private async settleQuietLater(key: string, ids: Set<string>, generation: number): Promise<void> {
-    const quiet = await this.readQuiet(key, ids, this.state.transcripts[key]?.queueAliases ?? {});
+    const held = this.state.transcripts[key];
+    const quiet = await this.readQuiet(key, ids, held?.queueAliases ?? {}, (id) =>
+      startOf(held?.runs ?? [], id),
+    );
     if (generation !== this.generation) return;
     this.updateActivity(key, (activity) => {
       const runs = settleQuietEnds(settleQuietEnds(activity.runs, quiet ?? new Set()), ids, true);

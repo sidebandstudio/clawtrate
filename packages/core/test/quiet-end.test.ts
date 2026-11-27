@@ -855,6 +855,125 @@ describe("a read that doesn't hold the whole run proves nothing (#680)", () => {
   });
 });
 
+describe("a long main session: a row of an earlier run shows where this one starts (#680)", () => {
+  // A main session past one page (`hasMore: true`): 1,000 rows of earlier turns, a person's and
+  // the bot's, then the event the gateway woke the task with. That row is keyed by the event, not
+  // by the run (2026.11.10), so only an earlier run's row, written before this run started, shows
+  // the page holds the whole run.
+  const earlier = (count: number): Row[] =>
+    Array.from({ length: count }, (_, i) =>
+      i % 2 === 0
+        ? {
+            role: "user",
+            content: `Earlier message ${i}`,
+            timestamp: T0 - 100_000 + i * 10,
+            __openclaw: { id: `p-${i}`, seq: i + 1, idempotencyKey: `old-${i}:user` },
+          }
+        : {
+            role: "assistant",
+            content: [{ type: "text", text: "Done." }],
+            stopReason: "stop",
+            timestamp: T0 - 100_000 + i * 10,
+            __openclaw: { runId: `old-${i - 1}`, id: `a-${i}`, seq: i + 1 },
+          },
+    );
+  const longPage = (rows: Row[]) => ({ messages: rows, hasMore: true, totalMessages: 1_201 });
+  /** The run's own later rows, filling a page: its first row, reasoning only, is on an older one. */
+  const ownRows = (runId: string, count: number): Row[] =>
+    Array.from({ length: count }, (_, i) => ({
+      ...(i % 2 === 0 ? toolRows(runId)[0]! : toolRows(runId)[1]!),
+      timestamp: T0 + 2_200 + i,
+      __openclaw: { runId, id: `own-${i}`, seq: 2_000 + i },
+    }));
+  /** Another run's row written after this one started (a helper's report, say): no boundary. */
+  const laterOther: Row = {
+    role: "assistant",
+    content: [{ type: "text", text: "A helper's report." }],
+    stopReason: "stop",
+    timestamp: T0 + 3_000,
+    __openclaw: { runId: "helper-1", id: "h-1", seq: 3_000 },
+  };
+  const keyOf = (params: unknown) => (params as { sessionKey: string }).sessionKey;
+  const limitOf = (params: unknown) => (params as { limit?: number }).limit;
+
+  it("a task not open: a quiet wake is done; one whose reasoning row is on an older page stays failed", async () => {
+    for (const [page, status] of [
+      [longPage([...earlier(999), eventRow]), "done"],
+      [longPage([...ownRows("wake-31", 999), laterOther]), "failed"],
+    ] as const) {
+      const gateway = gatewayWith(
+        [
+          { key: KEY, agentId: "otto", status: "done", hasActiveRun: false, updatedAt: T0 },
+          { ...markedRow("wake-31", OTHER), startedAt: T0 + 2_100 },
+        ],
+        () => [],
+      );
+      const asked: unknown[] = [];
+      gateway.handlers["chat.history"] = (params) => {
+        if (keyOf(params) !== OTHER) return { messages: [], hasMore: false };
+        asked.push(limitOf(params));
+        return page;
+      };
+      const { client } = await openTask({ gateway });
+      await until(() => asked.length > 0);
+      await sleep(50);
+      expect(task(client, OTHER)?.status).toBe(status);
+      client.stop();
+    }
+  }, 30_000);
+
+  it("an open task: a quiet wake is settled from the read on; one whose reasoning row is on an older page fails", async () => {
+    for (const [onward, state] of [
+      [longPage([...earlier(999), eventRow]), "completed"],
+      [longPage([...ownRows("wake-32", 999), laterOther]), "failed"],
+    ] as const) {
+      let page: unknown = { messages: [], hasMore: false };
+      const gateway = gatewayWith(
+        [{ key: KEY, agentId: "otto", hasActiveRun: false, updatedAt: T0 }],
+        () => [],
+      );
+      gateway.handlers["chat.history"] = (params) =>
+        limitOf(params) === QUIET_CHECK_ROWS ? onward : page;
+      const { client, transcript } = await openTask({ gateway });
+      // The task's own read: the last 200 rows, none of them an earlier run's.
+      page = longPage([...ownRows("wake-32", 199), eventRow]);
+      wakeAndEndMarked(gateway, "wake-32");
+      await until(() => {
+        const run = runOf(transcript, "wake-32");
+        return run?.state === "failed" || run?.quietEnd === "settled";
+      });
+      expect(runOf(transcript, "wake-32")?.state).toBe(state);
+      client.stop();
+    }
+  }, 30_000);
+
+  it("the rule alone: only the run machinery's row of another run, written before this run started", () => {
+    const row = (role: string, runId: string, at: number): Row => ({
+      role,
+      content: [{ type: "text", text: "x" }],
+      timestamp: at,
+      __openclaw: { runId, id: "z", seq: 1 },
+    });
+    const covers = (rows: Row[], started: number | null) =>
+      historyCoversRun(longPage(rows), "r", started);
+    expect(covers([row("assistant", "q", 99)], 100)).toBe(true);
+    expect(covers([row("toolResult", "q", 99)], 100)).toBe(true);
+    expect(covers([row("assistant", "q", 100)], 100)).toBe(false);
+    expect(covers([row("assistant", "q", 99)], null)).toBe(false);
+    expect(covers([row("user", "q", 99)], 100)).toBe(false);
+    expect(covers([row("custom", "q", 99)], 100)).toBe(false);
+    expect(covers([row("assistant", "r", 99)], 100)).toBe(false);
+    expect(covers([{ role: "assistant", content: [], timestamp: 99 }], 100)).toBe(false);
+    // A run's own input counts only as a person's or a system's row: OpenClaw keys some
+    // assistant rows by a run's id too.
+    expect(covers([{ role: "assistant", idempotencyKey: "r", timestamp: 200 }], 100)).toBe(false);
+    expect(covers([{ role: "assistant", idempotencyKey: "r:user", timestamp: 200 }], 100)).toBe(
+      false,
+    );
+    expect(covers([{ role: "user", idempotencyKey: "r", timestamp: 200 }], 100)).toBe(true);
+  });
+});
+
 describe("the sidebar and the run this client holds agree (#680)", () => {
   type Foreign = Map<string, { runs: Run[] }>;
   const foreignRun = (client: unknown, id: string) =>
