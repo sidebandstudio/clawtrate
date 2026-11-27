@@ -37,7 +37,8 @@ export const quietCheckChars = (idChars: number) => 2 * idChars + 80;
 /** `unread`: the read failed, so the failure stands; a later connection reads again. */
 export type QuietVerdict = "pending" | "quiet" | "failed" | "unread";
 
-type Check = { runId: string; connection: number; verdict: QuietVerdict };
+/** `token`: this check's own, so an answer to an earlier check of the same run never settles it. */
+type Check = { runId: string; connection: number; verdict: QuietVerdict; token: number };
 
 /**
  * Whether a history read holds every row of the run, so that no row of it answering nothing can
@@ -185,6 +186,7 @@ export function failedByRow(
  */
 export class QuietChecks {
   private readonly checks = new Map<string, Check>();
+  private tokens = 0;
 
   /**
    * What the task's check said of the run, on this connection (the client's `epoch`). One still on its way
@@ -198,15 +200,17 @@ export class QuietChecks {
   }
 
   /**
-   * A check begun. False when none more can be kept: then the failure stays. None gives way to
-   * another: a task whose check gave way would ask again at the next publish, and that one's
-   * answer would push out the next, reading history over and over (`retain` frees them).
+   * A check begun: its token, which its answer settles it by. Null when none more can be kept:
+   * then the failure stays. None gives way to another: a task whose check gave way would ask again
+   * at the next publish, and that one's answer would push out the next, reading history over and
+   * over (`retain` frees them).
    */
-  begin(key: string, runId: string, connection: number): boolean {
-    if (!this.checks.has(key) && this.checks.size >= MAX_QUIET_CHECKS) return false;
+  begin(key: string, runId: string, connection: number): number | null {
+    if (!this.checks.has(key) && this.checks.size >= MAX_QUIET_CHECKS) return null;
     this.checks.delete(key);
-    this.checks.set(key, { runId, connection, verdict: "pending" });
-    return true;
+    this.tokens += 1;
+    this.checks.set(key, { runId, connection, verdict: "pending", token: this.tokens });
+    return this.tokens;
   }
 
   /** Keep only the checks whose task's row still reports the marked failure of the same run. */
@@ -214,16 +218,13 @@ export class QuietChecks {
     for (const [key, check] of this.checks) if (!marked(key, check.runId)) this.checks.delete(key);
   }
 
-  /** The check's verdict, if it is still the task's check begun on that connection. */
-  settle(
-    key: string,
-    runId: string,
-    connection: number,
-    verdict: Exclude<QuietVerdict, "pending">,
-  ): void {
+  /**
+   * The check's verdict, if it is still the task's check its token names (#770): a check let go
+   * (`retain`) and begun again for the same run on the same connection is another check.
+   */
+  settle(key: string, token: number, verdict: Exclude<QuietVerdict, "pending">): void {
     const check = this.checks.get(key);
-    if (check?.runId === runId && check.connection === connection)
-      this.checks.set(key, { ...check, verdict });
+    if (check?.token === token) this.checks.set(key, { ...check, verdict });
   }
 
   clear(): void {
