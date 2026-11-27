@@ -1,6 +1,6 @@
 // A bot's check-ins (docs/design/automation.md section 13) against a real
 // development gateway: this run's accounts instance, whose bots are the seeded
-// four with the gateway's default check-ins (Juniper's, through
+// ones with the gateway's default check-ins (those of its own bot, `main`, through
 // `agents.defaults.heartbeat`). The interface runs on a preview host of its
 // own and is driven as a person drives it; what landed is read back from the
 // gateway's config and its heartbeat jobs, and the patches counted in the
@@ -144,7 +144,7 @@ test.beforeAll(async ({ accountsInstance, browser }) => {
     );
   expect(hasHeartbeats, "the gateway's schema agrees with the version under test").toBe(HEARTBEATS);
   if (HEARTBEATS) {
-    // The gateway's default: only Juniper (main) checks in, every 30 minutes, with no setting of its own.
+    // The gateway's default: only its own bot (main) checks in, every 30 minutes, with no setting of its own.
     await admin.request("config.patch", {
       raw: JSON.stringify({
         agents: {
@@ -201,7 +201,7 @@ if (HEARTBEATS) {
     await expect(block("marlow").getByRole("button", { name: /^Change / })).toBeVisible();
   });
 
-  test("F-201: Daily for Marlow is one config.patch that also keeps Juniper's check-ins, and once it says saved the gateway's config and jobs show both", async () => {
+  test("F-201: Daily for Marlow is one config.patch that also keeps the gateway's own bot's check-ins, and once it says saved the gateway's config and jobs show both", async () => {
     test.setTimeout(120_000);
     await block("marlow")
       .getByRole("button", { name: /^Change / })
@@ -235,7 +235,7 @@ if (HEARTBEATS) {
     await expect(block("marlow")).toContainText("Checks in every 30 minutes");
   });
 
-  test("F-366: Off for Juniper is one config.patch of every 0m; its job stays, disabled, and the gateway declines to run it if enabled", async () => {
+  test("F-366: Off for the gateway's own bot is one config.patch of every 0m; its job stays, disabled, and the gateway declines to run it if enabled", async () => {
     test.setTimeout(120_000);
     await block("main")
       .getByRole("button", { name: /^Change / })
@@ -479,7 +479,7 @@ if (!HEARTBEATS) {
     test.setTimeout(120_000);
     const before = patches();
     await openCheckIns();
-    for (const bot of ["main", "marlow", "otto", "pip"])
+    for (const bot of ["main", "clawtrate-main-bot", "marlow", "otto", "pip"])
       await expect(block(bot).getByTestId("check-in-text")).toContainText(
         "This OpenClaw keeps check-ins as routines.",
       );

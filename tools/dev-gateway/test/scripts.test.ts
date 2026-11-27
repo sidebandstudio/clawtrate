@@ -23,7 +23,7 @@ describe("normalizePrompt", () => {
 
   it("strips the working context Clawtrate's sends carry (#666), as both versions place it", () => {
     // The first turn: the words, the working context, then the runtime suffix.
-    const first = `[Thu 2026-11-26 02:12 EST] Conversation info: ⟦openclaw:ctx⟧\n\`\`\`json\n{"sender":{"id":"gateway-owner","name":"Pat"}}\n\`\`\`\n\nDo you know where you are?\n\n${WORK_CONTEXT_LINE}\n{"page":"Clawtrate"}\n\nRuntime: name=Juniper | agent=main | channel=webchat`;
+    const first = `[Thu 2026-11-26 02:12 EST] Conversation info: ⟦openclaw:ctx⟧\n\`\`\`json\n{"sender":{"id":"gateway-owner","name":"Pat"}}\n\`\`\`\n\nDo you know where you are?\n\n${WORK_CONTEXT_LINE}\n{"page":"Clawtrate"}\n\nRuntime: name=Juniper | agent=clawtrate-main-bot | channel=webchat`;
     expect(normalizePrompt(first)).toBe("Do you know where you are?");
     // A later turn: no runtime suffix.
     expect(normalizePrompt(`[Mon 09:00] #text\n\n${WORK_CONTEXT_LINE}\n{"page":"Clawtrate"}`)).toBe(

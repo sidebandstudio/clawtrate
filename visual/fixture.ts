@@ -286,7 +286,11 @@ export type StateScene = { name: string; query: string; prepare?: (page: Page) =
 
 /** The states this branch added, for screenshots and the legibility audit. */
 export const STATE_SCENES: StateScene[] = [
-  { name: "rail-pinned", query: `scene=main&${OTTO_DISK}&pins=main,otto,pip`, prepare: showList },
+  {
+    name: "rail-pinned",
+    query: `scene=main&${OTTO_DISK}&pins=clawtrate-main-bot,otto,pip`,
+    prepare: showList,
+  },
   { name: "task-states", query: `scene=task-states&${OTTO_DISK}`, prepare: showList },
   {
     name: "hidden-bots",
