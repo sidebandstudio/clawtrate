@@ -217,7 +217,7 @@ test.afterAll(async () => {
 
 test("F-560: a real skill note folds into its run's line, is not the bot's preview, and its undo works", async () => {
   test.setTimeout(300_000);
-  const key = `agent:main:skill-note-${Date.now()}`;
+  const key = `agent:clawtrate-main-bot:skill-note-${Date.now()}`;
   const send = { sessionKey: key, message: "#learn", idempotencyKey: key };
   const marks = !instanceForm(openInstance(INSTANCE)).reviewsCliTurns;
   if (!marks) await gatewayCall("chat.send", send);
@@ -242,11 +242,11 @@ test("F-560: a real skill note folds into its run's line, is not the bot's previ
   await expect(page.getByTestId("device-request")).toHaveCount(0);
 
   // The person reads the bot's reply, then goes to another bot before the review ends.
-  await botRow("main").click();
+  await botRow("clawtrate-main-bot").click();
   await expect(transcript()).toContainText(REPLY, { timeout: 60_000 });
-  const other = page.locator('[data-testid="bot"]:not([data-bot="main"])').first();
+  const other = page.locator('[data-testid="bot"]:not([data-bot="clawtrate-main-bot"])').first();
   await other.click();
-  await expect(botRow("main")).not.toHaveAttribute("aria-current", "true");
+  await expect(botRow("clawtrate-main-bot")).not.toHaveAttribute("aria-current", "true");
 
   // The gateway's review saves the skill and appends its note, under its key.
   let note: Json | undefined;
@@ -288,18 +288,18 @@ test("F-560: a real skill note folds into its run's line, is not the bot's previ
   // connection, which writes, the unread mark is the gateway's own: the note, which came after
   // the person read the task, did not raise it.
   await restartHost();
-  await expect(botRow("main")).toBeVisible({ timeout: 30_000 });
-  await expect(botRow("main").locator(".unread-dot")).toHaveCount(0);
-  await expect(botRow("main")).not.toHaveAccessibleName(/, unread/);
+  await expect(botRow("clawtrate-main-bot")).toBeVisible({ timeout: 30_000 });
+  await expect(botRow("clawtrate-main-bot").locator(".unread-dot")).toHaveCount(0);
+  await expect(botRow("clawtrate-main-bot")).not.toHaveAccessibleName(/, unread/);
 
   // The note is no bubble: it folds into the run's line, and is not the bot's preview.
-  await botRow("main").click();
+  await botRow("clawtrate-main-bot").click();
   await expect(transcript()).toContainText(REPLY, { timeout: 60_000 });
   await expect(page.getByTestId("transcript-turn").filter({ hasText: "Learned" })).toHaveCount(0);
   const line = transcript().getByTestId("run-line").filter({ hasText: "Saved a skill" });
   await expect(line).toHaveCount(1);
   await expect(line.locator(":scope > summary")).toContainText(`Saved a skill: ${skill}`);
-  await expect(botRow("main").locator(".bot-preview")).not.toContainText("Learned");
+  await expect(botRow("clawtrate-main-bot").locator(".bot-preview")).not.toContainText("Learned");
   await shots("note-folded");
   await line.locator(":scope > summary").click();
   await expect(line.getByTestId("skill-note").locator(".skill-note-text")).toHaveText(noteText);
@@ -312,7 +312,7 @@ test("F-560: a real skill note folds into its run's line, is not the bot's previ
     await expect(undo.getByRole("status")).toHaveText("Undone.", { timeout: 30_000 });
     const review = String(keyOf(note!)).replace("skill-workshop-notice:", "");
     const { changes } = await gatewayCall<{ changes: Json[] }>("skills.workshop.changes", {
-      agentId: "main",
+      agentId: "clawtrate-main-bot",
     });
     expect(
       changes.some(
