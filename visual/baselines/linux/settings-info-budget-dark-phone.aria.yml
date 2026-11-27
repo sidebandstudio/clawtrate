@@ -88,8 +88,8 @@
         - radio "Weekly" [checked]
       - text: Tokens
       - button "About Tokens" [expanded]
-      - note: "A whole number of 1,000 or more: the total the gateway reports for Otto each week, your time, input, output and cache together."
       - textbox "Tokens"
+      - note: "A whole number of 1,000 or more: the total the gateway reports for Otto each week, your time, input, output and cache together."
       - paragraph: "A warning only: nothing on the gateway stops a bot at its budget."
       - button "Save budget" [disabled]
       - button "Cancel"

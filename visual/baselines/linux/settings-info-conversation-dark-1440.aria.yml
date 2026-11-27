@@ -16,8 +16,8 @@
     - heading "Conversation" [level=3]
     - text: Turn time limit
     - button "About Turn time limit" [expanded]
-    - note: At the limit Clawtrate asks the gateway to stop the turn, so it doesn't hang, and the turn ends with a note naming the limit. Send a message to pick up where it left off. It applies to turns this device starts.
-    - spinbutton "Turn time limit": "50"
+    - spinbutton "Turn time limit minutes": "50"
+    - note: At the limit Clawtrate asks the gateway to stop the turn, so it doesn't hang. Once the gateway confirms, the turn ends with a note naming the limit. Send a message to pick up where it left off. It applies to turns this device starts.
     - text: Bot voice
     - button "About Bot voice"
     - text: On, as the gateway reads it, by default.

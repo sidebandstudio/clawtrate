@@ -22,8 +22,8 @@
     - switch "Show thinking"
     - text: Show external channel chats
     - button "About Show external channel chats" [expanded]
-    - note: Chats that reach a bot through Discord, Telegram, Slack, iMessage, WhatsApp, Signal or another channel. While it's off they stay out of the task list, its previews and its unread marks. A bot's main conversation always shows, with any channel messages the gateway puts in it.
     - switch "Show external channel chats"
+    - note: Chats that reach a bot through Discord, Telegram, Slack, iMessage, WhatsApp, Signal or another channel. While it's off they stay out of the task list, its previews and its unread marks. A bot's main conversation always shows, with any channel messages the gateway puts in it.
     - text: Show sessions from other tools
     - button "About Show sessions from other tools"
     - switch "Show sessions from other tools"

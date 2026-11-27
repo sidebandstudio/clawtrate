@@ -16,7 +16,7 @@
     - heading "Conversation" [level=3]
     - text: Turn time limit
     - button "About Turn time limit"
-    - spinbutton "Turn time limit": "50"
+    - spinbutton "Turn time limit minutes": "50"
     - text: Bot voice
     - button "About Bot voice"
     - text: On, as the gateway reads it, by default.

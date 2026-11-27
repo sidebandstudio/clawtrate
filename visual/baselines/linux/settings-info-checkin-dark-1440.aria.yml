@@ -65,10 +65,10 @@
       - group:
         - text: What to check Prompt
         - button "About Prompt" [expanded]
-        - note: Empty uses the gateway's built-in prompt, which asks the bot to reply NO_REPLY when nothing needs attention.
         - textbox "Prompt":
           - /placeholder: Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply NO_REPLY.
           - text: Look at the disk space on the build machine. Tell me if it is low.
+        - note: Empty uses the gateway's built-in prompt, which asks the bot to reply NO_REPLY when nothing needs attention. Up to 4,000 characters.
         - paragraph: This prompt replaces the gateway's own, which asks Otto to reply NO_REPLY when nothing needs attention. Whether Otto stays quiet depends on what this prompt asks.
       - alert
       - button "Cancel"
