@@ -11296,17 +11296,10 @@ export class ClawtrateClient {
     // it rather than send it to whichever gateway answered.
     if (!stamp) return this.actionContext(owner);
     // What the guard would refuse anyway is refused before access is asked, so a gateway the
-    // screen wasn't read on is never asked for it. Only a connected host's identity is its own
-    // connection's: each hello clears the last one's.
+    // screen wasn't read on is never asked for it. A connected host runs the guard itself first:
+    // right after a hello the identity is still being read, and the guard waits for it.
     this.requireSameTarget(stamp);
-    const connection = this.state.connection;
-    if (
-      connection.status === "connected" &&
-      connection.gatewayId !== null &&
-      stamp.gatewayId !== null &&
-      connection.gatewayId !== stamp.gatewayId
-    )
-      throw new Error(ANOTHER_GATEWAY);
+    if (this.state.connection.status === "connected") await this.requireSameGateway(stamp);
     await this.actionContext(owner).ensureWrite();
     const epoch = this.epoch;
     await this.requireSameGateway(stamp);
