@@ -1407,6 +1407,35 @@ describe("text beside a tool call on a gateway that sends no preamble item (Open
     ]);
   });
 
+  it("F-088: replayed over history that already holds a later message's call, an earlier message's text still knows that call", () => {
+    // A run in flight: its rows hold the answer and the later message's call, and its snapshot
+    // replays the answer, the next message's start and that call, whose step the rows made.
+    const model = (seq: number): Frame => A("run-1", seq, "lifecycle", { phase: "model" });
+    const rows = [
+      { role: "user", content: "Is the disk full?", __openclaw: { id: "u1", seq: 1 } },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: ANSWER }],
+        __openclaw: { id: "a1", seq: 2, runId: "run-1" },
+      },
+      { role: "user", content: "Also check the cache.", __openclaw: { id: "u2", seq: 3 } },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "c2", name: "ls", arguments: { path: "." } }],
+        __openclaw: { id: "a2", seq: 4, runId: "run-1" },
+      },
+    ];
+    const events = [start, ...said(2, "s:1", ANSWER), model(4), ...call(6, "c2")].flatMap(
+      (frame) => (frame.event === "agent" ? [frame.payload] : []),
+    );
+    const run = runsFromHistory(rows, { runId: "run-1", events }, ctx()).find(
+      (each) => each.id === "run-1",
+    );
+    expect(run?.textEarlier).toBe(true);
+    expect(run?.textBeforeCall).toBe("c2");
+    expect(run?.preambles ?? []).toEqual([]);
+  });
+
   it("F-088: a later message's preamble item never takes an earlier message's text", () => {
     // `lifecycle` `model` comes at each message's start: an answer before a steer, then the next
     // message's text only as a preamble item (2026.10.6), or no text at all (2026.11.10).

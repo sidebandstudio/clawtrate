@@ -2751,14 +2751,15 @@ function applyTool(run: Run, data: RawRecord, ts: number, ctx: EngineContext): R
     data.phase === "result" &&
     data.replace === true &&
     existing.replaceable;
-  if (existing && !isOpenStep(existing) && !replacing) return current;
+  if (existing && !isOpenStep(existing) && !replacing)
+    return data.phase === "start" ? markCallAfterText(current, toolCallId) : current;
   const step = existing ?? blankToolStep(toolCallId, name, ts);
   switch (data.phase) {
     case "start": {
       ctx.raw.set(ctx.sessionKey, id, { source: "live", runId: run.id, call: data, result: null });
       // The call is known now; carry it inline while the tool runs when it is small.
       return upsertStep(
-        existing ? current : textBesideCall(current, toolCallId),
+        existing ? markCallAfterText(current, toolCallId) : textBesideCall(current, toolCallId),
         settleRaw(
           {
             ...step,
@@ -2837,13 +2838,26 @@ function applyItem(run: Run, data: RawRecord, ts: number, ctx: EngineContext): R
   if (!existing && data.phase !== "start") return run;
   const step = existing ?? blankToolStep(toolCallId, str(data.name), num(data.startedAt));
   const title = str(data.title);
-  return upsertStep(existing ? run : textBesideCall(run, toolCallId), {
+  const placed = !existing
+    ? textBesideCall(run, toolCallId)
+    : data.phase === "start"
+      ? markCallAfterText(run, toolCallId)
+      : run;
+  return upsertStep(placed, {
     ...step,
     ...(data.commandBearing === true ? { commandBearing: true } : {}),
     ...(title ? { gatewayTitle: title } : {}),
     startedAt: num(data.startedAt) ?? step.startedAt,
     endedAt: isOpenStep(step) ? step.endedAt : (num(data.endedAt) ?? step.endedAt),
   });
+}
+
+/**
+ * The first call a later message starts after an earlier message's text (`textBeforeCall`), also
+ * when its step is already there, as the rows of a run in flight make it before its snapshot replays.
+ */
+function markCallAfterText(run: Run, toolCallId: string): Run {
+  return run.textEarlier && !run.textBeforeCall ? { ...run, textBeforeCall: toolCallId } : run;
 }
 
 /**
@@ -2858,7 +2872,7 @@ function textBesideCall(run: Run, toolCallId: string): Run {
   const itemId = run.textItemId;
   // An earlier message's text (`textEarlier`) is never placed beside a later message's call, at
   // any of its calls: it stays the reply, where it was read, until history holds the first call's row.
-  if (run.textEarlier) return run.textBeforeCall ? run : { ...run, textBeforeCall: toolCallId };
+  if (run.textEarlier) return markCallAfterText(run, toolCallId);
   // An item id comes only with the `assistant` stream's text, never the chat stream's.
   if (itemId === null || !run.text.trim() || textPlaced(run)) return run;
   const list = run.preambles ?? [];
