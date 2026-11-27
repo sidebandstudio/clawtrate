@@ -174,7 +174,10 @@ export function NameLine({ bot, onAnnounce }: { bot: Bot; onAnnounce: (text: str
               disabled={busy}
               onClick={() => void undo()}
             >
-              Undo: back to <bdi>{line.from}</bdi>
+              {/* One run of text: the button lays out its children apart. */}
+              <span>
+                Undo: back to <bdi>{line.from}</bdi>
+              </span>
             </button>
           )}
           <button
@@ -253,7 +256,10 @@ export function NameChanges({ bot }: { bot: Bot }) {
                 data-size="sm"
                 onClick={() => void undo(change)}
               >
-                Undo: back to <bdi>{change.from}</bdi>
+                {/* One run of text: the button lays out its children apart. */}
+                <span>
+                  Undo: back to <bdi>{change.from}</bdi>
+                </span>
               </button>
             )}
           </li>
