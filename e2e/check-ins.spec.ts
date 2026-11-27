@@ -277,11 +277,15 @@ if (HEARTBEATS) {
     // another reader's and let the save's own read through (#709). While holding, every
     // `config.get` waits, so the save's read waits whatever else is read meanwhile.
     // `holdReads("patch")` starts at the save's `config.patch`, so its read-back waits, and
-    // `patchAnswered` says the patch's answer has reached the client.
+    // `patchAnswered` says the patch's answer has reached the client. `withholdAnswer` keeps the
+    // gateway's answer to the next `config.patch` from the client, picked out by its id, and
+    // `answerWithheld` says the gateway has answered.
     let hold: "reads" | "after the patch" | null = null;
     const held: Array<() => void> = [];
     let patchId: unknown;
     let patchAnswered = false;
+    let withholdAnswer = false;
+    let answerWithheld = false;
     const holdReads = (from: "now" | "patch") => {
       held.length = 0;
       patchId = undefined;
@@ -311,7 +315,12 @@ if (HEARTBEATS) {
           // Registered before the client's own `onmessage`, so it runs first.
           (socket as unknown as EventTarget).addEventListener("message", (event) => {
             const frame = JSON.parse(String((event as MessageEvent).data)) as { id?: unknown };
-            if (patchId !== undefined && frame.id === patchId) patchAnswered = true;
+            if (patchId === undefined || frame.id !== patchId) return;
+            if (withholdAnswer) {
+              // The client's own `onmessage` was registered after this listener: it never sees it.
+              event.stopImmediatePropagation();
+              answerWithheld = true;
+            } else patchAnswered = true;
           });
           return socket;
         },
@@ -344,9 +353,15 @@ if (HEARTBEATS) {
         kept: [],
       });
       const before = patches();
+      /**
+       * Waits until `reached`, for as long as a loaded gateway can take to get a save there. On a
+       * timeout it shows the save as it stood: still saving, or how it ended instead.
+       */
+      const until = (reached: () => boolean) =>
+        expect.poll(() => reached() || client.state.checkIns?.save, { timeout: 30_000 }).toBe(true);
       /** The save is under way and its read is held, or will be: it can't reach its patch. */
       const reading = (saveId: string) =>
-        expect.poll(() => client.state.checkIns?.save?.id === saveId && held.length > 0).toBe(true);
+        until(() => client.state.checkIns?.save?.id === saveId && held.length > 0);
 
       // The viewer closes while the save reads, before its patch: nothing is sent.
       const first = createBridgeSession(client);
@@ -368,8 +383,8 @@ if (HEARTBEATS) {
       const second = createBridgeSession(client);
       holdReads("patch");
       const sent = second.apply(draft("sent"));
-      await expect.poll(() => patchAnswered).toBe(true);
-      await expect.poll(patches).toBe(before + 1);
+      await until(() => patchAnswered);
+      await expect.poll(patches, { timeout: 10_000 }).toBe(before + 1);
       second.dispose();
       expect(client.state.connection.status).toBe("connected");
       stopHolding();
@@ -399,8 +414,8 @@ if (HEARTBEATS) {
       // The suspend lands before the read-back's answer: the patch may have taken, so unknown.
       holdReads("patch");
       const cutSent = third.apply(draft("cut-sent", "30m", "24h"));
-      await expect.poll(() => patchAnswered).toBe(true);
-      await expect.poll(patches).toBe(before + 2);
+      await until(() => patchAnswered);
+      await expect.poll(patches, { timeout: 10_000 }).toBe(before + 2);
       await observer.apply({ type: "suspend" });
       await cutSent;
       stopHolding(true);
@@ -415,7 +430,7 @@ if (HEARTBEATS) {
       // after it leaves it so.
       holdReads("patch");
       const cutAfter = third.apply(draft("cut-after", "24h", "30m"));
-      await expect.poll(() => patchAnswered).toBe(true);
+      await until(() => patchAnswered);
       stopHolding();
       await cutAfter;
       expect(client.state.checkIns?.save).toMatchObject({ id: "cut-after", status: "saved" });
@@ -426,6 +441,27 @@ if (HEARTBEATS) {
         86_400_000,
       );
       expect(patches()).toBe(before + 3);
+
+      // The patch is sent and the gateway answers it, but the suspend lands before the answer
+      // reaches the client: the patch may have taken, so unknown, and never failed.
+      patchId = undefined;
+      answerWithheld = false;
+      withholdAnswer = true;
+      const cutUnanswered = third.apply(draft("cut-unanswered", "30m", "24h"));
+      await until(() => answerWithheld);
+      await expect.poll(patches, { timeout: 10_000 }).toBe(before + 4);
+      await observer.apply({ type: "suspend" });
+      await cutUnanswered;
+      withholdAnswer = false;
+      expect(client.state.checkIns?.save).toMatchObject({
+        id: "cut-unanswered",
+        status: "unknown",
+      });
+      await reconnect();
+      expect(client.state.checkIns?.jobs.find((job) => job.botId === "marlow")?.everyMs).toBe(
+        1_800_000,
+      );
+      expect(patches()).toBe(before + 4);
       third.dispose();
     } finally {
       observer.dispose();

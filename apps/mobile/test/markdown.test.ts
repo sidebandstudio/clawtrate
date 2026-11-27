@@ -1,5 +1,29 @@
 import { describe, expect, it } from "vitest";
-import { columnWidths, COLUMN_WIDTH, openableUrl, parseMarkdown } from "../src/markdown.ts";
+import { createSecrets } from "../src/host/secrets.ts";
+import {
+  besideLink,
+  besideShown,
+  carriesCredential,
+  columnWidths,
+  COLUMN_WIDTH,
+  LINK_JOINER,
+  linkPlace,
+  openableUrl,
+  parseMarkdown,
+  type Inline,
+} from "../src/markdown.ts";
+
+// Private and link-local addresses are built from their parts, so no tracked file writes one
+// out (test/addresses.test.ts).
+const join4 = (...parts: number[]) => parts.join(".");
+const join6 = (...groups: string[]) => groups.join(":");
+
+/** The links of a one-paragraph message, in order. */
+function links(markdown: string): Extract<Inline, { t: "link" }>[] {
+  const [block] = parseMarkdown(markdown);
+  if (block?.t !== "p") throw new Error("not a paragraph");
+  return block.children.filter((node) => node.t === "link");
+}
 
 describe("the bot's markdown on iOS", () => {
   it("reads paragraphs, emphasis, strong, inline code and links", () => {
@@ -23,6 +47,7 @@ describe("the bot's markdown on iOS", () => {
             url: "https://docs.example/a",
             host: "docs.example",
             plain: false,
+            place: null,
             children: [{ t: "text", text: "a link" }],
           },
           { t: "text", text: "." },
@@ -74,6 +99,22 @@ describe("the bot's markdown on iOS", () => {
     });
   });
 
+  it("keeps an address with a user name or password as its text", () => {
+    for (const url of [
+      "https://name@host.test/",
+      "https://name:secret@host.test/",
+      "https://na%40me:se%40cret@host.test/",
+      "https://name%40corp.test@host.test/",
+      "http://:secret@127.0.0.1/",
+    ])
+      expect(openableUrl(url), url).toBeNull();
+    expect(parseMarkdown("[the notes](https://name:secret@host.test/)")).toEqual([
+      { t: "p", children: [{ t: "text", text: "the notes" }] },
+    ]);
+    // An encoded @ in the host doesn't parse at all.
+    expect(openableUrl("https://host.test%40other.test/")).toBeNull();
+  });
+
   it("opens only http and https addresses that parse, and keeps any other as its text", () => {
     expect(openableUrl("https://a.example")?.href).toBe("https://a.example/");
     expect(openableUrl("http://127.0.0.1:9/x")?.host).toBe("127.0.0.1:9");
@@ -101,7 +142,7 @@ describe("the bot's markdown on iOS", () => {
     ]);
   });
 
-  it("marks a link whose text is not its address, so the screen shows the host and asks first", () => {
+  it("marks a link whose text is not its address, so the screen shows the host beside it", () => {
     const [hidden] = parseMarkdown("[the notes](https://elsewhere.example/n)");
     expect(hidden).toMatchObject({
       children: [{ t: "link", host: "elsewhere.example", plain: false }],
@@ -123,7 +164,7 @@ describe("the bot's markdown on iOS", () => {
     });
   });
 
-  it("asks first when the text differs from its address only in a path's case, a trailing slash or a query's case", () => {
+  it("shows the host when the text differs from its address only in a path's case, a trailing slash or a query's case", () => {
     for (const [shown, target] of [
       ["http://127.0.0.1:47000/Notes", "http://127.0.0.1:47000/notes"],
       ["http://127.0.0.1:47000/notes", "http://127.0.0.1:47000/notes/"],
@@ -133,6 +174,207 @@ describe("the bot's markdown on iOS", () => {
         children: [{ t: "link", plain: false }],
       });
     }
+  });
+
+  it("shows nothing beside a link whose text is its address, and the host beside one whose text isn't", () => {
+    const [plain, hidden, upper] = links(
+      "See https://b.example/a, [the notes](https://elsewhere.example/n) and [HTTPS://B.EXAMPLE/](https://b.example/).",
+    );
+    expect(plain).toMatchObject({ plain: true, place: null });
+    expect(besideLink(plain!)).toBeNull();
+    expect(besideLink(hidden!)).toBe("elsewhere.example");
+    // The same address in capitals is still its address.
+    expect(besideLink(upper!)).toBeNull();
+  });
+
+  it("names this iPhone beside a loopback link and your network beside a local one, even when the text is the address", () => {
+    const [loopback, preview, network] = links(
+      `At http://127.0.0.1:8080/x, [the preview](http://localhost:8081/) and [the router](http://${join4(192, 168, 1, 1)}/).`,
+    );
+    expect(besideLink(loopback!)).toBe("this iPhone");
+    expect(besideLink(preview!)).toBe("localhost:8081, this iPhone");
+    expect(besideLink(network!)).toBe(`${join4(192, 168, 1, 1)}, your network`);
+    expect(besideLink(links("At https://studio.local/x.")[0]!)).toBe("your network");
+  });
+
+  it("knows a loopback host in any spelling, IPv6 included", () => {
+    for (const url of [
+      "http://127.0.0.1/",
+      `http://${join4(127, 8, 9, 10)}:1/`,
+      "http://localhost/",
+      "http://LOCALHOST./",
+      "http://app.localhost/",
+      "http://0.0.0.0:3000/",
+      "http://0x7f.1/",
+      "http://[::1]:3000/",
+      "http://[::]/",
+      "http://[::ffff:127.0.0.1]/",
+    ])
+      expect(linkPlace(new URL(url)), url).toBe("device");
+  });
+
+  it("knows the person's own network: every address that isn't global unicast, .local and a name without a dot", () => {
+    for (const url of [
+      `http://${join4(10, 0, 0, 5)}/`,
+      `http://${join4(172, 16, 0, 1)}/`,
+      `http://${join4(172, 31, 255, 1)}/`,
+      `http://${join4(192, 168, 1, 20)}:8080/`,
+      `http://${join4(169, 254, 3, 4)}/`,
+      `http://${join4(100, 64, 0, 1)}/`,
+      `http://${join4(100, 127, 255, 1)}/`,
+      `http://[::ffff:${join4(192, 168, 1, 20)}]/`,
+      `http://[${join6("fd12", "", "1")}]/`,
+      `http://[${join6("fe80", "", "1")}]/`,
+      "http://studio.local/",
+      "http://studio.local./",
+      "http://nas:5000/",
+      "http://nas./",
+      // Every other address that isn't global unicast: documentation, benchmarking, reserved,
+      // multicast and broadcast, IPv4 written as IPv6, and IPv6 documentation, NAT64 and 6to4.
+      "http://192.0.2.1/",
+      `http://${join4(198, 18, 0, 1)}/`,
+      `http://${join4(198, 19, 255, 1)}/`,
+      "http://203.0.113.9/",
+      `http://${join4(240, 0, 0, 1)}/`,
+      `http://${join4(224, 0, 0, 251)}/`,
+      `http://${join4(255, 255, 255, 255)}/`,
+      `http://${join4(192, 0, 0, 8)}/`,
+      "http://[::ffff:192.0.2.1]/",
+      `http://[${join6("fd00", "", "1")}]/`,
+      "http://[2001:db8::1]/",
+      `http://[${join6("64", "ff9b", "", "c000", "201")}]/`,
+      `http://[${join6("2002", "c000", "201", "", "1")}]/`,
+      "http://[3fff::1]/",
+      `http://[${join6("ff02", "", "1")}]/`,
+    ])
+      expect(linkPlace(new URL(url)), url).toBe("network");
+    for (const url of [
+      "https://docs.example/",
+      // Just past the private 172.16/12 range and the shared 100.64/10 one.
+      `http://${join4(172, 32, 0, 1)}/`,
+      `http://${join4(100, 128, 0, 1)}/`,
+      // Just past benchmarking, and the two globally reachable addresses in 192.0.0/24.
+      `http://${join4(198, 20, 0, 1)}/`,
+      `http://${join4(192, 0, 0, 9)}/`,
+      `http://${join4(192, 0, 0, 10)}/`,
+      // Global IPv6, and the entries in 2001::/23 marked globally reachable.
+      `http://[${join6("2606", "4700", "", "1111")}]/`,
+      `http://[${join6("2001", "4", "112", "", "1")}]/`,
+      `http://[${join6("2001", "1", "", "1")}]/`,
+      // A name that starts like an address is a name.
+      "https://100.64.example/",
+      "https://local.example/",
+    ])
+      expect(linkPlace(new URL(url)), url).toBeNull();
+  });
+
+  it("shows a look-alike host in ASCII, so it shows as one, even when the text is the address", () => {
+    // A Cyrillic letter in place of a Latin "a".
+    const lookalike = "b\u0430nk.example";
+    const [written, hidden] = links(
+      `Sign in at https://${lookalike}/login or [your bank](https://${lookalike}/).`,
+    );
+    expect(written).toMatchObject({
+      url: "https://xn--bnk-6cd.example/login",
+      host: "xn--bnk-6cd.example",
+      plain: false,
+    });
+    expect(besideLink(written!)).toBe("xn--bnk-6cd.example");
+    expect(besideLink(hidden!)).toBe("xn--bnk-6cd.example");
+    // Another spelling of an address is not its address either.
+    expect(besideLink(links("[http://0x7f.1/](http://0x7f.1/)")[0]!)).toBe(
+      "127.0.0.1, this iPhone",
+    );
+  });
+
+  it("shows the host beside text that spells it with a letter the parser folds into ASCII", () => {
+    // The Kelvin sign, which the URL parser and toLowerCase both make a Latin "k".
+    const kelvin = "\u212A.example";
+    const [hidden, written] = links(
+      `See [https://${kelvin}/](https://k.example/) and https://${kelvin}/notes.`,
+    );
+    expect(hidden).toMatchObject({ url: "https://k.example/", plain: false });
+    expect(besideLink(hidden!)).toBe("k.example");
+    expect(besideLink(written!)).toBe("k.example");
+    // Capitals in ASCII are still the address.
+    expect(besideLink(links("[HTTPS://K.EXAMPLE/](https://k.example/)")[0]!)).toBeNull();
+  });
+
+  it("isolates the host beside a link from any direction set before it", () => {
+    const LRI = "\u2066";
+    const PDI = "\u2069";
+    // A right-to-left override left open in the link's words, and one in the text before it.
+    for (const markdown of [
+      "[Open \u202E](https://example.test/)",
+      "Read \u202Ethis [Open](https://example.test/)",
+      "[Open \u2067](https://example.test/) and [\u202Bmore\u202C](https://example.test/)",
+    ]) {
+      for (const link of links(markdown)) {
+        // The link's own words keep no direction control...
+        expect(JSON.stringify(link.children)).not.toMatch(/[\u202A-\u202E\u2066-\u2069]/);
+        // ...and the host reads left to right, inside an isolate of its own.
+        expect(besideShown(link)).toBe(` ${LRI}(example.test)${PDI}`);
+      }
+    }
+    expect(links("[Open \u202E](https://example.test/)")[0]!.children).toEqual([
+      { t: "text", text: "Open " },
+    ]);
+    expect(besideShown(links("See https://example.test/.")[0]!)).toBeNull();
+  });
+
+  it("keeps two links side by side apart, so VoiceOver has one element for each", () => {
+    const [block] = parseMarkdown("[One](https://one.example/)[Two](https://two.example/)");
+    expect(block).toMatchObject({
+      t: "p",
+      children: [
+        { t: "link", host: "one.example" },
+        { t: "text", text: LINK_JOINER },
+        { t: "link", host: "two.example" },
+      ],
+    });
+    // Across emphasis too, in a heading and in a table's cell.
+    const [heading] = parseMarkdown("# **[One](https://one.example/)**[Two](https://two.example/)");
+    expect(heading).toMatchObject({
+      t: "h",
+      children: [
+        { t: "strong", children: [{ t: "link", host: "one.example" }] },
+        { t: "text", text: LINK_JOINER },
+        { t: "link", host: "two.example" },
+      ],
+    });
+    const [table] = parseMarkdown(
+      "| a |\n| - |\n| [One](https://one.example/)[Two](https://two.example/) |",
+    );
+    expect(table).toMatchObject({
+      t: "table",
+      rows: [[[{ t: "link" }, { t: "text", text: LINK_JOINER }, { t: "link" }]]],
+    });
+    // Links with text between them are already apart.
+    expect(
+      parseMarkdown("[One](https://one.example/) [Two](https://two.example/)")[0],
+    ).toMatchObject({
+      children: [{ t: "link" }, { t: "text", text: " " }, { t: "link" }],
+    });
+  });
+
+  it("knows a credential in an address however it is encoded", () => {
+    const secrets = createSecrets();
+    secrets.learn("connection", JSON.stringify({ token: "demo@token/x:y" }));
+    const carries = (url: string) => carriesCredential(url, secrets.redact);
+    expect(carries("https://example.test/?token=demo@token/x:y")).toBe(true);
+    // decodeURI leaves reserved characters encoded; decodeURIComponent doesn't.
+    expect(carries("https://example.test/?token=demo%40token%2Fx%3Ay")).toBe(true);
+    expect(carries("https://example.test/?token=%64emo%40token/x:y")).toBe(true);
+    // One already scrubbed.
+    expect(carries("https://example.test/?token=%E2%80%A2%E2%80%A2%E2%80%A2")).toBe(true);
+    expect(carries("https://example.test/notes")).toBe(false);
+    // An address that doesn't decode is judged as written.
+    expect(carries("https://example.test/%E0%A4%A")).toBe(false);
+    expect(carries("https://example.test/%E0%A4%A?token=demo@token/x:y")).toBe(true);
+    // A malformed escape beside an encoded one doesn't keep the encoded one from decoding.
+    expect(carries("https://example.test/%E0%A4%A?token=demo%40token%2Fx%3Ay")).toBe(true);
+    expect(carries("https://example.test/?token=demo%40token%2Fx%3Ay&n=%E0%A4%A")).toBe(true);
+    expect(carries("https://example.test/%FF%40?token=demo%40token%2Fx%3Ay")).toBe(true);
   });
 
   it("shows raw HTML as text", () => {
