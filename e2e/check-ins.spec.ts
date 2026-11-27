@@ -441,7 +441,7 @@ if (!HEARTBEATS) {
     test.setTimeout(120_000);
     const before = patches();
     await openCheckIns();
-    for (const bot of ["main", "marlow", "otto", "pip"])
+    for (const bot of ["main", "clawtrate-main-bot", "marlow", "otto", "pip"])
       await expect(block(bot).getByTestId("check-in-text")).toContainText(
         "This OpenClaw keeps check-ins as routines.",
       );
