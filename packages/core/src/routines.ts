@@ -733,6 +733,15 @@ function confirmedWrite(
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
 /**
+ * A sent request whose answer never came, in a person's words. The client's own text ("gateway
+ * client stopped", "gateway closed (1006): ", its timeout) is never put in a sentence.
+ */
+const lostWords = (error: unknown) =>
+  error instanceof GatewayProtocolRequestTimeoutError
+    ? "The gateway didn't answer in time."
+    : "The connection changed before the gateway answered.";
+
+/**
  * A refusal another try would get again: a scope this connection lacks, a
  * method this gateway lacks, or no connection to ask on (the next connect reads).
  */
@@ -1145,7 +1154,17 @@ export class RoutinesEngine {
     const refused = refusal(error);
     if (refused !== null)
       return notFound(error) ? { status: "deleted" } : { status: "refused", error: refused };
-    return { status: "unknown", error: errorText(error) };
+    return { status: "unknown", error: lostWords(error) };
+  }
+
+  /**
+   * After a lost answer: the routine read back on the connection the write went out on. `null`:
+   * the gateway has none by that id; `undefined`: it couldn't be read there.
+   */
+  private async readBack(id: string, epoch: number) {
+    if (epoch !== this.epoch) return undefined;
+    const read = await this.readRevised(id).catch(() => undefined);
+    return epoch === this.epoch ? read : undefined;
   }
 
   /**
@@ -1395,7 +1414,24 @@ export class RoutinesEngine {
       this.keep(routine, epoch);
       return { status: "saved", routine };
     } catch (error) {
-      return pending.removed ? { status: "deleted" } : this.failed(error);
+      if (pending.removed) return { status: "deleted" };
+      const failed = this.failed(error);
+      if (failed.status !== "unknown") return failed;
+      // The answer was lost: a read that shows the change is the save an answer would confirm.
+      const read = await this.readBack(id, epoch);
+      if (pending.removed || read === null) return { status: "deleted" };
+      if (read === undefined)
+        return {
+          status: "unknown",
+          error: `${failed.error} Clawtrate couldn't read the routine back, so whether it was ${enabled ? "resumed" : "paused"} isn't known.`,
+        };
+      if (read.routine.enabled !== enabled)
+        return {
+          status: "unknown",
+          error: `${failed.error} Read back just now, it is still ${enabled ? "paused" : "not paused"}: the change hasn't taken, or not yet.`,
+        };
+      this.keep(read.routine, epoch);
+      return { status: "saved", routine: read.routine };
     } finally {
       this.updates.delete(pending);
     }
@@ -1410,6 +1446,7 @@ export class RoutinesEngine {
   ): Promise<RoutineRunNow> {
     const blocked = this.blocked(owner, stamp) ?? this.unlisted(listedOn);
     if (blocked) return { status: "not-sent", reason: blocked };
+    const epoch = this.epoch;
     try {
       const result = asRecord(await this.ctx.request("cron.run", { id, mode: "force" }));
       if (result?.ok === true && result.enqueued === true)
@@ -1421,9 +1458,23 @@ export class RoutinesEngine {
       };
     } catch (error) {
       const failed = this.failed(error);
-      return failed.status === "deleted"
-        ? { status: "refused", error: errorText(error) }
-        : (failed as RoutineRunNow);
+      if (failed.status === "deleted") return { status: "refused", error: errorText(error) };
+      if (failed.status !== "unknown") return failed as RoutineRunNow;
+      // The answer was lost: what the routine shows now, said as found. A run under way may be
+      // another, so nothing read back makes it "started".
+      const read = await this.readBack(id, epoch);
+      return {
+        status: "unknown",
+        error: `${failed.error} ${
+          read === undefined
+            ? "Clawtrate couldn't read the routine back, so whether a run started isn't known."
+            : read === null
+              ? "Read back just now, the gateway no longer has this routine."
+              : read.routine.runningAt !== null
+                ? "Read back just now, a run is under way, which may be this one."
+                : "Read back just now, no run is under way: it hasn't started, or not yet."
+        }`,
+      };
     }
   }
 
