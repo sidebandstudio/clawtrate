@@ -1,7 +1,7 @@
 // What Home and a bot's task list show, from the engine's state.
 // Pure, so the unit tests cover it.
 
-import type { Bot, ClawtrateState, Task } from "@clawtrate/core";
+import { listedBots, listedTasks, type Bot, type ClawtrateState, type Task } from "@clawtrate/core";
 import { arrange, fromSidebar, type RosterPrefs } from "./presentation/arrangement.ts";
 import {
   botLabel,
@@ -92,11 +92,19 @@ export function botRow(state: ClawtrateState, bot: Bot, seen: SeenMap, now: numb
 /**
  * Home: pinned bots as tiles, then the rows, then the user's sections, in the
  * arrangement the gateway keeps for its user, ordered by recent activity.
- * Hidden bots are not listed.
+ * Hidden bots are not listed, nor, as on the desktop (F-562), the gateway's own
+ * bot while another exists and "Show the gateway's own bot" is off: it comes
+ * back while one of its tasks waits on the person, and stays while the person
+ * keeps it open (`kept`).
  */
-export function homeModel(state: ClawtrateState, seen: SeenMap, now: number): HomeModel {
+export function homeModel(
+  state: ClawtrateState,
+  seen: SeenMap,
+  now: number,
+  kept: string | null = null,
+): HomeModel {
   const prefs = state.sidebar?.prefs ? fromSidebar(state.sidebar.prefs, "recent") : DEFAULT_PREFS;
-  const arranged = arrange(state.bots, state.tasksByBot, prefs);
+  const arranged = arrange(listedBots(state, kept), listedTasks(state, kept), prefs);
   const row = (bot: Bot) => botRow(state, bot, seen, now);
   return {
     pinned: arranged.pinned.map(row),

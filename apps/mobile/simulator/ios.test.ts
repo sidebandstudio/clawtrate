@@ -47,6 +47,7 @@ import { rowTime, stampTime } from "../../../packages/ui/src/format.ts";
 import { addressWords, SETTINGS_WORDS } from "../src/presentation/gateway-state.ts";
 import { WebSocket, WebSocketServer } from "ws";
 import { decodePng, encodePng } from "../../../tools/brand/src/png.ts";
+import { MAIN_BOT } from "../../../tools/dev-gateway/src/seed-data.ts";
 import { REDACTED } from "../src/host/secrets.ts";
 import { TASKS_FAILED } from "../src/lists.ts";
 import { LINK_WORDS } from "../src/markdown.ts";
@@ -325,7 +326,8 @@ beforeAll(async () => {
   browserUrl = `http://127.0.0.1:${address.port}/clawtrate-link-check`;
   // The reading check needs a stamp ten minutes after its first message: the
   // first is stored now, and the rest after the pairing checks.
-  reading = await gatewayTask("main", "Reading check");
+  // Juniper's: the Main Bot, a bot Clawtrate made, on Home. The gateway's own bot, `main`, is not.
+  reading = await gatewayTask(MAIN_BOT, "Reading check");
   await inject(reading.key, FIRST_NOTE);
   firstNoteAt = await storedAt(reading.key, FIRST_NOTE);
 });
@@ -672,11 +674,21 @@ describe("the iOS app", () => {
     ]);
   });
 
-  it("F-015 F-017 F-019: on iPhone, Home lists every bot by its latest activity with its avatar, name, label pill, latest line and time, and the primary bot with its star", async () => {
-    const { agents, defaultId } = await gatewayCall<{
+  it("F-015 F-017 F-019 F-562: on iPhone, Home lists every bot by its latest activity with its avatar, name, label pill, latest line and time, but not the gateway's own bot while another exists, and so no star", async () => {
+    const listed = await gatewayCall<{
       agents: Array<{ id: string; name?: string; identity?: { name?: string; theme?: string } }>;
       defaultId: string;
     }>("agents.list", {});
+    // The seed's five bots: the gateway's own (`defaultId`, which is `main`, the gateway's
+    // built-in bot, not Juniper), Juniper (the Main Bot), Otto, Marlow and Pip.
+    const { defaultId } = listed;
+    expect(defaultId).toBe("main");
+    expect(listed.agents.map((a) => a.id).sort()).toEqual(
+      ["main", MAIN_BOT, "otto", "marlow", "pip"].sort(),
+    );
+    // The gateway's own bot stays off Home while another bot exists (F-562), and with it the
+    // primary bot's star. F-017 draws the star, on a gateway that lists only its own bot.
+    const agents = listed.agents.filter((a) => a.id !== defaultId);
     const rows = await sessions();
     const latest = (id: string) =>
       Math.max(...rows.filter((r) => r.agentId === id).map((r) => r.updatedAt ?? 0));
@@ -689,8 +701,9 @@ describe("the iOS app", () => {
         return [
           see({
             id: `bot-${agent.id}`,
-            text: `${lit(name(agent))}, ${count} tasks?.*${agent.id === defaultId ? ", primary bot" : ""}`,
+            text: `${lit(name(agent))}, ${count} tasks?.*`,
           }),
+          notSee({ id: `bot-${agent.id}`, text: ".*, primary bot.*" }),
           see({ id: `bot-label-${agent.id}`, text: lit(agent.identity!.theme!) }),
           see({ id: `bot-preview-${agent.id}`, text: ".+" }),
           see({ id: `bot-time-${agent.id}`, text: ".+" }),
@@ -700,10 +713,8 @@ describe("the iOS app", () => {
       ...order
         .slice(1)
         .map((agent, i) => see({ id: `bot-${agent.id}`, below: { id: `bot-${order[i]!.id}` } })),
-      see({ id: "primary-star", childOf: { id: `bot-${defaultId}` } }),
-      ...agents
-        .filter((a) => a.id !== defaultId)
-        .map((a) => notSee({ id: "primary-star", childOf: { id: `bot-${a.id}` } })),
+      notSee({ id: `bot-${defaultId}` }),
+      notSee({ id: "primary-star" }),
       see({ id: "settings-button", text: "Settings. Gateway connected." }),
       see({ id: "connection-dot-connected" }),
     ]);
@@ -736,21 +747,6 @@ describe("the iOS app", () => {
           .startsWith(preview.replace(/\s+/g, " ").replace(/…$/, "").slice(0, 30)),
       ).toBe(true);
     }
-    // The star as the design draws it (decisions.md): a 16-point disc in the
-    // inverse fill at the avatar's lower right, the star in the inverse text.
-    const row = positions.get(`bot-${defaultId}`)![0]!;
-    const star = positions
-      .get("primary-star")!
-      .find((b) => b.x1 >= row.x1 && b.x2 <= row.x2 + 4 && b.y1 >= row.y1 && b.y2 <= row.y2 + 4)!;
-    expect(star.x2 - star.x1).toBeGreaterThanOrEqual(15);
-    expect(star.x2 - star.x1).toBeLessThanOrEqual(17);
-    const avatarRight = row.x1 + 10 + 44;
-    const rowMiddle = (row.y1 + row.y2) / 2;
-    expect(Math.abs(star.x2 - (avatarRight + 2))).toBeLessThanOrEqual(2);
-    expect(star.y1).toBeGreaterThan(rowMiddle);
-    const pixel = screen(positions.get("home")![0]!.x2);
-    expect(near(pixel(star.x1 + 8, star.y1 + 7.7), rgb(LIGHT["text-inverse"]), 12)).toBe(true);
-    expect(near(pixel(star.x1 + 8, star.y1 + 13.8), rgb(LIGHT["bg-inverse"]), 12)).toBe(true);
     await shoot("home");
   });
 
@@ -785,7 +781,8 @@ describe("the iOS app", () => {
     const rows = await sessions();
     const count = (id: string) => rows.filter((r) => r.agentId === id).length;
     const single = agents
-      .filter((a) => !["otto", "marlow", defaultId].includes(a.id) && count(a.id) > 0)
+      // Not Juniper, whose reading task a later check opens, nor the gateway's own bot, off Home.
+      .filter((a) => !["otto", "marlow", MAIN_BOT, defaultId].includes(a.id) && count(a.id) > 0)
       .sort((a, b) => count(a.id) - count(b.id))[0]!;
     const tasks = rows
       .filter((r) => r.agentId === single.id)
@@ -902,8 +899,8 @@ describe("the iOS app", () => {
     const laterAt = await storedAt(reading.key, LATER_NOTE);
     expect(laterAt - firstNoteAt).toBeGreaterThan(10 * 60_000);
     await steps("read-own", [
-      tap({ id: "bot-main" }),
-      waitFor({ id: "bot-tasks-main" }, 20_000),
+      tap({ id: `bot-${MAIN_BOT}` }),
+      waitFor({ id: `bot-tasks-${MAIN_BOT}` }, 20_000),
       tap({ id: `task-${lit(reading.key)}` }),
       waitFor({ id: "task-line", text: lit(reading.title) }, 60_000),
       see({ id: "stamp", text: stampPattern(firstNoteAt) }),
@@ -1018,7 +1015,7 @@ describe("the iOS app", () => {
       // Where it was: at the end of the task, the link it opened in view.
       see(browserText),
       tap({ id: "back" }),
-      waitFor({ id: "bot-tasks-main" }, 20_000),
+      waitFor({ id: `bot-tasks-${MAIN_BOT}` }, 20_000),
       tap({ id: "back" }),
       waitFor({ id: "home" }, 20_000),
     ]);
@@ -1151,7 +1148,7 @@ describe("the iOS app", () => {
       ),
       see({ id: "status-strip-action", text: "Retry now" }),
       see({ id: "bot-otto" }),
-      see({ id: "bot-main" }),
+      see({ id: `bot-${MAIN_BOT}` }),
       see({ id: "settings-button", text: "Settings. Gateway (connecting|offline)\\." }),
     ]);
     await shoot("reconnecting");
@@ -1711,7 +1708,7 @@ describe("the iOS app", () => {
     const names: Record<string, string> = {
       otto: LONG_BOT,
       pip: LONG_PIN,
-      main: "Jo",
+      [MAIN_BOT]: "Jo",
       marlow: "Mo",
     };
     const titles: Record<string, string> = { [DISK]: LONG_TITLE, [BACKUP]: "Log" };
@@ -1810,8 +1807,8 @@ describe("the iOS app", () => {
         },
       ]);
       const name = await heightOf("bot-name-otto", LONG_BOT);
-      await steps("long-control-row", [scrollTo({ id: "bot-name-main" }, "DOWN")]);
-      expect(name).toBeGreaterThan(1.8 * (await heightOf("bot-name-main", "Jo")));
+      await steps("long-control-row", [scrollTo({ id: `bot-name-${MAIN_BOT}` }, "DOWN")]);
+      expect(name).toBeGreaterThan(1.8 * (await heightOf(`bot-name-${MAIN_BOT}`, "Jo")));
       await shoot("home-long-largest");
     } finally {
       textSize("large");
@@ -1833,10 +1830,19 @@ describe("the iOS app", () => {
       ["pip", pictureWithChoice(photo, lantern)!],
       ["marlow", photo],
     ]);
+    // The gateway's own bot, `main` on the development gateway: it has no picture.
+    const { defaultId } = await gatewayCall<{ defaultId: string }>("agents.list", {});
     let chosen = false;
     const avatarGateway = await relay(env.gateway, {
       fromGateway: (frame, method) => {
-        if (!chosen || method !== "agents.list" || !frame.ok) return;
+        if (method !== "agents.list" || !frame.ok || !frame.payload) return;
+        // Until the pictures are chosen, the gateway's own bot alone, as a gateway with no other
+        // bot lists it: then Home shows it, with the primary bot's star (F-562).
+        if (!chosen) {
+          const agents = (frame.payload.agents ?? []) as Array<{ id: string }>;
+          frame.payload.agents = agents.filter((agent) => agent.id === defaultId);
+          return;
+        }
         for (const agent of (frame.payload?.agents ?? []) as Array<{
           id: string;
           identity?: { name?: string; avatarUrl?: string };
@@ -1860,12 +1866,11 @@ describe("the iOS app", () => {
       ]);
       devGateway("approve");
       await steps("avatars-home", [
-        waitFor({ id: "bot-main" }, 120_000),
-        see({ id: "primary-star", childOf: { id: "bot-main" } }),
-        // The bots probed below are at rest, so each is drawn in its idle pose.
-        ...["main", "otto", "pip"].map((id) =>
-          notSee({ id: "state-.*", childOf: { id: `bot-${id}` } }),
-        ),
+        waitFor({ id: `bot-${defaultId}` }, 120_000),
+        see({ id: "primary-star", childOf: { id: `bot-${defaultId}` } }),
+        notSee({ id: "bot-otto" }),
+        // The bot probed below is at rest, so it is drawn in its idle pose.
+        notSee({ id: "state-.*", childOf: { id: `bot-${defaultId}` } }),
       ]);
       await shoot("avatars-home");
 
@@ -1896,13 +1901,27 @@ describe("the iOS app", () => {
       };
       let positions = await layout();
       let read = screen(positions.get("home")![0]!.x2);
-      const clawling = defaultAvatar("main");
+      const clawling = defaultAvatar(defaultId);
       // The body, its single raised stalk, and the open space beside it.
-      expectPaint(positions, read, "main", clawling, [
+      expectPaint(positions, read, defaultId, clawling, [
         [25, 28, AVATAR_COLORS[clawling.color]],
         [20, 17, AVATAR_COLORS[clawling.color]],
         [9, 15, LIGHT.bg],
       ]);
+      // The star as the design draws it (decisions.md): a 16-point disc in the
+      // inverse fill at the avatar's lower right, the star in the inverse text.
+      const row = positions.get(`bot-${defaultId}`)![0]!;
+      const star = positions
+        .get("primary-star")!
+        .find((b) => b.x1 >= row.x1 && b.x2 <= row.x2 + 4 && b.y1 >= row.y1 && b.y2 <= row.y2 + 4)!;
+      expect(star.x2 - star.x1).toBeGreaterThanOrEqual(15);
+      expect(star.x2 - star.x1).toBeLessThanOrEqual(17);
+      const avatarRight = row.x1 + 10 + 44;
+      const rowMiddle = (row.y1 + row.y2) / 2;
+      expect(Math.abs(star.x2 - (avatarRight + 2))).toBeLessThanOrEqual(2);
+      expect(star.y1).toBeGreaterThan(rowMiddle);
+      expect(near(read(star.x1 + 8, star.y1 + 7.7), rgb(LIGHT["text-inverse"]), 12)).toBe(true);
+      expect(near(read(star.x1 + 8, star.y1 + 13.8), rgb(LIGHT["bg-inverse"]), 12)).toBe(true);
 
       chosen = true;
       avatarGateway.drop();
@@ -1910,6 +1929,10 @@ describe("the iOS app", () => {
         waitFor({ id: "bot-name-otto", text: lit("Otto (avatar check)") }, 120_000),
         see({ id: "bot-name-pip", text: lit("Pip (avatar check)") }),
         see({ id: "bot-name-marlow", text: lit("Marlow (avatar check)") }),
+        // With other bots listed, the gateway's own bot leaves Home (F-562).
+        waitGone({ id: `bot-${defaultId}` }, 30_000),
+        // The bots probed below are at rest, so each is drawn in its idle pose.
+        ...["otto", "pip"].map((id) => notSee({ id: "state-.*", childOf: { id: `bot-${id}` } })),
       ]);
       await shoot("avatars-choices");
       positions = await layout();
