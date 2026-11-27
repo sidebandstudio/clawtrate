@@ -63,6 +63,12 @@ import { Markdown } from "../Markdown.tsx";
 import { MessageUnit } from "../Messages.tsx";
 import { BotFiles } from "../BotFiles.tsx";
 import { Pictures } from "../Pictures.tsx";
+import {
+  SkillNoteBody,
+  SkillNoteLine,
+  skillNotesWords,
+  type SkillNoteItem,
+} from "../SkillNotes.tsx";
 import { useShowCommands, useShowThinking } from "../preferences.ts";
 import {
   ActionEnvContext,
@@ -1091,8 +1097,21 @@ export function RunFeed({ runId, reply }: { runId: string; reply: (run: Run) => 
   return <Groups groups={feed.groups} revision={feed.revision} reply={reply} />;
 }
 
-/** The run line of a finished run (7.7), counting every call of the run, card or not. */
-export function RunLine({ run }: { run: Run }) {
+/**
+ * The run line of a finished run (7.7), counting every call of the run, card or not. The gateway's
+ * skill notes that follow the run fold into it (F-560); with no line to fold into, they are a line
+ * of their own.
+ */
+export function RunLine({
+  run,
+  notes = [],
+  botName = "",
+}: {
+  run: Run;
+  notes?: readonly SkillNoteItem[];
+  botName?: string;
+}) {
+  const taskKey = useContext(ActionEnvContext)?.taskKey ?? "";
   // Counted from what the transcript draws of the run, against what the gateway reported.
   const drawn = useContext(FeedsContext)?.accounts.get(run.id);
   const calls = useMemo(
@@ -1108,14 +1127,33 @@ export function RunLine({ run }: { run: Run }) {
   const list = hidden?.groups.length ? (
     <Groups groups={hidden.groups} revision={hidden.revision} reply={() => null} />
   ) : null;
+  const alone =
+    notes.length > 0 ? <SkillNoteLine notes={notes} taskKey={taskKey} botName={botName} /> : null;
   if (!line)
     return list && isTerminal(run.state) ? (
-      <ActionsLine id={`run:${run.id}`} calls={callsOf(hidden!.groups)}>
-        {list}
-      </ActionsLine>
-    ) : null;
+      <>
+        <ActionsLine id={`run:${run.id}`} calls={callsOf(hidden!.groups)}>
+          {list}
+        </ActionsLine>
+        {alone}
+      </>
+    ) : (
+      alone
+    );
   return (
-    <RunLineView runId={run.id} line={line} model={run.model}>
+    <RunLineView
+      runId={run.id}
+      line={line}
+      model={run.model}
+      notes={
+        notes.length > 0
+          ? {
+              words: skillNotesWords(notes),
+              body: <SkillNoteBody notes={notes} taskKey={taskKey} botName={botName} />,
+            }
+          : null
+      }
+    >
       {list}
     </RunLineView>
   );

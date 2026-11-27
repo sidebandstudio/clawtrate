@@ -210,7 +210,9 @@ test.describe("1440", () => {
     await fillNew(page, "In doubt");
     await save(page).click();
     const note = editor(page).getByTestId("editor-unknown");
-    await expect(note).toContainText("The gateway didn't answer. This may or may not have saved");
+    await expect(note).toContainText(
+      "Not confirmed. The gateway didn't answer in time. This may or may not have saved.",
+    );
     await expect(save(page)).toHaveCount(0);
     await expect(editor(page).getByLabel("Name")).toBeDisabled();
     await note.getByRole("button", { name: "Check now" }).click();
