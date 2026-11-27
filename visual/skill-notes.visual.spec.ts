@@ -438,7 +438,8 @@ test.describe("the folded skill note's undo, preview and activity", () => {
   test("F-560: a note after a run with no actions is a line of its own", async ({ page }) => {
     await openFixture(page, `scene=main&${OTTO_DISK}&panel=closed&access=admin`);
     await showRows(page, [...workedRun(false), skillNote(true)]);
-    await expect(runLine(page).filter({ hasNotText: "Saved a skill" })).toHaveCount(0);
+    // A run with no actions has no line, so the note has its own.
+    await expect(runLine(page)).toHaveCount(0);
     const alone = page.getByTestId("skill-note-line");
     await expect(alone).toHaveCount(1);
     await expect(alone.locator(":scope > summary")).toHaveAccessibleName(
