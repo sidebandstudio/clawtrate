@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   besideLink,
+  besideShown,
   columnWidths,
   COLUMN_WIDTH,
   linkPlace,
@@ -253,6 +254,28 @@ describe("the bot's markdown on iOS", () => {
     expect(besideLink(written!)).toBe("k.example");
     // Capitals in ASCII are still the address.
     expect(besideLink(links("[HTTPS://K.EXAMPLE/](https://k.example/)")[0]!)).toBeNull();
+  });
+
+  it("isolates the host beside a link from any direction set before it", () => {
+    const LRI = "\u2066";
+    const PDI = "\u2069";
+    // A right-to-left override left open in the link's words, and one in the text before it.
+    for (const markdown of [
+      "[Open \u202E](https://example.test/)",
+      "Read \u202Ethis [Open](https://example.test/)",
+      "[Open \u2067](https://example.test/) and [\u202Bmore\u202C](https://example.test/)",
+    ]) {
+      for (const link of links(markdown)) {
+        // The link's own words keep no direction control...
+        expect(JSON.stringify(link.children)).not.toMatch(/[\u202A-\u202E\u2066-\u2069]/);
+        // ...and the host reads left to right, inside an isolate of its own.
+        expect(besideShown(link)).toBe(` ${LRI}(example.test)${PDI}`);
+      }
+    }
+    expect(links("[Open \u202E](https://example.test/)")[0]!.children).toEqual([
+      { t: "text", text: "Open " },
+    ]);
+    expect(besideShown(links("See https://example.test/.")[0]!)).toBeNull();
   });
 
   it("shows raw HTML as text", () => {

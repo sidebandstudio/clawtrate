@@ -7,7 +7,7 @@ import * as Clipboard from "expo-clipboard";
 import { Fragment, useMemo } from "react";
 import { ActionSheetIOS, Linking, ScrollView, View } from "react-native";
 import {
-  besideLink,
+  besideShown,
   columnWidths,
   LINK_WORDS,
   parseMarkdown,
@@ -103,7 +103,7 @@ function Inlines({ nodes }: { nodes: Inline[] }) {
               return <Inlines key={index} nodes={node.children} />;
             // What is beside the text is part of the link, so VoiceOver reads it in the link's
             // name: iOS names a link inside text by its own words, not by a label.
-            const beside = besideLink(node);
+            const beside = besideShown(node);
             return (
               <Txt
                 key={index}
@@ -120,7 +120,9 @@ function Inlines({ nodes }: { nodes: Inline[] }) {
                     size={TOUCH.bodyText}
                     color="text-muted"
                     style={{ textDecorationLine: "none" }}
-                  >{` (${beside})`}</Txt>
+                  >
+                    {beside}
+                  </Txt>
                 )}
               </Txt>
             );

@@ -282,6 +282,11 @@ const LOCAL_LINE = `Check [the router's settings](http://${ROUTER}/) first.`;
 const LOOKALIKE_HOST = { written: "b\u0430nk.example", ascii: "xn--bnk-6cd.example" };
 const LOOKALIKE_HOST_LINE = `Then sign in at https://${LOOKALIKE_HOST.written}/login.`;
 const MAIL_LINE = "Write [to the team](mailto:someone@example.com) for a copy.";
+/**
+ * What follows a link's text, as a pattern: a space and its words in parentheses, which the app
+ * isolates left to right (U+2066 to U+2069). The driver may or may not report the marks.
+ */
+const beside = (words: string) => ` \\u2066?\\(${words}\\)\\u2069?`;
 let browserUrl = "";
 /** The listener's GETs by path, and whether each carried a credential. */
 const browserGets = new Map<string, { hasAuthorization: boolean; hasCookie: boolean }>();
@@ -892,8 +897,8 @@ describe("the iOS app", () => {
       await inject(reading.key, message);
     // What a link shows beside its text is part of the link's own text. The listener is on
     // loopback, so each link to it says "this iPhone" there.
-    const hiddenText = `${lit(HIDDEN_LINK_TEXT)} \\(example\\.com\\)`;
-    const browserText = `${lit(browserUrl)} \\(this iPhone\\)`;
+    const hiddenText = `${lit(HIDDEN_LINK_TEXT)}${beside("example\\.com")}`;
+    const browserText = `${lit(browserUrl)}${beside("this iPhone")}`;
     const laterAt = await storedAt(reading.key, LATER_NOTE);
     expect(laterAt - firstNoteAt).toBeGreaterThan(10 * 60_000);
     await steps("read-own", [
@@ -959,11 +964,11 @@ describe("the iOS app", () => {
     await steps("local-links", [
       // A link to the person's own network says so beside its host, and a look-alike host
       // shows in ASCII, even where the address is the text.
-      scrollTo({ text: `Then sign in at .* \\(${lit(LOOKALIKE_HOST.ascii)}\\)\\.` }, "DOWN"),
-      see({ text: `Check the router's settings \\(${lit(ROUTER)}, your network\\) first\\.` }),
+      scrollTo({ text: `Then sign in at .*${beside(lit(LOOKALIKE_HOST.ascii))}\\.` }, "DOWN"),
+      see({ text: `Check the router's settings${beside(`${lit(ROUTER)}, your network`)} first\\.` }),
     ]);
     await shoot("transcript-links");
-    const lookalikeText = `${lit(lookalike().text)} \\(${lit(new URL(browserUrl).host)}, this iPhone\\)`;
+    const lookalikeText = `${lit(lookalike().text)}${beside(`${lit(new URL(browserUrl).host)}, this iPhone`)}`;
     await steps("not-links", [
       // A mailto address is its text: a tap does nothing, and touch and hold shows no address.
       scrollTo({ text: lit("Write to the team for a copy.") }, "DOWN"),

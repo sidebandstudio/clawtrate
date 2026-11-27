@@ -126,6 +126,29 @@ function textOf(node: Nodes): string {
   return "";
 }
 
+/**
+ * Embeddings, overrides and isolates (U+202A to U+202E, U+2066 to U+2069). A link's own words
+ * carry none, so no direction the bot set in them runs on into the host shown beside them.
+ */
+const DIRECTION_CONTROLS = /[\u202A-\u202E\u2066-\u2069]/g;
+
+function withoutDirectionControls(nodes: Inline[]): Inline[] {
+  return nodes.map((node): Inline => {
+    switch (node.t) {
+      case "text":
+      case "code":
+        return { ...node, text: node.text.replace(DIRECTION_CONTROLS, "") };
+      case "strong":
+      case "em":
+      case "del":
+      case "link":
+        return { ...node, children: withoutDirectionControls(node.children) };
+      default:
+        return node;
+    }
+  });
+}
+
 function inlines(nodes: PhrasingContent[]): Inline[] {
   return nodes.flatMap((node): Inline[] => {
     switch (node.type) {
@@ -143,8 +166,8 @@ function inlines(nodes: PhrasingContent[]): Inline[] {
         return [{ t: "break" }];
       case "link": {
         const url = openableUrl(node.url);
-        const children = inlines(node.children);
-        if (!url) return children;
+        if (!url) return inlines(node.children);
+        const children = withoutDirectionControls(inlines(node.children));
         return [
           {
             t: "link",
@@ -246,4 +269,14 @@ export function besideLink(link: Extract<Inline, { t: "link" }>): string | null 
   const parts = [link.plain ? null : link.host, link.place ? LINK_WORDS.place[link.place] : null];
   const shown = parts.filter((part) => part !== null);
   return shown.length > 0 ? shown.join(", ") : null;
+}
+
+/**
+ * What follows a link's text on the screen: a space, then what `besideLink` says in parentheses,
+ * isolated left to right (U+2066 to U+2069), so a direction set before it, in the link's words or
+ * the text around them, can't reverse the host it shows.
+ */
+export function besideShown(link: Extract<Inline, { t: "link" }>): string | null {
+  const beside = besideLink(link);
+  return beside === null ? null : ` \u2066(${beside})\u2069`;
 }
