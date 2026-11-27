@@ -3550,6 +3550,12 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       ]);
       const childKey = String(made!.sessionKey);
       view.expectEnd("final", `I started a task for it: ${CREATE_TASK.label}.`);
+      // The task's first run is its brief, answered as any plain message.
+      LEDGER.add(childKey);
+      const child = new RunView(h.op("plain"), String(made!.runId), childKey, view.from);
+      await h.wait(child, 60_000);
+      child.expectCalls([]);
+      child.expectEnd("final", scriptedFinalText("#text"));
       // Listed as a task started from this conversation, by the same fields as sessions_spawn's.
       const row = await listedRow(h, childKey);
       expect(row, "the task is in the task list");

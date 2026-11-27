@@ -108,9 +108,9 @@ async function hostCommand(command: Json): Promise<void> {
 }
 
 /**
- * The page connected. A gateway whose process the loaded machine froze for a while can drop the
- * host's connection, and this development host then waits for a Retry (as after a restart in
- * accounts.spec.ts): one is sent if the page is still reconnecting after 30 seconds.
+ * The page connected, with its "+". A gateway whose process the loaded machine froze for a while
+ * can drop the host's connection, and this development host then waits for a Retry (as after a
+ * restart in accounts.spec.ts): one is sent if the "+" isn't back after 30 seconds.
  */
 async function connected(): Promise<void> {
   const plus = page.locator(".rail-top").getByRole("button", { name: "New", exact: true });
@@ -192,6 +192,10 @@ test.beforeAll(async ({ accountsInstance, browser }) => {
   });
   await approve();
   await expect(botRow()).toBeVisible({ timeout: 30_000 });
+  // The pairing reads; writing (New task) takes the access a person asks for, as not-run.spec.ts.
+  await hostCommand({ type: "requestAccess" });
+  await approve();
+  await expect(page.getByTestId("plus")).toBeVisible({ timeout: 30_000 });
 });
 
 test.afterAll(async () => {
