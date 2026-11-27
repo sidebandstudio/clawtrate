@@ -179,3 +179,129 @@ describe("replyRow: the row is the reply's only where nothing else can stand", (
     expect(replyRow(run, items)).toBeNull();
   });
 });
+
+// F-551's run (`#think #tool-fail`): reasoning, a failed read, then the answer in a message of its
+// own, with each version's frames in the order a client watching the task received them on a
+// development gateway, and the rows of the history read that held the answer while the run was
+// still drawn. Ids and the workspace path are made up; the frames' other fields are as sent.
+describe("F-551's run on each version: the answer's row is known while the run goes on", () => {
+  const RUN = "run-551";
+  const KEY_ = "agent:pip:old-notes";
+  const ANSWER = "That file does not exist, so the step failed. I will carry on without it.";
+  const BESIDE = "I thought it over first. This is the answer that follows the reasoning.";
+  const play = (frames: Array<[number, string, Record<string, unknown>]>): Run => {
+    const raw = new RawTable();
+    let activity = emptyActivity;
+    for (const [seq, stream, data] of frames) {
+      const payload = { runId: RUN, seq, stream, ts: 1_000 + seq, sessionKey: KEY_, data };
+      activity = applyAgentEvent(activity, payload, { sessionKey: KEY_, now: 5_000, raw }).activity;
+    }
+    return activity.runs[0]!;
+  };
+  const user = {
+    role: "user",
+    content: "Look for my old notes. #think #tool-fail",
+    idempotencyKey: `${RUN}:user`,
+    __openclaw: { id: "u-1", seq: 1, idempotencyKey: `${RUN}:user` },
+  };
+  const failed = {
+    role: "toolResult",
+    toolCallId: "call_read_1",
+    toolName: "read",
+    content: [{ type: "text", text: '{"status":"error","tool":"read","error":"File not found."}' }],
+    isError: true,
+    __openclaw: { id: "r-3", seq: 3, runId: RUN },
+  };
+  const answerRow = {
+    role: "assistant",
+    content: [{ type: "text", text: ANSWER }],
+    api: "openai-completions",
+    provider: "scripted",
+    model: "dev-1",
+    __openclaw: { id: "a-4", seq: 4, runId: RUN },
+  };
+
+  it("on 2026.11.10: one row holds the reasoning, the text beside the call and the call", () => {
+    const stream = "5f0c2d8e-0000-4000-8000-00000000a11c";
+    const run = play([
+      [3, "lifecycle", { phase: "start", startedAt: 1_003 }],
+      [5, "lifecycle", { phase: "model", provider: "scripted", model: "dev-1" }],
+      [6, "thinking", { text: "The user wants", delta: "The user wants", itemId: "think-1" }],
+      [
+        10,
+        "assistant",
+        { text: "I thought it over", delta: "I thought it over", itemId: `${stream}:1` },
+      ],
+      [13, "assistant", { delta: BESIDE.slice("I thought it over".length), itemId: `${stream}:1` }],
+      [
+        18,
+        "thinking",
+        { phase: "persisted", itemId: "think-1", messageId: "a-2", messageRunId: RUN },
+      ],
+      [
+        19,
+        "item",
+        {
+          itemId: "tool:call_read_1",
+          toolCallId: "call_read_1",
+          name: "read",
+          kind: "tool",
+          phase: "start",
+          title: "Read",
+          status: "running",
+        },
+      ],
+      [
+        22,
+        "item",
+        {
+          itemId: "tool:call_read_1",
+          toolCallId: "call_read_1",
+          name: "read",
+          kind: "tool",
+          phase: "end",
+          title: "Read",
+          status: "failed",
+        },
+      ],
+      [23, "lifecycle", { phase: "model", provider: "scripted", model: "dev-1" }],
+      [
+        24,
+        "assistant",
+        { text: "That file does not", delta: "That file does not", itemId: `${stream}:2` },
+      ],
+      [
+        27,
+        "assistant",
+        { delta: ANSWER.slice("That file does not".length), itemId: `${stream}:2` },
+      ],
+      [29, "lifecycle", { phase: "finishing", stopReason: "stop", aborted: false }],
+    ]);
+    expect(run.text).toBe(ANSWER);
+    expect(run.textAfter).toEqual({ call: "call_read_1" });
+    const items = mapHistory([
+      user,
+      {
+        role: "assistant",
+        content: [
+          { type: "thinking", thinking: "The user wants to see reasoning first." },
+          { type: "text", text: BESIDE },
+          { type: "thinking", thinking: "I will read my old notes. They may not exist." },
+          {
+            type: "toolCall",
+            id: "call_read_1",
+            name: "read",
+            arguments: { path: "missing/old-notes.md" },
+          },
+        ],
+        api: "openai-completions",
+        provider: "scripted",
+        model: "dev-1",
+        __openclaw: { id: "a-2", seq: 2, runId: RUN },
+      },
+      failed,
+      answerRow,
+    ]);
+    expect(replyRow(run, items)).toEqual({ itemId: items[1]!.id, block: 4 });
+  });
+});
