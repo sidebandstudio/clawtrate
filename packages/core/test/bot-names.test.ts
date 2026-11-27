@@ -1051,6 +1051,14 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
     await s.engine.afterRun("pip", KEY, "run-1");
     expect(s.line()).toMatchObject({ whose: "bot" });
 
+    // No read of the file as the run started (no read free, the task opened mid-run): nothing.
+    const unstarted = gateway();
+    const v = device(unstarted, { start: null });
+    v.engine.sent(KEY, "run-1", "call yourself Juniper");
+    await v.engine.afterRun("pip", KEY, "run-1");
+    expect(v.lines()).toEqual([]);
+    expect(unstarted.state.updates).toEqual([]);
+
     // History unread at the run's end: who sent the run isn't known, so nothing is done.
     const unread = gateway();
     const u = device(unread, { history: false });
