@@ -1,0 +1,8 @@
+{
+  "plugins": {
+    "clawtrate-voice": {
+      "version": "0.1.0",
+      "digest": "sha256-ptF5G6UWP36m81AEwf6gGrXEmQ2A3+d+X4/PSxD9qRQ="
+    }
+  }
+}
