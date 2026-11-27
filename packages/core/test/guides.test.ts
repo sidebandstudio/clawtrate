@@ -163,9 +163,9 @@ describe("the section", () => {
       expect(withSection(added)).toBe(added);
     }
     // A byte-order mark stays first: the section goes right after it.
-    for (const before of ["﻿# Otto\n", "﻿"]) {
+    for (const before of ["\uFEFF# Otto\n", "\uFEFF"]) {
       const added = withSection(before);
-      expect(added).toBe(`﻿${GUIDES_SECTION}\n${before.slice(1)}`);
+      expect(added).toBe(`\uFEFF${GUIDES_SECTION}\n${before.slice(1)}`);
       expect(findSection(added)).toMatchObject({ kind: "ours", current: true, start: 1 });
     }
   });
@@ -175,7 +175,7 @@ describe("the section", () => {
     for (const span of [olderSection(), edited("").slice(0, -1)]) {
       const file = `${span}${below}`;
       expect(withSection(file)).toBe(`${GUIDES_SECTION}${below}`);
-      expect(withSection(`﻿${file}`)).toBe(`﻿${GUIDES_SECTION}${below}`);
+      expect(withSection(`\uFEFF${file}`)).toBe(`\uFEFF${GUIDES_SECTION}${below}`);
     }
     expect(findSection(edited())).toMatchObject({ kind: "changed", replaceable: true, start: 0 });
   });
@@ -187,7 +187,7 @@ describe("the section", () => {
       newerSection().replace("A newer guide", "An edited guide") + BOT_FILE,
     ]) {
       expect(withSection(file)).toBe(file);
-      expect(withSection(`﻿${file}`)).toBe(`﻿${file}`);
+      expect(withSection(`\uFEFF${file}`)).toBe(`\uFEFF${file}`);
     }
     expect(findSection(newerSection())).toMatchObject({ kind: "ours", current: true });
     expect(findSection(newerSection().replace("newer", "edited"))).toMatchObject({
