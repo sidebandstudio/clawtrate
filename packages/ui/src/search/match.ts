@@ -91,11 +91,5 @@ export function indexLinks(transcripts: Record<string, Transcript>): IndexedLink
   return out;
 }
 
-/** "Juniper", "Juniper and Otto", "Juniper, Otto and Pip". */
-export function listed(names: string[]): string {
-  if (names.length <= 1) return names.join("");
-  return `${names.slice(0, -1).join(", ")} and ${names.at(-1)}`;
-}
-
 export const plural = (count: number, one: string, many = `${one}s`) =>
   `${count.toLocaleString("en-US")} ${count === 1 ? one : many}`;
