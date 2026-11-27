@@ -325,6 +325,12 @@ export type TranscriptBlock =
        * its thread. OpenClaw 2026.10.6 keeps one only on a row with no tool call.
        */
       replyToId?: string;
+      /**
+       * The row is one the gateway wrote itself (`provider: "openclaw"`: a delivery's mirror, an
+       * injected note, a command's answer), never streamed as a model's message. Present and true
+       * only then.
+       */
+      gatewayRow?: true;
     }
   | { kind: "reasoning"; text: string }
   | {

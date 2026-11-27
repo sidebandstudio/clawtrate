@@ -1019,6 +1019,10 @@ export function mapHistory(
           for (const block of blocks)
             if (block.kind === "text" && block.text.trim()) block.replyToId = answers;
         }
+        // A row the gateway wrote itself, never a model's streamed message (`replyRow`).
+        if (message.provider === "openclaw") {
+          for (const block of blocks) if (block.kind === "text") block.gatewayRow = true;
+        }
         for (const block of blocks) {
           if (block.kind === "tool-call" && block.callId) callItems.set(block.callId, item);
         }

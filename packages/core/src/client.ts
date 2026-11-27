@@ -285,6 +285,7 @@ import {
   questionPending,
   startQueuedRun,
   updateMessage,
+  unfollowed,
   type CaughtUp,
   type EngineContext,
   type OutgoingMessage,
@@ -10987,9 +10988,11 @@ export class ClawtrateClient {
           .filter((message) => message.status === "sending" || message.status === "awaiting-access")
           .map((message) => message.id),
       );
+      // A read that subscribes again comes after a connection that may have missed frames.
+      const followed = subscribe || resync ? merge.runs.map(unfollowed) : merge.runs;
       const runs = settleQuietEnds(
         settleUnboundStops(
-          settleVanishedRuns(merge.runs, activeBefore, historyIds, inFlightId, ctx, busy),
+          settleVanishedRuns(followed, activeBefore, historyIds, inFlightId, ctx, busy),
           inFlightId,
           historyIds,
           awaitingAnswer,

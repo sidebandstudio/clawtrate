@@ -425,6 +425,8 @@ export const RUN: Bound = flagged<Run>()({
   textSource: ENUM,
   textItemId: ID,
   textEarlier: FLAG,
+  followed: object<NonNullable<Run["followed"]>>()({ call: ID, items: NUMBER }),
+  textAfter: object<NonNullable<Run["textAfter"]>>()({ call: ID }),
   textComplete: FLAG,
   steps: list(MAX_STEPS_PER_TASK, STEP, { pool: "steps" }),
   pendingCards: list(MAX_PENDING_CARDS, pendingCard),
@@ -614,6 +616,7 @@ const block = union<TranscriptBlock, "kind">("kind")({
     text: text(MAX_BLOCK_CHARS),
     messageId: ID,
     replyToId: ID,
+    gatewayRow: FLAG,
   }),
   reasoning: object<Extract<TranscriptBlock, { kind: "reasoning" }>>()({
     kind: ENUM,
