@@ -75,7 +75,7 @@
     - heading "Usage" [level=3]
     - 'button "Usage: This week: 2,239,000 tokens · about $5.92, as of 5:39 PM. Open."': "Usage This week: 2,239,000 tokens · about $5.92, as of 5:39 PM"
     - heading "Runs on" [level=3]
-    - 'button "Where Juniper runs: Command setting: not set · Same setting as main and Quartermaster of the Family Calendar and Errands. Open."': "Where Juniper runs Command setting: not set · Same setting as main and Quartermaster of the Family Calendar and Errands"
+    - 'button "Where Juniper runs: Command setting: not set. Open."': "Where Juniper runs Command setting: not set"
     - heading "Manage" [level=3]
     - button "Delete bot…"
   - status
