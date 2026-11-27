@@ -144,7 +144,15 @@ function useUpdatePart(state: ClawtrateState, place: RefObject<HTMLDivElement | 
   const [confirming, setConfirming] = useState<GatewayStamp | null>(null);
   const update = connection.openclawUpdate;
   const connected = connection.status === "connected";
-  if (run) return <UpdateLine run={run} waiting={!connected} />;
+  if (run)
+    return (
+      <UpdateLine
+        run={run}
+        waiting={!connected}
+        blocked={updating.blocked != null}
+        readOnly={info.readOnly === true}
+      />
+    );
   // A press whose answer was lost: no second one until the gateway's record settles it.
   if (updating.looking && updating.error)
     return (
@@ -216,11 +224,8 @@ function useUpdatePart(state: ClawtrateState, place: RefObject<HTMLDivElement | 
       </p>
       {info.readOnly ? (
         <p>
-          This device only reads, so it doesn't offer the update. Update OpenClaw on the gateway's
-          machine:{" "}
-          <a href={OPENCLAW_UPDATE_DOCS} target="_blank" rel="noreferrer noopener">
-            OpenClaw's update instructions <ExternalIcon />
-          </a>
+          This device only reads, so it doesn't offer the update. Clawtrate offers it on a device
+          that can change the gateway.
         </p>
       ) : (
         connected && (
@@ -398,12 +403,24 @@ export function UpdateConfirm({
  * The run: its line, the gateway's steps as a bar with its words beside it while it runs, then
  * how it ended. Progress is announced politely once per step, the outcome once.
  */
-function UpdateLine({ run, waiting }: { run: UpdateRunView; waiting: boolean }) {
+function UpdateLine({
+  run,
+  waiting,
+  blocked = false,
+  readOnly = false,
+}: {
+  run: UpdateRunView;
+  waiting: boolean;
+  /** The gateway said it can't update itself: no Update is offered after this run. */
+  blocked?: boolean;
+  /** This device only reads: it never offers Update. */
+  readOnly?: boolean;
+}) {
   const send = useCommand();
   const line = runLine(run);
   const heading = runHeading(run);
   const words = gatewayWords(run);
-  const next = nextStep(run);
+  const next = nextStep(run, blocked, readOnly);
   const finished = run.outcome !== "running" && run.outcome !== "late" && run.outcome !== "away";
   return (
     <div className="b-update" data-testid="update-run-settings" data-outcome={run.outcome}>
@@ -418,13 +435,6 @@ function UpdateLine({ run, waiting }: { run: UpdateRunView; waiting: boolean }) 
       </p>
       {!finished && <UpdateSteps run={run} waiting={waiting} />}
       {next && <p className="b-hint">{next}</p>}
-      {(run.outcome === "failed" || run.outcome === "rolled-back" || run.outcome === "skipped") && (
-        <p>
-          <a href={OPENCLAW_UPDATE_DOCS} target="_blank" rel="noreferrer noopener">
-            OpenClaw's update instructions <ExternalIcon />
-          </a>
-        </p>
-      )}
       {finished && (
         <button
           type="button"

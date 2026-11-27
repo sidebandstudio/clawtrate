@@ -5,7 +5,15 @@ import { ClawtrateClient, type ClientOptions } from "../src/client.ts";
 import type { KeyValueStore } from "../src/host.ts";
 import type { GatewayStamp } from "../src/types.ts";
 import { INTERACTIVE_SCOPES } from "../src/scopes.ts";
-import { FakeGateway, helloOk, memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
+import {
+  FakeGateway,
+  guidesOptions,
+  helloOk,
+  memoryStorage,
+  testHost,
+  tokenKey,
+  until,
+} from "./fake-gateway.ts";
 
 export const URL_A = "ws://127.0.0.1:19001";
 export const URL_B = "ws://127.0.0.1:19002";
@@ -67,7 +75,11 @@ export async function openTask(
         heldScopes: held,
       }),
     });
-  const client = new ClawtrateClient(testHost(gateway, storage), { ...FAST, ...options.client });
+  const client = new ClawtrateClient(testHost(gateway, storage), {
+    ...FAST,
+    ...guidesOptions(storage),
+    ...options.client,
+  });
   await client.start();
   await until(() => client.state.discovery.status === "ready");
   const key = options.key ?? KEY;

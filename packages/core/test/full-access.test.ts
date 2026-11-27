@@ -394,7 +394,10 @@ describe("full access, with no switch", () => {
   it("setup's reuse of a saved pairing through the proved sockets asks for read, and so do its retries", async () => {
     const gateway = grantingGateway();
     const route = provedRoute(gateway, () => true);
-    const { client } = fullClient(gateway, { client: { localConnect: () => route.sockets } });
+    // The bots' guides would read the bot list too: this counts setup's reads alone.
+    const { client } = fullClient(gateway, {
+      client: { localConnect: () => route.sockets, keepGuides: false },
+    });
     await client.start();
     await client.connect({ url: LOOPBACK, token: SHARED }, route.setup);
     await until(() => client.state.discovery.status === "ready");
