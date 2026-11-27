@@ -27,6 +27,12 @@ export type LookOutcome =
   | "cant-tell"
   /** The program was found but couldn't be started. */
   | "cant-run"
+  /**
+   * Local connect: OpenClaw's settings name a port where something answers, but
+   * Clawtrate couldn't match it to this account's OpenClaw profile (`reason`: which check
+   * failed, `ProofRefusalKind`).
+   */
+  | "unverified"
   | "not-found"
   | "windows";
 
@@ -43,7 +49,47 @@ export type CantTellReason =
    * its launcher may repair its own installation before any command runs, so
    * the look runs nothing (docs/decisions.md, "What the look runs").
    */
-  | "read-only";
+  | "read-only"
+  /** Local connect: OpenClaw's settings file can't be used here (its form, its sign-in, its rights). */
+  | "settings"
+  /** Local connect: OpenClaw's settings turn TLS on, or don't certainly leave it off; it dials `ws://` only. */
+  | "tls"
+  | ProofRefusalKind;
+
+/**
+ * Why local connect's proof refused a socket, by the check that failed: who holds the
+ * connection (another account's process, or none yet); matching what is listening to this
+ * account's OpenClaw profile (its lock, its state database, the process the lock names); this
+ * version's native module, where the app has a pin for it; OpenClaw's profile folder; that
+ * folder replaced since its settings were read (another device or inode at its path); a
+ * gateway whose lock names another settings file than the one read (`other-settings`); or the
+ * check itself. A refusal says which check failed and no more: it never claims what program
+ * holds the port.
+ */
+export type ProofRefusalKind =
+  | "holder"
+  | "not-gateway"
+  | "not-published"
+  | "folder"
+  | "replaced"
+  | "other-settings"
+  | "unchecked";
+
+/** Each refusal's words for the person, the same on a card and for a refused reconnect. */
+export const PROOF_REFUSAL_LINES: Record<ProofRefusalKind, (port: number | null) => string> = {
+  holder: (port) => `Clawtrate couldn't confirm who holds the connection at port ${port}.`,
+  "not-gateway": (port) =>
+    `Clawtrate couldn't match what is listening at port ${port} to this account's OpenClaw profile.`,
+  "not-published": (port) =>
+    `Clawtrate couldn't check this version's module for what is listening at port ${port}.`,
+  folder: (port) =>
+    `OpenClaw's profile folder on this Mac can be changed by others, or isn't where Clawtrate expects it, so Clawtrate doesn't check what is listening at port ${port}.`,
+  replaced: (port) =>
+    `OpenClaw's profile folder on this Mac was replaced since Clawtrate read its settings, so Clawtrate doesn't check what is listening at port ${port}.`,
+  "other-settings": (port) =>
+    `What is listening at port ${port} was started with another OpenClaw settings file than the one Clawtrate read, so Clawtrate can't tell how to connect to it.`,
+  unchecked: (port) => `Clawtrate couldn't check what is listening at port ${port} on this Mac.`,
+};
 
 /** The gateway's service, as the status reports it for this gateway. `none`: it reports no matching unit. */
 export type LookService =
@@ -88,6 +134,14 @@ export type SetupFailureKind =
   | "bots"
   /** Back couldn't close the connection setup opened; Back tries again. */
   | "cleanup"
+  /** Local connect couldn't match a socket to this account's OpenClaw profile: no credential went. */
+  | "unverified"
+  /**
+   * Local connect matched the port to the profile, but the gateway there never answered as its
+   * settings file says it would (on `ws://`): it may have stopped, or run on settings changed since
+   * it started (TLS on, for one). Advanced, or a look again.
+   */
+  | "unanswered"
   /** The connection failed in another way; the connection state says how. */
   | "other";
 
@@ -103,8 +157,8 @@ export type SetupFailure = {
   kind: SetupFailureKind;
   exitCode: number | null;
   port: number | null;
-  /** For `refused`: what was refused. */
-  reason: SetupRefusal | null;
+  /** For `refused`: what was refused; for `unverified`, which fact the proof refused. */
+  reason: SetupRefusal | ProofRefusalKind | null;
 };
 
 export type SetupPhase =
@@ -150,7 +204,8 @@ export type SetupHost = {
   cancel(): void;
   /**
    * Ask the host to pair with what the last look found. The host shows its own
-   * dialog and runs nothing unless that dialog's answer is yes.
+   * dialog and runs nothing unless that dialog's answer is yes; with local
+   * connect, this request is the consent (`SetupOffer.local`).
    */
   connect(): Promise<void>;
   /** Back to the first screen. */
@@ -159,6 +214,8 @@ export type SetupHost = {
 
 /**
  * Whether the screens of setup are offered, and which: `look` runs on the
- * host's computer, `pair` needs a native dialog of the host's.
+ * host's computer, `pair` needs a native dialog of the host's. `local`: the
+ * host proves this computer's gateway itself (local connect), so Connect is
+ * the consent and no dialog follows it.
  */
-export type SetupOffer = { look: boolean; pair: boolean; platform: string };
+export type SetupOffer = { look: boolean; pair: boolean; platform: string; local?: boolean };

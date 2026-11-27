@@ -83,7 +83,7 @@
       brand() +
       `<div class="se-found">` +
       `<p class="se-found-head"><span class="se-dot" data-state="pending" aria-hidden="true"></span>OpenClaw settings found</p>` +
-      `<p class="se-found-sub">Port 18789 · default profile · version 2026.10.6</p>` +
+      `<p class="se-found-sub">Port 18789 · default profile</p>` +
       `<p class="se-checking" role="status">${icon("clock")} Checking what is listening at port 18789…</p>` +
       `</div>` +
       otherRow(),
@@ -91,8 +91,8 @@
     found: () =>
       brand() +
       `<div class="se-found">` +
-      `<p class="se-found-head"><span class="se-dot" aria-hidden="true"></span>OpenClaw is running on this Mac</p>` +
-      `<p class="se-found-sub">Port 18789 · default profile · version 2026.10.6</p>` +
+      `<p class="se-found-head"><span class="se-dot" aria-hidden="true"></span>Found your OpenClaw settings on this Mac</p>` +
+      `<p class="se-found-sub">What is listening at the port they name matches them.</p>` +
       consent() +
       `<a class="button se-wide" data-variant="primary" data-size="lg" href="${go("connecting")}">Connect</a>` +
       `</div>` +
@@ -102,7 +102,7 @@
       brand() +
       `<div class="se-found">` +
       `<p class="se-found-head"><span class="se-dot" data-state="warn" aria-hidden="true"></span>OpenClaw settings found</p>` +
-      `<p class="se-found-sub">Port 18789 · default profile · version 2026.10.6</p>` +
+      `<p class="se-found-sub">Port 18789 · default profile</p>` +
       note("warn", "", "Clawtrate couldn't verify what is listening at port 18789. Nothing was sent to it.") +
       `<a class="button se-wide" data-size="lg" href="${go("settings")}">Look again</a>` +
       `</div>` +
@@ -135,7 +135,7 @@
       title("Connecting to OpenClaw on this Mac") +
       steps([
         ["Reading OpenClaw's settings", "done"],
-        ["Checking it's OpenClaw on this Mac", "done"],
+        ["Checking it matches OpenClaw's settings", "done"],
         ["Pairing this Mac", "running"],
         ["Loading your bots", "waiting"],
       ]) +

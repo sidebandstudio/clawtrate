@@ -8,7 +8,7 @@ It follows the product's rule (`docs/decisions.md`, "Doing, not asking", and `do
 
 It builds on, and doesn't redesign:
 
-- **The Main Bot design** (`main-bot-onboarding.md`): its `clawtrate-bots` plugin, its records and its journal (sections 5, 8 and 9). This document replaces its tool list (section 6) with section 2 here, and its proposal cards with changes that are applied and shown.
+- **The Main Bot design** (`main-bot-onboarding.md`): its earlier revision's `clawtrate-bots` plugin, records, journal, tool list and proposal cards are this document's now (section 2 here, and changes that are applied and shown); that design keeps the first run and the Main Bot's three-tool deny (its section 2).
 - **Doing, not asking** (`doing-not-asking.md`): the rule, and what Undo means, are written there once; where both documents say the same thing, the words are the same.
 - **The first run** (#493): the first run's script and screens are that design's. This one gives it the tools it calls.
 - **The guides** (`packages/core/src/guides.ts`, #544's first half): the section Clawtrate writes at the top of each bot's `AGENTS.md`. Section 7 adds one paragraph and changes one sentence.
@@ -105,7 +105,7 @@ The rule: **a tool the bot calls when it needs the fact, over more words in ever
 | What it may and may not do here: its tool rules, how it runs commands, what each tool does in this conversation                                                   | `clawtrate_here` lists its tools with what each would do now (section 3). A rule's refusal names the rule when it happens (`clawtrate-tool-rules`)                                                    | Tool                      | Proposed; how the bots plugin reads the rules plugin's store is not established (section 12) |
 | The bots it can hand work to                                                                                                                                      | `clawtrate_bots`: each bot's name, what it is for, and whose account it runs on                                                                                                                       | Tool                      | Proposed                                                                                     |
 
-**What stays in every prompt, in characters** (Proposed, counted from `guide-text.ts` on `main`): the voice guide (1,452) and "Where you live" (1,453) as today, less its sentence about asking first (66), plus the paragraph of section 7 (465), so 3,304 characters of section text. The tools themselves: OpenClaw runs defer tool schemas behind its tool search by default on both versions and put a bounded directory of names and descriptions in the prompt instead (`<1006>/docs/tools/tool-search.md:22-28`; `<1110>/docs/tools/tool-search.md:23-29`). Twelve tools at about 110 characters of name and description each add about 1,300 characters there. On a run with tool search turned off, the full schemas would add about 7,000.
+**What stays in every prompt, in characters** (Proposed, counted from `guide-text.ts` on `main`): the voice guide (1,452) and "Where you live" (2,270) as today, less its sentence about asking first (66), plus the paragraph of section 7 (465), so 4,121 characters of section text. The tools themselves: OpenClaw runs defer tool schemas behind its tool search by default on both versions and put a bounded directory of names and descriptions in the prompt instead (`<1006>/docs/tools/tool-search.md:22-28`; `<1110>/docs/tools/tool-search.md:23-29`). Twelve tools at about 110 characters of name and description each add about 1,300 characters there. On a run with tool search turned off, the full schemas would add about 7,000.
 
 ## 2. The tool surface
 
@@ -167,7 +167,7 @@ Signing an account in or out, or letting a device in; spending money; installing
 
 ### What the first run needs first
 
-The first run (#493) needs, in order: `clawtrate_identity` for the name it is given (and the picture); the gateway's `sessions_spawn`, to start a small task the person watches appear (on `main`), with `clawtrate_show` to open it beside the conversation; a file handed over with `MEDIA:` (on `main`, both versions); an approval (on `main`). So of this design's tools it needs `clawtrate_identity` and `clawtrate_show` first, and `clawtrate_here` so the bot can say what it can do. Section 10 orders the pull requests that way.
+The first run (#493) needs, in order: `clawtrate_identity` for the name it is given (and the picture); the gateway's `sessions_spawn`, to start a small task the person watches appear (on `main`), with `clawtrate_show` to open it beside the conversation; a file handed over with `MEDIA:` (on `main`, both versions). So of this design's tools it needs `clawtrate_identity` and `clawtrate_show` first, and `clawtrate_here` so the bot can say what it can do. Section 10 orders the pull requests that way.
 
 ## 3. What happens, per tool, and the tools a bot already has
 
@@ -221,7 +221,7 @@ Nothing a bot someone brings in does today depends on these tools, so this table
 
 ### 3.3 The tools a bot already has
 
-A bot doesn't need Clawtrate's tools to change itself. With nothing set, a bot's tool profile is `full`, which filters nothing (`<1006>/docs/gateway/config-tools/tool-policy.md:39`), and even the `coding` profile has the file tools, the session tools and the scheduler (`:37`). New bot on `main` writes no tool policy (`packages/core/src/accounts-engine.ts`), and the Main Bot design's managed policy is not built. So each Clawtrate check has a side door, and the plugin's `before_tool_call` hook holds each one, for every bot the plugin serves.
+A bot doesn't need Clawtrate's tools to change itself. With nothing set, a bot's tool profile is `full`, which filters nothing (`<1006>/docs/gateway/config-tools/tool-policy.md:39`), and even the `coding` profile has the file tools, the session tools and the scheduler (`:37`). New bot on `main` writes no tool policy (`packages/core/src/accounts-engine.ts`), and the Main Bot design's deny (its section 2) is not built yet. So each Clawtrate check has a side door, and the plugin's `before_tool_call` hook holds each one, for every bot the plugin serves.
 
 **What the hook can do** (Established, both versions): see the call's `runId`, `toolCallId`, tool name, parameters, `sessionKey` and `agentId`, and a `requester` with `channel`, `senderId` and `senderIsOwner` (`<1006>/dist/config-contracts-C65kIjn4.d.ts:9812-9848`; `<1110>/dist/config-contracts-CmjbWZfI.d.ts:25183-25206`); refuse it with a reason (`block`, `blockReason`); rewrite its parameters (`params`); or hold it for OpenClaw's own approval (`requireApproval`) (`:8888-8899` and `:24802-24815`; `<1006>/docs/plugins/hooks/tool-policy.md:43-80`). No conversation-access setting is needed for `before_tool_call` (`tool-policy.md:85-86`).
 
@@ -264,7 +264,7 @@ The hook decides a write to a bootstrap file by its path, resolved against the b
 
 **Each hold gets its own scenario check, failing with the hold undone, in the pull request that adds the hook** (section 10, step 2).
 
-**For bots Clawtrate makes,** Clawtrate also writes the managed deny of the Main Bot design §12 (`gateway`, `plugins`, `openclaw` and the rest), so those bots don't depend on the hook alone. A bot someone brings in keeps its tools, so the hook is what covers it.
+**For bots Clawtrate makes,** Clawtrate also denies OpenClaw's `gateway`, `plugins` and `openclaw` tools on the bot's own entry, as the Main Bot design §2 does for the Main Bot, so those bots never have those tools, and the table's last row above (`openclaw`, `gateway`, `plugins`) applies only to a bot someone brings in, which keeps its tools and is covered by the hook.
 
 **A change Clawtrate didn't make.** Clawtrate already reads every field these tools change. When a read finds a bot's name, instructions, routines, check-ins or reach changed with no journal entry behind it (a command did it, or a client without the plugin), the bot's conversation and settings show "Changed outside Clawtrate · Open", with the field and the time. Nothing is undone by itself.
 
@@ -324,7 +324,7 @@ A call is **B** when the run is typed here and sent by the device but one of tho
 
 ### 4.4 The first run
 
-The first run's name step is A by the rule above, with nothing special: the bot asks for a name, the person types it, and it is applied at once with "Named Juniper · Undo". What the first run does when the bot goes off its script is the first-run design's.
+The first run's name step is A by the rule above, with nothing special: the bot asks for a name, the person types it, and it is applied at once with "Renamed to Juniper · Undo". What the first run does when the bot goes off its script is the first-run design's.
 
 ### 4.5 What each source of a request now does
 
@@ -362,8 +362,8 @@ What a bot read earlier in a conversation stays in its context. A page read thre
 | A rename bound to the bot that was read   | No: `agents.update` takes `agentId`, `name`, `workspace`, `model`, `agentRuntime`, `emoji`, `avatar`, no precondition (`<1006>/dist/agents-models-skills-D_vYckoD.mjs:539-548`) | No: the same schema (`<1110>/dist/users-DQ-MuWzs.mjs`, `AgentsUpdateParamsSchema`)                                              |
 | Removing a routine bound to what was read | No: `cron.remove` takes only an id (`<1006>/dist/src-BSx5Woe0.mjs:4328`)                                                                                                        | Yes: it takes `expectedConfigRevision` (`<1110>/dist/src-4ukgpRDU.mjs`, `CronRemoveParamsSchema`)                               |
 | Changing a routine bound to what was read | `cron.update {id, patch, expectedConfigRevision}` (`<1006>/dist/src-BSx5Woe0.mjs:4325`)                                                                                         | The same                                                                                                                        |
-| Config and files bound to what was read   | `config.patch {baseHash}`, `agents.files.set {expectedHash}` (the Main Bot design §6)                                                                                           | The same (not re-run here)                                                                                                      |
-| A bot's incarnation in a write            | None (the Main Bot design §17)                                                                                                                                                  | None found in the schemas read                                                                                                  |
+| Config and files bound to what was read   | `config.patch {baseHash}`, `agents.files.set {expectedHash}` (R23, `docs/research/bot-self-management.md`)                                                                      | The same (not re-run here)                                                                                                      |
+| A bot's incarnation in a write            | None (R34)                                                                                                                                                                      | None found in the schemas read                                                                                                  |
 | A plugin writing as the person            | No: a tool's gateway call carries its turn's connection, and the docs call run facts "not authority"                                                                            | The same; `api.runtime.gateway.request` acts as the current caller (`<1110>/docs/plugins/tool-plugins.md`, the guard paragraph) |
 
 ### 5.2 Clawtrate applies, for every tool, on both versions
@@ -537,7 +537,7 @@ Whether `--tag bootstrap` keeps `latest` off the very first version a package ev
 
 > **Clawtrate's tools.** When you have tools whose names start with `clawtrate_`, they act on Clawtrate itself. If your person asks where you are or what you can do here, call `clawtrate_here` instead of guessing, and answer from it in a few sentences. Each tool's answer says what changed, what didn't and why. Tell your person what it says, and never say something changed before the answer does. Only a message your person typed in Clawtrate counts as them asking.
 
-The sentence "Only a message your person sent in this conversation counts as them asking for a task" stays, and so does everything #666 adds about recognising a Clawtrate conversation.
+The sentence "Only a message your person sent in this conversation counts as theirs, for asking for a task or for knowing where they are" stays, and so does everything #666 adds about recognising a Clawtrate conversation. Where the two disagree, the tool's answer wins: when `clawtrate_here` is available and says this turn came from Clawtrate, the bot may say it is in Clawtrate even if the person's latest message has no marker, because the tool's answer comes from the bots plugin on the gateway and the marker is only a hint. Without the tool, the section's rule applies as written.
 
 ### 7.2 The tools' own descriptions
 
@@ -662,7 +662,7 @@ Ten ids are held for this design; it uses all ten. They are proposed here and ad
 - **The first run's script and screens:** the first-run design (#493).
 - **What a bot is told about a conversation being in Clawtrate without a tool:** #666.
 - **What a bot may do on the person's machine** (running commands, OpenClaw's own command approvals, loosening tool rules): `doing-not-asking.md` §3 and #675, with their own security review.
-- **Connecting MCP servers and apps to a bot from Clawtrate** (#85), and external agents over MCP (the Main Bot design §10).
+- **Connecting MCP servers and apps to a bot from Clawtrate** (#85), and external agents over MCP (to be designed).
 - **A preview of a page or HTML a bot made:** what a bot supplies is content, shown under the project's rule for remote content; a tool that puts one beside the conversation waits for that rule and its own design.
 - **The other plugins' installation:** each with its own feature's design and review.
 - **Moving a task between bots,** renaming a task, and deleting a bot.

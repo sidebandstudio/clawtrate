@@ -5,6 +5,7 @@
 // messages between bots are the cards' own (./cards).
 
 import {
+  attachmentsCut,
   isTerminal,
   type Bot,
   type OutgoingMessage,
@@ -18,7 +19,8 @@ import { useBridge, useClawtrateState } from "./bridge.tsx";
 import { useAnnounce } from "./cards/parts.tsx";
 import { copyText, selectContents } from "./clipboard.ts";
 import { CloseIcon, WarnIcon } from "./icons.tsx";
-import { endingOf } from "./live.ts";
+import { endingOf, failedTurnTitle, forEarlierMessage, notRunWords } from "./live.ts";
+import { requestBotSettings } from "./bots/settings-request.ts";
 import { Markdown } from "./Markdown.tsx";
 import { SentFiles } from "./SentFiles.tsx";
 
@@ -197,19 +199,64 @@ export function stoppedWithLines(run: Run, nameOf: (sessionKey: string) => strin
   return lines;
 }
 
-/** The text of the message that started a run, for "Try again". */
-/** The message a run's own message replied to, from the outbox or from history's reference. */
+/**
+ * The person's message a run is known to have started from: its keyed anchor only (#686). A
+ * position decides where a run is drawn, never what Try again sends.
+ */
+function keyedAnchor(run: Run, transcript: Transcript) {
+  return run.anchorKeyed
+    ? transcript.items.find((item) => item.id === run.anchorItemId)
+    : undefined;
+}
+
+/**
+ * What "Try again" sends for a failed run, if anything (#686). Nothing goes out without its files:
+ * - `again`: this device still holds the message, and its words and files go again together;
+ * - `text`: only history has it, and it was words alone;
+ * - `files-gone`: only history has it, and it had files this device no longer holds: no Try
+ *   again, and the line says to send it again with them;
+ * - `files-unknown`: only history has it, and history's list of its files was cut to its bound, so
+ *   whether it had any isn't known: no Try again, and the line says to send it again with any;
+ * - null: no message is known to have started the run.
+ */
+export type RetryPlan =
+  | { kind: "again"; messageId: string }
+  | { kind: "text"; text: string; replyToId: string | null }
+  | { kind: "files-gone" }
+  | { kind: "files-unknown" }
+  | null;
+
+export function retryPlan(run: Run, transcript: Transcript): RetryPlan {
+  if (run.messageId && transcript.outbox.some((message) => message.id === run.messageId))
+    return { kind: "again", messageId: run.messageId };
+  const anchor = keyedAnchor(run, transcript);
+  if (!anchor) return null;
+  if ((anchor.attachments?.length ?? 0) > 0) return { kind: "files-gone" };
+  // Words alone go again only when the message is known to have had no files.
+  if (attachmentsCut(anchor)) return { kind: "files-unknown" };
+  const text = messageTextOf(run, transcript);
+  return text ? { kind: "text", text, replyToId: messageReplyOf(run, transcript) } : null;
+}
+
+/**
+ * The message a run's own message replied to, from the outbox or from history's reference on the
+ * run's message. Try again sends it only through `retryPlan`, which first requires that message
+ * known by its key: a parent is never taken from a message the run is only drawn under (#686).
+ */
 export function messageReplyOf(run: Run, transcript: Transcript): string | null {
   const outgoing = transcript.outbox.find((message) => message.id === run.messageId);
   if (outgoing) return outgoing.replyToId ?? null;
-  const anchor = transcript.items.find((item) => item.id === run.anchorItemId);
-  return anchor?.replyTo?.id ?? null;
+  return transcript.items.find((item) => item.id === run.anchorItemId)?.replyTo?.id ?? null;
 }
 
+/**
+ * The text of the message that started a run, for "Try again": null (no Try again) when no
+ * message is known to have started it, as for a failure history keyed to none (#686).
+ */
 export function messageTextOf(run: Run, transcript: Transcript): string | null {
   const outgoing = transcript.outbox.find((message) => message.id === run.messageId);
   if (outgoing) return outgoing.text;
-  const anchor = transcript.items.find((item) => item.id === run.anchorItemId);
+  const anchor = keyedAnchor(run, transcript);
   if (!anchor) return null;
   const text = anchor.blocks
     .map((block) => (block.kind === "text" ? block.text : ""))
@@ -322,19 +369,30 @@ export function RunEnding({
   }
   // A send the gateway refused already says so under your message.
   if (run.error?.kind === "not-started") return null;
+  // A message the gateway couldn't run: why, and the ways forward (#663).
+  // No message is known to have started it: said to be for an earlier one, with no Try again.
+  const earlier = forEarlierMessage(run, transcript);
+  const notRun =
+    ending.kind === "not-run" || ending.kind === "not-started"
+      ? notRunWords(ending, bot.name, earlier)
+      : null;
   // The app's own limit and the gateway's are worded apart: each says who ended the turn.
-  const title =
-    ending.kind === "turn-limit"
+  const title = notRun
+    ? notRun.title
+    : ending.kind === "turn-limit"
       ? `${bot.name}'s turn reached its ${ending.minutes} minute limit`
       : ending.kind === "gateway-timeout"
         ? `${bot.name}'s turn reached the gateway's time limit`
-        : `${bot.name} couldn't finish this turn`;
-  const reason =
-    ending.kind === "turn-limit"
+        : failedTurnTitle(bot.name, earlier);
+  const reason = notRun
+    ? notRun.reason
+    : ending.kind === "turn-limit"
       ? "Clawtrate stopped it at the Turn time limit in Settings, and the gateway confirmed. Send a message to pick up where it left off."
       : ending.kind === "gateway-timeout"
         ? "The gateway ended the turn so it would not hang. Send a message to pick up where it left off."
-        : ending.reason;
+        : ending.kind === "failed"
+          ? ending.reason
+          : null;
   if (dismissed) {
     return (
       <button
@@ -351,7 +409,9 @@ export function RunEnding({
   // A stop at the turn limit stops the other bots' runs it started too, as Stop does (F-296).
   const also =
     ending.kind === "turn-limit" ? stoppedWithLines(run, (key) => botOfSession(bots, key)) : [];
-  const text = messageTextOf(run, transcript);
+  const retry = retryPlan(run, transcript);
+  // What Try again sends, when there is one.
+  const resend = retry?.kind === "again" || retry?.kind === "text" ? retry : null;
   const requestId = run.requestId ?? null;
   const raw = run.error?.raw;
   const showRaw = (open: boolean) => {
@@ -376,7 +436,17 @@ export function RunEnding({
     }
   };
   return (
-    <div className="card turn-error" role="alert" data-testid="turn-error" data-run={run.id}>
+    <div
+      className="card turn-error"
+      role="alert"
+      data-testid="turn-error"
+      data-run={run.id}
+      {...(notRun
+        ? {
+            "data-not-run": ending.kind === "not-run" ? (ending.cause?.kind ?? "unsaid") : "silent",
+          }
+        : {})}
+    >
       <WarnIcon />
       <p className="turn-error-title">{title}</p>
       <button
@@ -408,9 +478,32 @@ export function RunEnding({
           Couldn't send it again: {retryError}
         </p>
       )}
-      {(text || requestId || raw) && (
+      {retry?.kind === "files-gone" && (
+        <p className="turn-error-reason" data-testid="retry-files-gone">
+          This message had files, and this device no longer holds them. To try again, send it again
+          with its files.
+        </p>
+      )}
+      {retry?.kind === "files-unknown" && (
+        <p className="turn-error-reason" data-testid="retry-files-unknown">
+          This device can't tell whether this message had files. To try again, send it again with
+          any files it had.
+        </p>
+      )}
+      {(resend || requestId || raw || (notRun?.ways.length ?? 0) > 0) && (
         <div className="turn-error-actions">
-          {text && (
+          {notRun?.ways.map((way) => (
+            <button
+              key={way}
+              type="button"
+              className="button"
+              data-size="sm"
+              onClick={() => requestBotSettings(bot.id, way)}
+            >
+              {way === "model" ? "Change model" : "Change account"}
+            </button>
+          ))}
+          {resend && (
             <button
               type="button"
               className="button"
@@ -418,20 +511,23 @@ export function RunEnding({
               onClick={() => {
                 setRetryError(null);
                 // The engine still holds the message: its words and files go again together.
-                // Otherwise only history has it, and history gives the words alone. A reply
+                // Otherwise only history has it, and it was words alone (`retryPlan`). A reply
                 // goes again as a reply to the same message.
-                const held = transcript.outbox.some((message) => message.id === run.messageId);
-                const parent = messageReplyOf(run, transcript);
-                const again = held
-                  ? bridge.invoke({ type: "sendAgain", key: taskKey, messageId: run.messageId! })
-                  : bridge.invoke({
-                      type: "sendMessage",
-                      key: taskKey,
-                      text,
-                      mode: "auto",
-                      attachmentIds: [],
-                      ...(parent ? { replyToId: parent } : {}),
-                    });
+                const again =
+                  resend.kind === "again"
+                    ? bridge.invoke({
+                        type: "sendAgain",
+                        key: taskKey,
+                        messageId: resend.messageId,
+                      })
+                    : bridge.invoke({
+                        type: "sendMessage",
+                        key: taskKey,
+                        text: resend.text,
+                        mode: "auto",
+                        attachmentIds: [],
+                        ...(resend.replyToId ? { replyToId: resend.replyToId } : {}),
+                      });
                 void again.catch((error: unknown) =>
                   setRetryError(error instanceof Error ? error.message : String(error)),
                 );

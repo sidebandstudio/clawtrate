@@ -1024,7 +1024,7 @@ export function startProblem(problem: {
 }
 
 /** The end of a process's log, as a failure prints it under its first line. */
-function logSection(owner: string, log: string, tail: string): string {
+export function logSection(owner: string, log: string, tail: string): string {
   return tail
     ? `  the end of ${owner} log, ${log}:\n${tail.replace(/^/gm, "    ")}`
     : `  ${owner} log, ${log}, is empty`;
@@ -1982,8 +1982,8 @@ export const SEED_RETRY_DELAYS_MS: readonly number[] = [
 
 /**
  * `call`, tried again after each delay while it fails on transport; any other failure is thrown.
- * Only for calls that are safe to repeat: a read, or one the gateway carries out once whatever
- * number of times it comes, as `sessions.create` does for a key and label it already has.
+ * Only for reads. A write the gateway didn't answer may still be carried out, so the seed reads
+ * what it did before writing again (`createSeedSession`, `runSeedTurn`).
  */
 export async function retryOnTransport<T>(
   call: () => Promise<T>,
@@ -2123,6 +2123,123 @@ export async function runSeedTurn(options: {
       failure = error;
       reached = !neverReachedGateway(error);
     }
+  }
+  throw failure;
+}
+
+/** A seeded task's fields, as the seed sends them to `sessions.create`. */
+export type SeedSession = { key: string; agentId: string; label: string };
+
+/** A task as `sessions.list` shows it. */
+export type ListedSession = { key?: string; agentId?: string; label?: string };
+
+/**
+ * A `sessions.create` the gateway refused because the task, or its label, is there already. A
+ * try that raced an earlier one, slow but not lost, is refused with "session changed before
+ * sessions.create" and `SESSION_MUTATION_AUTHORIZATION_CHANGED` (#700).
+ */
+export function isCreateConflict(error: unknown): boolean {
+  const text = error instanceof Error ? error.message : String(error);
+  return /SESSION_MUTATION_AUTHORIZATION_CHANGED|session changed before sessions\.create|already exists|label already in use/.test(
+    text,
+  );
+}
+
+/** How a listed task differs from the seed's, or null when it is the seed's. */
+export function sessionMismatch(row: ListedSession, session: SeedSession): string | null {
+  const differences = [
+    row.agentId === session.agentId
+      ? null
+      : `its bot is ${row.agentId ?? "missing"}, not ${session.agentId}`,
+    row.label === session.label
+      ? null
+      : `its label is ${JSON.stringify(row.label ?? null)}, not ${JSON.stringify(session.label)}`,
+  ].filter((difference) => difference !== null);
+  return differences.length > 0 ? differences.join("; ") : null;
+}
+
+/**
+ * Make a seeded task, and when the gateway doesn't answer or refuses, find out from its task
+ * list what happened before doing anything again (#700). A slow `sessions.create` isn't lost: a
+ * second one can race it, and the gateway then refuses the second. So the task is read back by
+ * key: there with the seed's bot and label, it is done; there with others, the seed stops and
+ * says how it differs, since a second `sessions.create` would relabel it. It isn't there: after a
+ * call the gateway didn't answer, it is sent again; after a refusal, never, only read again until
+ * the waits end.
+ */
+export async function createSeedSession(options: {
+  session: SeedSession;
+  create: () => Promise<unknown>;
+  find: () => Promise<ListedSession | undefined>;
+  delays?: readonly number[];
+  sleep?: (ms: number) => Promise<unknown>;
+  log?: (line: string) => void;
+}): Promise<void> {
+  const { session, create, find } = options;
+  const delays = options.delays ?? SEED_RETRY_DELAYS_MS;
+  const wait = options.sleep ?? sleep;
+  const log = options.log ?? console.log;
+  const what = `sessions.create for ${session.key}`;
+  /** Whether the seed's task is there; null when the gateway didn't answer the read. */
+  const landed = async (): Promise<boolean | null> => {
+    let row: ListedSession | undefined;
+    try {
+      row = await find();
+    } catch (error) {
+      if (!isTransportFailure(error)) throw error;
+      return null;
+    }
+    if (!row) return false;
+    const problem = sessionMismatch(row, session);
+    if (problem)
+      throw new Error(`${session.key} is on the gateway, but not as the seed makes it: ${problem}`);
+    log(`  ${session.key} is on the gateway as the seed makes it; carrying on`);
+    return true;
+  };
+  let failure: unknown;
+  try {
+    await create();
+    return;
+  } catch (error) {
+    failure = error;
+  }
+  let refusal: unknown = null;
+  /** A refusal is read back at once. */
+  const refused = async (error: unknown): Promise<boolean> => {
+    refusal = error;
+    return (await landed()) === true;
+  };
+  if (isCreateConflict(failure)) {
+    if (await refused(failure)) return;
+  } else if (!isTransportFailure(failure)) {
+    throw failure;
+  }
+  for (const delay of delays) {
+    log(
+      refusal
+        ? `  the gateway refused ${what} and doesn't list the task; reading its tasks again in ${delay / 1000} s`
+        : `  the gateway didn't answer ${what}; reading its tasks in ${delay / 1000} s`,
+    );
+    await wait(delay);
+    const found = await landed();
+    if (found) return;
+    // Not read, or not there after a refusal: never sent again, only read.
+    if (found === null || refusal) continue;
+    try {
+      await create();
+      return;
+    } catch (error) {
+      if (isCreateConflict(error)) {
+        if (await refused(error)) return;
+        continue;
+      }
+      if (!isTransportFailure(error)) throw error;
+      failure = error;
+    }
+  }
+  if (refusal) {
+    const reason = refusal instanceof Error ? refusal.message : String(refusal);
+    throw new Error(`${what} was refused, and the gateway doesn't list ${session.key}: ${reason}`);
   }
   throw failure;
 }
@@ -2283,10 +2400,18 @@ async function seedConversations(
     // Made as Clawtrate makes a task, by an operator (`createdVia: "operator"`), so the sample
     // conversations count as the person's own; the turns then run in it as the gateway's owner.
     if (!alreadySeeded) {
-      // Answered with the same task when it comes again, so safe to try again.
-      const params = { key, agentId: bot.id, label: task.label };
-      await retryOnTransport(() => callGateway(inst, "sessions.create", params), {
-        what: `sessions.create for ${key}`,
+      const session = { key, agentId: bot.id, label: task.label };
+      await createSeedSession({
+        session,
+        create: () => callGateway(inst, "sessions.create", session),
+        // The bot's tasks the gateway finds for the key, then the one with exactly that key.
+        find: async () =>
+          (
+            await callGateway<{ sessions?: ListedSession[] }>(inst, "sessions.list", {
+              agentId: bot.id,
+              search: key,
+            })
+          ).sessions?.find((row) => row.key === key),
       });
     }
     for (const [index, turn] of (alreadySeeded ? [] : task.turns).entries()) {

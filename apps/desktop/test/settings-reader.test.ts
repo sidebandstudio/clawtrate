@@ -17,6 +17,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  renameSync,
   rmSync,
   statSync,
   symlinkSync,
@@ -29,11 +30,7 @@ import { pathToFileURL } from "node:url";
 import { inspect } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { LOCAL_GATEWAY_HELPER, localGatewayBuild } from "../packaging/config.ts";
-import {
-  FS_SAFE_NATIVE_SHA256,
-  PINNED_FS_SAFE_VERSION,
-  PINNED_OPENCLAW_VERSION,
-} from "../src/setup/openclaw-pins.ts";
+import { PINNED_FS_SAFE, OPENCLAW_PINS } from "../src/setup/openclaw-pins.ts";
 import {
   checkOpened,
   guardHome,
@@ -47,7 +44,7 @@ import {
   sameFolder,
   SETTINGS_LIMIT,
 } from "../src/setup/settings-reader.ts";
-import { accountHome, SetupRefusedError } from "../src/setup/world.ts";
+import { accountHome, packagedApp, SetupRefusedError } from "../src/setup/world.ts";
 
 const ROOT = join(import.meta.dirname, "../../..");
 const WORKER = new URL("../src/setup/settings-parse.ts", import.meta.url);
@@ -62,16 +59,20 @@ const workerFailed = { kind: "refused", reason: "unreadable", why: "worker" };
 /** Stand-in helpers, written before any test starts one. */
 const FAKES: Record<string, string> = {
   fails: "exit 3",
-  "answer-fails": "printf 'ok\\n{}'; exit 1",
-  "answer-killed": "printf 'ok\\n{}'; kill -9 $$",
+  "answer-fails": "printf 'ok 1 2\\n{}'; exit 1",
+  "answer-killed": "printf 'ok 1 2\\n{}'; kill -9 $$",
+  // The folder's identity missing, or not written as the helper writes it.
+  "no-identity": "printf 'ok\\n{}'",
+  "half-identity": "printf 'ok 1\\n{}'",
+  "padded-identity": "printf 'ok 01 2\\n{}'",
   malformed: "echo surprise",
   unknown: "echo 'refused maybe'",
   "no-newline": "printf ok",
   "refusal-no-newline": "printf 'refused absent'",
   "refusal-body": "printf 'refused absent\\nmore'",
   "two-refusals": "printf 'refused absent\\nrefused link\\n'",
-  "over-cap": `printf 'ok\\n'; head -c ${SETTINGS_LIMIT + 1} /dev/zero`,
-  "at-cap": `printf 'ok\\n'; head -c ${SETTINGS_LIMIT} /dev/zero`,
+  "over-cap": `printf 'ok 1 2\\n'; head -c ${SETTINGS_LIMIT + 1} /dev/zero`,
+  "at-cap": `printf 'ok 18446744073709551615 18446744073709551615\\n'; head -c ${SETTINGS_LIMIT} /dev/zero`,
   slow: "exec sleep 5",
 };
 
@@ -116,6 +117,24 @@ describe.skipIf(!posix)("opening the settings file", () => {
     if (outcome.kind !== "found") throw new Error(`refused: ${JSON.stringify(outcome)}`);
     expect(outcome.port).toBe(19555);
     expect(outcome.token.reveal()).toBe(TOKEN);
+  });
+
+  it("reports the profile folder it read from by its device and inode, and another one put there as another", async () => {
+    const { path, folder } = home();
+    const identity = () => {
+      const { dev, ino } = statSync(folder, { bigint: true });
+      return `${dev}:${ino}`;
+    };
+    const first = identity();
+    expect(await openIn(path)).toMatchObject({ kind: "read", identity: first });
+    const [found] = await read(path);
+    expect(found?.outcome).toMatchObject({ kind: "found", identity: first });
+    // Another private profile, with the same settings, at the same path.
+    renameSync(folder, join(path, "earlier"));
+    mkdirSync(folder, { mode: 0o700 });
+    writeFileSync(join(folder, "openclaw.json"), SETTINGS, { mode: 0o600 });
+    expect(identity()).not.toBe(first);
+    expect(await openIn(path)).toMatchObject({ kind: "read", identity: identity() });
   });
 
   it("says absent for a missing folder or file", async () => {
@@ -360,7 +379,15 @@ describe.skipIf(!posix)("the home folder", () => {
     expect(guardHome(path, true, {}, () => account)).toEqual(exact(path));
     // A marker makes the run sandboxed whatever the caller says; only both together are production.
     expect(guardHome(path, false, { CLAWTRATE_AUTOMATED: "" }, () => account)).toEqual(exact(path));
-    expect(guardHome(path, false, {}, () => path)).toBe(null);
+    expect(
+      guardHome(
+        path,
+        false,
+        {},
+        () => path,
+        () => true,
+      ),
+    ).toBe(null);
   });
 
   it("holds a sandboxed home to the folder the guard checked, still private", async () => {
@@ -426,6 +453,12 @@ describe.skipIf(platform !== "darwin")("the macOS helper", () => {
     expect(await openIn(path)).toEqual(unsafe("acl"));
   });
 
+  /** The helper's answer of a read in this home: the profile folder's identity, then the file. */
+  const readOf = (home: string) => {
+    const { dev, ino } = statSync(join(home, ".openclaw"), { bigint: true });
+    return `ok ${dev} ${ino}\n${SETTINGS}`;
+  };
+
   /** The helper's answer for a home it is handed, by command: production's or a sandbox's. */
   const handed = (command: "read" | "read-private", home: string) =>
     spawnSync(
@@ -451,7 +484,7 @@ describe.skipIf(platform !== "darwin")("the macOS helper", () => {
       acl(path, "group:everyone deny delete");
       acl(path, "everyone allow list,search,readattr,readextattr,readsecurity");
       acl(path, `${userInfo().username} allow add_file,delete_child`);
-      expect(handed("read", path)).toBe(`ok\n${SETTINGS}`);
+      expect(handed("read", path)).toBe(readOf(path));
       expect(handed("read-private", path)).toBe("refused acl\n");
       // This run is sandboxed, so the reader asks for the private rule.
       expect(await openIn(path)).toEqual(unsafe("acl"));
@@ -466,7 +499,7 @@ describe.skipIf(platform !== "darwin")("the macOS helper", () => {
     try {
       acl(path, "group:everyone deny delete");
       acl(path, `${userInfo().username} allow add_file,delete_child`);
-      expect(handed("read-private", path)).toBe(`ok\n${SETTINGS}`);
+      expect(handed("read-private", path)).toBe(readOf(path));
       expect(await openIn(path)).toMatchObject({ kind: "read" });
     } finally {
       execFileSync("/bin/chmod", ["-N", path]);
@@ -479,11 +512,12 @@ describe.skipIf(platform !== "darwin")("the macOS helper", () => {
     chmodSync(shared, 0o770);
     expect(handed("read", "/usr")).toBe("refused owner\n");
     expect(handed("read", shared)).toBe("refused mode\n");
-    expect(handed("read", home().path)).toBe(`ok\n${SETTINGS}`);
+    const own = home().path;
+    expect(handed("read", own)).toBe(readOf(own));
     // A home others may enter but not write to: production's rule takes it, a sandbox's doesn't.
     const open = home().path;
     chmodSync(open, 0o755);
-    expect(handed("read", open)).toBe(`ok\n${SETTINGS}`);
+    expect(handed("read", open)).toBe(readOf(open));
     expect(handed("read-private", open)).toBe("refused mode\n");
   });
 
@@ -577,9 +611,7 @@ int main(int argc, char **argv) {
       spawnSync("/bin/sh", ["-c", 'exec "$0" "$@" 3<"$HOME_DIR"', helper!, ...args], {
         env: { HOME_DIR: path, PATH: "/usr/bin:/bin" },
       });
-    expect(answer(["read", ".openclaw", "openclaw.json"]).stdout.toString()).toBe(
-      `ok\n${SETTINGS}`,
-    );
+    expect(answer(["read", ".openclaw", "openclaw.json"]).stdout.toString()).toBe(readOf(path));
     for (const args of [
       ["read", path, ".openclaw", "openclaw.json"],
       ["read", "..", "openclaw.json"],
@@ -634,13 +666,19 @@ describe.skipIf(!posix)("the helper's failures mean unverified", () => {
     ["a refusal with more after it", "refusal-body"],
     ["two refusals", "two-refusals"],
     ["a file of more than 1 MiB", "over-cap"],
+    ["no folder identity", "no-identity"],
+    ["half a folder identity", "half-identity"],
+    ["a folder identity written otherwise", "padded-identity"],
   ])("refuses with %s", async (_, name) => {
     expect(await viaFake(name === null ? null : fake(name))).toEqual(unverified);
   });
 
-  it("takes a file of exactly 1 MiB", async () => {
+  it("takes a file of exactly 1 MiB, with the largest folder identity", async () => {
     const answer = await viaFake(fake("at-cap"));
     expect(answer.kind === "read" && answer.bytes.length).toBe(SETTINGS_LIMIT);
+    expect(answer.kind === "read" && answer.identity).toBe(
+      "18446744073709551615:18446744073709551615",
+    );
   });
 
   it("refuses a helper that passes its deadline, and stops it", async () => {
@@ -963,7 +1001,13 @@ describe("the account's real home", () => {
 
   it("in a production run, is only the home the system reports for this account", () => {
     const production = (home: string, account: string | null) => () =>
-      guardHome(home, false, {}, () => account);
+      guardHome(
+        home,
+        false,
+        {},
+        () => account,
+        () => true,
+      );
     expect(production(synthetic, synthetic)).not.toThrow();
     expect(production(synthetic, `${synthetic}${sep}`)).not.toThrow();
     // A home the caller names that isn't the account's, or no account home at all, refuses.
@@ -971,6 +1015,48 @@ describe("the account's real home", () => {
     expect(production(`${synthetic}${sep}`, synthetic)).toThrow(SetupRefusedError);
     expect(production(join(synthetic, ".openclaw"), synthetic)).toThrow(SetupRefusedError);
     expect(production(synthetic, null)).toThrow(SetupRefusedError);
+  });
+
+  it("outside a person's packaged app has no default home: a production run there is refused", () => {
+    // A development build, a test runner, the web host: this process isn't a packaged app's, so
+    // even the account's own home, named exactly, is refused before anything is opened.
+    expect(() => guardHome(synthetic, false, {}, () => synthetic)).toThrow(SetupRefusedError);
+    expect(() =>
+      guardHome(
+        synthetic,
+        false,
+        {},
+        () => synthetic,
+        () => false,
+      ),
+    ).toThrow(SetupRefusedError);
+    // A packaged app driven by a debugger or started for a check is no person's either.
+    for (const argv of [["--remote-debugging-port=9222"], ["--inspect"], ["--use-mock-keychain"]])
+      expect(() =>
+        guardHome(
+          synthetic,
+          false,
+          {},
+          () => synthetic,
+          () => true,
+          argv,
+        ),
+      ).toThrow(SetupRefusedError);
+    expect(
+      guardHome(
+        synthetic,
+        false,
+        {},
+        () => synthetic,
+        () => true,
+        ["--no-sandbox"],
+      ),
+    ).toBe(null);
+    expect(packagedApp({ versions: {} })).toBe(false);
+    expect(packagedApp({ versions: { electron: "41.0.0" }, defaultApp: true })).toBe(false);
+    expect(packagedApp({ versions: { electron: "41.0.0" } })).toBe(true);
+    // This test runner itself.
+    expect(packagedApp()).toBe(false);
   });
 
   it("is never a default: every reader entry point takes the home from its caller", () => {
@@ -982,7 +1068,7 @@ describe("the account's real home", () => {
   });
 });
 
-it("a shipped host reaches the reader only through local connect's proof, and reads no settings yet", () => {
+it("a shipped host reaches the reader only through local connect: its look, its Connect and its proof", () => {
   const own = new Set([
     "settings-reader.ts",
     "settings-parse.ts",
@@ -1002,9 +1088,12 @@ it("a shipped host reaches the reader only through local connect's proof, and re
       readFileSync(file, "utf8").includes(module.replace(/\.ts$/, "")),
     );
   });
-  // The proof holds the home and runs the helper as the reader does; local connect, which no
-  // shipped host turns on (local-connect.test.ts), is the proof's one caller.
-  expect(importers.map((file) => relative(ROOT, file).split(sep).join("/"))).toEqual([
+  // The proof holds the home and runs the helper as the reader does; the look reads settings,
+  // and Connect holds the token it found: local connect, which no shipped host turns on yet
+  // (local-connect.test.ts).
+  expect(importers.map((file) => relative(ROOT, file).split(sep).join("/")).sort()).toEqual([
+    "apps/desktop/src/setup/controller.ts",
+    "apps/desktop/src/setup/local-look.ts",
     "apps/desktop/src/setup/local-prove.ts",
   ]);
   const readers = shipped.filter(
@@ -1012,18 +1101,22 @@ it("a shipped host reaches the reader only through local connect's proof, and re
       !file.endsWith(`${sep}settings-reader.ts`) &&
       /\b(readLocalSettings|openSettingsFile|parseInWorker)\b/.test(readFileSync(file, "utf8")),
   );
-  expect(readers).toEqual([]);
+  expect(readers.map((file) => relative(ROOT, file).split(sep).join("/"))).toEqual([
+    "apps/desktop/src/setup/local-look.ts",
+  ]);
 });
 
-// CI installs the pinned OpenClaw from npm and names its folder: it must be the pinned version,
-// carry this platform's own module, and every module it carries must match its pin.
+// CI installs the pinned OpenClaw from npm and names its folder: it must be a version local
+// connect proves, carry this platform's own module, and every module it carries must match its
+// version's pin.
 it.skipIf(!process.env.CLAWTRATE_PINNED_OPENCLAW)(
   "the pinned hashes match the installed OpenClaw's own modules",
   () => {
     const root = process.env.CLAWTRATE_PINNED_OPENCLAW!;
     const version = (path: string) =>
       (JSON.parse(readFileSync(join(path, "package.json"), "utf8")) as { version: string }).version;
-    expect(version(root)).toBe(PINNED_OPENCLAW_VERSION);
+    const openclaw = version(root);
+    expect(Object.keys(OPENCLAW_PINS)).toContain(openclaw);
     const scope = join(root, "node_modules/@openclaw");
     const found = readdirSync(scope).filter((name) => /^fs-safe-.+/.test(name));
     const libc =
@@ -1035,10 +1128,10 @@ it.skipIf(!process.env.CLAWTRATE_PINNED_OPENCLAW)(
           : "-musl";
     expect(found).toContain(`fs-safe-${platform}-${process.arch}${libc}`);
     for (const name of found) {
-      expect(version(join(scope, name)), name).toBe(PINNED_FS_SAFE_VERSION);
+      expect(version(join(scope, name)), name).toBe(PINNED_FS_SAFE[openclaw]);
       const file = readFileSync(join(scope, name, "fs-safe-native.node"));
       const hash = createHash("sha256").update(file).digest("hex");
-      expect(hash, name).toBe(FS_SAFE_NATIVE_SHA256[name.slice("fs-safe-".length)]);
+      expect(hash, name).toBe(OPENCLAW_PINS[openclaw]![name.slice("fs-safe-".length)]);
     }
   },
 );
