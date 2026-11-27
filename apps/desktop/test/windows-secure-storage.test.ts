@@ -2,7 +2,9 @@
 // process seals through the public async calls the app's box makes (`safeStorageBox`) opens in the
 // next process on the same profile, after a normal quit. And with that box, `createSecureCredentials`
 // moves an earlier build's files into its sealed record at a normal start, and the next normal start
-// opens the same identity and token from it. Every value is random and made for this run, the
+// opens the same identity and token from it. That record and `state.json`, copied without the rest
+// of the profile to a fresh profile on the same account, open there as locked and change nothing,
+// and the first profile still opens them. Every value is random and made for this run, the
 // earlier build's files by core's own file store and key, and every folder the processes are given
 // (profile, home, temporary and crash folders) is inside one this run makes and removes. It shows
 // nothing about a process that ends abruptly (docs/decisions.md, "Windows keeps its files until a
@@ -102,8 +104,38 @@ async function start(job) {
   const opened = token === null ? null : createHash("sha256").update(token).digest("hex");
   end({ status, deviceId, token: opened, warned });
 }
+// Each read on its own, so one that is refused doesn't hide the rest. A refusal comes back as
+// the name of core's own error, anything else as "other", and warnings only as a count.
+const REFUSALS = [
+  "SecureStorageUnavailableError",
+  "CredentialRecordInvalidError",
+  "SavedSettingsInvalidError",
+];
+async function inspect(job) {
+  const { safeStorageBox } = await import(pathToFileURL(job.boxModule).href);
+  const { createSecureCredentials } = await import(pathToFileURL(job.coreModule).href);
+  let warned = 0;
+  const credentials = createSecureCredentials({
+    dataDir: job.dataDir,
+    box: safeStorageBox(safeStorage, process.platform),
+    log: () => (warned += 1),
+  });
+  const digest = (text) => (text === null ? null : createHash("sha256").update(text).digest("hex"));
+  const read = (promise) =>
+    promise.then(
+      (value) => ({ value }),
+      (error) => ({ refused: REFUSALS.includes(error && error.name) ? error.name : "other" }),
+    );
+  const status = await credentials.status();
+  const secure = await credentials.secure();
+  const identity = await read(credentials.signer.loadIdentity().then(({ deviceId }) => deviceId));
+  const token = await read(credentials.storage.get(job.tokenKey).then(digest));
+  const settings = await read(credentials.storage.get("connection").then(digest));
+  end({ status, secure, identity, token, settings, warned });
+}
 async function run(job) {
   if (job.step === "start" || job.step === "restart") return start(job);
+  if (job.step === "inspect") return inspect(job);
   const available = await safeStorage.isAsyncEncryptionAvailable();
   if (job.step === "seal") {
     if (available) writeFileSync(job.sealed, await safeStorage.encryptStringAsync(job.marker));
@@ -147,10 +179,37 @@ const sha256 = (text: string) => createHash("sha256").update(text).digest("hex")
 
 type Profile = { paths: { userData: string; crashDumps: string }; env: NodeJS.ProcessEnv };
 
+type Read = { value: string | null } | { refused: string };
+
+/** What an `inspect` step established, in fixed words: each read the same as sealed, or what refused it. */
+function established(
+  outcome: Record<string, unknown>,
+  sealed: { deviceId: string; token: string; settings: string },
+) {
+  const word = (read: Read, expected: string) =>
+    "refused" in read
+      ? read.refused
+      : read.value === null
+        ? "none"
+        : read.value === expected
+          ? "same"
+          : "different";
+  return {
+    status: outcome.status,
+    secure: outcome.secure,
+    identity: word(outcome.identity as Read, sealed.deviceId),
+    token: word(outcome.token as Read, sealed.token),
+    settings: word(outcome.settings as Read, sealed.settings),
+    warned: outcome.warned,
+  };
+}
+
 describe.skipIf(!electron)("Electron's safeStorage on Windows across a restart", () => {
   let root: string;
   /** Each running process and its exit, so one left by a failure is ended by its handle. */
   const running = new Map<ChildProcess, Promise<number | null>>();
+  /** Numbers each launch's job, so no earlier step's outcome is read as a later one's. */
+  let launched = 0;
 
   beforeAll(() => {
     root = mkdtempSync(join(realpathSync(tmpdir()), PREFIX));
@@ -192,7 +251,7 @@ describe.skipIf(!electron)("Electron's safeStorage on Windows across a restart",
     { paths, env }: Profile,
     job: Record<string, string>,
   ): Promise<Record<string, unknown>> {
-    const path = join(root, `${job.step}.json`);
+    const path = join(root, `${job.step}-${(launched += 1)}.json`);
     writeFileSync(path, JSON.stringify({ ...job, ...paths }));
     const child = spawn(electron!, [join(root, "probe.cjs"), path], {
       cwd: root,
@@ -286,6 +345,77 @@ describe.skipIf(!electron)("Electron's safeStorage on Windows across a restart",
       expect(readdirSync(dataDir).sort()).toEqual([CREDENTIALS_FILE, STATE_FILE].sort());
       expect(readFileSync(join(dataDir, CREDENTIALS_FILE)).equals(sealed)).toBe(true);
       expect(JSON.parse(readFileSync(join(dataDir, STATE_FILE), "utf8"))).toEqual(settings);
+    },
+  );
+
+  it(
+    "a fresh profile reports the copied credentials as locked and leaves both files unchanged for the original profile to reopen",
+    { timeout: 200_000 },
+    async () => {
+      // The donor: an earlier build's key and token, moved into a sealed record at a normal start.
+      const donor = newProfile("donor");
+      const donorDir = join(donor.paths.userData, "gateway");
+      const { deviceId } = await createFileSigner(join(donorDir, DEVICE_KEY_FILE)).loadIdentity();
+      const tokenKey = `deviceToken:${encodeURIComponent(GATEWAY)}:${deviceId}:operator`;
+      const token = `clawtrate-restore-token-${randomBytes(16).toString("hex")}`;
+      const record = JSON.stringify({
+        token,
+        grantedScopes: ["operator.read"],
+        heldScopes: ["operator.read"],
+      });
+      const connection = JSON.stringify({ url: GATEWAY, token: null });
+      const earlier = createFileStore(join(donorDir, STATE_FILE));
+      await earlier.set("connection", connection);
+      await earlier.set(tokenKey, record);
+      const sealed = { deviceId, token: sha256(record), settings: sha256(connection) };
+      const opens = {
+        status: "secure",
+        secure: true,
+        identity: "same",
+        token: "same",
+        settings: "same",
+        warned: 0,
+      };
+      const job = {
+        step: "inspect",
+        tokenKey,
+        boxModule: join(DESKTOP, "src", "main", "secret-box.ts"),
+        coreModule: createRequire(join(DESKTOP, "package.json")).resolve("@clawtrate/core/node"),
+      };
+      const open = async (profile: Profile, dataDir: string) =>
+        established(await launch(profile, { ...job, dataDir }), sealed);
+      expect(await open(donor, donorDir)).toEqual(opens);
+      expect(readdirSync(donorDir).sort()).toEqual([CREDENTIALS_FILE, STATE_FILE].sort());
+
+      // Copy only credentials.bin and state.json to a fresh profile on the same Windows account.
+      const copied = new Map(
+        [CREDENTIALS_FILE, STATE_FILE].map((name) => [name, readFileSync(join(donorDir, name))]),
+      );
+      const fresh = newProfile("restored");
+      const restored = join(fresh.paths.userData, "gateway");
+      mkdirSync(restored);
+      for (const [name, bytes] of copied) writeFileSync(join(restored, name), bytes);
+      const unchanged = (label: string) => {
+        expect(readdirSync(restored).sort(), label).toEqual([...copied.keys()].sort());
+        for (const [name, bytes] of copied)
+          expect(readFileSync(join(restored, name)).equals(bytes), `${label}: ${name}`).toBe(true);
+      };
+
+      // Locked, read as safeStorage being unavailable: no identity is made in place of the sealed
+      // one and no token is read; only the address, which was never a credential, still reads.
+      expect(await open(fresh, restored)).toEqual({
+        status: "locked",
+        secure: false,
+        identity: "SecureStorageUnavailableError",
+        token: "SecureStorageUnavailableError",
+        settings: "same",
+        warned: 1,
+      });
+      unchanged("after the fresh profile");
+
+      // The same bytes, after that, open on the donor's profile as the same device with its token.
+      expect(await open(donor, restored)).toEqual(opens);
+      unchanged("after the donor's profile");
     },
   );
 });
