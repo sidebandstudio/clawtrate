@@ -654,6 +654,22 @@ describe("a task's title the gateway derived shows a person's words alone", () =
     }
   });
 
+  it("a title cut at a space ends a word: a short word that only starts as the marker does is the person's", () => {
+    // The gateway backed up to a space, so a start of the marker there is a whole word of it.
+    const typed = "Check the status of the accounting export with W…";
+    expect(titleWithoutMarker(typed)).toBe(typed);
+    expect(titleWithoutMarker("Check the photos folder and the backup Working…")).toBe(
+      "Check the photos folder and the backup…",
+    );
+  });
+
+  it("a title of 59 cut right after the marker's first three words shows the words whole", () => {
+    const title = derived(modelCopy("Short one, and some more of these"));
+    expect(title).toBe("Short one, and some more of these Working context captured…");
+    expect(title.length).toBe(59);
+    expect(titleWithoutMarker(title)).toBe("Short one, and some more of these");
+  });
+
   it("a model's label on 2026.11.10, which quotes the copy as JSON and is cut at 60", () => {
     // The scripted model's echo of the label prompt, as the gateway keeps it.
     const echo = '> {"conversationLabelSource":Short one\\n\\nWorking context c';
