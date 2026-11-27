@@ -6,6 +6,7 @@
 
 import {
   attachmentsCut,
+  wordsCut,
   isTerminal,
   type Bot,
   type OutgoingMessage,
@@ -222,13 +223,16 @@ function keyedAnchor(run: Run, transcript: Transcript) {
  *   again, and the line says to send it again with them;
  * - `files-unknown`: only history has it, and history's list of its files was cut to its bound, so
  *   whether it had any isn't known: no Try again, and the line says to send it again with any;
+ * - `words-cut`: only history has it, and its words may be only their start (`wordsCut`): no Try
+ *   again, and the line says to send it again in full. A files plan says so too (`wordsCut`);
  * - null: no message is known to have started the run.
  */
 export type RetryPlan =
   | { kind: "again"; messageId: string }
   | { kind: "text"; text: string; replyToId: string | null }
-  | { kind: "files-gone" }
-  | { kind: "files-unknown" }
+  | { kind: "files-gone"; wordsCut?: true }
+  | { kind: "files-unknown"; wordsCut?: true }
+  | { kind: "words-cut" }
   | null;
 
 export function retryPlan(run: Run, transcript: Transcript): RetryPlan {
@@ -236,9 +240,12 @@ export function retryPlan(run: Run, transcript: Transcript): RetryPlan {
     return { kind: "again", messageId: run.messageId };
   const anchor = keyedAnchor(run, transcript);
   if (!anchor) return null;
-  if ((anchor.attachments?.length ?? 0) > 0) return { kind: "files-gone" };
+  // Nor do words that may be only their start, which a files plan says as well.
+  const cut = wordsCut(anchor) ? ({ wordsCut: true } as const) : {};
+  if ((anchor.attachments?.length ?? 0) > 0) return { kind: "files-gone", ...cut };
   // Words alone go again only when the message is known to have had no files.
-  if (attachmentsCut(anchor)) return { kind: "files-unknown" };
+  if (attachmentsCut(anchor)) return { kind: "files-unknown", ...cut };
+  if ("wordsCut" in cut) return { kind: "words-cut" };
   const text = messageTextOf(run, transcript);
   return text ? { kind: "text", text, replyToId: messageReplyOf(run, transcript) } : null;
 }
@@ -499,6 +506,12 @@ export function RunEnding({
         <p className="turn-error-reason" data-testid="retry-files-unknown">
           This device can't tell whether this message had files. To try again, send it again with
           any files it had.
+        </p>
+      )}
+      {(retry?.kind === "words-cut" ||
+        ((retry?.kind === "files-gone" || retry?.kind === "files-unknown") && retry.wordsCut)) && (
+        <p className="turn-error-reason" data-testid="retry-words-cut">
+          The full text of this message isn't available here. To try again, send it again in full.
         </p>
       )}
       {(resend || requestId || raw || (notRun?.ways.length ?? 0) > 0) && (

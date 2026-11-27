@@ -1,0 +1,26 @@
+- status
+- region "Conversation":
+  - button "Back to bots"
+  - button "Otto, Disk almost full on the media box. Show details.": Otto
+  - button "Show work panel"
+  - region "Transcript":
+    - heading "Disk almost full on the media box" [level=1]
+    - paragraph: "Context: 18,432 of 128,000 tokens"
+    - text: Today 5:38 PM
+    - paragraph: How much space is left on the disk?
+    - toolbar "Message actions":
+      - button "Add a reaction"
+      - button "Reply in a thread"
+      - button "More"
+    - paragraph: About 40 GB are free. The cache uses most of the rest.
+    - toolbar "Message actions":
+      - button "Add a reaction"
+      - button "Reply in a thread"
+      - button "More"
+    - group: "Worked 1 action Saved a skill: disk-check"
+    - status
+  - button "Attach files"
+  - textbox "Message Otto"
+  - button "Send" [disabled]
+  - status
+- status

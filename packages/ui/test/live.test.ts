@@ -9,6 +9,7 @@ import {
   newRun,
   LIVE_UPDATES_NOT_STARTED,
   READ_SCOPES,
+  startQueuedRun,
   type ClawtrateState,
   type ConnectionState,
   type OutgoingMessage,
@@ -261,6 +262,16 @@ describe("the composer during a run", () => {
     expect(view).toMatchObject({ placeholder: "Message Otto", mode: "steer", modeWord: "Steer" });
     expect(view.stoppable?.id).toBe("run-1");
     expect(sendName(view.mode)).toBe("Request a steer");
+  });
+
+  it("F-097: a held steer released as a run of its own is offered Stop before its first event", () => {
+    // The steer was sent into run-y, which asked a question and ended; it waits queued in its place.
+    const held = transcript(
+      [run({ id: "run-y", state: "completed" }), run({ id: "steer-1", state: "queued" })],
+      { steerAliases: { "steer-1": "run-y" } },
+    );
+    const view = composerFor({ ...held, ...startQueuedRun(held, "steer-1", NOW) }, otto);
+    expect(view.stoppable?.id).toBe("steer-1");
   });
 
   it("F-061: Queue after this turn, once chosen, is what plain Enter does for the rest of the run", () => {
