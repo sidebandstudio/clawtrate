@@ -434,6 +434,53 @@
   color: var(--danger);
 }
 
+/* The gateway's skill notes, folded into the line of the run they follow (F-560): their words on
+   the line, cut short on a narrow screen; opened, each note's own text and its undo. */
+.run-line > summary.event-line:has(.run-skill) {
+  max-width: 100%;
+}
+
+.run-skill {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.skill-notes {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 4px 0 6px;
+  padding: 0 6px;
+}
+
+.skill-note {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-width: min(640px, 100%);
+}
+
+.skill-note-text {
+  margin: 0;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.skill-note-undo {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+}
+
 /* Without commands shown (7.11): the run's actions, in plain words, under its line. */
 .run-actions {
   padding: 0 0 6px;

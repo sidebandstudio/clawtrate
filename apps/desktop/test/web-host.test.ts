@@ -1,9 +1,9 @@
 import { createStore, initialState, type ClawtrateClient } from "@clawtrate/core";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { tempDir } from "../../../test/temp-dir.ts";
 import WebSocket from "ws";
 import type { HostRuntime } from "../src/host/runtime.ts";
 import { ACCESS_COOKIE, startWebHost } from "../src/web-host/server.ts";
@@ -27,7 +27,7 @@ function openBridge(
 }
 
 beforeAll(async () => {
-  const staticDir = mkdtempSync(join(tmpdir(), "clawtrate-static-"));
+  const staticDir = tempDir("clawtrate-static-");
   writeFileSync(join(staticDir, "index.html"), "<!doctype html><title>Clawtrate</title>");
   const store = createStore(initialState);
   const runtime: HostRuntime = {

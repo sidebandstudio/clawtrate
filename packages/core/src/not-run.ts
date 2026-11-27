@@ -58,11 +58,12 @@ function reasonOf(raw: string): string {
 export function notRunCause(said: string | null | undefined): NotRunCause | null {
   if (typeof said !== "string" || !said.trim()) return null;
   const text = reasonOf(said);
-  if (!text) return { kind: "unsaid", words: null };
+  const words = cleanLine(text, MAX_NOT_RUN_WORDS);
+  if (!words) return { kind: "unsaid", words: null };
   const kind = kindOf(text);
   // An unknown model keeps the gateway's words too: they name the model, and what it suggests.
   const shown = kind === "other" || kind === "model-unknown";
-  return { kind, words: shown ? cleanLine(text, MAX_NOT_RUN_WORDS) || null : null };
+  return { kind, words: shown ? words : null };
 }
 
 function kindOf(text: string): NotRunKind {

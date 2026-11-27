@@ -605,7 +605,10 @@ test("F-201: an inherited custom prompt is what an empty prompt means, and no wo
     "placeholder",
     "Look over my inbox and tell me what's new.",
   );
-  await expect(own).toContainText("Empty uses the prompt the gateway sets for every bot.");
+  // Behind the prompt's "i", and its description (#798).
+  await expect(own.getByRole("textbox", { name: "Prompt" })).toHaveAccessibleDescription(
+    "Empty uses the prompt the gateway sets for every bot. Up to 4,000 characters.",
+  );
   await expect(own.getByTestId("prompt-note")).toHaveCount(0);
   // The built-in prompt's words are not said of a custom default.
   await own.getByRole("textbox", { name: "Prompt" }).fill("Look at the calendar.");

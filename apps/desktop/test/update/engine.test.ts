@@ -32,8 +32,11 @@ beforeEach(async () => {
   dir = tempDir();
 });
 afterEach(async () => {
-  await server.close();
-  dir.remove();
+  try {
+    dir.remove();
+  } finally {
+    await server.close();
+  }
 });
 
 const failed = (stage: "check" | "download", cause: string, status?: number): UpdateState =>

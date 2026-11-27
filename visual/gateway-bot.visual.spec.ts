@@ -132,11 +132,20 @@ test.describe("the gateway's own bot", () => {
     await expect(found.getByTestId("search-group-tasks").getByRole("option")).toHaveCount(1);
     // Nor its workspace's files: the others' are searched, and its notes/porch-light.md is not.
     await found.getByRole("combobox", { name: "Search" }).fill("porch");
-    const files = found.getByTestId("search-group-files");
-    // Five bots' workspaces: every bot but the gateway's own.
-    await expect(files).toContainText("4 of 5 bots' workspaces searched.");
-    await expect(files).not.toContainText(/\bmain\b/);
-    await expect(files).not.toContainText("porch-light");
+    await expect(found.getByTestId("search-announcer")).not.toHaveText("");
+    await expect(found.getByRole("option").filter({ hasText: "porch-light" })).toHaveCount(0);
+    const asked = await page.evaluate(() =>
+      (
+        window as unknown as {
+          clawtrateFixture: { sent: Array<{ type: string; query?: string; botId?: string }> };
+        }
+      ).clawtrateFixture.sent
+        .filter((each) => each.type === "searchFiles" && each.query === "porch")
+        .map((each) => each.botId),
+    );
+    // Five bots' workspaces asked: every bot but the gateway's own.
+    expect(asked).toHaveLength(5);
+    expect(asked).not.toContain("main");
   });
 
   test("F-562: the dock badge counts no unread task of the gateway's own bot while it is out of view", async ({
@@ -224,7 +233,9 @@ test.describe("the gateway's own bot", () => {
     await setState(page, ownWait("done"));
     await expect(railBot(page, "main")).toHaveCount(0);
     await expect(files.getByRole("option").filter({ hasText: "porch-light.md" })).toHaveCount(0);
-    await expect(files).not.toContainText(/\bmain\b/);
+    // With no other bot's file found, Files isn't drawn at all, so nothing names it.
+    await expect(files).toHaveCount(0);
+    await expect(found).not.toContainText(/\bmain\b/);
   });
 
   test("F-562: Search each bot for more keeps a message already found in a task of the gateway's own bot", async ({
@@ -240,7 +251,9 @@ test.describe("the gateway's own bot", () => {
     const found = messages.getByRole("option").filter({ hasText: "sunset" });
     await expect(found).toHaveCount(1);
     await messages.getByRole("option", { name: "Search each bot for more" }).click();
-    await expect(messages).toContainText("bots answered");
+    // Each bot asked and answered: the action is gone and the palette no longer says Searching….
+    await expect(messages.getByRole("option", { name: "Search each bot for more" })).toHaveCount(0);
+    await expect(page.getByTestId("search-palette").getByTestId("search-status")).toHaveCount(0);
     await expect(found).toHaveCount(1);
   });
 
