@@ -1919,18 +1919,18 @@ export function Rail({
     routines.find((each) => each.botId === botId && each.runningAt !== null) ?? null;
 
   const renderRow = (bot: Bot, place: "list" | "section" | "hidden" | "search") => {
-    // Every conversation, the main one included, for what the row says; the rows under it list
-    // the rest, since the row itself opens the main conversation.
-    const all = tasksByBot[bot.id] ?? [];
-    const tasks = tasksUnderBot(all);
+    const tasks = tasksByBot[bot.id] ?? [];
     const running = runningRoutine(bot.id);
     const summary = withRoutine(
-      summarize(all, selection.seen, onScreenKey, selection.unreadSeen),
+      summarize(tasks, selection.seen, onScreenKey, selection.unreadSeen),
       running,
     );
-    const waiting = waitingWords(all);
+    const waiting = waitingWords(tasks);
     const open = place !== "search" && selection.isOpen(bot.id);
-    const several = tasks.length > 0;
+    // The row says what all of the bot's conversations say; the rows under it list all but its
+    // main conversation, which the row itself opens (docs/design/bot-opens-main.md).
+    const listed = tasksUnderBot(tasks);
+    const several = listed.length > 0;
     const routineRuns = place !== "search" && (open || !several) ? runsUnder(bot) : [];
     const showTasks = open || (place !== "search" && interactive && archivedOpen.has(bot.id));
     const selected = bot.id === selection.bot?.id;
@@ -1965,7 +1965,7 @@ export function Rail({
           onDragEnd={() => setDrag(null)}
           aria-current={selected && (selection.task?.isMain === true || !open) ? "true" : undefined}
           aria-expanded={several && place !== "search" ? open : undefined}
-          aria-label={botRowLabel(bot, all, summary, {
+          aria-label={botRowLabel(bot, tasks, summary, {
             primary: bot.isDefault,
             label: bot.theme,
           })}
@@ -2015,7 +2015,7 @@ export function Rail({
         {(showTasks || routineRuns.length > 0) && (
           <TaskRows
             bot={bot}
-            tasks={showTasks ? tasks : []}
+            tasks={showTasks ? listed : []}
             routineRuns={routineRuns}
             onOpenRoutineRun={onOpenRoutineRun}
             selection={selection}
@@ -2034,13 +2034,12 @@ export function Rail({
   };
 
   const renderPin = (bot: Bot) => {
-    const all = tasksByBot[bot.id] ?? [];
-    const tasks = tasksUnderBot(all);
+    const tasks = tasksByBot[bot.id] ?? [];
     const summary = withRoutine(
-      summarize(all, selection.seen, onScreenKey, selection.unreadSeen),
+      summarize(tasks, selection.seen, onScreenKey, selection.unreadSeen),
       runningRoutine(bot.id),
     );
-    const several = tasks.length > 0 || pinHasRoutines(bot.id);
+    const several = tasksUnderBot(tasks).length > 0 || pinHasRoutines(bot.id);
     return (
       <li key={bot.id}>
         <button
@@ -2051,7 +2050,7 @@ export function Rail({
           data-state={summary.state ?? undefined}
           aria-current={bot.id === selection.bot?.id ? "true" : undefined}
           aria-expanded={several ? owner?.id === bot.id : undefined}
-          aria-label={botRowLabel(bot, all, summary, {
+          aria-label={botRowLabel(bot, tasks, summary, {
             primary: bot.isDefault,
             label: bot.theme,
           })}
