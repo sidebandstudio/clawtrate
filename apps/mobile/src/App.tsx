@@ -52,6 +52,9 @@ function Screens() {
   // What this viewer has read: the gateway's unread marks need write to change.
   const [seen, setSeen] = useState<SeenMap>({});
   const onRead = useCallback((task: Task) => setSeen((was) => markSeen(was, task)), []);
+  // The bot last opened: the gateway's own bot, opened while it waited, stays on Home until the
+  // person opens another bot, as on the desktop (F-562).
+  const [keptBot, setKeptBot] = useState<string | null>(null);
 
   const kept = keptMismatch(state, mismatch);
   if (kept !== mismatch) setMismatch(kept);
@@ -61,6 +64,7 @@ function Screens() {
     setAddressOpen(true);
     setSettingsOpen(false);
     setRoute(HOME);
+    setKeptBot(null);
   };
 
   if (!inShell(state, kept)) {
@@ -111,7 +115,11 @@ function Screens() {
         state={state}
         seen={seen}
         now={now}
-        onOpenBot={(botId) => setRoute({ name: "bot", botId })}
+        kept={keptBot}
+        onOpenBot={(botId) => {
+          setKeptBot(botId);
+          setRoute({ name: "bot", botId });
+        }}
         onSettings={() => setSettingsOpen(true)}
       />
     ) : null;

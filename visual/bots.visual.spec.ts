@@ -151,41 +151,107 @@ test("F-015: the primary bot's avatar carries a small round badge with a star at
   await check();
 });
 
-test("F-017: a row shows a small avatar, the name, one grey line of the latest message, truncated, and its time", async ({
+/**
+ * What a bot's row is (#790): its picture and its name on one line, with no preview and no time.
+ * Every state the row shows is a mark on the picture or the dot, never words.
+ */
+async function rowIsPictureAndName(page: Page, picture: number, height: number) {
+  const rows = page.locator(".bot-list > .bot-group > .bot");
+  const count = await rows.count();
+  expect(count).toBeGreaterThan(0);
+  for (let i = 0; i < count; i += 1) {
+    const row = rows.nth(i);
+    const name = (await row.locator(".bot-name").textContent()) ?? "";
+    expect(name).not.toBe("");
+    expect((await rect(page, row.locator(".presence"))).width).toBe(picture);
+    expect((await rect(page, row)).height).toBe(height);
+    // One line of text: the name and, when the bot has one, its label. Nothing else.
+    await expect(row.locator(".bot-line")).toHaveCount(1);
+    await expect(row.locator("time")).toHaveCount(0);
+    const label = (await row.locator(".bot-label").textContent()) ?? "";
+    await expect(row.locator(".bot-line")).toHaveText(`${name}${label}`);
+    // The name sits level with the picture's middle.
+    const at = await rect(page, row.locator(".bot-name"));
+    const face = await rect(page, row.locator(".presence"));
+    expect(Math.abs(at.y + at.height / 2 - (face.y + face.height / 2))).toBeLessThanOrEqual(1);
+  }
+}
+
+test("F-017: a bot's row is its picture, 48 px, and its name, 64 px tall, with no preview and no time", async ({
   page,
 }) => {
   await openFixture(page, `scene=main&${OTTO_DISK}`, "light");
-  const rows = page.locator(".bot-list > .bot-group > .bot");
-  await expect(rows).toHaveCount(5);
-  const times: string[] = [];
-  for (let i = 0; i < 5; i += 1) {
-    const row = rows.nth(i);
-    const box = await rect(page, row);
-    const avatar = await rect(page, row.locator(".avatar"));
-    expect(avatar.width).toBe(40);
-    expect(avatar.width).toBeLessThan(box.width / 6);
-    await expect(row.locator(".bot-name")).not.toBeEmpty();
-    const preview = row.locator(".bot-preview");
-    await expect(preview).not.toBeEmpty();
-    // One line, and it gives way with an ellipsis.
-    expect((await rect(page, preview)).height).toBeLessThanOrEqual(20);
-    expect(await style(preview, "white-space")).toBe("nowrap");
-    expect(await style(preview, "text-overflow")).toBe("ellipsis");
-    expect(await style(preview, "color")).toBe(await tokenColor(page, "--text-muted"));
-    // Desktop rows show the time too, at the right of the first line.
-    const time = row.locator(".bot-time");
-    times.push((await time.textContent()) ?? "");
-    const at = await rect(page, time);
-    expect(box.x + box.width - (at.x + at.width)).toBeLessThanOrEqual(13);
+  await expect(page.locator(".bot-list > .bot-group > .bot")).toHaveCount(5);
+  await rowIsPictureAndName(page, 48, 64);
+  // A long name gives way with an ellipsis rather than wrapping.
+  const long = bot(page, "Quartermaster").locator(".bot-name");
+  expect(await style(long, "white-space")).toBe("nowrap");
+  expect(await style(long, "text-overflow")).toBe("ellipsis");
+  expect(await long.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
+});
+
+test("F-017 F-021 F-022 F-426: with no words on the row, each state is still shown: waiting, failed, blocked, done with failures, working, unread", async ({
+  page,
+}) => {
+  await openFixture(page, "scene=task-states&bot=pip", "light");
+  await settle(page);
+  await rowIsPictureAndName(page, 48, 64);
+  const marks: Record<string, [string, string | null]> = {
+    // Bot: the picture's state, and the badge on it.
+    Juniper: ["waiting", "waiting"],
+    Otto: ["done-with-failures", "failed"],
+    Marlow: ["blocked", "blocked"],
+    Pip: ["failed", "failed"],
+  };
+  for (const [name, [state, badge]] of Object.entries(marks)) {
+    const row = bot(page, name);
+    await expect(row.locator(".presence")).toHaveAttribute("data-state", state);
+    if (badge) await expect(row.locator(".presence > .glyph")).toHaveAttribute("data-state", badge);
   }
-  // Otto works now; the rest are today, today, today and two days ago.
-  expect(times).toEqual(["now", "5:24 PM", "4:58 PM", "3:10 PM", "Sat"]);
-  // The preview is the latest message, cut short with an ellipsis.
-  const quartermaster = rows.nth(4).locator(".bot-preview");
-  await expect(quartermaster).toHaveText(
-    "Both are on Saturday's route, pharmacy first because it closes at noon.",
+  // The waiting badge is in the warning colour.
+  expect(await style(bot(page, "Juniper").locator(".presence > .glyph"), "background-color")).toBe(
+    await tokenBackground(page, "--warn"),
   );
-  expect(await quartermaster.evaluate((el) => el.scrollWidth > el.clientWidth)).toBe(true);
+  // Working: the ring turns round the picture.
+  await openFixture(page, `scene=rail-waiting&${OTTO_DISK}`, "light");
+  const otto = bot(page, "Otto");
+  await expect(otto).toHaveAccessibleName(/^Otto, working,/);
+  await expect(otto.locator(".presence")).toHaveAttribute("data-state", "working");
+  expect(
+    await otto.locator(".presence").evaluate((el) => getComputedStyle(el, "::before").opacity),
+  ).toBe("1");
+  // Unread: the dot follows the name on its line, and the accessible name says so.
+  const pip = bot(page, "Pip");
+  await expect(pip).toHaveAccessibleName(/, unread\b/);
+  const dot = pip.locator(".bot-line > .unread-dot");
+  await expect(dot).toBeVisible();
+  const name = await rect(page, pip.locator(".bot-name"));
+  const at = await rect(page, dot);
+  expect(at.width).toBe(8);
+  expect(at.x).toBeGreaterThan(name.x + name.width);
+  expect(await style(dot, "background-color")).toBe(await tokenBackground(page, "--accent-line"));
+  // A bot with nothing unread has no dot.
+  const quartermaster = bot(page, "Quartermaster");
+  await expect(quartermaster).not.toHaveAccessibleName(/, unread\b/);
+  await expect(quartermaster.locator(".unread-dot")).toHaveCount(0);
+});
+
+test.describe("at phone width", () => {
+  test.use(
+    contextFor(
+      SIZES.find((size) => size.name === "phone")!,
+      "light",
+    ),
+  );
+
+  test("F-017: a bot's row is its picture, 52 px, and its name, 68 px tall, with no preview and no time", async ({
+    page,
+  }) => {
+    await openFixture(page, `scene=main&${OTTO_DISK}`, "light");
+    await showList(page);
+    await expect(page.locator(".bot-list > .bot-group > .bot")).toHaveCount(5);
+    await rowIsPictureAndName(page, 52, 68);
+  });
 });
 
 test("F-019: a bot's label is a small grey pill beside its name", async ({ page }) => {
