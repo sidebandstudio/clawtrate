@@ -1,0 +1,709 @@
+/* docs/design/bot-opens-main.md: a bot's row opens its main conversation.
+   Prototype styles, written against the tokens; not product code. */
+
+.visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.bm *,
+.bm *::before,
+.bm *::after {
+  box-sizing: border-box;
+}
+
+.bm {
+  --side: 280px;
+  display: grid;
+  grid-template-columns: var(--side) minmax(0, 1fr);
+  height: 100%;
+  font-family: var(--font-ui);
+  font-size: var(--text-base);
+  color: var(--text);
+  background: var(--bg);
+}
+
+.bm[data-side="narrow"] {
+  --side: 208px;
+}
+
+.bm[data-side="rail"] {
+  --side: 72px;
+}
+
+/* One pane at phone width: the list or the conversation, never both. */
+[data-width="phone"] .bm {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+[data-width="phone"] .bm[data-pane="list"] .bm-main,
+[data-width="phone"] .bm[data-pane="conversation"] .bm-side {
+  display: none;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+/* ---- the sidebar ---------------------------------------------------------- */
+
+.bm-side {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: var(--bg-rail);
+  border-right: 1px solid var(--border);
+}
+
+.bm-side-top {
+  display: flex;
+  gap: var(--space-1);
+  padding: var(--space-3) var(--space-3) var(--space-2);
+}
+
+.bm[data-side="rail"] .bm-side-top {
+  display: none;
+}
+
+.bm-icon {
+  display: inline-grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.bm-icon:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.bm-icon svg {
+  width: 18px;
+  height: 18px;
+}
+
+.bm-list {
+  flex: 1;
+  margin: 0;
+  padding: var(--space-1) var(--space-2);
+  overflow-y: auto;
+  list-style: none;
+}
+
+.bm-group {
+  margin: 0 0 2px;
+}
+
+.bm-bot {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  width: 100%;
+  min-height: 52px;
+  padding: 6px 36px 6px var(--space-2);
+  border: 0;
+  border-radius: var(--radius-md);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.bm-bot:hover {
+  background: var(--bg-hover);
+}
+
+/* The open bot: its main conversation is on screen, or one of its tasks. */
+.bm-bot[aria-current="page"] {
+  background: var(--bg-selected);
+}
+
+.bm-group[data-open] > .bm-row > .bm-bot .bm-name {
+  font-weight: var(--weight-strong);
+}
+
+.bm-row {
+  position: relative;
+}
+
+.bm-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.bm-avatar-wrap {
+  position: relative;
+  flex: none;
+  display: block;
+}
+
+.bm-avatar {
+  position: relative;
+  display: block;
+  flex: none;
+  width: var(--avatar-row);
+  height: var(--avatar-row);
+}
+
+.bm-avatar svg {
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+.bm-avatar[data-size="pill"] {
+  width: var(--avatar-pill);
+  height: var(--avatar-pill);
+}
+
+.bm-avatar[data-size="card"] {
+  width: 28px;
+  height: 28px;
+}
+
+/* The bot's state over all of its conversations, on its picture. */
+.bm-mark {
+  position: absolute;
+  right: -2px;
+  bottom: -2px;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--bg-rail);
+  border-radius: 50%;
+}
+
+.bm-mark[data-state="working"] {
+  background: var(--accent);
+}
+
+.bm-mark[data-state="waiting"] {
+  background: var(--warn);
+}
+
+.bm-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+/* The fold: a pointer's way to the same thing Right and Left do on the row. */
+.bm-fold {
+  position: absolute;
+  top: 50%;
+  right: 6px;
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  margin-top: -13px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+}
+
+.bm-fold:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.bm-fold svg {
+  width: 14px;
+  height: 14px;
+  transition: rotate var(--dur-quick) var(--ease-out);
+}
+
+.bm-group[data-open] .bm-fold svg {
+  rotate: 90deg;
+}
+
+[data-motion="reduce"] .bm-fold svg {
+  transition: none;
+}
+
+.bm-tasks {
+  margin: 0 0 var(--space-2);
+  padding: 0 0 0 calc(var(--avatar-row) + var(--space-2));
+  list-style: none;
+}
+
+.bm[data-side="narrow"] .bm-tasks {
+  padding-left: var(--space-6);
+}
+
+.bm-task {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: 34px;
+  padding: 4px var(--space-2);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--text-md);
+  text-align: left;
+  cursor: pointer;
+}
+
+.bm-task:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.bm-task[aria-current="page"] {
+  background: var(--bg-selected);
+  color: var(--text);
+}
+
+.bm-task-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.bm-task-state {
+  flex: none;
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+}
+
+.bm-task-state[data-state="waiting"] {
+  color: var(--warn);
+}
+
+.bm-task-state[data-state="working"] {
+  color: var(--accent);
+}
+
+/* Narrow: the title keeps the room; a task's state is its mark alone (the words are in its name). */
+.bm[data-side="narrow"] .bm-tasks .bm-task-state {
+  width: 8px;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 50%;
+  background: currentColor;
+  font-size: 0;
+}
+
+/* Working is a ring, so it never reads as the unread dot beside it. */
+.bm[data-side="narrow"] .bm-tasks .bm-task-state[data-state="working"] {
+  border: 2px solid currentColor;
+  background: transparent;
+}
+
+/* The rail: pictures only, the sidebar's buttons stacked at its foot. */
+.bm[data-side="rail"] .bm-list {
+  padding: var(--space-3) 0;
+}
+
+.bm[data-side="rail"] .bm-bot {
+  justify-content: center;
+  width: 56px;
+  min-height: 56px;
+  margin: 0 auto 4px;
+  padding: 0;
+}
+
+.bm[data-side="rail"] .bm-name,
+.bm[data-side="rail"] .bm-dot,
+.bm[data-side="rail"] .bm-fold,
+.bm[data-side="rail"] .bm-tasks {
+  display: none;
+}
+
+/* In the rail an unread mark sits on the picture's other corner. */
+.bm[data-side="rail"] .bm-bot[data-unread]::after {
+  content: "";
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 9px;
+  height: 9px;
+  border: 2px solid var(--bg-rail);
+  border-radius: 50%;
+  background: var(--accent);
+}
+
+.bm-side-foot {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-3);
+  border-top: 1px solid var(--border);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.bm[data-side="rail"] .bm-side-foot {
+  flex-direction: column;
+  padding: var(--space-3) 0;
+}
+
+.bm[data-side="rail"] .bm-side-foot .bm-gw {
+  display: none;
+}
+
+.bm-gw {
+  flex: 1;
+  min-width: 0;
+}
+
+.bm-gw strong {
+  display: block;
+  color: var(--text);
+  font-weight: var(--weight-medium);
+}
+
+.bm-foot-buttons {
+  display: flex;
+  gap: var(--space-1);
+}
+
+.bm[data-side="rail"] .bm-foot-buttons {
+  flex-direction: column;
+}
+
+/* ---- the conversation ----------------------------------------------------- */
+
+.bm-main {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.bm-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  height: var(--header-height);
+  padding: 0 var(--space-3);
+}
+
+.bm-back {
+  display: none;
+}
+
+[data-width="phone"] .bm-back {
+  display: inline-grid;
+}
+
+.bm-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  min-width: 0;
+  max-width: 70%;
+  height: 36px;
+  margin: 0 auto;
+  padding: 0 var(--space-3) 0 7px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-button);
+  font-size: var(--text-md);
+  cursor: pointer;
+}
+
+.bm-pill-name {
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+}
+
+.bm-pill-task {
+  overflow: hidden;
+  color: var(--text-muted);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.bm-pill-task::before {
+  content: "·";
+  margin-right: var(--space-2);
+  color: var(--text-faint);
+}
+
+.bm-head-end {
+  display: flex;
+  gap: var(--space-1);
+}
+
+/* The Tasks button: only while the sidebar can't list the open bot's tasks. */
+.bm-tasks-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 36px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--bg-raised);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.bm-tasks-button svg {
+  width: 16px;
+  height: 16px;
+}
+
+.bm-tasks-button[aria-expanded="true"] {
+  color: var(--text);
+  background: var(--bg-selected);
+}
+
+.bm-menu {
+  position: absolute;
+  top: calc(var(--header-height) - 4px);
+  right: var(--space-3);
+  z-index: 3;
+  width: 280px;
+  margin: 0;
+  padding: var(--space-1);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-pop);
+  list-style: none;
+}
+
+.bm-menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  width: 100%;
+  min-height: 36px;
+  padding: 6px var(--space-3);
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  font-size: var(--text-md);
+  text-align: left;
+  cursor: pointer;
+}
+
+.bm-menu-item:hover,
+.bm-menu-item:focus-visible {
+  background: var(--bg-hover);
+}
+
+.bm-menu-item[aria-checked="true"] {
+  font-weight: var(--weight-medium);
+}
+
+.bm-menu-item[aria-checked="true"]::after {
+  content: "✓";
+  margin-left: auto;
+  color: var(--accent);
+}
+
+.bm-menu-rule {
+  height: 1px;
+  margin: var(--space-1) var(--space-2);
+  background: var(--border);
+}
+
+.bm-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.bm-transcript {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-4);
+  max-width: var(--transcript-max);
+  margin: 0 auto;
+  padding: var(--space-4) var(--space-6) var(--space-8);
+}
+
+[data-width="phone"] .bm-transcript {
+  padding: var(--space-3) var(--space-4) var(--space-6);
+}
+
+.bm-heading {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: var(--weight-strong);
+}
+
+.bm-started-line {
+  margin: -8px 0 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.bm-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--accent-strong);
+  font-size: inherit;
+  cursor: pointer;
+}
+
+.bm-msg {
+  max-width: 82%;
+  margin: 0;
+  padding: 10px 14px;
+  border-radius: var(--radius-lg);
+  line-height: 1.45;
+}
+
+.bm-msg[data-from="person"] {
+  align-self: flex-end;
+  background: var(--bubble-user);
+  color: var(--bubble-user-text);
+}
+
+.bm-msg[data-from="bot"] {
+  align-self: flex-start;
+  background: var(--bg-bubble);
+}
+
+.bm-quiet {
+  align-self: center;
+  margin: 0;
+  color: var(--text-faint);
+  font-size: var(--text-sm);
+}
+
+/* The "Started a task" card (F-587), in the Messaged cards' frame. */
+.bm-card {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: 2px var(--space-3);
+  align-items: center;
+  align-self: flex-start;
+  width: min(440px, 100%);
+  padding: var(--space-3) var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-raised);
+}
+
+.bm-card .bm-avatar {
+  grid-row: span 3;
+  align-self: start;
+}
+
+.bm-card-kind {
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+}
+
+.bm-card-title {
+  overflow: hidden;
+  font-weight: var(--weight-medium);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.bm-card-brief {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.bm-card-state {
+  grid-column: 3;
+  grid-row: 1;
+  justify-self: end;
+  font-size: var(--text-xs);
+  color: var(--text-muted);
+}
+
+.bm-card-state[data-state="working"] {
+  color: var(--accent);
+}
+
+.bm-card-state[data-state="waiting"] {
+  color: var(--warn);
+}
+
+.bm-card-open {
+  grid-column: 3;
+  grid-row: 2 / span 2;
+  justify-self: end;
+  height: 30px;
+  padding: 0 var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  background: var(--bg);
+  font-size: var(--text-sm);
+  cursor: pointer;
+}
+
+.bm-empty {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  gap: var(--space-3);
+  min-height: 100%;
+  padding: var(--space-8);
+  text-align: center;
+}
+
+.bm-empty .bm-avatar {
+  width: var(--avatar-hero);
+  height: var(--avatar-hero);
+}
+
+.bm-empty h1 {
+  margin: 0;
+  font-size: var(--text-lg);
+}
+
+.bm-empty p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-md);
+}
+
+.bm-composer {
+  margin: 0 auto var(--space-4);
+  width: min(var(--transcript-max), calc(100% - 2 * var(--space-6)));
+  padding: 12px 16px;
+  border: 1px solid var(--border);
+  border-radius: 24px;
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-raised);
+  color: var(--text-faint);
+  font-size: var(--text-base);
+}
+
+[data-width="phone"] .bm-composer {
+  width: calc(100% - 2 * var(--space-4));
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}

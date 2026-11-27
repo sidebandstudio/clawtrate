@@ -76,7 +76,7 @@ test("F-201: Daily for one bot sends one save that names the default bot it keep
     "true",
   );
   await expect(marlow.getByTestId("catch-note")).toContainText(
-    "Juniper checks in now through the gateway's default.",
+    "main checks in now through the gateway's default.",
   );
   await marlow.getByRole("button", { name: "Save", exact: true }).click();
   await expect(marlow).toHaveCount(0);
@@ -136,24 +136,24 @@ test("F-366: Off says what it does not stop, sends every 0m, and the bot is then
 }) => {
   await openFixture(page, ADMIN, "light");
   await checkIns(page);
-  await page.getByRole("button", { name: "Change Juniper's check-ins" }).click();
-  const juniper = dialog(page, "Juniper");
-  await expect(juniper.getByRole("radio", { name: /^As needed/ })).toHaveAttribute(
+  await page.getByRole("button", { name: "Change main's check-ins" }).click();
+  const own = dialog(page, "main");
+  await expect(own.getByRole("radio", { name: /^As needed/ })).toHaveAttribute(
     "aria-checked",
     "true",
   );
-  await expect(juniper.getByTestId("catch-self")).toBeVisible();
-  await juniper.getByRole("radio", { name: /^Off/ }).click();
-  await expect(juniper.getByTestId("off-note")).toHaveText(
-    "Juniper still reports when a command it started in the background finishes: Off stops only the schedule, and the gateway starts that turn.",
+  await expect(own.getByTestId("catch-self")).toBeVisible();
+  await own.getByRole("radio", { name: /^Off/ }).click();
+  await expect(own.getByTestId("off-note")).toHaveText(
+    "main still reports when a command it started in the background finishes: Off stops only the schedule, and the gateway starts that turn.",
   );
-  await juniper.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(juniper).toHaveCount(0);
+  await own.getByRole("button", { name: "Save", exact: true }).click();
+  await expect(own).toHaveCount(0);
   expect(await saves(page)).toEqual([
     { botId: "main", every: "0m", prompt: null, was: NOTHING, kept: [] },
   ]);
   await expect(block(page, "main")).toContainText("No check-ins");
-  await expect(block(page, "main")).toContainText("Juniper doesn't check in on a schedule.");
+  await expect(block(page, "main")).toContainText("main doesn't check in on a schedule.");
   await expect(block(page, "main")).toContainText(
     "It still reports when a command it started in the background finishes.",
   );
@@ -433,7 +433,7 @@ test("F-201: a cadence changed elsewhere while the dialog is open is a conflict 
   await juniper.getByRole("button", { name: "Save", exact: true }).click();
   await expect(juniper.getByTestId("save-conflict")).toContainText("Its cadence was changed.");
   await expect(page.getByTestId("b-announcer")).not.toHaveText("Check-ins saved");
-  await expect(block(page, "main")).toContainText("Checks in daily");
+  await expect(block(page, "clawtrate-main-bot")).toContainText("Checks in daily");
   await expect(juniper.getByRole("radio", { name: /^Off/ })).toHaveAttribute(
     "aria-checked",
     "true",
@@ -448,7 +448,7 @@ test("F-201: a cadence changed elsewhere while the dialog is open is a conflict 
     prompt: "Mine. NO_REPLY",
     was: { every: "24h", prompt: THEIRS },
   });
-  await expect(block(page, "main")).toContainText("No check-ins");
+  await expect(block(page, "clawtrate-main-bot")).toContainText("No check-ins");
 });
 
 test("F-201: after a conflict on the cadence alone, saving again never sends the prompt the person left, and the dialog shows the gateway's", async ({
@@ -466,7 +466,7 @@ test("F-201: after a conflict on the cadence alone, saving again never sends the
   await expect(juniper).toHaveCount(0);
   const [, second] = await saves(page);
   expect(second).toEqual({
-    botId: "main",
+    botId: "clawtrate-main-bot",
     every: "0m",
     prompt: null,
     was: { every: "24h", prompt: THEIRS },
@@ -481,12 +481,12 @@ test("F-201: the bots a dialog named are what its save sends, though the list be
   await checkIns(page);
   await page.getByRole("button", { name: "Change Marlow's check-ins" }).click();
   const marlow = dialog(page, "Marlow");
-  await expect(marlow.getByTestId("catch-note")).toContainText("Juniper checks in now");
+  await expect(marlow.getByTestId("catch-note")).toContainText("main checks in now");
   await change(
     page,
     "return { ...state, checkIns: { ...state.checkIns, defaults: { ...state.checkIns.defaults, inherited: ['main', 'otto'] } } };",
   );
-  await expect(marlow.getByTestId("catch-note")).toContainText("Juniper checks in now");
+  await expect(marlow.getByTestId("catch-note")).toContainText("main checks in now");
   await marlow.getByRole("radio", { name: /^Daily/ }).click();
   await marlow.getByRole("button", { name: "Save", exact: true }).click();
   expect((await saves(page))[0]!.kept).toEqual([{ botId: "main", every: "30m" }]);
@@ -563,7 +563,7 @@ test("F-201: check-ins read while disconnected are read again when the connectio
     page,
     "return { ...state, connection: { ...state.connection, status: 'connected' } };",
   );
-  await expect(page.getByTestId("check-in")).toHaveCount(5);
+  await expect(page.getByTestId("check-in")).toHaveCount(6);
   expect(await refreshes()).toBe(before + 1);
   await page.getByRole("button", { name: "Refresh", exact: true }).click();
   await expect.poll(refreshes).toBe(before + 2);
@@ -587,7 +587,7 @@ test("F-201: a cadence that is not whole minutes is shown exactly", async ({ pag
     "return { ...state, checkIns: { ...state.checkIns, jobs: state.checkIns.jobs.map((job) => ({ ...job, everyMs: 90000 })) } };",
   );
   await expect(block(page, "main")).toContainText("Checks in every 90 seconds");
-  await expect(block(page, "main")).toContainText("Every 90 seconds, Juniper looks");
+  await expect(block(page, "main")).toContainText("Every 90 seconds, main looks");
 });
 
 test("F-201: an inherited custom prompt is what an empty prompt means, and no words say the bot stays quiet", async ({
@@ -595,26 +595,26 @@ test("F-201: an inherited custom prompt is what an empty prompt means, and no wo
 }) => {
   await openFixture(page, `${ADMIN}&cidefault=prompt`, "light");
   await checkIns(page);
-  await page.getByRole("button", { name: "Change Juniper's check-ins" }).click();
-  const juniper = dialog(page, "Juniper");
-  await expect(juniper.getByRole("radio", { name: /^As needed/ })).toContainText(
-    "Every 30 minutes, Juniper checks in with the prompt the gateway sets for every bot.",
+  await page.getByRole("button", { name: "Change main's check-ins" }).click();
+  const own = dialog(page, "main");
+  await expect(own.getByRole("radio", { name: /^As needed/ })).toContainText(
+    "Every 30 minutes, main checks in with the prompt the gateway sets for every bot.",
   );
-  await juniper.getByText("What to check").click();
-  await expect(juniper.getByRole("textbox", { name: "Prompt" })).toHaveAttribute(
+  await own.getByText("What to check").click();
+  await expect(own.getByRole("textbox", { name: "Prompt" })).toHaveAttribute(
     "placeholder",
     "Look over my inbox and tell me what's new.",
   );
-  await expect(juniper).toContainText("Empty uses the prompt the gateway sets for every bot.");
-  await expect(juniper.getByTestId("prompt-note")).toHaveCount(0);
+  await expect(own).toContainText("Empty uses the prompt the gateway sets for every bot.");
+  await expect(own.getByTestId("prompt-note")).toHaveCount(0);
   // The built-in prompt's words are not said of a custom default.
-  await juniper.getByRole("textbox", { name: "Prompt" }).fill("Look at the calendar.");
-  await expect(juniper.getByTestId("prompt-note")).toHaveText(
-    "This prompt replaces the gateway's default for this bot. Whether Juniper stays quiet depends on what this prompt asks.",
+  await own.getByRole("textbox", { name: "Prompt" }).fill("Look at the calendar.");
+  await expect(own.getByTestId("prompt-note")).toHaveText(
+    "This prompt replaces the gateway's default for this bot. Whether main stays quiet depends on what this prompt asks.",
   );
-  await juniper.getByRole("textbox", { name: "Prompt" }).fill("");
+  await own.getByRole("textbox", { name: "Prompt" }).fill("");
   await expect(block(page, "main")).toContainText(
-    "Every 30 minutes, Juniper checks in with the prompt the gateway sets for every bot.",
+    "Every 30 minutes, main checks in with the prompt the gateway sets for every bot.",
   );
 });
 

@@ -125,6 +125,7 @@ import {
   type InstancePorts,
 } from "./registry.ts";
 import { CODING_AGENT_SERVER } from "./coding-agent-mcp.ts";
+import { CODING_AGENT_IDLE_MS, childrenReport, readProcessTable } from "./children.ts";
 import { IMAGE_API_KEY, IMAGE_MODEL_REF, IMAGE_PROVIDER_ID } from "./scripted-images.ts";
 import { contractProblems, matching, optional, type Contract } from "./contract.ts";
 import { accountStoreProblems } from "./account-stores.ts";
@@ -596,6 +597,11 @@ export function devConfig(
     // The stand-in coding agent: a local command server, no network, run in
     // the instance's own folder.
     mcp: {
+      // The gateway starts the server for each task's first turn, since every bot may call
+      // it, and by default keeps it until the task is deleted or the gateway stops: one
+      // server for each task, three processes and about 270 MB each (#845). It ends a
+      // server once its task has been idle this long, checking once a minute.
+      sessionIdleTtlMs: CODING_AGENT_IDLE_MS,
       servers: {
         [CODING_AGENT_SERVER]: {
           transport: "stdio",
@@ -785,7 +791,11 @@ export function devConfigContract(
   const entries = (contract.agents!.entries as Record<string, Record<string, unknown>>) ?? {};
   for (const bot of SEED_BOTS) {
     // `agents set-identity` during the seed.
-    entries[bot.id]!.identity = optional({ name: bot.name, emoji: bot.emoji, theme: bot.theme });
+    entries[bot.id]!.identity = optional({
+      name: bot.name,
+      ...(bot.emoji === undefined ? {} : { emoji: bot.emoji }),
+      ...(bot.theme === undefined ? {} : { theme: bot.theme }),
+    });
   }
   // The CLI stamps the version that last wrote the config, and the migrations
   // it considers applied, whenever it writes it.
@@ -1812,6 +1822,9 @@ async function stopLocked(inst: DevInstance): Promise<void> {
     const target = { role, pid: pid!, identity: identity!, ...(port ? { port } : {}) };
     (verdict.state === "alive" ? targets : exited).push(target);
   }
+  // What the gateway holds at the end of its use, before it and its children go.
+  const gateway = targets.find((target) => target.role === "gateway");
+  if (gateway) reportChildren(gateway.pid, (line) => console.log(`  gateway ${line}`));
   let confirmed = true;
   const openPorts: string[] = [];
   // Stopped means its PID is gone and so is its listener: a reset checks the port next.
@@ -1890,6 +1903,13 @@ export async function reset(inst: DevInstance, options: { runId?: string } = {})
   });
 }
 
+/** The gateway's children, and a warning when its coding-agent servers last too long (#845). */
+function reportChildren(gatewayPid: number, log: (line: string) => void): void {
+  const { line, warning } = childrenReport(readProcessTable(), gatewayPid);
+  log(`${"children".padEnd(12)}${line}`);
+  if (warning) log(`${"warning".padEnd(12)}${warning}`);
+}
+
 /** Report what is running. OpenClaw is asked only when the guard allows it. */
 export async function status(
   inst: DevInstance,
@@ -1917,6 +1937,7 @@ export async function status(
             ? "being started"
             : "stopped";
     log(`${role.padEnd(12)}${shown}`);
+    if (role === "gateway" && state === "alive") reportChildren(pid!, log);
   }
   const inUse = inUseRefusal(
     runner.stateDir,
@@ -2274,8 +2295,9 @@ async function configureBot(
     ]);
   }
   mkdirSync(workspace, { recursive: true });
-  writeFileSync(join(workspace, "AGENTS.md"), bot.instructions);
-  // One command per bot, not one `config.patch` for all four: after that patch, two of four
+  // The gateway's own bot keeps OpenClaw's starting files.
+  if (bot.instructions !== undefined) writeFileSync(join(workspace, "AGENTS.md"), bot.instructions);
+  // One command per bot, not one `config.patch` for all of them: after that patch, two of four
   // iPhone jobs on GitHub's runner timed out on the next gateway call (#571).
   await must(inst, [
     "agents",
@@ -2284,10 +2306,8 @@ async function configureBot(
     bot.id,
     "--name",
     bot.name,
-    "--emoji",
-    bot.emoji,
-    "--theme",
-    bot.theme,
+    ...(bot.emoji === undefined ? [] : ["--emoji", bot.emoji]),
+    ...(bot.theme === undefined ? [] : ["--theme", bot.theme]),
     "--json",
   ]);
 }
@@ -2399,7 +2419,8 @@ async function seedConversations(
     const alreadySeeded = existing.has(key);
     // Made as Clawtrate makes a task, by an operator (`createdVia: "operator"`), so the sample
     // conversations count as the person's own; the turns then run in it as the gateway's owner.
-    if (!alreadySeeded) {
+    // A main conversation is the gateway's: its first message makes it.
+    if (!alreadySeeded && !task.main) {
       const session = { key, agentId: bot.id, label: task.label };
       await createSeedSession({
         session,
