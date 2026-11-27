@@ -321,6 +321,38 @@ describe("F-088: text beside a call is known by its item, never by its words", (
     expect(count(html, "Now the summary.")).toBe(1);
   });
 
+  it("text from a message with no call is drawn once, from its row, once history holds a later message's call", () => {
+    // OpenClaw 2026.11.10: a text-only answer, a steer, then a message with a call and no text.
+    // The answer stays the reply until history holds the later call's row, which is written after
+    // the answer's own row.
+    const model: [string, Record<string, unknown>] = ["lifecycle", { phase: "model" }];
+    const rows = [
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "The logs are clean." }],
+        __openclaw: { id: "a1", seq: 2, runId: RUN },
+      },
+      { role: "user", content: "Also check the cache.", __openclaw: { id: "u2", seq: 3 } },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "c2", name: "ls", arguments: { path: "cache" } }],
+        __openclaw: { id: "a2", seq: 4, runId: RUN },
+      },
+    ];
+    const events = [...start, model, ...said("m:1", "The logs are clean."), model, ...call("c2")];
+    for (const html of [
+      draw(transcriptOf(events, rows)),
+      draw(transcriptOf([...events, ...call("c3")], rows)),
+    ]) {
+      expect(count(html, "The logs are clean.")).toBe(1);
+      expect(html).not.toContain('data-testid="live-turn"');
+    }
+    // Before history holds any of it, the answer is the reply.
+    const live = draw(transcriptOf(events));
+    expect(count(live, "The logs are clean.")).toBe(1);
+    expect(live).toContain('data-testid="live-turn"');
+  });
+
   it("on 2026.10.6, text its preamble item holds is drawn twice until its call starts, then once", () => {
     // The gateway sends the preamble item after the message's text and before the call's start.
     // Until the call starts, nothing ties the preamble to the stream's item, so the text is also

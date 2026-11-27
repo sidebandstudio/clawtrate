@@ -461,6 +461,12 @@ export type Run = {
    * beside itself, nor does that message's preamble item take it.
    */
   textEarlier?: true;
+  /**
+   * The first call a later message started after `textEarlier` text. History writes the text's own
+   * row before that call's row, so once history holds the call's row it draws the text there, and
+   * the reply is not drawn again.
+   */
+  textBeforeCall?: string;
   /** True once the gateway reported the reply complete. */
   textComplete: boolean;
   steps: Step[];
@@ -2688,7 +2694,7 @@ function applyAssistant(run: Run, data: RawRecord, ts: number, ctx: EngineContex
   // Text cut to its bound is not extended by deltas: they would join non-adjacent text.
   if (cumulative === null && sameItem && closed.cut?.includes("text")) return closed;
   const text = cumulative ?? (sameItem ? closed.text + delta : delta);
-  const { textEarlier: _earlier, ...rest } = closed;
+  const { textEarlier: _earlier, textBeforeCall: _before, ...rest } = closed;
   return {
     ...(sameItem ? closed : rest),
     textSource: "agent",
@@ -2752,7 +2758,7 @@ function applyTool(run: Run, data: RawRecord, ts: number, ctx: EngineContext): R
       ctx.raw.set(ctx.sessionKey, id, { source: "live", runId: run.id, call: data, result: null });
       // The call is known now; carry it inline while the tool runs when it is small.
       return upsertStep(
-        existing ? current : textBesideCall(current),
+        existing ? current : textBesideCall(current, toolCallId),
         settleRaw(
           {
             ...step,
@@ -2831,7 +2837,7 @@ function applyItem(run: Run, data: RawRecord, ts: number, ctx: EngineContext): R
   if (!existing && data.phase !== "start") return run;
   const step = existing ?? blankToolStep(toolCallId, str(data.name), num(data.startedAt));
   const title = str(data.title);
-  return upsertStep(existing ? run : textBesideCall(run), {
+  return upsertStep(existing ? run : textBesideCall(run, toolCallId), {
     ...step,
     ...(data.commandBearing === true ? { commandBearing: true } : {}),
     ...(title ? { gatewayTitle: title } : {}),
@@ -2848,12 +2854,13 @@ function applyItem(run: Run, data: RawRecord, ts: number, ctx: EngineContext): R
  * beside the call, and the next item would replace it. An item already placed, by an earlier call
  * of the same message, places nothing again.
  */
-function textBesideCall(run: Run): Run {
+function textBesideCall(run: Run, toolCallId: string): Run {
   const itemId = run.textItemId;
-  // An item id comes only with the `assistant` stream's text, never the chat stream's. An earlier
-  // message's text (`textEarlier`) is never placed beside a later message's call, at any of its
-  // calls: it stays the reply, where it was read.
-  if (itemId === null || run.textEarlier || !run.text.trim() || textPlaced(run)) return run;
+  // An earlier message's text (`textEarlier`) is never placed beside a later message's call, at
+  // any of its calls: it stays the reply, where it was read, until history holds the first call's row.
+  if (run.textEarlier) return run.textBeforeCall ? run : { ...run, textBeforeCall: toolCallId };
+  // An item id comes only with the `assistant` stream's text, never the chat stream's.
+  if (itemId === null || !run.text.trim() || textPlaced(run)) return run;
   const list = run.preambles ?? [];
   const waiting = list.findLastIndex((p) => p.beforeCall === null);
   if (waiting !== -1)

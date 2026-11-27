@@ -40,6 +40,7 @@ export const ACTION_SCENES = [
   "actions-retained-history",
   "actions-outcomes",
   "actions-repeat",
+  "actions-steered",
 ] as const;
 
 export type ActionScene = (typeof ACTION_SCENES)[number];
@@ -1314,6 +1315,65 @@ function liveRun(
 }
 
 /**
+ * A live run on OpenClaw 2026.11.10: a text-only answer, a steer, then a message with a call and
+ * no text, still running. History already holds the answer's row and the call's row.
+ */
+function steeredRun(now: number): { activity: TaskActivity; items: Transcript["items"] } {
+  const ctx: EngineContext = { sessionKey: OPEN_TASK, now, raw: new RawTable() };
+  const runId = "run-steered";
+  const t0 = now - 20 * SECOND;
+  const answer = "Last night's backup finished cleanly: 412 files, no errors.";
+  const args = { command: "df -h /srv/media", workdir: "/srv/media" };
+  const model = { phase: "model", provider: "scripted", model: "dev-1" };
+  const events: Array<[number, string, Rec]> = [
+    [0, "lifecycle", { phase: "start", startedAt: t0 }],
+    [0, "lifecycle", model],
+    [2, "assistant", { text: answer, delta: answer, itemId: "stream-steered:1" }],
+    [5, "lifecycle", model],
+    [6, "item", { kind: "tool", toolCallId: "call_s1", name: "exec", phase: "start" }],
+    [6, "tool", { toolCallId: "call_s1", name: "exec", phase: "start", args }],
+  ];
+  let activity: TaskActivity = emptyActivity;
+  events.forEach(([offset, stream, data], i) => {
+    const ts = t0 + offset * SECOND;
+    activity = applyAgentEvent(
+      activity,
+      { runId, seq: i + 1, stream, ts, sessionKey: OPEN_TASK, data },
+      { ...ctx, now: ts },
+    ).activity;
+  });
+  const rows = [
+    {
+      role: "user",
+      content: "Is last night's backup log fine?",
+      timestamp: t0,
+      __openclaw: { id: "steered-1" },
+    },
+    {
+      role: "assistant",
+      content: [{ type: "text", text: answer }],
+      timestamp: t0 + 3 * SECOND,
+      model: "scripted/dev-1",
+      __openclaw: { id: "steered-2", runId },
+    },
+    {
+      role: "user",
+      content: "And how full is the disk?",
+      timestamp: t0 + 4 * SECOND,
+      __openclaw: { id: "steered-3" },
+    },
+    {
+      role: "assistant",
+      content: [{ type: "toolCall", id: "call_s1", name: "exec", arguments: args }],
+      timestamp: t0 + 6 * SECOND,
+      model: "scripted/dev-1",
+      __openclaw: { id: "steered-4", runId },
+    },
+  ];
+  return { activity, items: mapHistory(rows) };
+}
+
+/**
  * A finished run of 400 reads, with text written before the 390th, through
  * the engine's retention: it keeps the newest 128 and counts the others.
  */
@@ -1432,6 +1492,13 @@ export function actionScene(
         items: t.items,
         outbox: [message],
       })),
+      steps: [],
+    };
+  }
+  if (name === "actions-steered") {
+    const { activity, items } = steeredRun(now);
+    return {
+      initial: withOpenTask(interactive(base), (t) => ({ ...t, ...activity, items, outbox: [] })),
       steps: [],
     };
   }

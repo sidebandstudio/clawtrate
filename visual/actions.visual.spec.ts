@@ -98,6 +98,7 @@ const BASELINES: Array<{ scene: string; rows: string; prepare?: (page: Page) => 
   { scene: "actions-failed", rows: "F-092 F-294" },
   { scene: "actions-mixed", rows: "F-092" },
   { scene: "actions-question", rows: "F-488" },
+  { scene: "actions-steered", rows: "F-088" },
   {
     scene: "actions-failed",
     rows: "F-293",
@@ -785,6 +786,16 @@ test.describe("action cards", () => {
     );
     await expect(page.getByText("Both logs are fine. Checking")).toHaveCount(1);
     await expect(page.getByTestId("live-turn")).toHaveCount(0);
+  });
+
+  test("F-088: a text-only answer before a steer is drawn once, from its row, while the steered call runs", async ({
+    page,
+  }) => {
+    await open(page, "actions-steered");
+    const answer = "Last night's backup finished cleanly: 412 files, no errors.";
+    await expect(page.getByText(answer, { exact: true })).toHaveCount(1);
+    await expect(page.getByTestId("live-turn")).toHaveCount(0);
+    await expect(cards(page).last()).toHaveAttribute("data-status", "running");
   });
 
   test("F-432: an opened running action shows its output as the gateway streams it", async ({

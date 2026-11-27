@@ -425,6 +425,7 @@ export const RUN: Bound = flagged<Run>()({
   textSource: ENUM,
   textItemId: ID,
   textEarlier: FLAG,
+  textBeforeCall: ID,
   textComplete: FLAG,
   steps: list(MAX_STEPS_PER_TASK, STEP, { pool: "steps" }),
   pendingCards: list(MAX_PENDING_CARDS, pendingCard),

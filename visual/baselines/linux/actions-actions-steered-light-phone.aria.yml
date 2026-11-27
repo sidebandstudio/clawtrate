@@ -1,0 +1,34 @@
+- status
+- region "Conversation":
+  - button "Back to bots"
+  - button "Otto, Disk almost full on the media box. Show details.": Otto
+  - button "Show work panel"
+  - region "Transcript":
+    - heading "Disk almost full on the media box" [level=1]
+    - paragraph: "Context: 18,432 of 128,000 tokens"
+    - text: Today 5:39 PM
+    - paragraph: Is last night's backup log fine?
+    - toolbar "Message actions":
+      - button "Add a reaction"
+      - button "Reply in a thread"
+      - button "More"
+    - paragraph: "Last night's backup finished cleanly: 412 files, no errors."
+    - toolbar "Message actions":
+      - button "Add a reaction"
+      - button "Reply in a thread"
+      - button "More"
+    - paragraph: And how full is the disk?
+    - toolbar "Message actions":
+      - button "Add a reaction"
+      - button "Reply in a thread"
+      - button "More"
+    - text: Steer
+    - group: Running df df -h /srv/media
+    - 'button "Otto, working: Running df. Show the action."': Running df
+    - status
+  - button "Attach files"
+  - textbox "Message Otto"
+  - button "Stop Otto"
+  - button "Request a steer" [disabled]
+  - status
+- status

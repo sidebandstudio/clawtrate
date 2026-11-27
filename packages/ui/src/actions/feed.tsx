@@ -423,6 +423,7 @@ function runEntries(
   cards: CardsFor,
   rest: CardRef[],
   tally: Tally,
+  inRows: ReadonlySet<string>,
 ): FeedEntry<FeedRef>[] {
   const entries: FeedEntry<FeedRef>[] = [];
   const preambles = [...(run.preambles ?? [])];
@@ -464,8 +465,10 @@ function runEntries(
     else entries.splice(before, 0, entry);
   }
   // The run's text is an item a call placed as the text beside it: that bubble, not a reply, and
-  // not drawn twice. Known by the item's id, never its words.
-  if (run.text.trim() && !textPlaced(run))
+  // not drawn twice. Known by the item's id, never its words. An earlier message's text is drawn
+  // from its own row once history holds the row of a call a later message made after it.
+  const inHistory = run.textBeforeCall !== undefined && inRows.has(run.textBeforeCall);
+  if (run.text.trim() && !textPlaced(run) && !inHistory)
     entries.push({ type: "bubble", id: `reply:${run.id}`, ref: { t: "reply", run } });
   return entries;
 }
@@ -738,7 +741,7 @@ export function ActionScope({
       const rest = placement.byRun.get(run.id) ?? [];
       builtRuns.push({
         id: run.id,
-        entries: runEntries(run, cards, rest, tally),
+        entries: runEntries(run, cards, rest, tally, inRows),
         revision: run.reasoningRevision,
       });
     }
