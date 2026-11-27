@@ -71,7 +71,6 @@
 - button "Close work panel"
 - dialog "Work":
   - button "Close work panel"
-  - button "Change Otto's picture"
   - heading "Otto" [level=2]
   - paragraph: home server operations
   - tablist "Work":
@@ -83,7 +82,7 @@
     - button "Back to settings"
     - heading "Account" [level=3]
     - paragraph: "The gateway chooses. Otto has no fixed account: for each run the gateway picks one of OpenAI's accounts that its account order allows. Otto keeps its own model and no fallbacks."
-    - paragraph: The gateway still has an order for Otto that names only OpenAI · Work, so it keeps using that account alone. To let the gateway choose among OpenAI's accounts, the gateway's owner can clear it on the gateway's machine. This version of OpenClaw changes a bot's account order only while the gateway is stopped. Stopping it gives work under way up to about five minutes to finish, then stops what is left. Until it starts again, none of your bots runs and Clawtrate can't reach the gateway.
+    - paragraph: The gateway still has an order for Otto that names only OpenAI openai:work, so it keeps using that account alone. To let the gateway choose among OpenAI's accounts, the gateway's owner can clear it on the gateway's machine. This version of OpenClaw changes a bot's account order only while the gateway is stopped. Stopping it gives work under way up to about five minutes to finish, then stops what is left. Until it starts again, none of your bots runs and Clawtrate can't reach the gateway.
     - paragraph:
       - text: These steps stop and start the gateway's service. If you run the gateway yourself, with
       - code: openclaw gateway run
@@ -104,6 +103,9 @@
         - code: openclaw gateway start
         - button "Copy start command"
         - status
-    - button "Bind to an account"
+    - paragraph: With admin access, Clawtrate clears it from here, with the gateway running.
+    - region "Access":
+      - text: Admin access needed. Changing Otto's settings needs admin access.
+      - button "Request admin access"
   - status
 - status

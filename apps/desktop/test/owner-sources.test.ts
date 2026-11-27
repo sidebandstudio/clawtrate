@@ -21,6 +21,8 @@ const ALLOWED: Record<string, string> = {
   // Static: built once from constants, never grown.
   "packages/core/src/memory.ts:ROOT_MEMORY": "static, two workspace filenames",
   "packages/core/src/bot-names.ts:PLACEHOLDERS": "static, the template's two name placeholders",
+  "packages/core/src/send-marker.ts:ABORT_WORDS": "static, the gateway's 43 stop words",
+  "packages/core/src/send-marker.ts:MARKER_SENTENCES": "static, the marker's two sentences",
   "packages/core/src/openclaw-update.ts:UPDATE_PHASES": "static, the gateway's eight update phases",
   "packages/core/src/openclaw-update.ts:RUN_STATUSES": "static, the gateway's five run statuses",
   "packages/core/src/openclaw-update.ts:UPDATE_ASK_WAITS_MS":
@@ -97,6 +99,8 @@ const ALLOWED: Record<string, string> = {
     "one creation's steps that did not land, at most four, gone when it returns",
   "packages/core/src/accounts-engine.ts:complete>errors":
     "the words for those steps, one each, gone when it returns",
+  "packages/core/src/accounts-engine.ts:readAll>sent":
+    "one accounts read's number per listed bot, as its request was sent, at most `MAX_BOTS`, gone when it returns",
   "packages/core/src/scopes.ts:IMPLIED_BY_WRITE": "static, the scopes write implies",
   "packages/core/src/state-bounds.ts:SESSION_ROW_FIELDS": "static, the twenty-one fields read",
   "packages/core/src/state-bounds.ts:SESSION_ROW_IDS": "static, five field names",
@@ -115,6 +119,8 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/types.ts:initialConnectionState.requestedScopes":
     "static, an empty list copied on write",
   "packages/core/src/types.ts:initialState.bots": "static, an empty list copied on write",
+  "packages/core/src/device-approval.ts:initialDeviceRequests.requests":
+    "static, an empty list copied on write",
   "packages/core/src/types.ts:initialState.unroutedApprovals":
     "static, an empty list copied on write",
   "packages/core/src/types.ts:initialState.creations": "static, an empty list copied on write",

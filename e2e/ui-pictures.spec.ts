@@ -106,11 +106,9 @@ test("F-535: a picture the bot makes with image_generate shows in the conversati
 
   await openShell(page);
   await openTask(page, "Otto", TASK);
-  // 2026.10.6 delivers the picture in a turn of the gateway's own, with its text, named for the
-  // description it was made from. 2026.11.10 writes it into the task as a row of its own, with no
-  // text and no turn of that run (`pictureTurn`). There the picture loses its description and
-  // shows as a picture the bot handed over: a fault, #662. Once #662 is fixed, 2026.11.10 expects
-  // the description (`ALT`) too.
+  // 2026.10.6 delivers the picture in a turn of the gateway's own, with its text. 2026.11.10 writes
+  // it into the task as a row of its own, with no text and no turn (`pictureTurn`), under the
+  // delivery's key. On both it is named for the description it was made from.
   const { pictureTurn } = instanceForm(openInstance(INSTANCE));
   const turn = page
     .getByTestId("transcript-turn")
@@ -119,9 +117,7 @@ test("F-535: a picture the bot makes with image_generate shows in the conversati
         ? { hasText: "Here is the picture you asked for." }
         : { has: page.getByTestId("picture") },
     );
-  const picture = turn.getByRole("img", {
-    name: pictureTurn ? ALT : "A picture the bot handed over",
-  });
+  const picture = turn.getByRole("img", { name: ALT });
   await expect(picture).toBeVisible({ timeout: 30_000 });
   const drawn = await picture.evaluate((img: HTMLImageElement) => ({
     src: img.src,

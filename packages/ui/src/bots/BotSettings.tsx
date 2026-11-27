@@ -20,7 +20,7 @@ import {
 } from "@clawtrate/core";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useBridge } from "../bridge.tsx";
-import { screenStamp, shownStamp } from "../stamp.ts";
+import { screenStamp, shownStamp, type ShownStamp } from "../stamp.ts";
 import {
   BackIcon,
   CheckIcon,
@@ -32,6 +32,7 @@ import {
   WarnIcon,
 } from "../icons.tsx";
 import { AccountChoices, GATEWAY_CHOICE, gatewayLine } from "./AccountChoices.tsx";
+import { ClearOrderConfirm, ClearOutcome, type ClearAsk } from "./ClearOrder.tsx";
 import { settleBotSettingsRequest, settlement, useBotSettingsRequest } from "./settings-request.ts";
 import { Connect } from "./Connect.tsx";
 import { ModelPair, rowFor, useModelList } from "./ModelPair.tsx";
@@ -150,6 +151,12 @@ export function BotSettings({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [effortNote, setEffortNote] = useState<string | null>(null);
+  // Unlock and Clear (#660): the confirmation open, where its page was read, and the id of this
+  // visit's press (a press from before isn't this visit's to report; no clocks are compared).
+  const [ask, setAsk] = useState<ClearAsk | null>(null);
+  const [asking, setAsking] = useState(false);
+  const askedOn = useRef<ShownStamp | null>(null);
+  const [pressed, setPressed] = useState<string | null>(null);
   // The page's clock: evidence ages while the page stays open, and with every change of the connection.
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
@@ -211,6 +218,8 @@ export function BotSettings({
     setView("main");
     setWatching(false);
     setPick(null);
+    setAsk(null);
+    setPressed(null);
   }
 
   // Every connect clears the gateway's id until its identity read answers, the reconnect that
@@ -241,6 +250,7 @@ export function BotSettings({
   const go = (next: View, focus: string = "[data-bs-focus]") => {
     setView(next);
     setError(null);
+    if (next === "account" && view !== "account") setPressed(null);
     if (next === "change" && view !== "change")
       setChoicesRead(accounts.readOn ?? shownStamp(connection));
     if (next !== "change") setPick(null);
@@ -299,10 +309,22 @@ export function BotSettings({
       announce("Locked. The gateway confirmed it.");
       setWatching(false);
       if (document.activeElement?.closest("[data-bs='lock-check']")) focusIn("[data-bs-focus]");
-    } else if (lastWord.current === "locked" && word === "bound")
+    } else if (
+      lastWord.current === "locked" &&
+      word === "bound" &&
+      // An Unlock pressed here says so in its own line: this change of word, the read it made,
+      // and only on the screen that shows that line (the press's own).
+      !(
+        accounts.clear?.botId === bot.id &&
+        accounts.clear.id === pressed &&
+        accounts.clear.status === "cleared" &&
+        accounts.clear.checkedSeq !== null &&
+        accounts.clear.checkedSeq === binding?.evidence.readSeq
+      )
+    )
       announce(`${name} is no longer locked`);
     lastWord.current = word;
-  }, [word, announce, name, focusIn]);
+  }, [word, announce, name, focusIn, accounts.clear, bot.id, binding?.evidence.readSeq, pressed]);
 
   const cli = gatewayCli(info, connection);
   const stopped = orderNeedsStoppedGateway(connection.serverVersion);
@@ -765,8 +787,8 @@ export function BotSettings({
                 ? `${name} is locked to ${accountName(was, accounts)}.`
                 : `${name} was locked to ${accountName(was, accounts)} when Clawtrate last checked, at ${clock(lock.asOf)}.`}{" "}
               {toGateway
-                ? `${lock.asOf === null ? "The gateway keeps" : "If it still does, the gateway keeps"} an order for ${name} that names only ${accountName(was, accounts)}, and goes on using that account alone until its owner clears the order on the gateway's machine. Account shows the command.`
-                : `${lock.asOf === null ? "After saving" : "If it still is, after saving"}, ${name} runs on ${accountName(target!, accounts)} first, and the gateway still tries ${accountName(was, accounts)} when ${accountName(target!, accounts)} fails, until you lock to ${accountName(target!, accounts)} or unlock. Account then shows both commands.`}
+                ? `${lock.asOf === null ? "The gateway keeps" : "If it still does, the gateway keeps"} an order for ${name} that names only ${accountName(was, accounts)}, and goes on using that account alone ${admin ? "until the order is cleared. Account then has Clear order." : "until its owner clears the order on the gateway's machine. Account shows the command."}`
+                : `${lock.asOf === null ? "After saving" : "If it still is, after saving"}, ${name} runs on ${accountName(target!, accounts)} first, and the gateway still tries ${accountName(was, accounts)} when ${accountName(target!, accounts)} fails, until you lock to ${accountName(target!, accounts)} or unlock. ${admin ? "Account then shows the lock command, and Unlock." : "Account then shows both commands."}`}
             </p>
           </Note>
         )}
@@ -821,6 +843,80 @@ export function BotSettings({
       return false;
     }
   };
+  // Unlock and Clear (#660): the one account the bot's own stored order names, which they clear.
+  const held =
+    binding.order?.stored && binding.order.ids.length === 1 ? binding.order.ids[0]! : null;
+  const nameOfAccount = (id: string) => {
+    const listed = accounts.accounts.find((a) => a.id === id);
+    return listed ? accountName(listed, accounts) : id;
+  };
+  // A press under way is shown wherever its bot's page is open; an ended one only to the visit
+  // that pressed it.
+  const clear =
+    accounts.clear?.botId === bot.id &&
+    (accounts.clear.status === "sending" || accounts.clear.id === pressed)
+      ? accounts.clear
+      : null;
+  // One press at a time, for any bot (the engine refuses a second one too).
+  const clearing = accounts.clear?.status === "sending" || asking;
+  const openClear = (kind: ClearAsk["kind"]) => {
+    if (!held || !binding.provider) return;
+    askedOn.current = shownOn;
+    setError(null);
+    setAsk({ kind, provider: binding.provider, account: held });
+  };
+  const pressClear = async (asked: ClearAsk) => {
+    setAsking(true);
+    const id = Array.from(crypto.getRandomValues(new Uint8Array(12)), (byte) =>
+      byte.toString(16).padStart(2, "0"),
+    ).join("");
+    setPressed(id);
+    try {
+      await bridge.invoke({
+        type: "clearBotOrder",
+        press: id,
+        botId: bot.id,
+        provider: asked.provider,
+        account: asked.account,
+        kind: asked.kind,
+        stamp: await screenStamp(bridge, askedOn.current ?? shownOn),
+      });
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : String(failure));
+    } finally {
+      setAsking(false);
+      setAsk(null);
+      // The button that opened it may be gone with the order: the line that says how it went.
+      requestAnimationFrame(() =>
+        requestAnimationFrame(() => {
+          const root = rootRef.current;
+          if (!root || root.contains(document.activeElement)) return;
+          (
+            root.querySelector<HTMLElement>("[data-bs='clear-outcome']") ??
+            root.querySelector<HTMLElement>("[data-bs-focus]")
+          )?.focus();
+        }),
+      );
+    }
+  };
+  const clearButton = (kind: ClearAsk["kind"]) => (
+    <button
+      type="button"
+      className="button"
+      data-size="sm"
+      data-bs={kind === "unlock" ? "unlock" : "clear-order"}
+      disabled={!connected || clearing}
+      onClick={() => openClear(kind)}
+    >
+      {kind === "unlock" ? "Unlock…" : "Clear order…"}
+    </button>
+  );
+  // Below admin, the commands stay: this is what admin access would add (bots.md section 2).
+  const adminWould = (what: string) => (
+    <p className="b-hint" data-testid="clear-needs-admin">
+      With admin access, Clawtrate {what} from here, with the gateway running.
+    </p>
+  );
   const changeButton = (label: string, primary: boolean) =>
     admin && (
       <div className="b-actions" style={{ marginTop: 14 }} key="change">
@@ -869,7 +965,18 @@ export function BotSettings({
           </p>
         </Note>,
       );
-    if (kept && provider)
+    if (kept && provider && admin)
+      page.push(
+        <Note key="kept" tone="warn" testId="retained-order">
+          <p>
+            The gateway still has an order for {name} that names only{" "}
+            {keptAccount ? accountName(keptAccount, accounts) : kept}, so it keeps using that
+            account alone. Clear it to let the gateway choose among {who}'s accounts.
+          </p>
+          <div className="b-actions">{clearButton("clear")}</div>
+        </Note>,
+      );
+    else if (kept && provider)
       page.push(
         <Note key="kept" tone="warn" testId="retained-order">
           <p>
@@ -890,6 +997,7 @@ export function BotSettings({
               label="Copy clear command"
             />
           )}
+          {adminWould("clears it")}
         </Note>,
       );
     page.push(changeButton(binding.suffixLost ? "Choose an account" : "Bind to an account", true));
@@ -1081,43 +1189,49 @@ export function BotSettings({
           has one, comes first.
         </p>,
       );
-    const unlock = (
-      <details className="b-disclosure" key="unlock">
-        <summary>
-          <ChevronIcon />
-          Unlock
-        </summary>
-        <div className="b-disclosure-body">
-          {stopped ? (
-            <>
-              <p className="b-hint" style={{ marginTop: 4 }}>
-                {STOPPED_WHY} On the gateway's machine:
-              </p>
-              <StoppedSteps
-                cli={cli}
-                command={unlockCommand(cli, bot.id, account.provider)}
-                label="Copy unlock command"
-              />
-              <p className="b-hint">
-                Clawtrate sees the change when the gateway is back. {name} then follows the
-                gateway's other orders.
-              </p>
-            </>
-          ) : (
-            <>
-              <p className="b-hint" style={{ marginTop: 4 }}>
-                Run this on the gateway's machine. Clawtrate sees the change by itself. {name} then
-                follows the gateway's other orders.
-              </p>
-              <CommandBlock
-                command={unlockCommand(cli, bot.id, account.provider)}
-                label="Copy unlock command"
-              />
-            </>
-          )}
+    const unlock =
+      admin && held ? (
+        <div className="b-actions" style={{ marginTop: 14 }} key="unlock">
+          {clearButton("unlock")}
         </div>
-      </details>
-    );
+      ) : (
+        <details className="b-disclosure" key="unlock">
+          <summary>
+            <ChevronIcon />
+            Unlock
+          </summary>
+          <div className="b-disclosure-body">
+            {stopped ? (
+              <>
+                <p className="b-hint" style={{ marginTop: 4 }}>
+                  {STOPPED_WHY} On the gateway's machine:
+                </p>
+                <StoppedSteps
+                  cli={cli}
+                  command={unlockCommand(cli, bot.id, account.provider)}
+                  label="Copy unlock command"
+                />
+                <p className="b-hint">
+                  Clawtrate sees the change when the gateway is back. {name} then follows the
+                  gateway's other orders.
+                </p>
+              </>
+            ) : (
+              <>
+                <p className="b-hint" style={{ marginTop: 4 }}>
+                  Run this on the gateway's machine. Clawtrate sees the change by itself. {name}{" "}
+                  then follows the gateway's other orders.
+                </p>
+                <CommandBlock
+                  command={unlockCommand(cli, bot.id, account.provider)}
+                  label="Copy unlock command"
+                />
+              </>
+            )}
+            {!admin && adminWould(`unlocks ${name}`)}
+          </div>
+        </details>
+      );
     if (word === "locked") {
       page.push(
         <Note key="s" icon={<LockIcon />} testId="locked-note">
@@ -1313,7 +1427,37 @@ export function BotSettings({
   return (
     <div ref={rootRef} className="b-tab" data-testid="bot-settings" data-word={word ?? undefined}>
       {sub("Account", "main", "[data-bs='account']")}
+      {clear && (
+        <ClearOutcome
+          clear={clear}
+          binding={binding}
+          name={name}
+          who={who}
+          named={nameOfAccount(clear.account)}
+          // Only where the page shows no Check now of its own: a bot the gateway chooses for, or
+          // one whose account is gone (No account).
+          onCheck={
+            binding.mode === "account" && word !== "no-account" && account !== null
+              ? null
+              : () => void bridge.send({ type: "checkLock", botId: bot.id }).catch(() => {})
+          }
+          connected={connected}
+        />
+      )}
       {page}
+      {ask && (
+        <ClearOrderConfirm
+          ask={ask}
+          name={name}
+          who={providerName(ask.provider)}
+          named={nameOfAccount(ask.account)}
+          bound={binding.mode === "account" && account ? accountName(account, accounts) : null}
+          stopped={stopped}
+          busy={asking}
+          onAction={() => void pressClear(ask)}
+          onCancel={() => setAsk(null)}
+        />
+      )}
       {error && (
         <p className="b-field-error" role="alert">
           {error}

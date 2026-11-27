@@ -135,10 +135,8 @@
     - button "Back to settings"
     - heading "Account" [level=3]
     - paragraph: "The gateway chooses. Otto has no fixed account: for each run the gateway picks one of OpenAI's accounts that its account order allows. Otto keeps its own model and no fallbacks."
-    - paragraph: "The gateway still has an order for Otto that names only OpenAI · Work, so it keeps using that account alone. To let the gateway choose among OpenAI's accounts, the gateway's owner can clear it on the gateway's machine:"
-    - code: openclaw models auth order clear --provider openai --agent otto
-    - button "Copy clear command"
-    - status
+    - paragraph: The gateway still has an order for Otto that names only OpenAI · Work, so it keeps using that account alone. Clear it to let the gateway choose among OpenAI's accounts.
+    - button "Clear order…"
     - button "Bind to an account"
   - status
 - status
