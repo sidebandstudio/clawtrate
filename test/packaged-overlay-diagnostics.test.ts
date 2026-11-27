@@ -21,6 +21,7 @@ import type * as Os from "node:os";
 import { basename, dirname, join, sep } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { debuggingPort } from "../e2e-packaged/desktop-driver.ts";
+import type * as Driver from "../e2e-packaged/desktop-driver.ts";
 import globalSetup, {
   CHECKOUT,
   exitedWithin,
@@ -41,21 +42,27 @@ import {
 } from "../e2e-packaged/overlay-diagnostics.ts";
 import {
   askToClose,
+  forceEnd,
   windowsProcesses,
   type OverlayRead,
   type WindowsProcess,
 } from "../e2e-packaged/windows.ts";
 
 // Stand-ins for the Windows run's app, its process list, its close request,
-// its debugging port and its temporary folder, and for a write that fails;
-// every other call is the real one.
+// its debugging port and its temporary folder, and for a write, a removal or
+// a look at a folder that fails; every other call is the real one.
 vi.mock("node:child_process", async (importOriginal) => {
   const real = await importOriginal<typeof ChildProcesses>();
   return { ...real, spawn: vi.fn(real.spawn) };
 });
 vi.mock("node:fs", async (importOriginal) => {
   const real = await importOriginal<typeof Fs>();
-  return { ...real, writeFileSync: vi.fn(real.writeFileSync) };
+  return {
+    ...real,
+    existsSync: vi.fn(real.existsSync),
+    rmSync: vi.fn(real.rmSync),
+    writeFileSync: vi.fn(real.writeFileSync),
+  };
 });
 vi.mock("node:os", async (importOriginal) => {
   const real = await importOriginal<typeof Os>();
@@ -72,6 +79,7 @@ vi.mock(import("../e2e-packaged/desktop-driver.ts"), async (actual) => ({
   debuggingPort: vi.fn(async () => 1),
 }));
 const realChildProcess = await vi.importActual<typeof ChildProcesses>("node:child_process");
+const realDriver = await vi.importActual<typeof Driver>("../e2e-packaged/desktop-driver.ts");
 const realFs = await vi.importActual<typeof Fs>("node:fs");
 const realOs = await vi.importActual<typeof Os>("node:os");
 
@@ -81,6 +89,8 @@ const AT = "2026-11-25T00:00:00.000Z";
 afterEach(() => {
   vi.restoreAllMocks();
   vi.mocked(writeFileSync).mockImplementation(realFs.writeFileSync);
+  vi.mocked(rmSync).mockImplementation(realFs.rmSync);
+  vi.mocked(existsSync).mockImplementation(realFs.existsSync);
 });
 
 /** Folders this file made with mkdtemp, by real path, with where each was made: the only ones it removes. */
@@ -590,7 +600,19 @@ describe("the Windows teardown", () => {
     /** Whether the packaged executable is there. */
     exe?: boolean;
     /** The debugging port the setup waits for. */
-    port?: () => Promise<number>;
+    port?: typeof debuggingPort;
+    /**
+     * Whether Windows has ended the app before Node reports it (#326): its
+     * handle then ends nothing, as Node's kill of a process already gone, and
+     * the stand-in's own exit is the one reported, late.
+     */
+    lateExit?: boolean;
+    /**
+     * Whether the executable is one that never exists, so that the real spawn
+     * fails: Node reports ENOENT by an error event a tick later, never an exit,
+     * and no process starts.
+     */
+    unstarted?: boolean;
   };
   type Run = {
     setup: () => Promise<() => Promise<void>>;
@@ -598,6 +620,8 @@ describe("the Windows teardown", () => {
     sidecar: string;
     /** The arguments the setup launched its app with, and the stand-in this run started for it. */
     launched: () => { args: string[]; app: ChildProcess } | undefined;
+    /** Runs the exit handlers the setup added, as the runner's own exit would. */
+    exit: () => void;
   };
 
   /** The stand-in app: it quits `after` ms once `quit` exists, or never if `after` is null. */
@@ -640,6 +664,17 @@ const wait = setInterval(() => {
       // In place of the packaged executable only, started by the real spawn, never the stand-in's;
       // outside the run's own folder, which Windows would not remove while it is a running app's.
       vi.mocked(spawn).mockImplementationOnce(((_exe: string, args: string[]) => {
+        if (stand.unstarted) {
+          // A name no file has, in this test's folder. No process, so nothing to list or reap.
+          const missing = join(root, `missing-${randomBytes(6).toString("hex")}.exe`);
+          const failed = realChildProcess.spawn(missing, [], { cwd: root, stdio: "ignore" });
+          // Node 24's kill of such a handle throws EINVAL, and Node 26's returns false.
+          vi.spyOn(failed, "kill").mockImplementation(() => {
+            throw Object.assign(new Error("kill EINVAL"), { code: "EINVAL", syscall: "kill" });
+          });
+          launched = { args, app: failed };
+          return failed;
+        }
         const after = stand.quitsAfter === undefined ? 0 : stand.quitsAfter;
         app = realChildProcess.spawn(process.execPath, ["-e", standIn(quit, after)], {
           cwd: root,
@@ -647,8 +682,12 @@ const wait = setInterval(() => {
         });
         listed = { pid: app.pid!, ppid: process.pid, command: args.join(" ") };
         launched = { args, app };
+        if (stand.lateExit) vi.spyOn(app, "kill").mockReturnValue(false);
         return app;
       }) as unknown as typeof spawn);
+      vi.mocked(forceEnd).mockClear();
+      vi.mocked(askToClose).mockClear();
+      vi.mocked(debuggingPort).mockClear();
       vi.mocked(askToClose).mockImplementation(
         () => (writeFileSync(quit, ""), stand.refusal ?? null),
       );
@@ -665,6 +704,10 @@ const wait = setInterval(() => {
         root,
         sidecar: join(report, TEARDOWN_EXIT),
         launched: () => launched,
+        exit: () => {
+          for (const listener of process.listeners("exit"))
+            if (!listeners.includes(listener)) listener(0);
+        },
       });
     } finally {
       // What cannot fail first, so a failure below leaves none of it behind.
@@ -676,6 +719,7 @@ const wait = setInterval(() => {
         if (!listeners.includes(listener)) process.off("exit", listener);
       restorePackagedEnv(saved);
       try {
+        if (app && vi.isMockFunction(app.kill)) vi.mocked(app.kill).mockRestore();
         if (app) await reap(app);
       } finally {
         removeOwned(root);
@@ -775,7 +819,7 @@ const wait = setInterval(() => {
     "after a refused close, when the process list %s before Node reports the exit, gives the exit a short chance for the record alone",
     async (_listing, listing, failure) => {
       await windowsRun(
-        { refusal: "ERROR: stand-in refusal", quitsAfter: 300, listing },
+        { refusal: "ERROR: stand-in refusal", quitsAfter: 300, listing, lateExit: true },
         async ({ setup, sidecar }) => {
           const teardown = await setup();
           // The checks' own verdict, as before.
@@ -785,6 +829,7 @@ const wait = setInterval(() => {
             afterClose: "not asked",
             lastReported: { code: 0, signal: null },
           });
+          expect(forceEnd, "the app, unreported, is never ended by PID").not.toHaveBeenCalled();
         },
       );
     },
@@ -793,19 +838,282 @@ const wait = setInterval(() => {
   it("keeps the exit unknown when Node reports none within the bound, and its stand-in app is reaped after the teardown rejects", async () => {
     let elapsed = 0;
     const app = await windowsRun(
-      { refusal: "ERROR: stand-in refusal", quitsAfter: null, listing: () => [] },
+      { refusal: "ERROR: stand-in refusal", quitsAfter: null, listing: () => [], lateExit: true },
       async ({ setup, sidecar }) => {
         const teardown = await setup();
         const started = Date.now();
         await expect(teardown()).rejects.toThrow("asking the app to close failed");
         elapsed = Date.now() - started;
         expect(JSON.parse(readFileSync(sidecar, "utf8")).lastReported).toBe("not reported");
+        expect(forceEnd).not.toHaveBeenCalled();
       },
     );
     expect(elapsed).toBeGreaterThanOrEqual(950);
     expect(elapsed).toBeLessThan(5_000);
     expect(app && exitOf(app), "ended by the test, by its handle").not.toBe("not reported");
   });
+
+  it("never ends by PID an app Node saw end by a signal, though another process now has its PID, and keeps how it ended", async () => {
+    let reused = 0;
+    await windowsRun(
+      {
+        // Once the app is gone, a row for another program Windows gave its PID; no process is behind it.
+        listing: (running) =>
+          running ? [running] : [{ pid: reused, ppid: 4, command: "C:\\stand-in\\other.exe" }],
+      },
+      async ({ setup, sidecar, launched }) => {
+        const teardown = await setup();
+        const app = launched()!.app;
+        reused = app.pid!;
+        // Ended by its handle, by the test, before the teardown comes to ask it to close.
+        app.kill();
+        expect(await exitedWithin(app, 10_000)).toBe(true);
+        await expect(teardown()).rejects.toThrow(
+          "the app exited before it was asked to close, with SIGTERM",
+        );
+        expect(forceEnd).not.toHaveBeenCalled();
+        expect(JSON.parse(readFileSync(sidecar, "utf8"))).toEqual({
+          beforeClose: { code: null, signal: "SIGTERM" },
+          afterClose: "not asked",
+          lastReported: { code: null, signal: "SIGTERM" },
+        });
+      },
+    );
+  });
+
+  it.each([
+    ["Node still holds it", false],
+    ["Node saw it end by a signal", true],
+  ])(
+    "at the runner's exit, when %s, never ends the app by PID, though the process list names its PID with its data folder, and ends its helper by PID",
+    async (_case, endedFirst) => {
+      // A made-up PID, for a row alone: forceEnd is a stand-in and ends nothing.
+      const helper = 0xfffffffc;
+      let rows: WindowsProcess[] = [];
+      await windowsRun(
+        { quitsAfter: null, listing: () => rows },
+        async ({ setup, launched, exit }) => {
+          await setup();
+          const { app, args } = launched()!;
+          expect(app.listenerCount("spawn") + app.listenerCount("error"), "none left").toBe(0);
+          if (endedFirst) {
+            app.kill();
+            expect(await exitedWithin(app, 10_000)).toBe(true);
+          }
+          const command = args.join(" ");
+          rows = [
+            { pid: app.pid!, ppid: process.pid, command },
+            { pid: helper, ppid: app.pid!, command: `${command} --type=renderer` },
+          ];
+          exit();
+          expect(vi.mocked(forceEnd).mock.calls).toEqual([[helper]]);
+          expect(await exitedWithin(app, 10_000)).toBe(true);
+          expect(exitOf(app)).toEqual({ code: null, signal: "SIGTERM" });
+        },
+      );
+    },
+  );
+
+  it.each([
+    ["its setup fails", false],
+    ["the runner exits first", true],
+  ])(
+    "for an executable that cannot start, when %s, rejects the setup with Node's own error, waits for no debugging port, ends nothing by handle or PID and removes the run's folder",
+    async (_case, exitsFirst) => {
+      const printed = vi.spyOn(console, "error").mockImplementation(() => {});
+      const app = await windowsRun(
+        // The real wait, which would read only this run's own profile.
+        { unstarted: true, port: realDriver.debuggingPort },
+        async ({ setup, root, sidecar, launched, exit }) => {
+          // Spawned, with its error not yet reported, once this returns.
+          const failed = setup();
+          const place = process.env.CLAWTRATE_PACKAGED_PLACE!;
+          const child = launched()!.app;
+          expect([child.pid, exitOf(child)]).toEqual([undefined, "not reported"]);
+          if (exitsFirst) {
+            exit();
+            expect(existsSync(place), "removed at the runner's exit").toBe(false);
+          }
+          const error = await failed.then(
+            () => undefined,
+            (caught: unknown) => caught,
+          );
+          expect(error).toMatchObject({
+            code: "ENOENT",
+            errno: child.exitCode,
+            path: child.spawnfile,
+          });
+          expect(child.listenerCount("spawn") + child.listenerCount("error")).toBe(0);
+          expect(existsSync(place), place).toBe(false);
+          expect(debuggingPort).not.toHaveBeenCalled();
+          expect(child.kill).not.toHaveBeenCalled();
+          expect(askToClose).not.toHaveBeenCalled();
+          expect(forceEnd).not.toHaveBeenCalled();
+          const ended = { code: child.exitCode, signal: null };
+          expect(printed.mock.calls).toEqual([
+            [`Error: the app exited before it was asked to close, with ${child.exitCode}`],
+          ]);
+          const kept = readFileSync(sidecar, "utf8");
+          expect(JSON.parse(kept)).toEqual({
+            beforeClose: ended,
+            afterClose: "not asked",
+            lastReported: ended,
+          });
+          for (const name of [basename(root), basename(child.spawnfile)])
+            expect(kept, "no path in the uploaded record").not.toContain(name);
+        },
+      );
+      expect(app, "no process started").toBeUndefined();
+    },
+  );
+
+  /**
+   * Makes the kill of this test's own app throw, as Node's does when Windows
+   * refuses to end a process, with a made-up path in its text. Returns that path.
+   */
+  const refuseKill = (app: ChildProcess, code: string) => {
+    const { path, error } = fakeError(code);
+    vi.spyOn(app, "kill").mockImplementation(() => {
+      throw error;
+    });
+    return path;
+  };
+
+  it.each([
+    ["its setup fails", true, false],
+    ["its teardown runs, with the busy folder reading as absent", false, true],
+  ])(
+    "when %s and ending the app by its handle throws, keeps the earlier verdict, tries to remove the run's folder and counts that it threw, and names each failure once by its code alone, never ending the app by PID",
+    async (_case, setupFails, hidden) => {
+      const printed = vi.spyOn(console, "error").mockImplementation(() => {});
+      const synthetic: string[] = [];
+      // The run's folder stays busy, as one a running app holds would.
+      vi.mocked(rmSync).mockImplementation((path, options) => {
+        if (path !== process.env.CLAWTRATE_PACKAGED_PLACE) return realFs.rmSync(path, options);
+        const busy = fakeError("EBUSY");
+        synthetic.push(busy.path);
+        throw busy.error;
+      });
+      // As a folder Windows denies a look at, which reads as absent.
+      if (hidden)
+        vi.mocked(existsSync).mockImplementation(
+          (path) => path !== process.env.CLAWTRATE_PACKAGED_PLACE && realFs.existsSync(path),
+        );
+      await windowsRun(
+        {
+          refusal: "ERROR: stand-in refusal",
+          quitsAfter: null,
+          listing: () => [],
+          port: async (_userData, app) => {
+            synthetic.push(refuseKill(app, "EPERM"));
+            if (setupFails) throw new Error("stand-in: no debugging port");
+            return 1;
+          },
+        },
+        async ({ setup, sidecar, launched }) => {
+          let verdict: string;
+          if (setupFails) {
+            await expect(setup()).rejects.toThrow("stand-in: no debugging port");
+            expect(printed).toHaveBeenCalledOnce();
+            verdict = String(printed.mock.calls[0]![0]);
+          } else {
+            const teardown = await setup();
+            verdict = String(await teardown().catch((error: unknown) => error));
+            expect(printed).not.toHaveBeenCalled();
+          }
+          const { app } = launched()!;
+          const place = process.env.CLAWTRATE_PACKAGED_PLACE!;
+          expect(verdict).toBe(
+            [
+              "Error: asking the app to close failed: ERROR: stand-in refusal",
+              `the app (pid ${app.pid}) could not be ended by its handle (EPERM)`,
+              "the run's folder could not be removed (EBUSY)",
+            ].join("\n"),
+          );
+          expect(synthetic).toHaveLength(2);
+          for (const path of [...synthetic, place]) expect(verdict).not.toContain(path);
+          expect(app.kill).toHaveBeenCalledOnce();
+          expect(rmSync).toHaveBeenCalledWith(place, expect.anything());
+          expect(forceEnd).not.toHaveBeenCalled();
+          expect(JSON.parse(readFileSync(sidecar, "utf8"))).toEqual({
+            beforeClose: "not reported",
+            afterClose: "not asked",
+            lastReported: "not reported",
+          });
+        },
+      );
+    },
+  );
+
+  it("at the runner's exit, when ending the app by its handle throws, prints the refusal without its text, still removes the run's folder and fails the run, never ending the app by PID", async () => {
+    const printed = vi.spyOn(console, "error").mockImplementation(() => {});
+    const exitCode = process.exitCode;
+    try {
+      await windowsRun({ quitsAfter: null }, async ({ setup, launched, exit }) => {
+        await setup();
+        const { app } = launched()!;
+        // A code that is no system name: none is printed.
+        const synthetic = refuseKill(app, "C:\\fake-code");
+        const place = process.env.CLAWTRATE_PACKAGED_PLACE!;
+        expect(() => exit()).not.toThrow();
+        expect(printed.mock.calls).toEqual([
+          [`the app (pid ${app.pid}) could not be ended by its handle`],
+        ]);
+        expect(printed.mock.calls.flat().join("\n")).not.toContain(synthetic);
+        expect(app.kill).toHaveBeenCalledOnce();
+        expect(existsSync(place)).toBe(false);
+        expect(forceEnd, "the process list names the app's PID").not.toHaveBeenCalled();
+        expect(process.exitCode).toBe(1);
+      });
+    } finally {
+      process.exitCode = exitCode;
+    }
+  });
+
+  it.each([
+    ["Windows refuses by an error event", true],
+    ["the kill only returns false", false],
+  ])(
+    "at the runner's exit before the app's start is reported, when %s, sees what the kill raises though the wait for the start listens too, and keeps an exit code already set",
+    async (_case, refused) => {
+      const printed = vi.spyOn(console, "error").mockImplementation(() => {});
+      const exitCode = process.exitCode;
+      try {
+        await windowsRun({}, async ({ setup, launched, exit }) => {
+          // Spawned with a PID, its start not yet reported, once this returns.
+          const started = setup().then(
+            () => "started",
+            (error: unknown) => error,
+          );
+          const { app } = launched()!;
+          const { path, error } = fakeError("EPERM");
+          // Node's kill on a refusal other than "no such process": an error event, then false.
+          vi.spyOn(app, "kill").mockImplementation(() => {
+            if (refused) app.emit("error", error);
+            return false;
+          });
+          const waiting = app.listeners("error");
+          expect(waiting, "the wait for the start").toHaveLength(1);
+          process.exitCode = 3;
+          exit();
+          expect(app.kill).toHaveBeenCalledOnce();
+          expect(app.listeners("error"), "no listener of the cleanup's").toEqual(
+            refused ? [] : waiting,
+          );
+          expect(process.exitCode).toBe(3);
+          expect(printed.mock.calls).toEqual(
+            refused ? [[`the app (pid ${app.pid}) could not be ended by its handle (EPERM)`]] : [],
+          );
+          expect(printed.mock.calls.flat().join("\n")).not.toContain(path);
+          expect(await started, "the wait for the start, as before").toBe(
+            refused ? error : "started",
+          );
+        });
+      } finally {
+        process.exitCode = exitCode;
+      }
+    },
+  );
 
   it("waits for no exit when there is no report to write it beside", async () => {
     let elapsed = 0;

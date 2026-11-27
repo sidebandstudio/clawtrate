@@ -27,6 +27,7 @@ import { appEnv, debuggingPort } from "./desktop-driver.ts";
 
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
+import { once } from "node:events";
 import {
   existsSync,
   mkdirSync,
@@ -519,14 +520,21 @@ async function macSetup(app: string, domain: string) {
   return teardown;
 }
 
+/** " (CODE)" for an error whose code is a bare system name, else nothing: its text may name paths. */
+function codeOf(error: unknown): string {
+  const code = (error as { code?: unknown } | null)?.code;
+  return typeof code === "string" && /^[A-Z][A-Z0-9_]*$/.test(code) ? ` (${code})` : "";
+}
+
 /**
  * The Windows run: the packaged app alone, with a temporary data folder. No
  * development gateway runs on Windows, so there are no instances, no run
  * record and no listeners to protect. The app is asked to close the way
  * Windows asks at sign-out (a close message to its windows), and the run
  * fails if it or a helper is still running 15 seconds later; anything left
- * is then ended by PID so the machine is not left with it. How the app had
- * ended by then goes beside any taskbar overlay report in `outputDirs`.
+ * is then ended, the app by its handle and its helpers by PID, so the machine
+ * is not left with it. How the app had ended by then goes beside any taskbar
+ * overlay report in `outputDirs`.
  */
 async function windowsSetup(outputDirs: string[]) {
   const app = packagedApp();
@@ -537,16 +545,62 @@ async function windowsSetup(outputDirs: string[]) {
   let userData = join(realpathSync.native(dir), "user-data");
   let appProcess: ChildProcess | null = null;
 
-  /** Ends whatever is left of the app by PID and removes the folder. Synchronous, for the exit handler too. */
+  /**
+   * Ends whatever is left of the app and removes the folder, and returns what
+   * it could not do. Synchronous, for the exit handler too. The app itself is
+   * ended only by its handle, and only while it has a PID and Node has not
+   * reported its exit: Node holds the process open until then, so the handle
+   * reaches no other. Once it has, the app's PID may be another program's, so
+   * the app is left alone, under its PID in the process list too. A spawn that
+   * failed has no PID, and no exit field set until Node reports why a tick
+   * later; Node 24's kill of it throws. Its helpers are ended by PID.
+   * If Windows refuses to end the app, Node throws, or raises an error event,
+   * which the wait for the app's start may be listening for too: either is
+   * reported once, by its code alone, since its text may name paths, and the
+   * folder is still removed. A removal that throws failed, however the folder
+   * reads afterwards: Windows can deny a look at one it would not remove.
+   */
   let finished = false;
-  const finish = () => {
-    if (finished) return;
+  const finish = (): string[] => {
+    if (finished) return [];
     finished = true;
-    for (const pid of processesUsing(userData)) forceEnd(pid);
-    if (appProcess?.pid && appProcess.exitCode === null) forceEnd(appProcess.pid);
-    rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    const problems: string[] = [];
+    const root = appProcess?.pid;
+    for (const pid of processesUsing(userData)) if (pid !== root) forceEnd(pid);
+    if (
+      appProcess?.pid !== undefined &&
+      appProcess.exitCode === null &&
+      appProcess.signalCode === null
+    ) {
+      const faults: unknown[] = [];
+      const seen = (error: Error) => faults.push(error);
+      appProcess.on("error", seen);
+      try {
+        appProcess.kill();
+      } catch (error) {
+        faults.push(error);
+      } finally {
+        appProcess.off("error", seen);
+      }
+      if (faults.length > 0)
+        problems.push(
+          `the app (pid ${appProcess.pid}) could not be ended by its handle${codeOf(faults[0])}`,
+        );
+    }
+    try {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+      if (existsSync(dir)) problems.push(`${dir} could not be removed`);
+    } catch (error) {
+      problems.push(`the run's folder could not be removed${codeOf(error)}`);
+    }
+    return problems;
   };
-  process.on("exit", finish);
+  // Nothing is left to throw to at exit: what cleanup could not do is printed and fails the run.
+  process.on("exit", () => {
+    const problems = finish();
+    for (const problem of problems) console.error(problem);
+    if (problems.length > 0 && !process.exitCode) process.exitCode = 1;
+  });
 
   /** How the app had ended before and after it was asked to close, for a failed overlay check's report. */
   const exits: Omit<TeardownExit, "lastReported"> = {
@@ -574,8 +628,7 @@ async function windowsSetup(outputDirs: string[]) {
     for (let i = 0; i < 50 && processesUsing(userData).length > 0; i += 1) await sleep(200);
     const left = processesUsing(userData);
     if (left.length > 0) problems.push(`app processes still running: ${left.join(", ")}`);
-    finish();
-    if (existsSync(dir)) problems.push(`${dir} could not be removed`);
+    problems.push(...finish());
     if (problems.length > 0) throw new Error(problems.join("\n"));
     console.log(`Closed the packaged app and removed ${dir}`);
   };
@@ -611,6 +664,10 @@ async function windowsSetup(outputDirs: string[]) {
     );
     const exitFile = join(dir, "app-exit.json");
     reportExit(appProcess, exitFile);
+    // Node reports a spawn that failed, such as a missing executable, by an error
+    // event a tick later and never by an exit: the setup rejects with that error
+    // and waits for no debugging port. Both listeners go once either event comes.
+    await once(appProcess, "spawn");
     const port = await debuggingPort(userData, appProcess);
     process.env.CLAWTRATE_PACKAGED_CDP = `http://127.0.0.1:${port}`;
     process.env.CLAWTRATE_PACKAGED_APP = app;
