@@ -372,7 +372,7 @@ p = await open("view=routine&routine=standup");
 check("F-353 another zone: next run in its zone and in yours", (await text(p, '[data-fact="next"] dd')) === "Sun, Sun Nov 22, 5:00 PM12:00 PM your time");
 await p.close();
 p = await open("view=routine&routine=reminder");
-check("a reminder: the bot answers it in the main conversation, one-shot schedule", (await text(p, ".r-section .r-hint")) === "Marlow gets this reminder in its main conversation and answers it there with its model, or says nothing:" && (await text(p, '[data-fact="runs-in"] dd')) === "Marlow's main conversation" && (await text(p, '[data-testid="no-runs"]')) === "No runs yet. The first is due Fri 9:00 AM.");
+check("a reminder: the bot may answer it in the main conversation, one-shot schedule", (await text(p, ".r-section .r-hint")) === "Marlow gets this reminder in its main conversation and may answer there:" && (await text(p, '[data-fact="runs-in"] dd')) === "Marlow's main conversation" && (await text(p, '[data-testid="no-runs"]')) === "No runs yet. The first is due Fri 9:00 AM.");
 await p.close();
 p = await open("view=routine&routine=watch");
 check("a condition: Starts only when its check passes; no zone for every", (await text(p, '[data-fact="starts"] dd')).startsWith("Only when its check passes") && !(await has(p, '[data-fact="zone"]')));

@@ -387,8 +387,7 @@ function Instruction({ routine, bot }: { routine: Routine; bot: string }) {
     return (
       <>
         <p className="r-hint">
-          {bot} gets this reminder in its main conversation and answers it there with its model, or
-          says nothing:
+          {bot} gets this reminder in its main conversation and may answer there:
         </p>
         <p className="r-instruction">{routine.text}</p>
       </>

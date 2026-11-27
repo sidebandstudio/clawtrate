@@ -239,7 +239,7 @@ test.describe("1440", () => {
     await view(page).getByTestId("routine-row").filter({ hasText: "Stretch break" }).click();
     // On both OpenClaw versions the bot gets the reminder in a turn of its own (#752).
     await expect(view(page)).toContainText(
-      "Juniper gets this reminder in its main conversation and answers it there with its model, or says nothing:",
+      "Juniper gets this reminder in its main conversation and may answer there:",
     );
     await expect(view(page)).not.toContainText("Posts a reminder");
     await expect(view(page).getByTestId("routine-facts")).toContainText(

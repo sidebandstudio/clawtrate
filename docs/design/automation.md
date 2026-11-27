@@ -161,7 +161,7 @@ Opened from a row, a calendar chip, a "Created routine" card's name (F-108), or 
 
 **State line.** One line under the header: "Runs weekdays at 8:00 AM, New York." / "Paused. It won't run until resumed." / the working mark and "Running since 8:00 AM" / the failed mark and "The last run failed." Live (section 8).
 
-**Instruction.** Group word "Instruction", then the message in a `--bg-bubble` block, as the person wrote it, with line breaks kept (`payload.message`). Other payload kinds are shown and not edited, here or in the editor (section 9): a reminder (`systemEvent`) reads "<Bot> gets this reminder in its main conversation and answers it there with its model, or says nothing:" and its text (on both OpenClaw versions the bot runs a turn for it; `decisions.md`, "What a reminder does"); a command or script reads "Runs a command on the gateway, not a bot:" and the command in mono, with "Edit it on the gateway." under it.
+**Instruction.** Group word "Instruction", then the message in a `--bg-bubble` block, as the person wrote it, with line breaks kept (`payload.message`). Other payload kinds are shown and not edited, here or in the editor (section 9): a reminder (`systemEvent`) reads "<Bot> gets this reminder in its main conversation and may answer there:" and its text (on both OpenClaw versions the bot runs a turn for it; `decisions.md`, "What a reminder does"); a command or script reads "Runs a command on the gateway, not a bot:" and the command in mono, with "Edit it on the gateway." under it.
 
 **When to run.** A fact block:
 
