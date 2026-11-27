@@ -51,10 +51,10 @@ async function openShell(page: Page) {
   await expect(bots).toHaveCount(4, { timeout: 30_000 });
 }
 
-/** Otto's row in the rail, expanded, every task of his shown. */
+/** Otto's row in the rail, expanded, every task of his shown. 2026.11.10 names him by his id. */
 async function ottoTasks(page: Page) {
-  const list = page.getByRole("list", { name: "Otto's tasks" });
-  const row = page.getByTestId("bot-list").getByRole("button", { name: /^Otto\b/ });
+  const list = page.getByRole("list", { name: /^otto's tasks$/i });
+  const row = page.getByTestId("bot-list").getByRole("button", { name: /^otto\b/i });
   if ((await row.getAttribute("aria-expanded")) !== "true") await row.click();
   const showAll = list.getByRole("button", { name: /^Show all/ });
   if ((await showAll.count()) > 0) await showAll.click();
@@ -77,7 +77,9 @@ async function makeTask(page: Page, key: string, title: string, open: boolean) {
     .toBeGreaterThan(0);
   if (!open) return;
   await (await taskRow(page, title)).click();
-  await expect(page.getByRole("button", { name: `Otto, ${title}. Show details.` })).toBeVisible();
+  await expect(
+    page.getByRole("button", { name: new RegExp(`^otto, ${title}\\. Show details\\.$`, "i") }),
+  ).toBeVisible();
   const asking = page
     .getByRole("region", { name: "Access" })
     .getByRole("button", { name: /^Request (access|again)$/ });
@@ -153,7 +155,7 @@ test("#680: a quiet answer to a turn the gateway started is no failure; a turn t
     const failure = transcript.locator(
       '[data-testid="turn-error"], [data-testid="turn-error-line"]',
     );
-    const ottoRow = page.getByTestId("bot-list").getByRole("button", { name: /^Otto\b/ });
+    const ottoRow = page.getByTestId("bot-list").getByRole("button", { name: /^otto\b/i });
 
     // The open task, woken, answers quietly.
     const quiet = await wakeAndWait(openKey, QUIET_EVENT, Date.now() - 1_000);
@@ -193,7 +195,7 @@ test("#680: a quiet answer to a turn the gateway started is no failure; a turn t
       expect(thought).toMatchObject({ status: "failed", suppressErrorNotice: true });
       const card = transcript.getByTestId("turn-error");
       await expect(card).toBeVisible({ timeout: 30_000 });
-      await expect(card).toContainText("Otto couldn't finish an earlier turn");
+      await expect(card).toContainText(/otto couldn't finish an earlier turn/i);
       await expect(card).toContainText("No answer was returned.");
       await expect(await taskRow(page, openTitle)).toHaveAccessibleName(/last run failed/, {
         timeout: 20_000,
