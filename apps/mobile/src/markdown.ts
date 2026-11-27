@@ -2,8 +2,8 @@
 // uses (micromark and mdast, with GitHub's extensions: tables, strikethrough,
 // autolinks), and reduced to the few blocks and inlines the iOS bubble draws.
 // Raw HTML is shown as text and never interpreted. A link opens in the system
-// browser, and only when it is an http or https address that parses; any other
-// is its text. A link opens at once. One whose visible text is not its own
+// browser, and only when it is an http or https address that parses with no
+// user name or password; any other is its text. A link opens at once. One whose visible text is not its own
 // address shows the address's host beside it, in ASCII, and one to this iPhone
 // or the person's own network says so beside it too. Pure, so the unit tests
 // cover it.
@@ -44,7 +44,10 @@ export type Block =
   | { t: "rule" }
   | { t: "table"; header: Inline[][]; rows: Inline[][][] };
 
-/** A link's address when it may open: http or https, and it parses with a host. */
+/**
+ * A link's address when it may open: http or https, it parses with a host, and it carries no
+ * user name or password (docs/decisions.md, "User names and passwords in an address").
+ */
 export function openableUrl(url: string): URL | null {
   let parsed: URL;
   try {
@@ -52,7 +55,10 @@ export function openableUrl(url: string): URL | null {
   } catch {
     return null;
   }
-  return (parsed.protocol === "http:" || parsed.protocol === "https:") && parsed.host !== ""
+  return (parsed.protocol === "http:" || parsed.protocol === "https:") &&
+    parsed.host !== "" &&
+    parsed.username === "" &&
+    parsed.password === ""
     ? parsed
     : null;
 }

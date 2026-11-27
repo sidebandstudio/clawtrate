@@ -99,6 +99,22 @@ describe("the bot's markdown on iOS", () => {
     });
   });
 
+  it("keeps an address with a user name or password as its text", () => {
+    for (const url of [
+      "https://name@host.example/",
+      "https://name:secret@host.example/",
+      "https://na%40me:se%40cret@host.example/",
+      "https://name%40corp.example@host.example/",
+      "http://:secret@127.0.0.1/",
+    ])
+      expect(openableUrl(url), url).toBeNull();
+    expect(parseMarkdown("[the notes](https://name:secret@host.example/)")).toEqual([
+      { t: "p", children: [{ t: "text", text: "the notes" }] },
+    ]);
+    // An encoded @ in the host doesn't parse at all.
+    expect(openableUrl("https://host.example%40other.example/")).toBeNull();
+  });
+
   it("opens only http and https addresses that parse, and keeps any other as its text", () => {
     expect(openableUrl("https://a.example")?.href).toBe("https://a.example/");
     expect(openableUrl("http://127.0.0.1:9/x")?.host).toBe("127.0.0.1:9");
