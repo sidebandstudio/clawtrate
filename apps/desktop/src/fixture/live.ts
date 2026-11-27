@@ -604,6 +604,7 @@ export function liveScene(
             uncertain: ["agent:pip:main"],
             refused: [],
             unanswered: [],
+            followUps: [],
             omitted: 0,
             recipientsAsked: true,
           },
