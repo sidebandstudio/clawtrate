@@ -127,6 +127,15 @@ export function useConnect({
   const [saving, setSaving] = useState(false);
   const keyRef = useRef<HTMLInputElement>(null);
   const pasteRef = useRef<HTMLInputElement>(null);
+  // A label save that answers after Connect has gone with its bot finishes nothing: the sign-in it
+  // would dismiss may be another bot's by then (#781).
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const [confirmDrop, setConfirmDrop] = useState<string | null>(null);
   // The grid: the tiles after the first few once "Show more" is pressed, and the tile last left,
   // which takes focus when the grid comes back.
@@ -590,7 +599,9 @@ export function useConnect({
       try {
         await bridge.invoke({ type: "setAccountLabel", profileId: where.account, label: typed });
         announce("Label saved");
-        finish(where.account);
+        // Kept only for this account's label step, now done; a later Connect may keep another.
+        if (recall<KeptLabel>(LABEL_KEPT)?.account === where.account) remember(LABEL_KEPT, null);
+        if (mounted.current) finish(where.account);
       } catch (error) {
         setLabelError(error instanceof Error ? error.message : String(error));
       } finally {

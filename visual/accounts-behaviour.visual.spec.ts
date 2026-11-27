@@ -2514,7 +2514,7 @@ for (const [end, words, word] of [
   ],
   [
     "unanswered",
-    "The gateway didn't answer (gateway request timeout for models.authOrderSet), so Clawtrate can't tell yet whether Otto's order was cleared. Check now reads it again.",
+    "The gateway didn't answer, so Clawtrate can't tell yet whether Otto's order was cleared. Check now reads it again.",
     "locked",
   ],
   [
@@ -2641,4 +2641,178 @@ test("F-480: Change model settled as the person moves to another bot leaves focu
   await releaseFrames(page);
   await expect(pip).toBeFocused();
   await expect(model).not.toBeFocused();
+});
+
+type Reply = {
+  clawtrateFixture: ClawtrateBridge;
+  held: { resolve: () => void; reject: (failure: Error) => void }[];
+};
+/** The fixture's answers to `type` commands wait, oldest first, until `releaseReply`. */
+const holdReply = (page: Page, type: string) =>
+  page.evaluate((type) => {
+    const w = window as unknown as Reply;
+    w.held = [];
+    const invoke = w.clawtrateFixture.invoke.bind(w.clawtrateFixture);
+    w.clawtrateFixture.invoke = ((command: { type: string }) =>
+      command.type !== type
+        ? invoke(command as never)
+        : new Promise<void>((resolve, reject) => {
+            w.held.push({ resolve, reject });
+          }).then(() => invoke(command as never))) as ClawtrateBridge["invoke"];
+  }, type);
+const releaseReply = (page: Page) =>
+  page.evaluate(() => (window as unknown as Reply).held.shift()!.resolve());
+const rejectReply = (page: Page, message: string) =>
+  page.evaluate(
+    (message) => (window as unknown as Reply).held.shift()!.reject(new Error(message)),
+    message,
+  );
+
+test("F-473: a Change account saved as the person moves to another bot leaves that bot's page on its first view", async ({
+  page,
+}) => {
+  await openFixture(page, `${SETTINGS_TAB}&lock=bound`, "light");
+  await page.getByRole("button", { name: /^Account: / }).click();
+  await page.getByRole("button", { name: "Change account" }).click();
+  await page.getByRole("radio", { name: /^OpenAI · Home/ }).click();
+  await holdReply(page, "changeBotAccount");
+  await page.getByRole("button", { name: "Save" }).click();
+  const pip = page.getByTestId("bot-list").getByRole("button", { name: /^Pip\b/ });
+  await pip.click();
+  await expect(page.getByTestId("bot-settings")).toContainText("Pip");
+  await releaseReply(page);
+  await expect(page.getByTestId("work-announcer")).toHaveText("Otto now runs on OpenAI · Home");
+  await settle(page);
+  await expect(page.getByTestId("model-select")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Account", level: 3 })).toHaveCount(0);
+  await expect(pip).toBeFocused();
+});
+
+test("F-473: a Change account refused after the person moved to another bot shows nothing on that bot's page", async ({
+  page,
+}) => {
+  await openFixture(page, `${SETTINGS_TAB}&lock=bound`, "light");
+  await page.getByRole("button", { name: /^Account: / }).click();
+  await page.getByRole("button", { name: "Change account" }).click();
+  await page.getByRole("radio", { name: /^OpenAI · Home/ }).click();
+  await holdReply(page, "changeBotAccount");
+  await page.getByRole("button", { name: "Save" }).click();
+  const pip = page.getByTestId("bot-list").getByRole("button", { name: /^Pip\b/ });
+  await pip.click();
+  await expect(page.getByTestId("bot-settings")).toContainText("Pip");
+  // Otto's save still out: Pip's own Change account isn't waiting on it.
+  await page.getByRole("button", { name: /^Account: / }).click();
+  await page.getByRole("button", { name: "Change account" }).click();
+  await expect(page.getByRole("button", { name: "Saving…" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Save" })).toBeVisible();
+  await rejectReply(page, "The gateway refused Otto's change.");
+  await settle(page);
+  await expect(page.getByTestId("bot-settings")).not.toContainText(
+    "The gateway refused Otto's change.",
+  );
+});
+
+test("F-473: a Change account refused after the person went to another bot and back leaves the next save waiting", async ({
+  page,
+}) => {
+  await openFixture(page, `${SETTINGS_TAB}&lock=bound`, "light");
+  const bots = page.getByTestId("bot-list");
+  const changeTo = async (account: RegExp) => {
+    await page.getByRole("button", { name: /^Account: / }).click();
+    await page.getByRole("button", { name: "Change account" }).click();
+    await page.getByRole("radio", { name: account }).click();
+    await page.getByRole("button", { name: "Save" }).click();
+  };
+  await holdReply(page, "changeBotAccount");
+  await changeTo(/^OpenAI · Home/);
+  await bots.getByRole("button", { name: /^Pip\b/ }).click();
+  await expect(page.getByTestId("bot-settings")).toContainText("Pip");
+  await bots.getByRole("button", { name: /^Otto\b/ }).click();
+  await expect(page.getByTestId("bot-settings")).toContainText("Otto");
+  await changeTo(/^OpenAI · Home/);
+  await expect(page.getByRole("button", { name: "Saving…" })).toBeVisible();
+  await rejectReply(page, "The gateway refused the first change.");
+  await settle(page);
+  await expect(page.getByRole("button", { name: "Saving…" })).toBeVisible();
+  await expect(page.getByTestId("bot-settings")).not.toContainText(
+    "The gateway refused the first change.",
+  );
+});
+
+test("F-473: a Change account saved after the person went to another bot and back leaves the next save on its page", async ({
+  page,
+}) => {
+  await openFixture(page, `${SETTINGS_TAB}&lock=bound`, "light");
+  const bots = page.getByTestId("bot-list");
+  const changeTo = async (account: RegExp) => {
+    await page.getByRole("button", { name: /^Account: / }).click();
+    await page.getByRole("button", { name: "Change account" }).click();
+    await page.getByRole("radio", { name: account }).click();
+    await page.getByRole("button", { name: "Save" }).click();
+  };
+  await holdReply(page, "changeBotAccount");
+  await changeTo(/^OpenAI · Home/);
+  await bots.getByRole("button", { name: /^Pip\b/ }).click();
+  await expect(page.getByTestId("bot-settings")).toContainText("Pip");
+  await bots.getByRole("button", { name: /^Otto\b/ }).click();
+  await expect(page.getByTestId("bot-settings")).toContainText("Otto");
+  await changeTo(/^OpenAI · Home/);
+  await expect(page.getByRole("button", { name: "Saving…" })).toBeVisible();
+  await releaseReply(page);
+  await settle(page);
+  // The first save's answer moves no page: the second is still waiting on Change account.
+  await expect(page.getByRole("heading", { name: "Change account", level: 3 })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Saving…" })).toBeVisible();
+});
+
+test("F-474: an account connected with a label as the person moves to another bot leaves that bot's page on its first view", async ({
+  page,
+}) => {
+  await openFixture(page, `${SETTINGS_TAB}&lock=bound&kept=1&signin=connected`, "light");
+  await page.getByRole("button", { name: /^Account: / }).click();
+  await page.getByRole("button", { name: "Change account" }).click();
+  await page.getByRole("button", { name: /^Connect an account/ }).click();
+  await page.getByRole("button", { name: /^xAI · / }).click();
+  await page.getByRole("textbox", { name: "Label" }).fill("Side");
+  await holdReply(page, "setAccountLabel");
+  await page.getByRole("button", { name: "Done" }).click();
+  const pip = page.getByTestId("bot-list").getByRole("button", { name: /^Pip\b/ });
+  await pip.click();
+  await expect(page.getByTestId("bot-settings")).toContainText("Pip");
+  const dismissals = async () =>
+    (await sent(page)).filter((each) => each.type === "dismissSignIn").length;
+  const before = await dismissals();
+  await releaseReply(page);
+  await expect(page.getByTestId("work-announcer")).toHaveText("Label saved");
+  // Otto's Connect has gone: it ends no sign-in, which by now could be one Pip started.
+  expect(await dismissals()).toBe(before);
+  await settle(page);
+  await expect(page.getByTestId("model-select")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Change account", level: 3 })).toHaveCount(0);
+  await expect(pip).toBeFocused();
+});
+
+test("F-474: a label saved after its Connect has gone leaves the next Connect on its sign-in methods", async ({
+  page,
+}) => {
+  await openFixture(page, `${SETTINGS_TAB}&lock=bound&kept=1&signin=connected`, "light");
+  await page.getByRole("button", { name: /^Account: / }).click();
+  await page.getByRole("button", { name: "Change account" }).click();
+  await page.getByRole("button", { name: /^Connect an account/ }).click();
+  await page.getByRole("button", { name: /^xAI · / }).click();
+  await page.getByRole("textbox", { name: "Label" }).fill("Side");
+  await holdReply(page, "setAccountLabel");
+  await page.getByRole("button", { name: "Done" }).click();
+  await page
+    .getByTestId("bot-list")
+    .getByRole("button", { name: /^Pip\b/ })
+    .click();
+  await expect(page.getByTestId("bot-settings")).toContainText("Pip");
+  await releaseReply(page);
+  await expect(page.getByTestId("work-announcer")).toHaveText("Label saved");
+  await page.getByRole("button", { name: /^Account: / }).click();
+  await page.getByRole("button", { name: "Change account" }).click();
+  await page.getByRole("button", { name: /^Connect an account/ }).click();
+  await expect(page.getByRole("textbox", { name: "Label" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^xAI · / })).toBeVisible();
 });
