@@ -781,6 +781,69 @@ describe("#686: the mark is the newest run's, never the latest-written failure's
     client.stop();
   });
 
+  it("2026.11.10 through the client: a second message failed before the row that admits it marks the task by its own run", async () => {
+    const gateway = gatewayWith([
+      { key: KEY, agentId: "otto", hasActiveRun: false, updatedAt: T0 },
+    ]);
+    const { client } = await openTask({ gateway, key: "agent:otto:elsewhere" });
+    const waiting = (client as unknown as { waiting: WaitingIndex }).waiting;
+    // A: admitted, failed at dispatch, then its row.
+    changed(gateway, "participants", {
+      status: "queued",
+      hasActiveRun: true,
+      updatedAt: T0 + 1_000,
+    });
+    gateway.emit("chat", {
+      runId: "a",
+      sessionKey: KEY,
+      seq: 1,
+      state: "error",
+      errorMessage: "boom",
+    });
+    changed(gateway, "chat.dispatch-error", { hasActiveRun: false, updatedAt: T0 + 2_000 });
+    await until(() => task(client)?.status === "failed");
+    // B fails at dispatch before the row that admits it, which the gateway sends later.
+    gateway.emit("chat", {
+      runId: "b",
+      sessionKey: KEY,
+      seq: 1,
+      state: "error",
+      errorMessage: "boom",
+    });
+    expect(waiting.latestRunId(KEY)).toBe("b");
+    expect(waiting.failedAt(KEY)).toBe(T0 + 2_000);
+    client.stop();
+  });
+
+  it("#722 through the client: a run stopped elsewhere ends at its chat abort, so the next message's failure marks the task", async () => {
+    const gateway = gatewayWith([
+      { key: KEY, agentId: "otto", hasActiveRun: false, updatedAt: T0 },
+    ]);
+    const { client } = await openTask({ gateway, key: "agent:otto:elsewhere" });
+    gateway.emit("agent", {
+      ...agentEvent("a", 1, "lifecycle", { phase: "start" }),
+      ts: T0 + 1_000,
+    });
+    // Stopped elsewhere: its abort comes, its lifecycle end never does.
+    gateway.emit("chat", { runId: "a", sessionKey: KEY, seq: 2, state: "aborted" });
+    // B: admitted, then failed at dispatch.
+    changed(gateway, "participants", {
+      status: "queued",
+      hasActiveRun: true,
+      updatedAt: T0 + 9_000,
+    });
+    gateway.emit("chat", {
+      runId: "b",
+      sessionKey: KEY,
+      seq: 1,
+      state: "error",
+      errorMessage: "boom",
+    });
+    changed(gateway, "chat.dispatch-error", { hasActiveRun: false, updatedAt: T0 + 9_000 });
+    await until(() => task(client)?.status === "failed");
+    client.stop();
+  });
+
   it("a failure marker never pairs with the send before it by place; a queued turn's reply still does", () => {
     const markerAfterB = [
       userRow("a"),
