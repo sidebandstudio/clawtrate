@@ -215,7 +215,7 @@ Connecting one, step by step, with no outside page for instructions:
 
 **Why the gateway's own set-up and not Clawtrate's own form per chat app:** OpenClaw knows each chat app's fields, checks and accounts on each version, and every plugin chat app brings its own; a Clawtrate form per app would be wrong the day OpenClaw changes one. Clawtrate's part is drawing it in its own look and doing the owner step. A chat app whose set-up can't be done without a desktop page of the chat app's own (a developer portal) shows that one button with its steps in Clawtrate, and is marked "Needs a few steps in <app>" on its tile.
 
-**Opening a connected one:** who answers there, who may write (only you; people you let in, listed with Remove; anyone, which asks first, section 8.3, and for a person's own press, below), Stop and Start (`channels.stop`, `channels.start`), and **Disconnect**, which asks ("Disconnect Telegram? Its token is removed from OpenClaw; connecting again needs a new one from BotFather.") because the token isn't kept.
+**Opening a connected one:** who answers there, who may write (only you; people you let in, listed with Remove; anyone, which asks the person once, "Anyone on Telegram could then message Juniper.", and is the card of section 8.3 when a bot asks), Stop and Start (`channels.stop`, `channels.start`), and **Disconnect**, which asks ("Disconnect Telegram? Its token is removed from OpenClaw; connecting again needs a new one from BotFather.") because the token isn't kept.
 
 ### 4.4 Plugins
 
