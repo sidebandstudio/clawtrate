@@ -386,6 +386,56 @@ test("F-054 F-012: New task from the + at the top right creates an empty task on
   });
 });
 
+test("F-054: a new task's first message titles it, never the name the gateway gives a task it can't title (#741)", async () => {
+  test.setTimeout(180_000);
+  const before = new Set((await listed("pip")).map((row) => row.key));
+  await botRow(page, "Pip").first().click();
+  await page.locator(".rail-top").getByRole("button", { name: "New", exact: true }).click();
+  await page.getByRole("menuitem", { name: "New task for Pip" }).click();
+  await expect(page.getByTestId("composer-input")).toBeFocused({ timeout: 20_000 });
+  // The scripted model answers this only with reasoning, so the gateway's model makes the task no
+  // title and the gateway names it one of its own: an adjective and a crustacean.
+  const words = `Plan the spring garden beds ${STAMP} #think-only`;
+  await page.getByTestId("composer-input").fill(words);
+  await page.getByTestId("composer-input").press("Enter");
+  let key = "";
+  await gateway
+    .poll(
+      async () => {
+        key = (await listed("pip")).find((row) => !before.has(row.key))?.key ?? "";
+        return key;
+      },
+      { timeout: 20_000 },
+    )
+    .toMatch(/^agent:pip:dashboard:/);
+  made.add(key);
+  let name = "";
+  await gateway
+    .poll(
+      async () => {
+        const row = (await describe(key)) as (Row & { displayName?: string }) | null;
+        name = row?.displayName ?? "";
+        return row?.label === undefined && /^[a-z]+-[a-z]+$/.test(name);
+      },
+      { timeout: 120_000, intervals: [2_000] },
+    )
+    .toBe(true);
+  // The person who sent it sees its words, in the header and the sidebar, and never the name.
+  const row = page.locator(`.task[data-key="${key}"]`);
+  await expect(page.locator(".title-pill-task")).toHaveText(words, { timeout: 20_000 });
+  await expect(row).toContainText(words);
+  await expect(row).not.toContainText(name);
+  await reload(page);
+  await unfold(page, "Pip");
+  await expect(page.locator(`.task[data-key="${key}"]`)).toContainText(words, { timeout: 20_000 });
+  // A device that hasn't read the message yet shows a task with no title, not the name.
+  await unfold(second, "Pip");
+  await expect(second.locator(`.task[data-key="${key}"]`)).toContainText("New task", {
+    timeout: 20_000,
+  });
+  await expect(second.locator(`.task[data-key="${key}"]`)).not.toContainText(name);
+});
+
 test("F-055: two tasks of one bot never show each other's messages", async () => {
   const first = await ownTask("pip", "Pip", "Separate one");
   const other = await ownTask("pip", "Pip", "Separate two");
