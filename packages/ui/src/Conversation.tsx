@@ -42,7 +42,13 @@ import {
   TrailingCards,
 } from "./cards/index.ts";
 import { Composer, reachable, type NeedsYou, type Notice } from "./Composer.tsx";
-import { currentRun, outgoingBubbles, statusLineFor, type StatusLineView } from "./live.ts";
+import {
+  currentRun,
+  outgoingBubbles,
+  statusLineFor,
+  userMessageAfter,
+  type StatusLineView,
+} from "./live.ts";
 import { IncompleteCaption, OutgoingBubble, RunEnding, RunReply } from "./LiveTurn.tsx";
 import {
   ActionScope,
@@ -698,9 +704,8 @@ function buildLive(bot: Bot, task: Task, transcript: Transcript, options: LiveOp
   const shown = new Set(transcript.items.map((item) => item.id));
   const signature: string[] = [];
 
-  // Which user message comes after each one, to place an ending under its turn.
-  const users = transcript.items.filter((item) => item.role === "user").map((item) => item.id);
-  const nextUser = (anchor: string): string | null => users[users.indexOf(anchor) + 1] ?? null;
+  // Which user message comes after a run's anchor, to place an ending under its turn.
+  const nextUser = (anchor: string): string | null => userMessageAfter(transcript.items, anchor);
 
   const footRuns = transcript.runs.filter(
     (run) =>

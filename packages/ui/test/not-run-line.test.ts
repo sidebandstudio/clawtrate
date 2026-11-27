@@ -36,6 +36,7 @@ import {
   forEarlierMessage,
   notRunWords,
   type RunEnding,
+  userMessageAfter,
 } from "../src/live.ts";
 import { BridgeProvider } from "../src/bridge.tsx";
 import {
@@ -247,6 +248,51 @@ describe("#686: a not-run line sits only under the message its run is known to h
     transcript.items.find((item) =>
       item.blocks.some((block) => block.kind === "text" && block.text === text),
     )!.id;
+
+  /** Another bot's message that started a run, as both versions keep it: an assistant row keyed `<run>:user`. */
+  const fromBotRow = (runId: string, text: string, seq: number) => ({
+    role: "assistant",
+    content: [{ type: "text", text }],
+    timestamp: T0 + seq,
+    provenance: {
+      kind: "inter_session",
+      sourceSessionKey: "agent:marlow:main",
+      sourceTool: "sessions_send",
+    },
+    __openclaw: { id: `i-${seq}`, seq, idempotencyKey: `${runId}:user`, senderIsOwner: false },
+  });
+
+  it("#645: a run another bot's message started has its ending under that message, not above the conversation's first message", () => {
+    const rows = [
+      userRow("run-0", "Plan the week.", 1),
+      replyRow("run-0", 2),
+      fromBotRow("run-f", "sessions_send delivery to agent:marlow:main failed.", 3),
+    ];
+    const ctx = { raw: new RawTable(), sessionKey: KEY, now: T0 + 10_000 };
+    const items = mapHistory(rows);
+    const run = runsFromHistory(rows, { runId: "run-f" }, ctx).find((each) => each.id === "run-f")!;
+    expect(run.anchorItemId).toBe(
+      itemOf({ items } as Transcript, "sessions_send delivery to agent:marlow:main failed."),
+    );
+    // Nothing after it: its ending goes last, under its turn.
+    expect(userMessageAfter(items, run.anchorItemId!)).toBeNull();
+    // A message the person sends later: the ending sits before it.
+    const later = mapHistory([...rows, userRow("run-g", "Thanks.", 4)]);
+    expect(userMessageAfter(later, run.anchorItemId!)).toBe(
+      itemOf({ items: later } as Transcript, "Thanks."),
+    );
+  });
+
+  it("#645: Try again never sends another bot's message as the person's", () => {
+    const { transcript, run } = reloaded([
+      userRow("run-0", "Plan the week.", 1),
+      fromBotRow("run-a", "Here is the plan.", 2),
+      failedRow("run-a", 3),
+    ]);
+    expect(run.state).toBe("failed");
+    expect(run.anchorKeyed).toBe(true);
+    expect(retryPlan(run, transcript)).toBeNull();
+  });
 
   it("A, B, A's failure, B's reply: the line is not under B, and Try again never sends B", () => {
     const { transcript, run } = reloaded([

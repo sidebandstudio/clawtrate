@@ -287,6 +287,21 @@ function partnerOf(ctx: PlanContext): string {
   return (ctx.agentId && messagingPartner(ctx.agentId)) ?? MESSAGING_PAIR[0];
 }
 
+/**
+ * How long `#message` lets the other bot take to answer within the call (#883). The gateway
+ * returns as soon as the answer is there, so a fast gateway waits no longer. On a loaded hosted
+ * runner the answer came about 45 s after the send, past the 30 s this used to give: one chat
+ * send there spent 35 s preparing and SQLite held the bot's store for up to 12.8 s. One seed call
+ * has taken 94 s (#710), and the seed already gives a call it can read back about 3 minutes.
+ */
+export const SAME_CALL_REPLY_SECONDS = 180;
+/**
+ * How long a run whose `#message` call may wait that whole limit can take: the limit, and the
+ * 120 s the seed gave a whole run before (#883) for the run's own work around the call, its
+ * preparation and the model calls before and after it.
+ */
+export const SAME_CALL_RUN_MS = SAME_CALL_REPLY_SECONDS * 1000 + 120_000;
+
 /** A bot-to-bot message whose text tells the recipient which scenario to play. */
 function message(recipientDirective: string, request: string, timeoutSeconds: number): Step[] {
   return [
@@ -889,7 +904,7 @@ export const SCENARIOS: Scenario[] = [
     phrase: "message your partner",
     bots: "Marlow or Pip",
     summary: "A message to the other bot of the pair, answered in the same call.",
-    steps: () => message("#reply", "Could you look over the plan?", 30),
+    steps: () => message("#reply", "Could you look over the plan?", SAME_CALL_REPLY_SECONDS),
   },
   {
     name: "message-slow",
