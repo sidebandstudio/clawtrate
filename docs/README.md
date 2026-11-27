@@ -43,6 +43,7 @@ Every document in the repository, by what you want to do.
 - [Search](design/search.md): the Cmd/Ctrl+K palette, what each source covers, opening a result in its place, and the iPhone's scopes.
 - [The Main Bot](design/main-bot-onboarding.md): the first run's chat with the Main Bot, how bots run commands, bots asking to change themselves and other bots through Clawtrate's plugin, proposals, and external agents over MCP.
 - [Bots in Clawtrate](design/bots-in-clawtrate.md): what a bot knows about the app it lives in, the tools it has to change things there, what happens to each change, and how Clawtrate's plugin reaches a gateway with nothing typed.
+- [Clawtrate installs its own plugins](design/plugins-install.md): every way a gateway takes a plugin, the app's own copy on this computer and over SSH, the one case that needs a publish, no restart, updates, Undo, and which plugins are added at first setup.
 - [Doing, not asking](design/doing-not-asking.md): every place Clawtrate asks a person, what each becomes under the rule that only something destructive asks, commands on the person's computer, and the order of the conversions.
 - [Title bar](design/titlebar.md): the mark, wordmark and Beta pill, the update button's states, the gear for Settings, and naming a gateway on this device.
 - [Prototype](design/prototype/README.md): static pages that show the design working.
