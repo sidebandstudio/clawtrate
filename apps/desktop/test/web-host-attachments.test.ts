@@ -8,12 +8,12 @@ import {
   MAX_IMAGE_BYTES,
   type ClawtrateClient,
 } from "@clawtrate/core";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { request } from "node:http";
 import type { AddressInfo } from "node:net";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { tempDir } from "../../../test/temp-dir.ts";
 import type { HostRuntime } from "../src/host/runtime.ts";
 import { ACCESS_COOKIE, startWebHost, UPLOAD_DEADLINE_MS } from "../src/web-host/server.ts";
 
@@ -24,7 +24,7 @@ let store: AttachmentStore;
 const cookie = `${ACCESS_COOKIE}=${TOKEN}`;
 
 beforeAll(async () => {
-  const staticDir = mkdtempSync(join(tmpdir(), "clawtrate-static-"));
+  const staticDir = tempDir("clawtrate-static-");
   writeFileSync(join(staticDir, "index.html"), "<!doctype html><title>Clawtrate</title>");
   const state = createStore(initialState);
   let id = 0;
@@ -175,7 +175,7 @@ describe(`an upload must arrive within its deadline (UPLOAD_DEADLINE_MS = ${UPLO
   let slowStore: AttachmentStore;
 
   beforeAll(async () => {
-    const staticDir = mkdtempSync(join(tmpdir(), "clawtrate-static-"));
+    const staticDir = tempDir("clawtrate-static-");
     writeFileSync(join(staticDir, "index.html"), "<!doctype html><title>Clawtrate</title>");
     const state = createStore(initialState);
     let id = 0;

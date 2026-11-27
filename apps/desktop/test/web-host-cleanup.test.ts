@@ -6,6 +6,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { tempDir } from "../../../test/temp-dir.ts";
 import WebSocket from "ws";
 
 const TOKEN = "stub-token";
@@ -15,7 +16,11 @@ let stderr = "";
 
 beforeAll(async () => {
   child = spawn(process.execPath, [join(import.meta.dirname, "fixtures/throwing-host.ts")], {
-    env: { PATH: process.env.PATH, STUB_ACCESS_TOKEN: TOKEN },
+    env: {
+      PATH: process.env.PATH,
+      STUB_ACCESS_TOKEN: TOKEN,
+      STUB_STATIC_DIR: tempDir("clawtrate-throwing-static-"),
+    },
     stdio: ["ignore", "pipe", "pipe"],
   });
   child.stderr!.on("data", (chunk: Buffer) => (stderr += chunk.toString()));

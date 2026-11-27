@@ -338,6 +338,44 @@ describe.each(["2026.10.6", "2026.11.10"])(
       client.stop();
     });
 
+    it("listed before its first message reaches the gateway: New task until the creation's answer, then named from the words, with no preview", async () => {
+      const gateway = gatewayOf(version);
+      const created = gateway.handlers["sessions.create"]!;
+      const sent = gateway.handlers["chat.send"]!;
+      const answer = deferred<void>();
+      const delivered = deferred<void>();
+      gateway.handlers["sessions.create"] = async (params) => {
+        await answer.promise;
+        return created(params);
+      };
+      gateway.handlers["chat.send"] = async (params) => {
+        await delivered.promise;
+        return sent(params);
+      };
+      const { client } = await openTask({ gateway });
+      // The new session's row, as a list reads it before any message has reached it.
+      const listed = { key: NEW_KEY, sessionId: "117d0ea4", updatedAt: 1, createdAt: 1 };
+      gateway.handlers["sessions.list"] = () => ({ sessions: [listed], hasMore: false });
+      const row = () => client.state.tasksByBot.otto?.[0];
+      const creating = client.createTask("otto", "Hello, where are you?");
+      await until(() => gateway.calls("sessions.create").length === 1);
+      gateway.emit("sessions.changed", { sessionKey: NEW_KEY, reason: "create" });
+      await until(() => row() !== undefined);
+      // Nothing yet ties the row to the words: it reads as an empty task for one round trip.
+      expect(row()).toMatchObject({ title: "New task", preview: null });
+      answer.resolve();
+      await creating;
+      await until(() => gateway.calls("chat.send").length === 1);
+      expect(row()).toMatchObject({
+        title: "Hello, where are you?",
+        preview: null,
+        status: "idle",
+      });
+      delivered.resolve();
+      await until(() => deliveredOnce(client, "Hello, where are you?"));
+      client.stop();
+    });
+
     it("a creation the gateway made but whose setup failed: the message waits Not sent, for the person's Try again", async () => {
       const gateway = gatewayOf(version);
       const created = gateway.handlers["sessions.create"]!;

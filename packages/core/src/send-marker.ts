@@ -203,7 +203,8 @@ function takeMarker(text: string, lead: number, ending: Ending): { text: string;
       if (ending.how === "cut" && ending.ellipsis && long) return { text: "", whole: false };
     }
     if (at > body && rest === MARKER_AS_SEARCHED) return { text: words, whole: true };
-    if (at > body && MARKER_AS_SEARCHED.startsWith(rest)) {
+    // Cut at a space, the kept piece ends a word: a start of the marker only with its space.
+    if (at > body && MARKER_AS_SEARCHED.startsWith(ending.atSpace ? piece : rest)) {
       const long = piece.length >= LONG_PIECE && MARKER_AS_SEARCHED.startsWith(piece);
       if (ending.how === "sentence" && rest === MARKER_SENTENCE)
         return { text: words, whole: false };
@@ -261,7 +262,9 @@ const MARKER_SENTENCES = [MARKER_SENTENCE, MARKER_AS_SEARCHED.slice(MARKER_SENTE
 export function markerTextOut(snippet: string): { rest: string; found: boolean } {
   let found = false;
   const segments = fold(snippet)
-    .split(/\s*…\s*/)
+    // Both versions' excerpts are one window: their "…" stands only at its start and its end (the
+    // cap's may follow the end's), and one inside it is the person's own.
+    .split(/^\s*…\s*|(?:\s*…)+\s*$/)
     .map((segment) => {
       let rest = segment.trim();
       // At the segment's edges first, where a start or an end of the marker runs whole: a
@@ -325,9 +328,10 @@ export function previewWithoutMarker(preview: string, atLimit: boolean): string 
  * marks out (`normalizeDashboardSessionTitle`): a label of 50 to 60 is taken as cut there.
  */
 export function titleWithoutMarker(title: string): string {
-  // Shorter than 59 and "…": cut at a space, so its last word is whole.
+  // Shorter than 60 and "…": cut at a space, so its last word is whole. A 59 that kept a pair of
+  // units whole instead has no space past 36, so no word of the marker to find either way.
   if (title.length <= TITLE_MAX_CHARS && title.length >= 38 && title.endsWith("…"))
-    return takeMarker(title, 0, { ellipsis: "…", how: "cut", atSpace: title.length < 59 }).text;
+    return takeMarker(title, 0, { ellipsis: "…", how: "cut", atSpace: title.length < 60 }).text;
   if (title.length <= TITLE_MAX_CHARS && title.length >= 50) {
     const label = takeMarker(title, 0, { ellipsis: "", how: "cut" }).text;
     if (label !== title) return label;
