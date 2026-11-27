@@ -794,7 +794,17 @@ export const SCENARIOS: Scenario[] = [
             limit: 3,
           }),
       },
-      say("I read that task's history."),
+      // What the tool answered, read or not.
+      (ctx) => {
+        const last = ctx.results.at(-1);
+        return [
+          say(
+            last && !/"status":\s*"(error|forbidden)"|^Not done:/m.test(last.text)
+              ? "I read that task's history."
+              : `I couldn't read that task's history: ${(last?.text ?? "no answer").split("\n")[0]}`,
+          ),
+        ];
+      },
     ],
   },
   {

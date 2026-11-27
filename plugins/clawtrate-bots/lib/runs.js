@@ -247,8 +247,13 @@ export function createRuns(api, options = {}) {
    * run's prompts or the messages that join it, so a record it kept from before
    * may be missing what the run read: every run is C, with something read.
    */
-  const vouched = (origin) =>
-    observe() ? origin : { origin: "C", read: "lost", kind: "unknown", why: "access" };
+  const UNVOUCHED = Object.freeze({ origin: "C", read: "lost", kind: "unknown", why: "access" });
+  /**
+   * A run's origin, after looking at the config first: a write or an access
+   * change since the last look invalidates the record before it is read.
+   */
+  const vouched = (find, requester) =>
+    observe() ? originOf(find(), requester, { versionKnown: known }) : { ...UNVOUCHED };
 
   /**
    * The call's run and origin, recorded before any hold decides it; the run
@@ -256,8 +261,9 @@ export function createRuns(api, options = {}) {
    * the call, so a later call in the same Code Mode cell already sees it.
    */
   function sawCall(event, ctx) {
-    const run = origins.sawCall(event, ctx);
-    const origin = vouched(originOf(run, ctx?.requester, { versionKnown: known }));
+    let run = null;
+    const origin = vouched(() => (run = origins.sawCall(event, ctx)), ctx?.requester);
+    run ??= origins.sawCall(event, ctx);
     return { run, origin };
   }
   function afterDecision(run, event, allowed, ctx) {
@@ -283,21 +289,17 @@ export function createRuns(api, options = {}) {
 
   /** The origin a read tool answers for: its own run, by run id or by session and call id. */
   function originFor(toolCtx, toolCallId) {
-    const run = origins.runForTool({
-      runId: toolCtx?.runId,
-      sessionKey: toolCtx?.sessionKey,
-      toolCallId,
-    });
+    const find = () =>
+      origins.runForTool({ runId: toolCtx?.runId, sessionKey: toolCtx?.sessionKey, toolCallId });
+    let run = null;
     const origin = vouched(
-      originOf(
-        run,
-        toolCtx?.requester ??
-          (toolCtx?.messageChannel
-            ? { channel: toolCtx.messageChannel, senderIsOwner: toolCtx.senderIsOwner }
-            : undefined),
-        { versionKnown: known },
-      ),
+      () => (run = find()),
+      toolCtx?.requester ??
+        (toolCtx?.messageChannel
+          ? { channel: toolCtx.messageChannel, senderIsOwner: toolCtx.senderIsOwner }
+          : undefined),
     );
+    run ??= find();
     return { run, origin: { ...origin, channel: run?.channel ?? null } };
   }
 
@@ -331,8 +333,11 @@ export function createRuns(api, options = {}) {
       // Its own tasks, and the tasks it started under other bots (design section 8).
       // Every other bot, not only the 50 clawtrate_bots lists: a task may be under any of them.
       const others = otherBots(config(), agentId);
+      // Its tasks: its own sessions but its main conversation.
       const mine = (s) =>
-        typeof s?.sessionKey === "string" && s.sessionKey.startsWith(`agent:${agentId}:`);
+        typeof s?.sessionKey === "string" &&
+        s.sessionKey.startsWith(`agent:${agentId}:`) &&
+        s.sessionKey !== `agent:${agentId}:main`;
       const startedByMe = (s) =>
         typeof s?.entry?.spawnedBy === "string" &&
         s.entry.spawnedBy.startsWith(`agent:${agentId}:`);
@@ -397,6 +402,8 @@ export function createRuns(api, options = {}) {
         byKey?.runId ?? (typeof opts.params?.runId === "string" ? opts.params.runId : "");
       // With conversation access off no record is vouched for (C, something lost).
       if (!observe()) return opts.respond(true, { runId, known: false, why: "access" });
+      // On a version this build doesn't know, no record is vouched for either.
+      if (!known) return opts.respond(true, { runId, known: false, why: "version" });
       const run = runId ? origins.lookup(runId) : null;
       opts.respond(true, {
         runId,

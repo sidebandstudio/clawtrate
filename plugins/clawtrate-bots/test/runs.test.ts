@@ -162,6 +162,31 @@ describe("the hooks", () => {
     expect(await h.runGet("r2")).toMatchObject({ kind: "typed" });
   });
 
+  it("the config is looked at before a call's origin is read, so a write invalidates the record for that very call", async () => {
+    let current = structuredClone(CONFIG) as Json;
+    const h = host({ config: () => current });
+    h.fire("before_prompt_build", {}, typed);
+    current = structuredClone(CONFIG) as Json; // a config write, access still on
+    const { origin } = (
+      h.plugin as unknown as { sawCall: (e: Json, c: Json) => { origin: Json } }
+    ).sawCall(call("write", { path: "x" }, "w1"), toolCtx);
+    expect(origin).toMatchObject({ origin: "C", read: "lost" });
+  });
+
+  it("on a version this build doesn't know, runs.get knows no run", async () => {
+    const h = host({ version: "2026.12.1" });
+    h.fire("before_prompt_build", {}, typed);
+    expect(await h.runGet("r1")).toEqual({ runId: "r1", known: false, why: "version" });
+  });
+
+  it("clawtrate_tasks leaves out the bot's main conversation", async () => {
+    const h = host({
+      sessions: [{ sessionKey: "agent:pip:main", entry: { label: "Main", updatedAt: 1 } }],
+    });
+    h.fire("before_prompt_build", {}, typed);
+    expect(await h.tool("clawtrate_tasks", toolCtx, "c2")).not.toMatch(/Main/);
+  });
+
   it("a routine's run is found by its session, since no client knows its run id", async () => {
     const h = host();
     const routine = {
