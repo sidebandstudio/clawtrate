@@ -136,26 +136,16 @@
     - heading "Connect an account" [level=3]
     - paragraph: This gateway keeps this sign-in for Otto only. Other bots won't be able to use it.
     - paragraph: Sign in with a subscription you already pay for. Your gateway does the sign-in and keeps it; Clawtrate never sees your password and never keeps the sign-in.
-    - heading "Subscriptions" [level=4]
-    - list:
+    - list "Providers":
       - listitem:
-        - button "xAI · SuperGrok or X Premium Open a page and enter a code"
+        - button "OpenAI Connected"
       - listitem:
-        - button "ChatGPT · Plus, Pro or Business Open a page and enter a code"
+        - button "GitHub Copilot Connected"
       - listitem:
-        - button "ChatGPT in the browser · Plus, Pro or Business Open a page, then paste a code back here"
+        - button "xAI Connected"
       - listitem:
-        - button "Sign in with ChatGPT · on the gateway's machine Finishes in a browser on the gateway's machine"
-      - listitem:
-        - button "GitHub Copilot · Copilot subscription Open a page and enter a code"
-      - listitem:
-        - button "GitHub Copilot Enterprise · Your company's GitHub Your company's GitHub address, then a code"
-      - listitem:
-        - button "MiniMax · Coding plan Open a page and enter a code"
-    - heading "Billed per token" [level=4]
-    - list:
-      - listitem:
-        - button "OpenRouter · Credits Open a page, then paste a code back here"
+        - button "OpenRouter Billed per token"
+    - button "Show more"
     - group: Use an API key instead
   - status
 - status

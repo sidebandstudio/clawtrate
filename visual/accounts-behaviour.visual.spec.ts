@@ -393,7 +393,7 @@ test("F-474: Connect an account is a grid of providers, each named, reached by k
   // The four most used first, each named by its provider; one the gateway has an account of says so.
   await expect(grid.getByRole("button")).toHaveText([
     /^OpenAI\s*Connected$/,
-    /^GitHub Copilot$/,
+    /^GitHub Copilot\s*Connected$/,
     /^xAI\s*Connected$/,
     /^OpenRouter\s*Billed per token$/,
   ]);

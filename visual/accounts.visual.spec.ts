@@ -172,6 +172,8 @@ const SCENES: Scene[] = [
         .getByRole("button", { name: /^OpenAI\b/ })
         .click();
       await expect(page.getByRole("heading", { name: "OpenAI", level: 2 })).toBeVisible();
+      // The pointer off the rows, so none is drawn hovered.
+      await page.mouse.move(0, 0);
     },
   },
   {

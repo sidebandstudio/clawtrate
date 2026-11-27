@@ -346,10 +346,11 @@
 }
 
 /* Providers: Connect an account's grid, one tile per provider with its logo and name. Two
-   columns, one at phone width; tiles read left to right, row by row. */
+   columns where there is room for them, one where there isn't (a phone, a bot's Settings tab);
+   tiles read left to right, row by row. */
 .b-tiles {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
   gap: 8px;
   margin: 0;
   padding: 0;
@@ -396,8 +397,11 @@
 }
 
 .b-tile-note {
+  overflow: hidden;
   font-size: var(--text-sm);
   line-height: 18px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
   color: var(--text-faint);
 }
 
@@ -448,12 +452,6 @@
   width: 13px;
   height: 13px;
   transform: rotate(90deg);
-}
-
-@media (max-width: 687px) {
-  .b-tiles {
-    grid-template-columns: minmax(0, 1fr);
-  }
 }
 
 [data-input="touch"] .b-more {
