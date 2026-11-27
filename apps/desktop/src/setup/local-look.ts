@@ -101,7 +101,8 @@ function settingsLook(outcome: Exclude<SettingsOutcome, { kind: "found" }>): Set
  * The look: each profile's settings, in the reader's order (the default first);
  * the first whose socket matches its profile is offered. Otherwise what came
  * closest, in this order: a port that answered but didn't match, one where
- * nothing listens, settings that can't be used, none at all. Throws the reader's `SetupRefusedError`.
+ * nothing listens, settings that can't be used, none at all. Throws the reader's `SetupRefusedError`,
+ * and, when no profile is offered, the refusal of a port it may not dial (`localPortAllowed`).
  */
 export async function lookLocally(
   local: LocalConnect,
@@ -118,6 +119,7 @@ export async function lookLocally(
   onStep(1);
   const closest: { rank: number; look: SetupLook }[] = [];
   const keep = (rank: number, look: SetupLook) => closest.push({ rank, look });
+  let blocked = false;
   for (const { profile, outcome } of read) {
     if (outcome.kind !== "found") {
       const look = settingsLook(outcome);
@@ -126,8 +128,12 @@ export async function lookLocally(
     }
     const folder = { folder: folderOf(profile), identity: outcome.identity };
     const { port } = outcome;
-    // Outside a person's app, never OpenClaw's default ports, before any socket is opened.
-    if (!localPortAllowed(local, port)) throw new SetupRefusedError("state");
+    // Outside a person's app, never OpenClaw's default ports, before any socket is opened: that
+    // profile is passed over, and the next one is still looked at.
+    if (!localPortAllowed(local, port)) {
+      blocked = true;
+      continue;
+    }
     const facts = { ...empty, profile, port };
     const result = await probe(local, folder, port);
     if (cancelled()) return null;
@@ -146,6 +152,7 @@ export async function lookLocally(
         reason: refusalKind(result.why),
       });
   }
+  if (blocked) throw new SetupRefusedError("state");
   // The closest result; between two alike, the reader's order.
   const best = closest.sort((a, b) => a.rank - b.rank)[0];
   return { look: best?.look ?? { ...empty, outcome: "not-found" }, found: null };

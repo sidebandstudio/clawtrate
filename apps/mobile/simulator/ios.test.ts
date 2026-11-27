@@ -275,9 +275,21 @@ const WIDE_TABLE = [
 const LONG_MESSAGE = "This line repeats to make a message longer than a block may be. ".repeat(60);
 const HIDDEN_LINK_TEXT = "the quarterly report on heating costs";
 const HIDDEN_LINK = `[${HIDDEN_LINK_TEXT}](https://example.com/report)`;
+/** An address on the person's own network, built from its parts (test/addresses.test.ts). */
+const ROUTER = [192, 168, 1, 1].join(".");
+const LOCAL_LINE = `Check [the router's settings](http://${ROUTER}/) first.`;
+/** A host with a Cyrillic letter in place of a Latin "a", and its ASCII form. */
+const LOOKALIKE_HOST = { written: "b\u0430nk.example", ascii: "xn--bnk-6cd.example" };
+const LOOKALIKE_HOST_LINE = `Then sign in at https://${LOOKALIKE_HOST.written}/login.`;
 const MAIL_LINE = "Write [to the team](mailto:someone@example.com) for a copy.";
+/**
+ * What follows a link's text, as a pattern: a space and its words in parentheses, which the app
+ * isolates left to right (U+2066 to U+2069). The driver may or may not report the marks.
+ */
+const beside = (words: string) => ` \\u2066?\\(${words}\\)\\u2069?`;
 let browserUrl = "";
-let browserGet: { hasAuthorization: boolean; hasCookie: boolean } | undefined;
+/** The listener's GETs by path, and whether each carried a credential. */
+const browserGets = new Map<string, { hasAuthorization: boolean; hasCookie: boolean }>();
 let browserRequests = 0;
 /** A link on the listener whose text differs from its address only in the path's case. */
 const lookalike = () => ({
@@ -286,11 +298,11 @@ const lookalike = () => ({
 });
 const browser = createServer((req, res) => {
   browserRequests += 1;
-  if (req.method === "GET" && req.url === "/clawtrate-link-check") {
-    browserGet = {
+  if (req.method === "GET" && (req.url === "/clawtrate-link-check" || req.url === "/notes")) {
+    browserGets.set(req.url, {
       hasAuthorization: req.headers.authorization !== undefined,
       hasCookie: req.headers.cookie !== undefined,
-    };
+    });
   }
   res.writeHead(200, { "Content-Type": "text/plain; charset=utf-8" });
   res.end("Clawtrate link check");
@@ -873,14 +885,20 @@ describe("the iOS app", () => {
       WIDE_TABLE,
       LONG_MESSAGE,
       HIDDEN_LINK,
+      LOCAL_LINE,
+      LOOKALIKE_HOST_LINE,
       MAIL_LINE,
       `The setup token was ${env.token}.`,
-      // Its text names its path in another case, so it asks first. The driver matches text in
-      // any case, so the text is not the bare address below.
+      // Its text names its path in another case, so its host shows beside it. The driver
+      // matches text in any case, so the text is not the bare address below.
       `[${lookalike().text}](${lookalike().url})`,
       browserUrl,
     ])
       await inject(reading.key, message);
+    // What a link shows beside its text is part of the link's own text. The listener is on
+    // loopback, so each link to it says "this iPhone" there.
+    const hiddenText = `${lit(HIDDEN_LINK_TEXT)}${beside("example\\.com")}`;
+    const browserText = `${lit(browserUrl)}${beside("this iPhone")}`;
     const laterAt = await storedAt(reading.key, LATER_NOTE);
     expect(laterAt - firstNoteAt).toBeGreaterThan(10 * 60_000);
     await steps("read-own", [
@@ -892,7 +910,7 @@ describe("the iOS app", () => {
       see(lit(FIRST_NOTE)),
       // Jump to latest goes to the end, and goes.
       tap({ id: "jump-to-latest", text: `${lit(CONVERSATION_WORDS.jumpToLatest)}.*` }),
-      waitFor(lit(browserUrl), 20_000),
+      waitFor(browserText, 20_000),
       waitGone({ id: "jump-to-latest" }, 20_000),
       scrollTo({ text: lit(LATER_NOTE) }, "UP"),
       see({ id: "stamp", text: stampPattern(laterAt) }),
@@ -926,22 +944,39 @@ describe("the iOS app", () => {
         },
         "DOWN",
       ),
-      // A link whose text is not its address names the host after it.
-      scrollTo({ text: `${lit(HIDDEN_LINK_TEXT)} \\(example\\.com\\)` }, "DOWN"),
+      // A link whose text is not its address names the host beside it, as part of the link.
+      scrollTo({ text: hiddenText }, "DOWN"),
     ]);
-    // It asks before leaving: the link's own words start the paragraph, which may wrap.
-    const lookalikeText = `${lit(lookalike().text)} \\(${lit(new URL(browserUrl).host)}\\)`;
+    // Touch and hold shows the full address, with Copy, and opens nothing. The link's own
+    // words start the paragraph, which may wrap.
     await steps("hidden-link", [
-      await transcriptLinkTap(new RegExp(`^${lit(HIDDEN_LINK_TEXT)} \\(example`)),
-      waitFor(lit(LINK_WORDS.ask), 10_000),
+      await transcriptLinkTap(new RegExp(`^${hiddenText}$`), "hold"),
+      waitFor(lit(LINK_WORDS.outside), 10_000),
       see(lit("https://example.com/report")),
-      tap(lit(LINK_WORDS.cancel)),
-      waitGone(lit(LINK_WORDS.ask), 10_000),
+    ]);
+    await shoot("transcript-link-address");
+    await steps("hidden-link-copy", [
+      tap(lit(LINK_WORDS.copy)),
+      waitGone(lit(LINK_WORDS.outside), 10_000),
       see({ id: "transcript" }),
-      // A mailto address is its text, and does nothing.
+    ]);
+    expect(pasteboard()).toBe("https://example.com/report");
+    await steps("local-links", [
+      // A link to the person's own network says so beside its host, and a look-alike host
+      // shows in ASCII, even where the address is the text.
+      scrollTo({ text: `Then sign in at .*${beside(lit(LOOKALIKE_HOST.ascii))}\\.` }, "DOWN"),
+      see({
+        text: `Check the router's settings${beside(`${lit(ROUTER)}, your network`)} first\\.`,
+      }),
+    ]);
+    await shoot("transcript-links");
+    const lookalikeText = `${lit(lookalike().text)}${beside(`${lit(new URL(browserUrl).host)}, this iPhone`)}`;
+    await steps("not-links", [
+      // A mailto address is its text: a tap does nothing, and touch and hold shows no address.
       scrollTo({ text: lit("Write to the team for a copy.") }, "DOWN"),
       tap({ text: lit("Write to the team for a copy.") }),
-      notSee(lit(LINK_WORDS.ask)),
+      { longPressOn: { text: lit("Write to the team for a copy.") } },
+      notSee(lit(LINK_WORDS.outside)),
       see({ id: "transcript" }),
       // The token the bot repeated is not shown.
       scrollTo({ text: lit("The setup token was •••.") }, "DOWN"),
@@ -950,33 +985,38 @@ describe("the iOS app", () => {
       "scroll",
       waitGone({ id: "jump-to-latest" }, 20_000),
       see({ text: lookalikeText }),
-      see(lit(browserUrl)),
+      see(browserText),
     ]);
-    // A link whose text is another address asks too; Cancel sends the listener nothing.
-    await steps("lookalike-link", [
-      await transcriptLinkTap(new RegExp(`^${lookalikeText}`)),
-      waitFor(lit(LINK_WORDS.ask), 10_000),
-      see(lit(lookalike().url)),
-      tap(lit(LINK_WORDS.cancel)),
-      waitGone(lit(LINK_WORDS.ask), 10_000),
-      see({ id: "transcript" }),
-      see(lit(browserUrl)),
-    ]);
+    // Nothing so far, touch and hold included, has opened a link or reached the listener.
     expect(browserRequests).toBe(0);
-    // An address written as itself opens in the system browser without asking:
-    // the system starts Safari, which was not running before. The system says
-    // so; the driver is not asked about a screen while Safari starts.
     expect(running(SAFARI)).toBe(false);
-    await steps("open-link", [await transcriptLinkTap(new RegExp(`^${lit(browserUrl)}$`))]);
+    // A link whose text is another address opens at once in the system browser: the system
+    // starts Safari, which was not running before, and the listener gets its GET. The system
+    // says so; the driver is not asked about a screen while Safari starts.
+    await steps("open-hidden-link", [await transcriptLinkTap(new RegExp(`^${lookalikeText}$`))]);
     await until("Safari to launch", async () => running(SAFARI), 90_000);
-    const request = await until("Safari's loopback GET", async () => browserGet, 90_000);
+    const hidden = await until(
+      "Safari's loopback GET for the link whose text is another address",
+      async () => browserGets.get("/notes"),
+      90_000,
+    );
+    expect(hidden).toEqual({ hasAuthorization: false, hasCookie: false });
+    activate();
+    await steps("back-for-plain", [waitFor({ id: "transcript" }, 30_000), see(browserText)]);
+    // An address written as itself opens at once the same way.
+    await steps("open-link", [await transcriptLinkTap(new RegExp(`^${browserText}$`))]);
+    const request = await until(
+      "Safari's loopback GET",
+      async () => browserGets.get("/clawtrate-link-check"),
+      90_000,
+    );
     expect(request).toEqual({ hasAuthorization: false, hasCookie: false });
     // Back from the browser, the app is where it was.
     activate();
     await steps("back-from-browser", [
       waitFor({ id: "transcript" }, 30_000),
       // Where it was: at the end of the task, the link it opened in view.
-      see(lit(browserUrl)),
+      see(browserText),
       tap({ id: "back" }),
       waitFor({ id: "bot-tasks-main" }, 20_000),
       tap({ id: "back" }),

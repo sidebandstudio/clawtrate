@@ -25,6 +25,9 @@ const running: SetupLook = {
   others: [],
 };
 
+/** What local connect's look reports: no program, version or service, only the profile and port. */
+const localLook: Partial<SetupLook> = { version: null, listens: null, service: null };
+
 const looked = (look: Partial<SetupLook>): SetupState => ({
   ...initialSetupState,
   phase: "found",
@@ -98,19 +101,71 @@ export const SETUP_STATES: Record<string, SetupState> = {
     version: "2026.10.6",
   }),
   "code-failed-shape": failed("code-failed", { exitCode: 0 }),
+  // A person's Mac app, with local connect (setup-effortless.md §3): `local-` scenes.
+  "local-first": { ...looked({ ...localLook }), unasked: true },
+  // The host's look at start, under way: it finds a gateway in a second, or after the
+  // first screen's wait for it has ended (`SETUP_STEPS`).
+  "local-waiting": { ...initialSetupState, phase: "looking", unasked: true },
+  "local-start": { ...initialSetupState, phase: "looking", unasked: true },
+  "local-start-slow": { ...initialSetupState, phase: "looking", unasked: true },
+  "local-unverified": looked({
+    ...localLook,
+    outcome: "unverified",
+    reason: "not-gateway",
+    access: null,
+  }),
+  // Settings that turn TLS on: local connect dials `ws://` only, so the way on is Advanced.
+  "local-tls": looked({ ...localLook, outcome: "cant-tell", reason: "tls", access: null }),
+  "local-failed": {
+    ...looked({ ...localLook }),
+    phase: "failed",
+    failure: { kind: "unverified", exitCode: null, port: 18789, reason: "not-gateway" },
+  },
+  // Set up through This computer, then its reconnect refused by the check
+  // (`REFUSED_RECONNECT`): with no bots kept, and with them (`-bots`, in the app behind it).
+  "local-refused": { ...looked({ ...localLook }), phase: "done", step: 2 },
+  "local-refused-bots": { ...looked({ ...localLook }), phase: "done", step: 2 },
+};
+
+/** The connection of the `local-refused` scenes: the saved gateway's reconnect, refused. */
+export const REFUSED_RECONNECT = {
+  status: "error",
+  retryAt: null,
+  error: {
+    code: "LOCAL_UNVERIFIED",
+    message:
+      "Clawtrate couldn't match what is listening at port 18789 to this account's OpenClaw profile.",
+    hint: "Choose This computer to connect to it again, or use Advanced.",
+  },
+} as const;
+
+/** What a scene's host publishes later, timed from when the interface first listens. */
+export const SETUP_STEPS: Record<string, Array<{ after: number; setup: SetupState }>> = {
+  "local-start": [{ after: 1_000, setup: { ...looked({ ...localLook }), unasked: true } }],
+  "local-start-slow": [{ after: 4_500, setup: { ...looked({ ...localLook }), unasked: true } }],
 };
 
 export function isSetupState(name: string | null): name is string {
   return name !== null && Object.hasOwn(SETUP_STATES, name);
 }
 
-/** The desktop host, offering setup; `windows` is the same app on Windows. */
+/**
+ * The desktop host, offering setup; `windows` is the same app on Windows. A `local-` scene is a
+ * person's Mac app, with local connect and the Keychain, so a new pairing asks for full control.
+ */
 export function setupInfo(info: HostInfo, name: string): HostInfo {
+  const local = name.startsWith("local-");
   return {
     ...info,
     kind: "desktop",
     devGateway: null,
-    setup: { look: true, pair: true, platform: name === "windows" ? "win32" : "darwin" },
+    ...(local ? { fullControl: true } : {}),
+    setup: {
+      look: true,
+      pair: true,
+      platform: name === "windows" ? "win32" : "darwin",
+      ...(local ? { local: true } : {}),
+    },
   };
 }
 
@@ -152,7 +207,7 @@ export function setupCommand(
       return true;
     }
     case "setupConnect": {
-      setup({ ...current(), phase: "connecting", step: 0, failure: null });
+      setup({ ...current(), phase: "connecting", step: 0, failure: null, unasked: false });
       after(300, () => current().phase === "connecting" && setup({ ...current(), step: 1 }));
       after(600, () => current().phase === "connecting" && setup({ ...current(), step: 2 }));
       after(900, () => {
