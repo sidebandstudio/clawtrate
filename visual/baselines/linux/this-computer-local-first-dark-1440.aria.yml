@@ -1,0 +1,14 @@
+- status
+- main:
+  - heading "Clawtrate" [level=1]
+  - paragraph: Your OpenClaw agents, orchestrated.
+  - heading "Found your OpenClaw settings on this Mac" [level=2]
+  - paragraph: What is listening at the port they name matches them.
+  - paragraph:
+    - text: Full control lets Clawtrate change gateway settings, approve devices and, when the gateway allows it, open a terminal on the computer running OpenClaw.
+    - button "What this means"
+  - button "Connect"
+  - paragraph:
+    - button "Another computer"
+    - button "Advanced"
+  - paragraph: Found your OpenClaw settings on this Mac

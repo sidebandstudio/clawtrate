@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Clawtrate prototype: OpenClaw's settings inside Settings</title>
+    <link rel="stylesheet" href="css/tokens.css" />
+    <link rel="stylesheet" href="css/prototype.css" />
+    <link rel="stylesheet" href="css/gateway-settings.css" />
+    <!-- Optional and not in the repository: local @font-face rules. See README.md. -->
+    <link rel="stylesheet" href="fonts.local.css" />
+    <script src="js/prototype.js"></script>
+    <script src="js/gateway-settings.js" defer></script>
+  </head>
+  <body>
+    <header class="proto-bar" id="proto-bar"></header>
+    <main class="proto-stage">
+      <div class="proto-frame">
+        <!-- docs/design/gateway-settings.md. js/gateway-settings.js draws one
+             state from the address (screen=, access=) on local fixtures. -->
+        <div class="gs" id="gs-root" data-testid="gateway-settings"></div>
+        <p class="visually-hidden" id="gs-live" role="status" aria-live="polite"></p>
+      </div>
+    </main>
+  </body>
+</html>
