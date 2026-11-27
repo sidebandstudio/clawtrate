@@ -529,6 +529,111 @@ describe("the device that sends the first message", () => {
     }
   });
 
+  it("names a task from the next message history holds when its refused first message is deleted", async () => {
+    // A refused, B sent; history holds B, so it leaves the outbox; then A deleted. B's answer
+    // comes before the delete, or after it: named from B either way.
+    for (const answerFirst of [true, false]) {
+      const { gateway } = creatingGateway(["Garden plan"]);
+      gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gw-a" });
+      const { client } = await openTask({ gateway });
+      try {
+        await until(() => client.state.connection.gatewayId === "gw-a");
+        const accept = gateway.handlers["chat.send"]!;
+        const answer = deferred<void>();
+        let sends = 0;
+        gateway.handlers["chat.send"] = async (params) => {
+          sends += 1;
+          if (sends === 1)
+            throw new GatewayError({ code: "UNAVAILABLE", message: "the bot is busy" });
+          if (!answerFirst) await answer.promise;
+          return accept(params);
+        };
+        await client.createTask("main", "Plan the spring beds");
+        const failed = () =>
+          client.state.transcripts[KEY]?.outbox.find((each) => each.status === "failed");
+        await until(() => failed() !== undefined);
+        const first = failed()!.id;
+        const next = client.sendMessage(KEY, MESSAGE);
+        await until(() => sends === 2);
+        if (answerFirst)
+          await until(
+            () =>
+              client.state.transcripts[KEY]?.outbox.find((each) => each.id === next)?.status ===
+              "sent",
+          );
+        gateway.handlers["chat.history"] = () => ({
+          messages: [
+            {
+              role: "user",
+              content: [{ type: "text", text: MESSAGE }],
+              timestamp: 1,
+              __openclaw: { id: "row-b", idempotencyKey: `${next}:user` },
+            },
+          ],
+          hasMore: false,
+        });
+        client.closeSession(KEY);
+        client.openSession(KEY);
+        await until(
+          () => client.state.transcripts[KEY]?.outbox.some((each) => each.id === next) === false,
+        );
+        client.deleteMessage(KEY, first);
+        answer.resolve();
+        await until(() => patches(gateway).length === 1);
+        expect(titleCalls(gateway)).toEqual([{ agentId: "main", message: MESSAGE }]);
+      } finally {
+        client.stop();
+      }
+    }
+  });
+
+  it("doesn't send a task's next message for its name to another gateway at the same address", async () => {
+    // Gateway A refuses A and accepts B; gateway B answers at the same address; A is deleted
+    // while B is still in the outbox: nothing goes to gateway B.
+    const { gateway } = creatingGateway(["Garden plan"]);
+    let identity = "gw-a";
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: identity });
+    const { client } = await openTask({ gateway });
+    try {
+      await until(() => client.state.connection.gatewayId === "gw-a");
+      const accept = gateway.handlers["chat.send"]!;
+      let sends = 0;
+      gateway.handlers["chat.send"] = (params) => {
+        sends += 1;
+        if (sends === 1)
+          throw new GatewayError({ code: "UNAVAILABLE", message: "the bot is busy" });
+        return accept(params);
+      };
+      await client.createTask("main", "Plan the spring beds");
+      const failed = () =>
+        client.state.transcripts[KEY]?.outbox.find((each) => each.status === "failed");
+      await until(() => failed() !== undefined);
+      const first = failed()!.id;
+      const next = client.sendMessage(KEY, MESSAGE);
+      const sent = () => client.state.transcripts[KEY]?.outbox.find((each) => each.id === next);
+      await until(() => sent()?.status === "sent");
+      identity = "gw-b";
+      // Gateway B's history isn't read yet, so B is still sent, not unconfirmed.
+      const history = deferred<unknown>();
+      gateway.handlers["chat.history"] = () => history.promise;
+      const was = client.state.connection.connectedAt;
+      gateway.dropAll();
+      await until(
+        () =>
+          client.state.connection.status === "connected" &&
+          client.state.connection.connectedAt !== was &&
+          client.state.connection.gatewayId === "gw-b",
+      );
+      expect(sent()?.status).toBe("sent");
+      client.deleteMessage(KEY, first);
+      history.resolve({ messages: [], hasMore: false });
+      await sleep(50);
+      expect(titleCalls(gateway)).toEqual([]);
+    } finally {
+      client.stop();
+    }
+  });
+
   it("doesn't name a task made again under its key from a message the one before sent", async () => {
     // S1's first message is on its way; the key is made again as S2, whose first message, queued
     // behind it, is cancelled; then the gateway accepts S1's message.

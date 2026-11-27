@@ -321,14 +321,21 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   },
   "sentSources.*": { max: MAX_SENT_SOURCES, each: 2 * MAX_INBOUND_REF_CHARS + N, row: null },
   // Tasks this client names, or waits to name from their first message with text, by key: the stage,
-  // the session the task was created as, the message it is named from once the gateway accepts it,
-  // and the ids of this client's messages there with no text.
+  // the session the task was created as, the gateway it was made on, the message it is named from
+  // once the gateway accepts it, the ids of this client's messages there with no text, and of its
+  // messages with text after that one.
   taskNames: {
     max: MAX_NAMED_TASKS,
-    each: 3 * ID + SHORT + MAX_TEXTLESS_SENDS * ID,
+    each: 4 * ID + SHORT + 2 * MAX_TEXTLESS_SENDS * ID,
     row: "bookkeeping",
   },
   "taskNames.*.textless": {
+    max: MAX_TEXTLESS_SENDS,
+    each: ID,
+    row: null,
+    opaque: "counted in `taskNames`",
+  },
+  "taskNames.*.later": {
     max: MAX_TEXTLESS_SENDS,
     each: ID,
     row: null,
