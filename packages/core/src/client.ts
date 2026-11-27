@@ -6241,7 +6241,7 @@ export class ClawtrateClient {
 
   /**
    * What the composer's "/" or "@" menu lists for a task (`composer-menus.ts`), read now and
-   * kept nowhere (F-071, F-070). Each read is `operator.read`.
+   * kept nowhere (F-071, F-070). Each read is `operator.read`, `skills.library.list` included.
    */
   async readComposerMenu(key: string, trigger: "/" | "@"): Promise<MenuRow[]> {
     if (this.state.connection.status !== "connected")
@@ -6256,12 +6256,15 @@ export class ClawtrateClient {
       return mentionRows(listedBots(this.state), routines);
     }
     const agentId = botIdFromSessionKey(key);
-    const [skills, metadata] = await Promise.all([
+    const [skills, metadata, library] = await Promise.all([
       agentId ? this.request("skills.status", { agentId }).catch(() => null) : null,
       this.request("chat.metadata", { sessionKey: key }).catch(() => null),
+      // The library skills this task has, the person's own among them.
+      this.request("skills.library.list", { sessionKey: key }).catch(() => null),
     ]);
-    if (skills === null && metadata === null) throw new Error("The gateway did not list them.");
-    return slashRows(skills, metadata);
+    if (skills === null && metadata === null && library === null)
+      throw new Error("The gateway did not list them.");
+    return slashRows(skills, metadata, library);
   }
 
   /**

@@ -48,13 +48,22 @@ export const DEFAULT_LIMITS: SendLimits = {
   payloadBytes: 25 * MIB,
   files: 20,
 };
-/** The tag each kind of "/" or "@" row carries (F-071, F-070). */
+/** The tag each kind of "/" or "@" row carries (F-071, F-070): whose a skill is, in words. */
 const TAG: Record<MenuRow["kind"], string> = {
-  skill: "Skill",
+  "your-skill": "Your skill",
+  "team-skill": "Team skill",
+  skill: "Bot skill",
   command: "Command",
   bot: "Bot",
   routine: "Routine",
 };
+
+/**
+ * What a row and its chip show: a library skill by its slug, since the generated command name it
+ * inserts (`/skill s_tide_tabl_…`) means nothing to a person; anything else by what it inserts.
+ */
+const shown = (row: MenuRow) =>
+  row.kind === "your-skill" || row.kind === "team-skill" ? row.name : row.insert;
 
 /** How long a touch on Send is held before its menu opens. */
 const LONG_PRESS_MS = 500;
@@ -531,7 +540,7 @@ export function Composer({
       setTokens((current) => [...current, row]);
     }
     setPicker(null);
-    onAnnounce(`${row.insert} added`);
+    onAnnounce(`${shown(row)} added`);
     focusRef.current?.focus();
   };
 
@@ -848,7 +857,7 @@ export function Composer({
                       onPointerDown={(event) => event.preventDefault()}
                       onClick={() => choose(row)}
                     >
-                      <span className="composer-menu-name">{row.insert}</span>
+                      <span className="composer-menu-name">{shown(row)}</span>
                       {row.description && (
                         <span className="composer-menu-description">{row.description}</span>
                       )}
@@ -869,11 +878,11 @@ export function Composer({
                   data-testid="token-chip"
                 >
                   <span className="chip-tag">{TAG[token.kind]}</span>
-                  <b>{token.insert}</b>
+                  <b>{shown(token)}</b>
                   <button
                     type="button"
                     className="chip-remove"
-                    aria-label={`Remove ${token.insert}`}
+                    aria-label={`Remove ${shown(token)}`}
                     onClick={() => {
                       setTokens((current) => current.filter((_, at) => at !== index));
                       focusRef.current?.focus();

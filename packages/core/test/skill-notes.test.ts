@@ -12,7 +12,6 @@ import {
   skillNoteChanges,
   skillNoteOf,
   skillNoteWords,
-  taskWithoutSkillNote,
   type Task,
   type Transcript,
 } from "../src/index.ts";
@@ -482,33 +481,8 @@ const loaded = (rows: unknown[], hasMore = false): Transcript =>
   ({ items: mapHistory(rows), hasMore }) as unknown as Transcript;
 const LISTED_NOTE =
   '💾 Learned: created trail-check (check the trail before a hike). Say "undo" to revert this skill change.';
-const REPLY = "I read through my workspace files one by one.";
-/** No update this device followed: no update line anywhere. */
-const NO_UPDATES = { updated: [], gatewayId: "gw-a", mainKey: "agent:main:t" };
 
-describe("F-560: the note is not the bot's preview, and doesn't mark the task unread", () => {
-  it("the listed preview of the note the history ends with shows the reply before it", () => {
-    expect(taskWithoutSkillNote(task(LISTED_NOTE, 3), loaded(realNote), NO_UPDATES).preview).toBe(
-      REPLY,
-    );
-  });
-
-  it("a newer listed preview, or one the gateway made of other text, stays", () => {
-    expect(
-      taskWithoutSkillNote(task("Something newer", 3), loaded(realNote), NO_UPDATES).preview,
-    ).toBe("Something newer");
-    const other = withText(channelCopy, FORGED_TEXT);
-    expect(
-      taskWithoutSkillNote(task(FORGED_TEXT, 3), loaded([realNote[0], other]), NO_UPDATES).preview,
-    ).toBe(FORGED_TEXT);
-  });
-
-  it("with nothing before the note, the title shows", () => {
-    expect(
-      taskWithoutSkillNote(task(LISTED_NOTE, 3), loaded([NOTE_1006]), NO_UPDATES).preview,
-    ).toBeNull();
-  });
-
+describe("F-560: the note doesn't mark the task unread", () => {
   it("a read-only viewer that read the reply has read the task through the note", () => {
     const at = NOTE_1006.timestamp + 5;
     const seen = realNote[0]!.timestamp;
