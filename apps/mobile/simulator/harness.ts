@@ -294,11 +294,10 @@ async function fieldTexts(): Promise<Map<string, string>> {
 }
 
 /**
- * Tap, or touch and hold, a link in the transcript: at the middle of the part of it the scroll
- * view shows, a little into its glyphs from where its lines start, so a link at the view's edge
- * is still hit. A scroll to it counts the screen under the composer as showing it, so a link
- * that isn't wholly in the scroll view is first dragged into it, slowly so the view doesn't
- * coast past.
+ * Tap, or touch and hold, a link in the transcript: at its middle, a little into its glyphs from
+ * where its lines start. A scroll to it counts the screen under the composer as showing it, so a
+ * link that isn't wholly in the scroll view is first dragged into it, slowly so the view doesn't
+ * coast past. A link still not wholly in the view fails the step.
  */
 export async function transcriptLinkTap(
   pattern: RegExp,
@@ -349,11 +348,14 @@ export async function transcriptLinkTap(
     ]);
     ({ viewport, link } = await locate());
   }
-  const top = Math.max(link.y1, viewport.y1);
-  const bottom = Math.min(link.y2, viewport.y2);
   const x = link.x1 + Math.min(24, Math.floor((link.x2 - link.x1) / 2));
-  const y = Math.floor((top + bottom) / 2);
-  if (bottom <= top || x < viewport.x1 || x >= viewport.x2) {
+  const y = Math.floor((link.y1 + link.y2) / 2);
+  if (
+    link.y1 < viewport.y1 ||
+    link.y2 > viewport.y2 ||
+    link.x1 < viewport.x1 ||
+    link.x2 > viewport.x2
+  ) {
     throw new Error(
       `Link ${pattern}: ${JSON.stringify(link)} is outside ${JSON.stringify(viewport)}`,
     );
