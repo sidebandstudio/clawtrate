@@ -400,6 +400,8 @@ export type RunEnding =
       elsewhere: boolean;
       /** This client stopped it after that many tool calls in a row timed out (F-101). */
       timeouts: number | null;
+      /** This client stopped it as the gateway's own turn after a Stop of the one before (#645). */
+      followUp: boolean;
     }
   | { kind: "finished-before-stop" }
   /** Stop was asked for, and the run has ended, but nothing the gateway sent says how. */
@@ -517,6 +519,7 @@ export function endingOf(run: Run, _transcript?: Transcript): RunEnding | null {
       elsewhere: run.stopRequestedAt === null,
       // 0: the automatic stop failed, so this stop is not the timeouts'.
       timeouts: run.stoppedForTimeouts ? run.stoppedForTimeouts : null,
+      followUp: run.stoppedAsFollowUp === true,
     };
   }
   if (run.state === "failed") {

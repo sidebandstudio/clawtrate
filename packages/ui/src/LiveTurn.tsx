@@ -192,6 +192,10 @@ export function stoppedWithLines(run: Run, nameOf: (sessionKey: string) => strin
     lines.push(`${nameOf(key)}'s run for this message may still be going: its stop got no answer.`);
   for (const key of also.uncertain)
     lines.push(`The message to ${nameOf(key)} may or may not have been delivered.`);
+  for (const key of also.followUps)
+    lines.push(
+      `Then stopped: the turn the gateway started here on its own once ${nameOf(key)}'s run was stopped.`,
+    );
   if (also.omitted > 0)
     lines.push(
       `${also.omitted} more ${also.omitted === 1 ? "run was" : "runs were"} asked to stop, not listed here.`,
@@ -313,6 +317,12 @@ export function RunEnding({
             <p>
               <b>Stopped after {ending.timeouts} tool calls in a row timed out.</b> The machine{" "}
               {bot.name} works on may not be responding. Completed actions are not undone.
+            </p>
+          ) : ending.followUp ? (
+            <p>
+              <b>{ending.after ? `Stopped after ${ending.after}.` : "Stopped."}</b> The gateway
+              started this turn on its own after your Stop of the one before, so Clawtrate stopped
+              it too. Completed actions are not undone.
             </p>
           ) : (
             <p>

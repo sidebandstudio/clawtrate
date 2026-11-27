@@ -286,6 +286,11 @@ export function timeoutsInARow(run: Run): number {
   return count;
 }
 
+/** The run is being stopped as the gateway's follow-up to a Stop of this client's (#645). */
+export function markStoppedAsFollowUp(activity: TaskActivity, runId: string): TaskActivity {
+  return updateRun(activity, runId, (run) => ({ ...run, stoppedAsFollowUp: true }));
+}
+
 /** The run is being stopped because its tool calls kept timing out. */
 export function markStoppedForTimeouts(
   activity: TaskActivity,
@@ -321,6 +326,11 @@ export type StoppedWith = {
   refused: string[];
   /** Session keys of recipients' runs whose stop got no answer: they may still be going. */
   unanswered: string[];
+  /**
+   * Session keys whose recipient's stopped run then made the gateway start a turn of its own in
+   * this task (its note that the delivery failed), which this client stopped as well (#645).
+   */
+  followUps: string[];
   /** Names not kept past `MAX_STOPPED_NAMED` of a kind; every one of them was still asked. */
   omitted: number;
   /** The recipients have been asked to stop (once per run). */
@@ -334,6 +344,7 @@ const noCompanions = (): StoppedWith => ({
   uncertain: [],
   refused: [],
   unanswered: [],
+  followUps: [],
   omitted: 0,
   recipientsAsked: false,
 });
@@ -359,6 +370,7 @@ export function noteStoppedWith(
         uncertain: keep(next.uncertain),
         refused: keep(next.refused),
         unanswered: keep(next.unanswered),
+        followUps: keep(next.followUps),
         omitted,
         recipientsAsked: next.recipientsAsked,
       },
@@ -559,6 +571,13 @@ export type Run = {
    * Absent otherwise.
    */
   stoppedForTimeouts?: number;
+  /**
+   * This client stopped the run on its own because it is the turn the gateway starts in a task
+   * once a recipient's run that this client stopped for a Stop in the task has ended (#645): the
+   * gateway's note that the delivery failed, which may resend the stopped message. Absent
+   * otherwise.
+   */
+  stoppedAsFollowUp?: boolean;
   /**
    * The run passed the "Turn time limit" (F-100), in minutes, and this client asked the gateway
    * to stop it, as any Stop: it is `stopping` until the gateway confirms. 0 when the limit was
@@ -3177,8 +3196,12 @@ export function runsFromHistory(
               state: "running",
               origin: "history",
               bound: true,
-              anchorItemId: keyedBy.get(inFlightRunId) ?? anchor,
-              ...(keyedBy.has(inFlightRunId) ? { anchorKeyed: true as const } : {}),
+              // As for a run with rows: the message from another session that started it, or
+              // the person's keyed row (#645).
+              anchorItemId: startedBy.get(inFlightRunId) ?? keyedBy.get(inFlightRunId) ?? anchor,
+              ...(startedBy.has(inFlightRunId) || keyedBy.has(inFlightRunId)
+                ? { anchorKeyed: true as const }
+                : {}),
               reportedStartAt: num(snapshot?.startedAt),
             },
             num(snapshot?.startedAt),

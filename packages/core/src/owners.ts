@@ -41,6 +41,7 @@ import {
   MAX_APPROVAL_OUTCOMES,
   MAX_APPROVAL_READERS,
   MAX_DEFERRED_STOPS,
+  MAX_FOLLOW_UPS,
   MAX_OUTCOME_LOOKUPS,
   MAX_FILE_READS,
   MAX_PICTURE_READS,
@@ -164,6 +165,9 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // An archive's or a delete's Stop of a run not named yet: task and run ids, and the action's
   // connection check; kept while its run is stopping, and never past the bound.
   deferredStops: { max: MAX_DEFERRED_STOPS, each: 2 * ID + 1, row: "bookkeeping" },
+  // The turn the gateway owes a task after a Stop of this client's stopped a recipient (#645):
+  // task, recipient session and run, the stopped run and when the wait ends; gone once found.
+  followUps: { max: MAX_FOLLOW_UPS, each: 4 * ID + 2 + N, row: "bookkeeping" },
   // One per task and list kind (three approval kinds and questions).
   listRequested: { max: T * 4, each: ID + SHORT + N, row: "bookkeeping" },
   listApplied: { max: T * 4, each: ID + SHORT + N, row: "bookkeeping" },
