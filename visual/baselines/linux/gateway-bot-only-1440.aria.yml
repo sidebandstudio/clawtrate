@@ -6,10 +6,7 @@
   - button "Search"
   - list:
     - listitem:
-      - button "main, 1 task, primary bot":
-        - text: main
-        - time: 8:40 AM
-        - text: Yes. The porch light turns on at sunset and off at 11 PM.
+      - button "main, 1 task, primary bot": main
   - status
   - button "127.0.0.1:18789, connected. Open the gateway menu."
   - button "Settings"

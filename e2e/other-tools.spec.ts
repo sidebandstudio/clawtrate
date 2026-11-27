@@ -236,7 +236,7 @@ test.afterAll(async () => {
   expect(problems).toEqual([]);
 });
 
-test("F-563: an API client's session and a scheduled run stay out of a bot's task list, preview, unread mark and order; with the switch on both are listed; one shows while it waits on an approval, and while open after it is answered; a task started in Clawtrate is unaffected", async () => {
+test("F-563: an API client's session and a scheduled run stay out of a bot's task list, unread mark and order; with the switch on both are listed; one shows while it waits on an approval, and while open after it is answered; a task started in Clawtrate is unaffected", async () => {
   test.setTimeout(420_000);
   // A task started in Clawtrate, under Marlow.
   const created = (await hostCommand({
@@ -246,11 +246,20 @@ test("F-563: an API client's session and a scheduled run stay out of a bot's tas
     label: "Notes from Clawtrate",
   })) as { key: string };
   expect(created.key).toMatch(/^agent:marlow:dashboard:/);
-  // Marlow's one task: his row opens it, and its reply is his preview.
-  await expect(botRow("marlow").locator(".bot-preview")).toContainText("plain reply", {
-    timeout: 60_000,
-  });
-  const marlowPreview = await botRow("marlow").locator(".bot-preview").innerText();
+  // Marlow's one task: his row opens it, once its reply has come.
+  await expect
+    .poll(
+      async () => {
+        const { sessions } = await gatewayCall<{ sessions: Json[] }>("sessions.list", {
+          agentId: "marlow",
+          includeLastMessage: true,
+        });
+        return String(sessions.find((each) => each.key === created.key)?.lastMessagePreview ?? "");
+      },
+      { timeout: 60_000, intervals: [2_000] },
+    )
+    .toContain("plain reply");
+  await expect(botRow("marlow")).toHaveAccessibleName(/^marlow, 1 task\b/i, { timeout: 30_000 });
 
   // An API client's session with Pip, through the gateway's HTTP API.
   const api = "agent:pip:openai-user:e2e-client";
@@ -287,7 +296,6 @@ test("F-563: an API client's session and a scheduled run stay out of a bot's tas
   await expect(botRow("pip")).toHaveAccessibleName(/, 2 tasks\b/, { timeout: 30_000 });
   await setOthersShown(false);
   await expect(botRow("pip")).toHaveAccessibleName(/, 0 tasks\b/);
-  await expect(botRow("pip").locator(".bot-preview")).toHaveText("No tasks yet");
   await expect(botRow("pip").locator(".unread-dot")).toHaveCount(0);
   await expect(taskRow(api)).toHaveCount(0);
   await expect(taskRow(scheduled)).toHaveCount(0);
@@ -295,15 +303,13 @@ test("F-563: an API client's session and a scheduled run stay out of a bot's tas
   expect(live.indexOf("marlow")).toBeLessThan(live.indexOf("pip"));
 
   // The app opened again reads the list fresh; nothing from the other tools is in Pip's list,
-  // its preview, its unread mark or the order, and Marlow's task is as it was.
+  // its unread mark or the order, and Marlow's task is as it was.
   await page.reload();
   await expect(botRow("marlow")).toBeVisible({ timeout: 30_000 });
-  await expect(botRow("pip").locator(".bot-preview")).toHaveText("No tasks yet");
   await expect(botRow("pip").locator(".unread-dot")).toHaveCount(0);
   await expect(botRow("pip")).not.toHaveAccessibleName(/, unread/);
   const order = await botOrder();
   expect(order.indexOf("marlow")).toBeLessThan(order.indexOf("pip"));
-  await expect(botRow("marlow").locator(".bot-preview")).toHaveText(marlowPreview);
   await expect(botRow("marlow")).toHaveAccessibleName(/, 1 task\b/);
   await expect(botRow("pip")).toHaveAccessibleName(/, 0 tasks\b/);
   await expect(taskRow(api)).toHaveCount(0);
@@ -328,11 +334,10 @@ test("F-563: an API client's session and a scheduled run stay out of a bot's tas
   await unfold("pip");
   await expect(taskRow(api)).toBeVisible();
   await expect(taskRow(scheduled)).toBeVisible();
-  await expect(botRow("pip").locator(".bot-preview")).not.toHaveText("No tasks yet");
   await expect(botRow("pip")).toHaveAccessibleName(/, 2 tasks\b/);
   const shown = await botOrder();
   expect(shown.indexOf("pip")).toBeLessThan(shown.indexOf("marlow"));
-  await expect(botRow("marlow").locator(".bot-preview")).toHaveText(marlowPreview);
+  await expect(botRow("marlow")).toHaveAccessibleName(/, 1 task\b/);
   await shots("shown");
 
   // Off again: an API client's session that waits on an approval shows until it is answered. The
@@ -341,7 +346,7 @@ test("F-563: an API client's session and a scheduled run stay out of a bot's tas
   // once a person continues it from another device: an operator's turn there asks.
   await setOthersShown(false);
   await expect(taskRow(api)).toHaveCount(0);
-  await expect(botRow("otto").locator(".bot-preview")).toHaveText("No tasks yet");
+  await expect(botRow("otto")).toHaveAccessibleName(/^otto, 0 tasks\b/i);
   const waiting = "agent:otto:openai-user:e2e-approver";
   expect((await apiTurn("otto", "e2e-approver", "#text")).status).toBe(200);
   const before = approver!.lastSeq;
@@ -371,8 +376,6 @@ test("F-563: an API client's session and a scheduled run stay out of a bot's tas
   await expect(page.getByTestId("transcript")).toContainText("#approve");
   await botRow("marlow").click();
   await expect(botRow("otto")).toHaveAccessibleName(/^otto, 0 tasks\b/i, { timeout: 30_000 });
-  await expect(botRow("otto").locator(".bot-preview")).toHaveText("No tasks yet");
   // The task started in Clawtrate was there throughout.
   await expect(botRow("marlow")).toHaveAccessibleName(/, 1 task\b/);
-  await expect(botRow("marlow").locator(".bot-preview")).toHaveText(marlowPreview);
 });

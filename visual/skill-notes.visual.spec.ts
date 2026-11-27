@@ -2,8 +2,7 @@
 // next snapshot would bring it (docs/parity.md F-560). The note folds into the line of the run it
 // follows, "Saved a skill: …", whatever "Show commands" says; opened, the line shows its text and
 // its undo, the gateway's own on OpenClaw 2026.11.10 (admin) and a message "undo" on 2026.10.6. A
-// note with no run line to fold into is a line of its own. It is not new activity and not the
-// bot's preview. A row with the note's fields and other words, or naming a run, is a message as
+// note with no run line to fold into is a line of its own. It is not new activity. A row with the note's fields and other words, or naming a run, is a message as
 // any other: a bot can write such a row. After a stopped or failed run, a row with no run is not
 // that run's reply: it takes neither its "Incomplete" nor its error. Every name and text is
 // invented.
@@ -52,7 +51,6 @@ const PAGE = Array.from({ length: 200 }, (_, n) =>
 
 const transcript = (page: Page) => page.getByTestId("transcript");
 const jump = (page: Page) => page.getByTestId("jump-latest");
-const preview = (page: Page) => page.locator('[data-testid="bot"][data-bot="otto"] .bot-preview');
 const open = (page: Page, commands = false) =>
   openFixture(page, `scene=main&${OTTO_DISK}&panel=closed${commands ? "&commands=show" : ""}`);
 
@@ -93,7 +91,7 @@ async function update(
             ? {
                 tasksByBot: {
                   ...state.tasksByBot,
-                  // This task is Otto's latest, so its preview is the bot's.
+                  // This task is Otto's latest.
                   otto: state.tasksByBot.otto!.map((task) =>
                     task.key === key ? { ...task, ...row } : { ...task, updatedAt: 1 },
                   ),
@@ -157,15 +155,6 @@ test.describe("rows of the gateway's skill-note shape", () => {
     expect((await measured(page)).top).toBeGreaterThan(before.top);
     await expect(transcript(page).getByText(NOTE_TEXT)).toBeInViewport();
     await expect(jump(page)).toHaveCount(0);
-  });
-
-  test("F-560: with Show commands off, the bot's preview is the row the gateway lists", async ({
-    page,
-  }) => {
-    await open(page);
-    const history = mapHistory([said("assistant", "prior", "Old reply.", 800), note("note-1")]);
-    await update(page, { items: history, row: { updatedAt: EPOCH + 1_005, preview: NOTE_TEXT } });
-    await expect(preview(page)).toHaveText(NOTE_TEXT);
   });
 
   // A row the gateway appends after a turn names no run: whatever its fields, it is not the
@@ -402,7 +391,7 @@ for (const size of [WIDE, PHONE]) {
   });
 }
 
-test.describe("the folded skill note's undo, preview and activity", () => {
+test.describe("the folded skill note's undo and activity", () => {
   test.use(contextFor(WIDE));
 
   test("F-560: on 2026.11.10, Undo asks the gateway to undo the review and says it did", async ({
@@ -498,17 +487,6 @@ test.describe("the folded skill note's undo, preview and activity", () => {
     );
     await expect(page.getByTestId("skill-note-line")).toHaveCount(0);
     await expect(page.getByTestId("transcript-turn").filter({ hasText: "Learned" })).toHaveCount(0);
-  });
-
-  test("F-560: the bot's preview is the reply before the note the gateway lists", async ({
-    page,
-  }) => {
-    await openFixture(page, `scene=main&${OTTO_DISK}&panel=closed&access=admin`);
-    await showRows(page, [...workedRun(), skillNote(true)], {
-      preview: SKILL_LISTED,
-      updatedAt: EPOCH + 40_005,
-    });
-    await expect(preview(page)).toHaveText(REPLY);
   });
 
   test("F-560: a note arriving while the person reads back is not new activity", async ({

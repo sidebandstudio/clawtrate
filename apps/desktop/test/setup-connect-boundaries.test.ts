@@ -512,7 +512,10 @@ beforeAll(() => {
   scratch = realpathSync(mkdtempSync(join(tmpdir(), "clawtrate-local-connect-")));
   if (platform === "darwin") {
     helper = join(scratch, "helper");
-    execFileSync("/usr/bin/xcrun", localGatewayBuild(helper));
+    // clang's two-architecture build leaves empty folders in TMPDIR: the scratch folder takes them.
+    execFileSync("/usr/bin/xcrun", localGatewayBuild(helper), {
+      env: { ...process.env, TMPDIR: scratch },
+    });
   }
 });
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
@@ -729,7 +732,9 @@ describe.skipIf(!BIN || !mac)(
       // A test build checks the start a microsecond late at the end of (f), as if the gateway's
       // PID had gone to another process while (f) looked at it: every fact before passes.
       const late = join(scratch, "helper-late");
-      execFileSync("/usr/bin/xcrun", [...localGatewayBuild(late), "-DPROVE_LATE_SKEW=1"]);
+      execFileSync("/usr/bin/xcrun", [...localGatewayBuild(late), "-DPROVE_LATE_SKEW=1"], {
+        env: { ...process.env, TMPDIR: scratch },
+      });
       const socket = connect({ host: "127.0.0.1", port: gateway.port });
       await new Promise<void>((done) => socket.once("connect", () => done()));
       try {

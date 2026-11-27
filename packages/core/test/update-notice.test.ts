@@ -4,12 +4,7 @@
 // the `message` tool's copy of what it sends.
 
 import { describe, expect, it } from "vitest";
-import {
-  mapHistory,
-  seenThroughUpdateNotice,
-  taskWithoutUpdateNotice,
-  tasksWithoutUpdateNotices,
-} from "../src/mapping.ts";
+import { mapHistory, seenThroughUpdateNotice } from "../src/mapping.ts";
 import {
   MAX_UPDATE_NOTICE_CHARS,
   UPDATE_NOTICE_WRITTEN_WITHIN_MS,
@@ -233,33 +228,6 @@ const transcriptOf = (rows: unknown[]): Transcript =>
 const HISTORY = transcriptOf([reply("The backup finished.", T), notice()]);
 
 describe("F-590: the sidebar and unread", () => {
-  it("F-590: the preview is the bot's last words before the line, only while the listed preview is the notice", () => {
-    expect(taskWithoutUpdateNotice(task(), HISTORY, SCOPE).preview).toBe("The backup finished.");
-    // A newer reply on the list is the gateway's preview.
-    expect(taskWithoutUpdateNotice(task({ preview: "A new reply." }), HISTORY, SCOPE).preview).toBe(
-      "A new reply.",
-    );
-    // A notice this device can't vouch for is the message it is, preview and all.
-    expect(taskWithoutUpdateNotice(task(), HISTORY, { ...SCOPE, updated: [] }).preview).toBe(
-      LISTED,
-    );
-    expect(taskWithoutUpdateNotice(task(), HISTORY, { ...SCOPE, gatewayId: "gw-b" }).preview).toBe(
-      LISTED,
-    );
-    // A line with nothing before it leaves the title.
-    expect(taskWithoutUpdateNotice(task(), transcriptOf([notice()]), SCOPE).preview).toBeNull();
-    // The time, and so the order, stays the gateway's.
-    const shown = tasksWithoutUpdateNotices(
-      { main: [task()] },
-      { "agent:main:main": HISTORY },
-      SCOPE,
-    );
-    expect(shown.main![0]).toMatchObject({
-      preview: "The backup finished.",
-      updatedAt: T + 10_005,
-    });
-  });
-
   it("F-590: a viewer that read the task before the notice doesn't find it unread for the notice alone", () => {
     const seen = T + 5;
     // Read after the bot's last words: the notice alone is no reason to read again.
@@ -288,17 +256,7 @@ describe("F-590: the sidebar and unread", () => {
     expect(seenThroughUpdateNotice(task(), T + 5, partial, SCOPE)).toBe(T + 5);
   });
 
-  it("F-590: a bot's message of files only before the line is the preview by their names", () => {
-    const files = {
-      ...reply("", T + 1, "files-1"),
-      content: [{ type: "attachment", attachment: { artifactId: "art-1", label: "report.pdf" } }],
-    };
-    const history = transcriptOf([reply("The backup finished.", T), files, notice()]);
-    expect(history.items.at(-2)!.filesPreview).toBe("report.pdf");
-    expect(taskWithoutUpdateNotice(task(), history, SCOPE).preview).toBe("report.pdf");
-  });
-
-  it("F-590: after two updates with nothing between them, the preview and unread go back past both lines", () => {
+  it("F-590: after two updates with nothing between them, unread goes back past both lines", () => {
     const SECOND = "5c4b3a29-1807-4f6e-9d5c-4b3a29180716";
     const both: UpdateNoticeScope = {
       ...SCOPE,
@@ -318,7 +276,6 @@ describe("F-590: the sidebar and unread", () => {
       true,
     ]);
     const listed = task({ updatedAt: T + 20_005 });
-    expect(taskWithoutUpdateNotice(listed, history, both).preview).toBe("The backup finished.");
     // Read after the reply, before either notice: neither makes it unread.
     expect(seenThroughUpdateNotice(listed, T + 5, history, both)).toBe(T + 20_005);
     expect(seenThroughUpdateNotice(listed, T - 1, history, both)).toBe(T - 1);
@@ -375,14 +332,13 @@ describe("F-590: only in the main bot's main conversation", () => {
     ).toBeNull();
   });
 
-  it("F-590: a known run's notice in another conversation, or in another bot's main one, is the bot's message: no line, preview or unread change", () => {
+  it("F-590: a known run's notice in another conversation, or in another bot's main one, is the bot's message: no line or unread change", () => {
     // A bot that read a succeeded run's id (its key is in the main conversation's history) copies
     // a send with that key into another conversation.
     for (const key of [OTHER, PIP_MAIN]) {
       expect(lineOf([notice()], SCOPE, key), key).toEqual([null]);
       const elsewhere = task({ key });
       const history = { ...HISTORY, sessionKey: key } as Transcript;
-      expect(taskWithoutUpdateNotice(elsewhere, history, SCOPE).preview, key).toBe(LISTED);
       expect(seenThroughUpdateNotice(elsewhere, T + 5, history, SCOPE), key).toBe(T + 5);
     }
     // With no main conversation listed, none.
