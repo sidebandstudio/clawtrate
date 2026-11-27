@@ -1,5 +1,5 @@
 - group:
-  - text: Messaged Marlow No reply yet
+  - text: Messaged Marlow Finished
   - list:
     - listitem:
       - text: Otto sent
@@ -7,6 +7,6 @@
       - text: "Write a two-line entry for the house log: the weekly backup finished, 41 GB across three machines."
     - listitem:
       - text: Marlow
-      - paragraph: Marlow's run finished without a reply. A reply that names this message appears here; any other arrives as a message from Marlow.
+      - paragraph: Finished. The answer is in Marlow's task.
   - button "Open this message in Marlow's task": Open in Marlow
   - button "Raw"
