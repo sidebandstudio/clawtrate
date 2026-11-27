@@ -87,7 +87,7 @@ const TURNED_OFF_REFUSALS = [
   "it was turned off while this run was under way",
   "blocked by rules: policy evaluation failed",
 ];
-/** Juniper, whose id is the gateway's built-in `main`. */
+/** The gateway's own bot, its built-in `main`. */
 const BOT = "main";
 
 type Answer =
@@ -1361,7 +1361,7 @@ export const RULES_CHECKS: RulesCheck[] = [
           expect(ranOk(write), `after denying web_search: ${show(run.calls)}`);
         }
       }
-      same(await botEntry(ctx, BOT), original, "Juniper's settings once the deny is removed again");
+      same(await botEntry(ctx, BOT), original, "the bot's settings once the deny is removed again");
       await pluginRunning(ctx);
     },
   },
@@ -1430,7 +1430,7 @@ export const RULES_CHECKS: RulesCheck[] = [
         );
       }
       same(rec((await config()).tools).deny, originalDeny, "the gateway's deny list once restored");
-      same(await botEntry(ctx, BOT), original, "Juniper's settings once the deny is removed again");
+      same(await botEntry(ctx, BOT), original, "the bot's settings once the deny is removed again");
       await pluginRunning(ctx);
     },
   },

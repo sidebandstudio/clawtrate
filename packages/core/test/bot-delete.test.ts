@@ -4,8 +4,12 @@
 // its refusals. Then the client: one gateway and one connection per delete,
 // one delete at a time, and a deleted bot's queued work let go. Bots, folders
 // and reasons are made up.
-import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
+import {
+  GatewayProtocolRequestError,
+  GatewayProtocolRequestTimeoutError,
+} from "@openclaw/gateway-client/browser";
 import { describe, expect, it } from "vitest";
+import { NotSentError } from "../src/client.ts";
 import {
   deleteBot,
   deleteFacts,
@@ -360,7 +364,12 @@ describe("deleting a bot: the delete", () => {
       message: expect.stringMatching(/didn't come back whole\. Nothing was sent\./),
     });
     g.failList(true);
-    expect(await deleteBot(g.ctx, ask())).toEqual({ kind: "not-sent", message: "socket closed" });
+    // The client's own text for a dropped socket is never the message.
+    expect(await deleteBot(g.ctx, ask())).toEqual({
+      kind: "not-sent",
+      message:
+        "The connection changed before Clawtrate could read the bot list, so nothing was sent.",
+    });
     expect(g.deletes()).toEqual([]);
   });
 
@@ -669,7 +678,7 @@ describe("deleting a bot: the delete", () => {
     expect(answer).toMatchObject({ removedOmitted: 1, missingOmitted: 2 });
   });
 
-  it("F-050: any failure once the request left is unconfirmed, in the gateway's words, and the list is read after", async () => {
+  it("F-050 #848: any failure once the request left is unconfirmed, a refusal in the gateway's words and a lost answer in Clawtrate's, and the list is read after", async () => {
     const g = gateway();
     const { ask } = await reviewed(g);
     // A refusal the gateway gives in its own words is no proof nothing was removed either.
@@ -684,12 +693,115 @@ describe("deleting a bot: the delete", () => {
     });
     const h = gateway();
     const second = await reviewed(h);
-    h.answers.push(() => new Error("request timed out"));
+    h.answers.push(
+      () =>
+        new GatewayProtocolRequestTimeoutError({
+          method: "agents.delete",
+          timeoutMs: 15_000,
+          requestSent: true,
+        }),
+    );
     expect(await deleteBot(h.ctx, second.ask({ deleteFiles: true }))).toEqual({
       kind: "unconfirmed",
-      message: "request timed out",
+      message: "it didn't answer in time",
       deleteFiles: true,
       listed: false,
+    });
+  });
+
+  // What the gateway client rejects a request with: its own text, never words for a person.
+  const dropped = () => new Error("gateway closed (1006): ");
+  const stopped = () => new Error("gateway client stopped");
+  const timedOut = (method: string) =>
+    new GatewayProtocolRequestTimeoutError({ method, timeoutMs: 15_000, requestSent: true });
+
+  it("#848: a delete whose answer was lost to a dropped connection, a stopped client or a timeout stays unconfirmed in Clawtrate's words, with what the list read after shows", async () => {
+    for (const cut of [dropped, stopped]) {
+      // The gateway deleted it, then the connection went: the list after can't be read either.
+      const g = gateway();
+      const { ask } = await reviewed(g);
+      g.answers.push(() => {
+        g.failList(true);
+        return cut();
+      });
+      expect(await deleteBot(g.ctx, ask()), cut().message).toEqual({
+        kind: "unconfirmed",
+        message: "the connection changed before it answered",
+        deleteFiles: false,
+        listed: null,
+      });
+    }
+    // A timeout on a connection still open: the list after says whether the bot is still there.
+    const late = gateway();
+    const first = await reviewed(late);
+    late.answers.push(() => timedOut("agents.delete"));
+    expect(await deleteBot(late.ctx, first.ask())).toEqual({
+      kind: "unconfirmed",
+      message: "it didn't answer in time",
+      deleteFiles: false,
+      listed: false,
+    });
+    const refused = gateway();
+    const second = await reviewed(refused);
+    refused.answers.push(() => refusal("agent is busy"));
+    expect(await deleteBot(refused.ctx, second.ask())).toEqual({
+      kind: "unconfirmed",
+      message: "agent is busy",
+      deleteFiles: false,
+      listed: true,
+      listedAs: "Pip",
+    });
+  });
+
+  it("#848: a delete the client never sent says nothing was sent, and nothing is read or deleted", async () => {
+    const g = gateway();
+    const { ask } = await reviewed(g);
+    const before = g.calls.length;
+    const ctx: BotDeleteContext = {
+      ...g.ctx,
+      request: (method, params) =>
+        method === "agents.delete"
+          ? Promise.reject(new NotSentError())
+          : g.ctx.request(method, params),
+    };
+    expect(await deleteBot(ctx, ask())).toEqual({
+      kind: "not-sent",
+      message: "The connection changed before the delete was sent, so nothing was sent.",
+    });
+    // Only the read before it: no list read after, and the gateway still has Pip.
+    expect(g.calls.slice(before).map((call) => call.method)).toEqual(["agents.list"]);
+    expect(g.confirmed).toEqual([]);
+  });
+
+  it("#848: the read just before a delete, cut off by a dropped connection, a stopped client or a timeout, or refused, says why in plain words and that nothing was sent", async () => {
+    const said = async (error: () => Error) => {
+      const g = gateway();
+      const { ask } = await reviewed(g);
+      g.lists.push(() => {
+        throw error();
+      });
+      const outcome = await deleteBot(g.ctx, ask());
+      expect(g.deletes()).toEqual([]);
+      return outcome;
+    };
+    for (const cut of [dropped, stopped])
+      expect(await said(cut)).toEqual({
+        kind: "not-sent",
+        message:
+          "The connection changed before Clawtrate could read the bot list, so nothing was sent.",
+      });
+    expect(await said(() => timedOut("agents.list"))).toEqual({
+      kind: "not-sent",
+      message: "The gateway didn't list its bots in time, so nothing was sent.",
+    });
+    expect(await said(() => refusal("missing scope: operator.read"))).toEqual({
+      kind: "not-sent",
+      message:
+        "The gateway didn't list its bots (missing scope: operator.read), so nothing was sent.",
+    });
+    expect(await said(() => new NotSentError())).toEqual({
+      kind: "not-sent",
+      message: "Clawtrate isn't connected to the gateway, so nothing was sent.",
     });
   });
 

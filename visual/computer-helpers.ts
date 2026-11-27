@@ -3,7 +3,8 @@ import { expect, type Locator, type Page } from "@playwright/test";
 import { OTTO_DISK } from "./fixture.ts";
 
 /** Juniper's research task with the Work pane open on Computer. */
-export const COMPUTER = "scene=main&bot=main&task=agent:main:ebook-apps&panel=open&tab=computer";
+export const COMPUTER =
+  "scene=main&bot=clawtrate-main-bot&task=agent:clawtrate-main-bot:ebook-apps&panel=open&tab=computer";
 /** Otto's disk task on Computer: the machine with a node, and the commands. */
 export const OTTO_COMPUTER = `scene=main&${OTTO_DISK}&panel=open&tab=computer`;
 
