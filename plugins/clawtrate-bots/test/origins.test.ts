@@ -297,14 +297,32 @@ describe("read from outside", () => {
   it("a run's own first message with its provenance doesn't mark it twice", () => {
     const store = new RunOrigins();
     const run = store.sawPrompt(frames["bot-message"]["1110"]!)!;
+    const own = frames["bot-message"]["1110"]!.inputProvenance;
     store.sawMessage(
-      {
-        sessionKey: "agent:marlow:main",
-        message: { role: "user", provenance: { kind: "inter_session" } },
-      },
+      { sessionKey: "agent:marlow:main", message: { role: "user", provenance: own } },
       {},
     );
     expect(run.readOutside).toBeNull();
+  });
+
+  it("a message of the same kind from another session joining a bot's run marks it", () => {
+    const store = new RunOrigins();
+    const run = store.sawPrompt(frames["bot-message"]["1110"]!)!;
+    store.sawMessage(
+      {
+        sessionKey: "agent:marlow:main",
+        message: {
+          role: "user",
+          provenance: {
+            kind: "inter_session",
+            sourceTool: "sessions_send",
+            sourceSessionKey: "agent:otto:main",
+          },
+        },
+      },
+      {},
+    );
+    expect(run.readOutside).toMatchObject({ source: "message" });
   });
 });
 
