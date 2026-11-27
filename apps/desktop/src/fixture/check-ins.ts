@@ -60,17 +60,17 @@ type Config = {
   };
 };
 
-const BOTS = ["main", "marlow", "otto", "pip", "quartermaster"];
+const BOTS = ["main", "clawtrate-main-bot", "marlow", "otto", "pip", "quartermaster"];
 
 function configFor(params: CheckInParams): Config {
   const own: Record<string, Heartbeat> =
     params.checkins === "off"
-      ? { main: { every: "0m" } }
+      ? { "clawtrate-main-bot": { every: "0m" } }
       : params.checkins === "daily"
-        ? { main: { every: "30m" }, marlow: { every: "24h" } }
+        ? { "clawtrate-main-bot": { every: "30m" }, marlow: { every: "24h" } }
         : params.checkins === "every"
           ? {
-              main: { every: "30m" },
+              "clawtrate-main-bot": { every: "30m" },
               otto: {
                 every: "2h",
                 prompt: "Look at the disk space on the build machine. Tell me if it is low.",
@@ -209,7 +209,7 @@ export function checkInCommands(params: CheckInParams) {
         put((c) => ({ ...c, save: { id: saveId, botId, status: "saving", error: null } }));
         // Another client, between the dialog opening and this save.
         if (params.save === "conflict")
-          config.agents.entries.main = {
+          config.agents.entries["clawtrate-main-bot"] = {
             heartbeat: {
               every: "24h",
               prompt: "Theirs. If nothing needs attention, reply NO_REPLY.",

@@ -227,7 +227,7 @@ test.afterAll(async () => {
 
 test("F-560: a real skill note shows in the default conversation and as the bot's preview", async () => {
   test.setTimeout(300_000);
-  const key = `agent:main:skill-note-${Date.now()}`;
+  const key = `agent:clawtrate-main-bot:skill-note-${Date.now()}`;
   const send = { sessionKey: key, message: "#learn", idempotencyKey: key };
   if (instanceForm(openInstance(INSTANCE)).reviewsCliTurns) await gatewayCall("chat.send", send);
   else {
@@ -248,11 +248,11 @@ test("F-560: a real skill note shows in the default conversation and as the bot'
   }
 
   // The person reads the bot's reply, then goes to another bot before the review ends.
-  await botRow("main").click();
+  await botRow("clawtrate-main-bot").click();
   await expect(transcript()).toContainText(REPLY, { timeout: 60_000 });
-  const other = page.locator('[data-testid="bot"]:not([data-bot="main"])').first();
+  const other = page.locator('[data-testid="bot"]:not([data-bot="clawtrate-main-bot"])').first();
   await other.click();
-  await expect(botRow("main")).not.toHaveAttribute("aria-current", "true");
+  await expect(botRow("clawtrate-main-bot")).not.toHaveAttribute("aria-current", "true");
 
   // The gateway's review saves the skill and appends its note, under its key.
   let note: Json | undefined;
@@ -283,19 +283,19 @@ test("F-560: a real skill note shows in the default conversation and as the bot'
   // On this connection, which writes, the unread mark is the gateway's own: the note, which came
   // after the person read the task, did not raise it.
   await restartHost();
-  await expect(botRow("main")).toBeVisible({ timeout: 30_000 });
-  await expect(botRow("main").locator(".unread-dot")).toHaveCount(0);
-  await expect(botRow("main")).not.toHaveAccessibleName(/, unread/);
+  await expect(botRow("clawtrate-main-bot")).toBeVisible({ timeout: 30_000 });
+  await expect(botRow("clawtrate-main-bot").locator(".unread-dot")).toHaveCount(0);
+  await expect(botRow("clawtrate-main-bot")).not.toHaveAccessibleName(/, unread/);
 
   // With Show commands off, the note is in the conversation after the reply, drawn as the bot's
   // words are (its code marks are formatting), and is the bot's preview.
   await setCommandsShown(false);
-  await botRow("main").click();
+  await botRow("clawtrate-main-bot").click();
   await expect(transcript()).toContainText(REPLY, { timeout: 60_000 });
   await expect(transcript()).toContainText(noteText.replaceAll("`", ""));
   const text = await transcript().innerText();
   expect(text.indexOf("Learned:")).toBeGreaterThan(text.lastIndexOf(REPLY));
-  await expect(botRow("main").locator(".bot-preview")).toContainText(
+  await expect(botRow("clawtrate-main-bot").locator(".bot-preview")).toContainText(
     "Learned: created trail-check",
   );
   await shots("note-shown");

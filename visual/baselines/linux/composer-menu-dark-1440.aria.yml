@@ -31,7 +31,7 @@
         - listitem:
           - button "Archived"
     - listitem:
-      - button "Juniper, 3 tasks, unread, research, primary bot":
+      - button "Juniper, 3 tasks, unread, research":
         - text: Juniper research
         - time: 5:24 PM
         - text: Ask these five, and get the answers in writing.
@@ -118,10 +118,8 @@
     - group: 2 actions · 1 unknown
     - status
   - listbox "Skills and commands":
-    - option "tide-table Use when someone asks when the tide turns at the harbour. Your skill" [selected]
-    - option "ferry-times Use when someone asks for the next ferry. Team skill"
-    - option "/healthcheck Check the health of this machine and its services. Bot skill"
-    - option "/weather Get the weather for a place. Bot skill"
+    - option "/healthcheck Check the health of this machine and its services. Skill" [selected]
+    - option "/weather Get the weather for a place. Skill"
     - option "/status Show the session's status. Command"
     - option "/compact Compact the session's context. Command"
   - button "Attach files"

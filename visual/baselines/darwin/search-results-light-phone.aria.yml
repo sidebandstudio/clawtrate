@@ -103,7 +103,7 @@
     - term: Tasks
     - definition: Titles in this device's task list, which keeps up to 500 tasks.
     - term: Links
-    - definition: Links in the 24 conversations this device has loaded.
+    - definition: Links in the 25 conversations this device has loaded.
     - term: Routines
     - definition: Routine names, descriptions and bot details.
     - term: Settings

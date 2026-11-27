@@ -65,10 +65,8 @@
     - group: 2 actions · 1 unknown
     - status
   - listbox "Skills and commands":
-    - option "tide-table Your skill" [selected]
-    - option "ferry-times Team skill"
-    - option "/healthcheck Bot skill"
-    - option "/weather Bot skill"
+    - option "/healthcheck Skill" [selected]
+    - option "/weather Skill"
     - option "/status Command"
     - option "/compact Command"
   - button "Attach files"
