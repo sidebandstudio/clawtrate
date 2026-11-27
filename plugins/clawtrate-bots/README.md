@@ -52,7 +52,7 @@ A run is one of: **typed** (the gateway's own chat channel, `webchat`, trigger `
 
 A tool finds its own run by its run id on 2026.11.10, and on 2026.10.6, whose tools aren't told it, by the session key and call id `before_tool_call` saw.
 
-**Bounds.** At most 512 runs. When full, an ended run leaves first; with none ended, a new run isn't held: it is remembered as lost, so its calls are C and it is never admitted later as new. A run unseen for 24 hours leaves; one that hadn't ended is remembered as lost (512, oldest first out) and is C from then on, never held again. So is a run first seen at a call or a result rather than at its first prompt: one under way when the plugin was loaded, enabled or given conversation access. The call lookup keeps 2,048 entries and the task sessions 512, oldest first out. After a gateway restart the store is empty: every call is C until a new run's first prompt.
+**Bounds.** At most 512 runs. When full, an ended run leaves first; with none ended, a new run isn't held: it is remembered as lost, so its calls are C. A run unseen for 24 hours leaves; one that hadn't ended is remembered as lost too. So is a run first seen at a call or a result rather than at its first prompt: one under way when the plugin was loaded, enabled or given conversation access. A lost run is C and is never admitted as new while it is remembered: the plugin remembers the last 512 lost runs, oldest first out, so one still running after 512 later runs were lost could be admitted again, with nothing it read. The call lookup keeps 2,048 entries and the task sessions 512, oldest first out. After a gateway restart the store is empty: every call is C until a new run's first prompt.
 
 ## Read from outside
 

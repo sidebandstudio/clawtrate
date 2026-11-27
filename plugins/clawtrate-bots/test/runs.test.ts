@@ -21,7 +21,11 @@ const CONFIG = {
   plugins: { entries: { "clawtrate-bots": { hooks: { allowConversationAccess: true } } } },
 };
 
-function host({ version = "2026.10.6", config = CONFIG as Json, sessions = [] as Json[] } = {}) {
+function host({
+  version = "2026.10.6",
+  config = CONFIG as Json,
+  sessions = [] as Json[] | ((agentId: string) => Json[]),
+} = {}) {
   const hooks = new Map<string, Handler>();
   const tools = new Map<
     string,
@@ -40,7 +44,7 @@ function host({ version = "2026.10.6", config = CONFIG as Json, sessions = [] as
   const plugin = createHooks(api, {
     slots: {},
     config: () => config,
-    sessions: () => sessions,
+    sessions: (agentId: string) => (typeof sessions === "function" ? sessions(agentId) : sessions),
   } as never);
   const fire = (name: string, event: Json, ctx: Json = {}) => hooks.get(name)!(event, ctx);
   const tool = async (name: string, ctx: Json, callId: string, params: Json = {}) =>
@@ -269,6 +273,26 @@ describe("fix round", () => {
     h.fire("after_tool_call", call("web_fetch", { url: "x" }), toolCtx);
     h.fire("before_prompt_build", {}, typed);
     expect(await h.runGet("r1")).toEqual({ runId: "r1", known: false });
+  });
+
+  it("clawtrate_tasks looks in every other bot's sessions, past the 50 clawtrate_bots lists", async () => {
+    const entries: Json = { pip: {} };
+    for (let i = 1; i <= 60; i += 1) entries[`bot${i}`] = {};
+    const h = host({
+      config: { ...CONFIG, agents: { ...CONFIG.agents, entries } } as Json,
+      sessions: (agentId) =>
+        agentId === "bot60"
+          ? [
+              {
+                sessionKey: "agent:bot60:dashboard:1",
+                entry: { label: "Under the sixtieth", spawnedBy: "agent:pip:main", updatedAt: 5 },
+              },
+            ]
+          : [],
+    });
+    h.fire("before_prompt_build", {}, typed);
+    h.fire("before_tool_call", call("clawtrate_tasks", {}, "c2"), toolCtx);
+    expect(await h.tool("clawtrate_tasks", toolCtx, "c2")).toMatch(/«Under the sixtieth»/);
   });
 
   it("clawtrate_tasks lists the tasks it started under other bots", async () => {
