@@ -56,6 +56,7 @@ import {
   processState,
   processVerdict,
   readMarker,
+  readOnlyIdentity,
   readRunRecord,
   recordPending,
   recordProcess,
@@ -3075,7 +3076,8 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
         `${command} covers every instance on this machine; it does not take --instance or CLAWTRATE_DEV_INSTANCE`,
       );
     }
-    if (command === "list") list({ json: values.json });
+    // `list` only reads markers and prints, so it alone may identify live processes everywhere.
+    if (command === "list") list({ json: values.json, identify: readOnlyIdentity });
     else await prune();
     return;
   }

@@ -19,6 +19,7 @@ import {
   lstatSync,
   mkdirSync,
   readFileSync,
+  realpathSync,
   renameSync,
   rmSync,
   writeFileSync,
@@ -250,8 +251,153 @@ export function psIdentity(candidates: readonly string[], timeoutMs = PS_TIMEOUT
   };
 }
 
-/** The system's own `ps`, run by its fixed path. */
-export const processIdentity: Identify = psIdentity(SYSTEM_PS);
+/**
+ * The kernel's own link to the folder the running Windows started from, on whatever drive. The
+ * system resolves it; neither the environment's SystemRoot nor a guessed drive is ever used.
+ */
+const SYSTEM_ROOT = "\\\\?\\GLOBALROOT\\SystemRoot";
+
+/**
+ * Reads one process's creation time from the kernel. It opens that PID alone, never a list of
+ * processes, with the least access that reads the time (PROCESS_QUERY_LIMITED_INFORMATION). Only
+ * .NET is called, so no command, module or profile is looked up. It prints the time as Windows
+ * keeps it, 100 ns intervals since 1601 in UTC, and exits nonzero when it cannot.
+ */
+function creationTimeScript(pid: number): string {
+  const kernel32 = (name: string, returns: string, takes: string) =>
+    `$kernel.DefinePInvokeMethod('${name}', 'kernel32.dll', 'Public, Static, PinvokeImpl', 'Standard', ${returns}, [Type[]]@(${takes}), 'Winapi', 'Unicode').SetImplementationFlags('PreserveSig')`;
+  return [
+    "$ErrorActionPreference = 'Stop'",
+    "$kernel = [AppDomain]::CurrentDomain.DefineDynamicAssembly([Reflection.AssemblyName]::new('ProcessTimes'), 'Run').DefineDynamicModule('ProcessTimes').DefineType('Kernel32', 'Public, Class')",
+    kernel32("OpenProcess", "[IntPtr]", "[UInt32], [Boolean], [UInt32]"),
+    kernel32("GetProcessTimes", "[Boolean]", `[IntPtr]${", [Int64].MakeByRefType()".repeat(4)}`),
+    kernel32("CloseHandle", "[Boolean]", "[IntPtr]"),
+    "$kernel = $kernel.CreateType()",
+    `$handle = $kernel::OpenProcess(0x1000, $false, ${pid})`,
+    "if ($handle -eq [IntPtr]::Zero) { exit 2 }",
+    "$created = [Int64]0; $unused = [Int64]0",
+    "$read = $kernel::GetProcessTimes($handle, [ref]$created, [ref]$unused, [ref]$unused, [ref]$unused)",
+    "$null = $kernel::CloseHandle($handle)",
+    "if (-not $read) { exit 3 }",
+    "[Console]::Out.Write($created.ToString([Globalization.CultureInfo]::InvariantCulture))",
+  ].join("\n");
+}
+
+/** 100 ns intervals from 1601, where Windows' clock starts, to 1970. */
+const FILETIME_1970 = 116_444_736_000_000_000n;
+
+/**
+ * A creation time as Windows keeps it, as the identity this tool records:
+ * "2026-11-16T21:27:01.1234567Z", the same whatever time zone the caller runs in. Windows can give
+ * a freed PID to the next process at once, so the identity keeps every digit, not whole seconds.
+ */
+function fileTimeIdentity(output: string): string | null {
+  if (!/^\d{1,19}$/.test(output)) return null;
+  const since1970 = BigInt(output) - FILETIME_1970;
+  const date = new Date(Number(since1970 / 10_000n));
+  if (since1970 < 0n || date.getUTCFullYear() > 9999) return null;
+  return `${date.toISOString().slice(0, 19)}.${String(since1970 % 10_000_000n).padStart(7, "0")}Z`;
+}
+
+/** The shape of an identity `fileTimeIdentity` writes. */
+const WINDOWS_IDENTITY = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2})\.(\d{7})Z$/;
+
+/**
+ * Whether `identity` is exactly what `fileTimeIdentity` writes for a creation time: seven digits
+ * after the second, in UTC, on a date and at a time that exist.
+ */
+function isWindowsIdentity(identity: string): boolean {
+  const match = WINDOWS_IDENTITY.exec(identity);
+  const ms = match ? Date.parse(`${match[1]}Z`) : Number.NaN;
+  if (Number.isNaN(ms)) return false;
+  const ticks = BigInt(ms) * 10_000n + BigInt(match![2]!) + FILETIME_1970;
+  return fileTimeIdentity(String(ticks)) === identity;
+}
+
+/**
+ * A process lookup on Windows, run by the PowerShell of the Windows that is running: the
+ * process's creation time from the kernel, which together with its PID identifies it.
+ */
+export function windowsIdentity(timeoutMs = PS_TIMEOUT_MS): Identify {
+  return (pid) => {
+    if (!validPid(pid)) return unknown(`${String(pid)} is not a process id this tool checks`);
+    // Windows has no zombies: a process that has exited is absent here once it has an exit code.
+    const absent = kernelSaysAbsent(pid);
+    if (absent === true) return { state: "exited", how: "absent" };
+    if (typeof absent === "string") return unknown(absent);
+    // Node can't start a program by the link's own path (EINVAL), so it starts the one the link
+    // resolves to. Unresolved, or nothing there: no answer, and nothing else is tried.
+    let root: string;
+    try {
+      root = realpathSync.native(SYSTEM_ROOT);
+    } catch (error) {
+      return unknown(
+        `the running Windows folder could not be resolved: ${(error as NodeJS.ErrnoException).code}`,
+      );
+    }
+    const shell = `${root}\\System32\\WindowsPowerShell\\v1.0\\powershell.exe`;
+    if (!existsSync(shell)) return unknown("the system's PowerShell was not found");
+    const result = spawnSync(
+      shell,
+      ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", creationTimeScript(pid)],
+      {
+        encoding: "utf8",
+        timeout: timeoutMs,
+        windowsHide: true,
+        // SystemRoot is the resolved folder, not the caller's. Node adds the few other variables
+        // Windows needs, such as PATH and TEMP, from this process; the script looks up no command,
+        // so PATH chooses nothing. PSModulePath is not one of them, so a PowerShell 7 that started
+        // the caller can't hand Windows PowerShell its own modules.
+        env: { SystemRoot: root },
+      },
+    );
+    // A process that exited between the two looks can't be opened; that much is still positive.
+    const failed = (reason: string): Lookup =>
+      kernelSaysAbsent(pid) === true ? { state: "exited", how: "absent" } : unknown(reason);
+    if (result.error) {
+      return failed(`could not run PowerShell for pid ${pid}: ${result.error.message}`);
+    }
+    if (result.status !== 0) {
+      return failed(`PowerShell for pid ${pid} exited with ${result.status ?? result.signal}`);
+    }
+    // Only one whole creation time counts; anything else must never become an identity.
+    const identity = fileTimeIdentity(result.stdout.trim());
+    if (identity === null) return failed(`could not read PowerShell output for pid ${pid}`);
+    return { state: "alive", identity };
+  };
+}
+
+/**
+ * What a decision to start, signal or delete may know about a process on Windows: only that the
+ * kernel has no such PID. Nothing is run, and a live or uncheckable process is unknown, so no
+ * such decision is ever made on a live process's word there.
+ */
+const windowsAbsenceOnly: Identify = (pid) => {
+  if (!validPid(pid)) return unknown(`${String(pid)} is not a process id this tool checks`);
+  const absent = kernelSaysAbsent(pid);
+  if (absent === true) return { state: "exited", how: "absent" };
+  return unknown(
+    typeof absent === "string"
+      ? absent
+      : `pid ${pid} exists, and on Windows only commands that read state identify a process`,
+  );
+};
+
+/** The system's own process lookup on `platform`, for any decision; never one the environment chooses. */
+export function systemIdentity(platform: NodeJS.Platform): Identify {
+  return platform === "win32" ? windowsAbsenceOnly : psIdentity(SYSTEM_PS);
+}
+
+/** The system's own process lookup: `ps` on macOS and Linux; on Windows only absence is known. */
+export const processIdentity: Identify = systemIdentity(process.platform);
+
+/**
+ * The lookup for commands that only read and print state, such as `list`. On Windows it reads a
+ * live process's creation time with the running Windows' own PowerShell; nothing that starts,
+ * signals or deletes may use it. Elsewhere it is `processIdentity`.
+ */
+export const readOnlyIdentity: Identify =
+  process.platform === "win32" ? windowsIdentity() : processIdentity;
 
 /** How many times a process looks itself up before it gives up. */
 const OWN_LOOKUPS = 3;
@@ -300,6 +446,14 @@ export function processVerdict(
   // A start time recorded in a local time zone: neither a match nor a mismatch.
   if (LOCAL_IDENTITY.test(identity)) {
     return { state: "unknown", reason: "its record's start time is in a local time zone" };
+  }
+  // A Windows start time is compared only with one written the same way. Whole seconds, another
+  // format or a date that doesn't exist can't show that the live process is another one.
+  if (
+    WINDOWS_IDENTITY.test(now.identity) &&
+    !(isWindowsIdentity(now.identity) && isWindowsIdentity(identity))
+  ) {
+    return { state: "unknown", reason: "its record's start time is not a Windows creation time" };
   }
   // A live process with another start time holds a reused PID: the recorded one is gone.
   return { state: now.identity === identity ? "alive" : "dead" };
