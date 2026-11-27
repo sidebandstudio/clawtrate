@@ -336,26 +336,31 @@ describe.skipIf(process.platform !== "darwin")("Mac update inspection helper", (
   beforeAll(() => {
     dir = tempDir();
     helper = join(dir.path, "ClawtrateUpdateInspection");
-    execFileSync("/usr/bin/xcrun", [
-      "clang",
-      "-fobjc-arc",
-      "-Wall",
-      "-Werror",
-      "-O2",
-      "-arch",
-      "arm64",
-      "-arch",
-      "x86_64",
-      "-mmacosx-version-min=12.0",
-      "-framework",
-      "Foundation",
-      "-framework",
-      "Security",
-      "-larchive.2",
-      resolve(import.meta.dirname, "../../packaging/mac/inspect-archive.m"),
-      "-o",
-      helper,
-    ]);
+    // clang's two-architecture build leaves empty folders in TMPDIR: the test's folder takes them.
+    execFileSync(
+      "/usr/bin/xcrun",
+      [
+        "clang",
+        "-fobjc-arc",
+        "-Wall",
+        "-Werror",
+        "-O2",
+        "-arch",
+        "arm64",
+        "-arch",
+        "x86_64",
+        "-mmacosx-version-min=12.0",
+        "-framework",
+        "Foundation",
+        "-framework",
+        "Security",
+        "-larchive.2",
+        resolve(import.meta.dirname, "../../packaging/mac/inspect-archive.m"),
+        "-o",
+        helper,
+      ],
+      { env: { ...process.env, TMPDIR: dir.path } },
+    );
   }, 60000);
   afterAll(() => dir.remove());
   const archiveArgs = ["scratch", "dev.clawtrate.desktop", "1.2.0", arch()];

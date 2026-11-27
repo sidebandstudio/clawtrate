@@ -2,10 +2,10 @@
 // file's skill-review instance (`e2e-<id>-skills`, started with
 // `--with-skill-review`), where a `#learn` turn makes the gateway review the
 // task in the background, save a skill and append its note ("Learned: …") to
-// the task about 30 seconds later. With "Show commands" off, the default, the
-// note shows as any message does, in the conversation and as the bot's preview
-// (docs/parity.md F-560). The unread mark is the gateway's own, which the note
-// does not raise.
+// the task about 30 seconds later. The note folds into the line of the run it
+// follows, "Saved a skill: trail-check", and its undo is there: the gateway's
+// own on OpenClaw 2026.11.10, a message "undo" on 2026.10.6 (docs/parity.md
+// F-560). The unread mark is the gateway's own, which the note does not raise.
 //
 // The instance is this file's own (`INSTANCE`), started and removed here, so a
 // shard that does not run this file starts none.
@@ -119,17 +119,6 @@ async function hostCommand(command: Json): Promise<void> {
 const botRow = (bot: string) => page.locator(`[data-testid="bot"][data-bot="${bot}"]`);
 const transcript = () => page.getByTestId("transcript");
 
-async function setCommandsShown(on: boolean): Promise<void> {
-  await page.keyboard.press("ControlOrMeta+,");
-  const settings = page.getByRole("dialog", { name: "Settings" });
-  await settings.getByRole("button", { name: "Advanced", exact: true }).click();
-  const toggle = settings.getByRole("switch", { name: "Show commands" });
-  if ((await toggle.getAttribute("aria-checked")) !== String(on)) await toggle.click();
-  await expect(toggle).toHaveAttribute("aria-checked", String(on));
-  await page.keyboard.press("Escape");
-  await expect(settings).toHaveCount(0);
-}
-
 /** Screenshots of the page as it is, at 1440 and 390, when asked for. */
 async function shots(name: string): Promise<void> {
   if (!SHOTS) return;
@@ -225,13 +214,16 @@ test.afterAll(async () => {
   expect(problems).toEqual([]);
 });
 
-test("F-560: a real skill note shows in the default conversation and as the bot's preview", async () => {
+test("F-560: a real skill note folds into its run's line, and its undo works", async () => {
   test.setTimeout(300_000);
   const key = `agent:clawtrate-main-bot:skill-note-${Date.now()}`;
   const send = { sessionKey: key, message: "#learn", idempotencyKey: key };
-  if (instanceForm(openInstance(INSTANCE)).reviewsCliTurns) await gatewayCall("chat.send", send);
+  const marks = !instanceForm(openInstance(INSTANCE)).reviewsCliTurns;
+  if (!marks) await gatewayCall("chat.send", send);
   else {
-    // 2026.11.10 reviews only a turn an admin connection sent (#609), not one the CLI sent.
+    // 2026.11.10 reviews only a turn offered skill_workshop (#609): of the paired clients, an admin
+    // connection's on a gateway with one profile; the others get skill_library instead. Nor does
+    // it review a turn the CLI sent.
     const op = await openOperator(
       openInstance(INSTANCE),
       "Clawtrate skill note check",
@@ -244,6 +236,11 @@ test("F-560: a real skill note shows in the default conversation and as the bot'
       await op.close();
     }
   }
+  // Admin access, which the gateway's own undo needs on 2026.11.10: asked for once the check's
+  // own device is paired, so the app has no pairing request of it to show.
+  await hostCommand({ type: "requestAccess", tier: "admin" });
+  await approve();
+  await expect(page.getByTestId("device-request")).toHaveCount(0);
 
   // The person reads the bot's reply, then goes to another bot before the review ends.
   await botRow("clawtrate-main-bot").click();
@@ -275,26 +272,72 @@ test("F-560: a real skill note shows in the default conversation and as the bot'
     "openclaw",
     "delivery-mirror",
   ]);
+  expect(meta(note!).runId).toBeUndefined();
+  // 2026.11.10 marks its note; 2026.10.6 doesn't.
+  const mark = note!.openclawDeliveryMirror as Json | undefined;
+  if (marks)
+    expect(mark).toMatchObject({
+      kind: "plugin-notice",
+      pluginId: "skill-workshop",
+      type: "skills-changed",
+    });
+  else expect(mark).toBeUndefined();
+  const skill = /`(trail-check[\w-]*)`/.exec(noteText)![1]!;
 
   // The note sends no sessions.changed, so the host's list still has the reply. The app opened
-  // again reads the list fresh: the gateway's row now has the note as its preview and time.
-  // On this connection, which writes, the unread mark is the gateway's own: the note, which came
-  // after the person read the task, did not raise it.
+  // again reads the list fresh, and the task's runs are rebuilt from its history. On this
+  // connection, which writes, the unread mark is the gateway's own: the note, which came after
+  // the person read the task, did not raise it.
   await restartHost();
   await expect(botRow("clawtrate-main-bot")).toBeVisible({ timeout: 30_000 });
   await expect(botRow("clawtrate-main-bot").locator(".unread-dot")).toHaveCount(0);
   await expect(botRow("clawtrate-main-bot")).not.toHaveAccessibleName(/, unread/);
 
-  // With Show commands off, the note is in the conversation after the reply, drawn as the bot's
-  // words are (its code marks are formatting), and is the bot's preview.
-  await setCommandsShown(false);
+  // The note is no bubble: it folds into the run's line.
   await botRow("clawtrate-main-bot").click();
   await expect(transcript()).toContainText(REPLY, { timeout: 60_000 });
-  await expect(transcript()).toContainText(noteText.replaceAll("`", ""));
-  const text = await transcript().innerText();
-  expect(text.indexOf("Learned:")).toBeGreaterThan(text.lastIndexOf(REPLY));
-  await expect(botRow("clawtrate-main-bot").locator(".bot-preview")).toContainText(
-    "Learned: created trail-check",
-  );
-  await shots("note-shown");
+  await expect(page.getByTestId("transcript-turn").filter({ hasText: "Learned" })).toHaveCount(0);
+  const line = transcript().getByTestId("run-line").filter({ hasText: "Saved a skill" });
+  await expect(line).toHaveCount(1);
+  await expect(line.locator(":scope > summary")).toContainText(`Saved a skill: ${skill}`);
+  await shots("note-folded");
+  await line.locator(":scope > summary").click();
+  await expect(line.getByTestId("skill-note").locator(".skill-note-text")).toHaveText(noteText);
+  await shots("note-open");
+
+  const undo = line.getByTestId("skill-note-undo");
+  if (marks) {
+    // The gateway's own undo, from this admin connection.
+    await undo.getByRole("button", { name: `Undo: Saved a skill: ${skill}` }).click();
+    await expect(undo.getByRole("status")).toHaveText("Undone.", { timeout: 30_000 });
+    const review = String(keyOf(note!)).replace("skill-workshop-notice:", "");
+    const { changes } = await gatewayCall<{ changes: Json[] }>("skills.workshop.changes", {
+      agentId: "clawtrate-main-bot",
+    });
+    expect(
+      changes.some(
+        (change) =>
+          change.skillName === skill &&
+          change.runId === review.replace("skill-workshop-review:", "skill-workshop-undo:"),
+      ),
+    ).toBe(true);
+  } else {
+    // The bot's undo, asked for in the task, as the note says.
+    await undo.getByRole("button", { name: /^Send "undo" to / }).click();
+    await expect(undo.getByRole("status")).toHaveText(/^Sent "undo" to /, { timeout: 30_000 });
+    const said = (row: Json) =>
+      row.role === "user" &&
+      (row.content === "undo" ||
+        (Array.isArray(row.content) &&
+          (row.content as Json[]).some((block) => block.text === "undo")));
+    await expect
+      .poll(
+        async () =>
+          (
+            await gatewayCall<{ messages: Json[] }>("chat.history", { sessionKey: key })
+          ).messages.some(said),
+        { timeout: 30_000, intervals: [2_000] },
+      )
+      .toBe(true);
+  }
 });

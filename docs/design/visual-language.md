@@ -266,22 +266,23 @@ There is no heading above the bots. The product's mark and name are in the title
 
 ### Bot row
 
-- 60 px tall (68 on touch), padded 10 px, radius 18.
-- Avatar 40 px, 12 px gap, then two lines.
-- Line one: the name (15/500) and, right-aligned, the time of the bot's latest activity (12, faint).
-- Line two: a state mark when a task is running or failed, one line of preview (14, muted), and the unread dot at the right end.
-- Time format: `now` while a task is running, today as `5:36 PM`, yesterday as `Yesterday`, within a week as `Mon`, older as `Nov 9`.
+A bot's row is its picture and its name, nothing else (#790): no preview line and no time.
+
+- 64 px tall (68 on touch), padded 8 px, radius 18; the right 36 px stay free for the fold chevron.
+- Picture 48 px (52 on touch, `--avatar-bot`), 12 px gap, then one line, centred on the picture.
+- The line: the name (15/500), the label pill when the bot has one, and the unread dot 8 px after them.
+- Eight bots take 526 px at the default width, so the list fits a 700 px window under the header; at phone width the rows are 68 px.
 - Hover: `--bg-hover`. Selected: `--bg-selected`. Both are neutral.
+- Task rows under a bot keep their time (below).
 
 **What a row says about a bot with several tasks.** A folded bot must not hide work in its older tasks, so its row is a summary of all of them, and its three signals are independent:
 
-| Signal           | Comes from                                                                                                   | Where                                |
-| ---------------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------ |
-| Preview and time | The latest activity in any task                                                                              | Line two, and the time               |
-| Unread           | Any task that is unread, other than the one on screen                                                        | The dot at the right end of line two |
-| Run state        | The most urgent state among the tasks: waiting for you, failed or blocked, done with failures, working, idle | A mark at the start of line two      |
+| Signal    | Comes from                                                                                                   | Where                                                  |
+| --------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------ |
+| Unread    | Any task that is unread, other than the one on screen                                                        | The dot after the name                                 |
+| Run state | The most urgent state among the tasks: waiting for you, failed or blocked, done with failures, working, idle | The picture: its ring or badge (`conversation.md` §20) |
 
-So a bot whose newest task has been read still shows the dot for an older unread task, and a bot with a task running in the background shows the working mark and that task's activity while a different task is open. The shell knows two of these states today, working and failed, and failed comes before working; `conversation.md` adds the rest and gives the avatar a state of its own. The same summary, with the same independence, applies to pinned tiles ("Pinned bots", below) and to the phone. A bot with no tasks has an empty summary: "No tasks yet" as its preview, no time, no mark, no dot.
+So a bot whose newest task has been read still shows the dot for an older unread task, and a bot with a task running in the background shows the working ring while a different task is open. The same summary, with the same independence, applies to pinned tiles ("Pinned bots", below). A bot with no tasks shows its picture and name, no mark and no dot; while its tasks are still being read its accessible name says "loading tasks".
 
 ### Tasks under a bot
 
@@ -295,7 +296,7 @@ A bot has many tasks. The arrangement keeps a single list of bots and puts each 
 - The bot and its tasks sit in one faint block (55% of `--bg-hover`, radius 18). Only the current task is strongly filled (`--bg-selected`, radius 10, medium weight). The bot row inside the block has no fill.
 - Opening another bot folds the one that was unfolded by being open. A bot the user unfolded by hand stays unfolded until they fold it, so two bots' tasks can be in view at once.
 - Folding does not change the selection. A folded selected bot shows the selection on its row.
-- The fold control is a small chevron that takes the time's place while the row is hovered or has focus. Clicking the open bot's row also folds and unfolds it. From the keyboard, Right unfolds and Left folds.
+- The fold control is a small chevron at the row's right end, shown while the row is hovered or has focus. Clicking the open bot's row also folds and unfolds it. From the keyboard, Right unfolds and Left folds.
 - Which bots the user unfolded or folded by hand persists across restarts.
 
 **A task row** is one line, 34 px (44 on touch), indented 20 px from the block's edge:

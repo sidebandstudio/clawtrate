@@ -360,13 +360,15 @@ test("F-474: a sign-in's stages: the code with its link; Back cancels; the API k
   await page.keyboard.press("ControlOrMeta+n");
   await page.getByRole("button", { name: "Next" }).click();
   await page.getByRole("button", { name: "Connect another account" }).click();
-  // Subscriptions first; OpenRouter, billed per token, after.
-  await expect(newBot(page).locator(".b-group")).toHaveText(["Subscriptions", "Billed per token"]);
+  // One tile per provider; OpenRouter's says its sign-in is billed per token.
+  await expect(newBot(page).getByRole("button", { name: /^OpenRouter/ })).toContainText(
+    "Billed per token",
+  );
   const disclosure = newBot(page).locator("details.b-disclosure");
   await expect(disclosure).not.toHaveAttribute("open", "");
   await expect(page.getByTestId("api-key")).toBeHidden();
   await newBot(page)
-    .getByRole("button", { name: /^xAI · / })
+    .getByRole("button", { name: /^xAI\b/ })
     .click();
   await expect(page.getByRole("heading", { name: "Sign in to xAI", level: 2 })).toBeVisible();
   await expect(page.getByRole("group", { name: "Code QK4F 7PZD" })).toBeVisible();
@@ -380,14 +382,104 @@ test("F-474: a sign-in's stages: the code with its link; Back cancels; the API k
   );
 });
 
+test("F-474: Connect an account is a grid of providers, each named, reached by keyboard in reading order", async ({
+  page,
+}) => {
+  await openFixture(page, ADMIN, "light");
+  await page.keyboard.press("ControlOrMeta+n");
+  await page.getByRole("button", { name: "Next" }).click();
+  await page.getByRole("button", { name: "Connect another account" }).click();
+  const grid = newBot(page).getByRole("list", { name: "Providers" });
+  // The four most used first, each named by its provider; one the gateway has an account of says so.
+  await expect(grid.getByRole("button")).toHaveText([
+    /^OpenAI\s*Connected$/,
+    /^GitHub Copilot\s*Connected$/,
+    /^xAI\s*Connected$/,
+    /^OpenRouter\s*Billed per token$/,
+  ]);
+  await grid.getByRole("button", { name: /^OpenAI\b/ }).focus();
+  for (const next of [/^GitHub Copilot/, /^xAI\b/, /^OpenRouter/]) {
+    await page.keyboard.press("Tab");
+    await expect(newBot(page).getByRole("button", { name: next })).toBeFocused();
+  }
+  await page.keyboard.press("Tab");
+  await expect(newBot(page).getByRole("button", { name: "Show more" })).toBeFocused();
+  // Show more goes once pressed; focus moves to the first tile it showed, and on to the next.
+  await page.keyboard.press("Enter");
+  await expect(newBot(page).getByRole("button", { name: "Show more" })).toHaveCount(0);
+  await expect(grid.getByRole("button", { name: /^MiniMax/ })).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(grid.getByRole("button", { name: /^OpenCode Go/ })).toBeFocused();
+  // A provider with several methods shows them in the same dialog, the usual one first; nothing
+  // starts until one is chosen.
+  await page.keyboard.press("Shift+Tab");
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("heading", { name: "MiniMax", level: 2 })).toBeVisible();
+  const ways = newBot(page).getByRole("list", { name: "Ways to sign in to MiniMax" });
+  await expect(ways.locator(".b-choice-title")).toHaveText(["Global account", "China account"]);
+  expect((await sent(page)).filter((each) => each.type === "startSignIn")).toEqual([]);
+  // Back gives focus to the tile it came from.
+  await page.getByRole("button", { name: "Back to providers" }).click();
+  await expect(grid.getByRole("button", { name: /^MiniMax/ })).toBeFocused();
+  // A tile with one method starts it at once.
+  await grid.getByRole("button", { name: /^OpenCode Go/ }).press("Enter");
+  await expect(page.getByTestId("paste")).toBeVisible();
+  expect((await sent(page)).find((each) => each.type === "startSignIn")).toMatchObject({
+    methodId: "opencode-go/opencode-go-console",
+  });
+});
+
+test("F-474: a sign-in chosen among a provider's methods and started again still goes back to them", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&signin=failed`, "light");
+  await page.keyboard.press("ControlOrMeta+n");
+  await page.getByRole("button", { name: "Next" }).click();
+  await page.getByRole("button", { name: "Connect another account" }).click();
+  await newBot(page)
+    .getByRole("button", { name: /^OpenAI\b/ })
+    .click();
+  await newBot(page).getByRole("button", { name: "Use a device code" }).click();
+  await expect(page.getByRole("heading", { name: "Couldn't connect" })).toBeVisible();
+  await page.getByRole("button", { name: "Try again" }).click();
+  await expect(page.getByRole("heading", { name: "Couldn't connect" })).toBeVisible();
+  await page.getByRole("button", { name: "Back to sign-in methods" }).click();
+  await expect(page.getByRole("heading", { name: "OpenAI", level: 2 })).toBeVisible();
+});
+
+test("F-474: a provider the app doesn't know shows under the gateway's name, and its sign-in works", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&plugin=1`, "light");
+  await page.keyboard.press("ControlOrMeta+n");
+  await page.getByRole("button", { name: "Next" }).click();
+  await page.getByRole("button", { name: "Connect another account" }).click();
+  await newBot(page).getByRole("button", { name: "Show more" }).click();
+  const tile = newBot(page).getByRole("button", { name: "Nimbus Cloud" });
+  await expect(tile.locator('[data-logo="none"]')).toHaveText("N");
+  await tile.click();
+  await expect(page.getByRole("heading", { name: "Nimbus Cloud", level: 2 })).toBeVisible();
+  await newBot(page)
+    .getByRole("button", { name: /^Nimbus device login/ })
+    .click();
+  await expect(page.locator(".b-code")).toBeVisible();
+  expect((await sent(page)).find((each) => each.type === "startSignIn")).toMatchObject({
+    methodId: "nimbus/nimbus-device",
+  });
+  // Back from a sign-in chosen among a provider's methods returns to them.
+  await page.getByRole("button", { name: "Back to sign-in methods" }).click();
+  await expect(page.getByRole("heading", { name: "Nimbus Cloud", level: 2 })).toBeVisible();
+});
+
 test("F-474: a pasted code is a password field, cleared as it is sent", async ({ page }) => {
   await openFixture(page, ADMIN, "light");
   await page.keyboard.press("ControlOrMeta+n");
   await page.getByRole("button", { name: "Next" }).click();
   await page.getByRole("button", { name: "Connect another account" }).click();
   await newBot(page)
-    .getByRole("button", { name: /^ChatGPT in the browser/ })
+    .getByRole("button", { name: /^OpenAI\b/ })
     .click();
+  await newBot(page).getByRole("button", { name: "Sign in with a browser" }).click();
   const paste = page.getByTestId("paste");
   await expect(paste).toHaveAttribute("type", "password");
   await expect(paste).toHaveAttribute("autocomplete", "off");
@@ -890,7 +982,7 @@ test("#450: disconnecting the account a failed sign-in left sends the stamp Conn
   await openFixture(page, `${ADMIN}&signin=failed&saved=1`, "light");
   await connectFromNewBot(page);
   await newBot(page)
-    .getByRole("button", { name: /^xAI · / })
+    .getByRole("button", { name: /^xAI\b/ })
     .click();
   await expect(page.getByTestId("reread")).toContainText("It may not be ready to use.");
   await page.getByTestId("reread").getByRole("button", { name: "Disconnect it…" }).click();
@@ -1981,7 +2073,7 @@ test("F-474: a sign-in whose read afterwards failed says so, and Check again rea
   await openFixture(page, `${ADMIN}&signin=unverified`, "light");
   await connectFromNewBot(page);
   await newBot(page)
-    .getByRole("button", { name: /^xAI · / })
+    .getByRole("button", { name: /^xAI\b/ })
     .click();
   await expect(page.getByRole("heading", { name: "Signed in, not confirmed" })).toBeVisible();
   await expect(page.getByRole("heading", { name: /^Connected to/ })).toHaveCount(0);
@@ -1996,7 +2088,7 @@ test("F-474: a cancel the gateway did not confirm stays on screen and says so; B
   await openFixture(page, `${ADMIN}&signin=cancel-unknown`, "light");
   await connectFromNewBot(page);
   await newBot(page)
-    .getByRole("button", { name: /^xAI · / })
+    .getByRole("button", { name: /^xAI\b/ })
     .click();
   await expect(page.getByTestId("cancel-unknown")).toContainText(
     "Clawtrate couldn't tell whether the gateway cancelled the sign-in",
@@ -2018,7 +2110,7 @@ test("F-474: where the gateway keeps sign-ins per bot, a bot connects an account
   await expect(page.getByTestId("kept-note")).toContainText(
     "This gateway keeps this sign-in for Otto only.",
   );
-  await page.getByRole("button", { name: /^xAI · / }).click();
+  await page.getByRole("button", { name: /^xAI\b/ }).click();
   await expect(page.getByRole("heading", { name: "Connected to xAI" })).toBeVisible();
   await expect(page.getByTestId("landed")).toHaveText(
     "Saved for Otto only. Other bots can't use it.",
@@ -2161,7 +2253,7 @@ test("F-476: a label step closed before Done comes back, in New bot and in Setti
   await openFixture(page, `${ADMIN}&signin=connected`, "light");
   await connectFromNewBot(page);
   await newBot(page)
-    .getByRole("button", { name: /^xAI · / })
+    .getByRole("button", { name: /^xAI\b/ })
     .click();
   await expect(page.getByRole("heading", { name: "Connected to xAI" })).toBeVisible();
   // Closed before Done: New bot opens on the label step again.
@@ -2214,7 +2306,7 @@ test("F-474 F-490: a sign-in's result says a lock widened only from a read that 
   await openFixture(page, `${ADMIN}&signin=connected`, "light");
   await connectFromNewBot(page);
   await newBot(page)
-    .getByRole("button", { name: /^xAI · / })
+    .getByRole("button", { name: /^xAI\b/ })
     .click();
   await expect(page.getByRole("heading", { name: "Connected to xAI" })).toBeVisible();
   await change(
@@ -2253,7 +2345,7 @@ test("F-474: when two new accounts appear during a sign-in, the person chooses w
   await openFixture(page, `${ADMIN}&signin=several`, "light");
   await connectFromNewBot(page);
   await newBot(page)
-    .getByRole("button", { name: /^xAI · / })
+    .getByRole("button", { name: /^xAI\b/ })
     .click();
   const several = newBot(page).getByTestId("several");
   await expect(several.getByRole("button")).toHaveCount(2);
@@ -2549,4 +2641,178 @@ test("F-480: Change model settled as the person moves to another bot leaves focu
   await releaseFrames(page);
   await expect(pip).toBeFocused();
   await expect(model).not.toBeFocused();
+});
+
+type Reply = {
+  clawtrateFixture: ClawtrateBridge;
+  held: { resolve: () => void; reject: (failure: Error) => void }[];
+};
+/** The fixture's answers to `type` commands wait, oldest first, until `releaseReply`. */
+const holdReply = (page: Page, type: string) =>
+  page.evaluate((type) => {
+    const w = window as unknown as Reply;
+    w.held = [];
+    const invoke = w.clawtrateFixture.invoke.bind(w.clawtrateFixture);
+    w.clawtrateFixture.invoke = ((command: { type: string }) =>
+      command.type !== type
+        ? invoke(command as never)
+        : new Promise<void>((resolve, reject) => {
+            w.held.push({ resolve, reject });
+          }).then(() => invoke(command as never))) as ClawtrateBridge["invoke"];
+  }, type);
+const releaseReply = (page: Page) =>
+  page.evaluate(() => (window as unknown as Reply).held.shift()!.resolve());
+const rejectReply = (page: Page, message: string) =>
+  page.evaluate(
+    (message) => (window as unknown as Reply).held.shift()!.reject(new Error(message)),
+    message,
+  );
+
+test("F-473: a Change account saved as the person moves to another bot leaves that bot's page on its first view", async ({
+  page,
+}) => {
+  await openFixture(page, `${SETTINGS_TAB}&lock=bound`, "light");
+  await page.getByRole("button", { name: /^Account: / }).click();
+  await page.getByRole("button", { name: "Change account" }).click();
+  await page.getByRole("radio", { name: /^OpenAI · Home/ }).click();
+  await holdReply(page, "changeBotAccount");
+  await page.getByRole("button", { name: "Save" }).click();
+  const pip = page.getByTestId("bot-list").getByRole("button", { name: /^Pip\b/ });
+  await pip.click();
+  await expect(page.getByTestId("bot-settings")).toContainText("Pip");
+  await releaseReply(page);
+  await expect(page.getByTestId("work-announcer")).toHaveText("Otto now runs on OpenAI · Home");
+  await settle(page);
+  await expect(page.getByTestId("model-select")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Account", level: 3 })).toHaveCount(0);
+  await expect(pip).toBeFocused();
+});
+
+test("F-473: a Change account refused after the person moved to another bot shows nothing on that bot's page", async ({
+  page,
+}) => {
+  await openFixture(page, `${SETTINGS_TAB}&lock=bound`, "light");
+  await page.getByRole("button", { name: /^Account: / }).click();
+  await page.getByRole("button", { name: "Change account" }).click();
+  await page.getByRole("radio", { name: /^OpenAI · Home/ }).click();
+  await holdReply(page, "changeBotAccount");
+  await page.getByRole("button", { name: "Save" }).click();
+  const pip = page.getByTestId("bot-list").getByRole("button", { name: /^Pip\b/ });
+  await pip.click();
+  await expect(page.getByTestId("bot-settings")).toContainText("Pip");
+  // Otto's save still out: Pip's own Change account isn't waiting on it.
+  await page.getByRole("button", { name: /^Account: / }).click();
+  await page.getByRole("button", { name: "Change account" }).click();
+  await expect(page.getByRole("button", { name: "Saving…" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Save" })).toBeVisible();
+  await rejectReply(page, "The gateway refused Otto's change.");
+  await settle(page);
+  await expect(page.getByTestId("bot-settings")).not.toContainText(
+    "The gateway refused Otto's change.",
+  );
+});
+
+test("F-473: a Change account refused after the person went to another bot and back leaves the next save waiting", async ({
+  page,
+}) => {
+  await openFixture(page, `${SETTINGS_TAB}&lock=bound`, "light");
+  const bots = page.getByTestId("bot-list");
+  const changeTo = async (account: RegExp) => {
+    await page.getByRole("button", { name: /^Account: / }).click();
+    await page.getByRole("button", { name: "Change account" }).click();
+    await page.getByRole("radio", { name: account }).click();
+    await page.getByRole("button", { name: "Save" }).click();
+  };
+  await holdReply(page, "changeBotAccount");
+  await changeTo(/^OpenAI · Home/);
+  await bots.getByRole("button", { name: /^Pip\b/ }).click();
+  await expect(page.getByTestId("bot-settings")).toContainText("Pip");
+  await bots.getByRole("button", { name: /^Otto\b/ }).click();
+  await expect(page.getByTestId("bot-settings")).toContainText("Otto");
+  await changeTo(/^OpenAI · Home/);
+  await expect(page.getByRole("button", { name: "Saving…" })).toBeVisible();
+  await rejectReply(page, "The gateway refused the first change.");
+  await settle(page);
+  await expect(page.getByRole("button", { name: "Saving…" })).toBeVisible();
+  await expect(page.getByTestId("bot-settings")).not.toContainText(
+    "The gateway refused the first change.",
+  );
+});
+
+test("F-473: a Change account saved after the person went to another bot and back leaves the next save on its page", async ({
+  page,
+}) => {
+  await openFixture(page, `${SETTINGS_TAB}&lock=bound`, "light");
+  const bots = page.getByTestId("bot-list");
+  const changeTo = async (account: RegExp) => {
+    await page.getByRole("button", { name: /^Account: / }).click();
+    await page.getByRole("button", { name: "Change account" }).click();
+    await page.getByRole("radio", { name: account }).click();
+    await page.getByRole("button", { name: "Save" }).click();
+  };
+  await holdReply(page, "changeBotAccount");
+  await changeTo(/^OpenAI · Home/);
+  await bots.getByRole("button", { name: /^Pip\b/ }).click();
+  await expect(page.getByTestId("bot-settings")).toContainText("Pip");
+  await bots.getByRole("button", { name: /^Otto\b/ }).click();
+  await expect(page.getByTestId("bot-settings")).toContainText("Otto");
+  await changeTo(/^OpenAI · Home/);
+  await expect(page.getByRole("button", { name: "Saving…" })).toBeVisible();
+  await releaseReply(page);
+  await settle(page);
+  // The first save's answer moves no page: the second is still waiting on Change account.
+  await expect(page.getByRole("heading", { name: "Change account", level: 3 })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Saving…" })).toBeVisible();
+});
+
+test("F-474: an account connected with a label as the person moves to another bot leaves that bot's page on its first view", async ({
+  page,
+}) => {
+  await openFixture(page, `${SETTINGS_TAB}&lock=bound&kept=1&signin=connected`, "light");
+  await page.getByRole("button", { name: /^Account: / }).click();
+  await page.getByRole("button", { name: "Change account" }).click();
+  await page.getByRole("button", { name: /^Connect an account/ }).click();
+  await page.getByRole("button", { name: /^xAI\b/ }).click();
+  await page.getByRole("textbox", { name: "Label" }).fill("Side");
+  await holdReply(page, "setAccountLabel");
+  await page.getByRole("button", { name: "Done" }).click();
+  const pip = page.getByTestId("bot-list").getByRole("button", { name: /^Pip\b/ });
+  await pip.click();
+  await expect(page.getByTestId("bot-settings")).toContainText("Pip");
+  const dismissals = async () =>
+    (await sent(page)).filter((each) => each.type === "dismissSignIn").length;
+  const before = await dismissals();
+  await releaseReply(page);
+  await expect(page.getByTestId("work-announcer")).toHaveText("Label saved");
+  // Otto's Connect has gone: it ends no sign-in, which by now could be one Pip started.
+  expect(await dismissals()).toBe(before);
+  await settle(page);
+  await expect(page.getByTestId("model-select")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Change account", level: 3 })).toHaveCount(0);
+  await expect(pip).toBeFocused();
+});
+
+test("F-474: a label saved after its Connect has gone leaves the next Connect on its sign-in methods", async ({
+  page,
+}) => {
+  await openFixture(page, `${SETTINGS_TAB}&lock=bound&kept=1&signin=connected`, "light");
+  await page.getByRole("button", { name: /^Account: / }).click();
+  await page.getByRole("button", { name: "Change account" }).click();
+  await page.getByRole("button", { name: /^Connect an account/ }).click();
+  await page.getByRole("button", { name: /^xAI\b/ }).click();
+  await page.getByRole("textbox", { name: "Label" }).fill("Side");
+  await holdReply(page, "setAccountLabel");
+  await page.getByRole("button", { name: "Done" }).click();
+  await page
+    .getByTestId("bot-list")
+    .getByRole("button", { name: /^Pip\b/ })
+    .click();
+  await expect(page.getByTestId("bot-settings")).toContainText("Pip");
+  await releaseReply(page);
+  await expect(page.getByTestId("work-announcer")).toHaveText("Label saved");
+  await page.getByRole("button", { name: /^Account: / }).click();
+  await page.getByRole("button", { name: "Change account" }).click();
+  await page.getByRole("button", { name: /^Connect an account/ }).click();
+  await expect(page.getByRole("textbox", { name: "Label" })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /^xAI\b/ })).toBeVisible();
 });

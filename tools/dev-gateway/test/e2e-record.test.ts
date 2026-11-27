@@ -2,12 +2,23 @@
 // Runners and preview hosts are `sleep` stand-ins; instance resets are recorded,
 // never run. Every folder is created here and removed here.
 import { spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, describe, expect, it } from "vitest";
 import {
   cleanUp,
+  pruneRunOutputs,
   readRecord,
   recordPath,
   recordSuccessor,
@@ -305,5 +316,85 @@ describe("recovering interrupted end-to-end runs (B2)", () => {
     expect(run.kept()).toBe(true);
     expect(run.resets).toEqual([]);
     expect(run.lines.join("\n")).toMatch(/not a run record this version wrote/);
+  });
+});
+
+describe("the output earlier runs left in test-results (#866)", () => {
+  const NOW = Date.UTC(2026, 10, 27, 12, 0);
+  const hoursAgo = (hours: number) => new Date(NOW - hours * 60 * 60 * 1000);
+  function results(): {
+    dir: string;
+    run: (name: string, status: string | null, hours: number) => void;
+  } {
+    const dir = tempDir("clawtrate-results-");
+    return {
+      dir,
+      run(name, status, hours) {
+        mkdirSync(join(dir, name, "trace"), { recursive: true });
+        if (status !== null) {
+          const last = join(dir, name, ".last-run.json");
+          writeFileSync(last, JSON.stringify({ status, failedTests: [] }));
+          utimesSync(last, hoursAgo(hours), hoursAgo(hours));
+        }
+        utimesSync(join(dir, name), hoursAgo(hours), hoursAgo(hours));
+      },
+    };
+  }
+
+  it("removes the runs that passed, and keeps a day of the others and the newest failure", () => {
+    const { dir, run } = results();
+    run("00000001", "failed", 50); // an older failure, more than a day old
+    run("00000002", "failed", 30); // the newest failure, kept whatever its age
+    run("00000003", "passed", 20);
+    run("00000004", "failed", 2); // less than a day old
+    run("00000005", "timedOut", 1);
+    run("00000006", "passed", 0.5);
+    run("00000007", null, 0.1); // still going in another terminal
+    run("00000008", null, 30); // killed more than a day ago
+    // This run's own, and other configurations' folders.
+    mkdirSync(join(dir, "aabbccdd"));
+    mkdirSync(join(dir, "visual"));
+    mkdirSync(join(dir, "packaged-00000009"));
+    pruneRunOutputs(dir, "aabbccdd", NOW);
+    expect(readdirSync(dir).sort()).toEqual([
+      "00000004",
+      "00000005",
+      "00000007",
+      "aabbccdd",
+      "packaged-00000009",
+      "visual",
+    ]);
+  });
+
+  it("keeps a failure older than a day when a rerun after it was interrupted", () => {
+    const { dir, run } = results();
+    run("00000001", "failed", 26);
+    run("00000002", "interrupted", 25);
+    run("00000003", "interrupted", 0.2);
+    pruneRunOutputs(dir, "aabbccdd", NOW);
+    expect(readdirSync(dir).sort()).toEqual(["00000001", "00000003"]);
+  });
+
+  it("keeps every failure from the last day when a second run starts", () => {
+    const { dir, run } = results();
+    run("00000001", "failed", 3);
+    run("00000002", "failed", 1);
+    pruneRunOutputs(dir, "aabbccdd", NOW);
+    expect(readdirSync(dir).sort()).toEqual(["00000001", "00000002"]);
+  });
+
+  it("passes over a run folder that is gone by the time it is read", () => {
+    // What a second run starting in the same checkout sees when the first has just removed it.
+    const { dir, run } = results();
+    run("00000001", "passed", 2);
+    symlinkSync(join(dir, "nowhere"), join(dir, "00000002"));
+    expect(() => pruneRunOutputs(dir, "aabbccdd", NOW)).not.toThrow();
+    expect(readdirSync(dir)).toEqual(["00000002"]);
+  });
+
+  it("does nothing before the first run", () => {
+    expect(() =>
+      pruneRunOutputs(join(tempDir("clawtrate-results-"), "none"), "aabbccdd", NOW),
+    ).not.toThrow();
   });
 });

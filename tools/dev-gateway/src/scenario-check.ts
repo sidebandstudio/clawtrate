@@ -43,6 +43,8 @@ import {
 import { MESSAGING_PAIR, SHELL_BOT } from "./seed-data.ts";
 import {
   IMAGE_PROMPT,
+  SAME_CALL_REPLY_SECONDS,
+  SAME_CALL_RUN_MS,
   SEND_KEYED_KEY,
   SEND_KEYED_TEXT,
   SEND_PICTURE_AFTER,
@@ -2315,11 +2317,16 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
     covers: ["#message", "#reply"],
     run: async (h) => {
       const { view } = await messageCheck(h, "#message");
-      await h.wait(view, 60_000);
+      // The sender's run ends after its call, which may wait for the answer the whole limit.
+      await h.wait(view, SAME_CALL_RUN_MS);
       const start = view.tool("start", "sessions_send")[0]!;
       same(
         view.data(start).args,
-        { agentId: RECIPIENT, message: "#reply Could you look over the plan?", timeoutSeconds: 30 },
+        {
+          agentId: RECIPIENT,
+          message: "#reply Could you look over the plan?",
+          timeoutSeconds: SAME_CALL_REPLY_SECONDS,
+        },
         "sessions_send args",
       );
       const result = view.result("sessions_send");
@@ -2362,7 +2369,7 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       );
       await recordFamily(h, "messaging between bots", "#message", view, "sessions_send", {
         args: scriptedArgs("#message", "sessions_send", "pip"),
-        title: "Session Send agent marlow, timeout 30",
+        title: `Session Send agent marlow, timeout ${SAME_CALL_REPLY_SECONDS}`,
         argsShape: "{agentId: string, message: string, timeoutSeconds: number}",
         resultShape:
           "content text; details {runId: string, sessionKey: string, status: string, delivery: {…}, reply: string}",
@@ -2384,7 +2391,7 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
             reply: RECIPIENT_REPLY,
           },
           false,
-          "Session Send agent marlow, timeout 30",
+          `Session Send agent marlow, timeout ${SAME_CALL_REPLY_SECONDS}`,
         ),
       ]);
       view.expectEnd("final", `Marlow replied:\n\n> ${RECIPIENT_REPLY}`);
@@ -2416,7 +2423,7 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
             sessionKey: RECIPIENT_SESSION,
           },
           true,
-          "Session Send agent marlow, timeout 30",
+          `Session Send agent marlow, timeout ${SAME_CALL_REPLY_SECONDS}`,
         ),
       ]);
       view.expectEnd("final", "The message to Marlow did not get through (forbidden).");

@@ -398,6 +398,14 @@ describe("a person's message found by search shows their words alone (#666)", ()
     expect(await shown("Clawtrate", ` … Is Clawtrate up\n\n${MARKER}`)).toBe(" … Is Clawtrate up");
     // A short start at a cut may be the person's next word: it never makes a hit go.
     expect(await shown("w", `Look ${"x".repeat(493)} W…`)).toBe(`Look ${"x".repeat(492)}…`);
+    // An excerpt's "…" stands only at its edges: one inside is the person's, and so are the words
+    // beside it, though they are the marker's.
+    expect(await shown("captured", "Working context captured … see the notes")).toBe(
+      "Working context captured … see the notes",
+    );
+    expect(await shown("captured", "Working context captured… see the notes")).toBe(
+      "Working context captured… see the notes",
+    );
     // At an excerpt's end the marker's first three words are whole, and come off.
     expect(
       await shown("backup", " … check the backup tonight\n\nWorking context captured … "),

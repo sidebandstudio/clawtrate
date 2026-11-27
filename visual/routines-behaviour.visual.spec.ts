@@ -232,12 +232,29 @@ test.describe("1440", () => {
     );
   });
 
+  test("F-190: a run that recorded no summary says so, and its status is not offered as what it returned", async ({
+    page,
+  }) => {
+    await open(page);
+    await view(page).getByTestId("routine-row").filter({ hasText: "Morning digest" }).click();
+    // The skipped run recorded no summary (#847).
+    await view(page).getByTestId("run-row").nth(3).click();
+    await expect(view(page).getByTestId("run-summary")).toHaveText(
+      "The gateway recorded nothing this run returned.",
+    );
+    await expect(view(page).getByTestId("run-view")).toContainText("Skipped");
+  });
+
   test("F-190: a reminder in the main conversation is shown as such, not as a run of its own", async ({
     page,
   }) => {
     await open(page);
     await view(page).getByTestId("routine-row").filter({ hasText: "Stretch break" }).click();
-    await expect(view(page)).toContainText("Posts a reminder in Juniper's main conversation:");
+    // On both OpenClaw versions the bot gets the reminder in a turn of its own (#752).
+    await expect(view(page)).toContainText(
+      "Juniper gets this reminder in its main conversation, uses its model, and may answer there:",
+    );
+    await expect(view(page)).not.toContainText("Posts a reminder");
     await expect(view(page).getByTestId("routine-facts")).toContainText(
       "Runs inJuniper's main conversation",
     );
@@ -246,6 +263,11 @@ test.describe("1440", () => {
     // cannot say which conversation it used.
     await expect(view(page).getByTestId("run-not-kept")).toContainText(
       "Clawtrate can't confirm which conversation this run used. The gateway recorded no session for it",
+    );
+    // With no session, the summary is what the gateway recorded (on 2026.10.6, the reminder's own
+    // text), not an answer the run returned.
+    await expect(view(page).getByTestId("run-summary")).toHaveText(
+      "What the gateway recorded: Time to stand up and stretch.",
     );
   });
 
@@ -275,14 +297,19 @@ test.describe("1440", () => {
     await expect(view(page)).toContainText("By default the gateway keeps 7 days of runs");
   });
 
-  test("F-024: a bot whose routine is running shows the working mark and the routine's name", async ({
+  test("F-024: a bot whose routine is running shows the working ring, and the run under it", async ({
     page,
   }) => {
     await openFixture(page, "scene=main&routines=running&others=show", "light");
     const marlow = page.getByTestId("bot-list").getByRole("button", { name: /^Marlow\b/ });
     await expect(marlow).toHaveAttribute("data-state", "working");
-    await expect(marlow).toContainText("Running Morning digest");
+    await expect(marlow.locator(".presence")).toHaveAttribute("data-state", "working");
     await expect(marlow).toHaveAccessibleName(/^Marlow, working/);
+    // No words on the row: the run is listed under the bot (F-193).
+    await expect(marlow.locator(".bot-line")).not.toContainText("Morning digest");
+    await expect(
+      page.getByTestId("routine-task").filter({ hasText: "Morning digest" }),
+    ).toHaveAccessibleName("Morning digest, routine run, running");
     // Without a run in progress the same bot is idle.
     await openFixture(page, ROUTINES, "light");
     await expect(

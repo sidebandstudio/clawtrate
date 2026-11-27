@@ -9,6 +9,7 @@ import { initialRoutinesState, type RoutinesState } from "./routines.ts";
 import type { ApprovalCard } from "./approvals.ts";
 import type { InterSessionMessage, LinkedRun, McpToolIdentity } from "./cards.ts";
 import type { TaskActivity } from "./runs.ts";
+import type { SkillNote } from "./skill-notes.ts";
 import type { StartTasks } from "./start-tasks.ts";
 import type { SetupState } from "./setup.ts";
 import type { CheckInsState } from "./check-ins.ts";
@@ -401,11 +402,6 @@ export type TranscriptItem = {
   pictures?: ChatPicture[];
   /** The other files the bot's messages of this item hand over, in their order. Absent when none. */
   files?: ChatFile[];
-  /**
-   * When the item's last row with text or files had only files: those files' names, the
-   * once-shown ones included, as the sidebar names them. Absent otherwise.
-   */
-  filesPreview?: string;
   /** The files a person's message carried, in the order sent. Absent when none. */
   attachments?: SentAttachment[];
   /**
@@ -436,6 +432,12 @@ export type TranscriptItem = {
    * alone, never by the row's other fields.
    */
   runless?: true;
+  /**
+   * The gateway's note that a background skill review saved or changed a skill (`skillNoteOf`):
+   * folded into the line of the run it follows, never drawn as the bot's message. Absent on any
+   * other item.
+   */
+  skillNote?: SkillNote;
   /**
    * In a task a bot started, the brief it wrote: the first user row stored in that task, which the
    * gateway attributes to the person but the bot wrote (`mapHistory`'s `startedAt`). Present and
