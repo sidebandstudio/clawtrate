@@ -1879,3 +1879,63 @@ button.b-open > .icon {
 .b-update-section {
   margin-top: var(--space-5);
 }
+
+/* A setting's explanation behind an "i" (InfoTip.tsx): the "i" beside its name, and its card in
+   the flow right after the setting's row, so an open card pushes what follows down and covers
+   nothing. */
+.info-tip-button {
+  display: inline-grid;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin: -4px 0 -4px 2px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-faint);
+  vertical-align: middle;
+  cursor: pointer;
+}
+
+.info-tip-button .icon {
+  width: 15px;
+  height: 15px;
+}
+
+.info-tip-button:hover,
+.info-tip-button[aria-expanded="true"] {
+  color: var(--text);
+}
+
+.info-tip-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+[data-input="touch"] .info-tip-button {
+  width: 32px;
+  height: 32px;
+  margin: -8px -4px -8px 0;
+}
+
+.info-tip-card {
+  margin: 8px 0 0;
+  padding: 10px 12px;
+  border-radius: var(--radius-md);
+  background: var(--bg-raised);
+  box-shadow: var(--shadow-pop);
+  font-size: var(--text-sm);
+  font-weight: normal;
+  line-height: 1.45;
+  color: var(--text-muted);
+  text-align: left;
+}
+
+.info-tip-card[hidden] {
+  display: none;
+}
+
+.info-tip-card code {
+  font-size: 0.95em;
+}
