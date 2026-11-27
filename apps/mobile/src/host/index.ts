@@ -13,7 +13,7 @@ import { createSocketFactory, type WebSocketConstructor } from "./socket.ts";
 import { createKeychainSigner } from "./signer.ts";
 import { createKeychainStore } from "./store.ts";
 import { createSecrets, learningStore, type Secrets } from "./secrets.ts";
-import { createSharing, type ShareFile, type ShareSystem } from "./share.ts";
+import { createSharing, type ShareFile, type SheetEnd, type ShareSystem } from "./share.ts";
 
 export const APP_VERSION = "0.1.0";
 /** The name this device gives the gateway when it pairs. */
@@ -40,42 +40,43 @@ export type IosHost = {
 /** The app's own folder in its cache for files offered to the share sheet: nothing else is in it. */
 const SHARE_FOLDER = "clawtrate-share";
 
-/** What modules/clawtrate-share gives JavaScript: the sheet for one file, answered once it closes. */
+/** What modules/clawtrate-share gives JavaScript: the sheet for one file, settled exactly once. */
 type NativeShare = {
-  share(uri: string): Promise<{ completed: boolean; activityType: string }>;
+  share(id: string, uri: string): Promise<{ end: SheetEnd["end"]; activityType: string }>;
+  cancel(id: string): Promise<void>;
 };
 
 /**
  * The share sheet over a folder of the app's own in its cache (`expo-file-system`), each file in
  * a folder of its own so two names never meet. The sheet is the app's own native module, which
- * answers every way the sheet closes (modules/clawtrate-share).
+ * settles every way the sheet ends (modules/clawtrate-share).
  */
 function iosShareSystem(native: NativeShare): ShareSystem {
   const root = () => new Directory(Paths.cache, SHARE_FOLDER);
   return {
-    clear: () => {
-      const folder = root();
-      if (folder.exists) folder.delete();
+    newName: randomUUID,
+    list: () => {
+      const parent = root();
+      return parent.exists ? parent.list().map((each) => each.name) : [];
     },
-    folder: () => {
+    write: async (folder, name, bytes) => {
       const parent = root();
       parent.create({ intermediates: true, idempotent: true });
-      const folder = parent.createDirectory(randomUUID());
-      return {
-        write: async (name, bytes) => {
-          const file = folder.createFile(name, null);
-          await file.write(bytes);
-          return file.uri;
-        },
-        remove: () => {
-          if (folder.exists) folder.delete();
-        },
-      };
+      const file = parent.createDirectory(folder).createFile(name, null);
+      await file.write(bytes);
+      return file.uri;
     },
-    sheet: async (uri) => {
-      const closed = await native.share(uri);
-      return { completed: closed.completed, activityType: closed.activityType || null };
+    remove: (folder) => {
+      const each = new Directory(root(), folder);
+      if (each.exists) each.delete();
     },
+    sheet: async (id, uri) => {
+      const { end, activityType } = await native.share(id, uri);
+      if (end === "completed" || end === "dismissed")
+        return { end, activityType: activityType || null };
+      return { end } as SheetEnd;
+    },
+    cancel: (id) => void native.cancel(id).catch(() => {}),
     later: (work) => void setTimeout(work, 2_000),
   };
 }
