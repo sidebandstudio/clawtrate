@@ -150,7 +150,7 @@ describe("making a name", () => {
   });
 
   it("is bound to the task's session: from its row when the creation gave none, else not kept", async () => {
-    // A patch by key alone makes a deleted task again (both versions); with the session the
+    // A patch by key alone made a deleted task again (2026.10.6); with the session the
     // gateway refuses it ("changed before patch").
     const fromRow = namingGateway([{ title: "Lisbon" }], { sessionId: "row-session" });
     expect(await nameTask(fromRow.ctx, { ...TASK, sessionId: null })).toBe("Lisbon");

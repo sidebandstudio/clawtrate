@@ -127,7 +127,7 @@ export async function nameTask(
     const row = ctx.row();
     if (hasName(row)) return null;
     // Bound to the task's own session: the gateway refuses it for a task deleted meanwhile, which a
-    // patch by key alone would make again (both versions).
+    // patch by key alone would make again.
     const sessionId = task.sessionId ?? (typeof row?.sessionId === "string" ? row.sessionId : null);
     if (!sessionId) return null;
     const name = [...title].slice(0, MAX_TASK_NAME_CHARS).join("");
