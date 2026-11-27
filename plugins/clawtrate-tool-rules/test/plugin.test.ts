@@ -1077,6 +1077,17 @@ describe("a run another bot's message started or reached (#606)", () => {
     refusedFor(h, "run-s");
   });
 
+  it("a run whose mark expired is the bot's from its first call, with no model call seen", async () => {
+    let clock = 1_800_000_000_000;
+    const h = host({ now: () => clock });
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    h.write(PIP, fromMarlow("run-s"));
+    clock += MARK_EXPIRY_MS + 1;
+    // Its first call comes before any model call is noted: the expired mark still names it.
+    refusedFor(h, "run-s");
+    refusedFor(h, "run-s");
+  });
+
   it("a run that matches its own mark also uses up a mark kept only for the next run", async () => {
     const h = host();
     await h.save("pip", [{ action: "ask", tools: ["read"] }]);
@@ -1204,6 +1215,22 @@ describe("a card answered after its rule changed (#606)", () => {
     expect(
       h.answer(card, "allow-once", "main", "write", { content: "x", path: "notes/a.md" }, call[3]),
     ).toBeUndefined();
+  });
+
+  it("uses Allow once up: the same call reaching the hook again is refused, never run on that answer", async () => {
+    const h = host();
+    await h.save("main", [ASK]);
+    const card = h.before(...call);
+    expect(h.answer(card, "allow-once", ...call)).toBeUndefined();
+    const hook = h.hooks.find((x) => x.name === "before_tool_call")!;
+    const again = hook.fn(
+      { toolName: "write", params: { path: "notes/a.md" }, runId: "run-1", toolCallId: "call-1" },
+      { agentId: "main", sessionKey: "agent:main:main", runId: "run-1", toolCallId: "call-1" },
+    ) as { block?: boolean; blockReason?: string; requireApproval?: unknown } | undefined;
+    expect(again?.requireApproval).toBeUndefined();
+    expect(again?.block).toBe(true);
+    expect(again?.blockReason).toMatch(/could not be checked again before the call runs/);
+    expect(h.handle.shared.approved.size).toBe(0);
   });
 
   it("looks again only at the call whose card was answered Allow once, once", async () => {

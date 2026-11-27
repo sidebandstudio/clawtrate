@@ -808,9 +808,10 @@ export function createToolRules(api, options = {}) {
    * person's message names the run.
    */
   const startedBy = (runId, sessionKey) => {
+    // Expired marks go among the forgotten first, so a run one names is found there.
+    const waiting = sessionKey ? waitingIn(sessionKey) : [];
     const note = runId ? noteOf(origins.runs, runId) : undefined;
     if (note) return note;
-    const waiting = sessionKey ? waitingIn(sessionKey) : [];
     const mark = waiting.find((m) => m.run === runId) ?? waiting[0];
     if (mark) return { bot: mark.bot };
     const lost = sessionKey ? forgotten.get(sessionKey) : undefined;
