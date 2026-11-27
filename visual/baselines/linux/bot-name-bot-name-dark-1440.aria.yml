@@ -69,7 +69,7 @@
     - status
   - region "Johnny's name":
     - status: Renamed to Johnny
-    - 'button "Undo: back to New bot"': Undo
+    - 'button "Undo: back to New bot"'
     - button "Close"
   - button "Attach files"
   - textbox "Message Johnny"

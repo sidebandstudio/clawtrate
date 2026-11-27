@@ -68,7 +68,7 @@
     - group: Worked 2 actions
     - status
   - region "New bot's name":
-    - status: Back to New bot. Johnny isn't used again unless you rename it yourself.
+    - status: Back to New bot.
     - button "Close"
   - button "Attach files"
   - textbox "Message New bot"
