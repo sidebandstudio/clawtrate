@@ -144,6 +144,8 @@ export type SignInMethod = {
   /** The `authChoice` to pass: `<pluginId>/<choiceId>`. */
   id: string;
   provider: string;
+  /** The gateway's own name for the method's provider (`groupLabel`), when it sends one. */
+  providerLabel: string | null;
   label: string;
   hint: string | null;
   /** The gateway's kind: `device-code`, `oauth` or `secret`. */
@@ -655,15 +657,17 @@ const PROVIDER_NAMES: Record<string, string> = {
   "github-copilot": "GitHub Copilot",
   minimax: "MiniMax",
   "minimax-portal": "MiniMax",
+  "opencode-go": "OpenCode Go",
   openrouter: "OpenRouter",
   google: "Google",
   mistral: "Mistral",
 };
 
-/** A provider's name in text. No provider is ever drawn with a logo. */
+/** A provider's name in text. */
 export function providerName(provider: string): string {
   return (
-    PROVIDER_NAMES[provider] ??
+    // Its own names only: an id such as `constructor` is not one of them.
+    (Object.hasOwn(PROVIDER_NAMES, provider) ? PROVIDER_NAMES[provider] : undefined) ??
     (provider ? provider.charAt(0).toUpperCase() + provider.slice(1) : provider)
   );
 }
@@ -859,6 +863,7 @@ export function readMethods(capabilities: RawRecord[]): SignInMethod[] {
       methods.push({
         id,
         provider,
+        providerLabel: str(option.groupLabel),
         label: str(option.label) ?? id,
         hint: str(option.hint),
         kind,

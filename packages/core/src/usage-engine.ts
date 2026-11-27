@@ -7,6 +7,10 @@
 // budget's count for its current period, and the limits providers report.
 // Reports for a page are answers, read when asked and never kept.
 
+import {
+  GatewayProtocolRequestError,
+  GatewayProtocolRequestTimeoutError,
+} from "@openclaw/gateway-client/browser";
 import { asRecord, type RawRecord } from "./mapping.ts";
 import {
   applyBudgetChange,
@@ -127,6 +131,17 @@ export type UsageReportRequest = {
 };
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+/**
+ * Why a request failed, said inside a sentence: the gateway's own answer as it gave it; for
+ * anything the gateway client made itself ("gateway client stopped", its timeout), never its text.
+ */
+const failureWords = (error: unknown) =>
+  error instanceof GatewayProtocolRequestError
+    ? errorText(error)
+    : error instanceof GatewayProtocolRequestTimeoutError
+      ? "the gateway didn't answer in time"
+      : "the connection changed before the gateway answered";
 
 /**
  * Run each job with at most `limit` running at once, in order. After the first
@@ -312,7 +327,13 @@ export class UsageEngine {
         assertSameConnection();
         // The answer was lost: the gateway may have kept the change. What it holds is read,
         // and shown, before anything is said of the change.
-        return this.confirmBudgets(next, errorText(error), change, assertSameConnection, request);
+        return this.confirmBudgets(
+          next,
+          failureWords(error),
+          change,
+          assertSameConnection,
+          request,
+        );
       }
       assertSameConnection();
       const result = asRecord(answer);
@@ -347,7 +368,7 @@ export class UsageEngine {
       read = await this.readRaw(request);
     } catch (error) {
       throw new BudgetError(
-        `${BUDGET_UNCONFIRMED}: ${lost}. Reading the gateway's budgets again failed too: ${errorText(error)}`,
+        `${BUDGET_UNCONFIRMED}: ${lost}. Reading the gateway's budgets again failed too: ${failureWords(error)}.`,
       );
     }
     assertSameConnection();

@@ -140,7 +140,8 @@ describe("development gateway config", () => {
     expect(config.tools.exec).toEqual({ mode: "deny" });
     const entries = config.agents.entries as Record<string, { tools: Record<string, unknown> }>;
     expect(entries.otto!.tools.exec).toEqual({ mode: "ask" });
-    for (const id of ["main", "marlow", "pip"]) expect(entries[id]!.tools.exec).toBeUndefined();
+    for (const id of ["main", "clawtrate-main-bot", "marlow", "pip"])
+      expect(entries[id]!.tools.exec).toBeUndefined();
     refused("tools.exec.mode", "full", /^tools\.exec\.mode must be "deny"/);
     refused(
       "agents.entries.marlow.tools.exec",
@@ -234,8 +235,13 @@ describe("development gateway config", () => {
     const seeded = clone(config) as unknown as Record<string, Record<string, unknown>>;
     seeded.meta = { lastTouchedVersion: "2026.10.6", migrations: { modelPolicyAllowlist: true } };
     const entries = seeded.agents!.entries as Record<string, Record<string, unknown>>;
+    // The gateway's own bot is given its name alone.
     for (const bot of SEED_BOTS)
-      entries[bot.id]!.identity = { name: bot.name, emoji: bot.emoji, theme: bot.theme };
+      entries[bot.id]!.identity = {
+        name: bot.name,
+        ...(bot.emoji === undefined ? {} : { emoji: bot.emoji }),
+        ...(bot.theme === undefined ? {} : { theme: bot.theme }),
+      };
     expect(sandboxProblems(seeded)).toEqual([]);
     entries.otto!.identity = { name: "Otto", emoji: "⚙️", theme: "operations", avatar: "x.png" };
     expect(sandboxProblems(seeded)).toEqual(["agents.entries.otto.identity.avatar is not allowed"]);
