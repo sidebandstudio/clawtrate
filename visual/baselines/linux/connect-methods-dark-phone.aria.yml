@@ -78,11 +78,15 @@
     - listitem:
       - button "OpenAI Connected"
     - listitem:
+      - button "Claude Connected · API key · Billed per token"
+    - listitem:
       - button "GitHub Copilot Connected"
     - listitem:
       - button "xAI Connected"
     - listitem:
       - button "OpenRouter Billed per token"
+    - listitem:
+      - button "MiniMax"
   - button "Show more"
   - group: Use an API key instead
   - status

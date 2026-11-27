@@ -653,6 +653,21 @@ test("F-474 F-475: an API key typed into the key path reaches the gateway once a
   await page.keyboard.press("Escape");
 });
 
+test("F-474: Claude's tile is second, says the gateway takes an Anthropic key, and opens that key's fields", async () => {
+  // Both OpenClaw versions offer no sign-in an app can start for Anthropic, only its key. The key
+  // isn't saved here: an Anthropic key on the gateway would reach out to the real provider.
+  const settings = await connectFromSettings();
+  await settings.getByRole("button", { name: "Connect an account" }).first().click();
+  const tiles = settings.getByRole("list", { name: "Providers" }).getByRole("button");
+  await expect(tiles.nth(0)).toHaveText(/^OpenAI/);
+  await expect(tiles.nth(1)).toHaveText(/^Claude\s*API key\s·\sBilled per token$/);
+  await tiles.nth(1).click();
+  await expect(settings.locator("details.b-disclosure")).toHaveAttribute("open", "");
+  await expect(settings.getByRole("combobox", { name: "Provider" })).toHaveValue("anthropic");
+  await expect(settings.getByTestId("api-key")).toBeFocused();
+  await page.keyboard.press("Escape");
+});
+
 test("F-474: a sign-in that is refused says so, and what the gateway now has", async () => {
   const settings = await connectFromSettings();
   await settings.getByRole("button", { name: "Connect an account" }).first().click();

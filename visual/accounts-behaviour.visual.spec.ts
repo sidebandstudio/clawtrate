@@ -390,25 +390,25 @@ test("F-474: Connect an account is a grid of providers, each named, reached by k
   await page.getByRole("button", { name: "Next" }).click();
   await page.getByRole("button", { name: "Connect another account" }).click();
   const grid = newBot(page).getByRole("list", { name: "Providers" });
-  // The four most used first, each named by its provider; one the gateway has an account of says so.
+  // The six most used first, each named by its provider; one the gateway has an account of says so.
   await expect(grid.getByRole("button")).toHaveText([
     /^OpenAI\s*Connected$/,
+    /^Claude\s*Connected\s·\sAPI key\s·\sBilled per token$/,
     /^GitHub Copilot\s*Connected$/,
     /^xAI\s*Connected$/,
     /^OpenRouter\s*Billed per token$/,
+    /^MiniMax$/,
   ]);
   await grid.getByRole("button", { name: /^OpenAI\b/ }).focus();
-  for (const next of [/^GitHub Copilot/, /^xAI\b/, /^OpenRouter/]) {
+  for (const next of [/^Claude/, /^GitHub Copilot/, /^xAI\b/, /^OpenRouter/, /^MiniMax/]) {
     await page.keyboard.press("Tab");
     await expect(newBot(page).getByRole("button", { name: next })).toBeFocused();
   }
   await page.keyboard.press("Tab");
   await expect(newBot(page).getByRole("button", { name: "Show more" })).toBeFocused();
-  // Show more goes once pressed; focus moves to the first tile it showed, and on to the next.
+  // Show more goes once pressed; focus moves to the first tile it showed.
   await page.keyboard.press("Enter");
   await expect(newBot(page).getByRole("button", { name: "Show more" })).toHaveCount(0);
-  await expect(grid.getByRole("button", { name: /^MiniMax/ })).toBeFocused();
-  await page.keyboard.press("Tab");
   await expect(grid.getByRole("button", { name: /^OpenCode Go/ })).toBeFocused();
   // A provider with several methods shows them in the same dialog, the usual one first; nothing
   // starts until one is chosen.
@@ -427,6 +427,38 @@ test("F-474: Connect an account is a grid of providers, each named, reached by k
   expect((await sent(page)).find((each) => each.type === "startSignIn")).toMatchObject({
     methodId: "opencode-go/opencode-go-console",
   });
+});
+
+test("F-474: Claude's tile, second, says it takes an API key billed per token, and opens the key's fields for Anthropic", async ({
+  page,
+}) => {
+  await openFixture(page, ADMIN, "light");
+  await page.keyboard.press("ControlOrMeta+n");
+  await page.getByRole("button", { name: "Next" }).click();
+  await page.getByRole("button", { name: "Connect another account" }).click();
+  const grid = newBot(page).getByRole("list", { name: "Providers" });
+  const claude = grid.getByRole("button").nth(1);
+  await expect(claude).toHaveText(/^Claude\s*Connected\s·\sAPI key\s·\sBilled per token$/);
+  await expect(claude.locator('[data-logo="claude"] svg')).toBeVisible();
+  // The key's provider list, folded, starts on another provider: the tile chooses Anthropic.
+  await expect(newBot(page).locator("details.b-disclosure select")).toHaveValue("openai");
+  await claude.press("Enter");
+  await expect(newBot(page).locator("details.b-disclosure")).toHaveAttribute("open", "");
+  await expect(newBot(page).getByRole("combobox", { name: "Provider" })).toHaveValue("anthropic");
+  await expect(page.getByTestId("api-key")).toBeFocused();
+  // Nothing starts until the key is saved.
+  expect((await sent(page)).filter((each) => each.type === "startSignIn")).toEqual([]);
+  await page.getByTestId("api-key").fill("made-up-key-for-a-check");
+  await newBot(page).getByRole("button", { name: "Save key" }).click();
+  await expect
+    .poll(async () =>
+      (await sent(page))
+        .filter((each) => each.type === "saveApiKey")
+        .map((each) => (each as { provider: string }).provider),
+    )
+    .toEqual(["anthropic"]);
+  // Sent once, then the key's field is gone with it.
+  await expect(page.getByTestId("api-key")).toHaveCount(0);
 });
 
 test("F-474: a sign-in chosen among a provider's methods and started again still goes back to them", async ({

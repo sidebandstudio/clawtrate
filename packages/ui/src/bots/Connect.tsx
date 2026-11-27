@@ -15,7 +15,7 @@ import {
   type HostInfo,
   type SignInState,
 } from "@clawtrate/core";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { useBridge } from "../bridge.tsx";
 import { screenStamp, shownStamp } from "../stamp.ts";
 import { ChevronIcon, ExternalIcon, LockIcon } from "../icons.tsx";
@@ -240,7 +240,7 @@ export function useConnect({
   }, [keyAgain]);
 
   // --- Choosing how -------------------------------------------------------------
-  const tiles = providerTiles(accounts.methods, accounts.accounts);
+  const tiles = providerTiles(accounts.methods, accounts.accounts, accounts.keyProviders);
 
   // --- A provider's methods -------------------------------------------------------
   if (where.view === "provider") {
@@ -297,13 +297,17 @@ export function useConnect({
       if (!admin) return;
       setLeftTile(tile.key);
       const only = tile.methods.length === 1 ? tile.methods[0]! : null;
-      if (only) void start(only.method.id);
+      // A tile that takes a key (it says so) opens the key's fields with its provider chosen.
+      if (tile.keyProvider) void toKey(tile.keyProvider);
+      else if (only) void start(only.method.id);
       else setWhere({ view: "provider", tile: tile.key });
     };
     const tileButton = (tile: ProviderTile, index: number) => {
-      const notes = [tile.connected ? "Connected" : null, tile.perToken ? "Billed per token" : null]
-        .filter(Boolean)
-        .join(" · ");
+      const notes = [
+        tile.connected ? "Connected" : null,
+        tile.keyProvider ? "API key" : null,
+        tile.perToken ? "Billed per token" : null,
+      ].filter((note) => note !== null);
       return (
         <li key={tile.key}>
           <button
@@ -318,7 +322,17 @@ export function useConnect({
             <ProviderLogo logo={tile.logo} name={tile.name} />
             <span className="b-tile-text">
               <span className="b-tile-name">{tile.name}</span>
-              {notes && <span className="b-tile-note">{notes}</span>}
+              {notes.length > 0 && (
+                // A long note wraps between its parts, after a dot, never inside one.
+                <span className="b-tile-note">
+                  {notes.map((note, at) => (
+                    <Fragment key={note}>
+                      {at > 0 && "\u00a0· "}
+                      <span>{note}</span>
+                    </Fragment>
+                  ))}
+                </span>
+              )}
             </span>
           </button>
         </li>

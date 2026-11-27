@@ -160,7 +160,20 @@ const SCENES: Scene[] = [
     ready: async (page) => {
       await connectStep(page);
       await newBot(page).getByRole("button", { name: "Show more" }).click();
-      await expect(newBot(page).getByRole("button", { name: /^MiniMax/ })).toBeFocused();
+      await expect(newBot(page).getByRole("button", { name: /^OpenCode Go/ })).toBeFocused();
+    },
+  },
+  {
+    // Claude's tile takes an Anthropic key: it opens the key's fields with Anthropic chosen.
+    name: "connect-claude",
+    query: ADMIN,
+    ready: async (page) => {
+      await connectStep(page);
+      await newBot(page)
+        .getByRole("button", { name: /^Claude\b/ })
+        .click();
+      await expect(page.getByTestId("api-key")).toBeFocused();
+      await expect(page.getByText(/This replaces the Anthropic key/)).toBeVisible();
     },
   },
   {
