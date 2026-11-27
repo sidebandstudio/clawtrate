@@ -5178,9 +5178,14 @@ export class ClawtrateClient {
     stoppedRunId: string,
   ): void {
     const now = this.now();
-    for (const [held, each] of this.followUps) if (each.until <= now) this.followUps.delete(held);
+    // Expired waits, and waits of an earlier connection (a reconnect to the same address keeps
+    // them), give way before the bound is checked: neither can stop anything any more.
+    for (const [held, each] of this.followUps)
+      if (each.until <= now || each.target !== this.target || each.epoch !== this.epoch)
+        this.followUps.delete(held);
     if (this.followUps.size >= MAX_FOLLOW_UPS) return;
-    this.followUps.set(`${key}\u0000${sessionKey}\u0000${recipientRunId}`, {
+    const id = (value: string) => capId(value, MAX_ID_CHARS);
+    this.followUps.set(`${key}\u0000${id(sessionKey)}\u0000${id(recipientRunId)}`, {
       stopped: stoppedRunId,
       until: now + FOLLOW_UP_WAIT_MS,
       claimedBy: null,
@@ -5320,14 +5325,18 @@ export class ClawtrateClient {
       (sender) =>
         sender.id !== run.id &&
         recipientLinks([sender], rawOf).some((link) => {
-          if (link.sessionKey !== sessionKey || !link.deliveryPending || !link.runId) return false;
-          const linked = transcript.linkedRuns[link.runId];
+          if (link.sessionKey !== sessionKey || !link.deliveryPending) return false;
+          // A send whose recipient's run isn't named: nothing is awaited for it, and its reply
+          // could be this turn.
+          if (!link.runId) return true;
+          const runId = capId(link.runId, MAX_ID_CHARS);
+          const linked = transcript.linkedRuns[runId];
           // Its recipient finished well, its abort too late or never sent: its real reply is owed,
           // and could be this turn, whatever else awaits it.
           if (linked?.state === "completed") return true;
           // The send whose stopped recipient this turn answers, or another that a Stop awaits too.
-          if (link.runId === recipientRunId) return false;
-          if (this.followUps.has(`${key}\u0000${sessionKey}\u0000${link.runId}`)) return false;
+          if (runId === recipientRunId) return false;
+          if (this.followUps.has(`${key}\u0000${sessionKey}\u0000${runId}`)) return false;
           // Still running: what the gateway starts for it comes only after it ends.
           return !(linked && isActive(linked.state));
         }),
@@ -8588,7 +8597,8 @@ export class ClawtrateClient {
       if (!waiting) this.unsentStops.delete(id);
     }
     // The turn the gateway starts by itself after a recipient this client stopped (#645).
-    this.stopFollowUps(key, transcript);
+    // Read after `refreshLinkedRuns`: a recipient it has just seen finish keeps its reply running.
+    this.stopFollowUps(key, this.state.transcripts[key] ?? transcript);
     for (const run of transcript.runs) {
       // A run this client stopped has ended as stopped: stop what its messages started (F-296).
       if (

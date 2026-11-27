@@ -7,7 +7,8 @@
 // what the gateway sends: never by its words.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { FOLLOW_UP_WAIT_MS } from "../src/client.ts";
+import { FOLLOW_UP_WAIT_MS, MAX_FOLLOW_UPS } from "../src/client.ts";
+import { emptyActivity, newRun, unmarkStoppedAsFollowUp } from "../src/runs.ts";
 import { INTERACTIVE_SCOPES } from "../src/scopes.ts";
 import { agentEvent, KEY, openTask, URL_A, URL_B } from "./client-harness.ts";
 import {
@@ -843,6 +844,94 @@ describe("the automatic stop of the gateway's own turn keeps to what the person 
     });
     await until(() => abortsOf(gateway).some((each) => each.runId === "run-f"));
     expect(abortsOf(gateway).filter((each) => each.runId === "run-f")).toHaveLength(1);
+    client.stop();
+  });
+});
+
+describe("the gateway's own turn: what the automated review found at 201f4b060 (#645)", () => {
+  it("#645: a pending send whose recipient's run isn't named yet keeps the turn ambiguous: a real reply to it is not stopped", async () => {
+    const opened = await openTask();
+    const { client, gateway } = opened;
+    aborting(gateway);
+    const unnamed = { status: "accepted", sessionKey: PEER, delivery: { status: "pending" } };
+    await stopTheExchange(opened, [unnamed, pending("run-r")]);
+    await turnStarts(gateway, "run-f", [startedRow("run-f", fromPeer, "Here is the plan.")]);
+    await until(() => run(opened, "run-f") !== undefined);
+    await sleep(50);
+    expect(abortsOf(gateway).some((each) => each.runId === "run-f")).toBe(false);
+    client.stop();
+  });
+
+  it("#645: a late answer to the automatic stop never undoes a Stop of the person's on a run rebuilt since", () => {
+    const stopping = newRun("run-f", { state: "stopping", origin: "history", bound: true }, 1);
+    const asked = { ...stopping, stopRequestedAt: 5 };
+    const activity = { ...emptyActivity, runs: [asked] };
+    // Not marked as the automatic stop's: the person's Stop stands.
+    expect(unmarkStoppedAsFollowUp(activity, "run-f")).toBe(activity);
+    // Marked: it goes back to running.
+    const marked = { ...activity, runs: [{ ...asked, stoppedAsFollowUp: true as const }] };
+    const back = unmarkStoppedAsFollowUp(marked, "run-f").runs[0]!;
+    expect(back.state).toBe("running");
+    expect(back.stoppedAsFollowUp).toBeUndefined();
+  });
+
+  it("#645: waits of an earlier connection give way to a new one at the bound", async () => {
+    const opened = await openTask();
+    const { client, gateway, transcript } = opened;
+    aborting(gateway);
+    // In another task, one Stop stops MAX_FOLLOW_UPS recipients of another bot: as many waits.
+    const OTHER = "agent:otto:other";
+    const JUNIPER = "agent:juniper:main";
+    client.openSession(OTHER);
+    await until(() => client.state.transcripts[OTHER]?.status === "ready");
+    gateway.emit("agent", agentEvent("run-o", 1, "lifecycle", { phase: "start" }, OTHER));
+    for (let i = 0; i < MAX_FOLLOW_UPS; i += 1) {
+      const details = pending(`run-j${i}`, JUNIPER);
+      gateway.emit(
+        "agent",
+        agentEvent(
+          "run-o",
+          i + 2,
+          "tool",
+          {
+            phase: "result",
+            name: "sessions_send",
+            toolCallId: `run-o-c${i}`,
+            isError: false,
+            result: { content: [{ type: "text", text: JSON.stringify(details) }], details },
+          },
+          OTHER,
+        ),
+      );
+    }
+    await until(() => client.state.transcripts[OTHER]!.runs[0]?.steps.length === MAX_FOLLOW_UPS);
+    await client.stopRun(OTHER, "run-o");
+    gateway.emit(
+      "agent",
+      agentEvent(
+        "run-o",
+        90,
+        "lifecycle",
+        { phase: "end", status: "cancelled", aborted: true },
+        OTHER,
+      ),
+    );
+    await until(
+      () =>
+        abortsOf(gateway).filter((each) => each.sessionKey === JUNIPER).length === MAX_FOLLOW_UPS,
+    );
+    await sleep(30);
+    client.closeSession(OTHER);
+    // A reconnect to the same gateway: those waits can stop nothing any more.
+    const sockets = gateway.sockets.length;
+    gateway.dropAll();
+    await until(
+      () => gateway.sockets.length > sockets && client.state.connection.status === "connected",
+    );
+    await until(() => transcript().status === "ready");
+    await stopTheExchange(opened);
+    await turnStarts(gateway, "run-f", [startedRow("run-f", fromPeer)]);
+    await until(() => abortsOf(gateway).some((each) => each.runId === "run-f"));
     client.stop();
   });
 });

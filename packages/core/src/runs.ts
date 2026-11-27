@@ -296,6 +296,9 @@ export function markStoppedAsFollowUp(activity: TaskActivity, runId: string): Ta
  * was this client's own doing, never the person's Stop, so no error is shown for it (#645).
  */
 export function unmarkStoppedAsFollowUp(activity: TaskActivity, runId: string): TaskActivity {
+  // Only a run still marked: one rebuilt since (the task closed and opened again) may be stopping
+  // for the person's own Stop, which a late answer to this client's abort must not undo.
+  if (!findRun(activity, runId)?.stoppedAsFollowUp) return activity;
   return updateRun(revertStop(activity, runId, ""), runId, ({ stoppedAsFollowUp: _, ...run }) => ({
     ...run,
     stopError: null,
