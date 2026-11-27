@@ -191,19 +191,22 @@ export function Home({
   state,
   seen,
   now,
+  kept,
   onOpenBot,
   onSettings,
 }: {
   state: ClawtrateState;
   seen: SeenMap;
   now: number;
+  /** The bot the person keeps open, listed even when F-562 would leave it out. */
+  kept: string | null;
   onOpenBot: (botId: string) => void;
   onSettings: () => void;
 }) {
   const { send, redact } = useRuntime();
   const { c } = useTheme();
   const [refreshing, setRefreshing] = useState(false);
-  const model = homeModel(state, seen, now);
+  const model = homeModel(state, seen, now, kept);
   const refresh = async () => {
     setRefreshing(true);
     try {
