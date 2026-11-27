@@ -459,6 +459,10 @@ test("attaches a report by its body alone", async () => {
 });
 `,
       );
+      // Playwright compiles the config and the spec into a cache in the temporary
+      // folder, or wherever this process's environment points it. This run keeps it
+      // in the test's folder, which the finally below removes, pass or fail.
+      const cache = join(dir, "transform-cache");
       const run = spawnSync(
         process.execPath,
         [join(ROOT, "node_modules/@playwright/test/cli.js"), "test", "-c", "overlay.config.mjs"],
@@ -466,11 +470,12 @@ test("attaches a report by its body alone", async () => {
           cwd: dir,
           encoding: "utf8",
           timeout: 90_000,
-          env: runnerEnv(exitFile),
+          env: { ...runnerEnv(exitFile), PLAYWRIGHT_TRANSFORM_CACHE_DIR: cache },
         },
       );
       const output = run.stdout + run.stderr;
       expect(run.status, output).toBe(1);
+      expect(existsSync(cache), "the runner's cache is in the test's folder").toBe(true);
       // The tests' own failures, as before.
       expect(output).toContain('Expected: "3 unread"');
       expect(output).toContain("Received: undefined");
