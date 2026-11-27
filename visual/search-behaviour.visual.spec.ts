@@ -224,6 +224,44 @@ test("F-033: a search that finds nothing says so in one line, after one quiet li
   await expect(announcer(page)).toHaveText("No results for “zzqx”.");
 });
 
+test("F-033: a message search the gateway left incomplete offers Search each bot for more with no match too, and says what it left out", async ({
+  page,
+}) => {
+  const lines = () => palette(page).getByTestId("search-status").locator(".s-status");
+  const each = () => options(page, "messages").filter({ hasText: "Search each bot for more" });
+  for (const [src, said] of [
+    ["truncated", []],
+    ["indexing", ["Some messages are still being indexed."]],
+    ["archive", ["Older messages in 4 tasks weren't searched."]],
+  ] as const) {
+    await search(page, "kayak", `${BASE}&src=${src}`);
+    // Nothing found, said first; then Messages as its heading and the action, with no count.
+    await expect(lines()).toHaveText(["No results for “kayak”.", ...said]);
+    await expect(announcer(page)).toHaveText(["No results for “kayak”.", ...said].join(" "));
+    await expect(group(page, "messages").locator(".s-group-name")).toHaveText("Messages");
+    await expect(group(page, "messages").locator(".s-group-lines")).toHaveCount(0);
+    await expect(options(page, "messages")).toHaveText(["Search each bot for more"]);
+    await expect(palette(page).locator(".s-group")).toHaveCount(1);
+  }
+  // A complete reply with nothing found: no Messages group, no action.
+  await search(page, "kayak");
+  await expect(lines()).toHaveText(["No results for “kayak”."]);
+  await expect(group(page, "messages")).toHaveCount(0);
+  // Beside matches the archive line is Messages' own, with the action.
+  await search(page, "transcode", `${BASE}&src=archive`);
+  await expect(group(page, "messages").locator(".s-group-lines")).toHaveText(
+    "Older messages in 4 tasks weren't searched.",
+  );
+  await expect(each()).toHaveCount(1);
+  await expect(palette(page).getByTestId("search-status")).toHaveCount(0);
+  // The action asks each bot, and the first reply's left-out lines give way to theirs.
+  await search(page, "kayak", `${BASE}&src=archive`);
+  await each().click();
+  await expect(each()).toHaveCount(0);
+  await expect(lines()).toHaveText(["No results for “kayak”."]);
+  expect((await sent(page, "searchMessages")).filter((one) => one.botId).length).toBeGreaterThan(0);
+});
+
 test("F-033: while the gateway is still indexing, a search that finds no message says so beside No results, and beside matches", async ({
   page,
 }) => {
@@ -247,10 +285,12 @@ test("F-033: while the gateway is still indexing, a search that finds no message
     "Some messages are still being indexed.",
   );
   await expect(palette(page).getByTestId("search-status")).toHaveCount(0);
-  // No message found while indexing, but a task was: Messages isn't drawn, so the line stands alone.
+  // No message found while indexing, but a task was: Messages is its heading and its action only,
+  // so the line stands with the search's own lines.
   await search(page, "weekly", `${BASE}&src=indexing`);
   await expect(group(page, "tasks")).toBeVisible();
-  await expect(group(page, "messages")).toHaveCount(0);
+  await expect(group(page, "messages").locator(".s-group-name")).toHaveText("Messages");
+  await expect(options(page, "messages")).toHaveText(["Search each bot for more"]);
   await expect(lines()).toHaveText(["Some messages are still being indexed."]);
   await expect(announcer(page)).toHaveText(
     "1 result: 1 task. Some messages are still being indexed.",

@@ -62,6 +62,20 @@ const SAY_AFTER_MS = 400;
 /** The gateway's message search reported its index still catching up (`indexing`). */
 const INDEXING = "Some messages are still being indexed.";
 
+/**
+ * What a message reply says it left out, as lines: they change what its results mean, so they
+ * stay. `archivedTranscriptsExcluded` counts listed tasks whose older transcript content is in
+ * the gateway's cold archive (research §4), not archived tasks.
+ */
+function replyFlags(reply: Pick<MessageSearch, "indexing" | "archivedExcluded">): string[] {
+  return [
+    ...(reply.indexing ? [INDEXING] : []),
+    ...(reply.archivedExcluded > 0
+      ? [`Older messages in ${plural(reply.archivedExcluded, "task")} weren't searched.`]
+      : []),
+  ];
+}
+
 class Deadline extends Error {
   constructor() {
     super("the gateway didn't answer in 8 seconds");
@@ -939,9 +953,10 @@ export function SearchPalette({
         };
       const { reply, each } = messages;
       const incomplete = reply.truncated || reply.indexing || reply.archivedExcluded > 0;
-      // Offered only beside a match: a search that found none draws no Messages group.
+      // Offered whenever the reply is incomplete, with or without matches: with none, Messages is
+      // drawn as its heading and this action under the nothing-found line.
       const eachAction =
-        incomplete && !each && reply.hits.length > 0
+        incomplete && !each
           ? [
               action("messages:each", "Search each bot for more", () =>
                 searchEach(
@@ -983,7 +998,7 @@ export function SearchPalette({
           if (r.hits.length === 0) return [];
           return [
             {
-              line: r.indexing ? `${name} · ${INDEXING}` : null,
+              line: replyFlags(r).length ? `${name} · ${replyFlags(r).join(" ")}` : null,
               rows: messageRows(r.hits, r, messages.listed),
             },
           ];
@@ -1023,7 +1038,7 @@ export function SearchPalette({
         ...base,
         count: reply.hits.length,
         // "No results" or a short list can be untrue while the gateway is still indexing.
-        lines: reply.indexing ? [INDEXING] : [],
+        lines: replyFlags(reply),
         sections: [{ line: null, rows: messageRows(reply.hits, reply, messages.listed) }],
         actions: eachAction,
         searching: false,
@@ -1227,19 +1242,28 @@ export function SearchPalette({
     .map((group) => (group.count > 0 || group.tone === "danger" ? group : { ...group, lines: [] }));
   const pending = groups.some((group) => group.searching);
   const found = groups.reduce((sum, group) => sum + group.count, 0);
-  // The quiet lines under the results: a source still answering, nothing found, messages the
-  // gateway is still indexing when the search found none (beside matches it is Messages' own
-  // line), or offline. A group still searching isn't drawn until it finds something.
-  const unindexed =
-    messages.status === "done" &&
-    messages.each === null &&
-    messages.reply.indexing &&
-    messages.reply.hits.length === 0;
+  // The quiet lines of the search itself: a source still answering, nothing found, what the
+  // message search left out when it found nothing (beside matches they are Messages' own lines),
+  // or offline. A group still searching isn't drawn until it finds something.
+  const unshown =
+    messages.status !== "done" || (groups.find((group) => group.id === "messages")?.count ?? 0) > 0
+      ? []
+      : replyFlags(
+          messages.each === null
+            ? messages.reply
+            : {
+                indexing: messages.each.bots.some((bot) => bot.reply?.indexing === true),
+                archivedExcluded: messages.each.bots.reduce(
+                  (sum, bot) => sum + (bot.reply?.archivedExcluded ?? 0),
+                  0,
+                ),
+              },
+        );
   const status = !query
     ? []
     : [
         pending ? "Searching…" : found === 0 ? `No results for “${query}”.` : "",
-        !pending && unindexed ? INDEXING : "",
+        ...(pending ? [] : unshown),
         connected
           ? ""
           : `Messages, files and routines weren't searched: ${gatewayName} isn't connected.`,
@@ -1411,6 +1435,16 @@ export function SearchPalette({
     }
   };
 
+  const statusLines = status.length > 0 && (
+    <div data-testid="search-status">
+      {status.map((line) => (
+        <p className="s-status" key={line}>
+          {line}
+        </p>
+      ))}
+    </div>
+  );
+
   return (
     <dialog
       ref={dialogRef}
@@ -1457,6 +1491,8 @@ export function SearchPalette({
         </div>
         {query !== "" && (
           <div className="s-body" ref={listRef}>
+            {/* With nothing found the lines come first, above an action that searches further. */}
+            {found === 0 && statusLines}
             <div id="s-results" role="listbox" aria-label="Results">
               {view.groups.map(({ group, sections, actions }) => (
                 <div
@@ -1507,15 +1543,7 @@ export function SearchPalette({
                 </div>
               ))}
             </div>
-            {status.length > 0 && (
-              <div data-testid="search-status">
-                {status.map((line) => (
-                  <p className="s-status" key={line}>
-                    {line}
-                  </p>
-                ))}
-              </div>
-            )}
+            {found > 0 && statusLines}
           </div>
         )}
         <p className="s-foot">↑↓ Move · ↵ Open · Esc Close</p>
