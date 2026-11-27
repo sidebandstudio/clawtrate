@@ -389,6 +389,7 @@ import {
   type CreatedTask,
   type TaskActionContext,
 } from "./task-actions.ts";
+import { nameTask } from "./task-names.ts";
 import { fromActivity, WaitingIndex } from "./waiting.ts";
 import { mentionRows, slashRows, type MenuRow } from "./composer-menus.ts";
 import { listedBots } from "./gateway-bot.ts";
@@ -515,6 +516,8 @@ const OTHER_TOOLS_KEY = "show-other-tool-sessions";
 const GATEWAY_BOT_KEY = "show-gateway-bot";
 /** Tasks the client follows at once: open in some viewer, kept for their unsent work, or being created. */
 export const MAX_TRACKED_TASKS = TRACKED_TASKS;
+/** Tasks this client names at once, or waits to name (`taskNames`); past it, the oldest goes. */
+export const MAX_NAMED_TASKS = 32;
 /**
  * Messages one task's outbox may hold, whatever their state: waiting, being
  * sent, accepted but not yet in history, unconfirmed, failed or cancelled. A
@@ -1729,6 +1732,12 @@ export class ClawtrateClient {
    * from its last history read: what a picture with no copy here is read back by.
    */
   private readonly sentSources = new Map<string, Map<string, string>>();
+  /**
+   * Tasks this client names (#750), by key, oldest first: `waiting` for the first message of an
+   * empty task it made, `naming` while the name is made. Only the device that sends a task's
+   * first message names it, so two devices never both do.
+   */
+  private readonly taskNames = new Map<string, "waiting" | "naming">();
   /** Pictures read back from the gateway, by `task\0messageKey\0index`, oldest first (`MAX_READ_BACK_PICTURES`). */
   private readonly readBackPictures = new Map<
     string,
@@ -3614,6 +3623,9 @@ export class ClawtrateClient {
       (typeof replyToId !== "string" || !replyToId || replyToId.length > MAX_ID_CHARS)
     )
       throw new Error("That message can't be replied to.");
+    // The first message of an empty task this client made names it.
+    const namedBy = this.taskNames.get(key) === "waiting" ? this.taskBot(key) : null;
+    if (body && namedBy) this.startNaming(key, namedBy, body);
     const message: OutgoingMessage = {
       id: this.randomId(),
       text: body,
@@ -4225,6 +4237,8 @@ export class ClawtrateClient {
       error: runError ? String(runError.message ?? "The run did not start.") : null,
       attachments: [],
     };
+    // A task created with its first message is named from it, unless the person named it.
+    if (!creation.label) this.startNaming(key, creation.botId, creation.text);
     // A caller holds one interest in the new task; one settled later is kept for its message.
     this.openSession(key, true);
     this.updateActivity(key, (activity, ctx) => {
@@ -9525,6 +9539,7 @@ export class ClawtrateClient {
     this.readBackPictures.clear();
     this.readBackBytes = 0;
     this.sentSources.clear();
+    this.taskNames.clear();
   }
 
   private invalidateCheckIns(): void {
@@ -11263,7 +11278,41 @@ export class ClawtrateClient {
     options: { label?: string | null; owner?: object } = {},
   ): Promise<string> {
     const ctx = this.actionContext(options.owner ?? null);
-    return this.listCreated(await newTask(ctx, botId, options.label ?? null));
+    const key = this.listCreated(await newTask(ctx, botId, options.label ?? null));
+    // An empty task is named from the first message the person sends in it, unless they named it.
+    if (!options.label?.trim()) this.keepTaskName(key, "waiting");
+    return key;
+  }
+
+  /** Note a task this client names; the oldest goes past `MAX_NAMED_TASKS`. */
+  private keepTaskName(key: string, stage: "waiting" | "naming"): void {
+    this.taskNames.delete(key);
+    if (this.taskNames.size >= MAX_NAMED_TASKS) {
+      const oldest = this.taskNames.keys().next();
+      if (!oldest.done) this.taskNames.delete(oldest.value);
+    }
+    this.taskNames.set(key, stage);
+  }
+
+  /**
+   * Name a task from its first message (`task-names.ts`), once, on this connection, with the write
+   * access it holds: nothing is asked of the person, and nothing that goes wrong is shown.
+   */
+  private startNaming(key: string, botId: string, text: string): void {
+    if (this.taskNames.get(key) === "naming") return;
+    this.taskNames.delete(key);
+    if (this.options.readOnly || !this.holds(WRITE_SCOPE)) return;
+    this.keepTaskName(key, "naming");
+    const ctx = this.actionContext(null, this.epoch);
+    const botModel = this.state.bots.find((bot) => bot.id === botId)?.model ?? null;
+    void nameTask(
+      { request: ctx.request, row: () => this.rows.get(capId(key, MAX_ID_CHARS)) ?? null },
+      { key, botId, botModel, text },
+    )
+      .catch(() => null)
+      .finally(() => {
+        if (this.taskNames.get(key) === "naming") this.taskNames.delete(key);
+      });
   }
 
   /** A bot's replacement first task, "Main", after its last unarchived task went (F-424). */

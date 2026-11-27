@@ -227,6 +227,16 @@ export function isExcludedSessionKey(key: string): boolean {
   return !isTaskSession({ key });
 }
 
+/**
+ * The name a small model wrote for a task Clawtrate made (`autoLabel`, `task-names.ts`, #750): after
+ * a name the person or the bot gave (`label`), before the gateway's own title. Only on the keys the
+ * gateway gives a task Clawtrate creates (`dashboard:`): elsewhere `autoLabel` is a device's name,
+ * which the gateway already shows below its own title.
+ */
+export function generatedName(row: RawRecord, key: string): string | null {
+  return /^agent:[^:]+:dashboard:/u.test(key) ? str(row.autoLabel) : null;
+}
+
 /** The bot a session row belongs to: its own `agentId`, else the one its key names. */
 export function rowBotOf(key: string, row: RawRecord): string | null {
   return str(row.agentId) ?? botIdFromSessionKey(key);
@@ -246,6 +256,7 @@ export function mapSessionRow(row: RawRecord): Task | null {
     title: channel
       ? channelChatTitle(row, channel)
       : (str(row.label) ??
+        generatedName(row, key) ??
         derivedTitle(row.derivedTitle) ??
         derivedTitle(row.displayName) ??
         fallbackTitle(key)),

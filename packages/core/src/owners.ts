@@ -41,6 +41,7 @@ import {
   MAX_APPROVAL_OUTCOMES,
   MAX_APPROVAL_READERS,
   MAX_DEFERRED_STOPS,
+  MAX_NAMED_TASKS,
   MAX_OUTCOME_LOOKUPS,
   MAX_FILE_READS,
   MAX_PICTURE_READS,
@@ -311,6 +312,8 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
     row: "bookkeeping",
   },
   "sentSources.*": { max: MAX_SENT_SOURCES, each: 2 * MAX_INBOUND_REF_CHARS + N, row: null },
+  // Tasks this client names, or waits to name from their first message, by key, with their stage.
+  taskNames: { max: MAX_NAMED_TASKS, each: ID + SHORT, row: "bookkeeping" },
   // The store's listeners: a host's windows and web viewers.
   "store.listeners": { max: MAX_STORE_LISTENERS, each: 0, row: null },
   // Settings reads a stop ends: connection commands run one at a time, each with one read.
