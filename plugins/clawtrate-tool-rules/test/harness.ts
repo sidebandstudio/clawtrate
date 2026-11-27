@@ -73,9 +73,7 @@ export function load(
   const warnings: string[] = [];
   const infos: string[] = [];
   const config = options.config ?? {};
-  // As on the development gateway, the Codex harness is kept from loading (OpenClaw's own
-  // uninstall marker); a config without it may run the harness, and the plugin refuses every Ask.
-  config.plugins ??= { entries: { codex: { enabled: false } } };
+
   const api: Json = {
     pluginConfig: options.pluginConfig ?? {},
     config,
@@ -107,6 +105,8 @@ export function load(
   const slots = options.slots ?? new Map();
   const handle = createToolRules(api, {
     stateDir: options.stateDir,
+    // The gateway's global plugin folder, in the test's own state folder (never a real one).
+    pluginFolders: [join(options.stateDir, "extensions")],
     slots,
     ...(options.now ? { now: options.now } : {}),
     ...(options.log ? { log: options.log } : {}),

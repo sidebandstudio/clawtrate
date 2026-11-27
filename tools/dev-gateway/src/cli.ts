@@ -626,11 +626,6 @@ export function devConfig(
         "memory-core": { config: { dreaming: { enabled: false } } },
         // Only the search half of the bundled Ollama plugin is used, on loopback.
         ollama: { config: { webSearch: { baseUrl: searchBaseUrl(ports) } } },
-        // The Codex harness never loads here (it is not installed either): its native tool
-        // relay answers cards where no plugin can look again, so the rules plugin refuses
-        // every Ask wherever the config does not keep it from loading. OpenClaw's own
-        // uninstall marker, which its validation keeps without a warning.
-        codex: { enabled: false },
         // The project's own plugins named at start, each as its addition says.
         ...Object.fromEntries(plugins.map((plugin) => [plugin.id, entryOf(plugin)])),
       },
@@ -644,7 +639,7 @@ export function devConfig(
 }
 
 /** Plugin entries that belong to the development config itself. */
-export const RESERVED_PLUGIN_IDS = ["memory-core", "ollama", "codex"] as const;
+export const RESERVED_PLUGIN_IDS = ["memory-core", "ollama"] as const;
 
 /**
  * Every tool the installed gateway provides itself (`tools.catalog` of

@@ -4,10 +4,12 @@
 
 import { createHash } from "node:crypto";
 import type * as fs from "node:fs";
-import { mkdirSync, readFileSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdirSync, readFileSync, rmSync, truncateSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin, {
+  codexInFolder,
+  globalPluginFolders,
   ALLOWED_DECISIONS,
   APPROVAL_TIMEOUT_MS,
   CHANGED_ARGUMENTS_REASON,
@@ -1457,17 +1459,28 @@ describe("a call another plugin's policy changed after this one decided it (#606
 });
 
 describe("where the Codex harness may answer a card (#606)", () => {
-  it("refuses an Ask without a card while the Codex plugin may run, and asks where it cannot", async () => {
+  const CODEX_REFUSAL =
+    /asks first, and the gateway runs the Codex harness, whose native tool approvals are answered where the plugin cannot check the answer again before the call runs\. The call did not run\.$/;
+  const refuses = (h: ReturnType<typeof load>) => {
+    const result = h.before("main", "write", { path: "a" });
+    expect(result?.requireApproval).toBeUndefined();
+    expect(result?.blockReason).toMatch(CODEX_REFUSAL);
+  };
+  const asksFor = (h: ReturnType<typeof load>) =>
+    expect(h.before("main", "write", { path: "a" })?.requireApproval).toBeDefined();
+  const rules = [
+    { action: "ask", tools: ["write"] },
+    { action: "never", tools: ["exec"] },
+  ];
+
+  it("asks on a default config, and where the config keeps it from loading; refuses wherever the config names it", async () => {
     const config: Record<string, unknown> = {};
     const h = host({ config });
-    await h.save("main", [
-      { action: "ask", tools: ["write"] },
-      { action: "never", tools: ["exec"] },
-    ]);
-    // Where an installed Codex plugin may load: the plugin cannot see what the gateway found on
-    // disk, so a config that does not keep it from loading counts, an empty one included.
+    await h.save("main", rules);
+    // Not bundled with either version: a default config does not load it.
+    asksFor(h);
+    // Each way of naming it, where both versions would load the installed plugin.
     for (const plugins of [
-      {},
       { entries: { codex: { enabled: true } } },
       { entries: { Codex: {} } },
       { allow: ["codex", "clawtrate-tool-rules"] },
@@ -1478,26 +1491,72 @@ describe("where the Codex harness may answer a card (#606)", () => {
       { allow: ["clawtrate-tool-rules"], slots: { contextEngine: "codex" } },
     ]) {
       config.plugins = plugins;
-      const result = h.before("main", "write", { path: "a" });
-      expect(result?.requireApproval).toBeUndefined();
-      expect(result?.blockReason).toMatch(
-        /asks first, and the gateway runs the Codex harness, whose native tool approvals are answered where the plugin cannot check the answer again before the call runs\. The call did not run\.$/,
-      );
+      refuses(h);
       expect(h.before("main", "exec", { command: "ls" })?.blockReason).toMatch(/^Blocked by/);
     }
-    // Where it cannot load: off, denied, turned off in its entry (OpenClaw's uninstall marker),
-    // left out of an allow list.
+    // Kept from loading: its entry turned off, denied, or left out of an allow list.
     for (const plugins of [
+      {},
       { entries: { codex: { enabled: false } } },
-      { deny: ["codex"] },
       { deny: ["codex"], entries: { codex: { enabled: true } } },
       { allow: ["clawtrate-tool-rules"] },
       { allow: ["clawtrate-tool-rules"], entries: { codex: { enabled: true } } },
       { allow: ["clawtrate-tool-rules"], installs: { codex: {} } },
     ]) {
       config.plugins = plugins;
-      expect(h.before("main", "write", { path: "a" })?.requireApproval).toBeDefined();
+      asksFor(h);
     }
+  });
+
+  it("refuses where an untracked Codex plugin sits in the global plugin folder, or the folder cannot be read", async () => {
+    const config: Record<string, unknown> = {};
+    const h = host({ config });
+    await h.save("main", rules);
+    const folder = join(h.stateDir, "extensions");
+    asksFor(h);
+    // Another plugin there changes nothing.
+    mkdirSync(join(folder, "notes"), { recursive: true });
+    writeFileSync(join(folder, "notes", "openclaw.plugin.json"), JSON.stringify({ id: "notes" }));
+    expect(codexInFolder(folder)).toBe(false);
+    // A folder named codex, or a manifest whose id is codex: both versions load it unnamed.
+    mkdirSync(join(folder, "codex"));
+    expect(codexInFolder(folder)).toBe(true);
+    rmSync(join(folder, "codex"), { recursive: true });
+    mkdirSync(join(folder, "openclaw-codex"));
+    writeFileSync(
+      join(folder, "openclaw-codex", "openclaw.plugin.json"),
+      JSON.stringify({ id: "codex" }),
+    );
+    expect(codexInFolder(folder)).toBe(true);
+    // The plugin looks again a minute later at most; a fresh host looks at once.
+    const fresh = open({ stateDir: h.stateDir, config });
+    refuses(fresh);
+    // An allow list that leaves it out still keeps it from loading.
+    config.plugins = { allow: ["clawtrate-tool-rules"] };
+    asksFor(fresh);
+    // A folder that cannot be read may hold it.
+    expect(codexInFolder(join(h.stateDir, "missing"))).toBe(false);
+    expect(codexInFolder(join(folder, "notes", "openclaw.plugin.json"))).toBe(false);
+    if (process.getuid?.() !== 0) {
+      const locked = join(h.stateDir, "locked");
+      mkdirSync(locked, { mode: 0o000 });
+      expect(codexInFolder(locked)).toBe(true);
+      chmodSync(locked, 0o700);
+    }
+  });
+
+  it("looks for a global plugin folder where both versions resolve it", () => {
+    expect(globalPluginFolders("/s", { OPENCLAW_STATE_DIR: "/state" })).toEqual([
+      "/s/extensions",
+      "/state/extensions",
+    ]);
+    expect(globalPluginFolders("/s", { OPENCLAW_CONFIG_PATH: "/cfg/openclaw.json" })).toEqual([
+      "/s/extensions",
+      "/cfg/extensions",
+    ]);
+    expect(globalPluginFolders("/state", { OPENCLAW_STATE_DIR: "/state" })).toEqual([
+      "/state/extensions",
+    ]);
   });
 });
 

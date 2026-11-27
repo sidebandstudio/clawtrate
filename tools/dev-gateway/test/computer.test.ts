@@ -182,7 +182,7 @@ describe("the browser setup the tool writes", () => {
   it("a start may choose the plugin's window from the declaration's set; the guard holds the config to that choice", async () => {
     const state = temp();
     const chosen = devConfig("tok", PORTS, state, [plugin()], { renewTimeoutMs: 20000 }, CHROMIUM);
-    const entry = (chosen.plugins.entries as Record<string, { config?: Record<string, unknown> }>)[
+    const entry = (chosen.plugins.entries as Record<string, { config: Record<string, unknown> }>)[
       "clawtrate-computer"
     ]!;
     expect(entry.config).toMatchObject({ drainTimeoutMs: 5000, renewTimeoutMs: 20000 });

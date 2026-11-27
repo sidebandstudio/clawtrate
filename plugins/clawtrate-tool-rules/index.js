@@ -30,8 +30,9 @@
 // record is metadata only: no arguments, results, paths or commands.
 
 import { createHash, randomBytes } from "node:crypto";
-import { realpathSync } from "node:fs";
-import { join } from "node:path";
+import { readdirSync, readFileSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
+import { dirname, join } from "node:path";
 import { evaluate } from "./lib/evaluate.js";
 import { configuredAgents, explicitlyDenied, exposureWarnings } from "./lib/exposure.js";
 import {
@@ -373,19 +374,26 @@ const CODEX = "codex";
 const policyId = (value) => (typeof value === "string" ? value.trim().toLowerCase() : "");
 const namesCodex = (list) => Array.isArray(list) && list.some((id) => policyId(id) === CODEX);
 
+/** How long a look for an untracked Codex plugin on disk is kept. */
+export const CODEX_SCAN_MS = 60_000;
+/** The most entries of a plugin folder the look reads. */
+const CODEX_SCAN_LIMIT = 500;
+
 /**
  * Whether the gateway may run the Codex harness, whose native tool relay
  * defers a plugin's card to Codex's own approval and runs the call without
- * this plugin's hook after the answer. A plugin cannot see which plugins the
- * gateway found on disk and loaded, and an installed one the config never
- * names loads by default, so the harness may run unless the config keeps it
- * from loading, as OpenClaw 2026.10.6 and 2026.11.10 decide that
- * (`resolvePluginActivationStateShared`): `plugins.enabled` false, `codex` in
- * `plugins.deny`, its entry's `enabled` false (OpenClaw's own uninstall
- * marker is `{enabled: false}`), or a non-empty `plugins.allow` that leaves it
- * out while no memory or context-engine slot names it.
+ * this plugin's hook after the answer. Codex is not bundled with OpenClaw
+ * 2026.10.6 or 2026.11.10 (neither's `dist/extensions` holds it): it reaches a
+ * gateway installed, which leaves its entry, an install record or a load path
+ * in the config, or copied into the global plugin folder untracked
+ * (`onDisk`). It follows how both versions decide an installed plugin loads
+ * (`resolvePluginActivationStateShared`): never with `plugins.enabled` false,
+ * `codex` in `plugins.deny` or its entry's `enabled` false; always when a
+ * memory or context-engine slot names it; never when a non-empty
+ * `plugins.allow` leaves it out; otherwise when the config names it at all, or
+ * it was found on disk.
  */
-export function codexHarnessMayRun(config) {
+export function codexHarnessMayRun(config, onDisk = false) {
   const plugins = isPlainObject(config?.plugins) ? config.plugins : {};
   if (plugins.enabled === false) return false;
   if (namesCodex(plugins.deny)) return false;
@@ -396,7 +404,56 @@ export function codexHarnessMayRun(config) {
   const slots = isPlainObject(plugins.slots) ? plugins.slots : {};
   if (policyId(slots.memory) === CODEX || policyId(slots.contextEngine) === CODEX) return true;
   const allow = Array.isArray(plugins.allow) ? plugins.allow : [];
-  return allow.length === 0 || namesCodex(allow);
+  if (allow.length > 0 && !namesCodex(allow)) return false;
+  const installs = isPlainObject(plugins.installs) ? plugins.installs : {};
+  const paths = isPlainObject(plugins.load) ? plugins.load.paths : undefined;
+  return (
+    onDisk ||
+    entryKey !== undefined ||
+    namesCodex(allow) ||
+    Object.keys(installs).some((key) => policyId(key) === CODEX) ||
+    (Array.isArray(paths) && paths.some((path) => typeof path === "string" && /codex/i.test(path)))
+  );
+}
+
+/**
+ * Whether a plugin folder holds a Codex plugin: a folder named `codex`, or a
+ * manifest whose id is `codex`. A folder that is not there holds none; one
+ * that cannot be read may hold one.
+ */
+export function codexInFolder(folder) {
+  let names;
+  try {
+    names = readdirSync(folder, { withFileTypes: true });
+  } catch (error) {
+    return error?.code !== "ENOENT" && error?.code !== "ENOTDIR";
+  }
+  for (const item of names.slice(0, CODEX_SCAN_LIMIT)) {
+    if (!item.isDirectory() && !item.isSymbolicLink()) continue;
+    if (policyId(item.name) === CODEX) return true;
+    try {
+      const manifest = JSON.parse(
+        readFileSync(join(folder, item.name, "openclaw.plugin.json"), "utf8"),
+      );
+      if (policyId(manifest?.id) === CODEX) return true;
+    } catch {
+      // No manifest, or none that names Codex.
+    }
+  }
+  return names.length > CODEX_SCAN_LIMIT;
+}
+
+/**
+ * The global plugin folders an untracked plugin loads from: the state folder's
+ * `extensions`, and the config folder's, as both versions resolve it
+ * (`resolvePluginInstallRoots`: OPENCLAW_STATE_DIR, else beside
+ * OPENCLAW_CONFIG_PATH, else ~/.openclaw).
+ */
+export function globalPluginFolders(stateDir, env = process.env) {
+  const override = text(env.OPENCLAW_STATE_DIR?.trim());
+  const configPath = text(env.OPENCLAW_CONFIG_PATH?.trim());
+  const configDir = override ?? (configPath ? dirname(configPath) : join(homedir(), ".openclaw"));
+  return [...new Set([join(stateDir, "extensions"), join(configDir, "extensions")])];
 }
 
 /** A key-order-free text of a call's arguments, or null where it has none. */
@@ -533,6 +590,16 @@ export function createToolRules(api, options = {}) {
   const logger = api.logger ?? {};
   const registration = Symbol("registration");
   const now = options.now ?? Date.now;
+  /** The global plugin folders looked in for an untracked Codex plugin (tests give their own). */
+  const pluginFolders = options.pluginFolders ?? globalPluginFolders(stateDir);
+  let codexSeen = { at: -Infinity, found: false };
+  /** Whether an untracked Codex plugin is in a global plugin folder, looked at once a minute. */
+  const codexOnDisk = () => {
+    if (now() - codexSeen.at >= CODEX_SCAN_MS) {
+      codexSeen = { at: now(), found: pluginFolders.some((folder) => codexInFolder(folder)) };
+    }
+    return codexSeen.found;
+  };
   /** "auto" (the default), "full" or "redacted": whether a card names what the call acts on. */
   const cardSetting = isPlainObject(api.pluginConfig) ? api.pluginConfig.cardDetails : undefined;
 
@@ -899,7 +966,7 @@ export function createToolRules(api, options = {}) {
         ? "hook"
         : mode === "again"
           ? "changed"
-          : codexHarnessMayRun(config)
+          : codexHarnessMayRun(config, codexOnDisk())
             ? "codex"
             : null;
     if (uncheckable) {
