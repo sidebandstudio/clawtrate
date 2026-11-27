@@ -1610,6 +1610,11 @@ export async function start(
 
 /** The scopes the install engine writes with: full control, as the app asks for at pairing. */
 const INSTALL_SCOPES = ["operator.admin", "operator.read", "operator.write"];
+/**
+ * The install client's connect, its approval by the gateway's own command line included, as
+ * e2e/plugin-install.spec.ts's: on a loaded machine that takes minutes, not 60 s.
+ */
+const INSTALL_CONNECT_MS = 240_000;
 
 /**
  * Installs `plugin`, packed from the checkout, through the desktop app's install engine on a
@@ -1617,7 +1622,13 @@ const INSTALL_SCOPES = ["operator.admin", "operator.read", "operator.write"];
  */
 async function installCarried(inst: DevInstance, plugin: string): Promise<void> {
   const packed = packCarried(inst.checkout, join(inst.runDir, "carried-plugins"), plugin);
-  const op = await openOperator(inst, "Clawtrate plugin install", INSTALL_SCOPES, []);
+  const op = await openOperator(
+    inst,
+    "Clawtrate plugin install",
+    INSTALL_SCOPES,
+    [],
+    INSTALL_CONNECT_MS,
+  );
   try {
     const outcome = await installPlugin(op, packed);
     console.log(describeOutcome(plugin, op.serverVersion, outcome));
