@@ -7,6 +7,7 @@
 // a check-in or another bot sends is not a person's message and never carries the mark.
 import { describe, expect, it } from "vitest";
 import { createBridgeSession } from "../src/bridge.ts";
+import { WithdrawnError } from "../src/client.ts";
 import { fieldsOf, parseRoutine } from "../src/routines.ts";
 import { ADMIN_SCOPES, INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
 import { grantingGateway, openTask, stampOn, URL_A } from "./client-harness.ts";
@@ -311,6 +312,31 @@ describe.each(["2026.10.6", "2026.11.10"])(
         client.stop();
       },
     );
+
+    it("a viewer closed while the gateway is named: no access is asked for its task", async () => {
+      const gateway = gatewayOf(version);
+      gateway.handlers["device.scopes.requestUpgrade"] = () => ({ requestId: "up-1" });
+      const { client } = await openTask({ gateway, held: READ_SCOPES });
+      await until(() => client.state.connection.gatewayId === "gateway-test");
+      const named = deferred<unknown>();
+      gateway.handlers["gateway.identity.get"] = () => named.promise;
+      const reads = gateway.calls("gateway.identity.get").length;
+      gateway.dropAll();
+      await until(
+        () =>
+          client.state.connection.status === "connected" &&
+          gateway.calls("gateway.identity.get").length > reads,
+      );
+      const viewer = {};
+      const creation = client.createTask("otto", "Hello", { owner: viewer });
+      creation.catch(() => {});
+      client.withdraw(viewer);
+      named.resolve({ deviceId: "gateway-test" });
+      await expect(creation).rejects.toThrow(WithdrawnError);
+      expect(gateway.calls("device.scopes.requestUpgrade")).toEqual([]);
+      expect(client.pendingAccessWaiters).toBe(0);
+      client.stop();
+    });
 
     it("a creation the gateway made but whose setup failed: the message waits Not sent, for the person's Try again", async () => {
       const gateway = gatewayOf(version);

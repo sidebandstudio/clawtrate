@@ -4305,7 +4305,9 @@ export class ClawtrateClient {
       const forGateway =
         connection.gatewayId ??
         (connection.status === "connected" ? await this.readGatewayIdentity() : null);
-      // A viewer that goes away while access is approved takes its request with it (`withdraw`).
+      // A viewer gone during that read asks for no access; one that goes while access is approved
+      // takes its request with it (`withdraw`).
+      this.checkNotWithdrawn(options.owner);
       await this.ensureScope(WRITE_SCOPE, options.owner ?? null);
       const epoch = this.epoch;
       const here = await this.readGatewayIdentity();
