@@ -244,6 +244,7 @@ export class RunOrigins {
     }
     for (const key of this.tasks.keys()) this.tasks.set(key, lost);
     for (const list of this.spawning.values()) for (const w of list) w.read = lost;
+    for (const key of this.snapshots.keys()) this.snapshots.set(key, lost);
   }
 
   /** before_prompt_build: a run starts (its first model request) or goes on. */
@@ -313,19 +314,14 @@ export class RunOrigins {
     const taken = fresh.shift();
     if (fresh.length) this.spawning.set(facts.agentId, fresh);
     else if (facts.agentId) this.spawning.delete(facts.agentId);
-    if (taken) {
-      this.rememberTask(key, taken.read);
-      return taken.read;
-    }
     // A live wait was dropped at the bound within the minute: this run may be its
-    // task, so it is one, having read something the plugin lost track of.
-    if (
-      this.spawnDroppedAt !== null &&
-      this.spawnDroppedAt > this.now() - this.limits.spawnWaitMs
-    ) {
-      const lost = { source: "lost", tool: null };
-      this.rememberTask(key, lost);
-      return lost;
+    // task, whichever wait it takes, so it is one, having read something lost.
+    const dropped =
+      this.spawnDroppedAt !== null && this.spawnDroppedAt > this.now() - this.limits.spawnWaitMs;
+    if (taken || dropped) {
+      const read = taken && !dropped ? taken.read : { source: "lost", tool: null };
+      this.rememberTask(key, read);
+      return read;
     }
     return undefined;
   }
