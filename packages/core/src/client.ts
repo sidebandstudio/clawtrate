@@ -11578,7 +11578,14 @@ export class ClawtrateClient {
    */
   private nameAccepted(key: string, messageId: string, text: string): void {
     const kept = this.taskNames.get(key);
-    if (kept?.stage !== "waiting" || kept.first !== messageId) return;
+    if (kept?.stage !== "waiting") return;
+    if (kept.first !== messageId) {
+      // The message chosen first was deleted or taken back while this one was on its way: this
+      // one takes its place, as a send after the delete would. A retry of that one keeps it.
+      const claimed = kept.first === null ? null : this.outgoing(key, kept.first);
+      if (kept.first === null || (claimed && claimed.status !== "cancelled")) return;
+      kept.first = messageId;
+    }
     const bot = this.taskBot(key);
     if (!bot || !text) {
       this.taskNames.delete(key);

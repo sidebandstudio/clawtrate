@@ -18,7 +18,7 @@ import {
   namingSource,
 } from "../src/task-names.ts";
 import { grantingGateway, openTask } from "./client-harness.ts";
-import { GatewayError, sleep, until, type FakeGateway } from "./fake-gateway.ts";
+import { deferred, GatewayError, sleep, until, type FakeGateway } from "./fake-gateway.ts";
 
 const KEY = "agent:main:dashboard:3f2a9c1e-6b7d-4e8f-a0b1-c2d3e4f5a6b7";
 const MESSAGE = "Help me plan a four-day trip to Lisbon in May with a small budget";
@@ -454,6 +454,37 @@ describe("the device that sends the first message", () => {
       } finally {
         client.stop();
       }
+    }
+  });
+
+  it("names a task from the next message when its refused first message is deleted while that one is on its way", async () => {
+    // A refused, B sent, A deleted before the gateway answers B, then B accepted: named from B.
+    const { gateway } = creatingGateway(["Garden plan"]);
+    const { client } = await openTask({ gateway });
+    try {
+      const accept = gateway.handlers["chat.send"]!;
+      const answer = deferred<void>();
+      let sends = 0;
+      gateway.handlers["chat.send"] = async (params) => {
+        sends += 1;
+        if (sends === 1)
+          throw new GatewayError({ code: "UNAVAILABLE", message: "the bot is busy" });
+        await answer.promise;
+        return accept(params);
+      };
+      await client.createTask("main", "Plan the spring beds");
+      const failed = () =>
+        client.state.transcripts[KEY]?.outbox.find((each) => each.status === "failed");
+      await until(() => failed() !== undefined);
+      const first = failed()!.id;
+      client.sendMessage(KEY, MESSAGE);
+      await until(() => sends === 2);
+      client.deleteMessage(KEY, first);
+      answer.resolve();
+      await until(() => patches(gateway).length === 1);
+      expect(titleCalls(gateway)).toEqual([{ agentId: "main", message: MESSAGE }]);
+    } finally {
+      client.stop();
     }
   });
 
