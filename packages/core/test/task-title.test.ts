@@ -8,7 +8,7 @@ import { groupTasks, isPlaceholderName, mapSessionRow, taskTitle } from "../src/
 import { readMessageSearch } from "../src/search.ts";
 import { mapArchivedRow } from "../src/task-actions.ts";
 import { grantingGateway, openTask, URL_B } from "./client-harness.ts";
-import { sleep, until } from "./fake-gateway.ts";
+import { GatewayError, sleep, until } from "./fake-gateway.ts";
 
 const KEY = "agent:main:dashboard:5b0e4c1a-8d2f-4e3b-9a61-7c2d9e0f1a2b";
 
@@ -32,6 +32,18 @@ const ROW_1110 = {
   titlePending: false,
   updatedAt: 1_700_000_000_000,
 };
+
+/** 2026.11.10's event when the placeholder lands (`reason: "chat.title"`). */
+const placeholderLands = (gateway: { emit(event: string, payload: unknown): void }) =>
+  gateway.emit("sessions.changed", {
+    sessionKey: KEY,
+    reason: "chat.title",
+    ...ROW_1110,
+    session: ROW_1110,
+  });
+const shownIn = (client: {
+  state: { tasksByBot: Record<string, { key: string; title: string }[]> };
+}) => client.state.tasksByBot.main?.find((task) => task.key === KEY)?.title;
 
 const title = (row: Record<string, unknown>, first: string | null = null) =>
   mapSessionRow(row, { firstMessage: first })?.title;
@@ -257,15 +269,119 @@ describe("a task titled from its first message", () => {
     const shown = () => client.state.tasksByBot.main?.find((task) => task.key === KEY)?.title;
     try {
       client.openSession(KEY);
-      await until(() => client.state.transcripts[KEY]?.status === "ready");
-      expect(shown()).toBe("New task");
+      // Named from its first message at once, before the gateway names it anything.
+      await until(() => shown() === "Sort the photos by trip");
       gateway.emit("sessions.changed", {
         sessionKey: KEY,
         reason: "chat.title",
         ...ROW_1110,
         session: ROW_1110,
       });
+      await sleep(20);
+      expect(shown()).toBe("Sort the photos by trip");
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("F-054: is the same in the archived list as in the rail", async () => {
+    const gateway = grantingGateway();
+    let created = false;
+    gateway.handlers["sessions.create"] = () => {
+      created = true;
+      return { key: KEY, runId: "run-create" };
+    };
+    gateway.handlers["sessions.list"] = (params) =>
+      (params as { archived?: unknown }).archived === true
+        ? { sessions: [{ ...ROW_1110, archived: true, archivedAt: 5 }], hasMore: false }
+        : { sessions: created ? [ROW_1110] : [], hasMore: false };
+    const { client } = await openTask({ gateway });
+    const words = "Plan the spring garden beds";
+    try {
+      await client.createTask("main", words);
+      placeholderLands(gateway);
+      await until(() => shownIn(client) === words);
+      expect((await client.listArchived("main")).tasks.map((task) => task.title)).toEqual([words]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("follows the first message: A refused and deleted, then B sent, is titled from B", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["sessions.create"] = () => ({ key: KEY });
+    gateway.handlers["sessions.list"] = () => ({ sessions: [ROW_1110], hasMore: false });
+    gateway.handlers["chat.send"] = (params) => {
+      if ((params as { message: string }).message.startsWith("Plan the garden"))
+        throw new GatewayError({ code: "INVALID_REQUEST", message: "no" });
+      return { runId: "run-b", status: "started" };
+    };
+    const { client } = await openTask({ gateway });
+    const shown = () => client.state.tasksByBot.main?.find((task) => task.key === KEY)?.title;
+    try {
+      await client.createTask("main", "Plan the garden");
+      placeholderLands(gateway);
+      await until(() => client.state.transcripts[KEY]?.outbox[0]?.status === "failed");
+      await until(() => shown() !== undefined);
+      expect(shown()).toBe("Plan the garden");
+      client.deleteMessage(KEY, client.state.transcripts[KEY]!.outbox[0]!.id);
+      await until(() => shown() === "New task");
+      client.sendMessage(KEY, "Sort the photos by trip");
       await until(() => shown() === "Sort the photos by trip");
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("follows the first message: history that shows another first message wins", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["sessions.create"] = () => ({ key: KEY, runId: "run-create" });
+    gateway.handlers["sessions.list"] = () => ({ sessions: [ROW_1110], hasMore: false });
+    gateway.handlers["chat.history"] = (params) =>
+      (params as { sessionKey: string }).sessionKey === KEY
+        ? {
+            messages: [
+              {
+                role: "user",
+                content: [{ type: "text", text: "From the other device" }],
+                timestamp: 1,
+              },
+            ],
+            hasMore: false,
+          }
+        : { messages: [], hasMore: false };
+    const { client } = await openTask({ gateway });
+    const shown = () => client.state.tasksByBot.main?.find((task) => task.key === KEY)?.title;
+    try {
+      await client.createTask("main", "Plan the garden");
+      placeholderLands(gateway);
+      await until(() => shown() === "From the other device");
+      await sleep(20);
+      expect(shown()).toBe("From the other device");
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("goes with its task: a task deleted on the gateway takes its title with it", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["sessions.subscribe"] = () => ({
+      subscribed: true,
+      list: { sessions: [ROW_1110], hasMore: false },
+    });
+    const { client } = await openTask({ gateway });
+    const kept = (client as unknown as { firstMessageTitles: Map<string, unknown> })
+      .firstMessageTitles;
+    try {
+      (
+        client as unknown as {
+          keepFirstMessage(key: string, text: string, from: string | null): boolean;
+        }
+      ).keepFirstMessage(KEY, "Plan the garden", null);
+      expect(kept.has(KEY)).toBe(true);
+      gateway.emit("sessions.changed", { sessionKey: KEY, reason: "delete" });
+      await until(() => !kept.has(KEY));
+      expect(shownIn(client)).toBeUndefined();
     } finally {
       client.stop();
     }
@@ -274,28 +390,25 @@ describe("a task titled from its first message", () => {
   it("keeps at most its bound, the oldest let go", async () => {
     const { client } = await openTask();
     const note = (key: string, text: string) =>
-      (client as unknown as { noteFirstMessage(key: string, text: string): void }).noteFirstMessage(
-        key,
-        text,
-      );
-    const kept = (client as unknown as { firstMessageTitles: Map<string, string> })
+      (
+        client as unknown as {
+          keepFirstMessage(key: string, text: string, from: string | null): boolean;
+        }
+      ).keepFirstMessage(key, text, null);
+    const kept = (client as unknown as { firstMessageTitles: Map<string, { title: string }> })
       .firstMessageTitles;
     try {
       for (let n = 0; n <= MAX_FIRST_MESSAGE_TITLES; n += 1)
         note(`agent:main:dashboard:${n}`, `Message ${n}`);
       expect(kept.size).toBe(MAX_FIRST_MESSAGE_TITLES);
       expect(kept.has("agent:main:dashboard:0")).toBe(false);
-      expect(kept.get(`agent:main:dashboard:${MAX_FIRST_MESSAGE_TITLES}`)).toBe(
-        `Message ${MAX_FIRST_MESSAGE_TITLES}`,
-      );
-      // A task's first message is kept once: a later one doesn't replace it.
-      note(`agent:main:dashboard:${MAX_FIRST_MESSAGE_TITLES}`, "Another");
-      expect(kept.get(`agent:main:dashboard:${MAX_FIRST_MESSAGE_TITLES}`)).toBe(
+      expect(kept.get(`agent:main:dashboard:${MAX_FIRST_MESSAGE_TITLES}`)?.title).toBe(
         `Message ${MAX_FIRST_MESSAGE_TITLES}`,
       );
       // Cut to a title's length, as one line.
       note("agent:main:dashboard:long", `Plan\n${"x".repeat(400)}`);
-      expect([...kept.get("agent:main:dashboard:long")!]).toHaveLength(256);
+      expect([...kept.get("agent:main:dashboard:long")!.title]).toHaveLength(256);
+      expect(kept.size).toBe(MAX_FIRST_MESSAGE_TITLES);
     } finally {
       client.stop();
     }

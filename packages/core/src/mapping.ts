@@ -226,7 +226,7 @@ export function isPlaceholderName(row: RawRecord, key: string): boolean {
 }
 
 /** Whether the gateway titles this key's task itself (`isAutoTitleSessionKey`, both versions). */
-function titledByGateway(key: string): boolean {
+export function titledByGateway(key: string): boolean {
   const rest = /^agent:[^:]+:(.*)$/u.exec(key)?.[1] ?? "";
   return /^(?:dashboard:|ios-|node-)/u.test(rest);
 }

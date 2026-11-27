@@ -313,10 +313,11 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
     row: "bookkeeping",
   },
   "sentSources.*": { max: MAX_SENT_SOURCES, each: 2 * MAX_INBOUND_REF_CHARS + N, row: null },
-  // The title each task's first message makes, by task key: shown in place of the gateway's placeholder.
+  // The title each task's first message makes, by task key, with the outgoing message it was
+  // made from until history holds it.
   firstMessageTitles: {
     max: MAX_FIRST_MESSAGE_TITLES,
-    each: ID + 2 * MAX_TITLE_CHARS,
+    each: 2 * ID + 2 * MAX_TITLE_CHARS + N,
     row: "bookkeeping",
   },
   // The store's listeners: a host's windows and web viewers.
