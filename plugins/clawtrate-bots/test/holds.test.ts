@@ -599,24 +599,24 @@ describe("fix round: other tool names", () => {
 
 describe("fix round 2", () => {
   it("D2: a Windows drive alias is mapped as 2026.11.10 maps it, and held on Windows in either form", () => {
-    expect(driveAlias("/c/Users/pip/AGENTS.md")).toBe("C:\\Users\\pip\\AGENTS.md");
+    expect(driveAlias("/c/bots/pip/AGENTS.md")).toBe("C:\\bots\\pip\\AGENTS.md");
     expect(driveAlias("/mnt/d/ws/SOUL.md")).toBe("D:\\ws\\SOUL.md");
     expect(driveAlias("/cygdrive/e/x")).toBe("E:\\x");
     expect(driveAlias("@/c/ws/AGENTS.md")).toBe("@C:\\ws\\AGENTS.md");
-    expect(driveAlias("/home/pip/AGENTS.md")).toBe("/home/pip/AGENTS.md");
-    const workspaces = { pip: "C:\\Users\\pip\\ws" };
+    expect(driveAlias("/srv/pip/AGENTS.md")).toBe("/srv/pip/AGENTS.md");
+    const workspaces = { pip: "C:\\bots\\pip\\ws" };
     const windows = { platform: "win32", pathApi: win32 };
     for (const raw of [
-      "/c/Users/pip/ws/AGENTS.md",
-      "/mnt/c/Users/pip/ws/agents.md",
-      "@/c/Users/pip/ws/AGENTS.md",
+      "/c/bots/pip/ws/AGENTS.md",
+      "/mnt/c/bots/pip/ws/agents.md",
+      "@/c/bots/pip/ws/AGENTS.md",
     ])
       expect(heldFile(raw, "pip", workspaces, windows as never), raw).toEqual({
         file: "agents.md",
         bot: "pip",
       });
     // Elsewhere the alias is a plain absolute path.
-    expect(heldFile("/c/Users/pip/ws/AGENTS.md", "pip", { pip: "/w/pip" })).toBeNull();
+    expect(heldFile("/c/bots/pip/ws/AGENTS.md", "pip", { pip: "/w/pip" })).toBeNull();
   });
 
   it("D4: a routine's run is decided by the enablement the gateway last reported", () => {
