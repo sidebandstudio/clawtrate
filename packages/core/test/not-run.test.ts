@@ -736,6 +736,25 @@ describe("the rules underneath", () => {
     expect(index.failedAt(KEY)).toBe(1_500);
   });
 
+  it("after a start sent again for a replaced run, the newer run's final ends it and the next failure marks the task", () => {
+    const index = new WaitingIndex();
+    for (const [runId, ts] of [
+      ["r1", 1_000],
+      ["r2", 1_500],
+      ["r1", 1_000],
+    ] as const)
+      index.onAgent(
+        { sessionKey: KEY, runId, stream: "lifecycle", ts, data: { phase: "start" } },
+        ts,
+      );
+    index.onChat({ sessionKey: KEY, runId: "r2", state: "final" }, 2_000);
+    expect(index.latestRunId(KEY)).toBe("r2");
+    // r2 is no longer going: a message admitted after it, failed at dispatch, marks the task.
+    index.noteInput(KEY);
+    expect(index.onChat({ sessionKey: KEY, runId: "r3", state: "error" }, 3_000)).toBe(true);
+    expect(index.failedAt(KEY)).toBe(3_000);
+  });
+
   it("an older run's late chat end says nothing while a newer run of the task is going", () => {
     const index = new WaitingIndex();
     index.onAgent(
