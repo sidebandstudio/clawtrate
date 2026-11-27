@@ -1939,7 +1939,8 @@ export class ClawtrateClient {
     // Read only when a read that began after this call has published the task's history: a read
     // in flight runs once more after it (`loadTranscript`), on the same connection and the same
     // opening of the task. A failed last read leaves the task in error, keeping an earlier read's
-    // time, and so does one without live updates, which can't be told from it: neither is read.
+    // time, and so does one without live updates, which can't be told from it; Try again on a
+    // failed read sets it loading with that time too: none of these is read.
     readHistory: async (key) => {
       if (!this.tracked(key)) return false;
       const generation = this.generation;
@@ -1952,7 +1953,7 @@ export class ClawtrateClient {
         this.tracked(key) &&
         this.incarnations.get(key) === incarnation &&
         read !== undefined &&
-        read.status !== "error" &&
+        read.status === "ready" &&
         (read.loadedAt ?? Number.NEGATIVE_INFINITY) >= since
       );
     },

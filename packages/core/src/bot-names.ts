@@ -71,6 +71,12 @@ export const CLAIM_DELAY_MS = 5_000;
  * whose rename is still on its way is never taken over.
  */
 export const CLAIM_EXPIRY_MS = 120_000;
+/**
+ * A claim older than this sends nothing; it is taken again first. Its rename, answered or given up
+ * within the client's 60-second request timeout, then ends before the claim could expire and be
+ * settled by another device as a rename that never landed.
+ */
+export const CLAIM_SEND_MS = CLAIM_EXPIRY_MS - 60_000;
 /** Times a record write is tried again after another device's write came first. */
 export const RECORD_WRITE_ATTEMPTS = 4;
 /** Times a claim is taken again because the connection changed before its rename was sent. */
@@ -304,6 +310,11 @@ export type NameRecord = {
 
 /** The UTC day a time falls on, as `YYYY-MM-DD`: what the day's limit counts by. */
 export const dayOf = (at: number) => new Date(at).toISOString().slice(0, 10);
+/**
+ * The first UTC day whose counts a record keeps when written on `day`: the day before too, which
+ * a device whose clock hasn't passed midnight yet still counts on.
+ */
+const keptFrom = (day: string) => dayOf(Date.parse(`${day}T00:00:00Z`) - 1);
 
 const isBot = (value: unknown): value is string =>
   typeof value === "string" && value.length > 0 && value.length <= MAX_RECORD_BOT_CHARS;
@@ -768,8 +779,10 @@ export class BotNames {
       let sent = false;
       for (let attempt = 0; attempt < CLAIM_ATTEMPTS && !sent; attempt += 1) {
         op = { stamp, generation: this.ctx.generation() };
+        let claimedAt = this.ctx.now();
         const claimed = await this.writeRecord(op, (record) => {
           const now = this.ctx.now();
+          claimedAt = now;
           if (otherClaim(record, botId, opId, now)) return "busy";
           const same = record.changes.find((each) => each.run === origin.run && each.bot === botId);
           if (same && (same.undone !== undefined || landed(same, record.changes, this.ctx.bots())))
@@ -808,8 +821,9 @@ export class BotNames {
           await this.release(op, opId, botId, origin.run, true);
           return this.giveUp(botId);
         }
-        // Sent only on the connection that holds the claim; on another, the claim is taken again.
-        if (!this.current(op)) continue;
+        // Sent only on the connection that holds the claim, while the claim is young enough to
+        // outlast the request; otherwise the claim is taken again.
+        if (!this.current(op) || this.ctx.now() - claimedAt >= CLAIM_SEND_MS) continue;
         try {
           await this.ctx.request("agents.update", { agentId: botId, name });
         } catch (error) {
@@ -844,14 +858,14 @@ export class BotNames {
       const done = this.ctx.now();
       await this.writeRecord({ stamp, generation: this.ctx.generation() }, (record) => {
         const entry = record.changes.find((each) => each.run === origin.run && each.bot === botId);
-        const marked = {
-          ...record,
-          changes: record.changes.map((each) => (each === entry ? { ...each, done } : each)),
-          claims: record.claims.filter((each) => each.op !== opId),
-        };
-        return !entry || entry.done !== undefined
-          ? { ...record, claims: marked.claims }
-          : withCount(marked, botId, dayOf(done));
+        const claims = record.claims.filter((each) => each.op !== opId);
+        if (entry?.done !== undefined) return { ...record, claims };
+        // An entry another device settled away while the rename was on its way is written again:
+        // the rename landed, so it has its record, its Undo and its count.
+        const changes = entry
+          ? record.changes.map((each) => (each === entry ? { ...each, done } : each))
+          : [...record.changes, { ...change, done }];
+        return withCount({ ...record, changes, claims }, botId, dayOf(done));
       }).catch((error: unknown) =>
         this.ctx.log(`could not mark ${botId}'s rename done: ${errorText(error)}`),
       );
@@ -913,8 +927,10 @@ export class BotNames {
       let sent = false;
       for (let attempt = 0; attempt < CLAIM_ATTEMPTS && !sent; attempt += 1) {
         op = { stamp, generation: this.ctx.generation() };
+        let claimedAt = this.ctx.now();
         const claimed = await this.writeRecord(op, (current) => {
           const now = this.ctx.now();
+          claimedAt = now;
           if (otherClaim(current, botId, opId, now)) return "busy";
           const kept = current.changes.find((each) => each.run === run && each.bot === botId);
           if (!kept || kept.undone !== undefined) return "gone";
@@ -940,7 +956,7 @@ export class BotNames {
           this.reconcile();
           throw new Error(NO_LONGER);
         }
-        if (!this.current(op)) continue;
+        if (!this.current(op) || this.ctx.now() - claimedAt >= CLAIM_SEND_MS) continue;
         try {
           await this.ctx.request("agents.update", { agentId: botId, name: change.from });
         } catch (error) {
@@ -1408,14 +1424,17 @@ export function settled(record: NameRecord, bots: readonly Bot[], now: number): 
 }
 
 /**
- * One more confirmed rename of `bot` on `day`. Earlier days' counts go; the day's others stay, and
- * so do later days', which a device whose clock is already past midnight wrote.
+ * One more confirmed rename of `bot` on `day`. Counts from before the day before go; the others
+ * stay: the day before's, which a device whose clock hasn't passed midnight yet still counts on,
+ * and later days', which a device whose clock already has wrote.
  */
 function withCount(record: NameRecord, bot: string, day: string): NameRecord {
   return {
     ...record,
     counts: [
-      ...record.counts.filter((each) => each.day > day || (each.day === day && each.bot !== bot)),
+      ...record.counts.filter(
+        (each) => each.day >= keptFrom(day) && !(each.day === day && each.bot === bot),
+      ),
       { bot, day, n: renamesOn(record, bot, day) + 1 },
     ],
   };
@@ -1423,14 +1442,15 @@ function withCount(record: NameRecord, bot: string, day: string): NameRecord {
 
 /**
  * Whether `next`, cut to what the gateway keeps, still has what it adds to `before`: every count
- * for `day` or a later day, every change it adds, and every claim. A write that would lose one isn't made: the
+ * from the day before `day` on, every change it adds, and every claim. A write that would lose one isn't made: the
  * day's limit would forget a bot's renames, a rename recorded nowhere would have no Undo, and a
  * claim dropped would let another writer in.
  */
 function keepsWhatItAdds(before: NameRecord, next: NameRecord, day: string): boolean {
   const value = fitNameRecord(next);
-  // The write's day and later ones: a device whose clock is past midnight counts those.
-  const today = (counts: NameRecord["counts"]) => counts.filter((each) => each.day >= day).length;
+  // The day before and later ones: a device on either side of midnight counts on those.
+  const from = keptFrom(day);
+  const today = (counts: NameRecord["counts"]) => counts.filter((each) => each.day >= from).length;
   if (today(value.counts) < today(next.counts)) return false;
   const kept = (list: NameRecordChange[], each: NameRecordChange) =>
     list.some((other) => other.run === each.run && other.bot === each.bot);

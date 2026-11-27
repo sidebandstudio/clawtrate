@@ -20,6 +20,7 @@ import {
   MAX_RECORD_BYTES,
   MAX_RECORD_CHANGES,
   MAX_RECORD_COUNTS,
+  CLAIM_SEND_MS,
   NAME_RECORD_KEY,
   namesInText,
   parseNameRecord,
@@ -1179,20 +1180,69 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
     expect([...pending.values()].map((each) => each.name)).toEqual(["Thistle"]);
   });
 
-  it("F-552: a rename that would push out a later day's count, written by a device past midnight, isn't made", async () => {
+  it("F-552: a rename that would push out a count of the day before or a later day, which a device on the other side of midnight counts on, isn't made", async () => {
+    for (const offset of [24, -24]) {
+      const gw = gateway();
+      const day = dayOf(NOW + offset * 60 * 60 * 1000);
+      const counts = Array.from({ length: MAX_RECORD_COUNTS }, (_, n) => ({
+        bot: `bot-${n}`,
+        day,
+        n: 3,
+      }));
+      gw.state.record = record({ counts });
+      const me = device(gw);
+      await me.engine.afterRun("pip", KEY, "run-1");
+      expect(gw.state.updates).toEqual([]);
+      expect(me.line()).toMatchObject({ status: "not-done", reason: "full" });
+      expect(gw.kept().counts).toEqual(counts);
+    }
+  });
+
+  it("F-552: a claim too old to outlast the rename's request sends nothing; it is taken again first", async () => {
+    for (const what of ["rename", "undo"] as const) {
+      const gw = gateway();
+      const me = device(gw);
+      if (what === "undo") await me.engine.afterRun("pip", KEY, "run-1");
+      let claimAt: number | undefined;
+      gw.state.onUpdate = () => (claimAt = gw.kept().claims[0]?.at);
+      // Time passes between the claim and the send.
+      gw.state.afterSet = () => (gw.state.now += CLAIM_SEND_MS);
+      if (what === "rename") await me.engine.afterRun("pip", KEY, "run-1");
+      else await me.engine.undo("pip", runTag("run-1"), "Pip", STAMP);
+      expect(claimAt).toBe(NOW + CLAIM_SEND_MS);
+      expect(gw.state.updates).toEqual(what === "rename" ? ["Juniper"] : ["Juniper", "Pip"]);
+    }
+  });
+
+  it("F-552: a rename whose entry another device settled away while it was sent is recorded again once it lands", async () => {
     const gw = gateway();
-    const tomorrow = dayOf(NOW + 24 * 60 * 60 * 1000);
-    const counts = Array.from({ length: MAX_RECORD_COUNTS }, (_, n) => ({
-      bot: `bot-${n}`,
-      day: tomorrow,
-      n: 3,
-    }));
-    gw.state.record = record({ counts });
     const me = device(gw);
+    // Another device took the claim for abandoned and took its entry back.
+    gw.state.onUpdate = () =>
+      (gw.state.record = { ...gw.kept(), changes: [], claims: [] } as unknown);
     await me.engine.afterRun("pip", KEY, "run-1");
-    expect(gw.state.updates).toEqual([]);
-    expect(me.line()).toMatchObject({ status: "not-done", reason: "full" });
-    expect(gw.kept().counts).toEqual(counts);
+    expect(gw.state.updates).toEqual(["Juniper"]);
+    expect(gw.kept().changes).toEqual([change({ at: NOW, done: NOW, whose: "bot" })]);
+    expect(gw.kept().counts).toEqual([{ bot: "pip", day: dayOf(NOW), n: 1 }]);
+    expect(gw.kept().claims).toEqual([]);
+  });
+
+  it("F-552: a device past midnight keeps the counts of a device still before it", async () => {
+    const gw = gateway();
+    // The device before midnight has renamed Pip three times today.
+    gw.state.record = record({ counts: [{ bot: "pip", day: dayOf(NOW), n: 3 }] });
+    // The device past midnight renames Otto.
+    gw.state.now = NOW + 24 * 60 * 60 * 1000;
+    await device(gw).engine.afterRun("otto", KEY, "run-1");
+    expect(gw.state.updates).toEqual(["Juniper"]);
+    expect(gw.kept().counts).toContainEqual({ bot: "pip", day: dayOf(NOW), n: 3 });
+    // Back on the earlier day, Pip's fourth rename is refused.
+    gw.state.now = NOW;
+    gw.state.file = "- **Name:** Maple\n";
+    const before = device(gw);
+    await before.engine.afterRun("pip", KEY, "run-2");
+    expect(gw.state.updates).toEqual(["Juniper"]);
+    expect(before.line()).toMatchObject({ status: "not-done", reason: "limit" });
   });
 
   it("F-552: a claim's entry is never the one the record's room drops", () => {
@@ -1490,6 +1540,45 @@ describe("F-552: through the client", () => {
       await until(() => client.state.botNames?.[0]?.status === "renamed");
       expect(client.state.botNames![0]).toMatchObject({ to: "Johnny", whose: "bot" });
     } finally {
+      client.stop();
+    }
+  });
+
+  it("F-552: a history read that failed and was tried again at once isn't read: the rename is the bot's own", async () => {
+    const { client, gw, edit } = await namingClient();
+    const key = "agent:new-bot:main";
+    let stop = () => {};
+    try {
+      const id = client.sendMessage(key, "call yourself Johnny");
+      await until(() => gw.calls("chat.send").length === 1);
+      edit(id, "Johnny");
+      // A read already on its way when the run ends, answered only after the history read began.
+      const history = gw.handlers["chat.history"]!;
+      const held = deferred<void>();
+      let reads = 0;
+      gw.handlers["chat.history"] = async (params) => {
+        reads += 1;
+        if (reads === 1) {
+          await held.promise;
+          return history(params);
+        }
+        // The read asked for at the run's end fails.
+        throw new Error("the gateway was busy");
+      };
+      client.reloadSession(key);
+      await until(() => reads === 1);
+      gw.emit("agent", agentEvent(id, 3, "lifecycle", { phase: "end" }, key));
+      // The history read is queued behind the one on its way.
+      await until(() => (client["loads"].get(key)?.again ?? null) !== null);
+      // Try again, pressed as soon as the failure shows, sets the task loading.
+      stop = client.store.subscribe((state) => {
+        if (state.transcripts[key]?.status === "error") client.reloadSession(key);
+      });
+      held.resolve();
+      await until(() => client.state.botNames?.[0]?.status === "renamed");
+      expect(client.state.botNames![0]).toMatchObject({ to: "Johnny", whose: "bot" });
+    } finally {
+      stop();
       client.stop();
     }
   });
