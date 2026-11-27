@@ -674,4 +674,25 @@ describe("fix round 2b", () => {
     expect(marlow.kind).toBe("task");
     expect(marlow.readOutside).toMatchObject({ source: "lost" });
   });
+
+  it("within a minute of a dropped wait, a run that takes a surviving clean wait still counts as a lost task", () => {
+    const store = new RunOrigins({ limits: { ...LIMITS, spawning: 2 } });
+    const parent = store.sawPrompt(at("r1", "agent:pip:main"))!;
+    store.sawSpawn(parent, "marlow", "c1", "agent:pip:main");
+    store.sawSpawn(parent, "otto", "c2", "agent:pip:main");
+    store.sawSpawn(parent, "marlow", "c3", "agent:pip:main"); // drops marlow's c1
+    const marlow = store.sawPrompt(at("m1", "agent:marlow:dashboard:1", "marlow"))!;
+    expect(marlow.readOutside).toMatchObject({ source: "lost" });
+  });
+
+  it("a spawn's snapshot is invalidated with the held records, so its task counts as lost", () => {
+    const store = new RunOrigins();
+    const parent = store.sawPrompt(at("r1", "agent:pip:main"))!;
+    store.sawSpawn(parent, "pip", "c1", "agent:pip:main"); // clean: nothing read
+    store.invalidate(); // a config write before the result
+    store.sawSpawned(parent, "agent:pip:dashboard:1", "c1", "agent:pip:main");
+    expect(store.sawPrompt(at("t1", "agent:pip:dashboard:1"))!.readOutside).toMatchObject({
+      source: "lost",
+    });
+  });
 });
