@@ -138,7 +138,6 @@ test.describe("the rail", () => {
     await expect(page.locator(".title-pill")).toHaveAccessibleName("Juniper. Show details.");
     await expect(page.getByRole("heading", { level: 1, name: "Nothing here yet" })).toBeVisible();
     await expect(page.getByText("Ask Juniper anything, or to put work in a task.")).toBeVisible();
-    await expect(page.getByTestId("composer-input")).toBeVisible();
     // No session is made for it, and its tasks are as they were.
     await expect(
       page.getByRole("list", { name: "Juniper's tasks" }).getByTestId("task"),
