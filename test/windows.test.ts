@@ -59,7 +59,10 @@ it("counts empty or unexpected output as no answer, never as no button, and keep
 });
 
 // A real Windows PowerShell, with Add-Type replaced by a stand-in that fails as
-// a .NET call does: the read's own script then never loads UI Automation.
+// a .NET call does: the read's own script then never loads UI Automation. Only
+// the script's error preference ends it there; without that, it goes on to
+// answer absent. The marker is joined when the call runs, so an error that
+// merely quotes the stand-in's line doesn't carry it.
 it.runIf(process.platform === "win32")(
   "ends the read's script with an error, not the absent answer, when a step of it fails",
   async () => {
@@ -73,12 +76,13 @@ it.runIf(process.platform === "win32")(
         "-NoProfile",
         "-NonInteractive",
         "-Command",
-        `function Add-Type { [void][int]::Parse('stand-in') }\n${script}`,
+        `function Add-Type { [void][Enum]::Parse([DayOfWeek], 'synthetic-uia-' + 'load-failed') }\n${script}`,
       ],
       { encoding: "utf8", timeout: 30_000 },
     );
-    expect(run.stdout).not.toContain("absent");
-    expect(run.status).not.toBe(0);
+    expect(run.status).toBe(1);
+    expect(run.stderr.includes("synthetic-uia-load-failed")).toBe(true);
+    expect(run.stdout.includes("absent")).toBe(false);
   },
   40_000,
 );
