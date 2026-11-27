@@ -277,9 +277,7 @@ for (const size of [SIZES[0]!, SIZES.at(-1)!]) {
       }) => {
         await openFixture(page, MODEL_LIST, theme);
         await scene(page, [], refusedForModel());
-        await expect(
-          page.getByTestId("started-task-card").getByTestId("model-refused"),
-        ).toBeVisible();
+        await expect(page.getByTestId("started-task-card")).toHaveCount(1);
         await settle(page);
         await expect(page).toHaveScreenshot(`started-task-model-allow-${theme}-${size.name}.png`);
       });

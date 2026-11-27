@@ -7,8 +7,8 @@ import { contextFor, expect, openFixture, OTTO_DISK, settle, SIZES, THEMES } fro
 const SETTINGS = `scene=main&${OTTO_DISK}&panel=open&tab=settings&access=admin&lock=bound`;
 
 const SCENES = [
-  { name: "model-allowed-line", query: `${SETTINGS}&modellist=added`, testId: "model-allowed" },
-  { name: "model-refused-line", query: `${SETTINGS}&modellist=refused`, testId: "model-refused" },
+  { name: "model-allowed-line", query: `${SETTINGS}&modellist=added` },
+  { name: "model-refused-line", query: `${SETTINGS}&modellist=refused` },
 ];
 
 for (const size of [SIZES[0]!, SIZES.at(-1)!]) {
@@ -22,7 +22,8 @@ for (const size of [SIZES[0]!, SIZES.at(-1)!]) {
           await openFixture(page, scene.query, theme);
           const settings = page.getByTestId("bot-settings");
           await expect(settings).toBeVisible();
-          await settings.getByTestId(scene.testId).scrollIntoViewIfNeeded();
+          // The Model group, where the line stands (and stood, without it, before #799).
+          await settings.getByTestId("model-select").scrollIntoViewIfNeeded();
           await settle(page);
           await expect(page).toHaveScreenshot(`${scene.name}-${theme}-${size.name}.png`);
         });
