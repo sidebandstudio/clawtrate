@@ -2772,7 +2772,7 @@ test("F-474: an account connected with a label as the person moves to another bo
   await page.getByRole("button", { name: /^Account: / }).click();
   await page.getByRole("button", { name: "Change account" }).click();
   await page.getByRole("button", { name: /^Connect an account/ }).click();
-  await page.getByRole("button", { name: /^xAI · / }).click();
+  await page.getByRole("button", { name: /^xAI\b/ }).click();
   await page.getByRole("textbox", { name: "Label" }).fill("Side");
   await holdReply(page, "setAccountLabel");
   await page.getByRole("button", { name: "Done" }).click();
@@ -2799,7 +2799,7 @@ test("F-474: a label saved after its Connect has gone leaves the next Connect on
   await page.getByRole("button", { name: /^Account: / }).click();
   await page.getByRole("button", { name: "Change account" }).click();
   await page.getByRole("button", { name: /^Connect an account/ }).click();
-  await page.getByRole("button", { name: /^xAI · / }).click();
+  await page.getByRole("button", { name: /^xAI\b/ }).click();
   await page.getByRole("textbox", { name: "Label" }).fill("Side");
   await holdReply(page, "setAccountLabel");
   await page.getByRole("button", { name: "Done" }).click();
@@ -2814,5 +2814,5 @@ test("F-474: a label saved after its Connect has gone leaves the next Connect on
   await page.getByRole("button", { name: "Change account" }).click();
   await page.getByRole("button", { name: /^Connect an account/ }).click();
   await expect(page.getByRole("textbox", { name: "Label" })).toHaveCount(0);
-  await expect(page.getByRole("button", { name: /^xAI · / })).toBeVisible();
+  await expect(page.getByRole("button", { name: /^xAI\b/ })).toBeVisible();
 });
