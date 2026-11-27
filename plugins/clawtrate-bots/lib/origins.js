@@ -584,17 +584,19 @@ export class RunOrigins {
   /** agent_end: the run is over; it stays for lookups until it ages out or makes room. */
   sawEnd(ctx) {
     const runId = str(ctx?.runId);
-    const run = runId ? this.runs.get(runId) : undefined;
-    if (!run) return;
-    run.ended = true;
-    if (run.sessionKey && this.active.get(run.sessionKey) === runId)
-      this.active.delete(run.sessionKey);
-    // Its spawns that never named a task wait no longer: no other run takes them.
+    if (!runId) return;
+    // Its spawns that never named a task wait no longer, whether or not the run
+    // is held (a run first seen at its call still made them): no other run takes them.
     for (const [bot, list] of this.spawning) {
       const left = list.filter((w) => w.runId !== runId);
       if (left.length === list.length) continue;
       if (left.length) this.spawning.set(bot, left);
       else this.spawning.delete(bot);
     }
+    const run = this.runs.get(runId);
+    if (!run) return;
+    run.ended = true;
+    if (run.sessionKey && this.active.get(run.sessionKey) === runId)
+      this.active.delete(run.sessionKey);
   }
 }
