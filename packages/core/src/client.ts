@@ -1720,6 +1720,8 @@ export class ClawtrateClient {
   private quietReconnect = false;
   /** The user asked for write access and it is not settled yet. */
   private upgradeWanted = false;
+  /** The ask wanted was raised only for operations waiting on it, none by the person (#782). */
+  private upgradeForWaiters = false;
   /**
    * What the request under way asks for: the interactive tier, admin with it,
    * (`held`) the scopes the connection held when device access was asked for, or (`full`)
@@ -3156,7 +3158,10 @@ export class ClawtrateClient {
    * When it is approved the client stores the rotated device token and
    * reconnects asking for exactly what was granted of that set.
    */
-  async requestAccess(tier: "interactive" | "admin" | "pairing" = "interactive"): Promise<void> {
+  async requestAccess(
+    tier: "interactive" | "admin" | "pairing" = "interactive",
+    forWaiter = false,
+  ): Promise<void> {
     if (this.options.readOnly)
       throw new Error("This host only reads; it does not ask for more access.");
     // A full pairing's grant is the gateway's limit, a narrower one too: nothing asks again,
@@ -3187,6 +3192,7 @@ export class ClawtrateClient {
     }
     this.upgradeTier = wanted;
     this.pairingWanted = pairing;
+    this.upgradeForWaiters = forWaiter && (!this.upgradeWanted || this.upgradeForWaiters);
     this.upgradeWanted = true;
     if (this.state.connection.status === "connected") this.startUpgrade();
   }
@@ -3242,6 +3248,7 @@ export class ClawtrateClient {
       this.upgradeTier = "full";
       this.pairingWanted = false;
       this.upgradeWanted = true;
+      this.upgradeForWaiters = false;
       this.startUpgrade();
     })();
     this.fullAttempt = attempt;
@@ -3526,7 +3533,11 @@ export class ClawtrateClient {
     // Noted before this hello settles any of them: a waiter it grants still named its gateway.
     const named = new Set(this.accessWaiters.map((waiter) => waiter.gatewayId));
     named.delete(null);
-    if (named.size === 0) return this.startUpgrade();
+    if (named.size === 0) {
+      // Raised only for operations all withdrawn since: no gateway is asked for them.
+      if (this.upgradeForWaiters && this.accessWaiters.length === 0) return this.dropAsk();
+      return this.startUpgrade();
+    }
     const epoch = this.epoch;
     void this.readGatewayIdentity().then((id) => {
       if (epoch !== this.epoch || !this.upgradeWanted) return;
@@ -3541,14 +3552,26 @@ export class ClawtrateClient {
         return this.startUpgrade();
       // A request asked for on this connection meanwhile is under way: its answer settles it.
       if (this.scopeUpgrade) return;
-      // shortcut: an ask with no waiter (Settings' own) queued beside them is dropped too; keep
-      // asks apart from their waiters if that ever matters. A dropped accept of full control
-      // is released, so it can be made again.
-      this.upgradeWanted = false;
-      this.pairingWanted = false;
-      this.fullAttempt = null;
-      this.setUpgrade(initialScopeUpgrade);
+      // The person's accept of full control ends as a failure they can try again from Settings,
+      // never quietly; an accept still being saved keeps its place.
+      if (this.upgradeTier === "full") {
+        this.fullAttempt = null;
+        this.failAccess(
+          new AccessRequestError("error", id === null ? IDENTITY_UNREAD : ANOTHER_GATEWAY),
+        );
+        return;
+      }
+      // shortcut: an ask the person made (Settings') queued beside them is dropped too; keep it
+      // apart from theirs if that ever matters.
+      this.dropAsk();
     });
+  }
+
+  /** A queued ask no one waits on any more goes, and the access state with it. */
+  private dropAsk(): void {
+    this.upgradeWanted = false;
+    this.pairingWanted = false;
+    this.setUpgrade(initialScopeUpgrade);
   }
 
   private failAccess(error: AccessRequestError): void {
@@ -3626,7 +3649,7 @@ export class ClawtrateClient {
       !this.state.connection.requestedScopes.includes(scope) ||
       this.state.connection.status === "connected"
     ) {
-      this.requestAccess().catch((error: unknown) => {
+      this.requestAccess("interactive", true).catch((error: unknown) => {
         this.failAccess(new AccessRequestError("error", errorMessage(error)));
       });
     }

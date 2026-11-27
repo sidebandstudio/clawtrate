@@ -1194,6 +1194,26 @@ describe("an archive or a delete bound to the connection it began on", () => {
     client.stop();
   });
 
+  it("a task change whose viewer closes while reconnecting asks nothing of the gateway that answers (#782)", async () => {
+    const { client, gateway, stamp } = await granted("gateway-b");
+    gateway.refuseConnections = true;
+    gateway.dropAll();
+    await until(() => client.state.connection.status !== "connected");
+    const viewer = {};
+    const renaming = outcome(
+      client.renameTask("agent:pip:main", "Weekly", { owner: viewer, stamp }),
+    );
+    await until(() => client.pendingAccessWaiters === 1);
+    client.withdraw(viewer);
+    expect(await renaming).toBe("The request was withdrawn.");
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway-b" });
+    gateway.refuseConnections = false;
+    await until(() => client.state.connection.gatewayId === "gateway-b", 6_000);
+    await sleep(50);
+    expect(gateway.calls("device.scopes.requestUpgrade")).toEqual([]);
+    client.stop();
+  });
+
   it("a task change on a gateway whose identity can't be read says so, not that it is another gateway", async () => {
     const { client, gateway } = await connected(INTERACTIVE_SCOPES);
     gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway-a" });

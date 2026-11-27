@@ -638,4 +638,70 @@ describe("the one-time offer of full control (F-500)", () => {
     await until(() => gateway.calls("device.scopes.requestUpgrade").length === 2);
     client.stop();
   });
+
+  it("F-549: an accept still saving when a task's ask is dropped keeps its place, so a second accept sends no second request (#782)", async () => {
+    const storage = pairedAt();
+    const { gateway, decide } = gatewayFor();
+    const client = await connected(clientOn(gateway, storage));
+    const stamp = gatewayStamp(client.state.connection);
+    // The first accept's save of its answer waits.
+    const set = storage.set.bind(storage);
+    const held = deferred<void>();
+    let writes = 0;
+    storage.set = async (key: string, value: string) => {
+      if (key === offerKey() && ++writes === 1) await held.promise;
+      await set(key, value);
+    };
+    const first = accept(client).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    // A rename made while reconnecting waits for access; the next hello can't read the name.
+    gateway.handlers["gateway.identity.get"] = () => {
+      throw new Error("unavailable");
+    };
+    gateway.dropAll();
+    const renaming = client.renameTask("agent:main:main", "Weekly", { stamp }).then(
+      () => "done",
+      (error: Error) => error.message,
+    );
+    expect(await renaming).toContain("couldn't confirm which gateway");
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway-a" });
+    // Read again, the gateway names itself: the same one.
+    await until(() => client.state.connection.gatewayId === "gateway-a", 6_000);
+    const second = accept(client).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    await sleep(50);
+    // The owner refuses whatever is pending, between the two saves.
+    decide({ status: "rejected" });
+    await sleep(50);
+    held.resolve();
+    await Promise.all([first, second]);
+    await sleep(50);
+    expect(gateway.calls("device.scopes.requestUpgrade")).toHaveLength(1);
+    client.stop();
+  });
+
+  it("F-549: an accept pending when a reconnect can't read its gateway's name ends as a failure in Settings, never quietly (#782)", async () => {
+    const storage = pairedAt();
+    const { gateway } = gatewayFor();
+    const client = await connected(clientOn(gateway, storage));
+    const stamp = gatewayStamp(client.state.connection);
+    await accept(client);
+    await until(() => gateway.calls("device.scopes.requestUpgrade").length === 1);
+    gateway.handlers["gateway.identity.get"] = () => {
+      throw new Error("unavailable");
+    };
+    gateway.dropAll();
+    const renaming = client.renameTask("agent:main:main", "Weekly", { stamp }).then(
+      () => "done",
+      (error: Error) => error.message,
+    );
+    expect(await renaming).toContain("couldn't confirm which gateway");
+    await until(() => client.state.connection.upgrade.status === "error");
+    expect(client.state.connection.upgrade.error).toContain("couldn't confirm which gateway");
+    client.stop();
+  });
 });
