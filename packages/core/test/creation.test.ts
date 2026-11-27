@@ -109,6 +109,7 @@ describe("a creation without an answer", () => {
   it("is not asked again once the gateway may have forgotten its key", async () => {
     const gateway = grantingGateway();
     idempotentCreate(gateway);
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway-test" });
     let clock = 1_000_000;
     const storage = memoryStorage({
       connection: JSON.stringify({ url: URL_A, token: null }),

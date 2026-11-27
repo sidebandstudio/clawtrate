@@ -3786,9 +3786,10 @@ export class ClawtrateClient {
    * Record the gateway a message is written for (`OutgoingMessage.gatewayId`): the one named now,
    * or, right after a hello, the name the connection it was written on gives when it answers.
    */
-  private stampGateway(key: string, messageId: string): void {
+  private stampGateway(key: string, messageId: string, known: string | null = null): void {
     const stamp = (gatewayId: string) =>
       this.updateActivity(key, (activity) => updateMessage(activity, messageId, { gatewayId }));
+    if (known !== null) return stamp(known);
     const { gatewayId, status } = this.state.connection;
     if (gatewayId !== null) return stamp(gatewayId);
     // Asked before any delivery of it can be, so it is stamped before `deliver` reads it.
@@ -4297,19 +4298,30 @@ export class ClawtrateClient {
     this.putCreation(creation);
     let sent = false;
     try {
+      // The gateway the task is asked of: the one named now, or right after a hello the name this
+      // connection gives. Another answering at the same address while access settles is asked
+      // nothing, the task and its first message alike (#749).
+      const connection = this.state.connection;
+      const forGateway =
+        connection.gatewayId ??
+        (connection.status === "connected" ? await this.readGatewayIdentity() : null);
       // A viewer that goes away while access is approved takes its request with it (`withdraw`).
       await this.ensureScope(WRITE_SCOPE, options.owner ?? null);
+      const epoch = this.epoch;
+      const here = await this.readGatewayIdentity();
       // The viewer went away while access settled: nothing is asked of the gateway.
       this.checkNotWithdrawn(options.owner);
       // Switching gateways while access settled dropped it: it is never asked of another gateway.
       if (this.creations.get(creation.id)?.status !== "creating")
         throw new Error("Switched to another gateway.");
+      if (epoch !== this.epoch || forGateway === null || here !== forGateway)
+        throw new Error(WRITTEN_FOR_ANOTHER);
       creation.gatewayBootId = this.gatewayBootId;
       this.putCreation(creation);
       sent = true;
       const result = asRecord(await this.request("sessions.create", creationParams(creation)));
       release();
-      return this.completeCreation(creation, result, true);
+      return this.completeCreation(creation, result, true, forGateway);
     } catch (error) {
       if (!sent) {
         // Nothing was asked of the gateway: an earlier refused attempt goes back to how it was,
@@ -4353,6 +4365,7 @@ export class ClawtrateClient {
     creation: TaskCreation,
     result: RawRecord | null,
     byCaller: boolean,
+    gatewayId: string | null = null,
   ): string {
     const key = typeof result?.key === "string" ? result.key : null;
     if (!key) {
@@ -4412,7 +4425,7 @@ export class ClawtrateClient {
         ctx,
       );
     });
-    this.stampGateway(key, id);
+    this.stampGateway(key, id, gatewayId);
     // As any message is sent: once, under its key, while it is still to be sent.
     if (!runError) this.enqueueDelivery(key, id);
     if (byCaller) {

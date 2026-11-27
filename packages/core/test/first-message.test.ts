@@ -8,9 +8,17 @@
 import { describe, expect, it } from "vitest";
 import { createBridgeSession } from "../src/bridge.ts";
 import { fieldsOf, parseRoutine } from "../src/routines.ts";
-import { ADMIN_SCOPES, INTERACTIVE_SCOPES } from "../src/scopes.ts";
+import { ADMIN_SCOPES, INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
 import { grantingGateway, openTask, stampOn, URL_A } from "./client-harness.ts";
-import { GatewayError, helloOk, memoryStorage, sleep, tokenKey, until } from "./fake-gateway.ts";
+import {
+  deferred,
+  GatewayError,
+  helloOk,
+  memoryStorage,
+  sleep,
+  tokenKey,
+  until,
+} from "./fake-gateway.ts";
 
 const MARK = { page: "Clawtrate" };
 const NEW_KEY = "agent:otto:dashboard:3a8acb00-128b-4a62-a74b-e6d84841cff1";
@@ -263,6 +271,46 @@ describe.each(["2026.10.6", "2026.11.10"])(
       expect(gateway.calls("chat.send")).toEqual([]);
       client.stop();
     });
+
+    it.each([
+      ["another gateway", "gateway-x", false],
+      ["the same gateway", "gateway-test", true],
+    ])(
+      "the connection drops while write access is approved and %s answers: the task is asked of it only if it is the one it was written for",
+      async (_name, answering, created) => {
+        const gateway = gatewayOf(version);
+        const approved = deferred<void>();
+        let asks = 0;
+        gateway.handlers["device.scopes.requestUpgrade"] = () => ({
+          requestId: `up-${(asks += 1)}`,
+        });
+        gateway.handlers["device.scopes.waitUpgrade"] = () =>
+          approved.promise.then(() => ({
+            status: "approved",
+            requestId: `up-${asks}`,
+            deviceToken: "rotated",
+            scopes: [...INTERACTIVE_SCOPES],
+          }));
+        const { client } = await openTask({ gateway, held: READ_SCOPES });
+        await until(() => client.state.connection.gatewayId === "gateway-test");
+        const creation = client.createTask("otto", "Hello");
+        creation.catch(() => {});
+        await until(() => asks === 1);
+        gateway.handlers["gateway.identity.get"] = () => ({ deviceId: answering });
+        gateway.dropAll();
+        await until(() => client.state.connection.gatewayId === answering, 3_000);
+        approved.resolve();
+        if (created) {
+          await creation;
+          expect(gateway.calls("sessions.create")).toHaveLength(1);
+        } else {
+          await expect(creation).rejects.toThrow("written for another gateway");
+          expect(gateway.calls("sessions.create")).toEqual([]);
+          expect(client.state.creations).toEqual([]);
+        }
+        client.stop();
+      },
+    );
 
     it("a creation the gateway made but whose setup failed: the message waits Not sent, for the person's Try again", async () => {
       const gateway = gatewayOf(version);
