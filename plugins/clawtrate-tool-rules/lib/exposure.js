@@ -153,11 +153,20 @@ const GROUPS = {
 const CORE_TOOLS = new Set(Object.values(GROUPS).flat());
 /** Deny entries that cover every tool outside the core catalog, as the gateway reads them. */
 const PLUGIN_GROUPS = new Set(["group:plugins", "bundle-mcp"]);
+/**
+ * The names a deny or allow entry is read as, in both versions: their tool-name aliases
+ * (`TOOL_NAME_ALIASES`; `tool_call` is 2026.11.10's) and a shipped tool's rename
+ * (`SHIPPED_CORE_POLICY_RENAMES`, `update_plan` to `progress_card`).
+ */
 const ALIASES = new Map([
   ["bash", "exec"],
   ["apply-patch", "apply_patch"],
   ["cron", "automations"],
+  ["tool_call", "dispatch_action"],
+  ["update_plan", "progress_card"],
 ]);
+/** An entry that also names a core tool its plugin family moved there (`SHIPPED_PLUGIN_POLICY_FAMILY_CORE_TOOLS`). */
+const FAMILIES = new Map([["canvas", ["show_widget"]]]);
 
 const rec = (value) =>
   value !== null && typeof value === "object" && !Array.isArray(value) ? value : {};
@@ -170,6 +179,7 @@ function covers(entry, tool) {
   const name = ALIASES.get(entry.trim().toLowerCase()) ?? entry.trim().toLowerCase();
   if (name === "*" || name === tool) return true;
   if (groupOf(name)?.includes(tool)) return true;
+  if (FAMILIES.get(name)?.includes(tool)) return true;
   if (PLUGIN_GROUPS.has(name) && !CORE_TOOLS.has(tool)) return true;
   if (name.includes("*")) {
     const pattern = new RegExp(

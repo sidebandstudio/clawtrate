@@ -1315,6 +1315,10 @@ describe("a pending call when the gateway comes to deny a group that holds its t
     ["automations", "cron"],
     ["coder__deploy", "group:plugins"],
     ["coder__deploy", "bundle-mcp"],
+    // The names both versions read a deny entry as: a renamed tool, an alias, a family.
+    ["progress_card", "update_plan"],
+    ["dispatch_action", "tool_call"],
+    ["show_widget", "canvas"],
   ] as const) {
     it(`refuses Allow once for ${tool} when ${deny} is denied while its card waits`, async () => {
       const config: Record<string, unknown> = {};
