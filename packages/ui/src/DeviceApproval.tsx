@@ -197,12 +197,16 @@ export function DeviceRequestView({
   }, [outcome]);
   const current: Seen | null = seen ?? (live ? { request: live, listedOn } : null);
   // The list it came from still lists it: what it can take now (a block, a spent pick) is the
-  // list's. A list from another connection says nothing about it.
+  // list's. A list from another connection only takes picks away, by a block.
   const fresh = current !== null && current.listedOn === listedOn;
-  const request: DeviceRequest | null =
-    current && fresh && live
-      ? { ...current.request, blocked: live.blocked, spent: live.spent, choices: live.choices }
-      : (current?.request ?? null);
+  const now: Partial<DeviceRequest> = !live
+    ? {}
+    : fresh
+      ? { blocked: live.blocked, spent: live.spent, choices: live.choices }
+      : live.blocked
+        ? { blocked: live.blocked, choices: [] }
+        : {};
+  const request: DeviceRequest | null = current && { ...current.request, ...now };
   /** Read the list again and say how that went; after not-allowed, then follow the list. */
   const readAgain = (after: Check["after"]) => {
     setCheck({ after, read: "reading" });

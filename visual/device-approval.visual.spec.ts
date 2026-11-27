@@ -294,6 +294,18 @@ test("F-550: a request that comes to share a code while open takes no pick, says
   expect(await decisions(page)).toEqual([{ type: "refuseDevice", why: "not-mine", listedOn: 1 }]);
 });
 
+test("F-550: a block a new connection lists takes the codes away at once", async ({ page }) => {
+  await openFixture(page, "scene=device-request", "dark");
+  const sheet = sheetOf(page);
+  await expect(sheet.locator(".device-code")).toHaveCount(4);
+  await setRequests(page, { listedOn: 2, blocked: "same-code" });
+  await expect(sheet.getByTestId("device-blocked")).toHaveText(
+    "Another waiting device shows the same code, so neither is approved here. Deny both, then ask again from the new device.",
+  );
+  await expect(sheet.locator(".device-code")).toHaveCount(0);
+  await expect(sheet.getByRole("button", { name: "None of these match" })).toHaveCount(0);
+});
+
 for (const [answer, words] of [
   [
     "unknown",
