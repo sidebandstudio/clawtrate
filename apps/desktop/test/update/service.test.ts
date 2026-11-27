@@ -5,6 +5,7 @@ import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
 import { linkSync, watch } from "node:fs";
 import { macInstaller } from "../../src/main/mac-install.ts";
+import { windowsInstaller } from "../../src/main/windows-install.ts";
 import type { UpdateInstaller } from "../../src/main/update/install.ts";
 import type { DesktopUpdateReply, DesktopUpdateSnapshot } from "@clawtrate/core";
 import { createUpdatePreferenceStore } from "../../src/main/update/preferences.ts";
@@ -902,6 +903,21 @@ it.each(["build-not-signed", "no-installer-path"] as const)(
     expect(await store().get("attempt")).toBeNull();
   },
 );
+
+it("F-231: a signed Windows build never runs its installer check until the trial", async () => {
+  const helper = vi.fn(async () => "");
+  const service = await start({ installer: windowsInstaller("C:\\Clawtrate.exe", helper) });
+  const id = await offer(service);
+  await service.download(id);
+  expect(service.get().install).toEqual({
+    kind: "unavailable-in-this-build",
+    reason: "windows-install-pending-trial",
+  });
+  expect((await service.restart(id)).outcome).toBe("invalid");
+  service.shutdown();
+  expect(helper).not.toHaveBeenCalled();
+  expect(await store().get("attempt")).toBeNull();
+});
 
 it.each([
   "running-signature-untrusted",
