@@ -11,7 +11,7 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ClawtrateClient } from "../packages/core/src/client.ts";
-import { runningRunId } from "../packages/core/src/runs.ts";
+import { replyRow, runningRunId, textPlaced } from "../packages/core/src/runs.ts";
 import { createNodeHost } from "../packages/core/src/node/index.ts";
 import {
   instanceForm,
@@ -218,6 +218,40 @@ test("F-088: text the bot writes beside an action is beside that action from the
     expect(seen.filter((texts) => texts.join() !== beside)).toEqual([]);
     const run = runs(client, key)[0]!;
     expect(run.text.trim()).toBe("This answers no message: none was named.");
+  } finally {
+    stop();
+    await close();
+  }
+});
+
+test("#872: while a run still draws its reply, history's row of that reply is known as the reply's", async () => {
+  const { client, close } = await engine("reply drawn once check");
+  const reply = "That file does not exist, so the step failed. I will carry on without it.";
+  let key = "";
+  // Each state in which the run still draws its reply and history already holds that reply's
+  // row (found here by its words, which the app never compares): the block the engine ties it to.
+  const held: Array<string | null> = [];
+  const stop = client.store.subscribe((state) => {
+    const transcript = state.transcripts[key];
+    for (const run of transcript?.runs ?? []) {
+      if (run.state !== "running" || run.text.trim() !== reply || textPlaced(run)) continue;
+      const rows = transcript!.items.flatMap((item) =>
+        item.blocks.flatMap((block, i) =>
+          block.kind === "text" && block.text.trim() === reply ? [`${item.id}#${i}`] : [],
+        ),
+      );
+      if (rows.length === 0) continue;
+      const tied = replyRow(run, transcript!.items);
+      held.push(tied && rows.includes(`${tied.itemId}#${tied.block}`) ? null : rows.join());
+    }
+  });
+  try {
+    key = await openNewTask(client, "reply-once");
+    // The scripted model thinks, its call fails, and it answers in a message of its own: F-551's run.
+    client.sendMessage(key, "Look for my old notes. #think #tool-fail");
+    await expect.poll(() => runs(client, key)[0]?.state, { timeout: 60_000 }).toBe("completed");
+    await expect.poll(() => gatewayIdle(op, key), { timeout: 15_000 }).toBe(true);
+    expect(held.filter((row) => row !== null)).toEqual([]);
   } finally {
     stop();
     await close();

@@ -5838,10 +5838,13 @@ export class ClawtrateClient {
     if (next.runs.length > FOREIGN_RUNS_PER_SESSION) {
       next = { ...next, runs: next.runs.slice(-FOREIGN_RUNS_PER_SESSION) };
     }
-    // Steps of foreign runs are not shown; keep only the run states, within the run bound.
+    // Steps of foreign runs are not shown; keep only the run states, within the run bound. Nor is
+    // a run followed while its task is not open (`Run.followed`).
     next = {
       ...next,
-      runs: next.runs.map((run) => enforce(RUN, run.steps.length ? { ...run, steps: [] } : run)),
+      runs: next.runs.map((run) =>
+        enforce(RUN, unfollowed(run.steps.length ? { ...run, steps: [] } : run)),
+      ),
     };
     // The id pairs the session's turns were named by, newest kept, as a task's own are.
     const aliasKeys = Object.keys(next.queueAliases);
@@ -9992,6 +9995,13 @@ export class ClawtrateClient {
     this.settleAccessWaiters();
     this.checkCreations();
     this.checkUnknownDecisions();
+    // A new connection: a run's stream followed on the last one may have lost frames since.
+    for (const [key, transcript] of Object.entries(this.state.transcripts))
+      if (transcript.runs.some((run) => run.followed || run.textAfter))
+        this.updateActivity(key, (activity) => ({
+          ...activity,
+          runs: activity.runs.map(unfollowed),
+        }));
     // Whether the computer plugin is loaded comes from the hello's methods; panes that lost a
     // connection while control was held read the browser's leases again before offering anything.
     this.computer.reconnected();
@@ -10988,11 +10998,9 @@ export class ClawtrateClient {
           .filter((message) => message.status === "sending" || message.status === "awaiting-access")
           .map((message) => message.id),
       );
-      // A read that subscribes again comes after a connection that may have missed frames.
-      const followed = subscribe || resync ? merge.runs.map(unfollowed) : merge.runs;
       const runs = settleQuietEnds(
         settleUnboundStops(
-          settleVanishedRuns(followed, activeBefore, historyIds, inFlightId, ctx, busy),
+          settleVanishedRuns(merge.runs, activeBefore, historyIds, inFlightId, ctx, busy),
           inFlightId,
           historyIds,
           awaitingAnswer,
