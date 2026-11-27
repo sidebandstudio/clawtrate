@@ -87,8 +87,11 @@ beforeEach(async () => {
 });
 afterEach(async () => {
   vi.useRealTimers();
-  await server.close();
-  dir.remove();
+  try {
+    dir.remove();
+  } finally {
+    await server.close();
+  }
 });
 
 const downloads = () => (existsSync(dir.path) ? readdirSync(dir.path) : []);

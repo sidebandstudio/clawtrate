@@ -470,9 +470,6 @@ function assistantPictures(content: unknown): ChatPicture[] {
   });
 }
 
-/** The longest preview of a file-only message kept (`TranscriptItem.filesPreview`): two sidebar lines. */
-const MAX_FILES_PREVIEW_CHARS = 200;
-
 /** The longest file name shown or offered for saving, in UTF-8 bytes: what macOS, Linux and Windows file systems all take. */
 export const MAX_FILE_NAME_BYTES = 255;
 
@@ -1006,14 +1003,6 @@ export function mapHistory(
           return true;
         });
         if (more.length > 0) item.files = [...(item.files ?? []), ...more];
-        // When the item's last row with text or files had files only: their names, for the sidebar.
-        if (blocks.some((block) => block.kind === "text" && block.text.trim()))
-          delete item.filesPreview;
-        else if (files.length > 0)
-          item.filesPreview = files
-            .map((file) => file.name)
-            .join(", ")
-            .slice(0, MAX_FILES_PREVIEW_CHARS);
         if (cutByGateway) item.truncated = true;
         if (rowId) {
           for (const block of blocks)
@@ -1108,47 +1097,6 @@ function historyFacts(details: unknown): Record<string, unknown> | null {
   return Object.keys(out).length ? out : null;
 }
 
-/** The start of a message read for a preview in place of the gateway's: more than two lines show. */
-const MAX_PREVIEW_SOURCE_CHARS = 400;
-
-/**
- * A task's preview when its loaded history ends with a bot's message that is only files (F-115):
- * that message's files' names. The gateway lists the last row with text, the one before it, so
- * only that preview, or none, is replaced; any other is the gateway's.
- */
-export function taskWithFilePreview(task: Task, transcript: Transcript | undefined): Task {
-  const items = transcript?.items ?? [];
-  const last = items.at(-1);
-  const preview = last?.role === "assistant" ? last.filesPreview : undefined;
-  if (!preview) return task;
-  let before: string | null = null;
-  for (let index = items.length - 1; index >= 0 && before === null; index -= 1) {
-    const text = items[index]!.blocks.findLast(
-      (block) => block.kind === "text" && block.text.trim(),
-    );
-    if (text?.kind === "text") before = plainPreview(text.text.slice(0, MAX_PREVIEW_SOURCE_CHARS));
-  }
-  if (task.preview !== null && task.preview !== before) return task;
-  return preview === task.preview ? task : { ...task, preview };
-}
-
-/** Every listed task as `taskWithFilePreview` shows it, by bot. */
-export function tasksWithFilePreviews(
-  tasksByBot: Record<string, Task[]>,
-  transcripts: Record<string, Transcript>,
-): Record<string, Task[]> {
-  let changed = false;
-  const shown: Record<string, Task[]> = {};
-  for (const [botId, tasks] of Object.entries(tasksByBot)) {
-    shown[botId] = tasks.map((task) => {
-      const named = taskWithFilePreview(task, transcripts[task.key]);
-      if (named !== task) changed = true;
-      return named;
-    });
-  }
-  return changed ? shown : tasksByBot;
-}
-
 /**
  * When a task's loaded history ends with an update line (`updateNoticeLine`) and its listed
  * preview is the one the gateway makes of that notice (`gatewayPreviewOf`): the item before the line, or null when there is none. Undefined otherwise:
@@ -1166,55 +1114,6 @@ function beforeUpdateNotice(
   const listed = gatewayPreviewOf(updateNoticeText(last));
   if (listed === null || plainPreview(listed) !== task.preview) return undefined;
   return items.at(-2) ?? null;
-}
-
-/**
- * A task's preview in the sidebar when its listed preview is the update notice its loaded history
- * ends with (F-590): the text of the last item before it (null when none has text, so the title
- * shows). The notice is not what the bot last said.
- * No time is changed, so the order is the gateway's.
- */
-export function taskWithoutUpdateNotice(
-  task: Task,
-  transcript: Transcript | undefined,
-  scope: UpdateNoticeScope,
-): Task {
-  if (beforeUpdateNotice(task, transcript, scope) === undefined) return task;
-  const items = transcript!.items;
-  let preview: string | null = null;
-  for (let index = items.length - 2; index >= 0 && preview === null; index -= 1) {
-    const item = items[index]!;
-    // An earlier update line, or a skill note (F-560), is not what the bot said either.
-    if (item.role === "system" || item.skillNote || updateNoticeLine(item, task.key, scope))
-      continue;
-    // A bot's message that is only files reads as their names, as the rail shows it (F-115).
-    if (item.role === "assistant" && item.filesPreview) {
-      preview = item.filesPreview;
-      continue;
-    }
-    const text = item.blocks.findLast((block) => block.kind === "text" && block.text.trim());
-    if (text?.kind === "text") preview = plainPreview(text.text.slice(0, MAX_PREVIEW_SOURCE_CHARS));
-  }
-  return preview === task.preview ? task : { ...task, preview };
-}
-
-/** Every listed task as `taskWithoutUpdateNotice` shows it, by bot. */
-export function tasksWithoutUpdateNotices(
-  tasksByBot: Record<string, Task[]>,
-  transcripts: Record<string, Transcript>,
-  scope: UpdateNoticeScope,
-): Record<string, Task[]> {
-  if (!scope.updated?.length || scope.mainKey === null) return tasksByBot;
-  let changed = false;
-  const shown: Record<string, Task[]> = {};
-  for (const [botId, tasks] of Object.entries(tasksByBot)) {
-    shown[botId] = tasks.map((task) => {
-      const quiet = taskWithoutUpdateNotice(task, transcripts[task.key], scope);
-      if (quiet !== task) changed = true;
-      return quiet;
-    });
-  }
-  return changed ? shown : tasksByBot;
 }
 
 /**
@@ -1283,55 +1182,6 @@ function trailingSkillNotes(task: Task, transcript: Transcript | undefined): num
   let first = items.length - 1;
   while (first > 0 && items[first - 1]!.skillNote) first -= 1;
   return first;
-}
-
-/**
- * A task's preview in the sidebar when its listed preview is the skill note its loaded history
- * ends with (F-560): the text of the last item before the notes (null when none has text, so the
- * title shows). The note is not what the bot said. No time is changed, so the order is the
- * gateway's.
- */
-export function taskWithoutSkillNote(
-  task: Task,
-  transcript: Transcript | undefined,
-  scope: UpdateNoticeScope,
-): Task {
-  const first = trailingSkillNotes(task, transcript);
-  if (first === undefined) return task;
-  const items = transcript!.items;
-  let preview: string | null = null;
-  for (let index = first - 1; index >= 0 && preview === null; index -= 1) {
-    const item = items[index]!;
-    // The gateway's update line is not what the bot said either (F-590).
-    if (item.role === "system" || item.skillNote || updateNoticeLine(item, task.key, scope))
-      continue;
-    // A bot's message that is only files reads as their names, as the rail shows it (F-115).
-    if (item.role === "assistant" && item.filesPreview) {
-      preview = item.filesPreview;
-      continue;
-    }
-    const text = item.blocks.findLast((block) => block.kind === "text" && block.text.trim());
-    if (text?.kind === "text") preview = plainPreview(text.text.slice(0, MAX_PREVIEW_SOURCE_CHARS));
-  }
-  return preview === task.preview ? task : { ...task, preview };
-}
-
-/** Every listed task as `taskWithoutSkillNote` shows it, by bot. */
-export function tasksWithoutSkillNotes(
-  tasksByBot: Record<string, Task[]>,
-  transcripts: Record<string, Transcript>,
-  scope: UpdateNoticeScope,
-): Record<string, Task[]> {
-  let changed = false;
-  const shown: Record<string, Task[]> = {};
-  for (const [botId, tasks] of Object.entries(tasksByBot)) {
-    shown[botId] = tasks.map((task) => {
-      const quiet = taskWithoutSkillNote(task, transcripts[task.key], scope);
-      if (quiet !== task) changed = true;
-      return quiet;
-    });
-  }
-  return changed ? shown : tasksByBot;
 }
 
 /**

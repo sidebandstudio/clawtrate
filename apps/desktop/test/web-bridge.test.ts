@@ -12,12 +12,12 @@ import {
   type WebSocketLike,
 } from "@clawtrate/core";
 import { once } from "node:events";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import { request } from "node:http";
 import type { AddressInfo, Socket } from "node:net";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { tempDir } from "../../../test/temp-dir.ts";
 import WebSocket from "ws";
 import type { HostRuntime } from "../src/host/runtime.ts";
 import {
@@ -42,7 +42,7 @@ async function host(
   policy: HostRuntime["policy"] = {},
   options: { snapshotDrainTimeoutMs?: number } = {},
 ) {
-  const staticDir = mkdtempSync(join(tmpdir(), "clawtrate-static-"));
+  const staticDir = tempDir("clawtrate-static-");
   writeFileSync(join(staticDir, "index.html"), "<!doctype html><title>Clawtrate</title>");
   const state = createStore(initialState);
   const interest = new Map<string, number>();

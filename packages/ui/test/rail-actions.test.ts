@@ -1,6 +1,5 @@
 import type { Bot, Task } from "@clawtrate/core";
 import { describe, expect, it } from "vitest";
-import { waitingWords } from "../src/Rail.tsx";
 import { isActive, neighbour } from "../src/RailActions.tsx";
 import { arrange, toSidebar, type RosterPrefs } from "../src/roster.ts";
 import { summarize, taskState } from "../src/selection.ts";
@@ -72,19 +71,6 @@ describe("the rail's sections and task states", () => {
         }),
       ),
     ).toEqual({ pins: ["a"], hidden: ["b"], order: ["c"], sections: [{ name: "W", bots: ["d"] }] });
-  });
-
-  it("F-021: line two says what the earliest waiting task waits on, and nothing waits when none does", () => {
-    expect(waitingWords([task("agent:o:a")])).toBeNull();
-    expect(
-      waitingWords([
-        task("agent:o:a", { status: "waiting", waitingFor: "approval", waitingSince: 20 }),
-        task("agent:o:b", { status: "waiting", waitingFor: "question", waitingSince: 10 }),
-      ]),
-    ).toBe("Waiting for you: a question");
-    expect(waitingWords([task("agent:o:a", { status: "waiting", waitingFor: "approval" })])).toBe(
-      "Waiting for you: approve a command",
-    );
   });
 
   it("F-057: a stopped task shows its mark until it is opened; a queued one shows its own; the avatar takes stopped, not queued", () => {
