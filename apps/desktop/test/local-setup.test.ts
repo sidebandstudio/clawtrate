@@ -1434,15 +1434,17 @@ describe.skipIf(!mac)(
         // The new gateway's hello is held: the frame reaches it and nothing answers.
         let hellos = 0;
         const make = gateway.createWebSocket.bind(gateway);
-        gateway.createWebSocket = (url) => {
-          const socket = make(url);
-          const send = socket.send.bind(socket);
-          socket.send = (data) => {
-            if ((JSON.parse(String(data)) as { method?: string }).method === "connect") hellos += 1;
-            else send(data);
-          };
-          return socket;
-        };
+        Object.defineProperty(gateway, "createWebSocket", {
+          value: (url: string) => {
+            const socket = make(url);
+            const send = socket.send.bind(socket);
+            socket.send = (data: string) => {
+              if ((JSON.parse(data) as { method?: string }).method === "connect") hellos += 1;
+              else send(data);
+            };
+            return socket;
+          },
+        });
         const run = await secondGateway("lock", gateway);
         const records = () =>
           run.app.writes.filter(({ key }) => key === "connection").map(({ value }) => value);
