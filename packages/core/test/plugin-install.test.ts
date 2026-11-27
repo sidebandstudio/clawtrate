@@ -591,6 +591,28 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
       expect(g.loaded).toBe(false);
     });
 
+    it("clears the enable's in-flight mark when the gateway refused it and the retry stopped", async () => {
+      // Ran on a real gateway: "already running" to the enable, the owner's deny during the wait.
+      const g = at(version, "off");
+      g.hooks.push({
+        method: "plugins.setEnabled",
+        nth: 1,
+        before: (gw) => gw.deny.push(ID),
+        refuse: "busy",
+      });
+      const ctx = contextFor(g);
+      expect(await new PluginInstaller(ctx).turnOn(PIN, ARCHIVE, CONFIRM)).toMatchObject({
+        stop: "owner-settings",
+        mayBeRunning: false,
+      });
+      expect(ctx.records.get(ID)).toMatchObject({ pending: null });
+      // With the deny gone, Turn on goes on and enables: the refused enable isn't a lost one.
+      g.deny = [];
+      expect(await new PluginInstaller(ctx).turnOn(PIN, ARCHIVE, CONFIRM)).toEqual({
+        kind: "enabled",
+      });
+    });
+
     it("reads every page of sessions.list before it calls the gateway idle", async () => {
       const g = at(version, "fresh");
       g.sessionPages = [[{ key: "agent:main:a" }], [{ key: "agent:pip:b", hasActiveRun: true }]];

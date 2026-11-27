@@ -334,6 +334,25 @@ export class PluginInstaller {
     epoch: number,
     method: string,
     prepare: () => Promise<unknown>,
+    notApplied?: () => Promise<void>,
+  ): Promise<Json> {
+    try {
+      return await this.writeTries(epoch, method, prepare);
+    } catch (error) {
+      // Refused, or never sent (a before-write read that stopped a retry): it didn't apply, so the
+      // write it marked as in flight isn't. A lost reply, or a connection gone mid-request, may
+      // have applied, and keeps its mark for the resume to decide.
+      const unknown =
+        error instanceof Lost || (error instanceof Stop && error.stop === "connection-changed");
+      if (!unknown) await notApplied?.();
+      throw error;
+    }
+  }
+
+  private async writeTries(
+    epoch: number,
+    method: string,
+    prepare: () => Promise<unknown>,
   ): Promise<Json> {
     for (let attempt = 0; ; attempt += 1) {
       const params = await prepare();
@@ -790,12 +809,17 @@ export class PluginInstaller {
       for (let attempt = 0; ; attempt += 1) {
         let base: string | null = null;
         try {
-          const answer = await this.write(epoch, "config.patch", async () => {
-            const read = await this.beforeWrite(epoch, pin, mode, after, olderVersion);
-            await save({ pending: step });
-            base = read.hash;
-            return { baseHash: read.hash, raw: entry(value) };
-          });
+          const answer = await this.write(
+            epoch,
+            "config.patch",
+            async () => {
+              const read = await this.beforeWrite(epoch, pin, mode, after, olderVersion);
+              await save({ pending: step });
+              base = read.hash;
+              return { baseHash: read.hash, raw: entry(value) };
+            },
+            () => save({ pending: null }),
+          );
           await save({ configHash: str(answer.hash) ?? base });
           return;
         } catch (error) {
@@ -834,11 +858,16 @@ export class PluginInstaller {
           await this.requireShipped(epoch, pin, olderVersion);
           running(true);
           try {
-            await this.write(epoch, "plugins.setEnabled", async () => {
-              await this.beforeWrite(epoch, pin, mode, 1, olderVersion);
-              await save({ pending: 2 });
-              return { pluginId: id, enabled: false, allowlistPolicy: "preserve" };
-            });
+            await this.write(
+              epoch,
+              "plugins.setEnabled",
+              async () => {
+                await this.beforeWrite(epoch, pin, mode, 1, olderVersion);
+                await save({ pending: 2 });
+                return { pluginId: id, enabled: false, allowlistPolicy: "preserve" };
+              },
+              () => save({ pending: null }),
+            );
           } catch (error) {
             if (error instanceof Lost) throw new Stop("lost", error.message);
             throw error;
@@ -853,16 +882,21 @@ export class PluginInstaller {
         if (mode === "turn-on") continue;
         let answer: Json;
         try {
-          answer = await this.write(epoch, "plugins.install", async () => {
-            await this.beforeWrite(epoch, pin, mode, 2, olderVersion);
-            await save({ pending: 3 });
-            return {
-              source: "npm-pack",
-              archivePath,
-              enable: false,
-              ...(mode === "update" ? { mode: "update" } : {}),
-            };
-          });
+          answer = await this.write(
+            epoch,
+            "plugins.install",
+            async () => {
+              await this.beforeWrite(epoch, pin, mode, 2, olderVersion);
+              await save({ pending: 3 });
+              return {
+                source: "npm-pack",
+                archivePath,
+                enable: false,
+                ...(mode === "update" ? { mode: "update" } : {}),
+              };
+            },
+            () => save({ pending: null }),
+          );
         } catch (error) {
           if (error instanceof Stop || error instanceof Lost) throw error;
           const text = words(error);
@@ -921,17 +955,25 @@ export class PluginInstaller {
         const reviewToken = token;
         let answer: Json;
         try {
-          answer = await this.write(epoch, "plugins.setEnabled", async () => {
-            await this.beforeWrite(epoch, pin, mode, 6);
-            await save({ pending: 7 });
-            running(true);
-            return {
-              pluginId: id,
-              enabled: true,
-              allowlistPolicy: "preserve",
-              acknowledgeCapabilities: { reviewToken },
-            };
-          });
+          answer = await this.write(
+            epoch,
+            "plugins.setEnabled",
+            async () => {
+              await this.beforeWrite(epoch, pin, mode, 6);
+              await save({ pending: 7 });
+              running(true);
+              return {
+                pluginId: id,
+                enabled: true,
+                allowlistPolicy: "preserve",
+                acknowledgeCapabilities: { reviewToken },
+              };
+            },
+            async () => {
+              running(false);
+              await save({ pending: null });
+            },
+          );
         } catch (error) {
           if (error instanceof Lost && record.again) await disable("lost");
           if (error instanceof Stop || error instanceof Lost) throw error;
