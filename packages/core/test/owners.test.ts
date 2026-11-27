@@ -254,12 +254,13 @@ describe("the registry of what the host keeps", () => {
     }
   });
 
-  it("bounds a first-message title's entry by its worst case: its key, title, message and session", () => {
+  it("bounds a first-message title's entry by its worst case: its key, title, message, session and connection", () => {
     const entry = {
       // Each quotation mark is two characters as JSON.
       title: '"'.repeat(MAX_TITLE_CHARS),
       from: "m".repeat(MAX_ID_CHARS),
       session: "s".repeat(MAX_ID_CHARS),
+      epoch: Number.MAX_SAFE_INTEGER,
     };
     // As a map's entry: its key, then a colon, and a comma after it.
     expect(size("k".repeat(MAX_ID_CHARS)) + size(entry) + 2).toBeLessThanOrEqual(

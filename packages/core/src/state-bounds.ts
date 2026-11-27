@@ -1041,6 +1041,8 @@ const SESSION_ROW_FIELDS = [
   "lastMessagePreview",
   "lastRunError",
   "lastRunId",
+  // Another revision of a session id is another conversation: a reset or a cut.
+  "lifecycleRevision",
   "markedUnreadAt",
   "pinned",
   "sessionId",
@@ -1061,6 +1063,7 @@ const SESSION_ROW_IDS = new Set([
   "agentId",
   "key",
   "lastRunId",
+  "lifecycleRevision",
   "sessionId",
   "sessionKey",
   "spawnedBy",

@@ -167,7 +167,7 @@ export function archivedListParams(botId: string): Record<string, unknown> {
 export function mapArchivedRow(
   row: RawRecord,
   botId: string,
-  firstMessageTitle?: (key: string) => string | null,
+  firstMessageTitle?: (key: string, row: RawRecord) => string | null,
 ): ArchivedTask | null {
   if (row.archived !== true) return null;
   // The task list's own mapping refuses archived rows; read the rest the same way.
@@ -175,7 +175,7 @@ export function mapArchivedRow(
   const key = sessionRowKey(row);
   const task = mapSessionRow(
     { ...row, archived: false },
-    { firstMessage: key ? (firstMessageTitle?.(key) ?? null) : null },
+    { firstMessage: key ? (firstMessageTitle?.(key, row) ?? null) : null },
   );
   if (!task || task.botId !== botId) return null;
   const archivedAt = typeof row.archivedAt === "number" ? row.archivedAt : null;
@@ -202,8 +202,11 @@ export async function listArchived(
   options: {
     showChannelChats?: boolean;
     showOtherToolSessions?: boolean;
-    /** The title a task's first message makes, as the task list has it (`taskTitle`). */
-    firstMessageTitle?: (key: string) => string | null;
+    /**
+     * The title a task's first message makes, as the task list has it (`taskTitle`), for the row's
+     * session: none for another session under the key.
+     */
+    firstMessageTitle?: (key: string, row: RawRecord) => string | null;
   } = {},
 ): Promise<ArchivedList> {
   const tasks: ArchivedTask[] = [];

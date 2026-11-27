@@ -8,7 +8,7 @@ import { groupTasks, isPlaceholderName, mapSessionRow, taskTitle } from "../src/
 import { readMessageSearch } from "../src/search.ts";
 import { mapArchivedRow } from "../src/task-actions.ts";
 import { grantingGateway, openTask, URL_B } from "./client-harness.ts";
-import { GatewayError, sleep, until } from "./fake-gateway.ts";
+import { deferred, GatewayError, sleep, until } from "./fake-gateway.ts";
 
 const KEY = "agent:main:dashboard:5b0e4c1a-8d2f-4e3b-9a61-7c2d9e0f1a2b";
 
@@ -582,6 +582,194 @@ describe("a task titled from its first message", () => {
       );
       await sleep(20);
       expect(shownIn(client)).toBe("New task");
+    } finally {
+      client.stop();
+    }
+  });
+
+  /** A history read of the key: its first message `text`, reaching its first row unless `hasMore`. */
+  const historyOf =
+    (text: string, hasMore = false, sessionId?: string) =>
+    (params: unknown) =>
+      (params as { sessionKey: string }).sessionKey === KEY
+        ? {
+            ...(sessionId ? { sessionId } : {}),
+            messages: [{ role: "user", content: [{ type: "text", text }], timestamp: 1 }],
+            hasMore,
+          }
+        : { messages: [], hasMore: false };
+  const changed = (
+    gateway: { emit(event: string, payload: unknown): void },
+    row: Record<string, unknown>,
+  ) =>
+    gateway.emit("sessions.changed", {
+      sessionKey: KEY,
+      reason: "chat.title",
+      ...row,
+      session: row,
+    });
+
+  it("is not made from the history of the session an open task had before", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["sessions.subscribe"] = () => ({
+      subscribed: true,
+      list: { sessions: [ROW_1110], hasMore: false },
+    });
+    gateway.handlers["chat.history"] = historyOf("Plan the garden");
+    const { client } = await openTask({ gateway });
+    try {
+      client.openSession(KEY);
+      await until(() => shownIn(client) === "Plan the garden");
+      // Another session under the key, its history still unread: the one held is the last one's.
+      changed(gateway, { ...ROW_1110, sessionId: "7e6d5c4b-3a29-4180-9f7e-6d5c4b3a2918" });
+      await until(() => shownIn(client) === "New task");
+      // Its own read, not reaching its first row, doesn't know its first message.
+      gateway.handlers["chat.history"] = historyOf("Water the beds", true);
+      client.reloadSession(KEY);
+      await until(
+        () =>
+          client.state.transcripts[KEY]?.items.length === 1 &&
+          client.state.transcripts[KEY]?.hasMore === true,
+      );
+      await sleep(20);
+      expect(shownIn(client)).toBe("New task");
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("is not made from the history of the revision an open task had before (a reset or a cut)", async () => {
+    const gateway = grantingGateway();
+    const first = { ...ROW_1110, lifecycleRevision: "rev-1" };
+    gateway.handlers["sessions.subscribe"] = () => ({
+      subscribed: true,
+      list: { sessions: [first], hasMore: false },
+    });
+    gateway.handlers["chat.history"] = historyOf("Plan the garden");
+    const { client } = await openTask({ gateway });
+    try {
+      client.openSession(KEY);
+      await until(() => shownIn(client) === "Plan the garden");
+      changed(gateway, { ...first, lifecycleRevision: "rev-2" });
+      await until(() => shownIn(client) === "New task");
+      // A row that names no revision is the same session as far as anyone knows.
+      changed(gateway, ROW_1110);
+      await sleep(20);
+      expect(shownIn(client)).toBe("New task");
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("is not made from another gateway's history at the same address, and stays when that gateway is named late", async () => {
+    const gateway = grantingGateway();
+    let identity: string | null = "gateway-a";
+    gateway.handlers["gateway.identity.get"] = () => {
+      if (identity === null) throw new GatewayError({ code: "UNAVAILABLE", message: "not now" });
+      return { deviceId: identity };
+    };
+    gateway.handlers["sessions.subscribe"] = () => ({
+      subscribed: true,
+      list: { sessions: [ROW_1110], hasMore: false },
+    });
+    gateway.handlers["sessions.search"] = () => ({
+      results: [{ sessionKey: KEY, messageId: "m1", role: "user", snippet: "Plan" }],
+      sessions: [ROW_1110],
+    });
+    gateway.handlers["chat.history"] = historyOf("Plan the garden");
+    const { client } = await openTask({ gateway });
+    const kept = (client as unknown as { firstMessageTitles: Map<string, unknown> })
+      .firstMessageTitles;
+    try {
+      client.openSession(KEY);
+      await until(() => client.state.connection.gatewayId === "gateway-a");
+      await until(() => shownIn(client) === "Plan the garden");
+      // Another gateway, its name not read yet and its history held back: A's is still held.
+      identity = null;
+      const history = deferred<unknown>();
+      gateway.handlers["chat.history"] = () => history.promise;
+      const was = client.state.connection.connectedAt;
+      gateway.dropAll();
+      await until(
+        () =>
+          client.state.connection.connectedAt !== was && client.state.discovery.status === "ready",
+      );
+      // A's title gone from the cache, it isn't made again from A's history.
+      kept.delete(KEY);
+      expect((await client.searchMessages("plan", null)).titles[KEY]).not.toBe("Plan the garden");
+      // B's own history titles it, and B's name, read late, leaves that title, the task closed.
+      history.resolve(historyOf("Sort the photos")({ sessionKey: KEY }));
+      await until(() => shownIn(client) === "Sort the photos");
+      client.closeSession(KEY);
+      identity = "gateway-b";
+      await until(() => client.state.connection.gatewayId === "gateway-b", 3000);
+      expect((await client.searchMessages("plan", null)).titles[KEY]).toBe("Sort the photos");
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("is not an archived row's in another session under the key", async () => {
+    const gateway = grantingGateway();
+    let archived = ROW_1110;
+    gateway.handlers["sessions.list"] = (params) =>
+      (params as { archived?: unknown }).archived === true
+        ? { sessions: [{ ...archived, archived: true, archivedAt: 5 }], hasMore: false }
+        : { sessions: [], hasMore: false };
+    const { client } = await openTask({ gateway });
+    try {
+      keep(client, KEY, "Plan the garden", ROW_1110.sessionId);
+      expect((await client.listArchived("main")).tasks.map((task) => task.title)).toEqual([
+        "Plan the garden",
+      ]);
+      archived = { ...ROW_1110, sessionId: "7e6d5c4b-3a29-4180-9f7e-6d5c4b3a2918" };
+      expect((await client.listArchived("main")).tasks.map((task) => task.title)).toEqual([
+        "New task",
+      ]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("is not a search hit's in another session when the hit's row leaves its session out", async () => {
+    const gateway = grantingGateway();
+    const { sessionId: _, ...unsessioned } = ROW_1110;
+    gateway.handlers["sessions.search"] = () => ({
+      results: [
+        {
+          sessionKey: KEY,
+          sessionId: "7e6d5c4b-3a29-4180-9f7e-6d5c4b3a2918",
+          messageId: "m1",
+          role: "assistant",
+          snippet: "A plan.",
+        },
+      ],
+      sessions: [unsessioned],
+    });
+    const { client } = await openTask({ gateway });
+    try {
+      keep(client, KEY, "Plan the garden", ROW_1110.sessionId);
+      expect((await client.searchMessages("plan", null)).titles[KEY]).not.toBe("Plan the garden");
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("is the session's its history was read in, for a task outside the list too", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["chat.history"] = historyOf("Plan the garden", false, ROW_1110.sessionId);
+    let hit = ROW_1110;
+    gateway.handlers["sessions.search"] = () => ({
+      results: [{ sessionKey: KEY, messageId: "m1", role: "assistant", snippet: "A plan." }],
+      sessions: [hit],
+    });
+    const { client } = await openTask({ gateway });
+    try {
+      client.openSession(KEY);
+      await until(() => client.state.transcripts[KEY]?.status === "ready");
+      expect((await client.searchMessages("plan", null)).titles[KEY]).toBe("Plan the garden");
+      hit = { ...ROW_1110, sessionId: "7e6d5c4b-3a29-4180-9f7e-6d5c4b3a2918" };
+      expect((await client.searchMessages("plan", null)).titles[KEY]).not.toBe("Plan the garden");
     } finally {
       client.stop();
     }

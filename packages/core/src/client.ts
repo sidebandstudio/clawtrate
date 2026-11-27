@@ -535,6 +535,26 @@ function sessionOf(value: unknown): string | null {
 }
 
 /**
+ * A row's session, with its `lifecycleRevision` when the gateway gives one: a reset or a cut of
+ * the session makes another revision of the same id, and another conversation.
+ */
+function sessionOfRow(row: RawRecord | null | undefined): string | null {
+  const id = sessionOf(row?.sessionId);
+  const revision = row?.lifecycleRevision;
+  return id && typeof revision === "string" && revision
+    ? (sessionOf(`${id}\u0000${revision}`) ?? id)
+    : id;
+}
+
+/** Whether two sessions (`sessionOfRow`) are known to differ: a revision only one names doesn't. */
+function otherSession(a: string | null, b: string | null): boolean {
+  if (a === null || b === null || a === b) return false;
+  const [idA, revisionA] = a.split("\u0000");
+  const [idB, revisionB] = b.split("\u0000");
+  return idA !== idB || (revisionA !== undefined && revisionB !== undefined);
+}
+
+/**
  * A task this client names (`taskNames`): `waiting` for the gateway to accept the message it is
  * named from (`first`: the creation's message, or an empty task's first with text), with the ids of
  * the messages it sent there before with no text (a picture or a file alone), or `naming` while its
@@ -555,9 +575,16 @@ export const MAX_FIRST_MESSAGE_TITLES = 200;
 /**
  * A title made from a task's first message, and the outgoing message it was made from while that
  * message is not yet in the task's history (`from`); null once history holds it. With the session
- * the task had then, when known: a task made again under the same key is another one.
+ * the task had then, when known: a task made again under the same key is another one. And the
+ * connection (`epoch`) it was made or last confirmed on: one before another gateway answered at
+ * the address was the other gateway's.
  */
-type FirstMessageTitle = { title: string; from: string | null; session: string | null };
+type FirstMessageTitle = {
+  title: string;
+  from: string | null;
+  session: string | null;
+  epoch: number;
+};
 
 /** The text of a transcript's first message from the person, or null when it has none. */
 function firstPersonText(items: readonly TranscriptItem[]): string | null {
@@ -1806,6 +1833,11 @@ export class ClawtrateClient {
    * from its last history read: what a picture with no copy here is read back by.
    */
   private readonly sentSources = new Map<string, Map<string, string>>();
+  /**
+   * Each followed task's last history read: the session it was read in, when known, and the
+   * connection (`epoch`). Only such a read of the row's session titles a task (`settleFirstMessage`).
+   */
+  private readonly historyReads = new Map<string, { session: string | null; epoch: number }>();
   /**
    * Tasks this client names (#750), by key, oldest first: `waiting` until the gateway accepts the
    * message it is named from (`TaskNaming`), `naming` while the name is made. Only the device that sends a task's
@@ -3112,6 +3144,7 @@ export class ClawtrateClient {
     // this device, and they show there once more. Their own bound lets them go. Its references
     // come back with its next history read.
     this.sentSources.delete(key);
+    this.historyReads.delete(key);
     this.recipients.delete(key);
     for (const readKey of [...this.approvalReads.keys()])
       if (readKey.startsWith(`${key}\u0000`)) this.approvalReads.delete(readKey);
@@ -9669,6 +9702,7 @@ export class ClawtrateClient {
     this.readBackPictures.clear();
     this.readBackBytes = 0;
     this.sentSources.clear();
+    this.historyReads.clear();
     this.taskNames.clear();
     this.firstMessageTitles.clear();
     this.firstMessageGateway = null;
@@ -10052,9 +10086,14 @@ export class ClawtrateClient {
     // Clearing another gateway's creation can notify a host that stops the connection.
     if (current() && this.state.connection.gatewayId !== id) this.setConnection({ gatewayId: id });
     // Another gateway at the same address: its tasks under the same keys are not the ones titled.
+    // Those made on this connection are this gateway's.
     if (current() && this.firstMessageGateway !== id) {
-      if (this.firstMessageGateway !== null) this.firstMessageTitles.clear();
+      const before = this.firstMessageGateway;
       this.firstMessageGateway = id;
+      const size = this.firstMessageTitles.size;
+      for (const [key, made] of this.firstMessageTitles)
+        if (before !== null && made.epoch !== this.epoch) this.firstMessageTitles.delete(key);
+      if (this.firstMessageTitles.size < size) this.publishTasks();
     }
     if (current()) this.settleReadStamps(id);
     // The guide change after this connection's connect found it unnamed: once, now it is named.
@@ -10478,12 +10517,15 @@ export class ClawtrateClient {
     const title = cleanLine(plainPreview(text) ?? "", MAX_TITLE_CHARS);
     if (!title) return this.firstMessageTitles.delete(id);
     const kept = this.firstMessageTitles.get(id);
-    if (kept?.title === title && kept.from === from && kept.session === session) return false;
+    if (kept?.title === title && kept.from === from && kept.session === session) {
+      kept.epoch = this.epoch;
+      return false;
+    }
     if (!kept && this.firstMessageTitles.size >= MAX_FIRST_MESSAGE_TITLES) {
       const oldest = this.firstMessageTitles.keys().next();
       if (!oldest.done) this.firstMessageTitles.delete(oldest.value);
     }
-    this.firstMessageTitles.set(id, { title, from, session });
+    this.firstMessageTitles.set(id, { title, from, session, epoch: this.epoch });
     return true;
   }
 
@@ -10491,33 +10533,45 @@ export class ClawtrateClient {
    * Bring a task's first-message title in line with what its transcript shows, once that reaches
    * the task's first row: the first message history holds; with none, the earliest message still
    * on its way (in the outbox, not cancelled); with neither, no title. A transcript still loading,
-   * or one that doesn't reach the first row, leaves what is kept. True when that changed.
+   * one that doesn't reach the first row, or one not read on this connection in the row's session
+   * (another gateway's, or another session's under the key) leaves what is kept. True when that
+   * changed.
    */
   private settleFirstMessage(key: string): boolean {
     const id = capId(key, MAX_ID_CHARS);
     if (!titledByGateway(id)) return false;
     const transcript = this.state.transcripts[key];
     if (transcript?.status !== "ready" || transcript.hasMore) return false;
-    const session =
-      sessionOf(this.rows.get(id)?.sessionId) ?? this.firstMessageTitles.get(id)?.session ?? null;
+    const read = this.historyReads.get(key);
+    if (read?.epoch !== this.epoch || otherSession(read.session, sessionOfRow(this.rows.get(id))))
+      return false;
     const held = firstPersonText(transcript.items);
-    if (held !== null) return this.keepFirstMessage(id, held, null, session);
+    if (held !== null) return this.keepFirstMessage(id, held, null, read.session);
     const waiting = transcript.outbox.find(
       (message) => message.status !== "cancelled" && message.text.trim() !== "",
     );
-    if (waiting) return this.keepFirstMessage(id, waiting.text, waiting.id, session);
+    if (waiting) return this.keepFirstMessage(id, waiting.text, waiting.id, read.session);
     return this.firstMessageTitles.delete(id);
   }
 
-  /** The title a task's first message makes, as far as this client knows it (`taskTitle`). */
-  private firstMessageTitle(key: string): string | null {
+  /**
+   * The title a task's first message makes, as far as this client knows it (`taskTitle`); none
+   * for a row in another `session` under the key, which is another task.
+   */
+  private firstMessageTitle(key: string, session: string | null = null): string | null {
     const id = capId(key, MAX_ID_CHARS);
-    const made = this.firstMessageTitles.get(id)?.session;
-    const now = sessionOf(this.rows.get(id)?.sessionId);
     // The task was deleted and made again under its key while this client didn't see it.
-    if (made && now && made !== now) this.firstMessageTitles.delete(id);
+    if (
+      otherSession(
+        this.firstMessageTitles.get(id)?.session ?? null,
+        sessionOfRow(this.rows.get(id)),
+      )
+    )
+      this.firstMessageTitles.delete(id);
+    // Made first, as it may be made again from history.
     this.settleFirstMessage(key);
-    return this.firstMessageTitles.get(id)?.title ?? null;
+    const made = this.firstMessageTitles.get(id);
+    return made && !otherSession(made.session, session) ? made.title : null;
   }
 
   /**
@@ -11048,6 +11102,14 @@ export class ClawtrateClient {
         gatewayEvents: this.writesEvents(),
       });
       this.sentSources.set(key, sentSources(messages));
+      // The session the reply says it read, else the row's; with the row's revision when the reply
+      // names the same id without one.
+      const read = sessionOfRow(asRecord(history?.sessionInfo)) ?? sessionOfRow(history);
+      const listed = sessionOfRow(this.rows.get(capId(key, MAX_ID_CHARS)));
+      this.historyReads.set(key, {
+        session: read === null || listed?.startsWith(`${read}\u0000`) ? listed : read,
+        epoch: this.epoch,
+      });
       const rebuilt: Transcript = {
         ...current,
         ...retainActivity(
@@ -11848,7 +11910,7 @@ export class ClawtrateClient {
     return listArchived(this.actionContext(null), botId, {
       showChannelChats: this.showChannelChats,
       showOtherToolSessions: this.showOtherToolSessions,
-      firstMessageTitle: (key) => this.firstMessageTitle(key),
+      firstMessageTitle: (key, row) => this.firstMessageTitle(key, sessionOfRow(row)),
     });
   }
 
@@ -11887,13 +11949,9 @@ export class ClawtrateClient {
       );
     };
     return this.search((request) =>
-      searchMessages(request, query, botId, hidden, (key, session) => {
-        // Made first, as it may be made again from history: a title made in another session under
-        // this key was another task's.
-        const title = this.firstMessageTitle(key);
-        const made = this.firstMessageTitles.get(capId(key, MAX_ID_CHARS))?.session;
-        return made && session && made !== session ? null : title;
-      }),
+      searchMessages(request, query, botId, hidden, (key, row) =>
+        this.firstMessageTitle(key, sessionOfRow(row)),
+      ),
     );
   }
 

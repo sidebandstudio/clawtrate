@@ -320,6 +320,9 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
     row: "bookkeeping",
   },
   "sentSources.*": { max: MAX_SENT_SOURCES, each: 2 * MAX_INBOUND_REF_CHARS + N, row: null },
+  // Each followed task's last history read, by key: the session it was read in and the connection's
+  // count, with the names and marks of its two fields and its place in the map.
+  historyReads: { max: T, each: 2 * ID + SHORT + 2 * N, row: "bookkeeping" },
   // Tasks this client names, or waits to name from their first message with text, by key: the stage,
   // the session the task was created as, the message it is named from once the gateway accepts it,
   // and the ids of this client's messages there with no text.
@@ -335,11 +338,11 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
     opaque: "counted in `taskNames`",
   },
   // The title each task's first message makes, by task key, with the outgoing message it was
-  // made from until history holds it, and the session it was made in: two Ns for the names and
-  // marks of its three fields and its place in the map.
+  // made from until history holds it, the session it was made in and the connection's count: two
+  // Ns for the names and marks of its four fields and its place in the map.
   firstMessageTitles: {
     max: MAX_FIRST_MESSAGE_TITLES,
-    each: 3 * ID + 2 * MAX_TITLE_CHARS + 2 * N,
+    each: 3 * ID + 2 * MAX_TITLE_CHARS + SHORT + 2 * N,
     row: "bookkeeping",
   },
   // The store's listeners: a host's windows and web viewers.

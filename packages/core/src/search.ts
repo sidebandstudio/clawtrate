@@ -116,14 +116,14 @@ const exactId = (value: unknown): string | null => {
  * `sessions.search` across bots, or one bot's, with the task list's own filters (search.md §5).
  * `hidden` leaves out a hit whose session the list hides, decided from the session's row as the
  * gateway sends it with the matches, or null when it sent none. `firstMessageTitle` is the title
- * the client made from a task's first message, as the task list has it.
+ * the client made from a task's first message, as the task list has it, for the row's session.
  */
 export async function searchMessages(
   request: Request,
   query: string,
   botId: string | null,
   hidden?: (sessionKey: string, row: RawRecord | null) => boolean,
-  firstMessageTitle?: (key: string, sessionId: string | null) => string | null,
+  firstMessageTitle?: (key: string, row: RawRecord) => string | null,
 ): Promise<MessageSearch> {
   const reply = asRecord(
     await request("sessions.search", {
@@ -239,7 +239,7 @@ function shownSnippet(snippet: string): string {
 export function readMessageSearch(
   reply: RawRecord | null,
   query = "",
-  firstMessageTitle?: (key: string, sessionId: string | null) => string | null,
+  firstMessageTitle?: (key: string, row: RawRecord) => string | null,
 ): MessageSearch {
   const hits: MessageHit[] = [];
   for (const raw of Array.isArray(reply?.results) ? reply.results : []) {
@@ -276,7 +276,14 @@ export function readMessageSearch(
       row && key && (isPlaceholderName(row, key) || generatedName(row, key))
         ? (mapSessionRow(
             { ...row, archived: false },
-            { firstMessage: firstMessageTitle?.(key, exactId(row.sessionId)) ?? null },
+            {
+              // A row that leaves out its session is in its hit's.
+              firstMessage:
+                firstMessageTitle?.(key, {
+                  ...row,
+                  sessionId: row.sessionId ?? hits.find((hit) => hit.sessionKey === key)?.sessionId,
+                }) ?? null,
+            },
           )?.title ?? null)
         : (str(row?.label) ?? (named === null ? null : str(titleWithoutMarker(named))));
     if (key && title && hits.some((hit) => hit.sessionKey === key))
