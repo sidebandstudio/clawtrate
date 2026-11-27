@@ -403,6 +403,25 @@ describe("#686: a not-run line sits only under the message its run is known to h
     const full = Array.from({ length: 8 }, (_, i) => `attachments[${i}]`);
     expect(wordsCut({ cut: full })).toBe(true);
     expect(wordsCut({ cut: full.slice(1) })).toBe(false);
+    // With a files plan, the person is told both: its files, and to send its words in full.
+    const withCut = (change: object) =>
+      ({
+        ...short.transcript,
+        items: short.transcript.items.map((item) =>
+          item.id === failed.anchorItemId ? { ...item, ...change } : item,
+        ),
+      }) as Transcript;
+    const textCuts = Array.from({ length: 8 }, (_, i) => `blocks[${i}].text`);
+    expect(retryPlan(failed, withCut({ cut: textCuts }))).toEqual({
+      kind: "files-unknown",
+      wordsCut: true,
+    });
+    expect(
+      retryPlan(
+        failed,
+        withCut({ truncated: true, attachments: [{ name: "a.jpg", mimeType: "image/jpeg" }] }),
+      ),
+    ).toEqual({ kind: "files-gone", wordsCut: true });
   });
 
   it("a run that started, then failed before replying: the gateway's row says nothing more", () => {
