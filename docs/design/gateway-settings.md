@@ -181,6 +181,8 @@ All OpenClaw settings shows an owned path read-only, with its value and a link t
 
 ## 3. Where it lives in Settings
 
+The design's pictures still show the earlier four-row list; they are made again from the prototype, which already shows one row, when Clawtrate's own pictures are next recorded.
+
 **Decided (replaces this section's first version, which added four rows).** Settings' list gains **one row, "OpenClaw"**, after Accounts: Gateway, Accounts, **OpenClaw**, Conversation, Usage, Machines, Check-ins, Updates, Advanced. Its search line in `SETTINGS_SECTIONS` is "The default model, and OpenClaw's own settings", so search finds it by "OpenClaw" and by "model".
 
 - **Why one row.** It is what the owner asked for: one place in Settings where OpenClaw's settings are changed. It keeps the list at nine rows instead of eleven. And every row added to the list changes every picture that shows Settings (about 290 when Models was built), so one row costs that once instead of four times.
