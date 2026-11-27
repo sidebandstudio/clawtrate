@@ -1,5 +1,6 @@
 import { skillNoteWords, updateNoticeText, type TranscriptItem } from "@clawtrate/core";
-import { useState } from "react";
+import { useContext, useState } from "react";
+import { ActionEnvContext } from "./actions/ActionCards.tsx";
 import { useBridge, useClawtrateState } from "./bridge.tsx";
 import { ChevronIcon } from "./icons.tsx";
 import { screenStamp, shownStamp } from "./stamp.ts";
@@ -23,7 +24,8 @@ type UndoPhase =
  * A note's undo, the gateway's own way where this connection may use it. A marked note (OpenClaw
  * 2026.11.10) is undone by the gateway (`skills.workshop.undo`), which needs admin access. An
  * unmarked one (2026.10.6) is undone by the bot when asked in the task: the button sends exactly
- * "undo", and says so. A connection that can do neither shows what it would take, or nothing.
+ * "undo", and says so. A connection that can do neither shows what it would take, or nothing;
+ * so does a host pinned read-only. Once done, the button stays where it was, so focus stays.
  */
 function SkillNoteUndo({
   note,
@@ -39,17 +41,20 @@ function SkillNoteUndo({
   // The gateway this note was drawn from: the undo goes only to that one.
   const [shown] = useState(() => shownStamp(bridge.getState().connection));
   const [phase, setPhase] = useState<UndoPhase>({ status: "ready" });
+  // What this viewer may change: a host pinned read-only changes nothing.
+  const readOnly = useContext(ActionEnvContext)?.readOnly ?? !connection.canWrite;
   const online = connection.status === "connected";
   const { agentId, reviewId } = note.skillNote;
   const byGateway = agentId !== null;
-  if (byGateway ? !connection.canAdmin : !connection.canWrite)
-    return byGateway ? (
+  if (readOnly) return null;
+  if (byGateway && !connection.canAdmin)
+    return (
       <p className="skill-note-undo" data-testid="skill-note-undo">
         Undoing it needs admin access to this gateway.
       </p>
-    ) : null;
+    );
   const press = () => {
-    if (phase.status === "busy" || !online) return;
+    if (phase.status === "busy" || phase.status === "done" || !online) return;
     setPhase({ status: "busy" });
     const fail = (error: unknown) =>
       setPhase({
@@ -79,18 +84,16 @@ function SkillNoteUndo({
   const label = byGateway ? "Undo" : `Send "undo" to ${botName}`;
   return (
     <div className="skill-note-undo" data-testid="skill-note-undo">
-      {phase.status !== "done" && (
-        <button
-          type="button"
-          className="button"
-          onClick={press}
-          aria-disabled={!online || phase.status === "busy" ? true : undefined}
-          aria-busy={phase.status === "busy" ? true : undefined}
-          aria-label={byGateway ? `Undo: ${skillNotesWords([note])}` : undefined}
-        >
-          {label}
-        </button>
-      )}
+      <button
+        type="button"
+        className="button"
+        onClick={press}
+        aria-disabled={!online || phase.status === "busy" || phase.status === "done" || undefined}
+        aria-busy={phase.status === "busy" || undefined}
+        aria-label={byGateway ? `Undo: ${skillNotesWords([note])}` : undefined}
+      >
+        {label}
+      </button>
       <span role="status">
         {phase.status === "done" || phase.status === "failed" ? phase.words : ""}
       </span>
