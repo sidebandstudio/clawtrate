@@ -31,7 +31,7 @@
         - listitem:
           - button "Archived"
     - listitem:
-      - button "Juniper, 3 tasks, unread, research, primary bot":
+      - button "Juniper, 3 tasks, unread, research":
         - text: Juniper research
         - time: 5:24 PM
         - text: Ask these five, and get the answers in writing.
@@ -67,6 +67,7 @@
   - button "New routine"
   - combobox "Bots":
     - option "All bots" [selected]
+    - option "main"
     - option "Juniper"
     - option "Marlow"
     - option "Otto"
@@ -75,7 +76,7 @@
   - text: 8 routines
   - region "Juniper":
     - heading "Juniper" [level=2]
-    - text: Checks in every 30 minutes
+    - text: No check-ins
     - list "Juniper":
       - listitem:
         - button "Stretch break, Juniper, Every 2 hours, next run today 6:20 PM, last today, succeeded": Stretch break Every 2 hours · Next today 6:20 PM · Last today, succeeded
@@ -121,8 +122,8 @@
     - heading "New routine" [level=2]
     - button "Close"
     - alert:
-      - strong: The gateway didn't answer.
-      - text: This may or may not have saved (gateway request timed out). Check what the gateway has before saving again.
+      - strong: Not confirmed.
+      - text: The gateway didn't answer in time. This may or may not have saved. Check what the gateway has before saving again.
     - button "Check now"
     - group:
       - text: Bot

@@ -286,6 +286,18 @@ export function attachmentsCut(item: { cut?: string[] }): boolean {
   const cut = item.cut ?? [];
   return cut.length >= MAX_CUT_PATHS || cut.some((path) => path.startsWith("attachments"));
 }
+/**
+ * A person's message whose words may not be whole (#726): the gateway cut its row (`truncated`),
+ * a text block was cut to `MAX_BLOCK_CHARS`, or a full list of cut paths may have let that one go.
+ */
+export function wordsCut(item: { truncated?: boolean; cut?: string[] }): boolean {
+  const cut = item.cut ?? [];
+  return (
+    item.truncated === true ||
+    cut.length >= MAX_CUT_PATHS ||
+    cut.some((path) => path.startsWith("blocks"))
+  );
+}
 /** Inter-session messages kept per task, newest. */
 export const MAX_INTER_SESSION = 64;
 /** Outgoing messages per task (also `MAX_OUTBOX_PER_TASK`). */
@@ -447,6 +459,9 @@ export const RUN: Bound = flagged<Run>()({
   endFromRows: FLAG,
   ranInHistory: FLAG,
   startSaid: FLAG,
+  quietEnd: ENUM,
+  quietError: runError,
+  unansweredInHistory: FLAG,
   anchorKeyed: FLAG,
   preambles: list(MAX_PREAMBLES_PER_RUN, preamble),
   reasoningAnchor: ID,
@@ -1037,6 +1052,7 @@ const SESSION_ROW_FIELDS = [
   "lastChannel",
   "lastMessagePreview",
   "lastRunError",
+  "lastRunId",
   "markedUnreadAt",
   "pinned",
   "sessionId",
@@ -1045,6 +1061,7 @@ const SESSION_ROW_FIELDS = [
   "startedAt",
   "status",
   "subject",
+  "suppressErrorNotice",
   "totalTokens",
   "totalTokensFresh",
   "unread",
@@ -1052,7 +1069,14 @@ const SESSION_ROW_FIELDS = [
 ] as const;
 
 /** Session-row fields that are ids: kept under the id cap (`#digest` when longer), never cut. */
-const SESSION_ROW_IDS = new Set(["agentId", "key", "sessionId", "sessionKey", "spawnedBy"]);
+const SESSION_ROW_IDS = new Set([
+  "agentId",
+  "key",
+  "lastRunId",
+  "sessionId",
+  "sessionKey",
+  "spawnedBy",
+]);
 
 /**
  * A session row as the client keeps it: the fields it reads, ids under the id
@@ -1172,6 +1196,7 @@ const account = object<GatewayAccount>()({
 const signInMethod = object<SignInMethod>()({
   id: ID,
   provider: ID,
+  providerLabel: NAME,
   label: NAME,
   hint: NAME,
   kind: ENUM,

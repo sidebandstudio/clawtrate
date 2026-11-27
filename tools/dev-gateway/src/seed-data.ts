@@ -17,16 +17,29 @@ export type SeedTask = {
   slug: string;
   label: string;
   turns: SeedTurn[];
+  /**
+   * The bot's main conversation, which a message reaches without anyone making a task: the seed
+   * makes no `sessions.create` for it and gives it no label.
+   */
+  main?: true;
 };
 
 export type SeedBot = {
   id: string;
   name: string;
-  emoji: string;
-  theme: string;
-  instructions: string;
+  /** Absent for the gateway's own bot, which keeps OpenClaw's own identity and files. */
+  emoji?: string;
+  theme?: string;
+  instructions?: string;
   tasks: SeedTask[];
 };
+
+/**
+ * The Main Bot: the bot Clawtrate's first run makes with `agents.create {name: "Clawtrate Main
+ * Bot"}`, so this is its id; the person has since named it Juniper
+ * (`docs/design/main-bot-onboarding.md` section 4).
+ */
+export const MAIN_BOT = "clawtrate-main-bot";
 
 const think = (text: string): ReplyStep => ({ kind: "reasoning", text });
 const say = (text: string): ReplyStep => ({ kind: "text", text });
@@ -39,8 +52,28 @@ const tool = (id: string, name: string, args: Record<string, unknown>): ReplySte
 
 export const SEED_BOTS: SeedBot[] = [
   {
-    // The gateway's built-in default agent, restyled. A real gateway always has one.
+    // The gateway's built-in default agent, which a real gateway always has: unnamed and with no
+    // picture, its one conversation the main one. A message that names no bot lands on it, as a
+    // channel's would; the development gateway has no channel, so the seed sends it. While
+    // another bot exists, Clawtrate keeps it out of view (F-562).
     id: "main",
+    name: "main",
+    tasks: [
+      {
+        slug: "main",
+        label: "Main",
+        main: true,
+        turns: [
+          {
+            prompt: "Is the porch light on a timer?",
+            rounds: [[say("Yes. The porch light turns on at sunset and off at 11 PM.")]],
+          },
+        ],
+      },
+    ],
+  },
+  {
+    id: MAIN_BOT,
     name: "Juniper",
     emoji: "🌿",
     theme: "research",
@@ -553,7 +586,7 @@ const quoted = (names: string[]) => names.map((name) => JSON.stringify(name)).jo
 const answered = (header: string, id: string, value: string) =>
   `${header}: ${value}\n\n${toolJson({ status: "answered", answers: { answers: { [id]: [value] } } })}`;
 
-const JUNIPER_INSTRUCTIONS = SEED_BOTS.find((bot) => bot.id === "main")!.instructions;
+const JUNIPER_INSTRUCTIONS = SEED_BOTS.find((bot) => bot.id === MAIN_BOT)!.instructions!;
 const escape = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 /** A tool result's JSON in the running version's form, with each placeholder a pattern. */
 const jsonPattern = (prefix: string, value: unknown, holes: Record<string, string>) => {
@@ -610,7 +643,7 @@ export const SCENARIO_EXAMPLES: ScenarioExample[] = [
     ],
   },
   {
-    botId: "main",
+    botId: MAIN_BOT,
     slug: "show-your-work",
     label: "Show your work",
     prompt: "Show your work: what is in your workspace?",
@@ -630,7 +663,7 @@ export const SCENARIO_EXAMPLES: ScenarioExample[] = [
     ],
   },
   {
-    botId: "main",
+    botId: MAIN_BOT,
     slug: "failed-step",
     label: "A step that fails",
     prompt: "Use a tool that fails, then carry on.",
@@ -646,7 +679,9 @@ export const SCENARIO_EXAMPLES: ScenarioExample[] = [
             jsonPattern(
               "",
               { status: "error", tool: "read", error: "File not found: MISSING" },
-              { MISSING: String.raw`\S+\/workspace\/missing\/old-notes\.md\.` },
+              {
+                MISSING: String.raw`\S+\/workspaces\/clawtrate-main-bot\/missing\/old-notes\.md\.`,
+              },
             ),
           ];
         },
@@ -654,7 +689,7 @@ export const SCENARIO_EXAMPLES: ScenarioExample[] = [
     ],
   },
   {
-    botId: "main",
+    botId: MAIN_BOT,
     slug: "coding-handoff",
     label: "Hand off to the coding agent",
     prompt: "Ask the coding agent to add a dark mode toggle.",

@@ -37,7 +37,7 @@
             - listitem:
               - button "Flush the DNS cache, archived": Flush the DNS cache
     - listitem:
-      - button "Juniper, 3 tasks, unread, research, primary bot":
+      - button "Juniper, 3 tasks, unread, research":
         - text: Juniper research
         - time: 5:24 PM
         - text: Ask these five, and get the answers in writing.

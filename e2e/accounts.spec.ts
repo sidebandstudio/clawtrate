@@ -436,7 +436,7 @@ test("F-520: a bot made in New bot starts as itself: no first-run sequence, its 
 });
 
 test("F-552: a bot made in New bot with no name takes one in the chat, and is renamed once the person confirms it, its picture kept out of its file", async () => {
-  test.setTimeout(240_000);
+  test.setTimeout(270_000);
   await page.keyboard.press("ControlOrMeta+n");
   const create = dialog("New bot");
   await expect(create.getByRole("textbox", { name: "Name" })).toBeFocused();
@@ -493,13 +493,23 @@ test("F-552: a bot made in New bot with no name takes one in the chat, and is re
   await card.getByRole("button", { name: "Rename" }).click();
   await expect(card).toHaveCount(0, { timeout: 30_000 });
   expect(await identity()).toBe("Johnny");
-  const file = String((await workspaceFile("new-bot", "IDENTITY.md")).content);
+  // The gateway wrote the picture into the file with the name; Clawtrate takes it out again, and
+  // the picture is still the one chosen, in the bot's settings. The card goes as soon as the bot
+  // list shows the new name, which can be before that write lands (seen on OpenClaw 2026.11.10),
+  // so the file is read until it has; a line that is never taken out still fails here (#608).
+  let file = "";
+  await expect
+    .poll(
+      async () => {
+        file = String((await workspaceFile("new-bot", "IDENTITY.md")).content);
+        return file;
+      },
+      { timeout: 30_000 },
+    )
+    .not.toMatch(/^- Avatar:/m);
   expect(file.match(/^- \*{0,2}Name:/gm)).toEqual(["- Name:"]);
   expect(file).toMatch(/^- Name: Johnny$/m);
   expect(file).not.toMatch(/New bot/);
-  // The gateway wrote the picture into the file with the name; Clawtrate took it out again, and
-  // the picture is still the one chosen, in the bot's settings.
-  expect(file).not.toMatch(/^- Avatar:/m);
   expect(file.length).toBeLessThan(1_000);
   expect(await picture()).toEqual(chosen);
   await expect(page.locator(".title-pill-name")).toHaveText("Johnny");
@@ -518,11 +528,22 @@ async function connectFromSettings() {
   return settings;
 }
 
+/**
+ * One of Acme's sign-ins, by its label: Acme, a plugin's provider the app has no logo for, is a
+ * tile after the gateway's own providers, behind Show more, and its two sign-ins sit behind it.
+ */
+async function chooseAcme(settings: ReturnType<typeof dialog>, method: RegExp) {
+  await settings.getByRole("button", { name: "Show more" }).click();
+  await settings.getByRole("button", { name: /^Acme \(scripted\)/ }).click();
+  await expect(settings.getByRole("heading", { name: "Acme (scripted)" })).toBeVisible();
+  await settings.getByRole("button", { name: method }).click();
+}
+
 test("F-474 F-476: a sign-in with a link and a code lands where the screen says it landed, and takes a label", async () => {
   const settings = await connectFromSettings();
   await shots("settings-accounts");
   await settings.getByRole("button", { name: "Connect an account" }).first().click();
-  await settings.getByRole("button", { name: /^Acme \(scripted\)/ }).click();
+  await chooseAcme(settings, /^Acme \(scripted\)/);
   const code = settings.locator(".b-code code");
   await expect(code).toBeVisible({ timeout: 20_000 });
   await expect(settings.getByText(/The code works for 15 minutes\./)).toBeVisible();
@@ -570,7 +591,7 @@ test("F-474 F-476: a sign-in with a link and a code lands where the screen says 
 test("F-474: a browser sign-in with the code pasted back lands where the screen says it landed", async () => {
   const settings = await connectFromSettings();
   await settings.getByRole("button", { name: "Connect an account" }).first().click();
-  await settings.getByRole("button", { name: /^Acme in the browser \(scripted\)/ }).click();
+  await chooseAcme(settings, /^Acme in the browser \(scripted\)/);
   const paste = settings.getByTestId("paste");
   await expect(paste).toBeVisible({ timeout: 20_000 });
   await expect(paste).toHaveAttribute("type", "password");
@@ -635,7 +656,7 @@ test("F-474 F-475: an API key typed into the key path reaches the gateway once a
 test("F-474: a sign-in that is refused says so, and what the gateway now has", async () => {
   const settings = await connectFromSettings();
   await settings.getByRole("button", { name: "Connect an account" }).first().click();
-  await settings.getByRole("button", { name: /^Acme \(scripted\)/ }).click();
+  await chooseAcme(settings, /^Acme \(scripted\)/);
   const code = settings.locator(".b-code code");
   await expect(code).toBeVisible({ timeout: 20_000 });
   await scripted("/scripted/signin/answer", {
