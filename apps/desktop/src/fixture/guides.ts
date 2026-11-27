@@ -2,7 +2,7 @@
 // guides.ts). Always on: there is nothing to change, only what the files hold to read.
 //
 //   (none)         every bot has the section as Clawtrate keeps it
-//   guides=odd     Juniper current; Marlow's markers out of shape; Pip's file not plain UTF-8;
+//   guides=odd     main and Juniper current; Marlow's markers out of shape; Pip's file not plain UTF-8;
 //                  Quartermaster's instructions too long for the section; Otto's not updated yet
 //   guides=unread  every bot has it, but Otto's file can't be read
 //   guides=new     Pip's AGENTS.md doesn't exist yet; the rest have it
