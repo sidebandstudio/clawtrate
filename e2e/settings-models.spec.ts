@@ -132,10 +132,12 @@ test("after another device writes it, Put back writes nothing and says what is t
   test.setTimeout(120_000);
   const settings = page.getByRole("dialog", { name: "Settings" });
   const choice = settings.getByRole("combobox", { name: /Default model/ });
+  // The last test's Put back left a line with its own Put back: this change's line replaces it.
+  const line = settings.locator('[data-status="saved"]');
+  const earlier = await line.textContent();
   await choice.selectOption(CHOSEN);
-  await expect(settings.getByRole("button", { name: /^Put back / })).toBeVisible({
-    timeout: 30_000,
-  });
+  await expect.poll(primary, { timeout: 30_000 }).toBe(CHOSEN);
+  await expect.poll(() => line.textContent(), { timeout: 30_000 }).not.toBe(earlier);
   await otherDeviceWrites("acme/dev-1@acme:work");
   await settings.getByRole("button", { name: /^Put back / }).click();
   await expect(
