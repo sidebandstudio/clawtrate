@@ -16,6 +16,8 @@
 //   guides=unreadable  this device's record can't be read: Otto's file still has a changed
 //                  section, the rest have it
 //   guides=voice   every bot has it, and the voice plugin adds its own guide
+//   guides=spelled the switch on: Pip and Quartermaster share a folder their settings write with
+//                  different capital letters, and it has no section; the rest have it
 //   guides=fail    the read fails
 //   guidesave=fail a change writes nothing: every file kept changing while it was written
 //   guidesave=race a change writes nothing and reports nothing: the files changed meanwhile
@@ -66,6 +68,7 @@ export function guidesCommands(
       pip: "none",
       quartermaster: "current",
     },
+    spelled: { main: "current", marlow: "current", otto: "current" },
     unreadable: {
       main: "current",
       marlow: "current",
@@ -98,9 +101,10 @@ export function guidesCommands(
   );
   const notUtf8 = (bot: string) => param === "odd" && bot === "pip";
   const long = (bot: string) => param === "mixed" && (bot === "quartermaster" || bot === "marlow");
+  const spelled = param === "spelled";
   const folders = (): GuideFolder[] =>
-    BOTS.map((bot) => ({
-      bots: [bot],
+    BOTS.filter((bot) => !(spelled && bot === "quartermaster")).map((bot) => ({
+      bots: spelled && bot === "pip" ? ["pip", "quartermaster"] : [bot],
       state: states.get(bot)!,
       replaceable: states.get(bot) === "changed" && param !== "odd",
       moved: states.get(bot) === "changed" && param === "odd" && bot === "marlow",
@@ -108,7 +112,7 @@ export function guidesCommands(
       utf8: !notUtf8(bot),
       missing: states.get(bot) === "none" && missing.has(bot),
       refused: states.get(bot) === "none" ? (refused.get(bot) ?? null) : null,
-      spelledApart: false,
+      spelledApart: spelled && bot === "pip",
       changedText:
         states.get(bot) === "changed"
           ? GUIDES_SECTION.replace("Lead with the answer", "Lead with a short joke")
