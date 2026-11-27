@@ -7,6 +7,7 @@
 
 import {
   INTERACTIVE_SCOPES,
+  LOCAL_ROUTE_ONLY,
   scopeSatisfied,
   type AccountsState,
   type Bot,
@@ -16,7 +17,14 @@ import {
   type ConnectionState,
   type HostInfo,
 } from "@clawtrate/core";
-import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
+import {
+  useContext,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ReactNode,
+} from "react";
 import { flushSync } from "react-dom";
 import type { useDesktopUpdateSnapshot } from "./update-reading.ts";
 import { Updates } from "./Updates.tsx";
@@ -43,6 +51,7 @@ import { CommandLine, failureTitle } from "./ConnectScreen.tsx";
 import { gatewayTitle } from "./format.ts";
 import { useShowCommands, useShowThinking } from "./preferences.ts";
 import { useForget } from "./forget.ts";
+import { thisComputer, ThisComputerStage } from "./this-computer.ts";
 import { DeviceRequestsList } from "./DeviceApproval.tsx";
 import { BackIcon, ChevronIcon, CloseIcon, ExternalIcon } from "./icons.tsx";
 
@@ -84,8 +93,23 @@ export function gatewayState(connection: ConnectionState): string {
   }
 }
 
+/**
+ * Whether the connection ended because This computer's check refused it, or the address is
+ * This computer's own, on a host that offers This computer: its way on is offered here too.
+ */
+export function thisComputerWayOn(connection: ConnectionState, info: HostInfo): boolean {
+  const code = connection.error?.code;
+  return (
+    info.setup?.local === true &&
+    connection.gatewayUrl !== null &&
+    (code === "LOCAL_UNVERIFIED" || code === LOCAL_ROUTE_ONLY)
+  );
+}
+
 /** The pane's error line: pairing rejected or expired, unreachable, protocol incompatible. */
-function gatewayProblem(connection: ConnectionState): { title: string; message: string } | null {
+export function gatewayProblem(
+  connection: ConnectionState,
+): { title: string; message: string } | null {
   const error = connection.error;
   if (!error) return null;
   if (error.code === "PROTOCOL_MISMATCH") {
@@ -95,6 +119,13 @@ function gatewayProblem(connection: ConnectionState): { title: string; message: 
     return { title: failureTitle(error.code), message: error.message };
   }
   if (connection.status === "connected") return null;
+  // This computer's check refused the connection, or the address is This computer's own:
+  // nothing was unreachable, and no credential went.
+  if (error.code === "LOCAL_UNVERIFIED" || error.code === LOCAL_ROUTE_ONLY)
+    return {
+      title: "Not connected",
+      message: [error.message, error.hint].filter(Boolean).join(" "),
+    };
   return {
     title: "Can't reach the gateway",
     message: [error.message, error.hint].filter(Boolean).join(" "),
@@ -324,9 +355,12 @@ function GatewayBotSwitch({ announce }: { announce: (text: string) => void }) {
 function ConversationPane({
   announce,
   canWrite,
+  canAdmin,
 }: {
   announce: (text: string) => void;
   canWrite: boolean;
+  /** Whether this device writes the bots' files: admin access, and not a read-only viewer. */
+  canAdmin: boolean;
 }) {
   const send = useCommand();
   const state = useClawtrateState();
@@ -384,16 +418,14 @@ function ConversationPane({
         </div>
       )}
       <BotVoicePane canWrite={canWrite} announce={announce} />
-      <BotGuidesPane announce={announce} />
+      <BotGuidesPane canWrite={canAdmin} />
     </>
   );
 }
 
-/** The voice plugin's page in Clawtrate's own repository: how to set it up, and what it covers. */
-const VOICE_README =
-  "https://github.com/sidebandstudio/clawtrate/blob/main/plugins/clawtrate-voice/README.md";
-const VOICE_SETUP = `${VOICE_README}#turning-it-on-for-a-gateway`;
-const VOICE_LIMITS = `${VOICE_README}#where-the-guide-doesnt-reach`;
+/** Where the voice plugin's guide doesn't reach, in its page in Clawtrate's own repository. */
+const VOICE_LIMITS =
+  "https://github.com/sidebandstudio/clawtrate/blob/main/plugins/clawtrate-voice/README.md#where-the-guide-doesnt-reach";
 
 function VoiceLink({ href, children }: { href: string; children: ReactNode }) {
   return (
@@ -409,8 +441,6 @@ function VoiceLink({ href, children }: { href: string; children: ReactNode }) {
     </a>
   );
 }
-
-const VoiceSetupLink = () => <VoiceLink href={VOICE_SETUP}>How to set it up</VoiceLink>;
 
 /** One of the two hook settings, what it must be, and whether it blocks the hook now. */
 function HookSetting({
@@ -437,7 +467,10 @@ function HookSetting({
  * changes what the bots are asked to do; nothing here rewrites what a bot wrote. The value is
  * read again after every new hello, after the gateway reports a change (the plugin's event, or
  * its plugins changing), and after a save that failed. Until then whatever was read last, a
- * missing plugin and a refusal included, is shown as unconfirmed.
+ * refusal included, is shown as unconfirmed. A gateway without the plugin shows nothing here
+ * (#796): every bot already gets the same voice guide from Clawtrate's section in its
+ * instructions, and there is nothing a person could do from here until Clawtrate installs its
+ * plugins itself.
  */
 function BotVoicePane({
   canWrite,
@@ -582,23 +615,10 @@ function BotVoicePane({
     </div>
   );
 
-  if (voice.status === "missing")
-    return (
-      <div className="bot-voice" data-testid="bot-voice" data-confirmed={confirmed}>
-        {freshness}
-        <div className="b-note">
-          <div>
-            <p>
-              Bot voice needs Clawtrate's voice plugin, <code>clawtrate-voice</code>, on the
-              gateway. Without it the bots talk the way their own instructions say.
-            </p>
-            <div className="b-actions">
-              <VoiceSetupLink />
-            </div>
-          </div>
-        </div>
-      </div>
-    );
+  // No plugin, or a refusal from a gateway that lists no methods, which is how one without it
+  // answers: nothing to show.
+  if (voice.status === "missing" || (voice.status === "refused" && voice.advertised === null))
+    return null;
   if (voice.status === "refused")
     return (
       <div className="bot-voice" data-testid="bot-voice" data-confirmed={confirmed}>
@@ -606,14 +626,10 @@ function BotVoicePane({
         <div className="b-note" data-tone="warn">
           <div>
             <p data-testid="bot-voice-refused">
-              {voice.advertised
-                ? "The gateway has Clawtrate's voice plugin, but it won't show this connection the setting. The plugin on the gateway may be a different version from the one this Clawtrate works with."
-                : "Clawtrate can't tell whether the gateway has its voice plugin. The gateway refused to show the setting, which it also does when the plugin isn't there."}{" "}
-              The gateway said: {voice.message}
+              The gateway has Clawtrate's voice plugin, but it won't show this connection the
+              setting. The plugin on the gateway may be a different version from the one this
+              Clawtrate works with. The gateway said: {voice.message}
             </p>
-            <div className="b-actions">
-              <VoiceSetupLink />
-            </div>
           </div>
         </div>
       </div>
@@ -712,9 +728,9 @@ function BotVoicePane({
         <div className="b-note" data-tone="warn" data-testid="bot-voice-blocked">
           <div>
             <p>
-              The gateway's config doesn't permit the voice plugin's prompt hook, so no bot gets the
-              guide. Under <code>plugins.entries.clawtrate-voice.hooks</code> both of these must
-              permit it:
+              The gateway's config doesn't permit the voice plugin's prompt hook, so the plugin adds
+              its guide to no bot's system prompt. Under{" "}
+              <code>plugins.entries.clawtrate-voice.hooks</code> both of these must permit it:
             </p>
             <ul>
               <HookSetting
@@ -729,9 +745,6 @@ function BotVoicePane({
               />
             </ul>
             <p>Then restart the gateway. Clawtrate doesn't change the gateway's config.</p>
-            <div className="b-actions">
-              <VoiceSetupLink />
-            </div>
           </div>
         </div>
       )}
@@ -837,6 +850,7 @@ export function Settings({
     dialogRef.current?.querySelector<HTMLElement>("#b-section-title")?.focus();
   };
   const { forget, failure: forgetProblem } = useForget();
+  const stageThisComputer = useContext(ThisComputerStage);
   const updateLine = useUpdateLinkLine();
   const gatewayUrl = connection.gatewayUrl;
   const state = gatewayState(connection);
@@ -1121,6 +1135,20 @@ export function Settings({
             Use another gateway
           </button>
         )}
+        {gatewayUrl && thisComputerWayOn(connection, info) && (
+          <button
+            type="button"
+            className="button"
+            onClick={() => {
+              // A staged look on this computer, on the connection screen: this gateway stays
+              // saved and selected until a Connect there replaces it, and Back returns here.
+              onClose();
+              void thisComputer(send, stageThisComputer ?? (() => {}));
+            }}
+          >
+            Use This computer
+          </button>
+        )}
       </div>
       {forgetProblem && (
         <div className="form-error" role="alert" data-testid="forget-problem">
@@ -1172,6 +1200,7 @@ export function Settings({
                   <ConversationPane
                     announce={announce}
                     canWrite={connection.canWrite && !info.readOnly}
+                    canAdmin={connection.canAdmin && !info.readOnly}
                   />
                 ),
                 foot: null,

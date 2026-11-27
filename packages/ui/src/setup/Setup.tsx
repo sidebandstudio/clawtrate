@@ -22,6 +22,8 @@ import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 
 import logoUrl from "../assets/logo-mark.png";
 import { useCommand } from "../bridge.tsx";
 import { CommandLine, PRODUCT_NAME, SLOGAN } from "../ConnectScreen.tsx";
+import { FullControlConsent } from "../FullControl.tsx";
+import { leaveLook } from "../this-computer.ts";
 import {
   BackIcon,
   CheckIcon,
@@ -284,6 +286,58 @@ const CONNECT_HINT: Record<NonNullable<SetupLook["access"]>, string> = {
   paired: "This device has a saved pairing for this address. Clawtrate asks for read access.",
 };
 
+/**
+ * With local connect: what Connect does, where this device can't hold full control, or is
+ * already paired there. Where it can, the consent line above Connect says it instead.
+ */
+const LOCAL_HINT: Record<NonNullable<SetupLook["access"]>, string> = {
+  new: "Clawtrate asks for read access. OpenClaw may ask its owner to approve this device.",
+  paired: "This device is already paired with it. Clawtrate connects with that pairing.",
+};
+
+/** The heading of the offer local connect makes, and the line under it: what its check found. */
+export const LOCAL_FOUND_HEADING = "Found your OpenClaw settings on this Mac";
+export const LOCAL_FOUND_LINE = "What is listening at the port they name matches them.";
+
+/**
+ * This computer's gateway, its socket matched to this account's OpenClaw profile by the host
+ * (local connect): Connect is the one step, with the consent line above it where this device
+ * asks for full control.
+ */
+function LocalConnect({
+  look,
+  full,
+  onConnect,
+}: {
+  look: SetupLook;
+  full: boolean;
+  /** Called as Connect is pressed, before the host is asked. */
+  onConnect?: () => void;
+}) {
+  const send = useCommand();
+  const asksFull = full && look.access !== "paired";
+  // A press that lands as Connect appears was aimed at what was there before: nothing happens.
+  const shownAt = useRef<number | null>(null);
+  useEffect(() => {
+    shownAt.current = performance.now();
+  }, []);
+  const connect = () => {
+    if (shownAt.current === null || performance.now() - shownAt.current < CONNECT_ARM_MS) return;
+    onConnect?.();
+    void send({ type: "setupConnect" });
+  };
+  return (
+    <>
+      <Lede>{LOCAL_FOUND_LINE}</Lede>
+      {asksFull && <FullControlConsent />}
+      <Actions>
+        <Primary onClick={connect}>Connect</Primary>
+      </Actions>
+      {!asksFull && <Hint>{LOCAL_HINT[look.access ?? "new"]}</Hint>}
+    </>
+  );
+}
+
 /** Other services and profiles the look saw: named, never used. */
 function Others({ others, onAdvanced }: { others: string[]; onAdvanced: () => void }) {
   if (others.length === 0) return null;
@@ -308,7 +362,7 @@ const CANT_TELL: Record<string, string> = {
     "This version of OpenClaw can change its own installation whenever one of its commands runs, so Clawtrate doesn't run it to look. Use Advanced with the gateway's address and token.",
   settings:
     "Clawtrate can't use OpenClaw's settings on this Mac to connect by itself. Use Advanced.",
-  tls: "This Mac's OpenClaw uses a secure address. Use Advanced to connect with its address.",
+  tls: "These settings may require a secure address. Use Advanced to connect with the gateway's address.",
 };
 
 /** Which fact local connect's proof refused, when the host said (`ProofRefusalKind`). */
@@ -336,18 +390,27 @@ function LookResult({
   onAdvanced,
   onAnother,
   confirming,
+  full,
 }: {
   look: SetupLook;
   offer: NonNullable<HostInfo["setup"]>;
   onAdvanced: () => void;
   onAnother: () => void;
   confirming: boolean;
+  /** This device asks for full control at a new pairing (`HostInfo.fullControl`). */
+  full: boolean;
 }) {
   const send = useCommand();
   const lookAgain = () => void send({ type: "setupLook" });
   const advanced = <Primary onClick={onAdvanced}>Use Advanced</Primary>;
   switch (look.outcome) {
     case "running":
+      if (offer.local)
+        return (
+          <Found mark={<CheckIcon />} tone="ok" heading={LOCAL_FOUND_HEADING}>
+            <LocalConnect look={look} full={full} />
+          </Found>
+        );
       return (
         <Found
           mark={<CheckIcon />}
@@ -469,7 +532,12 @@ function LookResult({
         <Found
           mark={<WarnIcon />}
           tone="warn"
-          heading="Clawtrate couldn't tell what is on this computer"
+          heading={
+            // TLS on: the settings were read, and local connect has no Connect for them.
+            look.reason === "tls"
+              ? "OpenClaw settings found"
+              : "Clawtrate couldn't tell what is on this computer"
+          }
         >
           <Lede>{CANT_TELL[look.reason ?? "shape"]}</Lede>
           <Actions>
@@ -644,8 +712,29 @@ const REFUSED: Record<SetupRefusal, string> = {
 const LOOK_STEPS = ["Finding OpenClaw", "Checking its version", "Asking the gateway"];
 const LOCAL_LOOK_STEPS = ["Reading OpenClaw's settings", "Checking it matches OpenClaw's settings"];
 
+/** How long Connect ignores presses after it appears: they were aimed at what was there. */
+export const CONNECT_ARM_MS = 500;
+/**
+ * How long the first screen waits, with nothing on it to press, for the host's own look at
+ * start. Then it asks its question, and a result that comes later doesn't take its place.
+ */
+export const START_WAIT_MS = 3_000;
+
+/** The look's result the first screen offers by itself: this computer's gateway, matched to its profile. */
+const offeredHere = (offer: NonNullable<HostInfo["setup"]>, setup: SetupState) =>
+  offer.local === true &&
+  setup.unasked &&
+  setup.phase === "found" &&
+  setup.look?.outcome === "running";
+
 /** A screen's identity, so that a new one takes focus and is announced. */
-function screenKey(view: SetupView, setup: SetupState): string {
+function screenKey(
+  view: SetupView,
+  setup: SetupState,
+  offer: NonNullable<HostInfo["setup"]>,
+): string {
+  if (view === "first" && offeredHere(offer, setup)) return "first:found";
+  if (view === "first" && setup.unasked && setup.phase === "looking") return "first:waiting";
   if (view !== "here") return view;
   return `${setup.phase}:${setup.look?.outcome ?? ""}:${setup.failure?.kind ?? ""}`;
 }
@@ -667,7 +756,39 @@ export function SetupFlow({
   const offer = info.setup!;
   const root = useRef<HTMLDivElement>(null);
   const [announced, setAnnounced] = useState("");
-  const key = screenKey(view, setup);
+  // The host's own look at start: the first screen waits for it, with nothing to press, for at
+  // most START_WAIT_MS. Nothing that grants anything appears where another control was: once the
+  // question is on screen, a gateway found later is offered only after This computer.
+  // The first screen's wait for the host's own look at start, resolved exactly once: to the
+  // offer, when the look matched a gateway to its profile in time, or to the question, at its end or after
+  // START_WAIT_MS, whichever comes first. The timer ends with the wait, so an offer shown in
+  // time stays; and once the question is shown, no offer takes its place.
+  const [initial, setInitial] = useState<"waiting" | "offer" | "question">(() =>
+    offer.local === true && setup.unasked && setup.phase === "looking"
+      ? "waiting"
+      : offeredHere(offer, setup)
+        ? "offer"
+        : "question",
+  );
+  if (initial === "waiting" && !(setup.unasked && setup.phase === "looking"))
+    setInitial(offeredHere(offer, setup) ? "offer" : "question");
+  useEffect(() => {
+    if (initial !== "waiting") return;
+    const timer = setTimeout(
+      () => setInitial((now) => (now === "waiting" ? "question" : now)),
+      START_WAIT_MS,
+    );
+    return () => clearTimeout(timer);
+  }, [initial]);
+  const holding = view === "first" && initial === "waiting";
+  const offerHere = view === "first" && initial === "offer" && offeredHere(offer, setup);
+  const key = holding
+    ? "first:waiting"
+    : offerHere
+      ? "first:found"
+      : view === "first"
+        ? "first"
+        : screenKey(view, setup, offer);
   const shown = useRef<string | null>(null);
   useEffect(() => {
     const first = shown.current === null;
@@ -680,8 +801,7 @@ export function SetupFlow({
   }, [key]);
 
   const toFirst = () => {
-    if (view === "here")
-      void send({ type: setup.phase === "looking" ? "setupCancel" : "setupReset" });
+    if (view === "here") void send(leaveLook(setup));
     onView("first");
   };
   const lookHere = () => {
@@ -713,8 +833,18 @@ export function SetupFlow({
   };
 
   let body: ReactNode;
-  if (view === "first") {
-    body = (
+  if (holding) {
+    body = <WaitingHere />;
+  } else if (view === "first") {
+    body = offerHere ? (
+      <FoundHere
+        look={setup.look!}
+        full={info.fullControl === true}
+        onConnect={() => onView("here")}
+        onAnother={another}
+        onAdvanced={advanced}
+      />
+    ) : (
       <FirstScreen offer={offer} onThis={lookHere} onAnother={another} onAdvanced={advanced} />
     );
   } else if (view === "another") {
@@ -824,6 +954,7 @@ export function SetupFlow({
           onAdvanced={advanced}
           onAnother={another}
           confirming={setup.phase === "confirming"}
+          full={info.fullControl === true}
         />
         <Others others={look.others} onAdvanced={advanced} />
       </>
@@ -836,6 +967,60 @@ export function SetupFlow({
         {announced}
       </p>
     </div>
+  );
+}
+
+/** The first screen while the host's own look at start runs: nothing to press yet. */
+function WaitingHere() {
+  return (
+    <>
+      <header className="connect-brand">
+        <img src={logoUrl} alt="" width={56} height={56} />
+        <h1>{PRODUCT_NAME}</h1>
+        <p>{SLOGAN}</p>
+      </header>
+      <h2 className="s-title s-question" id="setup-title" tabIndex={-1} data-s-title>
+        Looking for OpenClaw on this Mac
+      </h2>
+    </>
+  );
+}
+
+/**
+ * The first screen when the host's own look found OpenClaw's settings on this Mac and matched
+ * what listens at their port to that profile (local connect): that gateway first, with Connect,
+ * and the other ways below it.
+ */
+function FoundHere({
+  look,
+  full,
+  onConnect,
+  onAnother,
+  onAdvanced,
+}: {
+  look: SetupLook;
+  full: boolean;
+  onConnect: () => void;
+  onAnother: () => void;
+  onAdvanced: () => void;
+}) {
+  return (
+    <>
+      <header className="connect-brand">
+        <img src={logoUrl} alt="" width={56} height={56} />
+        <h1>{PRODUCT_NAME}</h1>
+        <p>{SLOGAN}</p>
+      </header>
+      <h2 className="s-title s-question" id="setup-title" tabIndex={-1} data-s-title>
+        {LOCAL_FOUND_HEADING}
+      </h2>
+      {/* Connect goes on to its steps on the screen for this computer. */}
+      <LocalConnect look={look} full={full} onConnect={onConnect} />
+      <p className="s-links">
+        <SmallLink onClick={onAnother}>Another computer</SmallLink>
+        <SmallLink onClick={onAdvanced}>Advanced</SmallLink>
+      </p>
+    </>
   );
 }
 

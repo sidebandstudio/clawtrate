@@ -23,6 +23,8 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/bot-names.ts:PLACEHOLDERS": "static, the template's two name placeholders",
   "packages/core/src/send-marker.ts:ABORT_WORDS": "static, the gateway's 43 stop words",
   "packages/core/src/send-marker.ts:MARKER_SENTENCES": "static, the marker's two sentences",
+  "packages/core/src/task-names.ts:NAMING_MODELS":
+    "static, the providers that name a task and their small models",
   "packages/core/src/openclaw-update.ts:UPDATE_PHASES": "static, the gateway's eight update phases",
   "packages/core/src/openclaw-update.ts:RUN_STATUSES": "static, the gateway's five run statuses",
   "packages/core/src/openclaw-update.ts:UPDATE_ASK_WAITS_MS":
@@ -322,22 +324,10 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/avatar.ts:LANTERN_HEADPHONES.box.left": "static, one headphone cup's centre",
   "packages/core/src/avatar.ts:LANTERN_HEADPHONES.box.right": "static, one headphone cup's centre",
   "packages/core/src/avatar.ts:wornAt>placed": "per call, at most three shapes for one pose",
-  "packages/core/src/guides.ts:applyGuidesChange>errors":
-    "one call; one sentence per instructions file it changed, returned to the caller",
-  "packages/core/src/guides.ts:applyGuidesChange>onList":
-    "one call; the bot ids of the one agents.list it read, dropped when it returns",
-  "packages/core/src/guides.ts:applyGuidesChange>kept":
-    "one call; the bot ids of the one agents.list it read and the record's, returned in the record",
-  "packages/core/src/guides.ts:applyGuidesChange>refused":
-    "one call; a reason per bot of the one agents.list it read, returned in the record",
-  "packages/core/src/guides.ts:applyGuidesChange>missing":
-    "one call; the folders of the one agents.list it read, returned to the caller",
-  "packages/core/src/guides.ts:applyGuidesChange>elsewhere":
-    "one call; at most MAX_GUIDES_HISTORY_BOTS (512) bot ids of the one gateway history it read, dropped when it returns",
-  "packages/core/src/guides.ts:applyGuidesChange>held":
-    "one call; the bot ids of the one agents.list it read, saved to the gateway's history and dropped when it returns",
-  "packages/core/src/guides.ts:recordRemoval>holding":
-    "one call; the folders of the one agents.list its change read, returned to that change",
+  "packages/core/src/guides.ts:SECTION_FIRST_LINES":
+    "static, the first line of each section a build has written (two)",
+  "packages/core/src/guides.ts:SECTION_LAST_LINES":
+    "static, the last line of each section a build has written (two)",
   "packages/core/src/guides.ts:readGuidesLimits>shown":
     "one call; the bot ids of the one agents.list its caller read, held by the limit function that call returns",
 };

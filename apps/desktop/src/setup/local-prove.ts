@@ -22,8 +22,9 @@
 // holder maps a file laid out as OpenClaw's native module in a package whose
 // package.json names a version pinned in openclaw-pins.ts, the module must be
 // that version's own, by SHA-256. Every other holder (a newer OpenClaw, an
-// install laid out otherwise, no module mapped) stands on (e) and (f) alone,
-// none of which is dropped.
+// install laid out otherwise, no module mapped) skips only that comparison:
+// the folder's identity, (e), (f) and the settings file the lock names still
+// apply to it.
 //
 // On macOS the native helper reads the kernel's facts (libproc). Linux's walk
 // through /proc is setup PR 2a-3's, so nothing is proved there yet. A missing

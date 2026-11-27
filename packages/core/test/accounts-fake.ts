@@ -12,6 +12,7 @@ import {
   FakeGateway,
   GatewayError,
   guidesOff,
+  guidesOptions,
   helloOk,
   memoryStorage,
   testHost,
@@ -691,7 +692,10 @@ export async function accountsClient(
     }),
   });
   const storage = options.guides ? stored : guidesOff(stored);
-  const client = new ClawtrateClient(testHost(fake.gateway, storage), FAST);
+  const client = new ClawtrateClient(testHost(fake.gateway, storage), {
+    ...FAST,
+    ...guidesOptions(storage),
+  });
   await client.start();
   await until(() => client.state.discovery.status === "ready");
   if (options.read !== false) await client.refreshAccounts();

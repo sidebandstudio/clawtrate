@@ -5,7 +5,7 @@
 // "run-failed-before-reply" row for it. 2026.10.6 keeps the reason in that row and in the task's
 // row (`status: "failed"`, `lastRunError`); 2026.11.10, failing it at dispatch, keeps neither.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { mapHistory, mergeSessionRow } from "../src/mapping.ts";
 import {
   applyAgentEvent,
@@ -552,6 +552,38 @@ describe("the rules underneath", () => {
     });
   });
 
+  it("history's row for a message the gateway couldn't run, with no words, keeps no reason", () => {
+    const rows = [
+      userRow("run-1"),
+      {
+        role: "custom",
+        customType: "run-failed-before-reply",
+        timestamp: T0 + 400,
+        __openclaw: { id: "c-1", seq: 2, runId: "run-1" },
+      },
+    ];
+    const [run] = runsFromHistory(rows, null, {
+      sessionKey: KEY,
+      now: T0 + 500,
+      raw: new RawTable(),
+    });
+    expect(run).toMatchObject({ id: "run-1", state: "failed" });
+    expect(run!.error).toMatchObject({ message: "", beforeReply: true });
+    expect(notRunCause(run!.error?.message)).toBeNull();
+  });
+
+  it("a streaming delta doesn't scan the task list; a run's end does", async () => {
+    const gateway = gatewayWith([{ key: KEY, agentId: "otto", updatedAt: T0 }]);
+    const { client } = await openTask({ gateway });
+    const scan = vi.spyOn(client as unknown as { keptKeys: () => Set<string> }, "keptKeys");
+    // The fake gateway's events are handled as they are emitted, so each check follows its event.
+    gateway.emit("chat", { runId: "r1", sessionKey: KEY, seq: 1, state: "delta" });
+    expect(scan).not.toHaveBeenCalled();
+    gateway.emit("chat", { runId: "r1", sessionKey: KEY, seq: 2, state: "final" });
+    expect(scan).toHaveBeenCalled();
+    client.stop();
+  });
+
   it("a run history rebuilt that failed after it started is not one the gateway couldn't run", () => {
     const rows = [
       userRow("run-1"),
@@ -634,6 +666,95 @@ describe("the rules underneath", () => {
     expect(index.failedAt(KEY)).toBe(2_000);
   });
 
+  it("a run stopped elsewhere ends at its chat abort, so a later message failed before running still marks the task (#722)", () => {
+    const index = new WaitingIndex();
+    index.onAgent(
+      { sessionKey: KEY, runId: "r1", stream: "lifecycle", ts: 1_000, data: { phase: "start" } },
+      1_000,
+    );
+    // Its abort, and no lifecycle end ever arrives.
+    index.onChat({ sessionKey: KEY, runId: "r1", state: "aborted" }, 1_500);
+    index.noteInput(KEY);
+    expect(index.onChat({ sessionKey: KEY, runId: "r2", state: "error" }, 2_000)).toBe(true);
+    expect(index.failedAt(KEY)).toBe(2_000);
+  });
+
+  for (const state of ["final", "aborted", "error"])
+    it(`an older run's late chat ${state} doesn't clear a newer run's failure`, () => {
+      const index = new WaitingIndex();
+      for (const [runId, ts] of [
+        ["r1", 1_000],
+        ["r2", 1_500],
+      ] as const)
+        index.onAgent(
+          { sessionKey: KEY, runId, stream: "lifecycle", ts, data: { phase: "start" } },
+          ts,
+        );
+      index.onChat({ sessionKey: KEY, runId: "r2", state: "error" }, 2_000);
+      expect(index.onChat({ sessionKey: KEY, runId: "r1", state }, 3_000)).toBe(false);
+      expect(index.failedAt(KEY)).toBe(1_500);
+    });
+
+  for (const quiet of [false, true])
+    it(`a queued run's ${quiet ? "quiet" : "failed"} end after the run before it failed decides the mark`, () => {
+      const index = new WaitingIndex();
+      index.onAgent(
+        { sessionKey: KEY, runId: "r1", stream: "lifecycle", ts: 1_000, data: { phase: "start" } },
+        1_000,
+      );
+      // r2 is admitted while r1 runs, then r1 fails.
+      index.noteInput(KEY);
+      index.onChat({ sessionKey: KEY, runId: "r1", state: "error" }, 2_000);
+      expect(
+        index.onChat(
+          {
+            sessionKey: KEY,
+            runId: "r2",
+            state: "error",
+            ...(quiet ? { suppressErrorNotice: true } : {}),
+          },
+          3_000,
+        ),
+      ).toBe(true);
+      expect(index.latestRunId(KEY)).toBe("r2");
+      expect(index.failedAt(KEY)).toBe(quiet ? null : 3_000);
+    });
+
+  it("a start sent again for a run a later start replaced says nothing", () => {
+    const index = new WaitingIndex();
+    for (const [runId, ts] of [
+      ["r1", 1_000],
+      ["r2", 1_500],
+      ["r1", 1_000],
+    ] as const)
+      index.onAgent(
+        { sessionKey: KEY, runId, stream: "lifecycle", ts, data: { phase: "start" } },
+        ts,
+      );
+    expect(index.latestRunId(KEY)).toBe("r2");
+    expect(index.onChat({ sessionKey: KEY, runId: "r2", state: "error" }, 2_000)).toBe(true);
+    expect(index.failedAt(KEY)).toBe(1_500);
+  });
+
+  it("after a start sent again for a replaced run, the newer run's final ends it and the next failure marks the task", () => {
+    const index = new WaitingIndex();
+    for (const [runId, ts] of [
+      ["r1", 1_000],
+      ["r2", 1_500],
+      ["r1", 1_000],
+    ] as const)
+      index.onAgent(
+        { sessionKey: KEY, runId, stream: "lifecycle", ts, data: { phase: "start" } },
+        ts,
+      );
+    index.onChat({ sessionKey: KEY, runId: "r2", state: "final" }, 2_000);
+    expect(index.latestRunId(KEY)).toBe("r2");
+    // r2 is no longer going: a message admitted after it, failed at dispatch, marks the task.
+    index.noteInput(KEY);
+    expect(index.onChat({ sessionKey: KEY, runId: "r3", state: "error" }, 3_000)).toBe(true);
+    expect(index.failedAt(KEY)).toBe(3_000);
+  });
+
   it("an older run's late chat end says nothing while a newer run of the task is going", () => {
     const index = new WaitingIndex();
     index.onAgent(
@@ -710,6 +831,69 @@ describe("#686: the mark is the newest run's, never the latest-written failure's
     });
     gateway.emit("chat", {
       runId: "c",
+      sessionKey: KEY,
+      seq: 1,
+      state: "error",
+      errorMessage: "boom",
+    });
+    changed(gateway, "chat.dispatch-error", { hasActiveRun: false, updatedAt: T0 + 9_000 });
+    await until(() => task(client)?.status === "failed");
+    client.stop();
+  });
+
+  it("2026.11.10 through the client: a second message failed before the row that admits it marks the task by its own run", async () => {
+    const gateway = gatewayWith([
+      { key: KEY, agentId: "otto", hasActiveRun: false, updatedAt: T0 },
+    ]);
+    const { client } = await openTask({ gateway, key: "agent:otto:elsewhere" });
+    const waiting = (client as unknown as { waiting: WaitingIndex }).waiting;
+    // A: admitted, failed at dispatch, then its row.
+    changed(gateway, "participants", {
+      status: "queued",
+      hasActiveRun: true,
+      updatedAt: T0 + 1_000,
+    });
+    gateway.emit("chat", {
+      runId: "a",
+      sessionKey: KEY,
+      seq: 1,
+      state: "error",
+      errorMessage: "boom",
+    });
+    changed(gateway, "chat.dispatch-error", { hasActiveRun: false, updatedAt: T0 + 2_000 });
+    await until(() => task(client)?.status === "failed");
+    // B fails at dispatch before the row that admits it, which the gateway sends later.
+    gateway.emit("chat", {
+      runId: "b",
+      sessionKey: KEY,
+      seq: 1,
+      state: "error",
+      errorMessage: "boom",
+    });
+    expect(waiting.latestRunId(KEY)).toBe("b");
+    expect(waiting.failedAt(KEY)).toBe(T0 + 2_000);
+    client.stop();
+  });
+
+  it("#722 through the client: a run stopped elsewhere ends at its chat abort, so the next message's failure marks the task", async () => {
+    const gateway = gatewayWith([
+      { key: KEY, agentId: "otto", hasActiveRun: false, updatedAt: T0 },
+    ]);
+    const { client } = await openTask({ gateway, key: "agent:otto:elsewhere" });
+    gateway.emit("agent", {
+      ...agentEvent("a", 1, "lifecycle", { phase: "start" }),
+      ts: T0 + 1_000,
+    });
+    // Stopped elsewhere: its abort comes, its lifecycle end never does.
+    gateway.emit("chat", { runId: "a", sessionKey: KEY, seq: 2, state: "aborted" });
+    // B: admitted, then failed at dispatch.
+    changed(gateway, "participants", {
+      status: "queued",
+      hasActiveRun: true,
+      updatedAt: T0 + 9_000,
+    });
+    gateway.emit("chat", {
+      runId: "b",
       sessionKey: KEY,
       seq: 1,
       state: "error",
