@@ -46,7 +46,6 @@ import {
   MAX_FIRST_MESSAGE_TITLES,
   MAX_FOLLOW_UPS,
   MAX_OUTCOME_LOOKUPS,
-  MAX_FILE_READS,
   MAX_PICTURE_READS,
   MAX_READ_BACK_PICTURES,
   MAX_SENT_PICTURE_MESSAGES,
@@ -75,6 +74,8 @@ import { MAX_STORE_LISTENERS } from "./store.ts";
 import {
   MAX_CHECKED_RUN_CHARS,
   MAX_CHECKED_RUNS,
+  MAX_LEGACY_KEY_CHARS,
+  MAX_NAME_CARDS,
   MAX_NAME_ERROR_CHARS,
   MAX_SENT_RUNS,
   MAX_SENT_TEXT_CHARS,
@@ -411,7 +412,24 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
     each: 6 * MAX_CHECKED_RUN_CHARS + ID + 6 * MAX_SENT_TEXT_CHARS + 6 + 2 * SHORT,
     row: "bookkeeping",
   },
-  "botNames.reading": { max: MAX_FILE_READS, each: ID, row: "bookkeeping" },
+  // A bot's read under way stays registered past its file read's slot (the wait and the rename
+  // hold none), so one per listed bot.
+  "botNames.reading": { max: MAX_BOTS, each: ID, row: "bookkeeping" },
+  // The name each run found in IDENTITY.md as it started: its run id, its bot and the name.
+  "botNames.starts": {
+    max: MAX_CHECKED_RUNS,
+    each: MAX_CHECKED_RUN_CHARS + ID + MAX_NAME_CHARS,
+    row: "bookkeeping",
+  },
+  // An earlier build's "Not now" answers, as kept on this device: a gateway and bot key, a name.
+  "botNames.legacy": {
+    max: MAX_NAME_CARDS,
+    each: MAX_LEGACY_KEY_CHARS + MAX_NAME_CHARS,
+    row: "bookkeeping",
+  },
+  // This device's Undo claims left standing when their outcome couldn't be read: a gateway and
+  // change key, and the claim's tag.
+  "botNames.heldUndos": { max: MAX_NAME_CARDS, each: 3 * ID, row: "bookkeeping" },
   "botNames.skipped": { max: MAX_BOTS, each: ID, row: "bookkeeping" },
   "botNames.checkedRuns": {
     max: MAX_CHECKED_RUNS,

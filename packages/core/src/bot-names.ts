@@ -86,6 +86,8 @@ const CLOCK_SKEW_MS = 5 * 60 * 1000;
 const MAX_RECORD_BOT_CHARS = 128;
 /** The host storage key the earlier card kept Not now under; removed, it no longer counts. */
 export const NAME_DECLINES_KEY = "clawtrate.bot-name-declines";
+/** A key of that record: a gateway's identity or address and a bot's id, each an id at most. */
+export const MAX_LEGACY_KEY_CHARS = 2 * 1_024 + 1;
 
 const PLACEHOLDERS = new Set(["not set yet", "pick something you like"]);
 /** A picture `agents.update` copied into IDENTITY.md from the config (R38). */
@@ -592,7 +594,9 @@ export class BotNames {
    * The "Not now" answers an earlier build kept on this device (`NAME_DECLINES_KEY`), by gateway
    * and bot, at most `MAX_NAME_CARDS`: read once, kept as they are.
    */
-  private legacy: Map<string, string> | null = null;
+  private readonly legacy = new Map<string, string>();
+  /** The one read of it, which every check waits for. */
+  private legacyRead: Promise<void> | null = null;
   /**
    * This device's Undo claims left standing because their outcome couldn't be read
    * (`MAX_NAME_CARDS`), by gateway and change: pressing Undo again takes the same claim.
@@ -1507,20 +1511,21 @@ export class BotNames {
    */
   private async legacyDeclined(stamp: GatewayStamp, botId: string, name: string): Promise<boolean> {
     if (stamp.gatewayId === null) return false;
-    if (this.legacy === null) {
-      const read = new Map<string, string>();
+    this.legacyRead ??= (async () => {
       try {
         const parsed = asRecord(
           JSON.parse((await this.ctx.storage.get(NAME_DECLINES_KEY)) ?? "{}"),
         );
         for (const [key, value] of Object.entries(parsed ?? {}).slice(-MAX_NAME_CARDS))
-          if (key.length <= 2 * 1_024 + 1 && typeof value === "string")
-            read.set(key, plainName(value) ?? value);
+          if (key.length <= MAX_LEGACY_KEY_CHARS && typeof value === "string") {
+            const name = plainName(value);
+            if (name !== null) this.legacy.set(key, name);
+          }
       } catch {
         // Unreadable: nothing declined.
       }
-      this.legacy ??= read;
-    }
+    })();
+    await this.legacyRead;
     return this.legacy.get(`${stamp.gatewayId}\n${botId}`) === name;
   }
 
