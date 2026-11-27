@@ -479,8 +479,9 @@ describe("F-560: the folded line's words", () => {
 /** A task whose listed preview is what the gateway lists, and its loaded history. */
 const task = (preview: string | null, updatedAt: number | null): Task =>
   ({ key: "agent:main:t", botId: "main", title: "T", preview, updatedAt }) as unknown as Task;
-const loaded = (rows: unknown[], hasMore = false): Transcript =>
-  ({ items: mapHistory(rows), hasMore }) as unknown as Transcript;
+/** `marked`: the client expects the gateway's mark, as it does on OpenClaw 2026.11.10. */
+const loaded = (rows: unknown[], hasMore = false, marked = false): Transcript =>
+  ({ items: mapHistory(rows, { skillNotesMarked: marked }), hasMore }) as unknown as Transcript;
 const LISTED_NOTE =
   '💾 Learned: created trail-check (check the trail before a hike). Say "undo" to revert this skill change.';
 const REPLY = "I read through my workspace files one by one.";
@@ -510,24 +511,27 @@ describe("F-560: the note is not the bot's preview, and doesn't mark the task un
     ).toBeNull();
   });
 
-  it("a read-only viewer that read the reply has read the task through the note", () => {
+  it("a read-only viewer that read the reply has read the task through the note the gateway marks", () => {
+    const rows = [realNote[0], { ...NOTE_1110, timestamp: NOTE_1006.timestamp }];
+    const at = NOTE_1006.timestamp + 5;
+    const seen = realNote[0]!.timestamp;
+    const read = (seenAt: number, preview = LISTED_NOTE, hasMore = false, history = rows) =>
+      seenThroughSkillNote(task(preview, at), seenAt, loaded(history, hasMore, true), NO_UPDATES);
+    expect(read(seen)).toBe(at);
+    // One that read before the reply hasn't.
+    expect(read(seen - 1)).toBe(seen - 1);
+    // Nor when the listed row has something newer than the note.
+    expect(read(seen, "Newer")).toBe(seen);
+    // A note alone on a page that isn't the whole history proves nothing.
+    expect(read(seen, LISTED_NOTE, true, [rows[1]])).toBe(seen);
+    expect(read(seen, LISTED_NOTE, false, [rows[1]])).toBe(at);
+  });
+
+  it("an unmarked note (OpenClaw 2026.10.6), which a bot can write, is still to read", () => {
     const at = NOTE_1006.timestamp + 5;
     const seen = realNote[0]!.timestamp;
     expect(seenThroughSkillNote(task(LISTED_NOTE, at), seen, loaded(realNote), NO_UPDATES)).toBe(
-      at,
-    );
-    // One that read before the reply hasn't.
-    expect(
-      seenThroughSkillNote(task(LISTED_NOTE, at), seen - 1, loaded(realNote), NO_UPDATES),
-    ).toBe(seen - 1);
-    // Nor when the listed row has something newer than the note.
-    expect(seenThroughSkillNote(task("Newer", at), seen, loaded(realNote), NO_UPDATES)).toBe(seen);
-    // A note alone on a page that isn't the whole history proves nothing.
-    expect(
-      seenThroughSkillNote(task(LISTED_NOTE, at), seen, loaded([NOTE_1006], true), NO_UPDATES),
-    ).toBe(seen);
-    expect(seenThroughSkillNote(task(LISTED_NOTE, at), seen, loaded([NOTE_1006]), NO_UPDATES)).toBe(
-      at,
+      seen,
     );
   });
 });
@@ -618,16 +622,21 @@ describe("F-560 F-590: a read-only viewer's read goes past any run of quiet line
     __openclaw: { id: "u1", idempotencyKey: `update-run-finished:${RUN}` },
   });
   const reply = { ...realNote[0]!, timestamp: T + 100 };
-  const note = (at: number) => ({ ...NOTE_1006, timestamp: at });
+  /** The gateway's marked note, as OpenClaw 2026.11.10 writes it. */
+  const note = (at: number) => ({ ...NOTE_1110, timestamp: at });
+  /** A bot's channel copy in the note's exact form: the note's fields, no run, no mark. */
+  const copy = (at: number) => ({ ...withText(channelCopy, NOTE_TEXT), timestamp: at });
   /** As `unreadSeenOf` reads it: past skill notes, then past update lines. */
   const seenThrough = (
     rows: unknown[],
     preview: string,
     seenAt: number,
     scope: typeof UPDATED | typeof NO_UPDATES = UPDATED,
+    /** The client expects the mark (OpenClaw 2026.11.10, after its hello), else not (2026.10.6). */
+    marked = true,
   ) => {
     const listed = task(preview, T + 400);
-    const transcript = loaded(rows);
+    const transcript = loaded(rows, false, marked);
     return seenThroughUpdateNotice(
       listed,
       seenThroughSkillNote(listed, seenAt, transcript, scope),
@@ -660,5 +669,15 @@ describe("F-560 F-590: a read-only viewer's read goes past any run of quiet line
     expect(seenThrough([reply, update(T + 200), words, note(T + 300)], LISTED_NOTE, T + 100)).toBe(
       T + 100,
     );
+  });
+
+  it("2026.10.6: a bot's copy in the note's exact form, which folds there, is still to read, in either order", () => {
+    // On a client that takes the unmarked form for the note, the copy is a skill note item, but
+    // nothing vouches for it: it stops the walk.
+    const old = (rows: unknown[], preview: string) =>
+      seenThrough(rows, preview, T + 100, UPDATED, false);
+    expect(old([reply, update(T + 200), copy(T + 300)], LISTED_NOTE)).toBe(T + 100);
+    expect(old([reply, copy(T + 200), update(T + 300)], UPDATE_TEXT)).toBe(T + 100);
+    expect(old([reply, update(T + 200), copy(T + 250), copy(T + 300)], LISTED_NOTE)).toBe(T + 100);
   });
 });

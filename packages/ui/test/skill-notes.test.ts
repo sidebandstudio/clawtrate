@@ -34,6 +34,22 @@ const note = (text = TEXT, at = T + 40_000) => ({
   idempotencyKey: NOTE_KEY,
   __openclaw: { id: "n1", idempotencyKey: NOTE_KEY, seq: 3 },
 });
+/** The note as OpenClaw 2026.11.10 writes it, with the skill workshop's mark. */
+const markedNote = (at = T + 40_000) => ({
+  ...note(TEXT, at),
+  openclawDeliveryMirror: {
+    kind: "plugin-notice",
+    pluginId: "skill-workshop",
+    type: "skills-changed",
+    data: {
+      agentId: "pip",
+      runId: `skill-workshop-review:${REVIEW}`,
+      skills: [
+        { name: "trail-check", action: "created", summary: "check the trail before a hike" },
+      ],
+    },
+  },
+});
 const replyRow = (text: string, at: number) => ({
   role: "assistant",
   content: [{ type: "text", text }],
@@ -163,22 +179,25 @@ describe("F-560: the skill note in the rail", () => {
       unreadSeenOf(
         seen,
         false,
-        state([reply, updateNotice(T + 50_100), note(TEXT, T + 60_000)], LISTED),
+        state([reply, updateNotice(T + 50_100), markedNote(T + 60_000)], LISTED),
       ),
     ).toEqual({ [KEY]: T + 70_000 });
     expect(
       unreadSeenOf(
         seen,
         false,
-        state([reply, note(TEXT, T + 40_000), updateNotice(T + 50_100)], UPDATE_TEXT),
+        state([reply, markedNote(T + 40_000), updateNotice(T + 50_100)], UPDATE_TEXT),
       ),
     ).toEqual({ [KEY]: T + 70_000 });
   });
 
   it("on a read-only connection the viewer's own memory goes past the note; on one that writes, unread is the gateway's", () => {
-    const transcript = history([replyRow("The trail is open.", T + 2_000), note()]);
+    const transcript = history([replyRow("The trail is open.", T + 2_000), markedNote()]);
     const seen = { [KEY]: T + 2_050 };
     const readOnly = unreadSeenOf(seen, false, stateWith(transcript));
+    // An unmarked note (OpenClaw 2026.10.6), which a bot can imitate, is still to read.
+    const unmarked = history([replyRow("The trail is open.", T + 2_000), note()]);
+    expect(unreadSeenOf(seen, false, stateWith(unmarked))).toBe(seen);
     expect(readOnly).toEqual({ [KEY]: T + 40_100 });
     expect(summarize([listed], readOnly, null, readOnly).unread).toBe(false);
     // A viewer that read before the reply still has it to read.
