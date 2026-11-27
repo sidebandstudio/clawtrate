@@ -246,6 +246,41 @@ describe("a message written while the connection is down (F-287)", () => {
   });
 });
 
+describe("a waiting message goes only to the gateway it was written for (F-287, #749)", () => {
+  const ANOTHER =
+    "This message was written for another gateway, or one that hasn't said which it is, so it wasn't sent.";
+  /** A message written while the connection to "gateway-test" is down, and the gateway that answers next. */
+  const writtenOffline = async (answering: string) => {
+    const { client, gateway, transcript } = await openTask();
+    await until(() => client.state.connection.gatewayId === "gateway-test");
+    gateway.refuseConnections = true;
+    gateway.dropAll();
+    await until(() => client.state.connection.status !== "connected");
+    const id = client.sendMessage(KEY, "Written offline");
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: answering });
+    gateway.refuseConnections = false;
+    return { client, gateway, transcript, id };
+  };
+
+  it("F-287: another gateway answering at the same address is sent nothing, and the message stays, Not sent, with Try again", async () => {
+    const { client, gateway, transcript, id } = await writtenOffline("gateway-x");
+    await until(() => transcript().outbox[0]?.status === "failed", 4_000);
+    expect(transcript().outbox[0]).toMatchObject({ id, error: ANOTHER });
+    expect(gateway.calls("chat.send")).toEqual([]);
+    client.stop();
+  });
+
+  it("F-287: the gateway it was written for, back at the same address, is sent it once", async () => {
+    const { client, gateway, transcript, id } = await writtenOffline("gateway-test");
+    await until(() => gateway.calls("chat.send").length === 1, 4_000);
+    await sleep(100);
+    expect(sentTexts(gateway)).toEqual(["Written offline"]);
+    expect(gateway.calls("chat.send")[0]).toMatchObject({ idempotencyKey: id });
+    expect(transcript().outbox[0]?.status).not.toBe("failed");
+    client.stop();
+  });
+});
+
 describe("a pending question holds every outgoing message (F-468)", () => {
   it("holds a message queued with the modifier or the menu, and releases it into the queue", async () => {
     const { client, gateway, transcript } = await openTask();

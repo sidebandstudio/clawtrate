@@ -41,13 +41,22 @@ import {
 import { ADMIN_SCOPES, INTERACTIVE_SCOPES } from "../src/scopes.ts";
 import { createBridgeSession, parseBridgeCommand } from "../src/bridge.ts";
 import type { BotGuidesAnswer, GuidesChange } from "../src/guides.ts";
-import { agentEvent, grantingGateway, openTask } from "./client-harness.ts";
+import { agentEvent, grantingGateway, openTask as openNamedTask } from "./client-harness.ts";
 import { GatewayError, memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { ClawtrateClient, CONNECTION_CHANGED } from "../src/client.ts";
 import { PUBLISHED_SECTIONS } from "./guides-published.ts";
 import { FAST } from "./client-harness.ts";
 import { URL_A } from "./client-harness.ts";
+
+/** The harness's task on a gateway that names itself only once it is given files (`withFiles`). */
+const openTask = (options: Parameters<typeof openNamedTask>[0] = {}) => {
+  const gateway = options.gateway ?? grantingGateway();
+  gateway.handlers["gateway.identity.get"] ??= () => {
+    throw new GatewayError({ code: "UNKNOWN_METHOD", message: "gateway.identity.get" });
+  };
+  return openNamedTask({ ...options, gateway });
+};
 
 const hash = (text: string) => sha256Hex(utf8Bytes(text));
 /** What the section adds to each prompt, with the blank line after it. */

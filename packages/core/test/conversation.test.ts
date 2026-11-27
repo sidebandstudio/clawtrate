@@ -40,6 +40,8 @@ function grantingGateway() {
   gateway.handlers["chat.send"] = () => ({ runId: `run-${(run += 1)}`, status: "started" });
   gateway.handlers["chat.abort"] = () => ({ ok: true, aborted: true, runIds: [] });
   gateway.handlers["question.list"] = () => ({ questions: [] });
+  // A waiting message goes only to the gateway that names itself as the one it was written for.
+  gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway-test" });
   return gateway;
 }
 

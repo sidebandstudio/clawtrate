@@ -461,6 +461,9 @@ export const CONNECTION_CHANGED =
   "The connection changed since this screen was read, so nothing was sent. Look again, then try again.";
 /** Why a write stamped with one gateway's identity is not sent to another (`requireSameGateway`). */
 const ANOTHER_GATEWAY = "This change was made for another gateway, so nothing was sent.";
+/** Why a waiting message is not sent to the gateway that answered (`deliver`). */
+const WRITTEN_FOR_ANOTHER =
+  "This message was written for another gateway, or one that hasn't said which it is, so it wasn't sent.";
 /** Why a file a bot handed over isn't read: its row came from another gateway (`readChatFile`). */
 export const FILE_FROM_ANOTHER_GATEWAY =
   "This file was listed by another gateway, so it wasn't read. Look again, then try again.";
@@ -3774,8 +3777,25 @@ export class ClawtrateClient {
       if (resolved === "queue" && !held) return queueLocalRun(withMessage, message, this.now());
       return withMessage;
     });
+    this.stampGateway(key, message.id);
     if (message.status === "sending") this.enqueueDelivery(key, message.id);
     return message.id;
+  }
+
+  /**
+   * Record the gateway a message is written for (`OutgoingMessage.gatewayId`): the one named now,
+   * or, right after a hello, the name the connection it was written on gives when it answers.
+   */
+  private stampGateway(key: string, messageId: string): void {
+    const stamp = (gatewayId: string) =>
+      this.updateActivity(key, (activity) => updateMessage(activity, messageId, { gatewayId }));
+    const { gatewayId, status } = this.state.connection;
+    if (gatewayId !== null) return stamp(gatewayId);
+    // Asked before any delivery of it can be, so it is stamped before `deliver` reads it.
+    if (status === "connected")
+      void this.readGatewayIdentity().then((id) => {
+        if (id !== null) stamp(id);
+      });
   }
 
   /**
@@ -4389,6 +4409,7 @@ export class ClawtrateClient {
         ctx,
       );
     });
+    this.stampGateway(key, id);
     // As any message is sent: once, under its key, while it is still to be sent.
     if (!runError) this.enqueueDelivery(key, id);
     if (byCaller) {
@@ -4575,6 +4596,15 @@ export class ClawtrateClient {
       await this.ensureScope(WRITE_SCOPE);
     } catch (error) {
       if (waiting()) this.failDelivery(key, messageId, error, true);
+      return;
+    }
+    // Waiting for access or a reconnect, it may meet another gateway at the same address: it goes
+    // only to the one it was written for, named on this connection. No name on either side is a
+    // refusal, as for a screen's write (`requireSameGateway`).
+    const epoch = this.epoch;
+    const here = await this.readGatewayIdentity();
+    if (here !== this.outgoing(key, messageId)?.gatewayId || this.epoch !== epoch) {
+      if (waiting()) this.failDelivery(key, messageId, new Error(WRITTEN_FOR_ANOTHER), true);
       return;
     }
     let message = this.outgoing(key, messageId);

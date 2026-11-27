@@ -245,6 +245,25 @@ describe.each(["2026.10.6", "2026.11.10"])(
       client.stop();
     });
 
+    it("the connection drops between the two and another gateway answers at the same address: the message isn't sent there, and stays Not sent", async () => {
+      const gateway = gatewayOf(version);
+      const created = gateway.handlers["sessions.create"]!;
+      gateway.handlers["sessions.create"] = (params) => {
+        gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway-x" });
+        void Promise.resolve().then(() => Promise.resolve().then(() => gateway.dropAll()));
+        return created(params);
+      };
+      const { client } = await openTask({ gateway });
+      await until(() => client.state.connection.gatewayId === "gateway-test");
+      const connects = gateway.connects.length;
+      await client.createTask("otto", "Hello");
+      await until(() => outboxOf(client)[0]?.status === "failed", 3_000);
+      expect(gateway.connects.length).toBeGreaterThan(connects);
+      expect(outboxOf(client)).toMatchObject([{ text: "Hello", gatewayId: "gateway-test" }]);
+      expect(gateway.calls("chat.send")).toEqual([]);
+      client.stop();
+    });
+
     it("a creation the gateway made but whose setup failed: the message waits Not sent, for the person's Try again", async () => {
       const gateway = gatewayOf(version);
       const created = gateway.handlers["sessions.create"]!;

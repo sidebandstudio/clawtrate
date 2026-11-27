@@ -485,6 +485,7 @@ export const OUTGOING: Bound = object<OutgoingMessage>()({
   replyToId: ID,
   steer: ENUM,
   unmarked: FLAG,
+  gatewayId: ID,
 });
 const questionOption = object<QuestionOption>()({
   index: NUMBER,
