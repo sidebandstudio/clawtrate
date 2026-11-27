@@ -4081,8 +4081,9 @@ export class ClawtrateClient {
 
   /**
    * Create a task under a bot with its first message. `sessions.create`
-   * carries only `agentId`, `message`, `idempotencyKey` and `label`, which keep
-   * it at `operator.write`. The caller holds one interest in the new task, as
+   * carries only `agentId`, `idempotencyKey` and `label`, which keep it at
+   * `operator.write`; the message follows by `chat.send`, under the same key
+   * (`completeCreation`). The caller holds one interest in the new task, as
    * if it had called `openSession`, and releases it with `closeSession`.
    */
   async createTask(
