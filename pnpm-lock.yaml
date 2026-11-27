@@ -126,6 +126,9 @@ importers:
       expo-crypto:
         specifier: 58.0.8
         version: 58.0.8(expo@58.0.26)
+      expo-file-system:
+        specifier: 58.0.14
+        version: 58.0.14(expo@58.0.26)(react-native@0.88.1(@babel/core@7.29.13)(@types/react@19.3.0)(react@19.3.1))
       expo-font:
         specifier: 58.0.12
         version: 58.0.12(expo@58.0.26)(react-native@0.88.1(@babel/core@7.29.13)(@types/react@19.3.0)(react@19.3.1))(react@19.3.1)
