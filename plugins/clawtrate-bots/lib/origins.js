@@ -23,7 +23,7 @@ export const LIMITS = Object.freeze({
   runMs: 24 * 60 * 60 * 1000,
   /** Tool calls remembered for the tools' own lookup (2026.10.6 gives a tool no run id). */
   calls: 2048,
-  /** Runs dropped, or never seen starting, remembered so they never come back as new. */
+  /** Runs dropped, or never seen starting, remembered so they don't come back as new while remembered. */
   lost: 512,
   /** Sessions a bot's own call made (tasks), remembered so their runs are C. */
   tasks: 512,
@@ -213,8 +213,8 @@ export class RunOrigins {
       known.lastSeenAt = this.now();
       return known;
     }
-    // A run this store dropped, refused or saw only mid-way never comes back as
-    // new: whatever it had read is gone with it.
+    // A run this store dropped, refused or saw only mid-way doesn't come back as
+    // new while it is remembered (the last LIMITS.lost): whatever it had read is gone with it.
     if (this.lost.has(runId)) return null;
     const facts = factsFrom(ctx);
     const parent = this.taskOf(facts);
@@ -396,7 +396,8 @@ export class RunOrigins {
   /**
    * A run a call or a result names: held, or lost. A run neither held nor lost
    * started before the plugin saw it (loaded, enabled or given conversation
-   * access mid-way): it is lost from now on, so it never comes back as new.
+   * access mid-way): it is lost from now on, so it doesn't come back as new
+   * while it is remembered (the last LIMITS.lost lost runs).
    */
   seen(runId) {
     const run = this.lookup(runId);
