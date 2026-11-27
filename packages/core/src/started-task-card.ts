@@ -121,13 +121,15 @@ export type RefusedModel = { provider: string; model: string };
  *   provider wildcard to <list>, or choose an allowed model.`
  */
 export function modelRefusal(error: string | null): RefusedModel | null {
+  // Checked before trimming, which would drop a leading or trailing U+FEFF and keep the rest.
+  if (UNSHOWABLE.test(error ?? "")) return null;
   const text = error?.trim() ?? "";
   // The model's name echoes what the bot asked for. One with a control or format character (a
   // bidirectional override or isolate, a zero-width character) could be drawn as another name,
   // and cleaning it would show a name the gateway didn't give: so it is no recognised refusal,
   // and the card keeps the gateway's words, cleaned and quoted, as for any other. A text past the
   // card's bound for those words is not read either.
-  if (text.length > MAX_REFUSAL_CHARS || UNSHOWABLE.test(text)) return null;
+  if (text.length > MAX_REFUSAL_CHARS) return null;
   const found = MODEL_REFUSAL.exec(text);
   return found ? { provider: found[1]!, model: found[2]! } : null;
 }
@@ -364,8 +366,11 @@ function startedTaskCard(
   const taskKey = accepted ? str(details?.childSessionKey) : null;
   const childRun = accepted ? str(details?.runId) : null;
   const task = startedTaskOf(input.tasks, taskKey, input.taskKey);
-  // A task made whose first run didn't start (only `sessions_create` says so).
-  const firstRunFailed = accepted && details?.runStarted === false;
+  // A task made whose first run didn't start (only `sessions_create` says so): `runStarted: false`
+  // with the gateway's `runError`. Without one it is a task made with no message, idle by design
+  // (`createSessionsCreateTool` adds `runError` only when a message was given).
+  const firstRunFailed =
+    accepted && details?.runStarted === false && str(details?.runError) !== null;
   const labelText = str(args?.label);
   const label = labelText ? cleanLine(labelText, MAX_TITLE_CHARS) || null : null;
   const hasResult = (raw?.result !== null && raw?.result !== undefined) || step.result !== null;
@@ -378,7 +383,7 @@ function startedTaskCard(
     state = task ? FROM_STATUS[task.status] : "started";
     // Its brief never ran: failed, until its row says a run of its own (the person wrote in it).
     if (firstRunFailed && (state === "started" || state === "idle")) state = "failed";
-    if (firstRunFailed) reason = str(details?.runError) ?? "The gateway didn't say why.";
+    if (firstRunFailed) reason = str(details?.runError);
   } else if (status === "forbidden" || status === "error") {
     state = "couldnt-start";
     given = str(details?.error);

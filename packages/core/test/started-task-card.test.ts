@@ -866,6 +866,12 @@ describe("F-587: a start's words a bot can shape, and a task made but not run (#
       // In the provider, too.
       expect(modelRefusal(`model not allowed: open${odd}ai/gpt-5.5`)).toBeNull();
     }
+    // Before any trimming: a leading or trailing U+FEFF (a format character) is no refusal either.
+    for (const edge of [
+      "model not allowed: openai/gpt-5.5\uFEFF",
+      "\uFEFFmodel not allowed: openai/gpt-5.5",
+    ])
+      expect(modelRefusal(edge)).toBeNull();
     // A text past the card's bound for the gateway's words is not read either.
     expect(modelRefusal(`model not allowed: openai/${"x".repeat(MAX_REFUSAL_CHARS)}`)).toBeNull();
     expect(modelRefusal("model not allowed: openai/gpt-5.5")).toEqual({
@@ -899,6 +905,16 @@ describe("F-587: a start's words a bot can shape, and a task made but not run (#
       state: "working",
       firstRunFailed: true,
     });
+    // Made with no message, it is idle by design: `runStarted: false` and no `runError`, and
+    // the card is the ordinary one, not failed.
+    const idle = { sessionKey: CHILD, sessionId: "s", runStarted: false };
+    for (const tasks of [{}, listed("idle")])
+      expect(cards(createRows(idle), tasks)[0]).toMatchObject({
+        state: Object.keys(tasks).length ? "idle" : "started",
+        taskKey: CHILD,
+        firstRunFailed: false,
+        reason: null,
+      });
     // Started, as before.
     const ran = { sessionKey: CHILD, sessionId: "s", runStarted: true, runId: CHILD_RUN };
     expect(cards(createRows(ran), listed("idle"))[0]).toMatchObject({
