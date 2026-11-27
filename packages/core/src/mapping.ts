@@ -221,27 +221,46 @@ const PLACEHOLDER_NAME =
  * one crustacean from the gateway's own lists, as it always writes them there.
  */
 export function isPlaceholderName(row: RawRecord, key: string): boolean {
-  if (str(row.label)) return false;
-  const rest = /^agent:[^:]+:(.*)$/u.exec(key)?.[1] ?? "";
-  if (!/^(?:dashboard:|ios-|node-)/u.test(rest)) return false;
+  if (str(row.label) || !titledByGateway(key)) return false;
   return typeof row.displayName === "string" && PLACEHOLDER_NAME.test(row.displayName);
 }
 
+/** Whether the gateway titles this key's task itself (`isAutoTitleSessionKey`, both versions). */
+function titledByGateway(key: string): boolean {
+  const rest = /^agent:[^:]+:(.*)$/u.exec(key)?.[1] ?? "";
+  return /^(?:dashboard:|ios-|node-)/u.test(rest);
+}
+
+/** Names of a task the gateway's row doesn't carry, which the client knows. */
+export type TaskTitleNames = {
+  /** A name a model wrote for the task. Nothing gives one yet: this is its place in the order. */
+  generated?: string | null;
+  /** The title the client made from the task's first message (`firstMessageTitles`). */
+  firstMessage?: string | null;
+};
+
 /**
- * A task's title: its label, else the gateway's derived title or display name (without the marker
- * on a message from Clawtrate), else the key's.
- * The gateway's placeholder counts as no title (its derived title is then the same name), and the
- * title from the task's first message, where the client knows it, comes before the key's.
+ * A task's title: the one place it is decided, the strongest that exists, in this order.
+ * 1. A name someone chose: the session's `label`, which the app never writes over. A person's
+ *    rename and a label given at creation are one; so is a bot's name for a task it started
+ *    (`sessions_spawn`): the gateway keeps them in the same field.
+ * 2. A generated name (`names.generated`).
+ * 3. A real title the gateway supplied: its derived title, else its display name, each without
+ *    the marker on a message from Clawtrate; never its placeholder (`isPlaceholderName`), which
+ *    its derived title then repeats.
+ * 4. The name made from the task's first message, on a task the gateway titles itself.
+ * 5. The key's own: Main, New task.
  */
-function taskTitle(row: RawRecord, key: string, firstMessageTitle: string | null): string {
-  if (isPlaceholderName(row, key)) {
-    const derived = row.derivedTitle !== row.displayName ? derivedTitle(row.derivedTitle) : null;
-    return derived ?? firstMessageTitle ?? fallbackTitle(key);
-  }
+export function taskTitle(row: RawRecord, key: string, names: TaskTitleNames = {}): string {
+  const placeholder = isPlaceholderName(row, key);
+  const supplied = (value: unknown) =>
+    placeholder && value === row.displayName ? null : derivedTitle(value);
   return (
     str(row.label) ??
-    derivedTitle(row.derivedTitle) ??
-    derivedTitle(row.displayName) ??
+    str(names.generated) ??
+    supplied(row.derivedTitle) ??
+    supplied(row.displayName) ??
+    (titledByGateway(key) ? str(names.firstMessage) : null) ??
     fallbackTitle(key)
   );
 }
@@ -275,13 +294,10 @@ export function rowBotOf(key: string, row: RawRecord): string | null {
 }
 
 /**
- * One session row to a task, or null for rows the sidebar should not show. `firstMessageTitle`
- * is the title the client made from the task's first message, when it knows it.
+ * One session row to a task, or null for rows the sidebar should not show. `names` are the
+ * task's names the client knows beyond the row (`taskTitle`).
  */
-export function mapSessionRow(
-  row: RawRecord,
-  firstMessageTitle: string | null = null,
-): Task | null {
+export function mapSessionRow(row: RawRecord, names: TaskTitleNames = {}): Task | null {
   const key = sessionRowKey(row);
   if (!key || !isTaskSession(row)) return null;
   const botId = rowBotOf(key, row);
@@ -291,7 +307,7 @@ export function mapSessionRow(
     key,
     botId,
     sessionId: str(row.sessionId),
-    title: channel ? channelChatTitle(row, channel) : taskTitle(row, key, firstMessageTitle),
+    title: channel ? channelChatTitle(row, channel) : taskTitle(row, key, names),
     preview: plainPreview(str(row.lastMessagePreview)),
     updatedAt: num(row.updatedAt) ?? num(row.lastActivityAt) ?? num(row.createdAt),
     status: taskStatus(row),
@@ -372,7 +388,9 @@ export function groupTasks(
   const grouped: Record<string, Task[]> = {};
   for (const row of rows) {
     const key = sessionRowKey(row);
-    const task = mapSessionRow(row, key ? (options.firstMessageTitle?.(key) ?? null) : null);
+    const task = mapSessionRow(row, {
+      firstMessage: key ? (options.firstMessageTitle?.(key) ?? null) : null,
+    });
     if (!task || (task.channel && options.showChannelChats !== true)) continue;
     if (task.otherTool && options.showOtherToolSessions !== true) continue;
     (grouped[task.botId] ??= []).push(task);

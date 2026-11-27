@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import { MAX_FIRST_MESSAGE_TITLES } from "../src/client.ts";
-import { groupTasks, isPlaceholderName, mapSessionRow } from "../src/mapping.ts";
+import { groupTasks, isPlaceholderName, mapSessionRow, taskTitle } from "../src/mapping.ts";
 import { readMessageSearch } from "../src/search.ts";
 import { mapArchivedRow } from "../src/task-actions.ts";
 import { grantingGateway, openTask, URL_B } from "./client-harness.ts";
@@ -34,7 +34,7 @@ const ROW_1110 = {
 };
 
 const title = (row: Record<string, unknown>, first: string | null = null) =>
-  mapSessionRow(row, first)?.title;
+  mapSessionRow(row, { firstMessage: first })?.title;
 
 describe("the gateway's placeholder name", () => {
   it("counts as no title on both versions: the first message's title, else New task", () => {
@@ -89,7 +89,8 @@ describe("the gateway's placeholder name", () => {
       expect(isPlaceholderName({ key: KEY, displayName }, KEY)).toBe(false);
     }
     expect(title({ key: KEY, derivedTitle: "Plan the beds" }, "Plan")).toBe("Plan the beds");
-    expect(title({ key: KEY }, "Plan")).toBe("New task");
+    expect(title({ key: KEY }, "Plan")).toBe("Plan");
+    expect(title({ key: KEY })).toBe("New task");
   });
 
   it("is no title in the archived list or in search's titles either", () => {
@@ -104,22 +105,40 @@ describe("the gateway's placeholder name", () => {
     expect(search.titles).toEqual({ [KEY]: "New task", "agent:main:garden": "calm-crab" });
   });
 
-  it("leaves every other task's title as it was", () => {
+  it("leaves every titled task's title as it was; the first message names one with none", () => {
     const grouped = groupTasks(
       [
         { key: "agent:main:main" },
+        { key: "agent:main:garden" },
         { key: "agent:main:dashboard:2cc23cbf-30e2-4416-837a-56d92c983588" },
         { key: "agent:main:dashboard:abc", derivedTitle: "From the message", displayName: "x" },
         { key: "agent:main:dashboard:def", displayName: "A model's title" },
       ],
-      { firstMessageTitle: () => "Never used" },
+      { firstMessageTitle: (key) => (key.includes("2cc23cbf") ? "What I asked" : "Not shown") },
     );
     expect(grouped.main!.map((task) => task.title).sort()).toEqual([
       "A model's title",
       "From the message",
       "Main",
-      "New task",
+      "What I asked",
+      "garden",
     ]);
+  });
+});
+
+describe("the order of a task's names", () => {
+  it("is a label, a generated name, the gateway's real title, the first message, the key's", () => {
+    const names = { generated: "Generated", firstMessage: "First message" };
+    const row = { key: KEY, label: "Typed", derivedTitle: "Derived", displayName: "Shown" };
+    expect(taskTitle(row, KEY, names)).toBe("Typed");
+    expect(taskTitle({ ...row, label: undefined }, KEY, names)).toBe("Generated");
+    expect(taskTitle({ ...row, label: undefined }, KEY, { firstMessage: "First" })).toBe("Derived");
+    expect(taskTitle({ key: KEY, displayName: "Shown" }, KEY, { firstMessage: "First" })).toBe(
+      "Shown",
+    );
+    expect(taskTitle(ROW_1110, KEY, { firstMessage: "First" })).toBe("First");
+    expect(taskTitle(ROW_1110, KEY, names)).toBe("Generated");
+    expect(taskTitle(ROW_1110, KEY)).toBe("New task");
   });
 });
 
