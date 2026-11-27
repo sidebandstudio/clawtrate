@@ -2218,10 +2218,13 @@ describe("the iOS app", () => {
       expect(asked[0]!.method).toBe("GET");
       expect(asked[0]!.cookie).toBeUndefined();
 
+      // A person closes the sheet with a tap outside it. The tap is at a point with no control
+      // under it, near the top beside the title: the centre of the sheet's full-screen dismiss
+      // region lands on the row's own Save button, and that tap didn't close it.
+      const tapOutside: Step = { tapOn: { point: "75%,11%" } };
       // Closed without choosing: the row is ready again and the file is gone.
       await steps("file-sheet-closed", [
-        // The sheet's own dismiss region, the area outside it.
-        tap({ id: "PopoverDismissRegion" }),
+        tapOutside,
         waitGone("Save to Files", 30_000),
         see(save),
         notSee({ id: "bot-file-note", text: lit(BOT_FILE_WORDS.saved) }),
@@ -2230,7 +2233,7 @@ describe("the iOS app", () => {
       expect(sharedFolders()).not.toContain(folder);
 
       // Ready again: Save opens the sheet a second time, for a folder of its own. Save to Files
-      // picked there and its picker cancelled, the sheet is done with, the row is ready, and that
+      // picked there and ended without saving, the sheet is done with, the row is ready, and that
       // folder is gone too: nothing waits for an answer that doesn't come.
       await steps("file-sheet-again", [
         tap(save),
@@ -2244,15 +2247,13 @@ describe("the iOS app", () => {
       expect(again).not.toBe(folder);
       await steps("file-save-to-files-cancelled", [
         tap("Save to Files"),
-        waitFor("Cancel", 30_000),
-        tap("Cancel"),
-        {
-          runFlow: {
-            // If the sheet stays up to choose another activity, it is closed as above.
-            when: { visible: "Save to Files" },
-            commands: [tap({ id: "PopoverDismissRegion" })],
-          },
-        },
+        // On the Simulator iOS can end Save to Files without a picker; where one shows, it is
+        // cancelled, and a sheet left up to choose again is closed with a tap outside it.
+        { extendedWaitUntil: { visible: "Cancel", timeout: 15_000, optional: true } },
+        { runFlow: { when: { visible: "Cancel" }, commands: [tap("Cancel")] } },
+        { runFlow: { when: { visible: "Save to Files" }, commands: [tapOutside] } },
+      ]);
+      await steps("file-save-to-files-closed", [
         waitGone("Save to Files", 30_000),
         see(save),
         // Cancelled is not saved: the row says nothing, so a wrong "Saved to Files." fails here.
