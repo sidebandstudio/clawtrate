@@ -391,8 +391,10 @@ test("F-562: the gateway's own bot shows when it is the only bot, and leaves onc
     await expect(botRow(page, "Wren")).toBeVisible({ timeout: 30_000 });
     await expect(botRow(page, own.name)).toHaveCount(0);
     await expect(rail(page).getByTestId("bot")).toHaveCount(1);
-    // A bot just made has no tasks yet: its empty conversation names it.
-    await expect(page.getByTestId("transcript")).toContainText(`Conversations with ${name}`);
+    // A bot just made has no tasks yet: its main conversation opens, empty, and names it.
+    await expect(page.getByTestId("transcript")).toContainText(
+      `Ask ${name} anything, or to put work in a task.`,
+    );
     await expect(rail(page).getByTestId("primary-star")).toHaveCount(0);
   } finally {
     await admin.close();

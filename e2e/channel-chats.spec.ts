@@ -181,8 +181,10 @@ process.once("exit", () => host?.child.kill("SIGKILL"));
 test("F-519: on a read-only connection, chats from Discord and Slack stay out of the list, its preview, unread and order until shown, and the main conversation stays", async () => {
   test.setTimeout(420_000);
   const key = keys(botId!);
+  // The bot's own task is listed under it; its main conversation, fed by Telegram, is the bot's
+  // own row, not a task row.
   await unfold();
-  await expect(tasks()).toHaveCount(2, { timeout: 30_000 });
+  await expect(tasks()).toHaveCount(1, { timeout: 30_000 });
   const native = (await rows(botId!)).find((row) => row.key === key.native)!;
   const preview = botRow().first().locator(".bot-preview");
   await expect(preview).toHaveText(plainPreview(native.lastMessagePreview ?? null)!);
@@ -200,7 +202,7 @@ test("F-519: on a read-only connection, chats from Discord and Slack stay out of
   await turn(key.slack, `Quick question ${STAMP}`, { id: "slack", to: "user:U0123" });
   await admin.request("sessions.patch", { key: key.discord, unread: true });
   // Still off: the chats have arrived and nothing shows them.
-  await expect(tasks()).toHaveCount(2);
+  await expect(tasks()).toHaveCount(1);
   await expect(botRow().first().locator(".unread-dot")).toHaveCount(0);
   const listed = await rows(botId!);
   expect(listed.find((row) => row.key === key.discord)?.channel).toBe("discord");
@@ -211,16 +213,20 @@ test("F-519: on a read-only connection, chats from Discord and Slack stay out of
 
   // Shown: the rows the host already holds come back, with no reconnect.
   await setShown(true);
-  await expect(tasks()).toHaveCount(4, { timeout: 30_000 });
+  await expect(tasks()).toHaveCount(3, { timeout: 30_000 });
   await expect(tasks().filter({ hasText: "Discord chat" })).toHaveCount(1);
   await expect(botRow().first().locator(".unread-dot")).toHaveCount(1, { timeout: 20_000 });
   await expect(preview).not.toHaveText(plainPreview(native.lastMessagePreview ?? null)!);
 
   // Hidden again, the default: the list, the preview, unread and the order are as before.
   await setShown(false);
-  await expect(tasks()).toHaveCount(2);
+  await expect(tasks()).toHaveCount(1);
   await expect(tasks().filter({ hasText: "Discord chat" })).toHaveCount(0);
-  await expect(tasks().filter({ hasText: "Main" })).toHaveCount(1);
+  // The main conversation stays: the bot's row opens it, with what came from Telegram.
+  await botRow().first().click();
+  await expect(page.getByTestId("transcript")).toContainText(`Hello from Telegram ${STAMP}`, {
+    timeout: 30_000,
+  });
   await expect(preview).toHaveText(plainPreview(native.lastMessagePreview ?? null)!);
   await expect(botRow().first().locator(".unread-dot")).toHaveCount(0);
   expect(await botNames()).toEqual(order);
@@ -230,7 +236,7 @@ test("F-519: on a read-only connection, chats from Discord and Slack stay out of
   await page.reload();
   await railShowsBot();
   await unfold();
-  await expect(tasks()).toHaveCount(4, { timeout: 30_000 });
+  await expect(tasks()).toHaveCount(3, { timeout: 30_000 });
   await setShown(false);
-  await expect(tasks()).toHaveCount(2);
+  await expect(tasks()).toHaveCount(1);
 });
