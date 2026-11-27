@@ -149,8 +149,9 @@ const answeredNoText = (messages: unknown, runId: string): boolean =>
  * (`run-failed-before-reply`, `display: false`), and `chat.history` doesn't return it. So the rows
  * alone rebuild a completed run, and only the row (`lastRunId`, `lastRunError` and the mark) says
  * otherwise. The row names its latest run alone, so no other run takes its failure; a run with
- * text in any of its rows answered, and never does. Its failure has no message unless the run's
- * own is keyed (#686).
+ * text in any of its rows answered, and never does, nor does one with no row that answered nothing
+ * (`quietInHistory`), which #680 reads as a quiet answer. Its failure has no message unless the
+ * run's own is keyed (#686).
  */
 export function failedByRow(
   runs: Run[],
@@ -165,7 +166,8 @@ export function failedByRow(
   let changed = false;
   const settled = runs.map((run) => {
     if (!ids.has(run.id) || run.state !== "completed" || !run.outcomeKnown) return run;
-    if (!answeredNoText(messages, run.id)) return run;
+    // A quiet answer by #680's own reading (no row of it answered nothing) is an answer too.
+    if (!answeredNoText(messages, run.id) || quietInHistory(messages, run.id)) return run;
     changed = true;
     return {
       ...run,

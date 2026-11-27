@@ -192,7 +192,7 @@ describe("#766: no other run takes the row's failure, and a run that answered ne
     expect(answered.run("wake-2")?.state).toBe("completed");
   });
 
-  it("a run with text in any row answered: never failed by its row", async () => {
+  it("a run that answered, with text in any row or quietly (#680): never failed by its row", async () => {
     for (const rows of [
       [eventRow("evt-5", 1), thinkingRow("wake-5", 2), replyRow("wake-5", 3)],
       [eventRow("evt-5", 1), replyRow("wake-5", 2), thinkingRow("wake-5", 3)],
@@ -210,6 +210,8 @@ describe("#766: no other run takes the row's failure, and a run that answered ne
         thinkingRow("wake-5", 4),
       ],
       [eventRow("evt-5", 1), { ...thinkingRow("wake-5", 2), content: "An answer as a string." }],
+      // A step that ends the run, and no row that answered nothing: #680's quiet answer.
+      [eventRow("evt-5", 1), { ...toolCallRow("wake-5", 2), stopReason: "stop" }],
     ]) {
       const { run } = await reload(markedRow("wake-5"), rows);
       expect(run("wake-5")).toMatchObject({ state: "completed", error: null });
