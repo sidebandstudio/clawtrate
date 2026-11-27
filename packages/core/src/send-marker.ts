@@ -262,7 +262,9 @@ const MARKER_SENTENCES = [MARKER_SENTENCE, MARKER_AS_SEARCHED.slice(MARKER_SENTE
 export function markerTextOut(snippet: string): { rest: string; found: boolean } {
   let found = false;
   const segments = fold(snippet)
-    .split(/\s*…\s*/)
+    // Both versions' excerpts are one window: their "…" stands only at its start and its end (the
+    // cap's may follow the end's), and one inside it is the person's own.
+    .split(/^\s*…\s*|(?:\s*…)+\s*$/)
     .map((segment) => {
       let rest = segment.trim();
       // At the segment's edges first, where a start or an end of the marker runs whole: a
