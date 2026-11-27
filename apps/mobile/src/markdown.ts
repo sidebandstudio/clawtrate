@@ -394,18 +394,26 @@ export function besideShown(link: Extract<Inline, { t: "link" }>): string | null
 }
 
 /**
+ * Text with each run of `%XX` escapes decoded on its own, so a malformed escape in one place
+ * can't keep the rest from decoding. A run that isn't valid UTF-8 has its ASCII escapes decoded
+ * one by one and its others left as written.
+ */
+function decodeRuns(text: string, decode: (escaped: string) => string): string {
+  return text.replace(/(?:%[0-9a-f]{2})+/gi, (run) => {
+    try {
+      return decode(run);
+    } catch {
+      return run.replace(/%[0-7][0-9a-f]/gi, (escape) => decode(escape));
+    }
+  });
+}
+
+/**
  * Whether an address carries a credential this device holds, or one already scrubbed, as written
  * or decoded: by `decodeURI`, and by `decodeURIComponent`, which also decodes `%40`, `%2F`, `%3A`
  * and the other reserved characters. Such a link is never handed to the system.
  */
 export function carriesCredential(url: string, redact: (text: string) => string): boolean {
-  const forms = [url];
-  for (const decode of [decodeURI, decodeURIComponent]) {
-    try {
-      forms.push(decode(url));
-    } catch {
-      // An address that doesn't decode is judged as written.
-    }
-  }
+  const forms = [url, decodeRuns(url, decodeURI), decodeRuns(url, decodeURIComponent)];
   return forms.some((form) => redact(form) !== form || form.includes(REDACTED));
 }

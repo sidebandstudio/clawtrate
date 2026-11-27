@@ -371,6 +371,10 @@ describe("the bot's markdown on iOS", () => {
     // An address that doesn't decode is judged as written.
     expect(carries("https://example.test/%E0%A4%A")).toBe(false);
     expect(carries("https://example.test/%E0%A4%A?token=demo@token/x:y")).toBe(true);
+    // A malformed escape beside an encoded one doesn't keep the encoded one from decoding.
+    expect(carries("https://example.test/%E0%A4%A?token=demo%40token%2Fx%3Ay")).toBe(true);
+    expect(carries("https://example.test/?token=demo%40token%2Fx%3Ay&n=%E0%A4%A")).toBe(true);
+    expect(carries("https://example.test/%FF%40?token=demo%40token%2Fx%3Ay")).toBe(true);
   });
 
   it("shows raw HTML as text", () => {
