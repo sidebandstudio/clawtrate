@@ -25,6 +25,7 @@ function host({
   version = "2026.10.6",
   config = CONFIG as Json,
   sessions = [] as Json[] | ((agentId: string) => Json[]),
+  describeHolds = undefined as ((origin: Json) => string[]) | undefined,
 } = {}) {
   const hooks = new Map<string, Handler>();
   const tools = new Map<
@@ -45,6 +46,7 @@ function host({
     slots: {},
     config: () => config,
     sessions: (agentId: string) => (typeof sessions === "function" ? sessions(agentId) : sessions),
+    describeHolds,
   } as never);
   const fire = (name: string, event: Json, ctx: Json = {}) => hooks.get(name)!(event, ctx);
   const tool = async (name: string, ctx: Json, callId: string, params: Json = {}) =>
@@ -293,6 +295,35 @@ describe("fix round", () => {
     h.fire("before_prompt_build", {}, typed);
     h.fire("before_tool_call", call("clawtrate_tasks", {}, "c2"), toolCtx);
     expect(await h.tool("clawtrate_tasks", toolCtx, "c2")).toMatch(/«Under the sixtieth»/);
+  });
+
+  it("clawtrate_bots find searches every other bot, past the 50 the full list shows", async () => {
+    const entries: Json = { pip: {} };
+    for (let i = 1; i <= 60; i += 1) entries[`bot${i}`] = { identity: { name: `Bot ${i}` } };
+    const h = host({ config: { ...CONFIG, agents: { ...CONFIG.agents, entries } } as Json });
+    h.fire("before_prompt_build", {}, typed);
+    h.fire("before_tool_call", call("clawtrate_bots", { find: "Bot 60" }, "c2"), toolCtx);
+    const found = await h.tool("clawtrate_bots", toolCtx, "c2", { find: "Bot 60" });
+    expect(found).toMatch(/- id bot60;/);
+  });
+
+  it("with conversation access off, every run is C with something read, in the holds and in clawtrate_here alike", async () => {
+    const seen: Json[] = [];
+    const config = structuredClone(CONFIG) as Json;
+    const h = host({
+      config,
+      describeHolds: (origin) => {
+        seen.push(origin);
+        return [];
+      },
+    });
+    // The run was recorded while access was on; then the person turned it off.
+    h.fire("before_prompt_build", {}, typed);
+    (config as { plugins: Json }).plugins = { entries: {} };
+    h.fire("before_tool_call", call("clawtrate_here", {}, "c2"), toolCtx);
+    const text = await h.tool("clawtrate_here", toolCtx, "c2");
+    expect(seen.at(-1)).toMatchObject({ origin: "C", read: "lost", kind: "unknown" });
+    expect(text).not.toMatch(/can't tell yet/);
   });
 
   it("clawtrate_tasks lists the tasks it started under other bots", async () => {

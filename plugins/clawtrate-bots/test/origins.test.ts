@@ -558,3 +558,38 @@ describe("fix round: steers", () => {
     expect(typed.steers).toBe(1);
   });
 });
+
+describe("tasks and what their starter read", () => {
+  const prompt = (runId: string, sessionKey: string) => ({
+    runId,
+    sessionKey,
+    agentId: "pip",
+    trigger: "user",
+    channel: "webchat",
+  });
+
+  it("a task whose starter the plugin doesn't hold carries 'something lost', never 'nothing read'", () => {
+    const store = new RunOrigins();
+    const starter = store.seen("r-unheld"); // first seen at its call: lost
+    store.sawSpawn(starter, "pip", "c1");
+    const early = store.sawPrompt(prompt("r-task", "agent:pip:dashboard:1"))!;
+    expect(early.kind).toBe("task");
+    expect(early.readOutside).toMatchObject({ source: "lost" });
+    store.sawSpawned(starter, "agent:pip:dashboard:2", "c2");
+    const late = store.sawPrompt(prompt("r-task2", "agent:pip:dashboard:2"))!;
+    expect(late.readOutside).toMatchObject({ source: "lost" });
+  });
+
+  it("a spawn whose result named its session, or failed, no longer waits for a first run", () => {
+    const store = new RunOrigins();
+    const starter = store.sawPrompt(prompt("r1", "agent:pip:main"))!;
+    store.sawSpawn(starter, "pip", "c1");
+    store.sawSpawned(starter, "agent:pip:dashboard:1", "c1");
+    expect(store.sawPrompt(prompt("r-task", "agent:pip:dashboard:1"))!.kind).toBe("task");
+    // A session the person starts later is not taken for that task.
+    expect(store.sawPrompt(prompt("r-own", "agent:pip:dashboard:9"))!.kind).toBe("typed");
+    store.sawSpawn(starter, "pip", "c2");
+    store.dropSpawn("c2");
+    expect(store.sawPrompt(prompt("r-own2", "agent:pip:dashboard:10"))!.kind).toBe("typed");
+  });
+});

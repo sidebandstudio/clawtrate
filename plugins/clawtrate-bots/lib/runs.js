@@ -128,11 +128,11 @@ export function otherBots(config, agentId) {
   );
 }
 
-/** The other bots as clawtrate_bots lists them (at most 50), with whether each is in reach. */
-export function botsFacts(config, agentId) {
+/** The other bots as clawtrate_bots lists them (at most `limit`), with whether each is in reach. */
+export function botsFacts(config, agentId, limit = 50) {
   const reach = reachOf(config, agentId);
   return otherBots(config, agentId)
-    .slice(0, 50)
+    .slice(0, limit)
     .map((id) => {
       const other = botEntry(config, id) ?? {};
       const model = other.model?.primary ?? other.model;
@@ -191,8 +191,12 @@ export function createRuns(api, options = {}) {
             sessionKey: ctx?.sessionKey,
             toolCallId: event?.toolCallId ?? ctx?.toolCallId,
           });
-    if (MAKES_TASK.has(String(event?.toolName)) && !event?.error)
-      origins.sawSpawned(run, madeSession(event?.result));
+    if (MAKES_TASK.has(String(event?.toolName))) {
+      const callId = event?.toolCallId ?? ctx?.toolCallId;
+      // A failed call made no task: its wait for one is over.
+      if (event?.error) origins.dropSpawn(callId);
+      else origins.sawSpawned(run, madeSession(event?.result), callId);
+    }
     if (readsOutside(event) && run && !run.lost)
       origins.markRead(run, sourceOf(event.toolName), event.toolName);
   });
@@ -202,9 +206,19 @@ export function createRuns(api, options = {}) {
    * is marked read from outside for every call but those 4.3 leaves out, at
    * the call, so a later call in the same Code Mode cell already sees it.
    */
+  /**
+   * A call's origin. With conversation access off the plugin no longer sees a
+   * run's prompts or the messages that join it, so a record it kept from before
+   * may be missing what the run read: every run is C, with something read.
+   */
+  const vouched = (origin) =>
+    conversationAccess(config())
+      ? origin
+      : { origin: "C", read: "lost", kind: "unknown", why: "access" };
+
   function sawCall(event, ctx) {
     const run = origins.sawCall(event, ctx);
-    const origin = originOf(run, ctx?.requester, { versionKnown: known });
+    const origin = vouched(originOf(run, ctx?.requester, { versionKnown: known }));
     return { run, origin };
   }
   function afterDecision(run, event, allowed, ctx) {
@@ -217,7 +231,11 @@ export function createRuns(api, options = {}) {
       } catch {
         // Two spellings disagree: the hold refuses it, and nothing starts.
       }
-      origins.sawSpawn(run, (bot ?? ctx?.agentId ?? run?.agentId ?? "").toLowerCase() || null);
+      origins.sawSpawn(
+        run,
+        (bot ?? ctx?.agentId ?? run?.agentId ?? "").toLowerCase() || null,
+        event?.toolCallId ?? ctx?.toolCallId,
+      );
     }
     if (run && !run.lost && readsOutside(event))
       origins.markRead(run, sourceOf(event.toolName), event.toolName);
@@ -230,13 +248,15 @@ export function createRuns(api, options = {}) {
       sessionKey: toolCtx?.sessionKey,
       toolCallId,
     });
-    const origin = originOf(
-      run,
-      toolCtx?.requester ??
-        (toolCtx?.messageChannel
-          ? { channel: toolCtx.messageChannel, senderIsOwner: toolCtx.senderIsOwner }
-          : undefined),
-      { versionKnown: known },
+    const origin = vouched(
+      originOf(
+        run,
+        toolCtx?.requester ??
+          (toolCtx?.messageChannel
+            ? { channel: toolCtx.messageChannel, senderIsOwner: toolCtx.senderIsOwner }
+            : undefined),
+        { versionKnown: known },
+      ),
     );
     return { run, origin: { ...origin, channel: run?.channel ?? null } };
   }
@@ -249,9 +269,10 @@ export function createRuns(api, options = {}) {
       const key = toolCtx?.sessionKey ?? "";
       const entry = sessions(agentId).find?.((s) => s?.sessionKey === key)?.entry;
       const task = taskOf(key, entry, agentId);
-      const where = conversationAccess(cfg) ? origin : { ...origin, kind: "unknown" };
+      // The same origin for both halves of the answer: with conversation access
+      // off it is already "unknown", C, with something read (vouched).
       return hereAnswer({
-        origin: where,
+        origin,
         session: {
           kind: /^agent:[^:]+:main$/.test(key) ? "main" : "task",
           title: task.title,
@@ -288,7 +309,11 @@ export function createRuns(api, options = {}) {
       if (find !== undefined && (typeof find !== "string" || !find.trim() || find.length > 80))
         throw new Error("find must be a name of 1 to 80 characters.");
       return {
-        ...botsAnswer({ bots: botsFacts(config(), toolCtx?.agentId), find }),
+        // With find, the whole roster is searched; the answer is bounded either way.
+        ...botsAnswer({
+          bots: botsFacts(config(), toolCtx?.agentId, find === undefined ? 50 : Infinity),
+          find,
+        }),
         source: "names",
       };
     },
