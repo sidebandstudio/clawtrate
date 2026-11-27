@@ -1736,8 +1736,12 @@ export class ClawtrateClient {
   private quietReconnect = false;
   /** The user asked for write access and it is not settled yet. */
   private upgradeWanted = false;
-  /** The ask wanted was raised only for operations waiting on it, none by the person (#782). */
-  private upgradeForWaiters = false;
+  /**
+   * What the person asked for themselves within the ask wanted, or null when it was raised only
+   * for operations waiting on it: what is left once those are withdrawn (#782).
+   */
+  private directAsk: { tier: "interactive" | "admin" | "held" | "full"; pairing: boolean } | null =
+    null;
   /**
    * What the request under way asks for: the interactive tier, admin with it,
    * (`held`) the scopes the connection held when device access was asked for, or (`full`)
@@ -3189,14 +3193,19 @@ export class ClawtrateClient {
     // A request for admin is never narrowed by a later one for less, and device access
     // (`operator.pairing`) is asked for only by name, added to the scopes the connection
     // holds and nothing else: from a read connection it asks for no power to send or answer.
-    const pairing = tier === "pairing" || (this.upgradeWanted && this.pairingWanted);
+    const raise = (base: { tier: string; pairing: boolean } | null) => ({
+      tier:
+        tier === "admin" || base?.tier === "admin"
+          ? ("admin" as const)
+          : tier === "interactive" || base?.tier === "interactive"
+            ? ("interactive" as const)
+            : ("held" as const),
+      pairing: tier === "pairing" || !!base?.pairing,
+    });
     const waiting = this.upgradeWanted ? this.upgradeTier : null;
-    const wanted =
-      tier === "admin" || waiting === "admin"
-        ? "admin"
-        : tier === "interactive" || waiting === "interactive"
-          ? "interactive"
-          : "held";
+    const { tier: wanted, pairing } = raise(
+      this.upgradeWanted ? { tier: this.upgradeTier, pairing: this.pairingWanted } : null,
+    );
     if (wanted === "held" && waiting !== "held")
       this.heldBase = ADMIN_SCOPES.filter((scope) => this.state.connection.scopes.includes(scope));
     const target = [...this.tierScopes(wanted), ...(pairing ? [PAIRING_SCOPE] : [])];
@@ -3209,7 +3218,8 @@ export class ClawtrateClient {
     }
     this.upgradeTier = wanted;
     this.pairingWanted = pairing;
-    this.upgradeForWaiters = forWaiter && (!this.upgradeWanted || this.upgradeForWaiters);
+    const direct = this.upgradeWanted ? this.directAsk : null;
+    this.directAsk = forWaiter ? direct : raise(direct);
     this.upgradeWanted = true;
     if (this.state.connection.status === "connected") this.startUpgrade();
   }
@@ -3265,7 +3275,7 @@ export class ClawtrateClient {
       this.upgradeTier = "full";
       this.pairingWanted = false;
       this.upgradeWanted = true;
-      this.upgradeForWaiters = false;
+      this.directAsk = { tier: "full", pairing: false };
       this.startUpgrade();
     })();
     this.fullAttempt = attempt;
@@ -3547,12 +3557,22 @@ export class ClawtrateClient {
    * isn't is refused, rather than asking a gateway that answered the reconnect at the same address.
    */
   private resumeUpgrade(): void {
-    // Noted before this hello settles any of them: a waiter it grants still named its gateway.
-    const named = new Set(this.accessWaiters.map((waiter) => waiter.gatewayId));
-    named.delete(null);
-    if (named.size === 0) {
-      // Raised only for operations all withdrawn since: no gateway is asked for them.
-      if (this.upgradeForWaiters && this.accessWaiters.length === 0) return this.dropAsk();
+    // A waiter this hello grants (`settleAccessWaiters`) is gone by the read, but still named
+    // its gateway. One withdrawn meanwhile names none.
+    const granted = new Set(
+      this.accessWaiters
+        .filter((waiter) => this.holds(waiter.scope))
+        .map((waiter) => waiter.gatewayId),
+    );
+    granted.delete(null);
+    if (this.accessWaiters.every((waiter) => waiter.gatewayId === null)) {
+      if (this.accessWaiters.length === 0) {
+        // Operations all withdrawn since asked for nothing: no gateway is asked for them, and
+        // what the person asked for goes on as they asked it.
+        if (!this.directAsk) return this.dropAsk();
+        this.upgradeTier = this.directAsk.tier;
+        this.pairingWanted = this.directAsk.pairing;
+      }
       return this.startUpgrade();
     }
     const epoch = this.epoch;
@@ -3565,10 +3585,12 @@ export class ClawtrateClient {
       for (const waiter of waiters)
         if (!this.accessWaiters.includes(waiter))
           waiter.reject(new Error(id === null ? IDENTITY_UNREAD : ANOTHER_GATEWAY));
-      if (this.accessWaiters.length > 0 || (id !== null && named.has(id)))
+      if (this.accessWaiters.length > 0 || (id !== null && granted.has(id)))
         return this.startUpgrade();
       // A request asked for on this connection meanwhile is under way: its answer settles it.
       if (this.scopeUpgrade) return;
+      // Every waiter was withdrawn during the read, none refused: as if none had waited.
+      if (waiters.length === 0 && granted.size === 0) return this.resumeUpgrade();
       // The person's accept of full control ends as a failure they can try again from Settings,
       // never quietly; an accept still being saved keeps its place.
       if (this.upgradeTier === "full") {

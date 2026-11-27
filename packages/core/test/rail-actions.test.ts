@@ -1258,4 +1258,86 @@ describe("an archive or a delete bound to the connection it began on", () => {
     expect(gateway.calls("sessions.patch")).toEqual([]);
     client.stop();
   });
+
+  it("a task change queued while reconnecting, whose viewer closes during the gateway's identity read, asks nothing for it", async () => {
+    const { client, gateway, stamp } = await granted("gateway-a");
+    gateway.refuseConnections = true;
+    gateway.dropAll();
+    await until(() => client.state.connection.status !== "connected");
+    const viewer = {};
+    const renaming = outcome(
+      client.renameTask("agent:pip:main", "Weekly", { owner: viewer, stamp }),
+    );
+    await until(() => client.pendingAccessWaiters === 1);
+    const naming = deferred<{ deviceId: string }>();
+    gateway.handlers["gateway.identity.get"] = () => naming.promise;
+    const asked = gateway.calls("gateway.identity.get").length;
+    gateway.refuseConnections = false;
+    await until(
+      () =>
+        client.state.connection.status === "connected" &&
+        gateway.calls("gateway.identity.get").length > asked,
+      6_000,
+    );
+    client.withdraw(viewer);
+    expect(await renaming).toBe("The request was withdrawn.");
+    naming.resolve({ deviceId: "gateway-a" });
+    await until(() => client.state.connection.gatewayId === "gateway-a");
+    await sleep(50);
+    expect(gateway.calls("device.scopes.requestUpgrade")).toEqual([]);
+    client.stop();
+  });
+
+  it("a device-access request goes to the gateway answering a reconnect as it was asked, not widened by a task change whose viewer closed", async () => {
+    const { client, gateway, stamp } = await granted("gateway-a");
+    gateway.handlers["device.scopes.waitUpgrade"] = () => new Promise(() => {});
+    await client.requestAccess("pairing");
+    await until(() => gateway.calls("device.scopes.requestUpgrade").length === 1);
+    gateway.refuseConnections = true;
+    gateway.dropAll();
+    await until(() => client.state.connection.status !== "connected");
+    const viewer = {};
+    const renaming = outcome(
+      client.renameTask("agent:pip:main", "Weekly", { owner: viewer, stamp }),
+    );
+    await until(() => client.pendingAccessWaiters === 1);
+    client.withdraw(viewer);
+    expect(await renaming).toBe("The request was withdrawn.");
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway-b" });
+    gateway.refuseConnections = false;
+    await until(() => gateway.calls("device.scopes.requestUpgrade").length === 2, 6_000);
+    expect(gateway.calls("device.scopes.requestUpgrade")).toEqual([
+      { scopes: [...READ_SCOPES, "operator.pairing"] },
+      { scopes: [...READ_SCOPES, "operator.pairing"] },
+    ]);
+    client.stop();
+  });
+
+  it("a device-access request goes on as it was asked when the task change beside it is withdrawn during the identity read", async () => {
+    const { client, gateway, stamp } = await granted("gateway-a");
+    gateway.handlers["device.scopes.waitUpgrade"] = () => new Promise(() => {});
+    await client.requestAccess("pairing");
+    await until(() => gateway.calls("device.scopes.requestUpgrade").length === 1);
+    gateway.refuseConnections = true;
+    gateway.dropAll();
+    await until(() => client.state.connection.status !== "connected");
+    const viewer = {};
+    const renaming = outcome(
+      client.renameTask("agent:pip:main", "Weekly", { owner: viewer, stamp }),
+    );
+    await until(() => client.pendingAccessWaiters === 1);
+    const naming = deferred<{ deviceId: string }>();
+    gateway.handlers["gateway.identity.get"] = () => naming.promise;
+    const asked = gateway.calls("gateway.identity.get").length;
+    gateway.refuseConnections = false;
+    await until(() => gateway.calls("gateway.identity.get").length > asked, 6_000);
+    client.withdraw(viewer);
+    expect(await renaming).toBe("The request was withdrawn.");
+    naming.resolve({ deviceId: "gateway-a" });
+    await until(() => gateway.calls("device.scopes.requestUpgrade").length === 2);
+    expect(gateway.calls("device.scopes.requestUpgrade")[1]).toEqual({
+      scopes: [...READ_SCOPES, "operator.pairing"],
+    });
+    client.stop();
+  });
 });
