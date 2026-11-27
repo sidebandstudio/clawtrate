@@ -1,5 +1,6 @@
 // Behaviour checks for the shell pages (app.html, pairing.html).
 // Run from the repository root:  node docs/design/prototype/tools/checks/shell.mjs
+import { readdirSync } from "node:fs";
 import { chromium, pageUrl } from "./browser.mjs";
 const base = pageUrl('app.html') + '?chrome=0&theme=light';
 const b = await chromium.launch();
@@ -162,6 +163,22 @@ check('N2 no copy: selected, says how', await q(p, () => /^Selected\. Press .+ t
 await p.close();
 const ctx = await b.newContext({ viewport: { width: 1300, height: 820 }, permissions: ['clipboard-read', 'clipboard-write'] }).catch(() => null);
 if (ctx) { p = await ctx.newPage(); await p.goto(pair); await p.click('#copy-command'); await p.waitForTimeout(200); out.push('     real copy status: ' + await q(p, () => document.querySelector('#copy-status').textContent) ); await ctx.close(); }
+
+// Dark unless light was chosen, whatever the system prefers (#707).
+const pages = readdirSync(new URL('../../', import.meta.url)).filter((f) => f.endsWith('.html'));
+for (const colorScheme of ['light', 'no-preference']) {
+  const light = [];
+  for (const name of pages) {
+    const pg = await b.newPage({ colorScheme });
+    await pg.goto(pageUrl(name));
+    if ((await pg.locator('html').getAttribute('data-theme')) !== 'dark') light.push(name);
+    await pg.close();
+  }
+  check(`every prototype opens dark with no theme chosen (system: ${colorScheme})`, light.length === 0, light.join(', '));
+}
+p = await b.newPage({ colorScheme: 'dark' }); await p.goto(pageUrl('app.html') + '?theme=light');
+check('theme=light opens light on a dark system', (await p.locator('html').getAttribute('data-theme')) === 'light');
+await p.close();
 
 await b.close();
 console.log(out.join('\n'));
