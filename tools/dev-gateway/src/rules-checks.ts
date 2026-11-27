@@ -513,46 +513,57 @@ const DENY_RETRY_MS = 30_000;
 
 /**
  * Until the returned stop, every card that reaches admin is denied as it comes. A denial
- * that fails is tried again while the card still waits, for DENY_RETRY_MS; the stop fails
- * naming any card it could not deny.
+ * that fails is tried again while the card still waits, for `retryMs`; the stop waits for
+ * those retries and fails naming any card it could not deny.
  */
-function denyAsTheyCome(
+export function denyAsTheyCome(
   ctx: RulesContext,
   since: Record<RulesClient, number>,
+  retryMs = DENY_RETRY_MS,
 ): () => Promise<void> {
   let stopped = false;
   const done = new Set<string>();
   const firstTried = new Map<string, number>();
   const failed: string[] = [];
+  /** One pass over the cards seen so far: deny each not done, or count it failed past the deadline. */
+  const pass = async () => {
+    for (const e of ctx.clients.admin.events) {
+      if (e.seq <= since.admin || e.event !== REQUESTED) continue;
+      const id = String(rec(e.payload).id);
+      if (done.has(id)) continue;
+      const denied = await call(ctx.clients.admin, "plugin.approval.resolve", {
+        id,
+        decision: "deny",
+      }).catch(() => undefined);
+      // Denied, or no longer waiting (answered or expired meanwhile): nothing more to do.
+      const waiting = denied?.ok ? [] : await waitingCards(ctx.clients.admin).catch(() => [id]);
+      if (!waiting.includes(id)) {
+        done.add(id);
+        continue;
+      }
+      const first = firstTried.get(id) ?? Date.now();
+      firstTried.set(id, first);
+      if (Date.now() - first >= retryMs) {
+        done.add(id);
+        failed.push(id);
+      }
+    }
+  };
   const loop = (async () => {
     while (!stopped) {
-      for (const e of ctx.clients.admin.events) {
-        if (e.seq <= since.admin || e.event !== REQUESTED) continue;
-        const id = String(rec(e.payload).id);
-        if (done.has(id)) continue;
-        const denied = await call(ctx.clients.admin, "plugin.approval.resolve", {
-          id,
-          decision: "deny",
-        }).catch(() => undefined);
-        // Denied, or no longer waiting (answered or expired meanwhile): nothing more to do.
-        const waiting = denied?.ok ? [] : await waitingCards(ctx.clients.admin).catch(() => [id]);
-        if (!waiting.includes(id)) {
-          done.add(id);
-          continue;
-        }
-        const first = firstTried.get(id) ?? Date.now();
-        firstTried.set(id, first);
-        if (Date.now() - first >= DENY_RETRY_MS) {
-          done.add(id);
-          failed.push(id);
-        }
-      }
+      await pass();
       await sleep(250);
     }
   })();
   return async () => {
     stopped = true;
     await loop;
+    // A card whose denial failed is tried again until it is denied, no longer waits, or its
+    // deadline passes, so stopping early never leaves it unreported.
+    while ([...firstTried.keys()].some((id) => !done.has(id))) {
+      await sleep(250);
+      await pass();
+    }
     expect(failed.length === 0, `cards the check could not deny: ${show(failed)}`);
   };
 }

@@ -14,6 +14,7 @@ import { CHECKOUT_DIR } from "../src/env.ts";
 import type { OperatorSession } from "../src/operator.ts";
 import {
   RULES_CHECKS,
+  denyAsTheyCome,
   eventually,
   isResultOfCall,
   logSaysAfter,
@@ -578,5 +579,41 @@ describe("the rules checks' approval clean-up", () => {
     });
     expect(run.result).toEqual({ passed: 1, failed: 1 });
     expect(run.lines.at(-1)).toMatch(/^FAIL {2}the final clean-up/);
+  });
+});
+
+describe("denying the cards a bot-message check raises", () => {
+  /** An admin connection whose denials fail `failures` times, with one card waiting. */
+  const admin = (failures: number) => {
+    let left = failures;
+    const waiting = new Set(["card-1"]);
+    return {
+      events: [{ seq: 1, event: "plugin.approval.requested", payload: { id: "card-1" } }],
+      request: async (method: string, params: Record<string, unknown>) => {
+        if (method === "plugin.approval.list") return [...waiting].map((id) => ({ id }));
+        if (method !== "plugin.approval.resolve") throw new Error(`unexpected ${method}`);
+        if (left > 0) {
+          left -= 1;
+          throw Object.assign(new Error("connection closed"), { code: "CLOSED" });
+        }
+        waiting.delete(String(params.id));
+        return { ok: true };
+      },
+    };
+  };
+  const ctxOf = (op: unknown) =>
+    ({ clients: { admin: op } }) as unknown as Parameters<typeof denyAsTheyCome>[0];
+  const since = { admin: 0 } as Parameters<typeof denyAsTheyCome>[1];
+
+  it("stopping early still retries a failed denial and reports a card it could not deny", async () => {
+    const stop = denyAsTheyCome(ctxOf(admin(Number.MAX_SAFE_INTEGER)), since, 600);
+    await expect(stop()).rejects.toThrow("cards the check could not deny");
+  });
+
+  it("stopping early waits for a retried denial that then succeeds", async () => {
+    const op = admin(2);
+    const stop = denyAsTheyCome(ctxOf(op), since, 5_000);
+    await expect(stop()).resolves.toBeUndefined();
+    expect(await op.request("plugin.approval.list", {})).toEqual([]);
   });
 });
