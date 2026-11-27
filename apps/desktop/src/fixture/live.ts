@@ -59,6 +59,7 @@ export const LIVE_SCENES = [
   "message-thread-question",
   "message-thread-failed",
   "run-stopped-with",
+  "run-stopped-follow-up",
   "run-stopped-timeouts",
   "run-reasoning",
 ] as const;
@@ -609,6 +610,54 @@ export function liveScene(
             recipientsAsked: true,
           },
         }),
+        steps: [],
+      };
+    case "run-stopped-follow-up":
+      // Pip's message to Marlow was stopped, and so was the turn the gateway then started in
+      // Pip's task by itself (#645): its note that the message failed, which the bot meant to
+      // retry.
+      return {
+        initial: withRun(
+          base,
+          now,
+          {
+            state: "stopped",
+            stopRequestedAt: now - 6 * SECOND,
+            endedAt: now - 6 * SECOND,
+            text: REPLY,
+            steps: [readStep(now - 30 * SECOND, { status: "done", endedAt: now - 29 * SECOND })],
+            stoppedWith: {
+              helpers: 0,
+              bots: ["agent:marlow:main"],
+              uncertain: [],
+              refused: [],
+              unanswered: [],
+              followUps: ["agent:marlow:main"],
+              omitted: 0,
+              recipientsAsked: true,
+            },
+          },
+          {
+            runs: [
+              newRun(
+                "run-follow-up",
+                {
+                  state: "stopped",
+                  origin: "history",
+                  bound: true,
+                  messageId: null,
+                  anchorItemId: null,
+                  reportedStartAt: now - 5 * SECOND,
+                  stopRequestedAt: now - 4 * SECOND,
+                  endedAt: now - 4 * SECOND,
+                  stoppedAsFollowUp: true,
+                  text: "Marlow didn't get the message. I'll send it again.",
+                },
+                now - 5 * SECOND,
+              ),
+            ],
+          },
+        ),
         steps: [],
       };
     case "run-stopped-timeouts":
