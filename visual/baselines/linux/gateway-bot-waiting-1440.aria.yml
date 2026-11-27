@@ -6,7 +6,7 @@
   - button "Search"
   - list:
     - listitem:
-      - button "Otto, done with failures, 14 tasks, unread, home server operations" [expanded]:
+      - button "Otto, working, 14 tasks, unread, home server operations" [expanded]:
         - text: Otto home server operations
         - time: now
         - text: Rotating logs on rack-2
@@ -16,7 +16,7 @@
         - listitem:
           - button "Disk almost full on the media box"
         - listitem:
-          - button "Weekly backup check, done with failures": Weekly backup check
+          - button "Weekly backup check, unread": Weekly backup check
         - listitem:
           - button "Certificate renewal warning"
         - listitem:
@@ -26,12 +26,12 @@
         - listitem:
           - button "Show all 14"
     - listitem:
-      - button "Juniper, waiting for you, 3 tasks, unread, research, primary bot":
+      - button "Juniper, 3 tasks, unread, research":
         - text: Juniper research
-        - time: now
-        - text: Waiting for you
+        - time: 5:24 PM
+        - text: Ask these five, and get the answers in writing.
     - listitem:
-      - button "Marlow, blocked, 1 task, editing":
+      - button "Marlow, 1 task, editing":
         - text: Marlow editing
         - time: 4:58 PM
         - text: Tightened the intro and cut about 80 words.
@@ -40,6 +40,11 @@
         - text: Pip planning
         - time: 3:10 PM
         - text: Here is the week, with Thursday kept clear.
+    - listitem:
+      - button "main, waiting for you, 1 task, unread, primary bot":
+        - text: main
+        - time: 5:40 PM
+        - text: "Waiting for you: a question"
     - listitem:
       - button "Quartermaster of the Family Calendar and Errands, 2 tasks, household logistics":
         - text: Quartermaster of the Family Calendar and Errands household logistics

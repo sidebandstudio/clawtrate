@@ -319,6 +319,7 @@ export function fixtureAccounts(now: number, params: AccountParams): AccountsSta
   const bindings: BotBinding[] = none
     ? [
         bound("main", "openai/gpt-5.5", "medium", now),
+        bound("clawtrate-main-bot", "openai/gpt-5.5", "medium", now),
         bound("marlow", "openai/gpt-5.5", "low", now),
         bound("otto", "openai/gpt-5.5", "medium", now),
         bound("pip", "openai/gpt-5.5-mini", "low", now),
@@ -326,6 +327,7 @@ export function fixtureAccounts(now: number, params: AccountParams): AccountsSta
       ]
     : [
         bound("main", "openai/gpt-5.5", "medium", now),
+        bound("clawtrate-main-bot", "openai/gpt-5.5", "medium", now),
         bound("marlow", "openai/gpt-5.5@openai:work", "low", now),
         bound("otto", "openai/gpt-5.5@openai:work", "medium", now, {
           order: { ids: ["openai:work"], stored: true, configured: null },
