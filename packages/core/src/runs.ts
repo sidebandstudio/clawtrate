@@ -3350,7 +3350,12 @@ export function runsFromHistory(
       const textOnly =
         typeof content === "string" ||
         (Array.isArray(content) && content.every((part) => asRecord(part)?.type === "text"));
-      return textOnly ? { ...failedRun, errorItemId: lastAssistantItem.get(run.id)! } : failedRun;
+      // Left to the row unless the card says its whole text: an error the card cuts, or the
+      // gateway's own message where the row holds other words, keeps the row.
+      const said = failedRun.error?.message === liveTextFromChatMessage(last).trim();
+      return textOnly && said
+        ? { ...failedRun, errorItemId: lastAssistantItem.get(run.id)! }
+        : failedRun;
     }
     // Only a final reply establishes completion. A last row that stops for a
     // tool, or no reply row at all, says the run ended but not how.

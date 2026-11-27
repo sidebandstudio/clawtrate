@@ -970,6 +970,33 @@ describe("rebuilding from history (F-107, F-093)", () => {
     expect(withCall!.errorItemId).toBeUndefined();
   });
 
+  it("a failed run's error row stays when its failure card doesn't say all of it (#723)", () => {
+    const failedWith = (text: string, errorMessage?: string) =>
+      runsFromHistory(
+        [
+          { role: "user", content: "a", __openclaw: { id: "u1", seq: 1 } },
+          {
+            role: "assistant",
+            content: [{ type: "text", text }],
+            stopReason: "error",
+            ...(errorMessage ? { errorMessage } : {}),
+            __openclaw: { id: "a1", seq: 2, runId: "r1" },
+          },
+        ],
+        null,
+        ctx(),
+      )[0]!;
+    // The card cuts a long error: the row keeps the rest of it.
+    const long = failedWith("x".repeat(2_048));
+    expect(long.error!.message.length).toBeLessThan(2_048);
+    expect(long.errorItemId).toBeUndefined();
+    // The card says the gateway's error message, which isn't what the row holds.
+    expect(
+      failedWith("Retrying with a smaller model.", "provider down").errorItemId,
+    ).toBeUndefined();
+    expect(failedWith("provider down").errorItemId).toBe("a1:1");
+  });
+
   it("merges a reload into live runs without duplicating runs or steps", () => {
     const live = play(toolRun()).activity;
     const history = runsFromHistory(toolRunHistory, null, ctx());
