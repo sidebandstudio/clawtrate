@@ -724,6 +724,7 @@ const interSession = flagged<InterSessionMessage>()({
   senderLabel: NAME,
   senderAgentId: NAME,
   timestamp: NUMBER,
+  runId: ID,
 });
 const linkedRun = object<LinkedRun>()({
   id: ID,
