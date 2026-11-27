@@ -195,6 +195,35 @@ test.describe("the sidebar's width, desktop", () => {
     expect(box.y + box.height).toBeLessThanOrEqual(WIDE.height);
   });
 
+  test("#792: with no width kept, the default is the stylesheet's, so it follows the window in the same frame", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 800, height: 700 });
+    await openFixture(page, `scene=main&${OTTO_DISK}`);
+    expect(await railWidth(page)).toBe(248);
+    const own = () =>
+      page.evaluate(() =>
+        (document.querySelector(".shell") as HTMLElement).style.getPropertyValue("--rail"),
+      );
+    expect(await own()).toBe("");
+    // Measured at once, before any render could catch up: already the wide default.
+    await page.setViewportSize({ width: 1440, height: 900 });
+    expect(
+      await page.evaluate(() =>
+        Math.round(document.querySelector(".rail")!.getBoundingClientRect().width),
+      ),
+    ).toBe(280);
+    // A drag that ends where it began leaves the default the stylesheet's.
+    const box = (await edge(page).boundingBox())!;
+    await page.mouse.move(box.x + 4, 400);
+    await page.mouse.down();
+    await page.mouse.move(box.x + 60, 400, { steps: 4 });
+    await page.mouse.move(box.x + 4, 400, { steps: 4 });
+    await page.mouse.up();
+    expect(await own()).toBe("");
+    expect(await kept(page)).toBeNull();
+  });
+
   test("#792: a kept width leaves the conversation its room in a smaller window", async ({
     page,
   }) => {
