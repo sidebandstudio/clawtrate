@@ -7,6 +7,7 @@ import {
   emptyActivity,
   mapHistory,
   tasksWithoutSkillNotes,
+  tasksWithoutUpdateNotices,
   type Task,
   type Transcript,
 } from "@clawtrate/core";
@@ -33,7 +34,7 @@ const note = (text = TEXT, at = T + 40_000) => ({
   idempotencyKey: NOTE_KEY,
   __openclaw: { id: "n1", idempotencyKey: NOTE_KEY, seq: 3 },
 });
-const reply = (text: string, at: number) => ({
+const replyRow = (text: string, at: number) => ({
   role: "assistant",
   content: [{ type: "text", text }],
   api: "openai-completions",
@@ -65,6 +66,27 @@ const listed: Task = {
   status: "done",
   unread: true,
 };
+/** No update this device followed. */
+const NO_UPDATES = { updated: [], gatewayId: "gw-a", mainKey: KEY };
+/** An update this device followed, whose notice the gateway wrote into this task (F-590). */
+const RUN = "3f2b8c1d-4e5a-4b6c-8d7e-9f0a1b2c3d4e";
+const UPDATED = {
+  updated: [{ gatewayId: "gw-a", runId: RUN, to: "2026.11.10", at: 1, succeededAt: T + 50_000 }],
+  gatewayId: "gw-a",
+  mainKey: KEY,
+};
+const UPDATE_TEXT = "✅ OpenClaw updated.";
+const updateNotice = (at: number) => ({
+  role: "assistant",
+  content: [{ type: "text", text: UPDATE_TEXT }],
+  api: "openclaw-transcript",
+  provider: "openclaw",
+  model: "delivery-mirror",
+  stopReason: "stop",
+  timestamp: at,
+  idempotencyKey: `update-run-finished:${RUN}`,
+  __openclaw: { id: "u1", idempotencyKey: `update-run-finished:${RUN}` },
+});
 const stateWith = (transcript: Transcript) =>
   ({
     bots: [],
@@ -76,23 +98,47 @@ const stateWith = (transcript: Transcript) =>
 
 describe("F-560: the skill note in the rail", () => {
   it("the bot's preview is its words before the note", () => {
-    const transcript = history([reply("The trail is open.", T + 2_000), note()]);
-    const quiet = tasksWithoutSkillNotes({ pip: [listed] }, { [KEY]: transcript });
+    const transcript = history([replyRow("The trail is open.", T + 2_000), note()]);
+    const quiet = tasksWithoutSkillNotes({ pip: [listed] }, { [KEY]: transcript }, NO_UPDATES);
     expect(summarize(quiet.pip!, {}, null).latest?.preview).toBe("The trail is open.");
   });
 
   it("a row with the note's fields and other words is the bot's preview, as any message", () => {
     const words = "The Saturday hike moved to Sunday at 9.";
-    const transcript = history([reply("The trail is open.", T + 2_000), note(words)]);
+    const transcript = history([replyRow("The trail is open.", T + 2_000), note(words)]);
     const shown = tasksWithoutSkillNotes(
       { pip: [{ ...listed, preview: words }] },
       { [KEY]: transcript },
+      NO_UPDATES,
     );
     expect(summarize(shown.pip!, {}, null).latest?.preview).toBe(words);
   });
 
+  it("with an update line and a skill note both after the reply, in either order, the preview is the reply", () => {
+    const shown = (rows: unknown[], preview: string) => {
+      const transcript = history(rows);
+      const quiet = tasksWithoutSkillNotes(
+        tasksWithoutUpdateNotices(
+          { pip: [{ ...listed, preview }] },
+          { [KEY]: transcript },
+          UPDATED,
+        ),
+        { [KEY]: transcript },
+        UPDATED,
+      );
+      return summarize(quiet.pip!, {}, null).latest?.preview;
+    };
+    const reply = replyRow("The trail is open.", T + 2_000);
+    expect(shown([reply, updateNotice(T + 50_100), note(TEXT, T + 60_000)], LISTED)).toBe(
+      "The trail is open.",
+    );
+    expect(shown([reply, note(TEXT, T + 40_000), updateNotice(T + 50_100)], UPDATE_TEXT)).toBe(
+      "The trail is open.",
+    );
+  });
+
   it("on a read-only connection the viewer's own memory goes past the note; on one that writes, unread is the gateway's", () => {
-    const transcript = history([reply("The trail is open.", T + 2_000), note()]);
+    const transcript = history([replyRow("The trail is open.", T + 2_000), note()]);
     const seen = { [KEY]: T + 2_050 };
     const readOnly = unreadSeenOf(seen, false, stateWith(transcript));
     expect(readOnly).toEqual({ [KEY]: T + 40_100 });

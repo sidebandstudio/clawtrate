@@ -296,15 +296,38 @@ const workedRun = (actions = true) => [
 ];
 
 /** Otto's task with these rows, its runs rebuilt from them as after a reload, and its listed row. */
-async function showRows(page: Page, rows: unknown[], row: Partial<Task> = {}) {
+async function showRows(
+  page: Page,
+  rows: unknown[],
+  row: Partial<Task> = {},
+  /** The run's message still in this device's outbox, so the engine draws the finished run. */
+  held = false,
+) {
   const items = mapHistory(rows);
-  const runs = runsFromHistory(rows, null, {
+  const built = runsFromHistory(rows, null, {
     sessionKey: TASK,
     now: NOW.getTime(),
     raw: new RawTable(),
   });
+  const runs = held ? built.map((run) => ({ ...run, messageId: "out-1" })) : built;
+  const outbox = held
+    ? [
+        {
+          id: "out-1",
+          text: "How much space is left on the disk?",
+          mode: "new" as const,
+          status: "sent" as const,
+          runId: "run-1",
+          messageSeq: null,
+          leftAt: null,
+          createdAt: EPOCH,
+          error: null,
+          attachments: [],
+        },
+      ]
+    : [];
   await page.evaluate(
-    ({ items, runs, row, key }) => {
+    ({ items, runs, outbox, row, key }) => {
       const fixture = (
         window as unknown as {
           clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
@@ -314,7 +337,7 @@ async function showRows(page: Page, rows: unknown[], row: Partial<Task> = {}) {
         ...state,
         transcripts: {
           ...state.transcripts,
-          [key]: { ...state.transcripts[key]!, items, runs, live: null, outbox: [] },
+          [key]: { ...state.transcripts[key]!, items, runs, live: null, outbox },
         },
         tasksByBot: {
           ...state.tasksByBot,
@@ -324,7 +347,7 @@ async function showRows(page: Page, rows: unknown[], row: Partial<Task> = {}) {
         },
       }));
     },
-    { items, runs, row, key: TASK },
+    { items, runs, outbox, row, key: TASK },
   );
   await settle(page);
 }
@@ -463,6 +486,18 @@ test.describe("the folded skill note's undo, preview and activity", () => {
     await expect(page.getByTestId("transcript-turn").filter({ hasText: "Learned" })).toHaveCount(0);
     // The run after it keeps its own line, without the note.
     await expect(runLine(page).locator(":scope > summary")).not.toContainText("Saved a skill");
+  });
+
+  test("F-560: a finished run the engine still draws folds the note into its line too", async ({
+    page,
+  }) => {
+    await openFixture(page, `scene=main&${OTTO_DISK}&panel=closed&access=admin`);
+    await showRows(page, [...workedRun(), skillNote(true)], {}, true);
+    await expect(runLine(page).locator(":scope > summary")).toContainText(
+      "Saved a skill: disk-check",
+    );
+    await expect(page.getByTestId("skill-note-line")).toHaveCount(0);
+    await expect(page.getByTestId("transcript-turn").filter({ hasText: "Learned" })).toHaveCount(0);
   });
 
   test("F-560: the bot's preview is the reply before the note the gateway lists", async ({

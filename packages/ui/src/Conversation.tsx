@@ -794,6 +794,8 @@ function buildLive(bot: Bot, task: Task, transcript: Transcript, options: LiveOp
       if (message.mode === "steer" && message.runId === run.id) bubble(message.id);
     }
     if (run !== active) {
+      // A finished run the engine still draws folds the notes after its message, as above.
+      const anchor = run.anchorItemId;
       foot.push(
         <RunEnding
           key={`end-${run.id}`}
@@ -802,7 +804,16 @@ function buildLive(bot: Bot, task: Task, transcript: Transcript, options: LiveOp
           transcript={transcript}
           taskKey={task.key}
         />,
-        <RunLine key={`line-${run.id}`} run={run} />,
+        <RunLine
+          key={`line-${run.id}`}
+          run={run}
+          notes={
+            anchor && shown.has(anchor) && isTerminal(run.state)
+              ? notesAfter(anchor, nextUser(anchor))
+              : []
+          }
+          botName={bot.name}
+        />,
       );
     }
   }

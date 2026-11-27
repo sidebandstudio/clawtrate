@@ -366,6 +366,7 @@ export function Shell({
         tasksWithoutSkillNotes(
           tasksWithoutUpdateNotices(tasksByBot, transcripts, { updated, gatewayId, mainKey }),
           transcripts,
+          { updated, gatewayId, mainKey },
         ),
         transcripts,
       ),

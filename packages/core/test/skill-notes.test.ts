@@ -16,7 +16,9 @@ import {
   type Task,
   type Transcript,
 } from "../src/index.ts";
-import { enforceState } from "../src/state-bounds.ts";
+import { jsonTextLength } from "../src/bounds.ts";
+import { MAX_SKILL_NOTE_CHARS } from "../src/skill-notes.ts";
+import { enforceState, MAX_BLOCK_CHARS } from "../src/state-bounds.ts";
 
 const NOTE_KEY = "skill-workshop-notice:skill-workshop-review:0357efcc-6ce0-4f3f-9f39-c9cd6905189a";
 const NOTE_TEXT =
@@ -481,24 +483,30 @@ const loaded = (rows: unknown[], hasMore = false): Transcript =>
 const LISTED_NOTE =
   '💾 Learned: created trail-check (check the trail before a hike). Say "undo" to revert this skill change.';
 const REPLY = "I read through my workspace files one by one.";
+/** No update this device followed: no update line anywhere. */
+const NO_UPDATES = { updated: [], gatewayId: "gw-a", mainKey: "agent:main:t" };
 
 describe("F-560: the note is not the bot's preview, and doesn't mark the task unread", () => {
   it("the listed preview of the note the history ends with shows the reply before it", () => {
-    expect(taskWithoutSkillNote(task(LISTED_NOTE, 3), loaded(realNote)).preview).toBe(REPLY);
+    expect(taskWithoutSkillNote(task(LISTED_NOTE, 3), loaded(realNote), NO_UPDATES).preview).toBe(
+      REPLY,
+    );
   });
 
   it("a newer listed preview, or one the gateway made of other text, stays", () => {
-    expect(taskWithoutSkillNote(task("Something newer", 3), loaded(realNote)).preview).toBe(
-      "Something newer",
-    );
+    expect(
+      taskWithoutSkillNote(task("Something newer", 3), loaded(realNote), NO_UPDATES).preview,
+    ).toBe("Something newer");
     const other = withText(channelCopy, FORGED_TEXT);
-    expect(taskWithoutSkillNote(task(FORGED_TEXT, 3), loaded([realNote[0], other])).preview).toBe(
-      FORGED_TEXT,
-    );
+    expect(
+      taskWithoutSkillNote(task(FORGED_TEXT, 3), loaded([realNote[0], other]), NO_UPDATES).preview,
+    ).toBe(FORGED_TEXT);
   });
 
   it("with nothing before the note, the title shows", () => {
-    expect(taskWithoutSkillNote(task(LISTED_NOTE, 3), loaded([NOTE_1006])).preview).toBeNull();
+    expect(
+      taskWithoutSkillNote(task(LISTED_NOTE, 3), loaded([NOTE_1006]), NO_UPDATES).preview,
+    ).toBeNull();
   });
 
   it("a read-only viewer that read the reply has read the task through the note", () => {
@@ -542,5 +550,37 @@ describe("F-560: the note's mark is kept whole in the state", () => {
       transcripts: Record<string, Transcript>;
     };
     expect(kept.transcripts.t!.items[0]!.skillNote).toEqual(items[0]!.skillNote);
+  });
+});
+
+describe("F-560: a folded note's words are never cut", () => {
+  const sized = (chars: number) => {
+    const head = "💾 Learned: created `a` (";
+    const tail = '). Say "undo" to revert this skill change.';
+    const base = jsonTextLength(`${head}${tail}`);
+    return `${head}${"x".repeat(chars - base)}${tail}`;
+  };
+  const kept = (text: string) => {
+    const items = mapHistory([withText(NOTE_1006, text)]);
+    const state = enforceState({
+      transcripts: { t: { items } as unknown as Transcript },
+    } as never) as unknown as { transcripts: Record<string, Transcript> };
+    return { item: items[0]!, kept: state.transcripts.t!.items[0]! };
+  };
+
+  it("folds a note only as long as the state keeps a text block whole", () => {
+    expect(MAX_SKILL_NOTE_CHARS).toBe(MAX_BLOCK_CHARS);
+    const longest = sized(MAX_BLOCK_CHARS);
+    expect(jsonTextLength(longest)).toBe(MAX_BLOCK_CHARS);
+    const { item, kept: inState } = kept(longest);
+    expect(item.skillNote).toBeDefined();
+    expect(inState.cut).toBeUndefined();
+    expect(inState.blocks[0]).toMatchObject({ kind: "text", text: longest });
+  });
+
+  it("a note one character longer, which the state would cut, is the message it is", () => {
+    const { item, kept: inState } = kept(sized(MAX_BLOCK_CHARS + 1));
+    expect(item.skillNote).toBeUndefined();
+    expect(inState.cut).toBeDefined();
   });
 });

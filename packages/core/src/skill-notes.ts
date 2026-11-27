@@ -6,6 +6,7 @@
 // form, and the folded line always shows the note's own words. docs/decisions.md, "The gateway's
 // skill notes", records what is left.
 
+import { jsonTextLength } from "./bounds.ts";
 import { rowIdempotencyKey } from "./update-notice.ts";
 import type { TranscriptItem } from "./types.ts";
 
@@ -31,8 +32,12 @@ const isSkillNoteAction = (value: unknown): value is SkillNoteAction =>
   value === "created" || value === "updated" || value === "archived" || value === "restored";
 /** The most skills one note is folded with; a longer note shows as the message it is. */
 export const MAX_SKILL_NOTE_SKILLS = 8;
-/** The longest note text folded; a longer one shows as the message it is. */
-export const MAX_SKILL_NOTE_CHARS = 4_000;
+/**
+ * The longest note text folded, in JSON characters: what the state keeps of a text block
+ * (`MAX_BLOCK_CHARS`). A longer note would be cut there and its words hidden, so it shows as the
+ * message it is, whose whole text can be read.
+ */
+export const MAX_SKILL_NOTE_CHARS = 2_048;
 /** A bot's id, as the mark may name one: what the gateway's undo takes. */
 const AGENT_ID = /^[\w.-]{1,128}$/;
 /** The longest such id. */
@@ -83,7 +88,7 @@ const CHANGE_START =
  * own either way.
  */
 export function skillNoteChanges(text: string): SkillNoteChange[] | null {
-  if (text.length > MAX_SKILL_NOTE_CHARS) return null;
+  if (jsonTextLength(text) > MAX_SKILL_NOTE_CHARS) return null;
   const body = NOTE_TEXT.exec(text)?.[1];
   if (body === undefined) return null;
   const skills: SkillNoteChange[] = [];

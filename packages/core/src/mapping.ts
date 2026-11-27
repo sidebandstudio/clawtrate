@@ -1184,8 +1184,9 @@ export function taskWithoutUpdateNotice(
   let preview: string | null = null;
   for (let index = items.length - 2; index >= 0 && preview === null; index -= 1) {
     const item = items[index]!;
-    // An earlier update line is not what the bot said either.
-    if (item.role === "system" || updateNoticeLine(item, task.key, scope)) continue;
+    // An earlier update line, or a skill note (F-560), is not what the bot said either.
+    if (item.role === "system" || item.skillNote || updateNoticeLine(item, task.key, scope))
+      continue;
     // A bot's message that is only files reads as their names, as the rail shows it (F-115).
     if (item.role === "assistant" && item.filesPreview) {
       preview = item.filesPreview;
@@ -1269,14 +1270,20 @@ function trailingSkillNotes(task: Task, transcript: Transcript | undefined): num
  * title shows). The note is not what the bot said. No time is changed, so the order is the
  * gateway's.
  */
-export function taskWithoutSkillNote(task: Task, transcript: Transcript | undefined): Task {
+export function taskWithoutSkillNote(
+  task: Task,
+  transcript: Transcript | undefined,
+  scope: UpdateNoticeScope,
+): Task {
   const first = trailingSkillNotes(task, transcript);
   if (first === undefined) return task;
   const items = transcript!.items;
   let preview: string | null = null;
   for (let index = first - 1; index >= 0 && preview === null; index -= 1) {
     const item = items[index]!;
-    if (item.role === "system" || item.skillNote) continue;
+    // The gateway's update line is not what the bot said either (F-590).
+    if (item.role === "system" || item.skillNote || updateNoticeLine(item, task.key, scope))
+      continue;
     // A bot's message that is only files reads as their names, as the rail shows it (F-115).
     if (item.role === "assistant" && item.filesPreview) {
       preview = item.filesPreview;
@@ -1292,12 +1299,13 @@ export function taskWithoutSkillNote(task: Task, transcript: Transcript | undefi
 export function tasksWithoutSkillNotes(
   tasksByBot: Record<string, Task[]>,
   transcripts: Record<string, Transcript>,
+  scope: UpdateNoticeScope,
 ): Record<string, Task[]> {
   let changed = false;
   const shown: Record<string, Task[]> = {};
   for (const [botId, tasks] of Object.entries(tasksByBot)) {
     shown[botId] = tasks.map((task) => {
-      const quiet = taskWithoutSkillNote(task, transcripts[task.key]);
+      const quiet = taskWithoutSkillNote(task, transcripts[task.key], scope);
       if (quiet !== task) changed = true;
       return quiet;
     });
