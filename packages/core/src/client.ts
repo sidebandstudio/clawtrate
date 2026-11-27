@@ -4049,6 +4049,9 @@ export class ClawtrateClient {
       }));
       return this.retryMessage(key, id);
     }
+    // Written before any gateway named itself (its read of the name failed): the person retries
+    // it on this connection, so it is for the gateway this one names.
+    if (message.gatewayId === undefined) this.stampGateway(key, messageId);
     const transcript = this.state.transcripts[key]!;
     // The gateway is running a run under this message's own id: the message is out, and nothing
     // goes again (as when a held one is released).

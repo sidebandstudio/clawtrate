@@ -12,7 +12,14 @@ import {
   type OutgoingMessage,
   type TaskActivity,
 } from "../src/runs.ts";
-import { agentEvent, KEY, openTask, questionRecord, sentTexts } from "./client-harness.ts";
+import {
+  agentEvent,
+  grantingGateway,
+  KEY,
+  openTask,
+  questionRecord,
+  sentTexts,
+} from "./client-harness.ts";
 import { deferred, GatewayError, sleep, until } from "./fake-gateway.ts";
 
 function start(gateway: Parameters<typeof sentTexts>[0], runId = "run-x") {
@@ -267,6 +274,22 @@ describe("a waiting message goes only to the gateway it was written for (F-287, 
     await until(() => transcript().outbox[0]?.status === "failed", 4_000);
     expect(transcript().outbox[0]).toMatchObject({ id, error: ANOTHER });
     expect(gateway.calls("chat.send")).toEqual([]);
+    client.stop();
+  });
+
+  it("F-287: one written before its gateway could be named is sent there by Try again, once it is", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["gateway.identity.get"] = () => {
+      throw new Error("unavailable");
+    };
+    const { client, transcript } = await openTask({ gateway });
+    const id = client.sendMessage(KEY, "Before its name");
+    await until(() => transcript().outbox[0]?.status === "failed", 4_000);
+    expect(gateway.calls("chat.send")).toEqual([]);
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway-test" });
+    client.retryMessage(KEY, id);
+    await until(() => gateway.calls("chat.send").length === 1, 4_000);
+    expect(gateway.calls("chat.send")[0]).toMatchObject({ idempotencyKey: id });
     client.stop();
   });
 
