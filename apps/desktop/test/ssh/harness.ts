@@ -9,7 +9,6 @@ import { type ChildProcess, execFileSync, spawn, spawnSync } from "node:child_pr
 import {
   existsSync,
   mkdirSync,
-  mkdtempSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -18,11 +17,12 @@ import {
 } from "node:fs";
 import { createServer as createHttpServer, request as httpRequest } from "node:http";
 import { createServer, type Socket } from "node:net";
-import { tmpdir, userInfo } from "node:os";
+import { userInfo } from "node:os";
 import { join } from "node:path";
 
 import { PROGRAM_PLACES } from "../../src/main/ssh/look.ts";
 import type { SshWorld } from "../../src/main/ssh/world.ts";
+import { tempDir as removedTempDir } from "../../../../test/temp-dir.ts";
 
 export const SSHD = "/usr/sbin/sshd";
 export const SSH = process.platform === "win32" ? "" : "/usr/bin/ssh";
@@ -37,7 +37,7 @@ export function testEnv(extra: NodeJS.ProcessEnv = {}): NodeJS.ProcessEnv {
 }
 
 export function tempDir(prefix: string): string {
-  return realpathSync(mkdtempSync(join(tmpdir(), prefix)));
+  return realpathSync(removedTempDir(prefix));
 }
 
 export function keygen(path: string, type: "ed25519" | "ecdsa" = "ed25519"): void {

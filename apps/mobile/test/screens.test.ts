@@ -214,7 +214,7 @@ describe("the iPhone app's screens", () => {
 
   it("lists pinned bots first, then the rest by their latest activity, without hidden bots, in the rail's words", () => {
     const bots = [
-      bot("main", { name: "Juniper", isDefault: true, theme: "research" }),
+      bot("clawtrate-main-bot", { name: "Juniper", theme: "research" }),
       bot("otto"),
       bot("pip"),
       bot("marlow"),
@@ -222,7 +222,11 @@ describe("the iPhone app's screens", () => {
     const s = state({
       bots,
       tasksByBot: {
-        main: [task("agent:main:a", NOW - 3 * 86_400_000, { preview: "A summary of the week" })],
+        "clawtrate-main-bot": [
+          task("agent:clawtrate-main-bot:a", NOW - 3 * 86_400_000, {
+            preview: "A summary of the week",
+          }),
+        ],
         otto: [
           task("agent:otto:disk", NOW - 60_000, { status: "running" }),
           task("agent:otto:old", NOW - 86_400_000, { unread: true }),
@@ -237,19 +241,51 @@ describe("the iPhone app's screens", () => {
     });
     const model = homeModel(s, {}, NOW);
     expect(model.pinned.map((row) => row.bot.id)).toEqual(["pip"]);
-    expect(model.rows.map((row) => row.bot.id)).toEqual(["otto", "main"]);
+    expect(model.rows.map((row) => row.bot.id)).toEqual(["otto", "clawtrate-main-bot"]);
     const [otto, juniper] = model.rows;
     expect(otto).toMatchObject({ time: "now", state: "working", unread: true, preview: "disk" });
     expect(otto!.spoken).toBe("Otto, working, 2 tasks, unread");
     expect(juniper).toMatchObject({
       label: "research",
-      primary: true,
+      primary: false,
       preview: "A summary of the week",
       unread: false,
     });
-    expect(juniper!.spoken).toBe("Juniper, 1 task, research, primary bot");
+    expect(juniper!.spoken).toBe("Juniper, 1 task, research");
     // Read on this device, the dot goes.
     expect(homeModel(s, { "agent:otto:old": NOW - 86_400_000 }, NOW).rows[0]!.unread).toBe(false);
+  });
+
+  it("F-562: leaves the gateway's own bot and its tasks off Home while another bot exists, unless it is waiting, kept open or shown by the switch; alone, it is listed with the star", () => {
+    // As the development gateway seeds them: its own bot `main`, and Juniper, the Main Bot.
+    const own = bot("main", { isDefault: true });
+    const juniper = bot("clawtrate-main-bot", { name: "Juniper" });
+    const ownTask = task("agent:main:main", NOW - 60_000);
+    const s = state({
+      bots: [own, juniper],
+      tasksByBot: {
+        main: [ownTask],
+        "clawtrate-main-bot": [task("agent:clawtrate-main-bot:a", NOW - 120_000)],
+      },
+    });
+    const ids = (model: ReturnType<typeof homeModel>) => model.rows.map((row) => row.bot.id);
+    expect(ids(homeModel(s, {}, NOW))).toEqual(["clawtrate-main-bot"]);
+    expect(homeModel(s, {}, NOW).rows.some((row) => row.primary)).toBe(false);
+    // Shown by the switch, kept open by the person, or waiting on them: listed, with the star.
+    const shown = homeModel({ ...s, showGatewayBot: true }, {}, NOW);
+    expect(ids(shown)).toEqual(["main", "clawtrate-main-bot"]);
+    expect(shown.rows[0]).toMatchObject({ primary: true });
+    expect(ids(homeModel(s, {}, NOW, "main"))).toEqual(["main", "clawtrate-main-bot"]);
+    expect(ids(homeModel(s, {}, NOW, "clawtrate-main-bot"))).toEqual(["clawtrate-main-bot"]);
+    const waiting = { ...ownTask, status: "waiting" as const, waitingFor: "approval" as const };
+    expect(
+      ids(homeModel({ ...s, tasksByBot: { ...s.tasksByBot, main: [waiting] } }, {}, NOW)),
+    ).toEqual(["main", "clawtrate-main-bot"]);
+    // The only bot: listed, with the star.
+    const alone = homeModel(state({ bots: [own], tasksByBot: { main: [ownTask] } }), {}, NOW);
+    expect(alone.rows).toHaveLength(1);
+    expect(alone.rows[0]).toMatchObject({ primary: true });
+    expect(alone.rows[0]!.spoken).toBe("Main, 1 task, primary bot");
   });
 
   it("gives each task row its title, time and one mark, newest first as the engine orders them", () => {
