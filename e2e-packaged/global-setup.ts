@@ -251,27 +251,28 @@ export function reportExit(child: ChildProcess, file: string): void {
 }
 
 /**
- * Whether the recorded app exited within `ms`: its recorded exit event, or the
- * kernel saying its PID is gone. Never a wait that started after it exited.
+ * Whether the recorded app exited within `ms`, by the exit event recorded at
+ * its spawn, so its exit code or signal is known once this says it did. A PID
+ * that is gone is not enough: Windows can end the process before Node reports
+ * how it ended, and its exit code reads null until then.
  */
 export async function exitedWithin(child: ChildProcess, ms: number): Promise<boolean> {
   if (child.exitCode !== null || child.signalCode !== null) return true;
-  const gone = async () => {
-    for (;;) {
-      await sleep(200);
-      try {
-        process.kill(child.pid!, 0);
-      } catch (error) {
-        if ((error as NodeJS.ErrnoException).code === "ESRCH") return true;
-      }
-    }
-  };
-  const ended = await Promise.race([
-    (exits.get(child) ?? new Promise<void>(() => {})).then(() => true),
-    gone(),
-    sleep(ms).then(() => false),
-  ]);
-  return ended;
+  return new Promise((resolve) => {
+    const deadline = setTimeout(() => resolve(false), ms);
+    exits.get(child)?.then(() => {
+      clearTimeout(deadline);
+      resolve(true);
+    });
+  });
+}
+
+/** What was wrong with how the Windows app quit once asked to close, or null if it exited 0 within 15 seconds. */
+export async function windowsQuitProblem(child: ChildProcess): Promise<string | null> {
+  if (!(await exitedWithin(child, 15_000))) {
+    return `the app (pid ${child.pid}) did not quit within 15 seconds`;
+  }
+  return child.exitCode === 0 ? null : `the app exited with ${child.exitCode ?? child.signalCode}`;
 }
 
 /**
@@ -548,10 +549,9 @@ async function windowsSetup() {
     } else if (appProcess) {
       const refused = askToClose(appProcess.pid!);
       if (refused) problems.push(`asking the app to close failed: ${refused}`);
-      else if (!(await exitedWithin(appProcess, 15_000))) {
-        problems.push(`the app (pid ${appProcess.pid}) did not quit within 15 seconds`);
-      } else if (appProcess.exitCode !== 0) {
-        problems.push(`the app exited with ${appProcess.exitCode ?? appProcess.signalCode}`);
+      else {
+        const problem = await windowsQuitProblem(appProcess);
+        if (problem) problems.push(problem);
       }
     }
     for (let i = 0; i < 50 && processesUsing(userData).length > 0; i += 1) await sleep(200);
