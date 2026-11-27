@@ -220,14 +220,18 @@ One component, in two places: inside New bot (title "Connect an account", Back t
 
 ### Choosing how
 
-A sentence: "Sign in with a subscription you already pay for. Your gateway does the sign-in and keeps it; Clawtrate never sees your password and never keeps the sign-in." Then the sign-in methods the gateway can start, in two groups (section 20, row 6):
+A sentence: "Sign in with a subscription you already pay for. Your gateway does the sign-in and keeps it; Clawtrate never sees your password and never keeps the sign-in." Then a grid of providers, one tile per provider the gateway can sign in to (section 20, row 6): its logo and its name, two columns and one at phone width, read left to right, row by row. A tile says "Connected" when the gateway already has an account of that provider, and OpenRouter's says "Billed per token" (its sign-in saves a key). The grouping is one table, `packages/ui/src/bots/provider-tiles.ts`: which of the gateway's provider ids are one provider, its name and logo, and its methods in order, the usual one first, each with a short plain name. Regional and enterprise variants are methods behind their provider's tile, not tiles of their own.
 
-| Group            | Methods (as the installed gateway offers them)                                                                                                     |
-| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Subscriptions    | xAI; ChatGPT (a code); ChatGPT in the browser; Sign in with ChatGPT (on the gateway's machine); GitHub Copilot; GitHub Copilot Enterprise; MiniMax |
-| Billed per token | OpenRouter (its sign-in saves a key, billed per token)                                                                                             |
+| Provider       | Its methods, the usual one first (as OpenClaw 2026.10.6 and 2026.11.10 offer them)                  |
+| -------------- | --------------------------------------------------------------------------------------------------- |
+| OpenAI         | Use a device code; Sign in with a browser; Sign in with ChatGPT (finishes on the gateway's machine) |
+| GitHub Copilot | Use a device code; GitHub Enterprise (your company's GitHub address, then a code)                   |
+| xAI            | Use a device code                                                                                   |
+| OpenRouter     | Sign in with a browser (saves a key, billed per token)                                              |
+| MiniMax        | Global account; China account                                                                       |
+| OpenCode Go    | Sign in with a browser (2026.11.10)                                                                 |
 
-Each row's title is the gateway's label for the method, with its hint after a middle dot; the line under it is what the person will do, from the method's kind: "Open a page and enter a code", "Open a page, then paste a code back here", "Finishes in a browser on the gateway's machine", "Your company's GitHub address, then a code". The provider is named in text; no provider's logo is drawn. Methods the gateway cannot start (Anthropic's sign-ins, local servers) are not listed.
+The four most used show first, in the table's order; the others wait behind "Show more", which moves focus to the first tile it shows. A tile with one method starts it at once; a tile with several shows them in the same place, titled with the provider's name, each row its plain name with what the person will do under it, from the method's kind: "Open a page and enter a code", "Open a page, then paste a code back here", "Finishes in a browser on the gateway's machine", "Your company's GitHub address, then a code". Back from there, or from a sign-in chosen there, returns to where it was chosen, and the grid gives focus back to the tile last chosen. Each provider's own logo is drawn (sources in `packages/ui/src/bots/logos/SOURCES.md`). A provider the table doesn't have, from a newer gateway or a plugin, still shows and works, after the known ones, under the gateway's own name for it, with its initial in place of a logo; a method the table doesn't have goes behind its provider's tile, after the known ones, under the gateway's label. Methods the gateway cannot start (Anthropic's sign-ins, local servers) are not listed. The sign-in steps that follow are unchanged.
 
 **The API key path** sits under the list, closed: a disclosure "Use an API key instead" (F-475). It is never open by default and never preselected. Open, it holds:
 

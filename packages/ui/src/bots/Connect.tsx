@@ -13,7 +13,6 @@ import {
   type ConnectionState,
   type GatewayAccount,
   type HostInfo,
-  type SignInMethod,
   type SignInState,
 } from "@clawtrate/core";
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
@@ -23,6 +22,8 @@ import { ChevronIcon, ExternalIcon, LockIcon } from "../icons.tsx";
 import { recall, remember } from "./memory.ts";
 import { AdminBar, CodeBlock, Note, Result, Wait } from "./parts.tsx";
 import { AccountTitle } from "./AccountChoices.tsx";
+import { ProviderLogo } from "./logos/ProviderLogo.tsx";
+import { FIRST_TILES, providerTiles, type ProviderTile } from "./provider-tiles.ts";
 import { accountName, flowWords, providerName } from "./words.ts";
 
 /** A label step left before Done, kept until the app quits so it comes back (section 6). */
@@ -50,7 +51,10 @@ export type ConnectView = {
 
 type Where =
   | { view: "methods" }
-  | { view: "flow"; method: string }
+  /** A provider's several sign-in methods, from its tile. */
+  | { view: "provider"; tile: string }
+  /** `tile`: the provider whose methods it was chosen from, where Back goes. */
+  | { view: "flow"; method: string; tile?: string }
   | { view: "label"; account: string; byKey: boolean }
   | { view: "same"; provider: string }
   /** A key the gateway took whose account the read after it didn't show. */
@@ -124,6 +128,11 @@ export function useConnect({
   const keyRef = useRef<HTMLInputElement>(null);
   const pasteRef = useRef<HTMLInputElement>(null);
   const [confirmDrop, setConfirmDrop] = useState<string | null>(null);
+  // The grid: the tiles after the first few once "Show more" is pressed, and the tile last left,
+  // which takes focus when the grid comes back.
+  const [moreTiles, setMoreTiles] = useState(false);
+  const [leftTile, setLeftTile] = useState<string | null>(null);
+  const firstMoreRef = useRef<HTMLButtonElement>(null);
   // Why the last Disconnect of a sign-in's account was refused, said under it.
   const [dropError, setDropError] = useState<string | null>(null);
 
@@ -163,8 +172,8 @@ export function useConnect({
     },
     [bridge, forBot],
   );
-  const start = async (id: string) => {
-    setWhere({ view: "flow", method: id });
+  const start = async (id: string, tile?: string) => {
+    setWhere(tile ? { view: "flow", method: id, tile } : { view: "flow", method: id });
     await begin(id);
   };
   // A new view or stage moves focus on purpose: to its field, or else to its title.
@@ -198,7 +207,12 @@ export function useConnect({
       if (!answer.cancelled) return;
     }
     await bridge.send({ type: "dismissSignIn" }).catch(() => {});
-    setWhere({ view: "methods" });
+    // Back to the provider's methods when the sign-in was chosen from them.
+    setWhere(
+      where.view === "flow" && where.tile
+        ? { view: "provider", tile: where.tile }
+        : { view: "methods" },
+    );
   };
   // A key's sign-in that ended without a key saved starts again where a key is typed.
   const toKey = async (provider: string) => {
@@ -217,28 +231,90 @@ export function useConnect({
   }, [keyAgain]);
 
   // --- Choosing how -------------------------------------------------------------
+  const tiles = providerTiles(accounts.methods, accounts.accounts);
+
+  // --- A provider's methods -------------------------------------------------------
+  if (where.view === "provider") {
+    const tile = tiles.find((each) => each.key === where.tile);
+    const back = () => {
+      setLeftTile(where.tile);
+      setWhere({ view: "methods" });
+    };
+    return {
+      title: tile?.name ?? "Connect an account",
+      backLabel: "Back to providers",
+      body: (
+        <>
+          <p className="b-lead">Choose how to sign in.</p>
+          <ul className="b-choices" aria-label={`Ways to sign in to ${tile?.name ?? ""}`}>
+            {(tile?.methods ?? []).map(({ method: m, name }) => (
+              <li key={m.id}>
+                <button
+                  type="button"
+                  className="b-choice"
+                  data-method={m.id}
+                  aria-disabled={!admin || undefined}
+                  onClick={() => admin && void start(m.id, where.tile)}
+                >
+                  <span className="b-choice-text">
+                    <span className="b-choice-title">{name}</span>
+                    <span className="b-choice-sub">{flowWords(m.flow)}</span>
+                  </span>
+                  <ChevronIcon />
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
+      ),
+      foot: admin ? null : (
+        <AdminBar
+          connection={connection}
+          info={info}
+          need="Connecting an account needs admin access. The gateway lets only admin connections start a sign-in."
+        />
+      ),
+      onBack: back,
+    };
+  }
+
   if (where.view === "methods") {
-    const subs = accounts.methods.filter((m) => m.group === "subscription" && m.flow !== "key");
-    const token = accounts.methods.filter((m) => m.group === "token" && m.flow !== "key");
-    const row = (m: SignInMethod) => (
-      <li key={m.id}>
-        <button
-          type="button"
-          className="b-choice"
-          data-method={m.id}
-          aria-disabled={!admin || undefined}
-          onClick={() => admin && void start(m.id)}
-        >
-          <span className="b-choice-text">
-            <span className="b-choice-title">
-              {m.label} {m.hint && <span>· {m.hint}</span>}
+    // The first few tiles, the rest behind "Show more"; all of them when the tile last left is
+    // among the rest, so that it can take focus again.
+    const hidden = tiles.slice(FIRST_TILES);
+    const showAll = moreTiles || hidden.some((tile) => tile.key === leftTile);
+    const shown = showAll ? tiles : tiles.slice(0, FIRST_TILES);
+    const choose = (tile: ProviderTile) => {
+      if (!admin) return;
+      setLeftTile(tile.key);
+      const only = tile.methods.length === 1 ? tile.methods[0]! : null;
+      if (only) void start(only.method.id);
+      else setWhere({ view: "provider", tile: tile.key });
+    };
+    const tileButton = (tile: ProviderTile, index: number) => {
+      const notes = [tile.connected ? "Connected" : null, tile.perToken ? "Billed per token" : null]
+        .filter(Boolean)
+        .join(" · ");
+      return (
+        <li key={tile.key}>
+          <button
+            ref={index === FIRST_TILES ? firstMoreRef : undefined}
+            type="button"
+            className="b-tile"
+            data-tile={tile.key}
+            data-b-focus={tile.key === leftTile ? "" : undefined}
+            aria-disabled={!admin || undefined}
+            onClick={() => choose(tile)}
+          >
+            <ProviderLogo logo={tile.logo} name={tile.name} />
+            <span className="b-tile-text">
+              <span className="b-tile-name">{tile.name}</span>
+              {notes && <span className="b-tile-note">{notes}</span>}
             </span>
-            <span className="b-choice-sub">{flowWords(m.flow)}</span>
-          </span>
-          <ChevronIcon />
-        </button>
-      </li>
-    );
+          </button>
+        </li>
+      );
+    };
     const kp = accounts.keyProviders.find((each) => each.provider === keyProvider);
     const saveKey = async () => {
       const key = keyRef.current?.value ?? "";
@@ -294,19 +370,26 @@ export function useConnect({
           Sign in with a subscription you already pay for. Your gateway does the sign-in and keeps
           it; Clawtrate never sees your password and never keeps the sign-in.
         </p>
-        {subs.length > 0 && (
-          <>
-            <h4 className="b-group">Subscriptions</h4>
-            <ul className="b-choices">{subs.map(row)}</ul>
-          </>
+        {tiles.length > 0 && (
+          <ul className="b-tiles" aria-label="Providers">
+            {shown.map(tileButton)}
+          </ul>
         )}
-        {token.length > 0 && (
-          <>
-            <h4 className="b-group">Billed per token</h4>
-            <ul className="b-choices">{token.map(row)}</ul>
-          </>
+        {!showAll && hidden.length > 0 && (
+          <button
+            type="button"
+            className="b-more"
+            onClick={() => {
+              setMoreTiles(true);
+              // The button goes once pressed: focus moves to the first tile it showed.
+              requestAnimationFrame(() => firstMoreRef.current?.focus());
+            }}
+          >
+            Show more
+            <ChevronIcon />
+          </button>
         )}
-        {subs.length + token.length === 0 && (
+        {tiles.length === 0 && (
           <p className="b-hint">
             This gateway offers no sign-in Clawtrate can start. Sign in on the gateway's machine.
           </p>

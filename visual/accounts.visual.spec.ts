@@ -28,12 +28,20 @@ async function connectStep(page: Page) {
   await expect(page.getByRole("heading", { name: "Connect an account", level: 2 })).toBeVisible();
 }
 
-/** A sign-in started with a method, waiting for `ready`. */
-const signIn = (method: RegExp, ready: (page: Page) => Promise<void>) => async (page: Page) => {
-  await connectStep(page);
-  await newBot(page).getByRole("button", { name: method }).click();
-  await ready(page);
-};
+/**
+ * A sign-in started from a provider's tile, and its method by name when the tile has several,
+ * waiting for `ready`.
+ */
+const signIn =
+  (provider: string, method: string | null, ready: (page: Page) => Promise<void>) =>
+  async (page: Page) => {
+    await connectStep(page);
+    await newBot(page)
+      .getByRole("button", { name: new RegExp(`^${provider}\\b`) })
+      .click();
+    if (method) await newBot(page).getByRole("button", { name: method }).click();
+    await ready(page);
+  };
 
 /** Settings, on Accounts. */
 async function accounts(page: Page) {
@@ -147,6 +155,35 @@ const SCENES: Scene[] = [
   // Connecting an account
   { name: "connect-methods", query: ADMIN, ready: connectStep },
   {
+    name: "connect-more",
+    query: ADMIN,
+    ready: async (page) => {
+      await connectStep(page);
+      await newBot(page).getByRole("button", { name: "Show more" }).click();
+      await expect(newBot(page).getByRole("button", { name: /^MiniMax/ })).toBeFocused();
+    },
+  },
+  {
+    name: "connect-provider",
+    query: ADMIN,
+    ready: async (page) => {
+      await connectStep(page);
+      await newBot(page)
+        .getByRole("button", { name: /^OpenAI\b/ })
+        .click();
+      await expect(page.getByRole("heading", { name: "OpenAI", level: 2 })).toBeVisible();
+    },
+  },
+  {
+    name: "connect-plugin",
+    query: `${ADMIN}&plugin=1`,
+    ready: async (page) => {
+      await connectStep(page);
+      await newBot(page).getByRole("button", { name: "Show more" }).click();
+      await expect(newBot(page).getByRole("button", { name: /^Nimbus Cloud/ })).toBeVisible();
+    },
+  },
+  {
     name: "connect-kept",
     query: `${ADMIN}&kept=1`,
     ready: async (page) => {
@@ -167,19 +204,19 @@ const SCENES: Scene[] = [
   {
     name: "signin-starting",
     query: `${ADMIN}&signin=starting`,
-    ready: signIn(/^xAI · /, (page) =>
+    ready: signIn("xAI", null, (page) =>
       expect(page.getByText("Asking the gateway to start the sign-in…")).toBeVisible(),
     ),
   },
   {
     name: "signin-code",
     query: ADMIN,
-    ready: signIn(/^xAI · /, (page) => expect(page.locator(".b-code")).toBeVisible()),
+    ready: signIn("xAI", null, (page) => expect(page.locator(".b-code")).toBeVisible()),
   },
   {
     name: "signin-saving",
     query: `${ADMIN}&signin=saving`,
-    ready: signIn(/^ChatGPT · /, async (page) => {
+    ready: signIn("OpenAI", "Use a device code", async (page) => {
       await expect(page.locator(".b-code")).toBeVisible();
       await expect(
         page.getByText("Too late to cancel: the gateway is saving the sign-in."),
@@ -189,14 +226,14 @@ const SCENES: Scene[] = [
   {
     name: "signin-paste",
     query: ADMIN,
-    ready: signIn(/^ChatGPT in the browser/, (page) =>
+    ready: signIn("OpenAI", "Sign in with a browser", (page) =>
       expect(page.getByTestId("paste")).toBeVisible(),
     ),
   },
   {
     name: "signin-checking",
     query: `${ADMIN}&signin=checking`,
-    ready: signIn(/^ChatGPT in the browser/, async (page) => {
+    ready: signIn("OpenAI", "Sign in with a browser", async (page) => {
       await page.getByTestId("paste").fill("made-up-code");
       await page.getByRole("button", { name: "Continue" }).click();
       await expect(page.getByText(/Finishing the sign-in with OpenAI/)).toBeVisible();
@@ -205,7 +242,7 @@ const SCENES: Scene[] = [
   {
     name: "signin-host",
     query: ADMIN,
-    ready: signIn(/^Sign in with ChatGPT/, (page) =>
+    ready: signIn("OpenAI", "Sign in with ChatGPT", (page) =>
       expect(
         page.getByText(/Waiting for OpenAI to send your browser back to the gateway/),
       ).toBeVisible(),
@@ -214,21 +251,21 @@ const SCENES: Scene[] = [
   {
     name: "signin-domain",
     query: ADMIN,
-    ready: signIn(/^GitHub Copilot Enterprise/, (page) =>
+    ready: signIn("GitHub Copilot", "GitHub Enterprise", (page) =>
       expect(page.getByText("GitHub Enterprise address")).toBeVisible(),
     ),
   },
   {
     name: "signin-label",
     query: `${ADMIN}&signin=connected`,
-    ready: signIn(/^ChatGPT · /, (page) =>
+    ready: signIn("OpenAI", "Use a device code", (page) =>
       expect(page.getByRole("heading", { name: "Connected to OpenAI" })).toBeVisible(),
     ),
   },
   {
     name: "signin-label-clash",
     query: `${ADMIN}&signin=connected`,
-    ready: signIn(/^ChatGPT · /, async (page) => {
+    ready: signIn("OpenAI", "Use a device code", async (page) => {
       await page.getByRole("textbox", { name: "Label" }).fill("work");
       await expect(
         page.getByText("Another OpenAI account is called Work. Choose a different label."),
@@ -238,26 +275,26 @@ const SCENES: Scene[] = [
   {
     name: "signin-failed",
     query: `${ADMIN}&signin=failed`,
-    ready: signIn(/^xAI · /, (page) => expect(page.getByTestId("reread")).toBeVisible()),
+    ready: signIn("xAI", null, (page) => expect(page.getByTestId("reread")).toBeVisible()),
   },
   {
     name: "signin-failed-saved",
     query: `${ADMIN}&signin=failed&saved=1`,
-    ready: signIn(/^xAI · /, (page) =>
+    ready: signIn("xAI", null, (page) =>
       expect(page.getByTestId("reread")).toContainText("It may not be ready to use."),
     ),
   },
   {
     name: "signin-expired",
     query: `${ADMIN}&signin=expired`,
-    ready: signIn(/^xAI · /, (page) =>
+    ready: signIn("xAI", null, (page) =>
       expect(page.getByRole("heading", { name: "The sign-in expired" })).toBeVisible(),
     ),
   },
   {
     name: "signin-cancelled",
     query: ADMIN,
-    ready: signIn(/^xAI · /, async (page) => {
+    ready: signIn("xAI", null, async (page) => {
       await expect(page.locator(".b-code")).toBeVisible();
       await page.getByRole("button", { name: "Cancel" }).click();
       await expect(page.getByRole("heading", { name: "Sign-in cancelled" })).toBeVisible();
@@ -266,28 +303,28 @@ const SCENES: Scene[] = [
   {
     name: "signin-ended",
     query: `${ADMIN}&signin=ended`,
-    ready: signIn(/^xAI · /, (page) =>
+    ready: signIn("xAI", null, (page) =>
       expect(page.getByRole("heading", { name: "The sign-in ended" })).toBeVisible(),
     ),
   },
   {
     name: "signin-busy",
     query: `${ADMIN}&signin=busy`,
-    ready: signIn(/^xAI · /, (page) =>
+    ready: signIn("xAI", null, (page) =>
       expect(page.getByRole("heading", { name: "The gateway is busy" })).toBeVisible(),
     ),
   },
   {
     name: "signin-unverified",
     query: `${ADMIN}&signin=unverified`,
-    ready: signIn(/^xAI · /, (page) =>
+    ready: signIn("xAI", null, (page) =>
       expect(page.getByRole("heading", { name: "Signed in, not confirmed" })).toBeVisible(),
     ),
   },
   {
     name: "signin-several",
     query: `${ADMIN}&signin=several`,
-    ready: signIn(/^xAI · /, (page) =>
+    ready: signIn("xAI", null, (page) =>
       expect(page.getByTestId("several").getByRole("button")).toHaveCount(2),
     ),
   },
@@ -306,7 +343,7 @@ const SCENES: Scene[] = [
   {
     name: "signin-cancel-unknown",
     query: `${ADMIN}&signin=cancel-unknown`,
-    ready: signIn(/^xAI · /, (page) => expect(page.getByTestId("cancel-unknown")).toBeVisible()),
+    ready: signIn("xAI", null, (page) => expect(page.getByTestId("cancel-unknown")).toBeVisible()),
   },
   {
     name: "bot-connect",
@@ -321,7 +358,7 @@ const SCENES: Scene[] = [
   {
     name: "signin-unconfirmed",
     query: `${ADMIN}&signin=unconfirmed`,
-    ready: signIn(/^xAI · /, (page) =>
+    ready: signIn("xAI", null, (page) =>
       expect(page.getByRole("heading", { name: "Saved, not confirmed" })).toBeVisible(),
     ),
   },
