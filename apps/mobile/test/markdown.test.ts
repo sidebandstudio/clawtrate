@@ -6,6 +6,7 @@ import {
   carriesCredential,
   columnWidths,
   COLUMN_WIDTH,
+  LINK_JOINER,
   linkPlace,
   openableUrl,
   parseMarkdown,
@@ -278,6 +279,41 @@ describe("the bot's markdown on iOS", () => {
       { t: "text", text: "Open " },
     ]);
     expect(besideShown(links("See https://example.test/.")[0]!)).toBeNull();
+  });
+
+  it("keeps two links side by side apart, so VoiceOver has one element for each", () => {
+    const [block] = parseMarkdown("[One](https://one.example/)[Two](https://two.example/)");
+    expect(block).toMatchObject({
+      t: "p",
+      children: [
+        { t: "link", host: "one.example" },
+        { t: "text", text: LINK_JOINER },
+        { t: "link", host: "two.example" },
+      ],
+    });
+    // Across emphasis too, in a heading and in a table's cell.
+    const [heading] = parseMarkdown("# **[One](https://one.example/)**[Two](https://two.example/)");
+    expect(heading).toMatchObject({
+      t: "h",
+      children: [
+        { t: "strong", children: [{ t: "link", host: "one.example" }] },
+        { t: "text", text: LINK_JOINER },
+        { t: "link", host: "two.example" },
+      ],
+    });
+    const [table] = parseMarkdown(
+      "| a |\n| - |\n| [One](https://one.example/)[Two](https://two.example/) |",
+    );
+    expect(table).toMatchObject({
+      t: "table",
+      rows: [[[{ t: "link" }, { t: "text", text: LINK_JOINER }, { t: "link" }]]],
+    });
+    // Links with text between them are already apart.
+    expect(
+      parseMarkdown("[One](https://one.example/) [Two](https://two.example/)")[0],
+    ).toMatchObject({
+      children: [{ t: "link" }, { t: "text", text: " " }, { t: "link" }],
+    });
   });
 
   it("knows a credential in an address however it is encoded", () => {

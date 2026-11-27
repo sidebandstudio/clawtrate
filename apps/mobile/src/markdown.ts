@@ -150,6 +150,44 @@ function withoutDirectionControls(nodes: Inline[]): Inline[] {
   });
 }
 
+/** A word joiner: no width, and no line break where it stands. */
+export const LINK_JOINER = "\u2060";
+
+/**
+ * A word joiner between two links with nothing between them. iOS makes one VoiceOver element of
+ * each run of text with the link role, so two links side by side would be one element naming
+ * both; text without the role between them keeps each its own, and the joiner shows nothing.
+ */
+function linksApart(nodes: Inline[]): Inline[] {
+  let afterLink = false;
+  const walk = (list: Inline[]): Inline[] =>
+    list.flatMap((node): Inline[] => {
+      switch (node.t) {
+        case "link": {
+          const out: Inline[] = afterLink ? [{ t: "text", text: LINK_JOINER }, node] : [node];
+          afterLink = true;
+          return out;
+        }
+        case "strong":
+        case "em":
+        case "del":
+          return [{ ...node, children: walk(node.children) }];
+        case "text":
+          if (node.text !== "") afterLink = false;
+          return [node];
+        default:
+          afterLink = false;
+          return [node];
+      }
+    });
+  return walk(nodes);
+}
+
+/** A block's inlines: links side by side kept apart for VoiceOver. */
+function blockInlines(nodes: PhrasingContent[]): Inline[] {
+  return linksApart(inlines(nodes));
+}
+
 function inlines(nodes: PhrasingContent[]): Inline[] {
   return nodes.flatMap((node): Inline[] => {
     switch (node.type) {
@@ -193,9 +231,9 @@ function blocks(nodes: RootContent[]): Block[] {
   return nodes.flatMap((node): Block[] => {
     switch (node.type) {
       case "paragraph":
-        return [{ t: "p", children: inlines(node.children) }];
+        return [{ t: "p", children: blockInlines(node.children) }];
       case "heading":
-        return [{ t: "h", depth: node.depth, children: inlines(node.children) }];
+        return [{ t: "h", depth: node.depth, children: blockInlines(node.children) }];
       case "list":
         return [
           {
@@ -214,7 +252,7 @@ function blocks(nodes: RootContent[]): Block[] {
       case "table": {
         const [head, ...body] = node.children;
         const cells = (row: typeof head) =>
-          row ? row.children.map((cell) => inlines(cell.children)) : [];
+          row ? row.children.map((cell) => blockInlines(cell.children)) : [];
         return [{ t: "table", header: cells(head), rows: body.map(cells) }];
       }
       case "html":
