@@ -364,7 +364,7 @@ test("F-190: shared routine runs open the recorded conversation", async () => {
       await expect(view().getByTestId("run-summary")).toBeVisible();
       if (target === "main") {
         // OpenClaw 2026.10.6 records no session for a main-target run; 2026.11.10 records the
-        // bot's main conversation, and the page names it and opens it.
+        // bot's main conversation, and the page names it and opens it: the gateway's own bot, `main`.
         const recorded = ran.run?.sessionKey ?? null;
         expect(recorded).toBe(admin.serverVersion === "2026.10.6" ? null : "agent:main:main");
         if (recorded === null) {
@@ -373,10 +373,10 @@ test("F-190: shared routine runs open the recorded conversation", async () => {
           );
         } else {
           await expect(view().getByTestId("run-not-kept")).toContainText(
-            "This run happened in Juniper's main conversation.",
+            "This run happened in main's main conversation.",
           );
           await view()
-            .getByRole("button", { name: "Open Juniper's main conversation", exact: true })
+            .getByRole("button", { name: "Open main's main conversation", exact: true })
             .click();
           await expect(page.getByTestId("transcript")).toContainText("A reminder.");
         }
