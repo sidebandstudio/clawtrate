@@ -5227,7 +5227,9 @@ export class ClawtrateClient {
    * stopped recipient's session through `sessions_send`, and not already another awaited turn.
    * That turn claims the wait whatever its state, even when only its row shows it: one that ended
    * before it was seen leaves a later message from that bot alone. A turn without a gateway time
-   * to place it by claims nothing. It is stopped only while still active, and only on the gateway
+   * to place it by claims nothing, so when it ends unread, a later timed turn of that bot's within
+   * the wait is taken for it and stopped (a limit, #842: the bot's turn, never the person's). It
+   * is stopped only while still active, and only on the gateway
    * the wait was made on. Where the turn can't be told from a wanted one it runs: the gateway's
    * relay of a reply, and its note for another send, have the same form, so nothing is stopped
    * when the recipient's run is known to have finished well (the abort came too late: this is its
