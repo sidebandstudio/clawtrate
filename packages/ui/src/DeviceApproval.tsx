@@ -382,7 +382,9 @@ export function DeviceRequestBody({
           </p>
           <ul className="device-allowed" aria-labelledby="device-allowed">
             {request.scopes.map((scope) => (
-              <li key={scope}>{ALLOWED_WORDS[scope] ?? scope}</li>
+              <li key={scope}>
+                {Object.hasOwn(ALLOWED_WORDS, scope) ? ALLOWED_WORDS[scope] : scope}
+              </li>
             ))}
           </ul>
         </>
@@ -507,6 +509,14 @@ function typing(): boolean {
 }
 
 /**
+ * A modal dialog is open anywhere in the window (the shared `Dialog`, or anything marked modal),
+ * whoever opened it; the Work drawer, modal only to the shell behind it, isn't one.
+ */
+function modalOpen(): boolean {
+  return document.querySelector('dialog[open], [aria-modal="true"]:not(.work-panel)') !== null;
+}
+
+/**
  * The one request the host opens by itself, in the window that has focus when it comes, and only
  * while the person isn't busy: no dialog open (`busy`: Settings, Search, New bot and the others
  * the shell knows) and no typing. Each condition is checked when the host offers the request
@@ -535,7 +545,7 @@ export function DeviceRequestPrompt({
   }, [open, onOpenChange]);
   useEffect(() => {
     if (!prompt || open || busy) return;
-    const free = () => document.hasFocus() && !busyRef.current && !typing();
+    const free = () => document.hasFocus() && !busyRef.current && !modalOpen() && !typing();
     const take = () => {
       if (!free()) return;
       bridge

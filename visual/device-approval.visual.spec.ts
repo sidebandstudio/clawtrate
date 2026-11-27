@@ -546,3 +546,113 @@ test("F-550: a held decision still answers when the fixture's state is replaced 
     "The connection changed before Clawtrate could approve it. Nothing was approved.",
   );
 });
+
+/** A waiting request published on a scene that has none, offered to open by itself. */
+const offerRequest = (page: Page) =>
+  page.evaluate(() => {
+    const id = "0c4f7a2e-91d3-4b6e-8a5f-000000000009";
+    const fixture = (
+      window as unknown as {
+        clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+      }
+    ).clawtrateFixture;
+    fixture.setState((s) => ({
+      ...s,
+      deviceRequests: {
+        access: "admin",
+        requests: [
+          {
+            requestId: id,
+            deviceId: "9".repeat(64),
+            publicKey: "q3J8bW2xR5tY7uN0kP4sV6aD9fG1hL3zX8cB5nM2vQw",
+            name: "Work laptop",
+            platform: "win32",
+            app: null,
+            remoteIp: null,
+            origin: null,
+            roles: ["operator"],
+            scopes: ["operator.read"],
+            at: 1,
+            blocked: null,
+            choices: ["4C7R-MZ2D", "9H3K-TQ8B", "K7QF-2MXA", "WX5N-0PJ6"],
+            spent: false,
+          },
+        ],
+        omitted: 0,
+        noticed: 0,
+        prompt: id,
+        error: null,
+        listedOn: 1,
+      },
+    }));
+  });
+
+test("F-550: no sheet opens by itself over Delete bot, and nothing of the shell's opens over Delete bot", async ({
+  page,
+}) => {
+  await openFixture(page, "scene=main&bot=pip&panel=open&tab=settings", "dark");
+  await page.getByRole("button", { name: "Delete bot…" }).click();
+  const dialog = page.getByTestId("delete-bot");
+  await expect(dialog.getByRole("heading", { name: "Delete Pip?" })).toBeVisible();
+  // Its own text field aside: the dialog alone keeps the sheet away.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await offerRequest(page);
+  await settle(page);
+  await expect(sheetOf(page)).toHaveCount(0);
+  expect(await takes(page)).toBe(0);
+  // ⌘K and ⌘N open nothing over it.
+  await page.keyboard.press("ControlOrMeta+K");
+  await page.keyboard.press("ControlOrMeta+N");
+  await settle(page);
+  await expect(page.getByRole("dialog", { name: /search/i })).toHaveCount(0);
+  await expect(page.getByTestId("new-bot")).toHaveCount(0);
+  await expect(dialog).toBeVisible();
+});
+
+for (const [key, opened] of [
+  ["ControlOrMeta+K", (page: Page) => page.getByRole("dialog", { name: /search/i })],
+  ["ControlOrMeta+N", (page: Page) => page.getByTestId("new-bot")],
+] as const) {
+  test(`F-550: ${key} opens nothing over the device sheet`, async ({ page }) => {
+    await openFixture(page, "scene=device-request", "dark");
+    const sheet = sheetOf(page);
+    await expect(sheet).toBeVisible();
+    await page.keyboard.press(key);
+    await settle(page);
+    await expect(opened(page)).toHaveCount(0);
+    await expect(sheet).toBeVisible();
+  });
+}
+
+test("F-550: from Settings with Work as a drawer, the sheet keeps Tab, and Escape closes the sheet, then Settings", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 900, height: 800 });
+  await openFixture(page, "scene=devices-asking&panel=open", "dark");
+  const drawer = page.getByTestId("work-panel");
+  await expect(drawer).toBeVisible();
+  await page.keyboard.press("ControlOrMeta+,");
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await expect(settings).toBeVisible();
+  const row = settings.getByRole("button", { name: /^Work laptop \(reported\)/ });
+  if (!(await row.isVisible())) await settings.getByRole("button", { name: /^Gateway/ }).click();
+  await row.click();
+  const sheet = sheetOf(page);
+  await expect(
+    sheet.getByRole("heading", { name: "A device is asking to use this gateway" }),
+  ).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(sheet.getByRole("button", { name: "I didn't start this" })).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(sheet.getByRole("button", { name: "None of these match" })).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(sheet.getByRole("button", { name: "I didn't start this" })).toBeFocused();
+  // Escape: the sheet, then Settings; the drawer underneath stays.
+  await page.keyboard.press("Escape");
+  await expect(sheet).toHaveCount(0);
+  await expect(settings).toBeVisible();
+  await expect(drawer).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(settings).toHaveCount(0);
+  await expect(drawer).toBeVisible();
+});

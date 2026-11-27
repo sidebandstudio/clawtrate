@@ -1471,7 +1471,8 @@ export function createFixtureBridge(
     deciding.add(shown.requestId);
     return new Promise((resolve, reject) =>
       timers.deferred(() => {
-        deciding.delete(shown.requestId);
+        // An unknown outcome keeps the request taken while it is listed, as the engine does.
+        if (decision.kind !== "unknown") deciding.delete(shown.requestId);
         const now = state.deviceRequests;
         // The state was replaced while the answer was held: nothing of this request is left.
         if (!now) {

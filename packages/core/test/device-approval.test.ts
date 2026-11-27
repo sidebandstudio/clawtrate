@@ -679,6 +679,33 @@ describe("approving a waiting device", () => {
     }
   });
 
+  it("answers not fresh when the connection changes while a read under way is waited out", async () => {
+    const row = pendingRow();
+    const t = await listed([row]);
+    const before = t.state().listedOn;
+    let release = () => {};
+    t.answers["device.pair.list"] = () =>
+      new Promise((resolve) => {
+        release = () => resolve({ pending: t.gw.pending, paired: [] });
+      });
+    void t.engine.refresh();
+    const asked = t.real.readNow();
+    await t.settle();
+    // A new connection with admin reads its own list on its hello; the old read is let through.
+    delete t.answers["device.pair.list"];
+    t.engine.onClose();
+    t.engine.onHello();
+    await t.settle();
+    const reads = t.calls.filter((call) => call === "device.pair.list").length;
+    release();
+    expect(await asked).toEqual({ fresh: false, error: null });
+    // Nothing more was read for the caller, and the state is the new connection's own list.
+    await t.settle();
+    expect(t.calls.filter((call) => call === "device.pair.list").length).toBe(reads);
+    expect(t.state().listedOn).toBeGreaterThan(before);
+    expect(t.state().requests.map((each) => each.requestId)).toEqual([row.requestId]);
+  });
+
   it("reads the list for a caller that waits, and says whether a list that new was applied", async () => {
     const row = pendingRow();
     const t = await listed([row]);

@@ -190,7 +190,8 @@ export function Shell({
   const drawerOpen = panelOpen && overlay && !routines;
   // While the offer of full control or a waiting device's sheet is open, its dialog keeps the
   // keyboard, not the drawer behind.
-  const drawerKeys = drawerOpen && !offerOpen && !deviceSheetOpen;
+  // Settings over the shell (`inert`) keeps it too.
+  const drawerKeys = drawerOpen && !offerOpen && !deviceSheetOpen && !inert;
 
   const setPanel = useCallback((open: boolean) => {
     if (open) {
@@ -268,10 +269,14 @@ export function Shell({
     null,
   );
   const deletingOpen = deleting !== null;
+  // Every dialog the shell opens itself, a waiting device's sheet included: none opens over
+  // another, by a shortcut or by itself.
+  const shellDialogOpen =
+    offerOpen || shortcuts || searchOpen || newBot || deletingOpen || deviceSheetOpen;
   const openNewBot = useCallback(() => setNewBot(true), []);
   const mac = isMac();
   useEffect(() => {
-    if (inert || newBot || shortcuts || searchOpen || offerOpen) return;
+    if (inert || shellDialogOpen) return;
     const onKey = (event: KeyboardEvent) => {
       if (
         (mac ? event.metaKey : event.ctrlKey) &&
@@ -285,10 +290,10 @@ export function Shell({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [inert, newBot, shortcuts, searchOpen, offerOpen, mac, openPalette]);
+  }, [inert, shellDialogOpen, mac, openPalette]);
   useEffect(() => {
-    // The full-control offer keeps ⌘N, as it keeps ⌘K: nothing opens over it.
-    if (!interactive || inert || offerOpen) return;
+    // A dialog of the shell's keeps ⌘N, as it keeps ⌘K: nothing opens over it.
+    if (!interactive || inert || shellDialogOpen) return;
     const onKey = (event: KeyboardEvent) => {
       if (
         (event.metaKey || event.ctrlKey) &&
@@ -302,7 +307,7 @@ export function Shell({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [interactive, inert, offerOpen]);
+  }, [interactive, inert, shellDialogOpen]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key === "/") {
@@ -1038,7 +1043,7 @@ export function Shell({
         )}
         {/* A device waiting for approval, opened by itself when it is the only one (§5). */}
         <DeviceRequestPrompt
-          busy={inert === true || offerOpen || searchOpen || newBot || shortcuts}
+          busy={inert === true || shellDialogOpen}
           onOpenChange={setDeviceSheetOpen}
         />
         {shortcuts && <ShortcutList onClose={() => setShortcuts(false)} />}

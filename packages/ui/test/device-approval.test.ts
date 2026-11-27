@@ -107,6 +107,15 @@ describe("the sheet", () => {
     expect(bare).toContain("Address not reported");
   });
 
+  it("F-550: shows a scope named like an object's own property as its own text, and stays usable", () => {
+    // A waiting device names its own scopes: none may reach into the words' object.
+    const odd = ["__proto__", "constructor", "toString", "hasOwnProperty"];
+    const html = sheet(request({ scopes: odd, blocked: "unknown-scope", choices: [] }));
+    for (const scope of odd) expect(html).toContain(`<li>${scope}</li>`);
+    expect(buttons(html)).toEqual(["I didn't start this", "Not now"]);
+    expect(html).toContain("It asks for access Clawtrate can't describe");
+  });
+
   it("F-550: offers no code for a request it doesn't approve, and still lets it be denied", () => {
     for (const blocked of [
       "not-operator",

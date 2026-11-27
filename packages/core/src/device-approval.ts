@@ -489,9 +489,13 @@ export class DeviceApprovals {
    * whether a list at least that new was applied.
    */
   async readNow(): Promise<DeviceListRead> {
-    while (this.current) await this.current;
-    if (!this.ctx.admin()) return { fresh: false, error: null };
+    // The connection asked about: one that changes while a read is waited out answers not fresh.
     const epoch = this.epoch;
+    while (this.current) {
+      await this.current;
+      if (epoch !== this.epoch) return { fresh: false, error: null };
+    }
+    if (!this.ctx.admin()) return { fresh: false, error: null };
     // `read()` numbers its send before its first await: the next number.
     const seq = this.sent + 1;
     await this.read();
