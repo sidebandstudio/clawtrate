@@ -23,7 +23,7 @@ import {
   UpdatesWithOpenClawView,
   workingTasks,
 } from "../src/bots/UpdateOpenClaw.tsx";
-import { updateLinkLine, updatingHere } from "../src/bots/update-words.ts";
+import { nextStep, updateLinkLine, updatingHere } from "../src/bots/update-words.ts";
 import { presenceWords } from "../src/Rail.tsx";
 import { stripFor } from "../src/StatusStrip.tsx";
 
@@ -96,11 +96,14 @@ describe("F-589: the Update OpenClaw button", () => {
   it("F-589: is not offered without a newer OpenClaw, on a host that only reads, or while not connected", () => {
     const none = { connection: { ...connection, openclawUpdate: null } };
     expect(part(none)).toBe("");
-    // A host that only reads says it is out, and where it is updated instead.
+    // A host that only reads says it is out, and where it is updated instead: no link out (#796).
     const reads = part({}, { ...info, readOnly: true });
     expect(reads).not.toContain("<button");
     expect(text(reads)).toContain("OpenClaw 2026.11.6 is out.");
-    expect(reads).toContain('href="https://docs.openclaw.ai/install/updating"');
+    expect(text(reads)).toContain(
+      "This device only reads, so it doesn't offer the update. Clawtrate offers it on a device that can change the gateway.",
+    );
+    expect(reads).not.toContain("href=");
     const away = { connection: { ...connection, status: "reconnecting" as const } };
     expect(part(away)).not.toContain("<button");
   });
@@ -275,11 +278,38 @@ describe("F-589: the progress and how it ends", () => {
       expect(text(html)).toContain(
         `${words} The gateway says: “Restored the previous package. (runtime-verification-failed)”.`,
       );
-      expect(text(html)).toContain(
-        "You can try again, or update OpenClaw on the gateway's machine",
-      );
-      expect(html).toContain('href="https://docs.openclaw.ai/install/updating"');
+      // Clawtrate's own Update tries again: no link out (#796).
+      expect(text(html)).toContain("Dismiss this, and Update is offered again.");
+      expect(html).not.toContain("href=");
     }
+  });
+
+  it("F-589: on a device that only reads, a failed run says where Update is offered, blocked or not", () => {
+    const readOnly = { ...info, readOnly: true };
+    const failed = run({
+      phase: "finished",
+      outcome: "failed",
+      reason: "container-image-install",
+      note: null,
+    });
+    for (const blocked of [null, { reason: "container-image-install", note: null }]) {
+      const html = part({ openclawUpdating: updating({ run: failed, blocked }) }, readOnly);
+      expect(text(html)).toContain(
+        "Dismiss this. Clawtrate offers Update on a device that can change the gateway.",
+      );
+      expect(text(html)).not.toContain("Update is offered again");
+      expect(text(html)).not.toContain("see why the gateway can't update itself");
+      expect(html).not.toContain("href=");
+    }
+    expect(nextStep({ outcome: "failed" } as Parameters<typeof nextStep>[0], true, true)).toBe(
+      "Dismiss this. Clawtrate offers Update on a device that can change the gateway.",
+    );
+  });
+
+  it("F-589: after a failure that says the gateway can't update itself, no Update is promised", () => {
+    const failed = { outcome: "failed" } as Parameters<typeof nextStep>[0];
+    expect(nextStep(failed)).toBe("Dismiss this, and Update is offered again.");
+    expect(nextStep(failed, true)).toBe("Dismiss this to see why the gateway can't update itself.");
   });
 
   it("F-589: a gateway that hasn't come back says so and what to check, with no Dismiss while it may still come", () => {

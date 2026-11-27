@@ -654,10 +654,18 @@ export class SetupController implements SetupHost {
       // last check is their own, no longer this attempt's, which Back or a new look ends.
       let kept = false;
       this.watch(attempt, found.url, found.port, selection, true, () => (kept = true));
+      // Until then, a socket only while this attempt is still Connecting. Once it has failed, the
+      // client's own retry may come due before setup's disconnect is through the client's queue:
+      // that retry dials nothing.
+      const createSocket = (url: string) => {
+        if (!kept && !(current() && this.state.phase === "connecting"))
+          throw new Error("This Connect has ended.");
+        return sockets.createWebSocket(url);
+      };
       await client.connect(
         { url: found.url, token: token.reveal() },
         {
-          createSocket: sockets.createWebSocket,
+          createSocket,
           prove: provedWhile(() => current() || kept, sockets.verify),
           route: routeOf(found),
           consent,
@@ -824,9 +832,12 @@ export class SetupController implements SetupHost {
       // settings file says isn't how the gateway there listens now (it stopped, or runs on
       // settings changed since it started, TLS for one). Not retried for ever behind
       // Connecting: the attempt ends with Advanced and a look again. A connection at the address
-      // whose bots are still shown says `reconnecting` for the same.
+      // whose bots are still shown says `reconnecting` for the same. Only while the connection
+      // is still setup's own: once its first paired hello made it the person's, a drop while the
+      // bots load is a reconnect like any other, and setup goes on watching for them.
       if (
         local &&
+        this.owned?.attempt === attempt &&
         (connection.status === "connecting" || connection.status === "reconnecting") &&
         connection.error?.code === "UNREACHABLE" &&
         this.state.phase === "connecting"

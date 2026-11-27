@@ -34,6 +34,7 @@ import {
   deferred,
   GatewayError,
   guidesOff,
+  guidesOptions,
   memoryStorage,
   sleep,
   testHost,
@@ -692,7 +693,7 @@ describe("F-552: a bot that takes a name", () => {
         ...testHost(a.gateway, storage),
         createWebSocket: (url: string) => (url === URL_B ? b : a).gateway.createWebSocket(url),
       },
-      FAST,
+      { ...FAST, ...guidesOptions(storage) },
     );
     await client.start();
     await until(() => client.state.discovery.status === "ready");
