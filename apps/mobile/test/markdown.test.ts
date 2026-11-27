@@ -375,6 +375,8 @@ describe("the bot's markdown on iOS", () => {
     expect(carries("https://example.test/%E0%A4%A?token=demo%40token%2Fx%3Ay")).toBe(true);
     expect(carries("https://example.test/?token=demo%40token%2Fx%3Ay&n=%E0%A4%A")).toBe(true);
     expect(carries("https://example.test/%FF%40?token=demo%40token%2Fx%3Ay")).toBe(true);
+    // A credential that starts inside a run that isn't UTF-8: the run's ASCII escapes still decode.
+    expect(carries("https://example.test/%FF%64emo%40token%2Fx%3Ay")).toBe(true);
   });
 
   it("shows raw HTML as text", () => {

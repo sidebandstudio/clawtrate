@@ -499,7 +499,10 @@ function macTools(version: () => string, overrides: Record<string, RunResult> = 
 }
 
 describe("checking an app as it ships", () => {
-  const app = "/stage/verify-mac-arm64/Clawtrate.app";
+  const root = mkdtempSync(join(tmpdir(), "clawtrate-verify-"));
+  const app = join(root, "verify-mac-arm64", "Clawtrate.app");
+  beforeAll(() => carryInto(app));
+  afterAll(() => rmSync(root, { recursive: true, force: true }));
   const expected = { version: "0.1.1-beta.20261120.1", arch: "arm64" as const };
   const tools = (overrides: Record<string, RunResult> = {}) =>
     macTools(() => expected.version, overrides);
@@ -555,6 +558,48 @@ describe("checking an app as it ships", () => {
     expect(() => verifyApp(tools({ [tool]: answer }), app, expected)).toThrow(`${check} failed.`);
   });
 
+  it("refuses an app that doesn't carry its plugins as its list names them", async () => {
+    const without = join(root, "without", "verify-mac-arm64", "Clawtrate.app");
+    const cases: [string, () => Promise<void> | void, string][] = [
+      [
+        "no list",
+        async () => carryInto(without, await compiledAsar([BETA_FEED_URL], null)),
+        "the carried plugins' list in app.asar failed.",
+      ],
+      [
+        "an empty list",
+        async () => carryInto(without, await compiledAsar([BETA_FEED_URL], { plugins: [] })),
+        "a carried plugin in app.asar's list failed.",
+      ],
+      [
+        "no tarball",
+        () => carryInto(without, BUILT_ASAR, null),
+        `the carried plugin ${CARRIED_FILE} with its integrity failed.`,
+      ],
+      [
+        "other bytes",
+        () => carryInto(without, BUILT_ASAR, Buffer.from("other bytes")),
+        `the carried plugin ${CARRIED_FILE} with its integrity failed.`,
+      ],
+      [
+        "a file outside the plugins folder",
+        async () =>
+          carryInto(
+            without,
+            await compiledAsar([BETA_FEED_URL], {
+              plugins: [{ ...CARRIED_LIST.plugins[0], file: `../plugins/${CARRIED_FILE}` }],
+            }),
+          ),
+        `the carried plugin ../plugins/${CARRIED_FILE} with its integrity failed.`,
+      ],
+    ];
+    for (const [what, make, check] of cases) {
+      rmSync(join(root, "without"), { recursive: true, force: true });
+      await make();
+      expect(() => verifyApp(tools(), without, expected), what).toThrow(check);
+    }
+  });
+
   it("refuses another bundle id or version", () => {
     expect(() =>
       verifyApp(
@@ -566,18 +611,48 @@ describe("checking an app as it ships", () => {
   });
 });
 
-/** An app.asar whose main bundle holds each of `feeds` as its own string literal, as a build does. */
-async function compiledAsar(...feeds: string[]): Promise<string> {
+/** The tarball a stand-in app carries, and its list entry, as carried-plugins.ts writes them. */
+const CARRIED_FILE = "clawtrate-clawtrate-voice-0.1.0.tgz";
+const CARRIED_BYTES = Buffer.from("a stand-in tarball");
+const CARRIED_LIST = {
+  plugins: [
+    {
+      packageName: "@clawtrate/clawtrate-voice",
+      version: "0.1.0",
+      pluginId: "clawtrate-voice",
+      integrity: `sha512-${createHash("sha512").update(CARRIED_BYTES).digest("base64")}`,
+      file: CARRIED_FILE,
+    },
+  ],
+};
+
+/**
+ * An app.asar whose main bundle holds each of `feeds` as its own string literal, as a build
+ * does, with the list of the plugins it carries (`list`, or none when null).
+ */
+async function compiledAsar(feeds: string[], list: unknown = CARRIED_LIST): Promise<string> {
   const dir = mkdtempSync(join(tmpdir(), "clawtrate-asar-"));
   mkdirSync(join(dir, "app", "out", "main"), { recursive: true });
   writeFileSync(
     join(dir, "app", "out", "main", "index.js"),
     feeds.map((feed, index) => `const FEED_${index} = ${JSON.stringify(feed)};\n`).join(""),
   );
+  if (list !== null) {
+    mkdirSync(join(dir, "app", "out", "plugins"), { recursive: true });
+    writeFileSync(join(dir, "app", "out", "plugins", "plugins.json"), JSON.stringify(list));
+  }
   await createPackage(join(dir, "app"), join(dir, "app.asar"));
   return join(dir, "app.asar");
 }
-const BUILT_ASAR = await compiledAsar(BETA_FEED_URL);
+const BUILT_ASAR = await compiledAsar([BETA_FEED_URL]);
+
+/** Puts `asar` and the carried tarball (`tarball`, or none when null) into `app`'s resources. */
+function carryInto(app: string, asar = BUILT_ASAR, tarball: Buffer | null = CARRIED_BYTES) {
+  const resources = join(app, "Contents", "Resources");
+  mkdirSync(join(resources, "plugins"), { recursive: true });
+  copyFileSync(asar, join(resources, "app.asar"));
+  if (tarball) writeFileSync(join(resources, "plugins", CARRIED_FILE), tarball);
+}
 
 /** The beta these tests prepare: the remote has run 1 of the day. */
 const VERSION = "0.1.1-beta.20261120.2";
@@ -633,11 +708,7 @@ function tools(
     if (basename(command) === "check-zip") return overrides["check-zip"] ?? ok("ok\n");
     if (command === "ditto" && overrides[`ditto ${args[0]}`]) return overrides[`ditto ${args[0]}`]!;
     if (command === "ditto") {
-      if (args[0] === "-x") {
-        const resources = join(args.at(-1)!, "Clawtrate.app", "Contents", "Resources");
-        mkdirSync(resources, { recursive: true });
-        copyFileSync(asar, join(resources, "app.asar"));
-      }
+      if (args[0] === "-x") carryInto(join(args.at(-1)!, "Clawtrate.app"), asar);
       return ok();
     }
     return mac(command, args, options);
@@ -746,19 +817,23 @@ describe("preparing a beta from start to finish, with stand-ins for every tool",
 
   const unread = `is not built to read ${BETA_FEED_URL} alone.`;
   it.each<[string, () => Promise<string>, string]>([
-    ["the legacy feed address", () => compiledAsar(LEGACY_BETA_FEED_URL), unread],
+    ["the legacy feed address", () => compiledAsar([LEGACY_BETA_FEED_URL]), unread],
     [
       "both feed addresses",
       // The new address as a whole literal, so only the legacy one can refuse it.
-      () => compiledAsar(BETA_FEED_URL, LEGACY_BETA_FEED_URL),
+      () => compiledAsar([BETA_FEED_URL, LEGACY_BETA_FEED_URL]),
       unread,
     ],
     [
       "no main bundle",
       async () => {
         const dir = mkdtempSync(join(tmpdir(), "clawtrate-asar-"));
-        mkdirSync(join(dir, "app"));
+        mkdirSync(join(dir, "app", "out", "plugins"), { recursive: true });
         writeFileSync(join(dir, "app", "package.json"), "{}");
+        writeFileSync(
+          join(dir, "app", "out", "plugins", "plugins.json"),
+          JSON.stringify(CARRIED_LIST),
+        );
         await createPackage(join(dir, "app"), join(dir, "app.asar"));
         return join(dir, "app.asar");
       },
