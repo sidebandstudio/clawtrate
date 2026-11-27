@@ -836,13 +836,15 @@ export const SCENARIOS: Scenario[] = [
     name: "read-history",
     phrase: "read what that task found",
     summary:
-      "Reads the history of the task this conversation started last, or of its own main conversation when it started none (`sessions_history`).",
+      "Reads the history of the task this conversation started last, or of this conversation when it started none (`sessions_history`), and says whether the read worked.",
     steps: () => [
       {
         kind: "tool-from",
         build: (ctx) =>
           tool("sessions_history", {
-            sessionKey: lastStartedTask(ctx) ?? `agent:${ctx.agentId ?? "main"}:main`,
+            // A session that exists: the task it started last, else this conversation.
+            sessionKey:
+              lastStartedTask(ctx) ?? ctx.sessionKey ?? `agent:${ctx.agentId ?? "main"}:main`,
             limit: 3,
           }),
       },
