@@ -969,6 +969,11 @@ describe("a run another bot's message started or reached (#606)", () => {
     personRun(h, "run-s", SUB);
     h.write(PIP, fromBot("run-back", SUB, "subagent_announce"));
     h.modelCall("run-back", PIP);
+    // A routine's hand-off: its report back comes from a run no person started.
+    const ROUTINE = "agent:pip:subagent:r1";
+    h.modelCall("run-r", ROUTINE);
+    h.write(PIP, fromBot("run-back-r", ROUTINE, "subagent_announce"));
+    h.modelCall("run-back-r", PIP);
     asks(h, "run-routine");
     // Bots' messages waiting in another task push marks out of the forgotten ones; no run
     // starts, so the runs' notes from before are all still held.
@@ -983,6 +988,9 @@ describe("a run another bot's message started or reached (#606)", () => {
     );
     asks(h, "run-person", "agent:pip:p");
     asks(h, "run-back");
+    expect(read(h, "run-back-r")?.blockReason).toContain(
+      "the plugin can no longer tell who started this run",
+    );
   });
 
   it("a waiting bot's message is read before a person's note: a busy run whose task the plugin no longer holds as under way still loses its cards", async () => {
@@ -1428,8 +1436,10 @@ describe("where the Codex harness may answer a card (#606)", () => {
       { action: "ask", tools: ["write"] },
       { action: "never", tools: ["exec"] },
     ]);
-    // Where the gateway would load an installed Codex plugin, as both versions decide it.
+    // Where an installed Codex plugin may load: the plugin cannot see what the gateway found on
+    // disk, so a config that does not keep it from loading counts, an empty one included.
     for (const plugins of [
+      {},
       { entries: { codex: { enabled: true } } },
       { entries: { Codex: {} } },
       { allow: ["codex", "clawtrate-tool-rules"] },
@@ -1447,10 +1457,11 @@ describe("where the Codex harness may answer a card (#606)", () => {
       );
       expect(h.before("main", "exec", { command: "ls" })?.blockReason).toMatch(/^Blocked by/);
     }
-    // Where it cannot load: off, denied, turned off in its entry, left out of an allow list.
+    // Where it cannot load: off, denied, turned off in its entry (OpenClaw's uninstall marker),
+    // left out of an allow list.
     for (const plugins of [
-      {},
       { entries: { codex: { enabled: false } } },
+      { deny: ["codex"] },
       { deny: ["codex"], entries: { codex: { enabled: true } } },
       { allow: ["clawtrate-tool-rules"] },
       { allow: ["clawtrate-tool-rules"], entries: { codex: { enabled: true } } },

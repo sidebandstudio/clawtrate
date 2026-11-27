@@ -73,6 +73,9 @@ export function load(
   const warnings: string[] = [];
   const infos: string[] = [];
   const config = options.config ?? {};
+  // As on the development gateway, the Codex harness is kept from loading (OpenClaw's own
+  // uninstall marker); a config without it may run the harness, and the plugin refuses every Ask.
+  config.plugins ??= { entries: { codex: { enabled: false } } };
   const api: Json = {
     pluginConfig: options.pluginConfig ?? {},
     config,

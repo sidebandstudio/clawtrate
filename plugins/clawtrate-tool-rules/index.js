@@ -376,14 +376,14 @@ const namesCodex = (list) => Array.isArray(list) && list.some((id) => policyId(i
 /**
  * Whether the gateway may run the Codex harness, whose native tool relay
  * defers a plugin's card to Codex's own approval and runs the call without
- * this plugin's hook after the answer. It follows how OpenClaw 2026.10.6 and
- * 2026.11.10 decide that an installed plugin loads
- * (`resolvePluginActivationStateShared`): never with `plugins.enabled` false,
- * `codex` in `plugins.deny` or its entry's `enabled` false; always when a
- * memory or context-engine slot names it; never when a non-empty
- * `plugins.allow` leaves it out. Otherwise an installed Codex plugin loads,
- * and the plugin takes it as installed wherever the config names it at all:
- * its entry, the allow list, its install record or a load path.
+ * this plugin's hook after the answer. A plugin cannot see which plugins the
+ * gateway found on disk and loaded, and an installed one the config never
+ * names loads by default, so the harness may run unless the config keeps it
+ * from loading, as OpenClaw 2026.10.6 and 2026.11.10 decide that
+ * (`resolvePluginActivationStateShared`): `plugins.enabled` false, `codex` in
+ * `plugins.deny`, its entry's `enabled` false (OpenClaw's own uninstall
+ * marker is `{enabled: false}`), or a non-empty `plugins.allow` that leaves it
+ * out while no memory or context-engine slot names it.
  */
 export function codexHarnessMayRun(config) {
   const plugins = isPlainObject(config?.plugins) ? config.plugins : {};
@@ -396,15 +396,7 @@ export function codexHarnessMayRun(config) {
   const slots = isPlainObject(plugins.slots) ? plugins.slots : {};
   if (policyId(slots.memory) === CODEX || policyId(slots.contextEngine) === CODEX) return true;
   const allow = Array.isArray(plugins.allow) ? plugins.allow : [];
-  if (allow.length > 0 && !namesCodex(allow)) return false;
-  const installs = isPlainObject(plugins.installs) ? plugins.installs : {};
-  const paths = isPlainObject(plugins.load) ? plugins.load.paths : undefined;
-  return (
-    entryKey !== undefined ||
-    namesCodex(allow) ||
-    Object.keys(installs).some((key) => policyId(key) === CODEX) ||
-    (Array.isArray(paths) && paths.some((path) => typeof path === "string" && /codex/i.test(path)))
-  );
+  return allow.length === 0 || namesCodex(allow);
 }
 
 /** A key-order-free text of a call's arguments, or null where it has none. */
@@ -692,7 +684,16 @@ export function createToolRules(api, options = {}) {
       const named = /^(.{1,200}):user$/s.exec(text(message.idempotencyKey) ?? "")?.[1] ?? null;
       if (!origin) {
         stamp(sessionKey, "person");
-        if (named) remember(origins.people, named, true);
+        // A person's run, positively: a person's own message, or this bot's own task's report
+        // from a run that was itself a person's (a routine's hand-off is no person's).
+        const source = messageOrigin(message)?.source;
+        const fromRun = source === undefined ? undefined : origins.current.get(source);
+        if (
+          named &&
+          (source === undefined || (fromRun !== undefined && origins.people.has(fromRun)))
+        ) {
+          remember(origins.people, named, true);
+        }
         return undefined;
       }
       // The run under way may take it: from now on that run is this bot's.
