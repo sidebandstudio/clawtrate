@@ -68,9 +68,12 @@ const taskRow = async (page: Page, title: string) =>
 async function makeTask(page: Page, key: string, title: string, open: boolean) {
   await gatewayCall("sessions.create", { key, agentId: "otto", label: title });
   await expect
-    .poll(async () => (await ottoTasks(page)).getByTestId("task").filter({ hasText: title }).count(), {
-      timeout: 30_000,
-    })
+    .poll(
+      async () => (await ottoTasks(page)).getByTestId("task").filter({ hasText: title }).count(),
+      {
+        timeout: 30_000,
+      },
+    )
     .toBeGreaterThan(0);
   if (!open) return;
   await (await taskRow(page, title)).click();
@@ -147,7 +150,9 @@ test("#680: a quiet answer to a turn the gateway started is no failure; a turn t
     await expect(transcript.locator('.msg[data-role="assistant"] .bubble')).toHaveCount(1, {
       timeout: 60_000,
     });
-    const failure = transcript.locator('[data-testid="turn-error"], [data-testid="turn-error-line"]');
+    const failure = transcript.locator(
+      '[data-testid="turn-error"], [data-testid="turn-error-line"]',
+    );
     const ottoRow = page.getByTestId("bot-list").getByRole("button", { name: /^Otto\b/ });
 
     // The open task, woken, answers quietly.
