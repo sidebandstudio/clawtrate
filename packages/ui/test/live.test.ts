@@ -324,7 +324,7 @@ describe("how a run ends", () => {
   it("F-299: a confirmed stop says how long the run took and that completed steps are not undone", () => {
     expect(
       endingOf(run({ state: "stopped", stopRequestedAt: NOW - 1, endedAt: NOW - 2_000 })),
-    ).toEqual({ kind: "stopped", after: "40s", elsewhere: false, timeouts: null });
+    ).toEqual({ kind: "stopped", after: "40s", elsewhere: false, timeouts: null, followUp: false });
     expect(endingOf(run({ state: "stopped", endedAt: NOW }))).toMatchObject({ elsewhere: true });
     // Only this client's own Stop of the run, which a typed /stop marks on the runs its answer
     // names, makes it local; a handled /stop near the run's time no longer does by itself.
@@ -573,6 +573,18 @@ describe("what a stop also ended (F-298)", () => {
   it("F-298: nothing the gateway did not report is claimed", () => {
     expect(stoppedWithLines(run({ state: "stopped" }), names)).toEqual([]);
     expect(stoppedWithLines(run({ state: "stopped", stoppedWith: record({}) }), names)).toEqual([]);
+  });
+});
+
+describe("the gateway's own turn after a Stop, stopped by this client (#645)", () => {
+  it("#645: its ending says so; any other stop's does not", () => {
+    expect(
+      endingOf(run({ state: "stopped", stopRequestedAt: NOW - 1, stoppedAsFollowUp: true })),
+    ).toMatchObject({ kind: "stopped", followUp: true });
+    expect(endingOf(run({ state: "stopped", stopRequestedAt: NOW - 1 }))).toMatchObject({
+      kind: "stopped",
+      followUp: false,
+    });
   });
 });
 
