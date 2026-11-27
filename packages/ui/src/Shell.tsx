@@ -903,7 +903,13 @@ export function Shell({
         ref={shellRef}
         data-panel={panelOpen && !routines ? "open" : "closed"}
         data-view={view}
-        style={railWidth === null ? undefined : ({ "--rail": `${railWidth}px` } as CSSProperties)}
+        // The default width is the stylesheet's, which follows the window at once; a kept or
+        // dragged width is set here.
+        style={
+          railWidth === null || (railKept === null && railLive === null)
+            ? undefined
+            : ({ "--rail": `${railWidth}px` } as CSSProperties)
+        }
         inert={inert}
       >
         <Rail
@@ -945,6 +951,7 @@ export function Shell({
         {railWidth !== null && (
           <RailEdge
             width={railWidth}
+            kept={railKept !== null}
             windowWidth={shellWidth}
             shellRef={shellRef}
             controls="bots-rail"

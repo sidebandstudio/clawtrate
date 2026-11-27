@@ -17,6 +17,7 @@ import {
  */
 export function RailEdge({
   width,
+  kept,
   windowWidth,
   shellRef,
   controls,
@@ -25,6 +26,8 @@ export function RailEdge({
 }: {
   /** The width shown now. */
   width: number;
+  /** Whether the width is this device's, set on the shell, rather than the stylesheet's default. */
+  kept: boolean;
   windowWidth: number | null;
   shellRef: RefObject<HTMLElement | null>;
   /** The id of the sidebar it sizes. */
@@ -82,6 +85,8 @@ export function RailEdge({
     frame.current = 0;
     shellRef.current?.removeAttribute("data-resizing");
     if (current.now !== current.from) onChange(current.now);
+    // Back where it began: the default stays the stylesheet's.
+    else if (!kept) shellRef.current?.style.removeProperty("--rail");
   };
 
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
