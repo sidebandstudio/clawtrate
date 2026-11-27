@@ -415,7 +415,7 @@ test("F-237: usage by bot and source agrees with the gateway for the selected pe
   await settings.getByRole("button", { name: "Usage", exact: true }).click();
   await expect(settings.getByTestId("usage-all")).toBeVisible({ timeout: 30_000 });
   for (const [bot, id] of [
-    ["Juniper", "main"],
+    ["Juniper", "clawtrate-main-bot"],
     ["Marlow", "marlow"],
     ["Otto", "otto"],
     ["Pip", "pip"],
@@ -821,7 +821,10 @@ test("F-396: the warning appears in the bot's task once the gateway's figure pas
   test.setTimeout(420_000);
   // A task of Juniper's own for this check.
   const label = `Budget check ${STAMP}`;
-  const created = await gatewayCall<{ key: string }>("sessions.create", { agentId: "main", label });
+  const created = await gatewayCall<{ key: string }>("sessions.create", {
+    agentId: "clawtrate-main-bot",
+    label,
+  });
   await botRow(page, "Juniper").first().click();
   await expect(page.getByTestId("task").filter({ hasText: label })).toBeVisible({
     timeout: 30_000,
@@ -829,7 +832,7 @@ test("F-396: the warning appears in the bot's task once the gateway's figure pas
   await page.getByTestId("task").filter({ hasText: label }).first().click();
   // Enough use this week that one more run passes 80 percent of the first budget, and that
   // the smallest budget, 1,000 tokens, is reached afterwards: at least 900 tokens before it.
-  let before = (await gatewayTotal("main", "week")).total;
+  let before = (await gatewayTotal("clawtrate-main-bot", "week")).total;
   for (let run = 0; before < 900 && run < 6; run += 1) {
     await gatewayCall("chat.send", {
       sessionKey: created.key,
@@ -838,9 +841,11 @@ test("F-396: the warning appears in the bot's task once the gateway's figure pas
     });
     const was = before;
     await expect
-      .poll(async () => (await gatewayTotal("main", "week")).total, { timeout: 120_000 })
+      .poll(async () => (await gatewayTotal("clawtrate-main-bot", "week")).total, {
+        timeout: 120_000,
+      })
       .toBeGreaterThan(was);
-    before = (await gatewayTotal("main", "week")).total;
+    before = (await gatewayTotal("clawtrate-main-bot", "week")).total;
   }
   expect(before).toBeGreaterThanOrEqual(900);
   // A weekly budget the next run passes 80 percent of, and not 100.
@@ -864,9 +869,11 @@ test("F-396: the warning appears in the bot's task once the gateway's figure pas
   );
   // Once the gateway's own figure includes the run, the line says what it reports.
   await expect
-    .poll(async () => (await gatewayTotal("main", "week")).total, { timeout: 120_000 })
+    .poll(async () => (await gatewayTotal("clawtrate-main-bot", "week")).total, {
+      timeout: 120_000,
+    })
     .toBeGreaterThan(before);
-  const after = (await gatewayTotal("main", "week")).total;
+  const after = (await gatewayTotal("clawtrate-main-bot", "week")).total;
   const percent = Math.floor((after / tokens) * 100);
   expect(percent).toBeGreaterThanOrEqual(80);
   expect(percent).toBeLessThan(100);

@@ -45,6 +45,24 @@ const UNREACHABLE = failed({
   message: "Gateway not reachable at ws://127.0.0.1:19780 (ETIMEDOUT).",
   reason: "Opening handshake has timed out",
 });
+// A start on a loaded Mac (#883): the gateway stalled after the bots' identity reloads, and
+// `approvals get` reported the connect it never finished as its own error, not a transport one.
+const APPROVALS_CONNECT = new Error(
+  `openclaw --profile clawtrate-dev-ios-1 approvals get --json failed:
+${JSON.stringify(
+  {
+    ok: false,
+    error: {
+      type: "cli_error",
+      message:
+        "Gateway owning /state/.openclaw-clawtrate-dev-ios-1 on local port 19780 could not complete exec.approvals.get for default exec approvals: gateway closed (4000): connect timeout\nGateway target: ws://127.0.0.1:19780\nSource: local loopback",
+    },
+  },
+  null,
+  2,
+)}
+gateway connect failed: Error: gateway closed (4000): connect timeout`,
+);
 const REFUSED = failed({
   type: "gateway_error",
   code: "INVALID_REQUEST",
@@ -52,10 +70,11 @@ const REFUSED = failed({
 });
 
 describe("which seed failures are the gateway not answering", () => {
-  it("a timeout, a connection the gateway closed and one it never took are; a refusal is not", () => {
+  it("a timeout, a connection the gateway closed or never finished and one it never took are; a refusal is not", () => {
     expect(isTransportFailure(TIMEOUT)).toBe(true);
     expect(isTransportFailure(CONNECT)).toBe(true);
     expect(isTransportFailure(UNREACHABLE)).toBe(true);
+    expect(isTransportFailure(APPROVALS_CONNECT)).toBe(true);
     expect(isTransportFailure(REFUSED)).toBe(false);
     expect(
       isTransportFailure(new Error("Marlow / Notes: the replies differ from the script")),
@@ -145,36 +164,78 @@ describe("a seed whose gateway stops answering its health call", () => {
   afterEach(() => {
     for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
   });
+  const quiet = { log: () => {}, sleep: async () => {} };
 
-  it("says so with the end of the gateway's and the scripted model's logs", async () => {
+  /**
+   * An instance that answers health calls from `health`. `gateway` says, from the calls so far,
+   * whether its port is open and what the tool's guard refuses (null when it accepts).
+   */
+  function instance(
+    health: () => RunResult,
+    gateway: (calls: string[][]) => { open: boolean; refusal?: string } = () => ({ open: true }),
+  ) {
     const root = mkdtempSync(join(tmpdir(), "clawtrate-seed-"));
     dirs.push(root);
     const calls: string[][] = [];
-    // A runner the guard accepts, whose health call times out; nothing else is ever run.
     const runner = {
-      refusal: () => null,
+      refusal: () => gateway(calls).refusal ?? null,
       gatewayPort: () => 19_999,
       run: async (args: string[]): Promise<RunResult> => {
         calls.push(args);
-        return { status: 1, stdout: "", stderr: "gateway timeout after 3000ms" };
+        if (args[2] === "health") return health();
+        return { status: 1, stdout: "", stderr: "not scripted" };
       },
     } as unknown as OpenclawRunner;
     const inst = openInstance("seed-health", {
       home: join(root, "home"),
       runRoot: join(root, "run"),
       runner,
-      listening: async () => true,
+      listening: async () => gateway(calls).open,
     });
     mkdirSync(inst.runDir, { recursive: true });
     writeFileSync(join(inst.runDir, "gateway.log"), "[gateway] ready\n[gateway] closing\n");
     writeFileSync(join(inst.runDir, "provider.log"), "scripted model on 127.0.0.1\n");
-    const failure = await seed(inst).then(
+    return { inst, calls };
+  }
+  const failureOf = (promise: Promise<void>) =>
+    promise.then(
       () => new Error("the seed succeeded"),
       (error: unknown) => error as Error,
     );
+  const HEALTH = ["gateway", "call", "health", "--json", "--timeout", "3000"];
+  const TIMED_OUT = { status: 1, stdout: "", stderr: "gateway timeout after 3000ms" };
+  const NOT_RUNNING =
+    "the seed stopped: the development gateway is not running. Run `pnpm dev-gateway start --instance seed-health` first.";
+  /** The guard's refusal once the gateway's process has exited. */
+  const EXITED =
+    "The development gateway started on this state (pid 4242) is not running. Run `pnpm dev-gateway start`.";
+  /** Waits that are recorded and take no time. */
+  const recorded = () => {
+    const waits: number[] = [];
+    return { waits, options: { ...quiet, sleep: async (ms: number) => waits.push(ms) } };
+  };
+
+  it("open but never healthy: asks again after each wait, then says how long it took with the end of the gateway's and the scripted model's logs", async () => {
+    // A clock the waits move on, and each probe by its whole 3 s: 195 s of waits and 7 probes.
+    let clock = 0;
+    const { inst, calls } = instance(() => {
+      clock += 3_000;
+      return TIMED_OUT;
+    });
+    const waits: number[] = [];
+    const failure = await failureOf(
+      seed(inst, {
+        ...quiet,
+        now: () => clock,
+        sleep: async (ms) => {
+          waits.push(ms);
+          clock += ms;
+        },
+      }),
+    );
     expect(failure.message).toBe(
       [
-        "the seed stopped: the development gateway is not running. Run `pnpm dev-gateway start --instance seed-health` first.",
+        "the seed stopped: the development gateway's port was open on the last look, but it didn't answer its health check in 216 s (7 tries); last: health exited 1: gateway timeout after 3000ms",
         `  the end of the development gateway's log, ${join(inst.runDir, "gateway.log")}:`,
         "    [gateway] ready",
         "    [gateway] closing",
@@ -182,6 +243,53 @@ describe("a seed whose gateway stops answering its health call", () => {
         "    scripted model on 127.0.0.1",
       ].join("\n"),
     );
-    expect(calls).toEqual([["gateway", "call", "health", "--json", "--timeout", "3000"]]);
+    expect(waits).toEqual([...SEED_RETRY_DELAYS_MS]);
+    expect(calls).toEqual(Array.from({ length: SEED_RETRY_DELAYS_MS.length + 1 }, () => HEALTH));
+  });
+
+  it("carries on when a slow gateway answers a later try", async () => {
+    const answers = [TIMED_OUT, { status: 0, stdout: "{}", stderr: "" }];
+    const { inst, calls } = instance(() => answers.shift()!);
+    const failure = await failureOf(seed(inst, quiet));
+    // Past the health check: the next call is the seed's first step, which this runner refuses.
+    expect(calls.slice(0, 3)).toEqual([HEALTH, HEALTH, ["agents", "list", "--json"]]);
+    expect(failure.message).toMatch(/agents list --json failed/);
+  });
+
+  it("gone on the first probe: stops at once with no waits, its port closed or its process exited", async () => {
+    const closed = instance(
+      () => TIMED_OUT,
+      () => ({ open: false }),
+    );
+    const first = recorded();
+    const failure = await failureOf(seed(closed.inst, first.options));
+    expect(failure.message.split("\n")[0]).toBe(NOT_RUNNING);
+    expect(first.waits).toEqual([]);
+    expect(closed.calls).toEqual([]);
+
+    // The first probe fails as the process exits: the guard refuses from then on.
+    const exited = instance(
+      () => TIMED_OUT,
+      (calls) => (calls.length === 0 ? { open: true } : { open: true, refusal: EXITED }),
+    );
+    const second = recorded();
+    const refused = await failureOf(seed(exited.inst, second.options));
+    expect(refused.message.split("\n")[0]).toBe(
+      `the seed stopped: the development gateway is gone, so waiting won't help: ${EXITED}`,
+    );
+    expect(second.waits).toEqual([]);
+    expect(exited.calls).toEqual([HEALTH]);
+  });
+
+  it("gone after two slow probes: stops then, with the waits so far and no more", async () => {
+    const { inst, calls } = instance(
+      () => TIMED_OUT,
+      (made) => ({ open: made.length < 2 }),
+    );
+    const { waits, options } = recorded();
+    const failure = await failureOf(seed(inst, options));
+    expect(failure.message.split("\n")[0]).toBe(NOT_RUNNING);
+    expect(waits).toEqual([SEED_RETRY_DELAYS_MS[0]]);
+    expect(calls).toEqual([HEALTH, HEALTH]);
   });
 });
