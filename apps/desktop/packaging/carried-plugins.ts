@@ -1,7 +1,7 @@
 // The OpenClaw plugins the desktop app carries, packed for a gateway on the
 // same computer to install from (issue #796).
 //
-//   node apps/desktop/packaging/carried-plugins.ts pack [out folder]
+//   node apps/desktop/packaging/carried-plugins.ts pack [out folder] [--unrecorded-digests]
 //   node apps/desktop/packaging/carried-plugins.ts record <plugin folder name>
 //   node apps/desktop/packaging/carried-plugins.ts bump <plugin folder name>
 //   node apps/desktop/packaging/carried-plugins.ts source-digest <plugin folder name> <OpenClaw version> <digest>
@@ -23,7 +23,10 @@
 // `record` writes the plugin's current version and digest, only for a version
 // newer than the one recorded, and drops the source digests, which belonged to
 // the old packing. `bump` raises the version's patch number and records it.
-// `source-digest` records one source digest for the recorded packing.
+// `pack --unrecorded-digests` packs it without its source digests, for the
+// recording step alone: install that tarball on a development gateway of each
+// version, then `source-digest` records the digest each one reported. The
+// build never packs without them.
 //
 // The tarball is written here rather than by `npm pack`, so a build needs no
 // npm and packs the same way on macOS and Windows. It holds the files the
@@ -377,14 +380,30 @@ export function digestNow(folder: string, pluginsDir = PLUGINS_DIR, license = LI
  */
 export function packCarried(
   out: string,
-  { record = readRecord(), pluginsDir = PLUGINS_DIR, license = LICENSE } = {},
+  {
+    record = readRecord(),
+    pluginsDir = PLUGINS_DIR,
+    license = LICENSE,
+    /**
+     * Skips the source digests, for the recording step only: `pack --unrecorded-digests` packs a
+     * raised version so it can be installed on a development gateway and its digests read. The
+     * build (build.ts) never passes it, and a test holds it to that.
+     */
+    unrecordedDigests = false,
+  } = {},
 ): CarriedList {
   const packed = Object.keys(record.plugins)
     .sort()
     .map((folder) => {
       const recorded = record.plugins[folder];
       const one = packOne(folder, pluginsDir, license, recorded, record.openclaw);
-      requireRecorded(folder, one.entry.version, one.digest, recorded, record.openclaw);
+      requireRecorded(
+        folder,
+        one.entry.version,
+        one.digest,
+        recorded,
+        unrecordedDigests ? [] : record.openclaw,
+      );
       return one;
     });
   rmSync(out, { recursive: true, force: true });
@@ -426,9 +445,14 @@ export function packagedCarried(resources: string): { list: CarriedList; tarball
 
 function main(args: string[]): void {
   const [command, ...rest] = args;
-  if (command === "pack" && rest.length <= 1) {
-    const out = rest[0] ? resolve(rest[0]) : BUILD_OUT;
-    for (const plugin of packCarried(out).plugins)
+  const unrecordedDigests = rest.includes("--unrecorded-digests");
+  const operands = rest.filter((arg) => arg !== "--unrecorded-digests");
+  if (command === "pack" && operands.length <= 1) {
+    const out = operands[0] ? resolve(operands[0]) : BUILD_OUT;
+    // The recording step's packing never goes where the build packs.
+    if (unrecordedDigests && out === BUILD_OUT)
+      throw new Error("pack --unrecorded-digests needs a folder of its own, not the build's.");
+    for (const plugin of packCarried(out, { unrecordedDigests }).plugins)
       console.log(`Carried ${plugin.packageName} ${plugin.version} ${plugin.integrity}`);
   } else if (command === "record" && rest.length === 1) {
     const { version, digest } = digestNow(rest[0]!);

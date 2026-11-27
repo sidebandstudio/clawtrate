@@ -298,16 +298,16 @@ describe("a carried plugin's version", () => {
     });
     // The source digests belonged to the old packing: a new one needs each again.
     expect(() => packCarried(temp(), { pluginsDir: plugins, record: raised })).toThrow(
-      `plugins/clawtrate-voice 9.0.0 has no source digest for OpenClaw ${OPENCLAW_VERSIONS[0]}.`,
+      `plugins/clawtrate-voice 9.0.0 has no source digest for OpenClaw ${readRecord().openclaw[0]}.`,
     );
-    const record = OPENCLAW_VERSIONS.reduce(
+    const record = readRecord().openclaw.reduce(
       (into, openclaw) => recordSourceDigest(into, "clawtrate-voice", openclaw, "a".repeat(64)),
       raised,
     );
     const [voice] = packCarried(temp(), { pluginsDir: plugins, record }).plugins;
     expect(voice!.version).toBe("9.0.0");
     expect(Object.values(voice!.sourceDigests)).toEqual(
-      OPENCLAW_VERSIONS.map(() => "a".repeat(64)),
+      readRecord().openclaw.map(() => "a".repeat(64)),
     );
   });
 
@@ -345,7 +345,7 @@ describe("a carried plugin's version", () => {
 describe("a source digest", () => {
   it("is required for every OpenClaw version before packing", () => {
     const recorded = readRecord().plugins["clawtrate-voice"]!;
-    for (const openclaw of OPENCLAW_VERSIONS) {
+    for (const openclaw of readRecord().openclaw) {
       const { [openclaw]: _left, ...rest } = recorded.sourceDigests;
       const record = {
         ...readRecord(),
@@ -355,6 +355,54 @@ describe("a source digest", () => {
         `plugins/clawtrate-voice ${VOICE_VERSION} has no source digest for OpenClaw ${openclaw}. Install it on a development gateway of that version and run \`node apps/desktop/packaging/carried-plugins.ts source-digest clawtrate-voice ${openclaw} <digest>\` with the digest its runtime reported.`,
       );
     }
+  });
+
+  it("can be left out by the recording step's own command alone, never by the build", () => {
+    // The recording step: a raised version has no source digests until a gateway reports them.
+    const plugins = pluginsCopy();
+    setVersion(plugins, "9.0.0");
+    const now = digestNow("clawtrate-voice", plugins);
+    const record = recordPlugin(readRecord(), "clawtrate-voice", now.version, now.digest);
+    const out = temp();
+    const [voice] = packCarried(out, {
+      pluginsDir: plugins,
+      record,
+      unrecordedDigests: true,
+    }).plugins;
+    expect(voice!.version).toBe("9.0.0");
+    expect(existsSync(join(out, voice!.file))).toBe(true);
+    expect(Object.values(voice!.sourceDigests)).toEqual(record.openclaw.map(() => ""));
+    // What the build calls refuses that same state.
+    expect(() => packCarried(temp(), { pluginsDir: plugins, record })).toThrow(
+      "has no source digest for OpenClaw",
+    );
+    // The build packs with packCarried(BUILD_OUT) and nothing else, and no release path names
+    // the recording step's flag.
+    const packaging = join(import.meta.dirname, "../packaging");
+    const build = readFileSync(join(packaging, "build.ts"), "utf8");
+    expect(build.match(/packCarried\([^)]*\)/g)).toEqual(["packCarried(BUILD_OUT)"]);
+    for (const file of ["build.ts", "candidate-build.ts", "release-beta.ts", "config.ts"])
+      expect(readFileSync(join(packaging, file), "utf8"), file).not.toMatch(/unrecorded/i);
+  });
+
+  it("is left out only into a folder of the recording step's own", () => {
+    const run = (...args: string[]) =>
+      spawnSync(
+        process.execPath,
+        [join(import.meta.dirname, "../packaging/carried-plugins.ts"), ...args],
+        {
+          encoding: "utf8",
+        },
+      );
+    const refused = run("pack", "--unrecorded-digests");
+    expect(refused.status).toBe(1);
+    expect(refused.stderr).toContain(
+      "pack --unrecorded-digests needs a folder of its own, not the build's.",
+    );
+    const out = temp();
+    const packed = run("pack", out, "--unrecorded-digests");
+    expect(packed.status, packed.stderr).toBe(0);
+    expect(readdirSync(out)).toContain(CARRIED_LIST_NAME);
   });
 
   it("is recorded only for a version the development gateway runs, in OpenClaw's form", () => {
