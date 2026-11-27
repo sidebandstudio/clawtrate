@@ -1004,6 +1004,67 @@ describe("the guides in the client", () => {
     }
   });
 
+  it("F-566 on a route loaded unbound, writes nothing while the saved record that another client bound is checked", async () => {
+    const files = fakeFiles({ pip: BOT_FILE });
+    const gateway = withFiles(grantingGateway(), files);
+    const ROUTE = ".openclaw-guides-check";
+    const unbound = { url: URL_A, token: null, route: ROUTE };
+    const storage = memoryStorage({
+      connection: JSON.stringify(unbound),
+      [tokenKey(URL_A)]: JSON.stringify({
+        token: "device-token",
+        grantedScopes: ADMIN_SCOPES,
+        heldScopes: INTERACTIVE_SCOPES,
+        adminHeld: true,
+        route: ROUTE,
+      }),
+    });
+    let name = () => {};
+    const naming = new Promise<void>((done) => (name = done));
+    gateway.handlers["gateway.identity.get"] = async () => {
+      await naming;
+      return { deviceId: "gw-other" };
+    };
+    let release = () => {};
+    const held = new Promise<void>((done) => (release = done));
+    let holding = false;
+    let checking = false;
+    const get = storage.get;
+    storage.get = async (key) => {
+      if (holding && key === "connection") {
+        checking = true;
+        await held;
+      }
+      return get(key);
+    };
+    const client = new ClawtrateClient(testHost(gateway, storage), {
+      ...FAST,
+      localConnect: () => ({
+        createSocket: (url) => gateway.createWebSocket(url),
+        verify: async () => true,
+      }),
+    });
+    try {
+      await client.start();
+      await until(() => client.state.connection.status === "connected");
+      // Another client on this store binds the route to gw-a; this one's check of it is held.
+      storage.data.set("connection", JSON.stringify({ ...unbound, gatewayId: "gw-a" }));
+      holding = true;
+      name();
+      await until(() => checking);
+      await sleep(300);
+      expect(files.sets).toEqual([]);
+      release();
+      await until(() => client.state.connection.error?.code === ROUTE_IDENTITY_CHANGED);
+      await sleep(100);
+      expect(files.sets).toEqual([]);
+      expect(files.store.get("pip")).toBe(BOT_FILE);
+    } finally {
+      release();
+      client.stop();
+    }
+  });
+
   it("a read made while the connect's own reads are still under way shows what the change after them leaves", async () => {
     const files = fakeFiles({ pip: BOT_FILE });
     const { client, gateway } = await openTask({ storage: adminStorage() });

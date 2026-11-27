@@ -1681,6 +1681,11 @@ export class ClawtrateClient {
    * the guides made before then waits for it, so it shows what that change leaves.
    */
   private guidesConnectPass: { epoch: number; queued: Promise<void> } | null = null;
+  /**
+   * Settled once this connection's route has decided its binding from the saved record
+   * (`bindRouteIdentity`): until then an upkeep write can't know which gateway the route is for.
+   */
+  private routeBinding: { epoch: number; decided: Promise<void> } | null = null;
   /** Bots of this connection whose `AGENTS.md` didn't exist yet at its guide change (`keepGuides`). */
   private readonly guidesMissing = new Set<string>();
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -6898,7 +6903,7 @@ export class ClawtrateClient {
     // A bot made in Clawtrate gets the guides right away, as every bot does, on the connection it
     // was made on, once the gateway is known to be the one it was made on. It never fails the
     // creation.
-    if (gatewayId !== null && this.routeIdentityHolds(gatewayId) && this.guidesWritable())
+    if (gatewayId !== null && (await this.routeIdentityHolds(gatewayId)) && this.guidesWritable())
       await this.guidesByThemselves(request, created.botId).catch((error: unknown) =>
         this.logFailure("warn", "guides for a new bot", error),
       );
@@ -7745,7 +7750,10 @@ export class ClawtrateClient {
    * Whether `id` can be this connection's gateway as its saved route knows it: a route that has
    * bound an identity accepts only that one; no route, or one not bound yet, accepts any.
    */
-  private routeIdentityHolds(id: string): boolean {
+  private async routeIdentityHolds(id: string): Promise<boolean> {
+    // Another client on this store may have bound the route since this one loaded it.
+    const binding = this.routeBinding;
+    if (binding?.epoch === this.epoch) await binding.decided;
     const settings = this.settings;
     return (
       settings?.route === undefined || settings.gatewayId === undefined || settings.gatewayId === id
@@ -9990,7 +9998,7 @@ export class ClawtrateClient {
       void this.changeConnection(() => this.dropRouteToken(url, deviceId, used));
       return "changed";
     }
-    void this.changeConnection(async () => {
+    const decided = this.changeConnection(async () => {
       const now = this.settings;
       if (!current() || now?.url !== url || now.route !== route) return;
       // Decided from the record as it is now: another client on this store may have saved the
@@ -10008,6 +10016,7 @@ export class ClawtrateClient {
       this.stopChangedRoute(url);
       await this.dropRouteToken(url, deviceId, used);
     }).catch(() => this.log("warn", "Could not check which gateway answers on this route."));
+    this.routeBinding = { epoch: this.epoch, decided };
   }
 
   /**
