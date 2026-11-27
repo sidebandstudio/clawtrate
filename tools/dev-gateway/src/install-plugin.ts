@@ -26,6 +26,16 @@ import type { OperatorSession } from "./operator.ts";
 /** The plugins `--install-plugin` takes: those the desktop app carries. */
 export const INSTALLABLE = ["clawtrate-voice"] as const;
 
+/**
+ * The grants the engine writes into each one's config entry, its record's
+ * (apps/desktop/packaging/carried-plugins.json): the instance's config contract accepts that
+ * entry, and nothing else, once the plugin is installed.
+ */
+export const INSTALLED_GRANTS: Record<
+  (typeof INSTALLABLE)[number],
+  { hooks: Record<string, true> }
+> = { "clawtrate-voice": { hooks: { allowConversationAccess: true } } };
+
 /** The plugin's own read that confirms it loaded (the engine's step 8). */
 const CONFIRM: Record<string, { method: string; params: unknown }> = {
   "clawtrate-voice": { method: "clawtrate-voice.get", params: {} },

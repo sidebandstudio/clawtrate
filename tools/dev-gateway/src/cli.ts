@@ -101,7 +101,13 @@ import {
   profileArgs,
   selectInstance,
 } from "./instance.ts";
-import { describeOutcome, INSTALLABLE, installPlugin, packCarried } from "./install-plugin.ts";
+import {
+  describeOutcome,
+  INSTALLABLE,
+  INSTALLED_GRANTS,
+  installPlugin,
+  packCarried,
+} from "./install-plugin.ts";
 import { instanceLockPath, portLockPath, withLock } from "./lock.ts";
 import {
   OPENCLAW_VERSION,
@@ -449,6 +455,13 @@ export type StartOptions = {
    * review only after `#learn` (scenarios.ts, `skillReviewReply`).
    */
   skillReview?: boolean;
+  /**
+   * The plugins the desktop app carries that the start installed through its install engine
+   * (`--install-plugin`, install-plugin.ts). The config doesn't name them when it is written; the
+   * contract then accepts each one's entry as the engine leaves it: off or on, with its grants or
+   * without, and nothing else.
+   */
+  installPlugins?: (typeof INSTALLABLE)[number][];
   /**
    * The OpenClaw version the gateway runs, the start's program's (versions.ts); absent, the pin.
    * The config is written in that version's form, and its stamps are checked against it.
@@ -798,6 +811,16 @@ export function devConfigContract(
       ...(bot.theme === undefined ? {} : { theme: bot.theme }),
     });
   }
+  // A plugin the start installed through the app's engine: its entry as the engine writes it
+  // (packages/core/src/plugin-install.ts, `entryShape`), off or on, with its grants or without.
+  const pluginEntries = contract.plugins!.entries as Record<string, Contract>;
+  for (const name of options.installPlugins ?? []) {
+    pluginEntries[name] = optional({
+      enabled: matching("true or false", (value) => typeof value === "boolean"),
+      hooks: optional(INSTALLED_GRANTS[name].hooks),
+      config: optional({}),
+    });
+  }
   // The CLI stamps the version that last wrote the config, and the migrations
   // it considers applied, whenever it writes it.
   (contract as Record<string, unknown>).meta = optional({
@@ -852,6 +875,14 @@ function recordedPlugins(inst: DevInstance): DevPlugin[] {
 const renewChoice = (value: unknown) =>
   value === undefined || (BOT_BROWSER_CHOICES.renewTimeoutMs as readonly unknown[]).includes(value);
 
+/** Absent, or a list of plugins `--install-plugin` takes, each once. */
+const installChoice = (value: unknown) =>
+  value === undefined ||
+  (Array.isArray(value) &&
+    value.length > 0 &&
+    new Set(value).size === value.length &&
+    value.every((name) => (INSTALLABLE as readonly unknown[]).includes(name)));
+
 /** The form of the OpenClaw version an instance's gateway runs, as its start recorded it. */
 export function instanceForm(inst: { runDir: string }): Shape {
   return shapeOf(recordedStartOptions(inst).openclaw ?? OPENCLAW_VERSION);
@@ -877,6 +908,7 @@ export function recordedStartOptions(inst: { runDir: string }): StartOptions {
         key !== "messageTool" &&
         key !== "httpApi" &&
         key !== "skillReview" &&
+        key !== "installPlugins" &&
         key !== "openclaw",
     ) ||
     !["boolean", "undefined"].includes(typeof (recorded as StartOptions).accounts) ||
@@ -886,6 +918,7 @@ export function recordedStartOptions(inst: { runDir: string }): StartOptions {
     !["boolean", "undefined"].includes(typeof (recorded as StartOptions).httpApi) ||
     !["boolean", "undefined"].includes(typeof (recorded as StartOptions).skillReview) ||
     !renewChoice((recorded as StartOptions).renewTimeoutMs) ||
+    !installChoice((recorded as StartOptions).installPlugins) ||
     ((recorded as StartOptions).openclaw !== undefined &&
       !isOpenclawVersion((recorded as StartOptions).openclaw))
   ) {
@@ -1371,6 +1404,11 @@ export async function start(
       `--renew-timeout-ms must be one of ${BOT_BROWSER_CHOICES.renewTimeoutMs.join(", ")}`,
     );
   }
+  for (const name of options.installPlugins ?? [])
+    if (!(INSTALLABLE as readonly string[]).includes(name))
+      throw new Error(
+        `--install-plugin takes ${INSTALLABLE.join(", ")}, not ${JSON.stringify(name)}`,
+      );
   const startOptions: StartOptions = {
     ...(options.accounts ? { accounts: true } : {}),
     ...(options.defaultLocalPairing ? { defaultLocalPairing: true } : {}),
@@ -1379,10 +1417,21 @@ export async function start(
     ...(options.messageTool ? { messageTool: true } : {}),
     ...(options.httpApi ? { httpApi: true } : {}),
     ...(options.skillReview ? { skillReview: true } : {}),
+    ...(options.installPlugins?.length
+      ? { installPlugins: [...new Set(options.installPlugins)] as (typeof INSTALLABLE)[number][] }
+      : {}),
   };
   // Refused before anything changes: a name that is not this checkout's own
   // plugin, or whose addition breaks the rule for plugins.
   const plugins = loadPlugins(inst, options.plugins ?? []);
+  const both = plugins.find((plugin) =>
+    (startOptions.installPlugins as string[] | undefined)?.includes(plugin.id),
+  );
+  if (both) {
+    throw new Error(
+      `${both.id} is loaded with --with-plugin and installed with --install-plugin; start with one of them`,
+    );
+  }
   const signIns = plugins.filter((plugin) => plugin.providers.length > 0);
   if (signIns.length > 0 && !options.accounts) {
     throw new Error(

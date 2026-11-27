@@ -1,14 +1,22 @@
 // `--install-plugin`: which plugins it takes, how it packs them, and what it says. The install
 // itself is the engine's (packages/core/test/plugin-install.test.ts) and the e2e spec's
 // (e2e/plugin-install.spec.ts).
-import { existsSync, mkdtempSync, rmSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
 import {
+  devConfig,
+  openInstance,
+  recordedStartOptions,
+  sandboxProblems,
+  start,
+} from "../src/cli.ts";
+import {
   describeOutcome,
   INSTALLABLE,
+  INSTALLED_GRANTS,
   installPlugin,
   operatorContext,
   packCarried,
@@ -22,6 +30,8 @@ import {
   PIN,
   Refusal,
 } from "../../../packages/core/test/plugin-gateway.ts";
+import { tempDir } from "../../../test/temp-dir.ts";
+import type { InstancePorts } from "../src/registry.ts";
 
 const CHECKOUT = resolve(import.meta.dirname, "../../..");
 const dirs: string[] = [];
@@ -91,6 +101,93 @@ describe("--install-plugin", () => {
     expect(typo.stderr).toContain('--install-plugin takes clawtrate-voice, not "clawtrate-vioce"');
     // Two Node processes start the tool's CLI, which takes more than Vitest's 5 s under load.
   }, 40_000);
+
+  it("refuses a name it doesn't install, or a plugin also loaded from the checkout, before start changes anything", async () => {
+    const home = tempDir("install-plugin-home-");
+    const inst = () => openInstance("install-check", { home, runRoot: join(home, "run") });
+    await expect(start(inst(), { installPlugins: ["clawtrate-vioce"] })).rejects.toThrow(
+      '--install-plugin takes clawtrate-voice, not "clawtrate-vioce"',
+    );
+    await expect(
+      start(inst(), { plugins: ["clawtrate-voice"], installPlugins: ["clawtrate-voice"] }),
+    ).rejects.toThrow(
+      "clawtrate-voice is loaded with --with-plugin and installed with --install-plugin",
+    );
+    expect(existsSync(inst().stateDir)).toBe(false);
+  });
+
+  it("lets the instance's config hold the entry the engine writes, and nothing else", () => {
+    const ports: InstancePorts = { gatewayPort: 19240, providerPort: 19250 };
+    const state = "/state/.openclaw-clawtrate-dev-install";
+    const options = { installPlugins: ["clawtrate-voice" as const] };
+    const grants = INSTALLED_GRANTS["clawtrate-voice"];
+    const withEntry = (entry: unknown) => {
+      const config = devConfig("token", ports, state, [], options) as {
+        plugins: { entries: Record<string, unknown> };
+      };
+      config.plugins.entries[ID] = entry;
+      return config;
+    };
+    // `seed` after an unseeded start that installed it, and every later check of the config.
+    for (const entry of [
+      { enabled: false },
+      { enabled: false, ...grants },
+      { enabled: true, ...grants },
+      { enabled: true, ...grants, config: {} },
+    ])
+      expect(
+        sandboxProblems(withEntry(entry), ports, state, [], options),
+        JSON.stringify(entry),
+      ).toEqual([]);
+    expect(
+      sandboxProblems(devConfig("token", ports, state, [], options), ports, state, [], options),
+    ).toEqual([]);
+    for (const [entry, problem] of [
+      [
+        { enabled: true, hooks: { allowConversationAccess: true, allowPromptInjection: true } },
+        "plugins.entries.clawtrate-voice.hooks.allowPromptInjection is not allowed",
+      ],
+      [
+        { enabled: true, ...grants, config: { x: 1 } },
+        "plugins.entries.clawtrate-voice.config.x is not allowed",
+      ],
+      [{ enabled: "yes" }, "plugins.entries.clawtrate-voice.enabled must be true or false"],
+      [
+        { enabled: true, ...grants, apiKey: "k" },
+        "plugins.entries.clawtrate-voice.apiKey is not allowed",
+      ],
+    ] as const)
+      expect(sandboxProblems(withEntry(entry), ports, state, [], options).join("\n")).toContain(
+        problem,
+      );
+    // Without the start's record of it, the entry is refused as before.
+    expect(sandboxProblems(withEntry({ enabled: false }), ports, state)).toEqual([
+      "plugins.entries.clawtrate-voice is not allowed",
+    ]);
+  });
+
+  it("reads back only a list of plugins it installs, as the start recorded it", () => {
+    const runDir = tempDir("install-plugin-run-");
+    for (const [text, ok] of [
+      ['{"installPlugins":["clawtrate-voice"]}', true],
+      ['{"installPlugins":["clawtrate-voice","clawtrate-voice"]}', false],
+      ['{"installPlugins":["clawtrate-tool-rules"]}', false],
+      ['{"installPlugins":[]}', false],
+      ['{"installPlugins":"clawtrate-voice"}', false],
+    ] as const) {
+      writeFileSync(join(runDir, "start-options.json"), text);
+      if (ok) expect(recordedStartOptions({ runDir })).toEqual(JSON.parse(text));
+      else expect(() => recordedStartOptions({ runDir })).toThrow(/not a record of start options/);
+    }
+  });
+
+  it("allows the grants the plugin's record pins, and those alone", () => {
+    const record = JSON.parse(
+      readFileSync(join(CHECKOUT, "apps/desktop/packaging/carried-plugins.json"), "utf8"),
+    ) as { plugins: Record<string, { grants: unknown }> };
+    for (const name of INSTALLABLE)
+      expect(INSTALLED_GRANTS[name], name).toEqual(record.plugins[name]!.grants);
+  });
 
   /** An operator session over the engine tests' stand-in gateway, one connection at a time. */
   function session(gateway: FakeGateway): OperatorSession {
