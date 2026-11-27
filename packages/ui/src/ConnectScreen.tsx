@@ -642,6 +642,13 @@ export function ConnectScreen({
   const [view, setView] = useState<SetupView>(() =>
     isStaged || (setup && setup.phase !== "idle" && !setup.unasked) ? "here" : "first",
   );
+  // A look staged from elsewhere while this screen is open (Settings, over the address form)
+  // shows here, whichever view was open; where the person goes from it is theirs.
+  const [stagedSeen, setStagedSeen] = useState(isStaged);
+  if (stagedSeen !== isStaged) {
+    setStagedSeen(isStaged);
+    if (isStaged) setView("here");
+  }
   const command = useCommand();
   // This computer, from the address form: a staged look. The saved gateway stays selected, with
   // this form, until a Connect on the new offer replaces it; Back returns here.

@@ -481,17 +481,26 @@ test("F-602: a gateway local connect couldn't prove isn't offered: it says so, w
 test("F-602: while the host looks at start, the first screen waits with nothing to press; Connect then ignores a press in its first moment", async ({
   page,
 }) => {
-  await openFixture(page, "setup=local-start", "light");
+  // The page's clock stands still unless the test moves it: Connect's first half-second
+  // (`CONNECT_ARM_MS`, 500 ms) is counted on that clock from Connect's appearance, so how long
+  // the runner takes between the checks moves neither click into or out of it.
+  await page.clock.install({ time: NOW });
+  await page.clock.pauseAt(new Date(NOW.getTime() + 1_000));
+  await page.goto("/?setup=local-start&theme=light");
+  await page.locator(".app").waitFor();
   await expect(
     page.getByRole("heading", { name: "Looking for OpenClaw on this Mac" }),
   ).toBeVisible();
   await expect(page.getByRole("button")).toHaveCount(0);
+  // The fixture's host matches the gateway 1 s after the page first listens.
+  await page.clock.runFor(1_100);
   const connect = page.getByRole("button", { name: "Connect", exact: true });
   await connect.waitFor();
-  // A click as it appears was aimed at what was there before: nothing is sent.
+  // A click as it appears, with no time gone on the page's clock, was aimed at what was there
+  // before: nothing is sent.
   await connect.click();
   expect(await sent(page)).toEqual([]);
-  await page.waitForTimeout(600);
+  await page.clock.runFor(600);
   await connect.click();
   expect(await sent(page)).toEqual(["setupConnect"]);
 });
@@ -586,4 +595,72 @@ test("F-602: Use This computer in Settings stages a look over the app; Back retu
   await connect.click();
   await expect(page.getByTestId("bot-list")).toBeVisible();
   expect(await gatewaySent(page)).toEqual(["setupLook", "setupReset", "setupLook", "setupConnect"]);
+});
+
+test("F-602: Use This computer in Settings, over the Advanced form's local-route error, shows the look on that screen", async ({
+  page,
+}) => {
+  await openFixture(page, "setup=local-first", "light");
+  await page.getByRole("button", { name: "Advanced" }).click();
+  const address = page.getByPlaceholder("Gateway address");
+  await expect(address).toBeVisible();
+  // The typed address's pairing belongs to This computer, as the client says it.
+  await page.evaluate(() =>
+    (
+      window as unknown as {
+        clawtrateFixture: {
+          setState(change: (state: { connection: object }) => { connection: object }): void;
+        };
+      }
+    ).clawtrateFixture.setState((state) => ({
+      ...state,
+      connection: {
+        ...state.connection,
+        status: "error",
+        gatewayUrl: "ws://127.0.0.1:18789",
+        retryAt: null,
+        error: {
+          code: "LOCAL_ROUTE_ONLY",
+          message:
+            "This device is paired for This computer, so it doesn't use that pairing at a typed address. No credential was sent.",
+          hint: "Choose This computer to connect to it.",
+        },
+      },
+    })),
+  );
+  await expect(page.getByText("This device is paired for This computer")).toBeVisible();
+  await page.keyboard.press("ControlOrMeta+,");
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("button", { name: "Gateway", exact: true }).click();
+  await settings.getByRole("button", { name: "Use This computer" }).click();
+  await expect(settings).toHaveCount(0);
+  // The look's result is what this screen shows now, not the form it was opened over.
+  await expect(
+    page.getByRole("heading", { name: "Found your OpenClaw settings on this Mac" }),
+  ).toBeVisible();
+  await expect(address).toHaveCount(0);
+  expect(await gatewaySent(page)).toEqual(["setupLook"]);
+});
+
+test("F-602: the host's late result for its look at start isn't put over a look and Connect the person started since", async ({
+  page,
+}) => {
+  // On the page's clock alone: the question at 3 s, the person's own look, and Connect pressed
+  // before the fixture's host answers its look at start, at 4.5 s.
+  await page.clock.install({ time: NOW });
+  await page.clock.pauseAt(new Date(NOW.getTime() + 1_000));
+  await page.goto("/?setup=local-start-slow&theme=light");
+  await page.locator(".app").waitFor();
+  await page.clock.runFor(3_000);
+  await expect(page.getByRole("heading", { name: "Where does OpenClaw run?" })).toBeVisible();
+  await rows(page).first().click();
+  await page.clock.runFor(900);
+  const connect = page.getByRole("button", { name: "Connect", exact: true });
+  await connect.waitFor();
+  await page.clock.runFor(500);
+  await connect.click();
+  expect(await gatewaySent(page)).toEqual(["setupLook", "setupConnect"]);
+  // Past 4.5 s, and past Connect's steps: Connect ends with the app open.
+  await page.clock.runFor(1_000);
+  await expect(page.getByTestId("bot-list")).toBeVisible();
 });

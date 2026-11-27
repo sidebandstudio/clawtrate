@@ -678,9 +678,12 @@ export function createFixtureBridge(
   const { initial: sceneInitial, steps: sceneSteps } = scene(setupName ? "connect" : name, now);
   const steps = [
     ...sceneSteps,
+    // The host's result for the scene's own look at start: applied only while that look is still
+    // the one shown, never over a look or Connect the person started since.
     ...(setupName ? (SETUP_STEPS[setupName] ?? []) : []).map(({ after, setup }) => ({
       after,
-      change: (state: ClawtrateState) => ({ ...state, setup }),
+      change: (state: ClawtrateState) =>
+        state.setup === SETUP_STATES[setupName!] ? { ...state, setup } : state,
     })),
   ];
   // The `local-refused` scenes: a gateway saved through This computer, whose reconnect was

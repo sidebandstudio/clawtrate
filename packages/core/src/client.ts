@@ -9255,7 +9255,11 @@ export class ClawtrateClient {
             await this.saveChoice(current, choice);
             return;
           }
-          if (!current.token) return;
+          // A Connect over a proved route replaces the saved gateway at its first paired hello,
+          // also one that sent no token because this device was already paired there.
+          const replaces = () =>
+            this.replacing?.url === settings.url && current.route !== undefined;
+          if (!current.token && !replaces()) return;
           // Paired, by this hello or an earlier one: the device token replaces the bootstrap secret.
           // Only a token saved here counts. A hello's token that wasn't saved, because another
           // socket on this store opened since, leaves the secret, so a restart can still connect.
@@ -9264,7 +9268,7 @@ export class ClawtrateClient {
           if (!paired || !live()) return;
           // A Connect over a proved route replaces the saved gateway now, paired, and saves no
           // copy of the token it was paired with: the record was the earlier gateway's until here.
-          if (this.replacing?.url === settings.url && current.route !== undefined) {
+          if (replaces()) {
             const choice = this.setupMaySave(settings.url);
             if (choice === null) return;
             await this.saveChoice({ ...current, token: null }, choice);
@@ -9272,6 +9276,7 @@ export class ClawtrateClient {
             if (this.typedAttempt?.url === settings.url) this.typedAttempt = null;
             return;
           }
+          if (!current.token) return;
           try {
             // Read at the moment of the write: another client on this store may have saved a
             // different gateway, forgotten this one or changed its record since. Only this
@@ -9887,10 +9892,13 @@ export class ClawtrateClient {
     const deviceId = this.state.connection.deviceId;
     if (settings?.route === undefined || settings.gatewayId === id) return;
     const { url, route } = settings;
+    // The token this connection's socket used, taken before the stop clears it: only that one
+    // goes, never a pairing saved since by another connection on this store.
+    const used = this.heldToken;
     // Known here to be another gateway: stopped now, before anything is awaited or published.
     if (settings.gatewayId !== undefined) {
       this.stopChangedRoute(url);
-      void this.changeConnection(() => this.dropRouteToken(url, deviceId));
+      void this.changeConnection(() => this.dropRouteToken(url, deviceId, used));
       return "changed";
     }
     void this.changeConnection(async () => {
@@ -9909,7 +9917,7 @@ export class ClawtrateClient {
       if (this.settings === now) this.settings = { ...now, gatewayId: bound };
       if (bound === id) return;
       this.stopChangedRoute(url);
-      await this.dropRouteToken(url, deviceId);
+      await this.dropRouteToken(url, deviceId, used);
     }).catch(() => this.log("warn", "Could not check which gateway answers on this route."));
   }
 
@@ -9933,14 +9941,22 @@ export class ClawtrateClient {
   }
 
   /**
-   * This device's token for a changed route, dropped once the connection has stopped. One that
-   * couldn't be dropped is said, and the next hello on the route stops it and tries again.
+   * This device's token for a changed route, dropped once the connection has stopped, and only
+   * while it is still `used`, the token that connection's socket used: one another connection
+   * saved since is a newer pairing, and stays. One that couldn't be dropped is said, and the next
+   * hello on the route stops it and tries again.
    */
-  private async dropRouteToken(url: string, deviceId: string | null): Promise<void> {
-    if (!deviceId) return;
+  private async dropRouteToken(
+    url: string,
+    deviceId: string | null,
+    used: string | null,
+  ): Promise<void> {
+    if (!deviceId || !used) return;
     const key = this.tokenKey(url, deviceId, "operator");
-    this.writes.grants.set(key, null);
     try {
+      const existing = await this.loadToken(url, deviceId, "operator", true, key);
+      if (existing?.token.trim() !== used.trim()) return;
+      this.writes.grants.set(key, null);
       await this.host.storage.delete(key);
     } catch {
       this.log("warn", "Could not remove this device's pairing for a route that changed gateway.");
