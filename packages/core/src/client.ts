@@ -2426,8 +2426,10 @@ export class ClawtrateClient {
         this.writes.chosen = choice;
         this.setupChosen = { url, choice };
       } else {
-        this.replacing = null;
         await this.saveChoice(chosen);
+        // Saved: a Connect over a proved route still waiting, at this address too, is over. One
+        // that couldn't be saved leaves that wait, and the earlier gateway's record, as they were.
+        this.replacing = null;
       }
       this.writes.retiredShared.delete(url);
       // The selection changes only once this choice was valid and saved: a refused one leaves

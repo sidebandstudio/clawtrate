@@ -249,6 +249,8 @@ function localApp(local: LocalConnect, options: { secure?: boolean; dataDir?: st
   // over: before the host seals its credentials record, where a search of the file on disk can't
   // see into it. A value later overwritten or deleted is still here.
   const writes: { key: string; value: string | null }[] = [];
+  // A write the test says the store refuses, before anything is kept.
+  let refuse: ((key: string, value: string) => boolean) | null = null;
   const storage = {
     get: (key: string) => host.storage.get(key),
     delete: async (key: string) => {
@@ -256,6 +258,7 @@ function localApp(local: LocalConnect, options: { secure?: boolean; dataDir?: st
       await host.storage.delete(key);
     },
     set: async (key: string, value: string) => {
+      if (refuse?.(key, value)) throw new Error("the store refused this write");
       writes.push({ key, value });
       await host.storage.set(key, value);
     },
@@ -280,7 +283,16 @@ function localApp(local: LocalConnect, options: { secure?: boolean; dataDir?: st
     log: (line) => lines.push(line),
     localConnect: { ...local, worker: WORKER },
   });
-  return { client, setup, dialog, lines, dataDir, writes, local };
+  return {
+    client,
+    setup,
+    dialog,
+    lines,
+    dataDir,
+    writes,
+    local,
+    refuseWrites: (rule: (key: string, value: string) => boolean) => (refuse = rule),
+  };
 }
 
 describe.skipIf(!mac)(
@@ -1503,6 +1515,75 @@ describe.skipIf(!mac)(
             }
           }
         } finally {
+          await run.server.close();
+          await run.second.server.close();
+        }
+      });
+
+    for (const leave of ["disconnect", "suspend"] as const)
+      it(`F-602: Use This computer, Connect to another gateway, then a typed Connect the store can't save, then ${leave === "disconnect" ? "Use another gateway" : "Disconnect in Settings"} before anything pairs: the earlier gateway's record stays, and nothing of either other is written`, async () => {
+        const gateway = silentGateway();
+        // The new gateway's hello is held: the frame reaches it and nothing answers.
+        let hellos = 0;
+        const make = gateway.createWebSocket.bind(gateway);
+        Object.defineProperty(gateway, "createWebSocket", {
+          value: (url: string) => {
+            const socket = make(url);
+            const send = socket.send.bind(socket);
+            socket.send = (data: string) => {
+              if ((JSON.parse(data) as { method?: string }).method === "connect") hellos += 1;
+              else send(data);
+            };
+            return socket;
+          },
+        });
+        const run = await secondGateway("lock", gateway);
+        const typed = "ws://gateway.example:19951";
+        const records = () =>
+          run.app.writes.filter(({ key }) => key === "connection").map(({ value }) => value);
+        const earlier = records().at(-1)!;
+        try {
+          await run.press();
+          await run.session.apply({ type: "setupConnect" });
+          await until(() => hellos > 0, 60_000);
+          const before = run.app.writes.length;
+          // An ordinary Connect, as the address form sends it, whose saved choice the store refuses.
+          run.app.refuseWrites((key) => key === "connection");
+          await expect(
+            run.session.apply({ type: "connect", url: typed, token: "a-typed-token" }),
+          ).rejects.toThrow();
+          run.app.refuseWrites(() => false);
+          // Use another gateway (forget), or Disconnect in Settings (suspend).
+          await run.session.apply(
+            leave === "disconnect"
+              ? { type: "disconnect", gatewayUrl: run.second.url }
+              : { type: "suspend" },
+          );
+          expect(run.app.client.state.connection).toMatchObject({ gatewayUrl: run.url });
+          // The earlier gateway's record: untouched, or with the suspension alone recorded on it.
+          expect(
+            run.app.writes
+              .slice(before)
+              .filter(({ key }) => key === "connection")
+              .map(({ value }) => value),
+          ).toEqual(
+            leave === "disconnect"
+              ? []
+              : [JSON.stringify({ ...JSON.parse(earlier), suspended: true })],
+          );
+          expect(await run.app.client.savedSettings()).toEqual(
+            leave === "disconnect"
+              ? JSON.parse(earlier)
+              : { ...JSON.parse(earlier), suspended: true },
+          );
+          for (const { key, value } of run.app.writes) {
+            for (const other of [run.second.url, typed]) {
+              expect(key).not.toContain(encodeURIComponent(other));
+              expect(value ?? "").not.toContain(other);
+            }
+          }
+        } finally {
+          run.app.client.stop();
           await run.server.close();
           await run.second.server.close();
         }
