@@ -12,6 +12,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ClawtrateClient } from "../packages/core/src/client.ts";
 import { replyRow, runningRunId, textPlaced } from "../packages/core/src/runs.ts";
+import type { WebSocketFactory, WebSocketLike } from "../packages/core/src/host.ts";
 import { createNodeHost } from "../packages/core/src/node/index.ts";
 import {
   instanceForm,
@@ -26,15 +27,79 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 type Engine = { client: ClawtrateClient; close: () => Promise<void> };
 
+/** A run's end, as the gateway sends it: a lifecycle end or error, or a terminal chat event. */
+function endsRun(data: unknown): boolean {
+  if (typeof data !== "string") return false;
+  const frame = JSON.parse(data) as {
+    type?: string;
+    event?: string;
+    payload?: { stream?: string; state?: string; data?: { phase?: string } };
+  };
+  if (frame.type !== "event") return false;
+  const p = frame.payload;
+  return (
+    (frame.event === "agent" &&
+      p?.stream === "lifecycle" &&
+      (p.data?.phase === "end" || p.data?.phase === "error")) ||
+    (frame.event === "chat" && ["final", "error", "aborted"].includes(p?.state ?? ""))
+  );
+}
+
+/**
+ * Sockets on which a run's end, and every event after it, reach the client `ms` late and in their
+ * order, while answers to its requests come at once: a loaded machine's slow end, made sure. A
+ * history read the gateway answers in that time is answered while the client still draws the run.
+ */
+function slowEnds(create: WebSocketFactory, ms: number): WebSocketFactory {
+  return (url) => {
+    const socket = create(url);
+    let held: Array<{ data: unknown }> | null = null;
+    const wrapper: WebSocketLike = {
+      get readyState() {
+        return socket.readyState;
+      },
+      send: (data) => socket.send(data),
+      close: (code, reason) => socket.close(code, reason),
+      onopen: null,
+      onmessage: null,
+      onclose: null,
+      onerror: null,
+    };
+    socket.onopen = (event) => wrapper.onopen?.(event);
+    socket.onclose = (event) => wrapper.onclose?.(event);
+    socket.onerror = (event) => wrapper.onerror?.(event);
+    socket.onmessage = (event) => {
+      const isEvent =
+        typeof event.data === "string" &&
+        (JSON.parse(event.data) as { type?: string }).type === "event";
+      if (held && isEvent) return void held.push(event);
+      if (!held && endsRun(event.data)) {
+        held = [event];
+        setTimeout(() => {
+          const out = held ?? [];
+          held = null;
+          for (const each of out) wrapper.onmessage?.(each);
+        }, ms);
+        return;
+      }
+      wrapper.onmessage?.(event);
+    };
+    return wrapper;
+  };
+}
+
 /** A client paired with this run's instance, with write access. */
-async function engine(name: string): Promise<Engine> {
+async function engine(name: string, options: { slowEndMs?: number } = {}): Promise<Engine> {
   const inst = openInstance(INSTANCE);
   const connection = readDevConnection(inst.connectionFile)!;
   const dataDir = mkdtempSync(join(tmpdir(), "clawtrate-e2e-engine-"));
-  const host = createNodeHost({
+  const node = createNodeHost({
     dataDir,
     client: { displayName: `Clawtrate ${name}`, version: "0.0.0", platform: process.platform },
   });
+  const host = options.slowEndMs
+    ? { ...node, createWebSocket: slowEnds(node.createWebSocket, options.slowEndMs) }
+    : node;
   const client = new ClawtrateClient(host, {});
   await client.start();
   await client.connect({ url: connection.url, token: connection.token });
@@ -250,7 +315,9 @@ function heldReplies(client: ClawtrateClient, key: () => string) {
 }
 
 test("#872: while a run still draws its reply, history's row of that reply is known as the reply's", async () => {
-  const { client, close } = await engine("reply drawn once check");
+  // The run's end reaches this client two seconds late, so the history read the answer's row
+  // brings is answered while the run is still drawn: the moment F-551 met on loaded runners.
+  const { client, close } = await engine("reply drawn once check", { slowEndMs: 2_000 });
   let key = "";
   const { held, stop } = heldReplies(client, () => key);
   try {
@@ -259,6 +326,8 @@ test("#872: while a run still draws its reply, history's row of that reply is kn
     client.sendMessage(key, "Look for my old notes. #think #tool-fail");
     await expect.poll(() => runs(client, key)[0]?.state, { timeout: 60_000 }).toBe("completed");
     await expect.poll(() => gatewayIdle(op, key), { timeout: 15_000 }).toBe(true);
+    // The moment happened, and in every state of it the row was the reply's.
+    expect(held.length).toBeGreaterThan(0);
     expect(held.filter((row) => row !== null)).toEqual([]);
   } finally {
     stop();

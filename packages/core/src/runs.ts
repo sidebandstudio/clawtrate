@@ -3078,7 +3078,12 @@ export function textPlaced(run: Pick<Run, "textItemId" | "preambles">): boolean 
  * - another call's block comes first, or the run's rows there end, or a person's message is in
  *   between (a steer): a row of another message may be there;
  * - that text is in a row the gateway wrote itself (`gatewayRow`), never streamed;
+ * - that text comes after a call in its own row (`afterCall`): the call's own message wrote it,
+ *   not the reply's, so it is the first text of no later message;
+ * - the gateway cut a row of that item, or put its placeholder for a message too large there
+ *   (`truncated`): the words there aren't the reply's whole words;
  * - the reply is placed beside a call, or the run's start is not keyed to the person's row.
+ * So a row is given up only where it is the reply's own message, whose words the live reply shows.
  * The engine's run then draws it, and history's row does too, until the run ends.
  */
 export function replyRow(
@@ -3100,12 +3105,14 @@ export function replyRow(
     const anchor = items.findIndex((each) => each.id === run.anchorItemId);
     if (anchor !== -1) item = items[anchor + 1];
   }
-  if (!item || item.role !== "assistant" || item.runless) return null;
+  // A row the gateway cut, or replaced with its placeholder for a message too large, holds other
+  // words than the reply's.
+  if (!item || item.role !== "assistant" || item.runless || item.truncated) return null;
   for (let i = from; i < item.blocks.length; i++) {
     const block = item.blocks[i]!;
     if (block.kind === "tool-call") return null;
     if (block.kind === "text" && block.text.trim())
-      return block.gatewayRow ? null : { itemId: item.id, block: i };
+      return block.gatewayRow || block.afterCall ? null : { itemId: item.id, block: i };
   }
   return null;
 }

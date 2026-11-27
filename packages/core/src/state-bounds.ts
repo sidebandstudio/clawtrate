@@ -639,6 +639,7 @@ const block = union<TranscriptBlock, "kind">("kind")({
     messageId: ID,
     replyToId: ID,
     gatewayRow: FLAG,
+    afterCall: FLAG,
   }),
   reasoning: object<Extract<TranscriptBlock, { kind: "reasoning" }>>()({
     kind: ENUM,

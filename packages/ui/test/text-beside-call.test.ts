@@ -10,6 +10,7 @@ import {
   mapHistory,
   RawTable,
   readingContextOf,
+  replyRow,
   unfollowed,
   type ClawtrateBridge,
   type Run,
@@ -71,6 +72,13 @@ function transcriptOf(
 /** The conversation's drawing of the run's history rows and of the run itself. */
 function draw(transcript: Transcript): string {
   const run = transcript.runs[0]!;
+  // Whenever history gives up a block as the reply's row, the live reply shows those words: no
+  // words leave the screen (#872). Checked here by the words, which the app never compares.
+  const given = replyRow(run, transcript.items);
+  if (given) {
+    const block = transcript.items.find((item) => item.id === given.itemId)!.blocks[given.block]!;
+    expect(block.kind === "text" && run.text.includes(block.text.trim())).toBe(true);
+  }
   const bridge = {
     invoke: () => Promise.reject(new Error("not in this test")),
     send: () => Promise.reject(new Error("not in this test")),
@@ -479,6 +487,74 @@ describe("#872: a reply history already holds is drawn once while its run goes o
     const html = draw({ ...before, runs: before.runs.map(unfollowed) });
     expect(count(html, reply)).toBe(2);
     expect(html).toContain('data-testid="live-turn"');
+  });
+
+  it("a history row is given up only where the live reply shows the same words", () => {
+    const long = `First I read every log. ${"Line by line, before I answer. ".repeat(90)}The end.`;
+    const arrangements: Array<[Array<[string, Record<string, unknown>]>, unknown[]]> = [
+      // The reply after a call, in a message of its own: given up.
+      [
+        [...start, ...call("c1"), ...said("m:1", "Clean.")],
+        [user, row("a1", 2, [toolCall("c1")]), row("a2", 4, [text("Clean.")])],
+      ],
+      // Text after the call in the call's own row, the next message streaming: kept.
+      [
+        [...start, ...said("m:1", `${long}\n\nShort.`), ...call("c1"), ...said("m:2", "Next.")],
+        [user, row("a1", 2, [text(long), toolCall("c1"), text("Short.")])],
+      ],
+      // The reply's row not written yet, an earlier text after the call there: kept.
+      [
+        [...start, ...call("c1"), ...said("m:1", "Reading."), ...said("m:2", "Done.")],
+        [user, row("a1", 2, [toolCall("c1")]), row("a2", 4, [text("Reading.")])],
+      ],
+      // A plain answer whose row is written: given up.
+      [
+        [...start, ...said("m:0", "All clean.")],
+        [user, row("a1", 2, [text("All clean.")])],
+      ],
+    ];
+    const given = arrangements.map(([events, rows]) => {
+      const transcript = keyed(transcriptOf(events, rows));
+      const run = transcript.runs[0]!;
+      const tied = replyRow(run, transcript.items);
+      if (!tied) return null;
+      const block = transcript.items.find((item) => item.id === tied.itemId)!.blocks[tied.block]!;
+      return block.kind === "text" && run.text.includes(block.text.trim());
+    });
+    expect(given).toEqual([true, null, null, true]);
+  });
+
+  it("text after the call in the call's own row stays when the next message streams", () => {
+    // Long text, a call, then short text, in one message: the text beside the call is cut to its
+    // bound, so the short text is on screen only from history. The next message's item is the
+    // first since the call, and the short text is the first after the call's block, but in the
+    // call's own row: not the next message's.
+    const long = `First I read every log. ${"Line by line, before I answer. ".repeat(90)}The end.`;
+    const short = "One more look at the cache.";
+    const html = draw(
+      transcriptOf(
+        [...start, ...said("m:1", `${long}\n\n${short}`), ...call("c1"), ...said("m:2", "Next.")],
+        [user, row("a1", 2, [text(long), toolCall("c1"), text(short)])],
+      ),
+    );
+    expect(count(html, short)).toBe(1);
+    expect(count(html, "Next.")).toBe(1);
+  });
+
+  it("the gateway's placeholder for a message too large is never taken for the reply's row", () => {
+    const placeholder = {
+      role: "assistant",
+      content: [{ type: "text", text: "[chat.history omitted: message too large]" }],
+      __openclaw: { id: "a2", seq: 4, runId: RUN, truncated: true, reason: "oversized" },
+    };
+    const html = draw(
+      transcriptOf(
+        [...start, ...call("c1"), ...said("m:1", "A very long answer.")],
+        [user, row("a1", 2, [toolCall("c1")]), placeholder],
+      ),
+    );
+    expect(count(html, "[chat.history omitted: message too large]")).toBe(1);
+    expect(count(html, "A very long answer.")).toBe(1);
   });
 
   it("a history row that belongs to no run the transcript knows is drawn as it is", () => {

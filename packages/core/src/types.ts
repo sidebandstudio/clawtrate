@@ -332,6 +332,12 @@ export type TranscriptBlock =
        * only then.
        */
       gatewayRow?: true;
+      /**
+       * In its own row this text comes after a tool call (the gateway keeps a message's blocks in
+       * order): text the model wrote after that call in the same message, never the first text of a
+       * later message. Present and true only then.
+       */
+      afterCall?: true;
     }
   | { kind: "reasoning"; text: string }
   | {
