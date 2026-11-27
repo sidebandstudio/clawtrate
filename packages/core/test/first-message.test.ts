@@ -269,7 +269,12 @@ describe.each(["2026.10.6", "2026.11.10"])(
       };
       const { client } = await openTask({ gateway });
       // The new session's row, as a list reads it before any message has reached it.
-      const listed = { key: NEW_KEY, sessionId: "117d0ea4", updatedAt: 1, createdAt: 1 };
+      const listed = {
+        key: NEW_KEY,
+        sessionId: "117d0ea4-3792-489d-ae25-c603c455ad8f",
+        updatedAt: 1,
+        createdAt: 1,
+      };
       gateway.handlers["sessions.list"] = () => ({ sessions: [listed], hasMore: false });
       const row = () => client.state.tasksByBot.otto?.[0];
       const creating = client.createTask("otto", "Hello, where are you?");

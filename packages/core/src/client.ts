@@ -1847,10 +1847,14 @@ export class ClawtrateClient {
    */
   private readonly sentSources = new Map<string, Map<string, string>>();
   /**
-   * Each followed task's last history read: the session it was read in, when known, and the
-   * connection (`epoch`). Only such a read of the row's session titles a task (`settleFirstMessage`).
+   * Each followed task's last history read: the session it was read in, when known, the
+   * connection (`epoch`) and when it was asked (`at`). Only such a read of the row's session titles
+   * a task (`settleFirstMessage`).
    */
-  private readonly historyReads = new Map<string, { session: string | null; epoch: number }>();
+  private readonly historyReads = new Map<
+    string,
+    { session: string | null; epoch: number; at: number }
+  >();
   /**
    * Tasks this client names (#750), by key, oldest first: `waiting` until the gateway accepts the
    * message it is named from (`TaskNaming`), `naming` while the name is made. Only the device that sends a task's
@@ -1863,8 +1867,8 @@ export class ClawtrateClient {
    * from what the task's transcript shows (`settleFirstMessage`); gone with the task.
    */
   private readonly firstMessageTitles = new Map<string, FirstMessageTitle>();
-  /** The gateway identity `firstMessageTitles` were made on, once one is confirmed. */
-  private firstMessageGateway: string | null = null;
+  /** The gateway identity `firstMessageTitles` were made on, and the connection that confirmed it. */
+  private firstMessageGateway: { id: string; epoch: number } | null = null;
   /** Pictures read back from the gateway, by `task\0messageKey\0index`, oldest first (`MAX_READ_BACK_PICTURES`). */
   private readonly readBackPictures = new Map<
     string,
@@ -10350,15 +10354,20 @@ export class ClawtrateClient {
     this.accounts.onGateway(id);
     // Clearing another gateway's creation can notify a host that stops the connection.
     if (current() && this.state.connection.gatewayId !== id) this.setConnection({ gatewayId: id });
-    // Another gateway at the same address: its tasks under the same keys are not the ones titled.
-    // Those made on this connection are this gateway's.
-    if (current() && this.firstMessageGateway !== id) {
+    // Titles kept from the connection that last confirmed this gateway are its own again. Another
+    // gateway at the same address has other tasks under the same keys, and a connection that was
+    // never confirmed may have been any gateway's. Those made on this connection are this one's.
+    if (current()) {
       const before = this.firstMessageGateway;
-      this.firstMessageGateway = id;
-      const size = this.firstMessageTitles.size;
-      for (const [key, made] of this.firstMessageTitles)
-        if (before !== null && made.epoch !== this.epoch) this.firstMessageTitles.delete(key);
-      if (this.firstMessageTitles.size < size) this.publishTasks();
+      this.firstMessageGateway = { id, epoch: this.epoch };
+      let changed = false;
+      for (const [key, made] of this.firstMessageTitles) {
+        if (made.epoch === this.epoch) continue;
+        if (before?.id === id && made.epoch === before.epoch) made.epoch = this.epoch;
+        else this.firstMessageTitles.delete(key);
+        changed = true;
+      }
+      if (changed) this.publishTasks();
     }
     if (current()) this.settleReadStamps(id);
     // The guide change after this connection's connect found it unnamed: once, now it is named.
@@ -10811,10 +10820,12 @@ export class ClawtrateClient {
   /**
    * Bring a task's first-message title in line with what its transcript shows, once that reaches
    * the task's first row: the first message history holds; with none, the earliest message still
-   * on its way (in the outbox, not cancelled); with neither, no title. A transcript still loading,
-   * one that doesn't reach the first row, or one not read on this connection in the row's session
-   * (another gateway's, or another session's under the key) leaves what is kept. True when that
-   * changed.
+   * on its way (in the outbox, not cancelled) that was sent in the read's session on its
+   * connection; with neither, no title. A transcript still loading, one that doesn't reach the
+   * first row, one not read on this connection in the row's session (another gateway's, or another
+   * session's under the key), or one nothing ties to a session while the row or the kept title
+   * names one leaves what is kept, and so does an outbox whose messages were all sent elsewhere.
+   * True when that changed.
    */
   private settleFirstMessage(key: string): boolean {
     const id = capId(key, MAX_ID_CHARS);
@@ -10822,15 +10833,36 @@ export class ClawtrateClient {
     const transcript = this.state.transcripts[key];
     if (transcript?.status !== "ready" || transcript.hasMore) return false;
     const read = this.historyReads.get(key);
-    if (read?.epoch !== this.epoch || otherSession(read.session, sessionOfRow(this.rows.get(id))))
+    const row = sessionOfRow(this.rows.get(id));
+    if (read?.epoch !== this.epoch || otherSession(read.session, row)) return false;
+    const kept = this.firstMessageTitles.get(id);
+    // Search can open a task by its key before its row is known, so the read may be another
+    // session's; a new task's row or creation names its session before history answers.
+    if (read.session === null && (row ?? kept?.session ?? null) !== null) {
+      // Read again in the session the row now names.
+      if (row !== null) {
+        this.historyReads.delete(key);
+        void this.loadTranscript(key, false, null);
+      }
       return false;
+    }
     const held = firstPersonText(transcript.items);
     if (held !== null) return this.keepFirstMessage(id, held, null, read.session);
-    const waiting = transcript.outbox.find(
+    const waiting = transcript.outbox.filter(
       (message) => message.status !== "cancelled" && message.text.trim() !== "",
     );
-    if (waiting) return this.keepFirstMessage(id, waiting.text, waiting.id, read.session);
-    return this.firstMessageTitles.delete(id);
+    // A message is the read's when sent after it was asked, or when the title kept was made from
+    // it in the read's session on this connection: one left from before a reset or another
+    // gateway is not.
+    const first = waiting.find(
+      (message) =>
+        message.createdAt >= read.at ||
+        (message.id === kept?.from &&
+          kept.epoch === read.epoch &&
+          !otherSession(kept.session, read.session)),
+    );
+    if (first) return this.keepFirstMessage(id, first.text, first.id, read.session);
+    return waiting.length === 0 && this.firstMessageTitles.delete(id);
   }
 
   /**
@@ -10839,17 +10871,21 @@ export class ClawtrateClient {
    */
   private firstMessageTitle(key: string, session: string | null = null): string | null {
     const id = capId(key, MAX_ID_CHARS);
-    // The task was deleted and made again under its key while this client didn't see it.
+    const kept = this.firstMessageTitles.get(id);
+    const row = sessionOfRow(this.rows.get(id));
+    // The task was deleted and made again under its key while this client didn't see it; or the
+    // title came from a history read nothing tied to a session, and the row now names one.
     if (
-      otherSession(
-        this.firstMessageTitles.get(id)?.session ?? null,
-        sessionOfRow(this.rows.get(id)),
-      )
+      kept &&
+      (otherSession(kept.session, row) ||
+        (row !== null && kept.session === null && kept.from === null))
     )
       this.firstMessageTitles.delete(id);
     // Made first, as it may be made again from history.
     this.settleFirstMessage(key);
     const made = this.firstMessageTitles.get(id);
+    // One kept from an earlier connection waits for this one to confirm the same gateway.
+    if (made?.epoch !== this.epoch && this.state.connection.status === "connected") return null;
     return made && !otherSession(made.session, session) ? made.title : null;
   }
 
@@ -11283,6 +11319,7 @@ export class ClawtrateClient {
       }
       // The row's session as the read is asked: a reply that doesn't name its own is that one's.
       const asked = sessionOfRow(this.rows.get(capId(key, MAX_ID_CHARS)));
+      const at = this.now();
       const history = asRecord(
         await this.readAgain(
           () => this.request("chat.history", { sessionKey: key, limit: HISTORY_LIMIT }),
@@ -11389,15 +11426,11 @@ export class ClawtrateClient {
       // since is another session's, and takes no title from this read); with that row's revision
       // when the reply names the same id without one.
       const read = sessionOfRow(asRecord(history?.sessionInfo)) ?? sessionOfRow(history);
-      // Nothing says whose it is (no row when asked, no session in the reply) while the row names
-      // one by now: it may be another session's, and titles nothing.
-      if (read === null && asked === null && this.rows.get(capId(key, MAX_ID_CHARS))?.sessionId)
-        this.historyReads.delete(key);
-      else
-        this.historyReads.set(key, {
-          session: read === null || asked?.startsWith(`${read}\u0000`) ? asked : read,
-          epoch: this.epoch,
-        });
+      this.historyReads.set(key, {
+        session: read === null || asked?.startsWith(`${read}\u0000`) ? asked : read,
+        epoch: this.epoch,
+        at,
+      });
       const rebuilt: Transcript = {
         ...current,
         ...retainActivity(
