@@ -641,7 +641,7 @@ export const BOTS_CHECKS: BotsCheck[] = [
       );
       expect(
         spawn.calls.some((c) => c.name === "sessions_spawn" && c.text.includes(NOT_DONE)),
-        `calls: ${show(spawn.calls)}`,
+        `the hand-off: ${show(spawn.calls.filter((c) => c.name === "sessions_spawn").map((c) => c.text.slice(0, 120)))}`,
       );
       const sent = await turn(
         ctx,
@@ -651,7 +651,7 @@ export const BOTS_CHECKS: BotsCheck[] = [
       const sends = sent.calls.filter((c) => c.name === "sessions_send");
       expect(
         sends.length === 3 && sends.every((c) => c.text.includes(NOT_DONE)),
-        `calls: ${show(sent.calls)}`,
+        `the messages: ${show(sends.map((c) => c.text.slice(0, 90)))}`,
       );
     },
   },
