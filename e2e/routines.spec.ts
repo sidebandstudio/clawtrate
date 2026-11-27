@@ -365,7 +365,7 @@ test("F-190: shared routine runs open the recorded conversation", async () => {
       // On both versions the reminder is a turn of the bot's own in its main conversation:
       // 2026.10.6 wakes its heartbeat with it, 2026.11.10 runs it as an ordinary turn (#752).
       await expect(view()).toContainText(
-        "Juniper gets this reminder in its main conversation and may answer there:",
+        "main gets this reminder in its main conversation, uses its model, and may answer there:",
       );
     }
     await view().getByTestId("run-row").first().click();

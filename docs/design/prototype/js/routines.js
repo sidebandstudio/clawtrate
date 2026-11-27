@@ -791,7 +791,7 @@
       (S.runError?.id === r.id ? `<p class="r-row-error" role="alert" data-testid="run-error-line">Couldn't start a run: ${esc(S.runError.message)}</p>` : "");
     // Instruction
     let instruction;
-    if (r.payload.kind === "systemEvent") instruction = `<p class="r-hint">${botName(r.bot)} gets this reminder in its main conversation and may answer there:</p><p class="r-instruction">${esc(r.payload.text)}</p>`;
+    if (r.payload.kind === "systemEvent") instruction = `<p class="r-hint">${botName(r.bot)} gets this reminder in its main conversation, uses its model, and may answer there:</p><p class="r-instruction">${esc(r.payload.text)}</p>`;
     else instruction = `<p class="r-instruction" data-testid="instruction">${esc(r.payload.message)}</p>`;
     body += `<section class="r-section"><h3>Instruction</h3>${instruction}</section>`;
     // When to run
