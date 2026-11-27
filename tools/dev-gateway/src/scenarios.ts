@@ -317,6 +317,10 @@ function message(
       const who = SEED_BOTS.find((bot) => bot.id === id)?.name ?? id;
       const status = typeof result?.status === "string" ? result.status : "unknown";
       if (status === "ok") return [say(`${who} replied:\n\n> ${String(result?.reply ?? "")}`)];
+      // A steer joins the run under way: no reply of its own comes back to this task.
+      if (status === "accepted" && result?.targetDisposition === "steered") {
+        return [say(`The message was added to the run ${who} has under way.`)];
+      }
       if (status === "accepted") {
         return [say(`${who} is still working on it. Their reply will arrive in this task.`)];
       }
@@ -937,7 +941,7 @@ export const SCENARIOS: Scenario[] = [
     phrase: "steer your busy partner to read",
     bots: "Marlow or Pip",
     summary:
-      'A message to the other bot steered into the run it has under way (`mode: "steer"`), asking it to read its own instructions file; the call returns at once and fails when no run is under way.',
+      'A message to the other bot steered into the run it has under way (`mode: "steer"`), asking it to read its own instructions file; the call returns once the gateway has taken the steer in, without waiting for the reply, and fails when no run is under way.',
     steps: () => message("#read", "Could you check your instructions?", 0, { mode: "steer" }),
   },
   {
