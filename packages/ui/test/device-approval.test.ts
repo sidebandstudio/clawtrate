@@ -49,6 +49,7 @@ const request = (extra: Partial<DeviceRequest> = {}): DeviceRequest => ({
   blocked: null,
   choices: CODES,
   spent: false,
+  deciding: false,
   ...extra,
 });
 
@@ -250,6 +251,19 @@ describe("a decision under way", () => {
     const idle = body({});
     expect(held(idle)).toEqual([]);
     expect(idle).not.toContain(DECIDING_WORDS);
+  });
+
+  it("F-550: a sheet opened again while this host's decision on the request is under way holds every decision, and says so", () => {
+    const html = sheet(request({ deciding: true }));
+    expect(html).toContain(DECIDING_WORDS);
+    expect(held(html)).toEqual([
+      "I didn't start this",
+      "None of these match",
+      "Code 4 C 7 R, M Z 2 D",
+      "Code 9 H 3 K, T Q 8 B",
+      "Code K 7 Q F, 2 M X A",
+      "Code W X 5 N, 0 P J 6",
+    ]);
   });
 
   it("F-550: after a decision that wasn't allowed, holds every decision until the list is read again", () => {

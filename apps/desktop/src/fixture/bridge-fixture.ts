@@ -276,6 +276,7 @@ const deviceRequest = (n: number, extra: Partial<DeviceRequest> = {}): DeviceReq
   blocked: null,
   choices: ["4C7R-MZ2D", "9H3K-TQ8B", DEVICE_CODE, "WX5N-0PJ6"],
   spent: false,
+  deciding: false,
   ...extra,
 });
 const deviceRequests = (change: Partial<DeviceRequestsState>): DeviceRequestsState => ({
@@ -1497,6 +1498,12 @@ export function createFixtureBridge(
     if (options.device === "host-error")
       return Promise.reject(new Error("Clawtrate is connected to another gateway now."));
     deciding.add(shown.requestId);
+    const marked = (requests: DeviceRequest[], change: Partial<DeviceRequest>) =>
+      requests.map((each) => (each.requestId === shown.requestId ? { ...each, ...change } : each));
+    set({
+      ...state,
+      deviceRequests: { ...listed, requests: marked(listed.requests, { deciding: true }) },
+    });
     return new Promise((resolve, reject) =>
       timers.deferred(() => {
         // An unknown outcome keeps the request taken while it is listed, as the engine does.
@@ -1514,10 +1521,11 @@ export function createFixtureBridge(
             ...now,
             requests: ends
               ? now.requests.filter((each) => each.requestId !== shown.requestId)
-              : now.requests.map((each) =>
-                  each.requestId === shown.requestId && decision.kind !== "unknown"
-                    ? { ...each, spent: true }
-                    : each,
+              : marked(
+                  now.requests,
+                  decision.kind === "unknown"
+                    ? { deciding: false }
+                    : { deciding: false, spent: true },
                 ),
           },
         });

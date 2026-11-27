@@ -438,9 +438,10 @@ describe("approving a waiting device", () => {
       kind: "not-allowed",
     });
     await t.settle();
-    // The decision's read, then the list read again; no approval, and nothing published.
+    // The decision's read, then the list read again; no approval, and no list published: only
+    // the decision under way, then its end.
     expect(t.calls.slice(before)).toEqual(["device.pair.list", "device.pair.list"]);
-    expect(t.state()).toBe(shown);
+    expect(t.state()).toEqual(shown);
   });
 
   it("gives Settings, Machines the whole reply, applied like any read, and only with admin", async () => {
@@ -551,6 +552,38 @@ describe("approving a waiting device", () => {
     });
     expect(await t.engine.refuse(id, "not-mine")).toEqual({ kind: "not-allowed" });
     expect(t.calls.filter((call) => call === "device.pair.approve")).toHaveLength(1);
+  });
+
+  it("publishes a decision under way on its request until it ends, though a lost answer keeps it taken", async () => {
+    const row = pendingRow();
+    const t = await listed([row]);
+    const id = row.requestId as string;
+    expect(t.request(id).deciding).toBe(false);
+    const during: boolean[] = [];
+    t.answers["device.pair.approve"] = () => {
+      during.push(t.request(id).deciding);
+      throw new Error("connection closed");
+    };
+    expect(await t.engine.approve(id, codeOf(row), [...FULL_SCOPES])).toEqual({ kind: "unknown" });
+    // Under way through the read before approving, which publishes the list again, and the call.
+    expect(during).toEqual([true]);
+    expect(t.request(id).deciding).toBe(false);
+    await t.engine.refresh();
+    expect(t.request(id).deciding).toBe(false);
+    expect(await t.engine.refuse(id, "not-mine")).toEqual({ kind: "not-allowed" });
+    // A denial reads nothing first: it is published as under way when it is taken.
+    const other = pendingRow();
+    t.gw.pending = [row, other];
+    await t.engine.refresh();
+    t.answers["device.pair.reject"] = () => {
+      during.push(t.request(other.requestId as string).deciding);
+      throw new Error("connection closed");
+    };
+    expect(await t.engine.refuse(other.requestId as string, "not-mine")).toEqual({
+      kind: "unknown",
+    });
+    expect(during).toEqual([true, true]);
+    expect(t.request(other.requestId as string).deciding).toBe(false);
   });
 
   it("frees each request a decision kept taken once it leaves the list", async () => {

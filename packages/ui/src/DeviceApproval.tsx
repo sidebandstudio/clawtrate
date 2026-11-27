@@ -197,7 +197,8 @@ export function DeviceRequestView({
   }, [outcome]);
   const current: Seen | null = seen ?? (live ? { request: live, listedOn } : null);
   // The list it came from still lists it: what it can take now (a block, a spent pick) is the
-  // list's. A list from another connection only takes picks away, by a block.
+  // list's. A list from another connection only takes picks away, by a block. Whether a decision
+  // is under way is this host's, whichever list it is on.
   const fresh = current !== null && current.listedOn === listedOn;
   const now: Partial<DeviceRequest> = !live
     ? {}
@@ -206,7 +207,11 @@ export function DeviceRequestView({
       : live.blocked
         ? { blocked: live.blocked, choices: [] }
         : {};
-  const request: DeviceRequest | null = current && { ...current.request, ...now };
+  const request: DeviceRequest | null = current && {
+    ...current.request,
+    ...now,
+    deciding: live?.deciding ?? false,
+  };
   /** Read the list again and say how that went; after not-allowed, then follow the list. */
   const readAgain = (after: Check["after"]) => {
     setCheck({ after, read: "reading" });
@@ -346,7 +351,9 @@ export function DeviceRequestBody({
   titleRef?: RefObject<HTMLHeadingElement | null>;
   closeRef?: RefObject<HTMLButtonElement | null>;
 }) {
-  const busy = pending !== null || held;
+  // A decision under way here, or one this host holds from a sheet closed before it ended.
+  const deciding = pending !== null || (!result && request?.deciding === true);
+  const busy = deciding || held;
   const press = (pick: Pick) => () => {
     if (!busy) onDecide(pick);
   };
@@ -406,7 +413,7 @@ export function DeviceRequestBody({
           {note}
         </p>
       )}
-      {pending && (
+      {deciding && (
         <p className="device-outcome" role="status" data-testid="device-deciding">
           {DECIDING_WORDS}
         </p>
