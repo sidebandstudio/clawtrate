@@ -1352,6 +1352,30 @@ describe("the waiting requests", () => {
     expect(t.delays()).toEqual([1_000]);
   });
 
+  it("keeps a failed event read's retry that a sooner 30-second read replaced, though a list with none waiting comes after", async () => {
+    const t = await listed([]);
+    t.answers["device.pair.list"] = () => {
+      throw new Error("timed out");
+    };
+    t.engine.onEvent("device.pair.requested", { requestId: "new" });
+    // The event's read fails, and its retries move out to 64 seconds.
+    for (let i = 0; i < 4; i += 1) await t.fire();
+    expect(t.delays()).toEqual([64_000]);
+    // Two of Machines' reads overlap: one finds a request, and a later one, as old as the event,
+    // finds none.
+    const replies: Array<(value: unknown) => void> = [];
+    t.answers["device.pair.list"] = () => new Promise((resolve) => replies.push(resolve));
+    const first = t.engine.listDevices();
+    const second = t.engine.listDevices();
+    replies[0]!({ pending: [pendingRow()], paired: [] });
+    await first;
+    expect(t.delays()).toEqual([30_000]);
+    replies[1]!({ pending: [], paired: [] });
+    await second;
+    // The sooner read keeps the retry's reason: a list with none waiting doesn't end it.
+    expect(t.delays()).toEqual([30_000]);
+  });
+
   it("stops after four retries, keeping the last list read, though requests were waiting", async () => {
     const row = pendingRow();
     const t = await listed([row]);

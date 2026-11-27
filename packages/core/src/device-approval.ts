@@ -548,9 +548,12 @@ export class DeviceApprovals {
       if (ms !== REREAD_MS) this.rereadOnly = false;
       return;
     }
+    // A sooner read that replaces one armed for more keeps its reason: only a re-read ends with
+    // a list applied with none waiting.
+    const reread = ms === REREAD_MS && (this.cancelRead === null || this.rereadOnly);
     this.clearTimer();
     this.readDue = due;
-    this.rereadOnly = ms === REREAD_MS;
+    this.rereadOnly = reread;
     this.cancelRead = this.ctx.later(() => {
       this.cancelRead = null;
       this.readDue = Infinity;
