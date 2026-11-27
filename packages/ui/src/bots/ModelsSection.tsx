@@ -14,7 +14,7 @@ import {
   type DefaultsValues,
   type HostInfo,
 } from "@clawtrate/core";
-import { useRef, useState, type ReactNode } from "react";
+import { useState, type ReactNode } from "react";
 import { useBridge } from "../bridge.tsx";
 import { screenStamp, shownStamp } from "../stamp.ts";
 import { AdminBar, GrantedBar, useGranted } from "./parts.tsx";
@@ -133,8 +133,8 @@ export function useModelsSection({
   const bridge = useBridge();
   const granted = useGranted(connection);
   const admin = connection.canAdmin && !info.readOnly;
-  const shownOn = useRef(shownStamp(connection));
-  shownOn.current = shownStamp(connection);
+  // Where the values shown were read: a change made from them goes only to that gateway.
+  const shownOn = accounts.readOn ?? shownStamp(connection);
   const [busy, setBusy] = useState(false);
   /** The held change the person set aside with Cancel, by when it was held. */
   const [setAside, setSetAside] = useState<number | null>(null);
@@ -158,11 +158,11 @@ export function useModelsSection({
       type: "setModelDefaults",
       values,
       restart,
-      stamp: await screenStamp(bridge, shownOn.current),
+      stamp: await screenStamp(bridge, shownOn),
     });
   };
   const putBack = async () =>
-    run({ type: "putBackModelDefaults", stamp: await screenStamp(bridge, shownOn.current) });
+    run({ type: "putBackModelDefaults", stamp: await screenStamp(bridge, shownOn) });
 
   // Each signed-in account's models, named for the person: "Swift 2 · Acme · Work".
   const choices = accounts.accounts.flatMap((account) =>
