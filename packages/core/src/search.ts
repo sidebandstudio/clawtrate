@@ -123,7 +123,7 @@ export async function searchMessages(
   query: string,
   botId: string | null,
   hidden?: (sessionKey: string, row: RawRecord | null) => boolean,
-  firstMessageTitle?: (key: string) => string | null,
+  firstMessageTitle?: (key: string, sessionId: string | null) => string | null,
 ): Promise<MessageSearch> {
   const reply = asRecord(
     await request("sessions.search", {
@@ -239,7 +239,7 @@ function shownSnippet(snippet: string): string {
 export function readMessageSearch(
   reply: RawRecord | null,
   query = "",
-  firstMessageTitle?: (key: string) => string | null,
+  firstMessageTitle?: (key: string, sessionId: string | null) => string | null,
 ): MessageSearch {
   const hits: MessageHit[] = [];
   for (const raw of Array.isArray(reply?.results) ? reply.results : []) {
@@ -276,7 +276,7 @@ export function readMessageSearch(
       row && key && (isPlaceholderName(row, key) || generatedName(row, key))
         ? (mapSessionRow(
             { ...row, archived: false },
-            { firstMessage: firstMessageTitle?.(key) ?? null },
+            { firstMessage: firstMessageTitle?.(key, exactId(row.sessionId)) ?? null },
           )?.title ?? null)
         : (str(row?.label) ?? (named === null ? null : str(titleWithoutMarker(named))));
     if (key && title && hits.some((hit) => hit.sessionKey === key))

@@ -446,6 +446,9 @@ describe("a task titled from its first message", () => {
     try {
       keep(client, KEY, "Plan the garden", null);
       expect((await client.searchMessages("plan", null)).titles[KEY]).toBe("Plan the garden");
+      // Made in another session under the key: another task's, so not this hit's title.
+      keep(client, KEY, "Plan the garden", "0f1e2d3c-4b5a-4697-8877-665544332211");
+      expect((await client.searchMessages("plan", null)).titles[KEY]).not.toBe("Plan the garden");
     } finally {
       client.stop();
     }

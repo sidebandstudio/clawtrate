@@ -11802,7 +11802,11 @@ export class ClawtrateClient {
       );
     };
     return this.search((request) =>
-      searchMessages(request, query, botId, hidden, (key) => this.firstMessageTitle(key)),
+      searchMessages(request, query, botId, hidden, (key, session) => {
+        // A title made in another session under this key was another task's.
+        const made = this.firstMessageTitles.get(capId(key, MAX_ID_CHARS))?.session;
+        return made && session && made !== session ? null : this.firstMessageTitle(key);
+      }),
     );
   }
 
