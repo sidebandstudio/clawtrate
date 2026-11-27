@@ -13,7 +13,7 @@
 //     folder; or write files in a workspace that holds the store's folder.
 //
 // The check is conservative: a tool counts as denied only when a deny list
-// names it, by name, a group of OpenClaw 2026.10.6 that holds it, `*` or a
+// names it, by name, a group of OpenClaw (2026.10.6, 2026.11.10) that holds it, `*` or a
 // pattern matching it, or when a non-empty allow list leaves it out (an
 // empty one restricts nothing, and `write` brings `apply_patch`, as the
 // gateway reads them). Anything it cannot tell (a tool profile, a group it
@@ -25,12 +25,16 @@
 import { realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
-/** The groups of OpenClaw 2026.10.6 (tool-catalog) holding the tools checked here. */
+/**
+ * The groups of OpenClaw 2026.10.6 and 2026.11.10 (tool-catalog, the same in
+ * both) holding the tools checked here; `group:fs` whole, as a deny saved while
+ * a card waits names any of its tools.
+ */
 const GROUPS = {
   "group:openclaw": ["gateway", "plugins"],
   "group:automation": ["gateway", "plugins"],
   "group:runtime": ["exec", "process"],
-  "group:fs": ["write", "edit", "apply_patch"],
+  "group:fs": ["ls", "read", "write", "edit", "apply_patch"],
 };
 const ALIASES = new Map([
   ["bash", "exec"],

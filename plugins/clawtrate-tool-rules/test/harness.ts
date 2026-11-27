@@ -151,27 +151,44 @@ export function load(
     return found;
   };
 
+  /** The cards a trusted policy gave, whose Allow once the gateway follows with the hooks. */
+  const policyCards = new WeakSet<object>();
+
   /**
    * Decide one call as the gateway would before asking: the trusted policies
-   * first, then, when none decided, the before_tool_call hooks.
+   * first, then, when none decided, the before_tool_call hooks. `rewrite`
+   * plays a later trusted policy that changes the call's arguments after the
+   * plugin's policy looked at them; the hooks then see the changed ones.
    */
   function before(
     agentId: string | undefined,
     toolName: string,
     params: Json = {},
     ids: Ids = {},
+    rewrite?: Json,
   ): HookResult | undefined {
     const { event, ctx } = callOf(agentId, toolName, params, ids);
+    let card: HookResult | undefined;
     for (const policy of policies) {
       const decided = policy.evaluate(event, ctx) as HookResult | undefined;
-      if (decided) return decided;
+      if (decided?.block) return decided;
+      if (decided?.requireApproval) card ??= decided;
     }
-    return hook("before_tool_call").fn(event, ctx) as HookResult | undefined;
+    if (card) {
+      policyCards.add(card);
+      return card;
+    }
+    const after = rewrite
+      ? callOf(agentId, toolName, { ...params, ...rewrite }, ids)
+      : { event, ctx };
+    return hook("before_tool_call").fn(after.event, after.ctx) as HookResult | undefined;
   }
 
   /**
-   * A card answered: the answer to the plugin, then, for Allow once, the
-   * before_tool_call hooks the gateway runs after a trusted policy's card.
+   * A card answered: the answer to the plugin, then, for Allow once on a
+   * trusted policy's card, the before_tool_call hooks the gateway runs before
+   * the call (with the call's arguments as they then stand: `params`). A
+   * card the hook gave is answered in place: the gateway runs no hook again.
    */
   function answer(
     card: HookResult | undefined,
@@ -183,7 +200,7 @@ export function load(
   ): HookResult | undefined {
     if (!card?.requireApproval) throw new Error("no card to answer");
     card.requireApproval.onResolution?.(decision);
-    if (decision !== "allow-once") return undefined;
+    if (decision !== "allow-once" || !policyCards.has(card)) return undefined;
     const { event, ctx } = callOf(agentId, toolName, params, ids);
     return hook("before_tool_call").fn(event, ctx) as HookResult | undefined;
   }

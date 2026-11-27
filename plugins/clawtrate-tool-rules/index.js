@@ -9,11 +9,13 @@
 //                      a Never blocks with the rule named, an Ask and "Ask when
 //                      nothing else decides" ask through the gateway's own
 //                      approval card, Allow once or Deny, and refuse in a run
-//                      another bot's message started or reached; it never
-//                      rewrites a call
-//   before_tool_call   after Allow once, refuses the call if its rule changed
-//                      while the card waited (where there is no trusted policy,
-//                      it decides instead)
+//                      another bot's message started or reached, or where the
+//                      Codex harness may answer the card; it never rewrites a
+//                      call
+//   before_tool_call   after Allow once, refuses the call if its rule or its
+//                      arguments changed while the card waited; decides again
+//                      a call another policy changed; where there is no trusted
+//                      policy, decides instead, refusing an Ask
 //   before_message_write, model_call_started, after_tool_call
 //                      note which bot's message started or reached a run (the
 //                      message's role, the gateway's marks on it and on a bot's
@@ -90,6 +92,11 @@ export const MEMORY_LIMIT = 1000;
  * oldest is let go, and its task and run are kept among the forgotten.
  */
 export const PENDING_LIMIT = 16;
+/**
+ * How long a bot's message waits for its run before the plugin lets the task go;
+ * its run, if it starts later, still counts as the bot's.
+ */
+export const MARK_EXPIRY_MS = 30 * 60 * 1000;
 /** A bot's id as the gateway writes it in a task's key; anything else is not named. */
 const BOT_ID = /^[a-z0-9][a-z0-9_-]{0,63}$/;
 
@@ -122,11 +129,13 @@ function sharedState(dir, options) {
       /**
        * Who started each run, and who wrote each task's latest message: null for a person,
        * { bot } for another bot. `pending` holds, per task, the bots' messages waiting,
-       * `{ bot, run }` with the run each names (`next` for one kept only for the next run);
-       * `current` each task's latest run; `times` when a task's person last wrote and its
-       * latest run was noted, on `clock`; `steered` the bots' messages a send's result said
-       * were steered before they were written, by task and run; `forgotten` the runs and tasks whose bot's mark
-       * was let go past a bound, which count as a bot's.
+       * `{ bot, run, at }` with the run each names (`next` for one kept only for the next
+       * run) and when it was written; `current` each task's latest run; `times` when a
+       * task's person last wrote and its latest run was noted, on `clock`; `early` the
+       * bots' messages a send's result placed before they were written ("steered" or
+       * "ended"), by task and run; `forgotten` the runs and tasks whose bot's mark was let
+       * go past a bound, which count as a bot's; `people` the runs a person's message
+       * names; `lostTrack` whether a bot's mark was let go with nowhere left to keep it.
        */
       origins: {
         sessions: new Map(),
@@ -134,13 +143,21 @@ function sharedState(dir, options) {
         current: new Map(),
         pending: new Map(),
         times: new Map(),
-        steered: new Map(),
+        early: new Map(),
         clock: 0,
         forgotten: new Map(),
+        people: new Map(),
+        lostTrack: false,
       },
-      /** The cards answered Allow once, by run and call, with the source each card showed. */
+      /**
+       * The cards answered Allow once, by run and call: the source each card showed and
+       * a hash of the arguments the policy looked at.
+       */
       approved: new Map(),
-      /** The calls the trusted policy decided, by run and call, for the hook to leave alone. */
+      /**
+       * The calls the trusted policy decided, by run and call: a hash of the arguments it
+       * looked at, and whether it asked.
+       */
       seen: new Map(),
       /** Which decided the last call: "policy" (the trusted policy) or "hook"; null before one. */
       decidedBy: null,
@@ -322,12 +339,74 @@ export function messageOrigin(message) {
  * task's key, checked against its form, so it carries nothing else.
  */
 export function botRunReason(result, origin) {
-  const who = origin.bot ? `bot ${origin.bot}` : "another bot";
+  const who = origin.unsure
+    ? "the plugin can no longer tell who started this run: it let go of a bot's message past its memory limit, so it counts the run as a bot's"
+    : `this run was started by a message from ${origin.bot ? `bot ${origin.bot}` : "another bot"}`;
   return clip(
-    `Refused by Clawtrate's rules plugin without asking anyone: ${askerWords(result)}, and this run was started by a message from ${who}. An Ask in a run another bot started is a refusal, so a person never approves what a bot asked for. The call did not run.`,
+    `Refused by Clawtrate's rules plugin without asking anyone: ${askerWords(result)}, and ${who}. An Ask in a run another bot started is a refusal, so a person never approves what a bot asked for. The call did not run.`,
     DESCRIPTION_MAX,
   );
 }
+
+const UNCHECKABLE = {
+  hook: "the gateway did not run the plugin's trusted policy, so an answer could not be checked again before the call runs",
+  changed:
+    "another plugin's policy changed the call after this plugin looked at it, so an answer could not be checked again before the call runs",
+  codex:
+    "the gateway runs the Codex harness, whose native tool approvals are answered where the plugin cannot check the answer again before the call runs",
+};
+
+/** The refusal of an Ask whose answer the plugin could not check again before the call runs. */
+export function uncheckableReason(result, why) {
+  return clip(
+    `Refused by Clawtrate's rules plugin without asking anyone: ${askerWords(result)}, and ${UNCHECKABLE[why]}. The call did not run.`,
+    DESCRIPTION_MAX,
+  );
+}
+
+/** The refusal of a call whose arguments changed after its card was shown. */
+export const CHANGED_ARGUMENTS_REASON =
+  "Refused by Clawtrate's rules plugin: the call's arguments changed after the plugin asked about it (another plugin's policy rewrote them). The answer was for the call the card showed. The call did not run.";
+
+/**
+ * Whether the gateway may run the Codex harness, whose native tool relay
+ * defers a plugin's card to Codex's own approval and runs the call without
+ * this plugin's hook after the answer: its plugin entry not turned off, or an
+ * allow list naming it.
+ */
+export function codexHarnessMayRun(config) {
+  const plugins = isPlainObject(config?.plugins) ? config.plugins : {};
+  if (plugins.enabled === false) return false;
+  if (Array.isArray(plugins.deny) && plugins.deny.includes("codex")) return false;
+  const entry = isPlainObject(plugins.entries) ? plugins.entries.codex : undefined;
+  if (isPlainObject(entry)) return entry.enabled !== false;
+  return Array.isArray(plugins.allow) && plugins.allow.includes("codex");
+}
+
+/** A key-order-free text of a call's arguments, or null where it has none. */
+function stableText(value) {
+  return JSON.stringify(value ?? {}, (_key, v) =>
+    isPlainObject(v)
+      ? Object.fromEntries(
+          Object.keys(v)
+            .sort()
+            .map((k) => [k, v[k]]),
+        )
+      : v,
+  );
+}
+
+/** A hash of a call's arguments; null (never equal to another) where they cannot be read. */
+export function argumentsHash(params) {
+  try {
+    const json = stableText(params);
+    return typeof json === "string" ? createHash("sha256").update(json).digest("hex") : null;
+  } catch {
+    return null;
+  }
+}
+
+const sameArguments = (a, b) => a !== null && a === b;
 
 /** Whether the gateway's config turns this plugin off, as the gateway reads it. */
 export function turnedOff(config) {
@@ -376,17 +455,16 @@ const sameSource = (a, b) =>
   a?.action === b?.action;
 
 /**
- * Keep `value` under `key` as the newest entry. Past the limit, a person's
- * entry (null) is let go first, the oldest of them; only when none is left is
- * the oldest bot's mark let go, and then, with `forgotten`, its key is kept
- * there, so it still counts as a bot's.
+ * Keep `value` under `key` as the newest entry. Past the limit the oldest
+ * entry is let go; with `peopleFirst`, a person's entry (null) goes first, the
+ * oldest of them. A non-null entry let go is handed to `letGo`.
  */
-function remember(map, key, value, forgotten) {
+function remember(map, key, value, { peopleFirst = false, letGo } = {}) {
   map.delete(key);
   map.set(key, value);
   if (map.size <= MEMORY_LIMIT) return;
   let drop;
-  if (forgotten) {
+  if (peopleFirst) {
     for (const [k, v] of map) {
       if (v === null) {
         drop = k;
@@ -394,13 +472,20 @@ function remember(map, key, value, forgotten) {
       }
     }
   }
-  if (drop === undefined) {
-    drop = map.keys().next().value;
-    const mark = map.get(drop);
-    if (forgotten && mark) remember(forgotten, drop, { bot: mark.bot ?? null });
-  }
+  if (drop === undefined) drop = map.keys().next().value;
+  const mark = map.get(drop);
   map.delete(drop);
+  if (mark) letGo?.(drop, mark);
 }
+
+/** Who started a run once the plugin let go of a bot's mark with nowhere left to keep it. */
+const UNSURE = Object.freeze({ bot: null, unsure: true });
+
+/** The `sessions_send` results the gateway gives only once the run is over, or the message was never taken. */
+const SEND_ENDED = new Set(["ok", "no_reply", "timeout", "error"]);
+
+export const LOST_TRACK_LINE =
+  "Let go of a bot's message past its memory limit: until the gateway restarts, an Ask in a run that no person's message started is refused.";
 
 /**
  * Register the plugin on `api`. Returns a handle for tests. `options` lets
@@ -462,14 +547,34 @@ export function createToolRules(api, options = {}) {
   //   - waits until the run it names starts, which is that bot's;
   //   - meanwhile, every other run that starts in the task counts as that
   //     bot's too;
-  //   - is let go when its run starts, or when the sending bot's
-  //     `sessions_send` result says the gateway steered it into a run under way
-  //     or its run has answered.
+  //   - is let go when its run starts, when the sending bot's `sessions_send`
+  //     result says the gateway steered it into a run under way or its run has
+  //     ended (answered, failed or timed out), or after MARK_EXPIRY_MS; a run it
+  //     names that starts later is still that bot's.
   // A run is noted at its first model call. Past a bound, a mark is let go only
   // after its task and its run are kept among the forgotten, which count as a
-  // bot's.
+  // bot's. Past the forgotten's own bound the plugin can no longer tell an old
+  // run from a new one: from then on only a run a person's message names is a
+  // person's.
   const { origins, approved, seen } = shared;
   const { forgotten } = origins;
+
+  /** A bot's mark let go with nowhere left to keep it. */
+  const loseTrack = () => {
+    if (origins.lostTrack) return;
+    origins.lostTrack = true;
+    logger.warn?.(`${PLUGIN_ID}: ${LOST_TRACK_LINE}`);
+  };
+  /** Keep a bot's mark among the forgotten; past their bound, the oldest is lost. */
+  const keepForgotten = (key, mark) =>
+    remember(
+      forgotten,
+      key,
+      { bot: mark.bot ?? null, ...(mark.unsure ? { unsure: true } : {}) },
+      { letGo: loseTrack },
+    );
+  /** Who wrote or started what: past the bound a person's note goes first, a bot's among the forgotten. */
+  const MARKS = { peopleFirst: true, letGo: keepForgotten };
 
   /** Who a run or a task stands for: its note, a forgotten bot's mark, or undefined. */
   const noteOf = (map, key) =>
@@ -493,8 +598,8 @@ export function createToolRules(api, options = {}) {
 
   /** A bot's mark let go past a bound: its task and its run still count as that bot's. */
   const forget = (sessionKey, mark) => {
-    remember(forgotten, sessionKey, { bot: mark.bot });
-    if (mark.run) remember(forgotten, mark.run, { bot: mark.bot });
+    keepForgotten(sessionKey, mark);
+    if (mark.run) keepForgotten(mark.run, mark);
   };
 
   /** Keep a task's waiting marks; past MEMORY_LIMIT tasks, the oldest task's are forgotten. */
@@ -506,6 +611,21 @@ export function createToolRules(api, options = {}) {
     const [oldest, theirs] = origins.pending.entries().next().value;
     origins.pending.delete(oldest);
     for (const mark of theirs) forget(oldest, mark);
+  };
+
+  /**
+   * A task's waiting marks, less those written more than MARK_EXPIRY_MS ago
+   * (nothing said where they went: dropped, cancelled, or their sender gone);
+   * the run each of those names is kept among the forgotten.
+   */
+  const waitingIn = (sessionKey) => {
+    const marks = origins.pending.get(sessionKey) ?? [];
+    const cutoff = now() - MARK_EXPIRY_MS;
+    const live = marks.filter((mark) => !(mark.at < cutoff));
+    if (live.length === marks.length) return marks;
+    for (const mark of marks) if (mark.at < cutoff && mark.run) keepForgotten(mark.run, mark);
+    keepWaiting(sessionKey, live);
+    return live;
   };
 
   const steerKey = (sessionKey, run) => `${sessionKey}\n${run}`;
@@ -520,7 +640,7 @@ export function createToolRules(api, options = {}) {
     if (times && times.person <= times.noted) return waiting;
     const kept = waiting.length >= PENDING_LIMIT ? waiting.slice(1) : waiting;
     if (kept !== waiting) forget(sessionKey, waiting[0]);
-    return [...kept, { bot, run: null, next: true }];
+    return [...kept, { bot, run: null, next: true, at: now() }];
   };
 
   /** When a task's person last wrote and its latest run was noted, on one clock. */
@@ -537,26 +657,32 @@ export function createToolRules(api, options = {}) {
       const sessionKey = text(ctx?.sessionKey) ?? text(event?.sessionKey);
       if (!sessionKey) return undefined;
       const origin = originOf(message, sessionKey);
-      remember(origins.sessions, sessionKey, origin, forgotten);
+      remember(origins.sessions, sessionKey, origin, MARKS);
+      const named = /^(.{1,200}):user$/s.exec(text(message.idempotencyKey) ?? "")?.[1] ?? null;
       if (!origin) {
         stamp(sessionKey, "person");
+        if (named) remember(origins.people, named, true);
         return undefined;
       }
       // The run under way may take it: from now on that run is this bot's.
       const running = origins.current.get(sessionKey);
       if (running !== undefined && !noteOf(origins.runs, running)) {
-        remember(origins.runs, running, origin, forgotten);
+        remember(origins.runs, running, origin, MARKS);
       }
-      const named = /^(.{1,200}):user$/s.exec(text(message.idempotencyKey) ?? "")?.[1] ?? null;
-      const waiting = [...(origins.pending.get(sessionKey) ?? [])];
-      // Its send's result came first (2026.10.6 answers a steer before the run takes it in):
-      // it starts no run of its own, so it waits only as a steer's does.
-      if (named && origins.steered.delete(steerKey(sessionKey, named))) {
-        keepWaiting(sessionKey, afterSteer(sessionKey, origin.bot, waiting));
+      const waiting = [...waitingIn(sessionKey)];
+      // Its send's result came first (2026.10.6 answers a steer before the run takes it in).
+      const early = named ? origins.early.get(steerKey(sessionKey, named)) : undefined;
+      if (early) {
+        origins.early.delete(steerKey(sessionKey, named));
+        // Steered: it starts no run of its own, so it waits only as a steer's does.
+        if (early === "steered")
+          keepWaiting(sessionKey, afterSteer(sessionKey, origin.bot, waiting));
+        // Ended: nothing waits; its run, should it start, is still the bot's.
+        else keepForgotten(named, origin);
         return undefined;
       }
       if (waiting.length >= PENDING_LIMIT) forget(sessionKey, waiting.shift());
-      keepWaiting(sessionKey, [...waiting, { bot: origin.bot, run: named }]);
+      keepWaiting(sessionKey, [...waiting, { bot: origin.bot, run: named, at: now() }]);
     } catch {
       // Noting who wrote is never a reason to stop a write.
     }
@@ -565,17 +691,18 @@ export function createToolRules(api, options = {}) {
 
   /**
    * Who a run that starts now stands for: the bot whose message names it;
-   * else, while a bot's message waits in its task, that bot (a mark kept only
-   * for the next run is used up); else a task whose mark was forgotten, once;
-   * else a person.
+   * else, while a bot's message waits in its task, that bot; else a task
+   * whose mark was forgotten, once; else a person, or, once the plugin lost
+   * track of a bot's mark, a person only where a person's message names the
+   * run. The run noted uses up any mark kept only for the next run.
    */
   function originAtStart(sessionKey, runId) {
-    const waiting = origins.pending.get(sessionKey) ?? [];
+    const waiting = waitingIn(sessionKey);
     const own = waiting.find((mark) => mark.run === runId);
     if (own) {
       keepWaiting(
         sessionKey,
-        waiting.filter((mark) => mark !== own),
+        waiting.filter((mark) => mark !== own && !mark.next),
       );
       return { bot: own.bot };
     }
@@ -587,8 +714,11 @@ export function createToolRules(api, options = {}) {
       return { bot: waiting[0].bot };
     }
     const lost = forgotten.get(sessionKey);
-    if (lost) forgotten.delete(sessionKey);
-    return lost ?? null;
+    if (lost) {
+      forgotten.delete(sessionKey);
+      return lost;
+    }
+    return origins.lostTrack && !origins.people.has(runId) ? UNSURE : null;
   }
 
   function noteRun(event, ctx) {
@@ -597,18 +727,22 @@ export function createToolRules(api, options = {}) {
     if (!runId || !sessionKey || origins.runs.has(runId)) return;
     remember(origins.current, sessionKey, runId);
     stamp(sessionKey, "noted");
-    // A bot's run let go past the limit stays among the forgotten.
+    // An expired mark's run goes among the forgotten first; a bot's run let go stays there.
+    waitingIn(sessionKey);
     if (forgotten.has(runId)) return;
-    remember(origins.runs, runId, originAtStart(sessionKey, runId), forgotten);
+    remember(origins.runs, runId, originAtStart(sessionKey, runId), MARKS);
   }
 
   /**
    * A bot's `sessions_send` result: where the gateway put the message. Steered
-   * into a run under way (which its write made the bot's), or answered, it
-   * starts no run, so its mark is let go. A person's message written since the
-   * task's latest run was noted may have started a run not noted yet, into
-   * which the gateway steered it: then the next run noted is the bot's too.
-   * A steer answered before its message is written is kept until it is.
+   * into a run under way (which its write made the bot's), it starts no run,
+   * so its mark is let go; a person's message written since the task's latest
+   * run was noted may have started a run not noted yet, into which the gateway
+   * steered it: then the next run noted is the bot's too. Ended (answered,
+   * failed, timed out: the gateway says so only once the run is over, or the
+   * message was never taken), its mark is let go and its run, should it start,
+   * is still the bot's. A result that comes before its message is written is
+   * kept until it is.
    */
   function noteSent(event) {
     try {
@@ -617,14 +751,16 @@ export function createToolRules(api, options = {}) {
       const sessionKey = text(details.sessionKey);
       const run = text(details.runId);
       const steered = details.status === "accepted" && details.targetDisposition === "steered";
-      if (!sessionKey || !run || !(steered || details.status === "ok")) return undefined;
-      const waiting = origins.pending.get(sessionKey) ?? [];
+      const ended = SEND_ENDED.has(details.status);
+      if (!sessionKey || !run || !(steered || ended)) return undefined;
+      const waiting = waitingIn(sessionKey);
       const mark = waiting.find((m) => m.run === run);
       if (!mark) {
-        if (steered) remember(origins.steered, steerKey(sessionKey, run), true);
+        remember(origins.early, steerKey(sessionKey, run), steered ? "steered" : "ended");
         return undefined;
       }
       const rest = waiting.filter((m) => m !== mark);
+      if (ended) keepForgotten(run, mark);
       keepWaiting(sessionKey, steered ? afterSteer(sessionKey, mark.bot, rest) : rest);
     } catch {
       // Noting where a message went is never a reason to fail a call.
@@ -632,14 +768,24 @@ export function createToolRules(api, options = {}) {
     return undefined;
   }
 
-  /** Who started a run: its note, else (no model call seen) as if it started now. */
+  /**
+   * Who started a run, failing toward a bot: its note, where that is a bot's;
+   * else a bot's message waiting in its task (the run under way may have taken
+   * it, and the plugin may have forgotten that run was under way), or a task
+   * whose bot's mark was forgotten; else its note, a person's; else, with no
+   * model call seen, a person, or, once the plugin lost track of a bot's mark,
+   * a person only where a person's message names the run.
+   */
   const startedBy = (runId, sessionKey) => {
     const note = runId ? noteOf(origins.runs, runId) : undefined;
-    if (note !== undefined) return note;
-    if (!sessionKey) return null;
-    const waiting = origins.pending.get(sessionKey) ?? [];
+    if (note) return note;
+    const waiting = sessionKey ? waitingIn(sessionKey) : [];
     const mark = waiting.find((m) => m.run === runId) ?? waiting[0];
-    return mark ? { bot: mark.bot } : (forgotten.get(sessionKey) ?? null);
+    if (mark) return { bot: mark.bot };
+    const lost = sessionKey ? forgotten.get(sessionKey) : undefined;
+    if (lost) return lost;
+    if (note === null) return null;
+    return origins.lostTrack && !(runId && origins.people.has(runId)) ? UNSURE : null;
   };
 
   const approvalKey = (runId, toolCallId) =>
@@ -661,14 +807,23 @@ export function createToolRules(api, options = {}) {
     return { tool, agentId, toolCallId, base };
   };
 
-  /** `viaPolicy`: the trusted policy decides, so its card's answer is looked at again. */
-  function decide(event, ctx, viaPolicy = false) {
+  /**
+   * `mode`: "policy", the trusted policy decides, and its card's answer is
+   * looked at again by the hook before the call runs; "hook", the gateway did
+   * not run the policy; "again", the hook decides a call another policy changed
+   * after this one decided it. Only the policy asks: on the other two, nothing
+   * can look at an answer again before the call runs, so an Ask is refused.
+   */
+  function decide(event, ctx, mode = "hook") {
     shared.lastCallAt = now();
-    shared.decidedBy = viaPolicy ? "policy" : "hook";
+    if (mode !== "again") shared.decidedBy = mode;
     const { tool, agentId, toolCallId, base } = callOf(event, ctx);
     const key = approvalKey(base.runId, toolCallId);
-    // The hook that runs after the policy leaves a call the policy decided alone.
-    if (viaPolicy && key) remember(seen, key, true);
+    const args = argumentsHash(event?.params);
+    // The hook that runs after the policy leaves a call the policy decided alone, as it
+    // was then: the arguments it looked at, and whether it asked.
+    const decided = { args, asked: false };
+    if (mode === "policy" && key) remember(seen, key, decided);
     // Before anything that could fail: a question is never asked about or blocked.
     if (tool === EXEMPT_TOOL) {
       log.add({ ...base, decision: "none", source: null });
@@ -699,6 +854,20 @@ export function createToolRules(api, options = {}) {
       log.answer(id, "cancelled");
       return { block: true, blockReason: botRunReason(result, origin) };
     }
+    // An answer nothing looks at again before the call runs could outlast a change.
+    const uncheckable =
+      mode === "hook"
+        ? "hook"
+        : mode === "again"
+          ? "changed"
+          : codexHarnessMayRun(config)
+            ? "codex"
+            : null;
+    if (uncheckable) {
+      log.answer(id, "cancelled");
+      return { block: true, blockReason: uncheckableReason(result, uncheckable) };
+    }
+    decided.asked = true;
     return {
       requireApproval: {
         ...(lost
@@ -712,10 +881,9 @@ export function createToolRules(api, options = {}) {
         // Only the decision word is kept; nothing standing is made from it.
         onResolution: (decision) => {
           log.answer(id, ANSWERS.has(decision) ? decision : "unknown");
-          // The rules are looked at again before the approved call runs.
-          if (viaPolicy && key && decision === "allow-once") {
-            remember(approved, key, result.source);
-          }
+          // The rules, and the call's arguments, are looked at again before the approved call runs.
+          if (key && decision === "allow-once")
+            remember(approved, key, { source: result.source, args });
         },
       },
     };
@@ -723,8 +891,9 @@ export function createToolRules(api, options = {}) {
 
   /**
    * After a card's Allow once, before the call runs: the answer was for the
-   * rule the card showed. The call runs when the rules still ask by that rule
-   * at that version, or would now run it without asking; otherwise it is
+   * call the card showed, under the rule it showed. A call whose arguments
+   * changed since is refused. The call runs when the rules still ask by that
+   * rule at that version, or would now run it without asking; otherwise it is
    * refused, naming what the rules say now.
    */
   function recheck(event, ctx, key) {
@@ -743,6 +912,11 @@ export function createToolRules(api, options = {}) {
       log.add({ ...base, rules, decision: "block", source: { kind: "gateway-deny" } });
       return { block: true, blockReason: deniedReason(tool) };
     }
+    // Another plugin's policy rewrote the call after this one asked about it.
+    if (!sameArguments(shown.args, argumentsHash(event?.params))) {
+      log.add({ ...base, rules, decision: "block", source: { kind: "arguments-changed" } });
+      return { block: true, blockReason: CHANGED_ARGUMENTS_REASON };
+    }
     const result =
       view.enforced === null
         ? { decision: "ask", source: { kind: "rules-lost" } }
@@ -752,18 +926,19 @@ export function createToolRules(api, options = {}) {
             target: readTarget(tool, event?.params, workspaceOf(agentId)),
           });
     if (result.decision === "none" || result.decision === "allow") return undefined;
-    if (result.decision === "ask" && sameSource(result.source, shown)) return undefined;
+    if (result.decision === "ask" && sameSource(result.source, shown.source)) return undefined;
     log.add({ ...base, rules, decision: "block", source: result.source });
     return { block: true, blockReason: changedReason(result) };
   }
 
   /**
    * The ordinary hook: after the policy's card was answered Allow once, the
-   * rules are looked at again; a call the policy decided is left alone; any
-   * other call, one the policy never saw (the gateway has no trusted policies,
-   * or did not take this one; for a plugin not explicitly enabled both
-   * versions log a diagnostic, yet still ran the policy on a development
-   * gateway, so `decidedBy` said `policy`), the hook decides itself.
+   * call is looked at again; a call the policy decided without asking is left
+   * alone while its arguments are those the policy looked at, and decided
+   * again when another policy changed them; any other call (one the policy
+   * never saw: the gateway has no trusted policies, or did not take this one;
+   * or one the policy asked about whose answer the plugin no longer holds),
+   * the hook decides itself. Deciding in the hook, an Ask is refused.
    */
   function afterPolicy(event, ctx) {
     const { base, toolCallId } = callOf(event, ctx);
@@ -772,8 +947,13 @@ export function createToolRules(api, options = {}) {
       seen.delete(key);
       return recheck(event, ctx, key);
     }
-    if (key && seen.delete(key)) return undefined;
-    return decide(event, ctx);
+    const decided = key ? seen.get(key) : undefined;
+    if (decided === undefined) return decide(event, ctx);
+    seen.delete(key);
+    if (!decided.asked && sameArguments(decided.args, argumentsHash(event?.params))) {
+      return undefined;
+    }
+    return decide(event, ctx, "again");
   }
 
   // Every tool: "Ask when nothing else decides" can apply to any of them. The
@@ -788,7 +968,7 @@ export function createToolRules(api, options = {}) {
     api.registerTrustedToolPolicy({
       id: POLICY_ID,
       description: "Clawtrate's rules: run without asking, ask first, or never",
-      evaluate: (event, ctx) => decide(event, ctx, true),
+      evaluate: (event, ctx) => decide(event, ctx, "policy"),
     });
     hookRegistered = true;
   }
