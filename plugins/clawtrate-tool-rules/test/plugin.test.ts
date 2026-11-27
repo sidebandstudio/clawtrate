@@ -8,6 +8,7 @@ import { chmodSync, mkdirSync, readFileSync, rmSync, truncateSync, writeFileSync
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin, {
+  codexAtPath,
   codexInFolder,
   globalPluginFolders,
   ALLOWED_DECISIONS,
@@ -1543,6 +1544,43 @@ describe("where the Codex harness may answer a card (#606)", () => {
       expect(codexInFolder(locked)).toBe(true);
       chmodSync(locked, 0o700);
     }
+  });
+
+  it("refuses where a configured load path holds the Codex plugin under any name, or cannot be read", async () => {
+    const config: Record<string, unknown> = {};
+    const h = host({ config });
+    await h.save("main", rules);
+    const relay = join(h.stateDir, "srv", "relay");
+    const shelf = join(h.stateDir, "srv", "shelf");
+    const other = join(h.stateDir, "srv", "notes");
+    for (const [dir, id] of [
+      [relay, "codex"],
+      [join(shelf, "harness"), "codex"],
+      [other, "notes"],
+    ] as const) {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "openclaw.plugin.json"), JSON.stringify({ id }));
+    }
+    const at = (path: string) => {
+      config.plugins = { load: { paths: [path] } };
+      return open({ stateDir: h.stateDir, config });
+    };
+    // A plugin folder whose manifest is Codex's, a folder of plugins holding it, its entry file.
+    for (const path of [relay, shelf, join(relay, "index.js")]) refuses(at(path));
+    // Another plugin, or a path that is not there, holds none.
+    for (const path of [other, join(h.stateDir, "srv", "gone")]) asksFor(at(path));
+    // A relative path resolves where the plugin cannot be sure, and an unreadable one may hold it.
+    refuses(at("plugins/relay"));
+    expect(codexAtPath("plugins/relay")).toBe(true);
+    if (process.getuid?.() !== 0) {
+      const locked = join(h.stateDir, "srv", "locked");
+      mkdirSync(locked, { mode: 0o000 });
+      expect(codexAtPath(locked)).toBe(true);
+      chmodSync(locked, 0o700);
+    }
+    // An allow list that leaves it out still keeps it from loading.
+    config.plugins = { load: { paths: [relay] }, allow: ["clawtrate-tool-rules"] };
+    asksFor(open({ stateDir: h.stateDir, config }));
   });
 
   it("looks for a global plugin folder where both versions resolve it", () => {

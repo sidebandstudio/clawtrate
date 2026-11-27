@@ -31,7 +31,8 @@
 
 import { createHash, randomBytes } from "node:crypto";
 import { readdirSync, readFileSync, realpathSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { homedir } from "node:os";
+import { dirname, isAbsolute, join } from "node:path";
 import { evaluate } from "./lib/evaluate.js";
 import { configuredAgents, explicitlyDenied, exposureWarnings } from "./lib/exposure.js";
 import {
@@ -389,10 +390,11 @@ const CODEX_SCAN_LIMIT = 500;
  * (`resolvePluginActivationStateShared`): never with `plugins.enabled` false,
  * `codex` in `plugins.deny` or its entry's `enabled` false; always when a
  * memory or context-engine slot names it; never when a non-empty
- * `plugins.allow` leaves it out; otherwise when the config names it at all, or
- * it was found on disk.
+ * `plugins.allow` leaves it out; otherwise when the config names it (its
+ * entry, the allow list, an install record), a load path holds it (`atPath`:
+ * by default, a path that names it), or it was found on disk.
  */
-export function codexHarnessMayRun(config, onDisk = false) {
+export function codexHarnessMayRun(config, onDisk = false, atPath = codexInName) {
   const plugins = isPlainObject(config?.plugins) ? config.plugins : {};
   if (plugins.enabled === false) return false;
   if (namesCodex(plugins.deny)) return false;
@@ -411,8 +413,35 @@ export function codexHarnessMayRun(config, onDisk = false) {
     entryKey !== undefined ||
     namesCodex(allow) ||
     Object.keys(installs).some((key) => policyId(key) === CODEX) ||
-    (Array.isArray(paths) && paths.some((path) => typeof path === "string" && /codex/i.test(path)))
+    (Array.isArray(paths) && paths.some((path) => typeof path === "string" && atPath(path)))
   );
+}
+
+/** Whether a load path names Codex in its own words. */
+const codexInName = (path) => /codex/i.test(path);
+
+/**
+ * Whether a configured load path holds the Codex plugin: it names Codex; its
+ * manifest (beside the path, or in its folder) has the id `codex`; or, a
+ * folder of plugins, one of them does. A path the plugin cannot resolve as
+ * the gateway does (relative), or cannot read, may hold it.
+ */
+export function codexAtPath(path) {
+  if (typeof path !== "string" || path.trim().length === 0) return false;
+  if (codexInName(path)) return true;
+  const where = path.startsWith("~") ? join(homedir(), path.slice(1)) : path;
+  if (!isAbsolute(where)) return true;
+  for (const manifest of [
+    join(where, "openclaw.plugin.json"),
+    join(dirname(where), "openclaw.plugin.json"),
+  ]) {
+    try {
+      if (policyId(JSON.parse(readFileSync(manifest, "utf8"))?.id) === CODEX) return true;
+    } catch (error) {
+      if (error?.code && error.code !== "ENOENT" && error.code !== "ENOTDIR") return true;
+    }
+  }
+  return codexInFolder(where);
 }
 
 /**
@@ -601,6 +630,16 @@ export function createToolRules(api, options = {}) {
       codexSeen = { at: now(), found: pluginFolders.some((folder) => codexInFolder(folder)) };
     }
     return codexSeen.found;
+  };
+  /** Each configured load path's look, kept a minute; a handful of paths, cleared when it grows. */
+  const pathSeen = new Map();
+  const codexAtLoadPath = (path) => {
+    const seen = pathSeen.get(path);
+    if (seen && now() - seen.at < CODEX_SCAN_MS) return seen.found;
+    if (pathSeen.size >= 64) pathSeen.clear();
+    const found = codexAtPath(path);
+    pathSeen.set(path, { at: now(), found });
+    return found;
   };
   /** "auto" (the default), "full" or "redacted": whether a card names what the call acts on. */
   const cardSetting = isPlainObject(api.pluginConfig) ? api.pluginConfig.cardDetails : undefined;
@@ -968,7 +1007,7 @@ export function createToolRules(api, options = {}) {
         ? "hook"
         : mode === "again"
           ? "changed"
-          : codexHarnessMayRun(config, codexOnDisk())
+          : codexHarnessMayRun(config, codexOnDisk(), codexAtLoadPath)
             ? "codex"
             : null;
     if (uncheckable) {
