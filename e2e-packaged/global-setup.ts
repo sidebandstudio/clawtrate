@@ -45,6 +45,8 @@ import { writeSandbox } from "../e2e/setup-sandbox.ts";
 import { newRunId, processIdentity } from "../tools/dev-gateway/src/state-guard.ts";
 import { FORBIDDEN_PORTS, listInstances, runningOthers } from "../e2e/global-setup.ts";
 import { askToClose, forceEnd, windowsProcesses } from "./windows.ts";
+import { exitOf, recordTeardownExit, type TeardownExit } from "./overlay-diagnostics.ts";
+import type { FullConfig } from "@playwright/test";
 import {
   cleanUp,
   recordPath,
@@ -267,6 +269,12 @@ export async function exitedWithin(child: ChildProcess, ms: number): Promise<boo
   });
 }
 
+/**
+ * How long the Windows teardown waits for an exit Node has not reported yet,
+ * only when a failed overlay check's report needs it.
+ */
+const LAST_EXIT_MS = 1_000;
+
 /** What was wrong with how the Windows app quit once asked to close, or null if it exited 0 within 15 seconds. */
 export async function windowsQuitProblem(child: ChildProcess): Promise<string | null> {
   if (!(await exitedWithin(child, 15_000))) {
@@ -309,8 +317,9 @@ function setupSandbox(dir: string, instance: string): { file: string; appData: s
   return { file: sandbox.file, appData: realpathSync.native(sandbox.appData) };
 }
 
-export default async function globalSetup() {
-  if (process.platform === "win32") return windowsSetup();
+export default async function globalSetup(config: FullConfig) {
+  if (process.platform === "win32")
+    return windowsSetup(config.projects.map(({ outputDir }) => outputDir));
   if (process.platform !== "darwin") throw new Error("the launch check runs on macOS and Windows");
   const app = packagedApp();
   if (!existsSync(app)) throw new Error(`${app} does not exist. Check the packaged app path.`);
@@ -516,9 +525,10 @@ async function macSetup(app: string, domain: string) {
  * record and no listeners to protect. The app is asked to close the way
  * Windows asks at sign-out (a close message to its windows), and the run
  * fails if it or a helper is still running 15 seconds later; anything left
- * is then ended by PID so the machine is not left with it.
+ * is then ended by PID so the machine is not left with it. How the app had
+ * ended by then goes beside any taskbar overlay report in `outputDirs`.
  */
-async function windowsSetup() {
+async function windowsSetup(outputDirs: string[]) {
   const app = packagedApp();
   const exe = packagedExecutable(app);
   if (!existsSync(exe)) throw new Error(`${exe} does not exist. Run \`pnpm package:win\` first.`);
@@ -538,8 +548,14 @@ async function windowsSetup() {
   };
   process.on("exit", finish);
 
-  const teardown = async () => {
+  /** How the app had ended before and after it was asked to close, for a failed overlay check's report. */
+  const exits: Omit<TeardownExit, "lastReported"> = {
+    beforeClose: "not reported",
+    afterClose: "not asked",
+  };
+  const closeAndCheck = async () => {
     const problems: string[] = [];
+    if (appProcess) exits.beforeClose = exitOf(appProcess);
     if (appProcess && (appProcess.exitCode !== null || appProcess.signalCode !== null)) {
       // The app must still be running when it is asked to close. One that ended by
       // itself, cleanly or not, did not "stay up and close when asked".
@@ -552,6 +568,7 @@ async function windowsSetup() {
       else {
         const problem = await windowsQuitProblem(appProcess);
         if (problem) problems.push(problem);
+        exits.afterClose = exitOf(appProcess);
       }
     }
     for (let i = 0; i < 50 && processesUsing(userData).length > 0; i += 1) await sleep(200);
@@ -561,6 +578,21 @@ async function windowsSetup() {
     if (existsSync(dir)) problems.push(`${dir} could not be removed`);
     if (problems.length > 0) throw new Error(problems.join("\n"));
     console.log(`Closed the packaged app and removed ${dir}`);
+  };
+  // Whatever the checks threw; recording never throws.
+  const teardown = async () => {
+    try {
+      await closeAndCheck();
+    } finally {
+      const child = appProcess;
+      if (child)
+        await recordTeardownExit(outputDirs, exits, async () => {
+          // Windows can end the app before Node reports it (#326): a short
+          // chance for the exit event, for this record alone, judging nothing.
+          if (exitOf(child) === "not reported") await exitedWithin(child, LAST_EXIT_MS);
+          return exitOf(child);
+        });
+    }
   };
 
   try {
@@ -577,11 +609,14 @@ async function windowsSetup() {
         stdio: ["ignore", "ignore", "inherit"],
       }),
     );
+    const exitFile = join(dir, "app-exit.json");
+    reportExit(appProcess, exitFile);
     const port = await debuggingPort(userData, appProcess);
     process.env.CLAWTRATE_PACKAGED_CDP = `http://127.0.0.1:${port}`;
     process.env.CLAWTRATE_PACKAGED_APP = app;
     process.env.CLAWTRATE_PACKAGED_USER_DATA = userData;
     process.env.CLAWTRATE_PACKAGED_PID = String(appProcess.pid);
+    process.env.CLAWTRATE_PACKAGED_EXIT = exitFile;
   } catch (error) {
     await teardown().catch((problem: unknown) => console.error(String(problem)));
     throw error;

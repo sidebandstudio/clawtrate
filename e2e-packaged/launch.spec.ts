@@ -56,8 +56,8 @@ import {
   mainWindowTitle,
   taskbarOverlayDescription,
   windowsProcesses,
-  type OverlayRead,
 } from "./windows.ts";
+import { overlayEvidence, type OverlayStep } from "./overlay-diagnostics.ts";
 
 const ROOT = join(import.meta.dirname, "..");
 const INSTANCE = process.env.CLAWTRATE_DEV_INSTANCE!;
@@ -140,6 +140,10 @@ test.afterAll(async () => {
   // Disconnects; the teardown quits the app.
   await browser?.close();
 });
+
+/** The taskbar overlay check's report, kept at its failure, or here if it timed out before its catch. */
+const overlay = overlayEvidence(APP_EXIT);
+test.afterEach(() => overlay.after(test.info()));
 
 test("opens its window from the packaged app on the connect screen", async () => {
   expect(USER_DATA).toBe(realpathSync.native(USER_DATA));
@@ -306,23 +310,28 @@ test("shows unread tasks as an overlay on its taskbar button, and clears it at z
         window as unknown as { clawtrateHost: { setBadge(n: number): void } }
       ).clawtrateHost.setBadge(value);
     }, count);
-  const reads: OverlayRead[] = [];
-  let step = { phase: "set", expected: "3 unread" };
+  const steps = overlay.begin();
+  const phase = async (name: OverlayStep["phase"], count: number, expected: string) => {
+    const step: OverlayStep = {
+      phase: name,
+      expected,
+      started: Date.now(),
+      badgeCallReturned: false,
+      reads: [],
+    };
+    steps.push(step);
+    await setBadge(count);
+    step.badgeCallReturned = true;
+    await expect
+      .poll(() => taskbarOverlayDescription(APP_ID, step.reads), { timeout: 15_000 })
+      .toBe(expected);
+  };
   try {
-    await setBadge(3);
-    await expect
-      .poll(() => taskbarOverlayDescription(APP_ID, reads), { timeout: 15_000 })
-      .toBe(step.expected);
-    step = { phase: "clear", expected: "" };
-    await setBadge(0);
-    await expect
-      .poll(() => taskbarOverlayDescription(APP_ID, reads), { timeout: 15_000 })
-      .toBe(step.expected);
+    await phase("set", 3, "3 unread");
+    await phase("clear", 0, "");
   } catch (error) {
-    await test.info().attach("taskbar-overlay", {
-      body: JSON.stringify({ ...step, lastReads: reads.slice(-5) }, null, 2),
-      contentType: "application/json",
-    });
+    // A report CI keeps, in this test's output folder; the test fails with its own error.
+    await overlay.failed(test.info());
     throw error;
   }
 });
