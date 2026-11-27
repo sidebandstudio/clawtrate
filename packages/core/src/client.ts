@@ -1771,11 +1771,14 @@ export class ClawtrateClient {
   /**
    * The turn the gateway will start in a task because a Stop of this client's stopped a
    * recipient's run whose send left the reply to come later (#645), by
-   * `task\u0000recipient session\u0000recipient run`: the stopped run of the task, and when the
-   * wait for that turn ends. Gone once that turn is found, or the wait ends. At most
+   * `task\u0000recipient session\u0000recipient run`: the stopped run of the task, when the wait
+   * for that turn ends, and the run found to be it. Gone once the wait ends. At most
    * `MAX_FOLLOW_UPS`.
    */
-  private readonly followUps = new Map<string, { stopped: string; until: number }>();
+  private readonly followUps = new Map<
+    string,
+    { stopped: string; until: number; claimedBy: string | null }
+  >();
   /** Task creations not yet settled, oldest first (`MAX_CREATIONS`). */
   private readonly creations = new Map<string, TaskCreation>();
   private readonly creationTimers = new Map<string, ReturnType<typeof setTimeout>>();
@@ -5038,6 +5041,7 @@ export class ClawtrateClient {
     this.followUps.set(`${key}\u0000${sessionKey}\u0000${recipientRunId}`, {
       stopped: stoppedRunId,
       until: now + FOLLOW_UP_WAIT_MS,
+      claimedBy: null,
     });
     // It may be shown already.
     this.afterActivity(key);
@@ -5046,15 +5050,21 @@ export class ClawtrateClient {
   /**
    * Stop the turn the gateway started by itself in `key` after a Stop of this client's (#645), as
    * that Stop would have: the person stopped the exchange, and that turn may redo it. It is found
-   * by what the gateway sends, never by its words: a run this client did not start, still active,
-   * started by an inter-session message (its keyed row) from the stopped recipient's session
-   * through `sessions_send`. The gateway's relay of a reply, and its note for another send that
-   * failed, have the same form, so nothing is stopped while another send of this task to that
-   * session could be the one answered (`mayBeAnswer`). Each awaited turn is stopped once at most.
+   * by what the gateway sends, never by its words: the first run of the task after the stopped
+   * one that was started by an inter-session message (its keyed row) from the stopped recipient's
+   * session through `sessions_send`, and not already another awaited turn. That run claims the
+   * wait whatever its state: one that ended before it was seen leaves a later message from that
+   * bot alone. It is stopped only while still active. The gateway's relay of a reply, and its
+   * note for another send that failed, have the same form, so nothing is stopped when the
+   * recipient's run is known to have finished well (the abort came too late: this is its reply),
+   * or while another send of this task to that session could be the one answered (`mayBeAnswer`).
    */
   private stopFollowUps(key: string, transcript: Transcript): void {
     if (this.followUps.size === 0) return;
     const now = this.now();
+    const claimed = new Set<string>();
+    for (const [held, expected] of this.followUps)
+      if (held.startsWith(`${key}\u0000`) && expected.claimedBy) claimed.add(expected.claimedBy);
     for (const [held, expected] of [...this.followUps]) {
       const [task, sessionKey, recipientRunId] = held.split("\u0000") as [string, string, string];
       if (task !== key) continue;
@@ -5062,15 +5072,21 @@ export class ClawtrateClient {
         this.followUps.delete(held);
         continue;
       }
+      if (expected.claimedBy) continue;
+      const stopped = findRun(transcript, expected.stopped);
       const run = transcript.runs.find(
         (each) =>
-          isActive(each.state) &&
-          each.state !== "stopping" &&
-          each.stopRequestedAt === null &&
+          each.id !== expected.stopped &&
+          !claimed.has(each.id) &&
+          startedAfter(each, stopped) &&
           startedBySend(transcript, each, sessionKey),
       );
       if (!run) continue;
-      this.followUps.delete(held);
+      this.followUps.set(held, { ...expected, claimedBy: run.id });
+      claimed.add(run.id);
+      if (!isActive(run.state) || run.state === "stopping" || run.stopRequestedAt !== null)
+        continue;
+      if (transcript.linkedRuns[recipientRunId]?.state === "completed") continue;
       if (this.mayBeAnswer(transcript, key, sessionKey, recipientRunId, run)) continue;
       if (!this.state.connection.canWrite || this.options.readOnly) continue;
       if (runningRunId(transcript, run.id) !== run.id) continue;
@@ -12353,6 +12369,17 @@ export function hostLimit(value: number | undefined, max: number, name: string):
   if (!Number.isInteger(value) || value < 1 || value > max)
     throw new RangeError(`${name} must be a whole number from 1 to ${max}.`);
   return value;
+}
+
+/**
+ * `run` started after `stopped`, by the gateway's own start times (one task's turns run one after
+ * another). Without both times, only a run still going and not being stopped counts (#645).
+ */
+function startedAfter(run: Run, stopped: Run | undefined): boolean {
+  const at = run.reportedStartAt;
+  const from = stopped?.reportedStartAt ?? null;
+  if (at !== null && from !== null) return at > from;
+  return isActive(run.state) && run.state !== "stopping" && run.stopRequestedAt === null;
 }
 
 /**

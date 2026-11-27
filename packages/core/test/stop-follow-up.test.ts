@@ -24,13 +24,22 @@ const pending = (runId: string, sessionKey = PEER) => ({
   delivery: { status: "pending" },
 });
 
-/** `run-s` messages each recipient, with each result's details as given. */
-function messaged(gateway: FakeGateway, results: Array<Record<string, unknown>>, run = "run-s") {
-  gateway.emit("agent", agentEvent(run, 1, "lifecycle", { phase: "start" }));
+/** `run-s` messages each recipient, with each result's details as given; its events from `at` on. */
+function messaged(
+  gateway: FakeGateway,
+  results: Array<Record<string, unknown>>,
+  run = "run-s",
+  at = 1_000,
+) {
+  const event = (seq: number, stream: string, data: Record<string, unknown>) => ({
+    ...agentEvent(run, seq, stream, data),
+    ts: at + seq,
+  });
+  gateway.emit("agent", event(1, "lifecycle", { phase: "start" }));
   results.forEach((details, index) =>
     gateway.emit(
       "agent",
-      agentEvent(run, index + 2, "tool", {
+      event(index + 2, "tool", {
         phase: "result",
         name: "sessions_send",
         toolCallId: `${run}-c${index}`,
@@ -93,7 +102,10 @@ async function stopTheExchange(
   gateway.emit("agent", agentEvent("run-r", 1, "lifecycle", { phase: "start" }, PEER));
   await until(() => transcript().linkedRuns["run-r"]?.state === "running");
   await client.stopRun(KEY, "run-s");
-  await until(() => transcript().runs[0]!.stoppedWith?.recipientsAsked === true);
+  await until(
+    () =>
+      transcript().runs.find((each) => each.id === "run-s")?.stoppedWith?.recipientsAsked === true,
+  );
   await sleep(10);
   gateway.emit(
     "agent",
@@ -153,7 +165,7 @@ describe("the gateway's own turn after a Stop that stopped a recipient (#645)", 
     await stopTheExchange(opened);
     // The bot resends at once, before the client has read what started its turn: a new run of
     // Marlow's.
-    messaged(gateway, [pending("run-r2")], "run-f");
+    messaged(gateway, [pending("run-r2")], "run-f", 1_500);
     gateway.emit("agent", agentEvent("run-r2", 1, "lifecycle", { phase: "start" }, PEER));
     await until(() => opened.transcript().linkedRuns["run-r2"]?.state === "running");
     await turnStarts(gateway, "run-f", [startedRow("run-f", fromPeer)]);
@@ -194,6 +206,16 @@ describe("the gateway's own turn after a Stop that stopped a recipient (#645)", 
       ],
       ["run-spawn", startedRow("run-spawn", { ...fromPeer, sourceTool: "sessions_spawn" })],
       ["run-plain", startedRow("run-plain", null)],
+      // A routine's turn in the task, as the gateway writes it.
+      [
+        "run-routine",
+        startedRow(
+          "run-routine",
+          { kind: "internal_system", sourceTool: "cron", sourceSessionKey: KEY },
+          "Daily check.",
+          "user",
+        ),
+      ],
       // A turn with no row of its own, drawn after a message from Marlow that started another.
       ["run-after", startedRow("run-old", fromPeer, NOTE, "user")],
     ];
@@ -297,6 +319,133 @@ describe("the gateway's own turn after a Stop that stopped a recipient (#645)", 
     await until(() => run(opened, "run-f") !== undefined);
     await sleep(50);
     expect(abortsOf(gateway).some((each) => each.runId === "run-f")).toBe(false);
+    client.stop();
+  });
+
+  it("#645: a message the person sends after the Stop starts a turn that is left alone", async () => {
+    const opened = await openTask();
+    const { client, gateway } = opened;
+    aborting(gateway);
+    await stopTheExchange(opened);
+    gateway.handlers["chat.send"] = () => ({ runId: "run-mine", status: "started" });
+    client.sendMessage(KEY, "Go on with the plan.");
+    await until(() => gateway.calls("chat.send").length === 1);
+    const mine = {
+      role: "user",
+      content: [{ type: "text", text: "Go on with the plan." }],
+      timestamp: 2_000,
+      idempotencyKey: "run-mine:user",
+      __openclaw: { id: "row-mine", idempotencyKey: "run-mine:user" },
+    };
+    await turnStarts(gateway, "run-mine", [mine]);
+    await until(() => run(opened, "run-mine") !== undefined);
+    await sleep(50);
+    expect(abortsOf(gateway).map((each) => each.runId)).toEqual(["run-s", "run-r"]);
+    // The gateway's own turn comes after it, and is still the one stopped.
+    gateway.emit(
+      "agent",
+      agentEvent("run-mine", 80, "lifecycle", { phase: "end", status: "completed" }),
+    );
+    await turnStarts(gateway, "run-f", [mine, startedRow("run-f", fromPeer)], 1_900);
+    await until(() => abortsOf(gateway).some((each) => each.runId === "run-f"));
+    client.stop();
+  });
+
+  it("#645: the gateway's turn that ended before it was seen is the awaited one: the bot's own later message is left alone", async () => {
+    const opened = await openTask();
+    const { client, gateway } = opened;
+    aborting(gateway);
+    await stopTheExchange(opened);
+    // A quick answer to the gateway's note: started and ended before any read showed its row.
+    gateway.emit("agent", {
+      ...agentEvent("run-f", 1, "lifecycle", { phase: "start" }),
+      ts: 1_500,
+    });
+    gateway.emit("agent", {
+      ...agentEvent("run-f", 2, "lifecycle", { phase: "end", status: "completed" }),
+      ts: 1_600,
+    });
+    await until(() => run(opened, "run-f")?.state === "completed");
+    const answered = {
+      role: "assistant",
+      content: [{ type: "text", text: "The message to Marlow failed." }],
+      timestamp: 2_100,
+      __openclaw: { id: "row-f-reply", runId: "run-f" },
+    };
+    const before = gateway.calls("chat.history").length;
+    gateway.handlers["chat.history"] = () => ({
+      messages: [startedRow("run-f", fromPeer), answered],
+      hasMore: false,
+    });
+    gateway.emit("session.message", { sessionKey: KEY });
+    await until(() => gateway.calls("chat.history").length > before);
+    await until(() => run(opened, "run-f")?.anchorKeyed === true);
+    // Then Marlow, asked again by the person in its own task, messages this one.
+    await turnStarts(
+      gateway,
+      "run-m",
+      [startedRow("run-f", fromPeer), answered, startedRow("run-m", fromPeer, "Here is the plan.")],
+      1_900,
+    );
+    await until(() => run(opened, "run-m") !== undefined);
+    await sleep(50);
+    expect(abortsOf(gateway).map((each) => each.runId)).toEqual(["run-s", "run-r"]);
+    client.stop();
+  });
+
+  it("#645: a turn of that form from before the Stop (an earlier relayed reply) is not the awaited one", async () => {
+    const opened = await openTask();
+    const { client, gateway } = opened;
+    aborting(gateway);
+    // Earlier, Marlow's reply to another message was relayed here as a turn, which ended.
+    const earlier = [
+      startedRow("run-old", fromPeer, "Earlier reply."),
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "Thanks." }],
+        timestamp: 950,
+        __openclaw: { id: "row-old-reply", runId: "run-old" },
+      },
+    ];
+    gateway.emit("agent", {
+      ...agentEvent("run-old", 1, "lifecycle", { phase: "start" }),
+      ts: 900,
+    });
+    gateway.emit("agent", {
+      ...agentEvent("run-old", 2, "lifecycle", { phase: "end", status: "completed" }),
+      ts: 950,
+    });
+    const before = gateway.calls("chat.history").length;
+    gateway.handlers["chat.history"] = () => ({ messages: earlier, hasMore: false });
+    gateway.emit("session.message", { sessionKey: KEY });
+    await until(() => gateway.calls("chat.history").length > before);
+    await until(() => run(opened, "run-old")?.anchorKeyed === true);
+    await stopTheExchange(opened);
+    await turnStarts(gateway, "run-f", [...earlier, startedRow("run-f", fromPeer)]);
+    await until(() => abortsOf(gateway).some((each) => each.runId === "run-f"));
+    client.stop();
+  });
+
+  it("#645: when the recipient's run finished well despite its stop, the gateway's relay of its reply is left alone", async () => {
+    const opened = await openTask();
+    const { client, gateway, transcript } = opened;
+    aborting(gateway);
+    messaged(gateway, [pending("run-r")]);
+    gateway.emit("agent", agentEvent("run-r", 1, "lifecycle", { phase: "start" }, PEER));
+    await until(() => transcript().linkedRuns["run-r"]?.state === "running");
+    await client.stopRun(KEY, "run-s");
+    await until(() => transcript().runs[0]!.stoppedWith?.recipientsAsked === true);
+    await sleep(10);
+    // The abort came as it finished: its run ended well, and its reply is relayed.
+    gateway.emit(
+      "agent",
+      agentEvent("run-r", 9, "lifecycle", { phase: "end", status: "completed" }, PEER),
+    );
+    await until(() => transcript().linkedRuns["run-r"]?.state === "completed");
+    await turnStarts(gateway, "run-f", [startedRow("run-f", fromPeer, "Here is the plan.")]);
+    await until(() => run(opened, "run-f") !== undefined);
+    await sleep(50);
+    expect(abortsOf(gateway).map((each) => each.runId)).toEqual(["run-s", "run-r"]);
     client.stop();
   });
 
