@@ -82,8 +82,17 @@ export type StartedTaskCard = {
   /** What the card calls the task: its listed title, or the bot's label. */
   title: string | null;
   state: StartedTaskState;
-  /** The gateway's reason, as it gave it, when the start was refused or failed. */
+  /**
+   * The gateway's reason, as it gave it, when the start was refused or failed, or when a task it
+   * made never ran its first message (`firstRunFailed`).
+   */
   reason: string | null;
+  /**
+   * The gateway made the task but its first run didn't start (OpenClaw 2026.11.10's
+   * `sessions_create` answering `runStarted: false` with its `runError`): the card keeps the task
+   * and says the brief didn't run, with `reason`.
+   */
+  firstRunFailed: boolean;
   /**
    * The model the gateway's model allowlist refused the start for (`modelRefusal`), when that is
    * the reason: the card says so in plain words instead of the gateway's.
@@ -112,9 +121,18 @@ export type RefusedModel = { provider: string; model: string };
  *   provider wildcard to <list>, or choose an allowed model.`
  */
 export function modelRefusal(error: string | null): RefusedModel | null {
-  const found = MODEL_REFUSAL.exec(error?.trim() ?? "");
+  const text = error?.trim() ?? "";
+  // The model's name echoes what the bot asked for. One with a control or format character (a
+  // bidirectional override or isolate, a zero-width character) could be drawn as another name,
+  // and cleaning it would show a name the gateway didn't give: so it is no recognised refusal,
+  // and the card keeps the gateway's words, cleaned and quoted, as for any other. A text past the
+  // card's bound for those words is not read either.
+  if (text.length > MAX_REFUSAL_CHARS || UNSHOWABLE.test(text)) return null;
+  const found = MODEL_REFUSAL.exec(text);
   return found ? { provider: found[1]!, model: found[2]! } : null;
 }
+/** Control, format (bidirectional overrides and isolates, zero-width), private-use or unassigned. */
+const UNSHOWABLE = /\p{C}/u;
 const MODEL_REFUSAL =
   /^(?:sessions_spawn model "[^"\r\n]*" is not usable: )?model not allowed: ([^\s/]+)\/(\S+?)(?:\. Rejected by \S+\. Add the model or its provider wildcard to \S+, or choose an allowed model\.)?$/;
 
@@ -317,7 +335,12 @@ function reportCandidates(runs: Run[], rawOf: (step: Step) => StepRaw | null): s
   for (const run of runs) {
     for (const step of run.steps) {
       if (step.kind !== "tool") continue;
-      if (step.toolName !== START_TASK_TOOL && step.toolName !== BOT_MESSAGE_TOOL) continue;
+      if (
+        step.toolName !== START_TASK_TOOL &&
+        step.toolName !== CREATE_TASK_TOOL &&
+        step.toolName !== BOT_MESSAGE_TOOL
+      )
+        continue;
       const result = resultOf(step, rawOf(step));
       const key = str(result?.childSessionKey) ?? str(result?.sessionKey);
       const child = str(result?.runId);
@@ -341,6 +364,8 @@ function startedTaskCard(
   const taskKey = accepted ? str(details?.childSessionKey) : null;
   const childRun = accepted ? str(details?.runId) : null;
   const task = startedTaskOf(input.tasks, taskKey, input.taskKey);
+  // A task made whose first run didn't start (only `sessions_create` says so).
+  const firstRunFailed = accepted && details?.runStarted === false;
   const labelText = str(args?.label);
   const label = labelText ? cleanLine(labelText, MAX_TITLE_CHARS) || null : null;
   const hasResult = (raw?.result !== null && raw?.result !== undefined) || step.result !== null;
@@ -349,8 +374,12 @@ function startedTaskCard(
   let reason: string | null = null;
   let given: string | null = null;
   if (isOpenStep(step)) state = "starting";
-  else if (accepted) state = task ? FROM_STATUS[task.status] : "started";
-  else if (status === "forbidden" || status === "error") {
+  else if (accepted) {
+    state = task ? FROM_STATUS[task.status] : "started";
+    // Its brief never ran: failed, until its row says a run of its own (the person wrote in it).
+    if (firstRunFailed && (state === "started" || state === "idle")) state = "failed";
+    if (firstRunFailed) reason = str(details?.runError) ?? "The gateway didn't say why.";
+  } else if (status === "forbidden" || status === "error") {
     state = "couldnt-start";
     given = str(details?.error);
     reason = given ?? step.error;
@@ -375,6 +404,7 @@ function startedTaskCard(
     title: (task ? cleanLine(task.title, MAX_TITLE_CHARS) : "") || label,
     state,
     reason: reason === null ? null : cleanLine(reason, MAX_REFUSAL_CHARS) || null,
+    firstRunFailed,
     // Only from the gateway's own result object, never an exception's text.
     refusedModel: modelRefusal(given),
     resultStatus: status,

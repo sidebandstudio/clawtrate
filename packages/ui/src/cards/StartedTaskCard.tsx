@@ -90,7 +90,9 @@ export function StartedTaskCardView({ card, read }: { card: StartedTaskCard; rea
     ) : undefined;
 
   let note: string | null = null;
-  if (card.state === "starting") note = `${starter.name} is starting this task.`;
+  // Made, and its brief never ran (2026.11.10's `sessions_create`): the task opens, and says so.
+  if (card.firstRunFailed) note = "The task was made, but its first message didn't run.";
+  else if (card.state === "starting") note = `${starter.name} is starting this task.`;
   else if (card.state === "started")
     note = "This task is not in the task list here, so it can't be opened from this card.";
   else if (card.state === "unknown")
@@ -131,7 +133,7 @@ export function StartedTaskCardView({ card, read }: { card: StartedTaskCard; rea
           </p>
         )}
         {note && <p className="exchange-note">{note}</p>}
-        {refused && card.reason && !card.refusedModel && (
+        {(refused || card.firstRunFailed) && card.reason && !card.refusedModel && (
           <>
             <p className="exchange-note">The gateway says:</p>
             <div className="exchange-text" data-testid="started-task-reason">
