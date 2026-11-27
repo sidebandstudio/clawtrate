@@ -21,6 +21,7 @@ import type { GatewayEvent, OperatorSession } from "./operator.ts";
 import { homedir } from "node:os";
 import { join, relative } from "node:path";
 import { HAND_OFF_PARTNER, INSTRUCTION_LINE, KEPT_ROUTINE } from "./scenarios.ts";
+import { SEED_BOTS } from "./seed-data.ts";
 
 type JsonRecord = Record<string, unknown>;
 const rec = (value: unknown): JsonRecord =>
@@ -819,18 +820,50 @@ export async function runBotsChecks(
   const world: World = { stamp: Date.now().toString(36), counter: 0, jobs: new Set() };
   let passed = 0;
   let failed = 0;
-  for (const check of BOTS_CHECKS) {
-    try {
-      await check.run(ctx, world);
-      passed += 1;
-      log(`ok    ${check.name}`);
-    } catch (error) {
-      failed += 1;
-      log(`FAIL  ${check.name}: ${error instanceof Error ? error.message : String(error)}`);
-    }
+  try {
+    await withPairNames(ctx, async () => {
+      for (const check of BOTS_CHECKS) {
+        try {
+          await check.run(ctx, world);
+          passed += 1;
+          log(`ok    ${check.name}`);
+        } catch (error) {
+          failed += 1;
+          log(`FAIL  ${check.name}: ${error instanceof Error ? error.message : String(error)}`);
+        }
+      }
+    });
+  } catch (error) {
+    failed += 1;
+    log(`FAIL  the pair's names: ${error instanceof Error ? error.message : String(error)}`);
   }
   await clearRoutines(ctx, world).catch(() => {});
   return { passed, failed };
+}
+
+/** The pair the checks use, Pip and Marlow, whose names some checks read. */
+const PAIR = ["pip", "marlow"];
+
+/**
+ * The pair's names as seeding gives them (`agents set-identity`), for an instance
+ * started with `--no-seed`, as `pnpm scenarios` starts it; put back afterwards.
+ */
+async function withPairNames(ctx: BotsContext, body: () => Promise<void>): Promise<void> {
+  const read = rec(await ctx.clients.admin.request("config.get", {}));
+  const entries = rec(rec(rec(read.config).agents).entries);
+  const patch: JsonRecord = {};
+  for (const bot of SEED_BOTS.filter((b) => PAIR.includes(b.id))) {
+    if (typeof rec(rec(entries[bot.id]).identity).name === "string") continue;
+    patch[bot.id] = { identity: { name: bot.name } };
+  }
+  if (Object.keys(patch).length === 0) return body();
+  const before = Object.fromEntries(Object.keys(patch).map((id) => [id, entries[id] ?? null]));
+  try {
+    await patchConfig(ctx, { agents: { entries: patch } });
+    await body();
+  } finally {
+    await patchConfig(ctx, { agents: { entries: restorePatch(before, patch) } });
+  }
 }
 
 /** On its own, against a named instance started with `--with-plugin clawtrate-bots`. */
