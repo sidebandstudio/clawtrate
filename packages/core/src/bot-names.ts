@@ -552,6 +552,8 @@ type Applied = {
 const NOTHING_SENT = "The connection changed, so nothing was sent.";
 const NO_LONGER = "That change can no longer be undone.";
 const UNCONFIRMED = "Clawtrate couldn't read the bot list again, so this isn't confirmed.";
+const UNRECORDED =
+  "Clawtrate couldn't save this rename to the gateway's record yet, so its Undo and count may be missing.";
 
 export class BotNames {
   /** Each bot's line, and when it was set here: a later change on the gateway replaces an earlier line. */
@@ -799,8 +801,18 @@ export class BotNames {
             changes: [...record.changes.filter((each) => each !== same), change],
             claims: [...record.claims.filter((each) => each.op !== opId), { ...claim, at: now }],
           };
-          // Room now for what confirming it writes too: the day's count, kept with today's others.
-          const counted = withCount(next, botId, day);
+          // Room now for what confirming it writes too: the day's count, kept with today's others,
+          // and the count each other rename still under way will write when it is confirmed.
+          let counted: NameRecord = next;
+          for (const other of next.claims) {
+            if (other.undo || other.op === opId) continue;
+            const pending = next.changes.find(
+              (each) => each.run === other.run && each.bot === other.bot,
+            );
+            if (pending && pending.done === undefined && pending.undone === undefined)
+              counted = withCount(counted, other.bot, day);
+          }
+          counted = withCount(counted, botId, day);
           if (!keepsWhatItAdds(record, counted, day)) return "full";
           return next;
         });
@@ -856,20 +868,27 @@ export class BotNames {
       // Confirmed by the bot list: marked done and counted, and the claim let go.
       // Settling the record does this for a claim whose rename the bot list shows; counted once.
       const done = this.ctx.now();
-      await this.writeRecord({ stamp, generation: this.ctx.generation() }, (record) => {
-        const entry = record.changes.find((each) => each.run === origin.run && each.bot === botId);
-        const claims = record.claims.filter((each) => each.op !== opId);
-        if (entry?.done !== undefined) return { ...record, claims };
-        // An entry another device settled away while the rename was on its way is written again:
-        // the rename landed, so it has its record, its Undo and its count.
-        const changes = entry
-          ? record.changes.map((each) => (each === entry ? { ...each, done } : each))
-          : [...record.changes, { ...change, done }];
-        return withCount({ ...record, changes, claims }, botId, dayOf(done));
-      }).catch((error: unknown) =>
-        this.ctx.log(`could not mark ${botId}'s rename done: ${errorText(error)}`),
-      );
-      line({ status: "renamed" });
+      const recorded = await this.writeRecord(
+        { stamp, generation: this.ctx.generation() },
+        (record) => {
+          const entry = record.changes.find(
+            (each) => each.run === origin.run && each.bot === botId,
+          );
+          const claims = record.claims.filter((each) => each.op !== opId);
+          if (entry?.done !== undefined) return { ...record, claims };
+          // An entry another device settled away while the rename was on its way is written again:
+          // the rename landed, so it has its record, its Undo and its count.
+          const changes = entry
+            ? record.changes.map((each) => (each === entry ? { ...each, done } : each))
+            : [...record.changes, { ...change, done }];
+          return withCount({ ...record, changes, claims }, botId, dayOf(done));
+        },
+      ).catch((error: unknown) => {
+        this.ctx.log(`could not mark ${botId}'s rename done: ${errorText(error)}`);
+        return "unavailable" as const;
+      });
+      // Renamed, but not saved to the record: said, since its Undo and count may then be missing.
+      line({ status: "renamed", error: recorded === "written" ? null : UNRECORDED });
     } catch (error) {
       line({
         status: "failed",

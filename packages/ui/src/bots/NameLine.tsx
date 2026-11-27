@@ -170,8 +170,11 @@ export function NameLine({ bot, onAnnounce }: { bot: Bot; onAnnounce: (text: str
         <p className="name-line-words" role="status">
           {words(line)}
           {/* Shown, and already announced: a screen reader hears it once. */}
-          {problem?.run === line.run && line.status === "renamed" && (
+          {problem?.run === line.run && line.status === "renamed" ? (
             <span aria-hidden="true">. Undo didn't go through: {problem.text}</span>
+          ) : (
+            // What the engine says about this change: that its rename isn't saved, say.
+            line.status === "renamed" && line.error && <span>. {line.error}</span>
           )}
         </p>
         <div className="name-line-actions">

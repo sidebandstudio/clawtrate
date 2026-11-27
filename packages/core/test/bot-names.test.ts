@@ -1245,6 +1245,47 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
     expect(before.line()).toMatchObject({ status: "not-done", reason: "limit" });
   });
 
+  it("F-552: room for a rename counts the renames still under way: with one place left, a second claim isn't made", async () => {
+    const gw = gateway();
+    const yesterday = dayOf(NOW - 24 * 60 * 60 * 1000);
+    const counts = Array.from({ length: MAX_RECORD_COUNTS - 1 }, (_, n) => ({
+      bot: `bot-${n}`,
+      day: yesterday,
+      n: 1,
+    }));
+    gw.state.record = record({ counts });
+    // Pip's rename holds its claim, paused at its update.
+    const held = deferred<void>();
+    gw.state.hold = held.promise;
+    const first = device(gw);
+    const pip = first.engine.afterRun("pip", KEY, "run-1");
+    await until(() => gw.kept().claims.length === 1);
+    // Another device's rename of Otto meanwhile: no place is left once Pip's is counted.
+    gw.state.file = "- **Name:** Maple\n";
+    const second = device(gw);
+    await second.engine.afterRun("otto", KEY, "run-2");
+    expect(second.line()).toBeUndefined();
+    expect(second.lines()).toEqual([
+      expect.objectContaining({ botId: "otto", status: "not-done", reason: "full" }),
+    ]);
+    held.resolve();
+    await pip;
+    expect(gw.state.updates).toEqual(["Juniper"]);
+    expect(gw.kept().counts).toHaveLength(MAX_RECORD_COUNTS);
+    expect(gw.kept().counts).toContainEqual({ bot: "pip", day: dayOf(NOW), n: 1 });
+  });
+
+  it("F-552: a rename whose confirmation couldn't be saved says so in its line", async () => {
+    const gw = gateway();
+    const me = device(gw);
+    // The claim is saved; the write that confirms the rename isn't.
+    gw.state.downAt = 2;
+    await me.engine.afterRun("pip", KEY, "run-1");
+    expect(gw.state.updates).toEqual(["Juniper"]);
+    expect(me.line()).toMatchObject({ status: "renamed", to: "Juniper" });
+    expect(me.line()!.error).toContain("couldn't save this rename");
+  });
+
   it("F-552: a claim's entry is never the one the record's room drops", () => {
     const changes = Array.from({ length: 9 }, (_, n) =>
       change({ bot: `bot-${n}`, run: runTag(`r${n}`), done: NOW }),
