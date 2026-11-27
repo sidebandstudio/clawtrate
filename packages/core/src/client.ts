@@ -11007,6 +11007,8 @@ export class ClawtrateClient {
         );
         if (stale()) return;
       }
+      // The row's session as the read is asked: a reply that doesn't name its own is that one's.
+      const asked = sessionOfRow(this.rows.get(capId(key, MAX_ID_CHARS)));
       const history = asRecord(
         await this.readAgain(
           () => this.request("chat.history", { sessionKey: key, limit: HISTORY_LIMIT }),
@@ -11102,12 +11104,12 @@ export class ClawtrateClient {
         gatewayEvents: this.writesEvents(),
       });
       this.sentSources.set(key, sentSources(messages));
-      // The session the reply says it read, else the row's; with the row's revision when the reply
-      // names the same id without one.
+      // The session the reply says it read, else the row's when it was asked (a row that moved
+      // since is another session's, and takes no title from this read); with that row's revision
+      // when the reply names the same id without one.
       const read = sessionOfRow(asRecord(history?.sessionInfo)) ?? sessionOfRow(history);
-      const listed = sessionOfRow(this.rows.get(capId(key, MAX_ID_CHARS)));
       this.historyReads.set(key, {
-        session: read === null || listed?.startsWith(`${read}\u0000`) ? listed : read,
+        session: read === null || asked?.startsWith(`${read}\u0000`) ? asked : read,
         epoch: this.epoch,
       });
       const rebuilt: Transcript = {

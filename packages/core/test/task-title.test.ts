@@ -661,6 +661,57 @@ describe("a task titled from its first message", () => {
     }
   });
 
+  /** A task whose history read is held while its row moves on (`move`), then answered. */
+  const readAcrossAMove = async (from: Record<string, unknown>, to: Record<string, unknown>) => {
+    const gateway = grantingGateway();
+    gateway.handlers["sessions.subscribe"] = () => ({
+      subscribed: true,
+      list: { sessions: [from], hasMore: false },
+    });
+    const answer = deferred<void>();
+    const answered = historyOf("Plan the garden");
+    // The reply names no session of its own: only when it was asked says whose it is.
+    let asked = false;
+    gateway.handlers["chat.history"] = async (params) => {
+      if ((params as { sessionKey: string }).sessionKey === KEY) {
+        asked = true;
+        await answer.promise;
+      }
+      return answered(params);
+    };
+    const { client } = await openTask({ gateway });
+    client.openSession(KEY);
+    await until(() => asked);
+    changed(gateway, to);
+    await sleep(20);
+    answer.resolve();
+    await until(() => client.state.transcripts[KEY]?.status === "ready");
+    await sleep(20);
+    return client;
+  };
+
+  it("is not made from a read asked before the task's row moved to another session", async () => {
+    const client = await readAcrossAMove(ROW_1110, {
+      ...ROW_1110,
+      sessionId: "7e6d5c4b-3a29-4180-9f7e-6d5c4b3a2918",
+    });
+    try {
+      expect(shownIn(client)).toBe("New task");
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("is not made from a read asked before the task's row moved to another revision", async () => {
+    const first = { ...ROW_1110, lifecycleRevision: "rev-1" };
+    const client = await readAcrossAMove(first, { ...first, lifecycleRevision: "rev-2" });
+    try {
+      expect(shownIn(client)).toBe("New task");
+    } finally {
+      client.stop();
+    }
+  });
+
   it("is not made from another gateway's history at the same address, and stays when that gateway is named late", async () => {
     const gateway = grantingGateway();
     let identity: string | null = "gateway-a";
