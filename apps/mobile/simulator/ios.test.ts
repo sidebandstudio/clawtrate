@@ -815,6 +815,10 @@ describe("the iOS app", () => {
   });
 
   it("F-063 F-065: on iPhone, a task's chat opens on its title under the header band, puts a stamp before the first message and after a pause, shows your messages and the bot's as bubbles with the bot's markdown and tables that scroll sideways, and each action as one line in the engine's words", async () => {
+    const DISK_ASK = "The media box says the disk is 94% full. What is eating the space?";
+    // The seed wrote this before the check ran, maybe before the device's midnight
+    // (#640): the stamp's day word comes from that time, not "Today".
+    const diskAskAt = await storedAt("agent:otto:disk-space", DISK_ASK);
     await steps("read-disk", [
       tap({ id: "bot-otto" }),
       waitFor({ id: "bot-tasks-otto" }, 20_000),
@@ -822,8 +826,8 @@ describe("the iOS app", () => {
       waitFor({ id: "turn-bot" }, 60_000),
       // Opened at its start: the title is in view without scrolling.
       see({ id: "task-line", text: "Disk almost full on the media box" }),
-      see({ id: "stamp", text: "Today \\d{1,2}:\\d{2}.(AM|PM)", below: { id: "task-line" } }),
-      see(`${lit("The media box says the disk is 94% full. What is eating the space?")}`),
+      see({ id: "stamp", text: stampPattern(diskAskAt), below: { id: "task-line" } }),
+      see(lit(DISK_ASK)),
       // The markdown is drawn, not shown as marks.
       notSee(".*\\*\\*.*"),
       // One read-only explanation, where the composer will be.
