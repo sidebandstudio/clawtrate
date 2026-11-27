@@ -1,0 +1,14 @@
+- status
+- main:
+  - button "Back"
+  - heading "Connecting" [level=2]
+  - paragraph
+  - list "Steps":
+    - listitem "Checking it matches OpenClaw's settings, failed": Checking it matches OpenClaw's settings
+    - listitem "Pairing this Mac, waiting": Pairing this Mac
+    - listitem "Loading your bots, waiting": Loading your bots
+  - alert:
+    - paragraph: Clawtrate couldn't match what is listening at port 18789 to this account's OpenClaw profile. No credential was sent to it. Use Advanced, or look again.
+  - button "Use Advanced"
+  - button "Look again"
+  - paragraph: Connecting

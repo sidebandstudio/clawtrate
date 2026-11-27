@@ -7,6 +7,7 @@ import type {
   SetupState,
 } from "@clawtrate/core";
 import {
+  LOCAL_ROUTE_ONLY,
   plainRemoteGatewayUrl,
   protectedGatewayUrl,
   SETUP_PAIRING_APPEARED,
@@ -31,6 +32,7 @@ import { FullControlConsent } from "./FullControl.tsx";
 import { gatewayLabel, gatewayTitle } from "./format.ts";
 import { BackIcon, CheckIcon, CopyIcon } from "./icons.tsx";
 import { SetupFlow, type SetupView } from "./setup/Setup.tsx";
+import { thisComputer, type StageThisComputer } from "./this-computer.ts";
 
 export const PRODUCT_NAME = "Clawtrate";
 export const SLOGAN = "Your OpenClaw agents, orchestrated.";
@@ -258,7 +260,22 @@ function PairingPanel({ connection }: { connection: ConnectionState }) {
   );
 }
 
-function ConnectForm({ connection, info }: { connection: ConnectionState; info: HostInfo }) {
+/** The errors whose way on is This computer: a route's own pairing, a refused proof. */
+const LOCAL_CODES: ReadonlySet<string> = new Set([LOCAL_ROUTE_ONLY, "LOCAL_UNVERIFIED"]);
+
+function ConnectForm({
+  connection,
+  info,
+  onThisComputer,
+}: {
+  connection: ConnectionState;
+  info: HostInfo;
+  /**
+   * Where This computer (local connect) is offered: its way in, for an address whose pairing
+   * belongs to it, or whose socket its proof refused.
+   */
+  onThisComputer?: (() => void) | undefined;
+}) {
   const send = useCommand();
   const [url, setUrl] = useState(connection.gatewayUrl ?? info.devGateway?.url ?? "");
   const [token, setToken] = useState("");
@@ -345,6 +362,11 @@ function ConnectForm({ connection, info }: { connection: ConnectionState; info: 
             <button type="button" className="button" data-size="sm" onClick={tryAgain}>
               Try again
             </button>
+            {onThisComputer && error.code !== null && LOCAL_CODES.has(error.code) && (
+              <button type="button" className="button" data-size="sm" onClick={onThisComputer}>
+                Use This computer
+              </button>
+            )}
           </div>
         )}
         {/* Always there, so a screen reader announces the warning when it appears. */}
@@ -603,6 +625,8 @@ export function ConnectScreen({
   setup,
   mismatch = null,
   inert = false,
+  staged,
+  onStage,
 }: {
   connection: ConnectionState;
   discovery: DiscoveryState;
@@ -613,22 +637,53 @@ export function ConnectScreen({
   mismatch?: ConnectionError | null;
   /** Set while Settings covers the screen. */
   inert?: boolean;
+  /** The app's staged look on this computer (`this-computer.ts`): shown here, bots or not. */
+  staged?: boolean;
+  onStage?: StageThisComputer;
 }) {
   const pairing = connection.status === "pairing" && connection.pairing;
   const host = `${info.kind === "web" ? "Web preview" : "Desktop"} ${info.version}`;
   const loadingBots = connection.status === "connected" && discovery.status === "loading";
   const settingUp = loadingBots || connection.status === "connecting";
   // The first question, when the host offers setup and no gateway is saved (docs/design/setup.md §3).
-  // A setup the host has under way (another window, or a reload) opens where it stands.
+  // A setup the host has under way (another window, or a reload) opens where it stands; a look the
+  // host started by itself (local connect, at start) opens on the first screen, which offers a
+  // gateway it found and proved.
+  const [ownStage, setOwnStage] = useState(false);
+  const isStaged = staged ?? ownStage;
+  const stage = onStage ?? setOwnStage;
   const [view, setView] = useState<SetupView>(() =>
-    setup && setup.phase !== "idle" ? "here" : "first",
+    isStaged || (setup && setup.phase !== "idle" && !setup.unasked) ? "here" : "first",
   );
+  // A look staged from elsewhere while this screen is open (Settings, over the address form)
+  // shows here, whichever view was open; where the person goes from it is theirs.
+  const [stagedSeen, setStagedSeen] = useState(isStaged);
+  if (stagedSeen !== isStaged) {
+    setStagedSeen(isStaged);
+    if (isStaged) setView("here");
+  }
+  const command = useCommand();
+  // This computer, from the address form: a staged look. The saved gateway stays selected, with
+  // this form, until a Connect on the new offer replaces it; Back returns here.
+  const stageLook = () => {
+    setView("here");
+    void thisComputer(command, stage);
+  };
+  // Leaving the staged look, by Back or Advanced, returns to the saved gateway's form.
+  const onView = (next: SetupView) => {
+    if (isStaged && (next === "first" || next === "advanced")) stage(false);
+    setView(next);
+  };
   const setupOwns =
     setup !== undefined &&
     (setup.phase === "confirming" ||
       setup.phase === "connecting" ||
       setup.phase === "failed" ||
-      (setup.phase === "done" && connection.status !== "connected") ||
+      // A setup that finished stops speaking for the connection once it ends in an error: a
+      // refused reconnect says why, with its ways on, on the form below.
+      (setup.phase === "done" &&
+        connection.status !== "connected" &&
+        connection.status !== "error") ||
       // A saved pairing gone or appeared under setup's connection: its card asks again.
       (setup.phase === "found" &&
         (connection.error?.code === SETUP_PAIRING_GONE ||
@@ -637,7 +692,7 @@ export function ConnectScreen({
   const showSetup =
     info.setup !== undefined &&
     setup !== undefined &&
-    (setupOwns || (noGateway && view !== "advanced"));
+    (setupOwns || ((noGateway || isStaged) && view !== "advanced"));
   // Advanced: the address-and-token form as it was, with Back to the first question.
   const advancedBack =
     info.setup !== undefined && view === "advanced" && noGateway ? () => setView("first") : null;
@@ -682,7 +737,7 @@ export function ConnectScreen({
         ) : showSetup ? (
           <SetupFlow
             view={view === "advanced" ? "here" : view}
-            onView={setView}
+            onView={onView}
             setup={setup!}
             connection={connection}
             info={info}
@@ -711,7 +766,11 @@ export function ConnectScreen({
             {settingUp ? (
               <SetupPanel connection={connection} loadingBots={loadingBots} />
             ) : (
-              <ConnectForm connection={connection} info={info} />
+              <ConnectForm
+                connection={connection}
+                info={info}
+                onThisComputer={info.setup?.local === true ? stageLook : undefined}
+              />
             )}
             <p className="connect-foot">
               {connection.deviceId

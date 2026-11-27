@@ -3,13 +3,23 @@
 // writes a byte, and hands that same socket to the WebSocket. A stand-in proof
 // and a listener of the test's own on loopback; no OpenClaw and no gateway.
 
-import { readdirSync, readFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer, type Server, type Socket } from "node:net";
+import { tmpdir } from "node:os";
 import { join, relative, sep } from "node:path";
 import ts from "typescript";
 import { afterEach, describe, expect, it } from "vitest";
 import { WebSocketServer } from "ws";
 import { deferred, until } from "../../../packages/core/test/fake-gateway.ts";
+import { PROOF_REFUSAL_LINES } from "@clawtrate/core";
 import { provedWhile } from "../src/setup/controller.ts";
 import {
   localConnectFor,
@@ -17,6 +27,7 @@ import {
   provedSockets,
   sendableCloseCode,
 } from "../src/setup/local-connect.ts";
+import { refusalKind } from "../src/setup/local-prove.ts";
 
 const servers: { close(): void }[] = [];
 afterEach(() => {
@@ -208,6 +219,63 @@ describe("local connect's connector", () => {
     second.close();
   });
 
+  it.skipIf(process.platform !== "darwin")(
+    "a replaced socket's refusal, after its wait for a holder, is no refusal of the route",
+    { timeout: 20_000 },
+    async () => {
+      const listener = await counting();
+      const home = realpathSync(mkdtempSync(join(tmpdir(), "clawtrate-replaced-")));
+      chmodSync(home, 0o700);
+      // A stand-in helper: the first socket it is asked about waits a second and finds no
+      // holder; any other socket is refused at once as not the profile's gateway.
+      const helper = join(home, "helper");
+      writeFileSync(
+        helper,
+        [
+          "#!/bin/sh",
+          `first=$(/bin/cat "${home}/first" 2>/dev/null)`,
+          `[ -n "$first" ] || { echo "$4" > "${home}/first"; first=$4; }`,
+          `echo "$4" >> "${home}/asked"`,
+          "if [ \"$4\" = \"$first\" ]; then /bin/sleep 1; printf 'refused holder\\n'; else printf 'refused lock\\n'; fi",
+          "",
+        ].join("\n"),
+        { mode: 0o700 },
+      );
+      const asked = () => {
+        try {
+          return readFileSync(join(home, "asked"), "utf8").trim().split("\n").length;
+        } catch {
+          return 0;
+        }
+      };
+      const told: string[] = [];
+      const port = listener.port;
+      const sockets = provedRouteFor({ home, helper, platform: "darwin", sandboxed: true }, (why) =>
+        told.push(why),
+      )(`ws://127.0.0.1:${port}`, ".openclaw@1:1")!;
+      try {
+        const url = `ws://127.0.0.1:${port}`;
+        const first = sockets.createSocket(url);
+        first.onerror = () => {};
+        await until(() => asked() === 1, 5_000);
+        // The protocol's retry, while the first socket's proof still runs.
+        const second = sockets.createSocket(url);
+        second.onerror = () => {};
+        await until(() => told.length > 0, 5_000);
+        // Past the first socket's answer, its wait for a holder and a second ask.
+        await new Promise((done) => setTimeout(done, 3_000));
+        // Only the replacement's refusal is told, and it is the route's words.
+        expect(told).toEqual(["lock"]);
+        expect(sockets.refusal?.()).toBe(PROOF_REFUSAL_LINES[refusalKind("lock")](port));
+        expect(listener.bytes()).toBe(0);
+        first.close();
+        second.close();
+      } finally {
+        rmSync(home, { recursive: true, force: true });
+      }
+    },
+  );
+
   it("gives the client proved sockets for one loopback endpoint's exact address alone", () => {
     const routes = provedRouteFor({
       home: "/nowhere",
@@ -350,7 +418,7 @@ it("the check finds the builder however a host takes it", () => {
     expect(localConnectUses("host.ts", text).join("\n"), text).toContain(`host.ts ${kind} `);
 });
 
-it("no shipped host turns local connect on", () => {
+it("only a person's packaged Mac app turns local connect on", () => {
   const shipped = [
     "apps/desktop/src",
     "apps/mobile/src",
@@ -364,12 +432,31 @@ it("no shipped host turns local connect on", () => {
   const found = shipped.flatMap((file) =>
     localConnectUses(relative(ROOT, file).split(sep).join("/"), readFileSync(file, "utf8")),
   );
-  // Each option's declaration and its reads; nothing sets either, or calls the builder.
-  expect(found.sort()).toEqual([
-    "apps/desktop/src/setup/controller.ts PropertySignature localConnect?: LocalConnect & { worker: URL };",
-    "apps/desktop/src/setup/controller.ts read this.options.localConnect",
-    "apps/desktop/src/setup/controller.ts read this.options.localConnect",
-    "packages/core/src/client.ts PropertySignature localConnect?: (url: string, route: string) => ProvedRoute | null;",
-    "packages/core/src/client.ts read this.options.localConnect",
-  ]);
+  // Each option's declaration and its reads, and the main process's one builder call, which
+  // is a person's packaged Mac app's only (index.ts `LOCAL_CONNECT`).
+  expect(found.sort()).toMatchInlineSnapshot(`
+    [
+      "apps/desktop/src/host/runtime.ts PropertyAssignment localConnect: options.localConnect",
+      "apps/desktop/src/host/runtime.ts PropertySignature localConnect?: ClientOptions["localConnect"];",
+      "apps/desktop/src/host/runtime.ts read options.localConnect",
+      "apps/desktop/src/host/runtime.ts read options.localConnect",
+      "apps/desktop/src/host/runtime.ts string "localConnect"",
+      "apps/desktop/src/main/index.ts PropertyAssignment localConnect: provedRouteFor(LOCAL_CONNECT, (why) => console.log(\`[setup] couldn't verify what is listening (\${why})\`), )",
+      "apps/desktop/src/main/index.ts PropertyAssignment localConnect: { ...LOCAL_CONNECT, worker: new URL("./settings-parse.js", import.meta.url), }",
+      "apps/desktop/src/main/index.ts builder localConnectFor",
+      "apps/desktop/src/main/index.ts call localConnectFor( { packaged: app.isPackaged, env: process.env, switches: hasSwitch }, { // packaging/config.ts \`LOCAL_GATEWAY_HELPER\`, built and signed with the app. helper: join(process.resourcesPath, "..", "Helpers", "ClawtrateLocalGateway"), platform: process.platform, }, )",
+      "apps/desktop/src/setup/controller.ts PropertySignature localConnect?: LocalConnect & { worker: URL };",
+      "apps/desktop/src/setup/controller.ts read this.options.localConnect",
+      "apps/desktop/src/setup/controller.ts read this.options.localConnect",
+      "apps/desktop/src/setup/controller.ts read this.options.localConnect",
+      "packages/core/src/client.ts PropertySignature localConnect?: (url: string, route: string) => ProvedRoute | null;",
+      "packages/core/src/client.ts read this.options.localConnect",
+    ]
+  `);
+  // That one call is made only for a launch resolved as a person's own, on macOS, with the
+  // Keychain; every other launch's LOCAL_CONNECT is null.
+  const main = readFileSync(join(ROOT, "apps/desktop/src/main/index.ts"), "utf8");
+  expect(main).toMatch(
+    /const LOCAL_CONNECT =\s+SETUP\.kind === "production" &&\s+process\.platform === "darwin" &&\s+usesSecureStorage\(.*\)\)\s+\? localConnectFor\(/,
+  );
 });

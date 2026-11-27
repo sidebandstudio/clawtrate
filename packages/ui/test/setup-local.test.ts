@@ -1,9 +1,11 @@
-// "This computer" with local connect (docs/design/setup-effortless.md §3): what the look couldn't
-// prove, settings it can't use, a gateway that isn't running and a Connect whose socket wasn't
-// proved are each said plainly, with the way on (Advanced).
+// "This computer" with local connect (docs/design/setup-effortless.md §3): the first screen offers
+// a gateway the host found and matched to this account's OpenClaw profile by itself, with Connect and the full-control line and
+// nothing else to read; no address, token or command is shown; and what the look couldn't prove
+// is said plainly, with the way on (Advanced).
 import {
   initialState,
   initialSetupState,
+  LOCAL_ROUTE_ONLY,
   PROOF_REFUSAL_LINES,
   type ClawtrateBridge,
   type HostInfo,
@@ -18,6 +20,9 @@ import { BridgeProvider } from "../src/bridge.tsx";
 /** As React escapes text. */
 const escape = (text: string) => text.replaceAll("'", "&#x27;");
 import { ConnectScreen } from "../src/ConnectScreen.tsx";
+import { gatewayProblem, thisComputerWayOn } from "../src/Settings.tsx";
+import { CONSENT_LINE } from "../src/FullControl.tsx";
+import { LOCAL_FOUND_HEADING, LOCAL_FOUND_LINE } from "../src/setup/Setup.tsx";
 
 const PORT = 19940;
 const local = (full = true): HostInfo => ({
@@ -56,14 +61,86 @@ function render(info: HostInfo, setup: SetupState): string {
   );
 }
 
-const found = (more: Partial<SetupLook> = {}): SetupState => ({
+const found = (more: Partial<SetupLook> = {}, unasked = false): SetupState => ({
   ...initialSetupState,
   phase: "found",
+  unasked,
   look: look(more),
 });
 
+/** What a person must never be shown on this path: an address, a token, a command, read-only. */
+function nothingToType(html: string) {
+  expect(html).not.toContain("ws://");
+  expect(html).not.toContain(String(PORT));
+  expect(html).not.toContain("openclaw ");
+  expect(html).not.toContain('placeholder="Gateway address"');
+  expect(html).not.toMatch(/read-only/i);
+}
+
+describe("the first screen on a Mac whose OpenClaw profile the host found and matched", () => {
+  it("F-602: offers this computer first: its heading, the full-control line and Connect", () => {
+    const html = render(local(), found({}, true));
+    expect(html).toContain(LOCAL_FOUND_HEADING);
+    // One plain line under it: what the check found, and no more.
+    expect(html).toContain(`<p class="s-lede">${LOCAL_FOUND_LINE}</p>`);
+    expect(html).not.toMatch(/is running|is OpenClaw|proved/);
+    expect(html).toContain(CONSENT_LINE);
+    expect(html).toMatch(/<button[^>]*data-variant="primary"[^>]*>Connect<\/button>/);
+    expect(html).toContain("Another computer");
+    expect(html).toContain("Advanced");
+    expect(html).not.toContain("Where does OpenClaw run?");
+    // The heading is the screen's title: focused when it appears, and announced.
+    expect(html).toMatch(
+      /<h2[^>]*id="setup-title"[^>]*data-s-title[^>]*>Found your OpenClaw settings on this Mac</,
+    );
+    nothingToType(html);
+  });
+
+  it("where this device can't hold full control, says what Connect asks instead", () => {
+    const html = render(local(false), found({}, true));
+    expect(html).not.toContain(CONSENT_LINE);
+    expect(html).toContain(
+      "Clawtrate asks for read access. OpenClaw may ask its owner to approve this device.",
+    );
+  });
+
+  it("a device already paired there connects with that pairing, and isn't asked again", () => {
+    const html = render(local(), found({ access: "paired" }, true));
+    expect(html).not.toContain(CONSENT_LINE);
+    expect(html).toContain("This device is already paired with it.");
+  });
+
+  it("while the host looks, waits with nothing to press, so nothing appears under the pointer", () => {
+    const html = render(local(), { ...initialSetupState, phase: "looking", unasked: true });
+    expect(html).toMatch(/<h2[^>]*data-s-title[^>]*>Looking for OpenClaw on this Mac<\/h2>/);
+    expect(html).not.toContain("<button");
+    expect(html).not.toContain("Where does OpenClaw run?");
+  });
+
+  it("when the host matched nothing, is the first question", () => {
+    for (const setup of [
+      found({ outcome: "unverified", access: null }, true),
+      found({ outcome: "not-found", access: null }, true),
+    ]) {
+      const html = render(local(), setup);
+      expect(html, setup.look?.outcome ?? setup.phase).toContain("Where does OpenClaw run?");
+      expect(html).not.toContain("Looking on this computer");
+    }
+  });
+});
+
 describe("the card for this computer, after This computer", () => {
-  it("says what couldn't be verified, in the words of what failed, and the way on", () => {
+  it("is the same one step", () => {
+    const html = render(local(), found());
+    expect(html).toContain(LOCAL_FOUND_HEADING);
+    expect(html).toContain(LOCAL_FOUND_LINE);
+    expect(html).not.toMatch(/is running|is OpenClaw|proved/);
+    expect(html).toContain(CONSENT_LINE);
+    expect(html).toMatch(/>Connect<\/button>/);
+    nothingToType(html);
+  });
+
+  it("F-602: says what couldn't be verified, in the words of what failed, and the way on", () => {
     for (const reason of [
       "holder",
       "not-gateway",
@@ -87,6 +164,20 @@ describe("the card for this computer, after This computer", () => {
     }
   });
 
+  it("F-602: a profile with TLS on gets the Advanced path, with why, and no Connect", () => {
+    const html = render(local(), found({ outcome: "cant-tell", reason: "tls", access: null }));
+    expect(html).toContain("OpenClaw settings found");
+    expect(html).toContain(
+      escape(
+        "These settings may require a secure address. Use Advanced to connect with the gateway's address.",
+      ),
+    );
+    expect(html).toContain(">Use Advanced</button>");
+    expect(html).not.toMatch(/>Connect<\/button>/);
+    expect(html).not.toContain(LOCAL_FOUND_HEADING);
+    nothingToType(html);
+  });
+
   it("says when OpenClaw's settings can't be used, and when nothing answers", () => {
     const settings = render(
       local(),
@@ -98,7 +189,7 @@ describe("the card for this computer, after This computer", () => {
     expect(stopped).not.toContain("Installed program");
   });
 
-  it("a Connect whose socket wasn't proved says what failed, and that no credential was sent", () => {
+  it("a Connect whose socket didn't pass the check says what failed, and that no credential was sent", () => {
     const html = render(local(), {
       ...found(),
       phase: "failed",
@@ -137,7 +228,39 @@ describe("the card for this computer, after This computer", () => {
       found({ version: "2026.10.6", listens: "loopback", service: "none" }),
     );
     expect(html).toContain("Connect read-only");
-    expect(html).not.toContain("OpenClaw is running on this Mac");
+    expect(html).not.toContain(LOCAL_FOUND_HEADING);
+  });
+});
+
+describe("an address whose pairing belongs to This computer", () => {
+  const refused = (code: string, local: boolean) =>
+    renderToStaticMarkup(
+      createElement(BridgeProvider, {
+        bridge: { info: info(local) } as ClawtrateBridge,
+        children: createElement(ConnectScreen, {
+          info: info(local),
+          setup: initialSetupState,
+          connection: {
+            ...initialState.connection,
+            status: "error",
+            gatewayUrl: `ws://127.0.0.1:${PORT}`,
+            error: { code, message: "fixture", hint: null },
+          },
+          discovery: initialState.discovery,
+        }),
+      }),
+    );
+  const info = (on: boolean): HostInfo => ({
+    ...local(),
+    setup: { look: true, pair: true, platform: "darwin", ...(on ? { local: true } : {}) },
+  });
+
+  it("F-602: offers This computer as the way on, where the host has it", () => {
+    for (const code of [LOCAL_ROUTE_ONLY, "LOCAL_UNVERIFIED"]) {
+      expect(refused(code, true), code).toContain(">Use This computer</button>");
+      expect(refused(code, false), code).not.toContain("Use This computer");
+    }
+    expect(refused("UNREACHABLE", true)).not.toContain("Use This computer");
   });
 });
 
@@ -157,5 +280,85 @@ describe("the words of a refusal", () => {
     );
     for (const line of Object.values(PROOF_REFUSAL_LINES).map((words) => words(PORT)))
       expect(line).not.toMatch(/isn't the OpenClaw|isn't the copy|is OpenClaw|another gateway/);
+  });
+});
+
+describe("a reconnect refused after setup finished", () => {
+  const refusal = PROOF_REFUSAL_LINES["not-gateway"](PORT);
+  const connection = {
+    ...initialState.connection,
+    status: "error" as const,
+    gatewayUrl: `ws://127.0.0.1:${PORT}`,
+    error: {
+      code: "LOCAL_UNVERIFIED",
+      message: refusal,
+      hint: "Choose This computer to connect to it again, or use Advanced.",
+    },
+  };
+
+  it("F-602: with no bots kept, the first screen says why, with its ways on, not setup's old steps", () => {
+    const html = renderToStaticMarkup(
+      createElement(BridgeProvider, {
+        bridge: { info: local() } as ClawtrateBridge,
+        children: createElement(ConnectScreen, {
+          info: local(),
+          setup: { ...found(), phase: "done", step: 2 },
+          connection,
+          discovery: initialState.discovery,
+        }),
+      }),
+    );
+    expect(html).toContain(escape(refusal));
+    expect(html).toContain(">Try again</button>");
+    expect(html).toContain(">Use This computer</button>");
+    expect(html).not.toContain("Loading your bots");
+  });
+
+  it("F-602: with bots kept, Settings says the same, and offers This computer", () => {
+    expect(gatewayProblem(connection)).toEqual({
+      title: "Not connected",
+      message: `${refusal} Choose This computer to connect to it again, or use Advanced.`,
+    });
+    expect(thisComputerWayOn(connection, local())).toBe(true);
+    expect(
+      thisComputerWayOn(connection, {
+        ...local(),
+        setup: { look: true, pair: true, platform: "darwin" },
+      }),
+    ).toBe(false);
+  });
+
+  it("F-602: Use This computer stages its look over the saved gateway, whose form comes back once it is let go", () => {
+    const screen = (staged: boolean, setup: SetupState) =>
+      renderToStaticMarkup(
+        createElement(BridgeProvider, {
+          bridge: { info: local() } as ClawtrateBridge,
+          children: createElement(ConnectScreen, {
+            info: local(),
+            setup,
+            connection,
+            discovery: initialState.discovery,
+            staged,
+            onStage: () => {},
+          }),
+        }),
+      );
+    // Staged: the look, then what it found, each with Back, over the saved gateway.
+    const looking = screen(true, { ...initialSetupState, phase: "looking" });
+    expect(looking).toContain("Looking on this computer");
+    expect(looking).not.toContain(">Try again</button>");
+    const unmatched = screen(
+      true,
+      found({ outcome: "unverified", reason: "holder", access: null }),
+    );
+    expect(unmatched).toContain("OpenClaw settings found");
+    expect(unmatched).toContain("Back</button>");
+    const offered = screen(true, found());
+    expect(offered).toContain(LOCAL_FOUND_HEADING);
+    // Let go (Back): the saved gateway's form, with both of its ways on.
+    const back = screen(false, initialSetupState);
+    expect(back).toContain(escape(refusal));
+    expect(back).toContain(">Try again</button>");
+    expect(back).toContain(">Use This computer</button>");
   });
 });
