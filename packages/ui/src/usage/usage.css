@@ -268,3 +268,8 @@
   font-size: var(--text-sm);
   color: var(--text-muted);
 }
+
+/* The name and its "i" on one line: not the form's column of label and field. */
+.c-field-label > label {
+  display: inline;
+}
