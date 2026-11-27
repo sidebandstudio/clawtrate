@@ -195,37 +195,48 @@ describe("instance names", () => {
 
   it("the CLI validates the selector before any command and creates nothing (A4)", () => {
     const home = tempDir("clawtrate-home-");
-    const run = (args: string[], env: NodeJS.ProcessEnv = {}) =>
-      spawnSync(process.execPath, [CLI, ...args], {
-        env: { PATH: process.env.PATH, HOME: home, ...env },
-        encoding: "utf8",
-      });
-    for (const args of [
-      ["start", "--instance", "../../.openclaw"],
-      ["reset", "--instance", "default"],
-      ["status", "--instance", "DEV"],
-      ["prune", "--instance", "../bad"],
-      ["list", "--instance", "../bad"],
-    ]) {
-      const result = run(args);
-      expect(result.status, args.join(" ")).toBe(1);
-      expect(result.stderr).toMatch(/refusing instance name/);
+    try {
+      // Node takes its home from USERPROFILE on Windows and from HOME elsewhere.
+      const base = { PATH: process.env.PATH, HOME: home, USERPROFILE: home };
+      const run = (args: string[], env: NodeJS.ProcessEnv = {}) =>
+        spawnSync(process.execPath, [CLI, ...args], { env: { ...base, ...env }, encoding: "utf8" });
+      // Unless the CLI's own home is this folder, the empty-folder check below proves nothing.
+      // The child compares the two itself and only exits, so no path reaches the test output.
+      const probe = spawnSync(
+        process.execPath,
+        ["-e", "process.exit(require('node:os').homedir() === process.argv[1] ? 0 : 1)", home],
+        { env: base, stdio: "ignore" },
+      );
+      expect(probe.status, "the CLI would not run in its temporary home").toBe(0);
+      for (const args of [
+        ["start", "--instance", "../../.openclaw"],
+        ["reset", "--instance", "default"],
+        ["status", "--instance", "DEV"],
+        ["prune", "--instance", "../bad"],
+        ["list", "--instance", "../bad"],
+      ]) {
+        const result = run(args);
+        expect(result.status, args.join(" ")).toBe(1);
+        expect(result.stderr).toMatch(/refusing instance name/);
+      }
+      expect(run(["stop"], { [INSTANCE_ENV]: "a/b" }).status).toBe(1);
+      // A valid selector on the machine-wide commands is refused, not ignored.
+      for (const [args, env] of [
+        [["prune", "--instance", "alpha"], {}],
+        [["prune"], { [INSTANCE_ENV]: "beta" }],
+        [["list", "--instance", "alpha"], {}],
+      ] as const) {
+        const result = run([...args], env);
+        expect(result.status, args.join(" ")).toBe(1);
+        expect(result.stderr).toMatch(/covers every instance on this machine/);
+      }
+      const disagree = run(["prune", "--instance", "alpha"], { [INSTANCE_ENV]: "beta" });
+      expect(disagree.status).toBe(1);
+      expect(disagree.stderr).toMatch(/disagree/);
+      expect(readdirSync(home)).toEqual([]);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
     }
-    expect(run(["stop"], { [INSTANCE_ENV]: "a/b" }).status).toBe(1);
-    // A valid selector on the machine-wide commands is refused, not ignored.
-    for (const [args, env] of [
-      [["prune", "--instance", "alpha"], {}],
-      [["prune"], { [INSTANCE_ENV]: "beta" }],
-      [["list", "--instance", "alpha"], {}],
-    ] as const) {
-      const result = run([...args], env);
-      expect(result.status, args.join(" ")).toBe(1);
-      expect(result.stderr).toMatch(/covers every instance on this machine/);
-    }
-    const disagree = run(["prune", "--instance", "alpha"], { [INSTANCE_ENV]: "beta" });
-    expect(disagree.status).toBe(1);
-    expect(disagree.stderr).toMatch(/disagree/);
-    expect(readdirSync(home)).toEqual([]);
     // Starts the CLI as a process for each case: seconds alone, many more on a loaded machine.
   }, 120_000);
 });
