@@ -630,7 +630,7 @@ export const BOTS_CHECKS: BotsCheck[] = [
     },
   },
   {
-    name: "fix round D1: after reading a page, a hand-off or message naming the other bot in snake_case isn't made",
+    name: "fix round D1: after reading a page, a hand-off or message naming the other bot in snake_case, or by session key beside its own agentId, isn't made",
     covers: ["#hand-off-snake", "#message-snake"],
     async run(ctx, world) {
       const spawn = await turn(
@@ -649,7 +649,7 @@ export const BOTS_CHECKS: BotsCheck[] = [
       );
       const sends = sent.calls.filter((c) => c.name === "sessions_send");
       expect(
-        sends.length === 2 && sends.every((c) => c.text.includes(NOT_DONE)),
+        sends.length === 3 && sends.every((c) => c.text.includes(NOT_DONE)),
         `calls: ${show(sent.calls)}`,
       );
     },
@@ -747,7 +747,12 @@ export const BOTS_CHECKS: BotsCheck[] = [
       );
       try {
         const own = await routineRun(ctx, world, `#end-routine-mixed ${target}`);
-        await routineFinished(ctx, own);
+        const done = await routineFinished(ctx, own);
+        // The plugin refuses it itself, before the gateway's own rule for a routine's run.
+        expect(
+          String(done.summary ?? "").includes("names its target twice"),
+          `the routine's run: ${show(done)}`,
+        );
         expect(
           (await routines(ctx)).some((j) => j.id === own),
           "the routine's own job was removed",

@@ -927,7 +927,7 @@ export const SCENARIOS: Scenario[] = [
     phrase: "message your partner the other way",
     bots: "Marlow or Pip",
     summary:
-      "A message to the other bot, naming it with `agent_id`, then one naming its main conversation with `session_key` (snake case, which the tool also reads).",
+      "A message to the other bot, naming it with `agent_id`, then one naming its main conversation with `session_key` (snake case, which the tool also reads), then one naming the bot itself as `agentId` beside the other bot's `sessionKey` (the tool takes the session key).",
     steps: () => [
       {
         kind: "tool-from",
@@ -944,6 +944,16 @@ export const SCENARIOS: Scenario[] = [
           tool("sessions_send", {
             session_key: `agent:${partnerOf(ctx)}:main`,
             message: "#reply Snake two.",
+            timeoutSeconds: 30,
+          }),
+      },
+      {
+        kind: "tool-from",
+        build: (ctx) =>
+          tool("sessions_send", {
+            agentId: ctx.agentId,
+            sessionKey: `agent:${partnerOf(ctx)}:main`,
+            message: "#reply Snake three.",
             timeoutSeconds: 30,
           }),
       },
