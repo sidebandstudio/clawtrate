@@ -13,15 +13,10 @@ import { isTooLargeToSave, MAX_CHAT_FILE_BYTES } from "../src/chat-files.ts";
 import { ClawtrateClient, CONNECTION_CHANGED, FILE_FROM_ANOTHER_GATEWAY } from "../src/client.ts";
 import { parseBridgeCommand } from "../src/bridge.ts";
 import type { HttpFetch, HttpResponseLike } from "../src/host.ts";
-import {
-  cleanFileName,
-  mapHistory,
-  MAX_FILE_NAME_BYTES,
-  taskWithFilePreview,
-} from "../src/mapping.ts";
+import { cleanFileName, mapHistory, MAX_FILE_NAME_BYTES } from "../src/mapping.ts";
 import { READ_SCOPES } from "../src/scopes.ts";
 import { enforceState } from "../src/state-bounds.ts";
-import type { Task, Transcript } from "../src/types.ts";
+import type { Transcript } from "../src/types.ts";
 import { FAST, grantingGateway, KEY, URL_A } from "./client-harness.ts";
 import { deferred, memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
 
@@ -345,80 +340,6 @@ describe("F-115: the name shown and offered for saving", () => {
     const short = cleanFileName(`${"\u{1F4C4}".repeat(100)}.pdf`);
     expect(bytes(short)).toBeLessThanOrEqual(MAX_FILE_NAME_BYTES);
     expect(short.endsWith("….pdf")).toBe(true);
-  });
-});
-
-describe("F-115: the preview of a task whose last message is only a file", () => {
-  const task = (preview: string | null) => ({ key: KEY, preview }) as unknown as Task;
-  const transcript = (content: unknown[]) =>
-    ({ items: mapHistory(run(content, "Send the route")) }) as unknown as Transcript;
-  const only = transcript([attachment(NOTES, "route.csv", "text/csv", 1_204)]);
-
-  it("F-115: reads as the file's name in place of the person's message the gateway lists, or of none", () => {
-    expect(taskWithFilePreview(task("Send the route"), only).preview).toBe("route.csv");
-    expect(taskWithFilePreview(task(null), only).preview).toBe("route.csv");
-  });
-
-  it("F-115: a file-only message after the bot's text in the same run still names its file, in place of that text", () => {
-    const merged = {
-      items: mapHistory([
-        ...run([{ type: "text", text: "I'll prepare it." }], "Send the route"),
-        {
-          role: "assistant",
-          content: [attachment(NOTES, "route.csv", "text/csv", 1_204)],
-          model: "dev-1",
-          __openclaw: { runId: "probe-attach", id: "row-last", seq: 5 },
-        },
-      ]),
-    } as unknown as Transcript;
-    expect(merged.items.filter((item) => item.role === "assistant")).toHaveLength(1);
-    expect(taskWithFilePreview(task("I'll prepare it."), merged).preview).toBe("route.csv");
-    expect(taskWithFilePreview(task("Send the route"), merged).preview).toBe("Send the route");
-  });
-
-  it("F-115: the last file-only message's files are named even when one was shown earlier in the run", () => {
-    const row = (id: string, seq: number, file: unknown) => ({
-      role: "assistant",
-      content: [file],
-      model: "dev-1",
-      __openclaw: { runId: "probe-attach", id, seq },
-    });
-    const x = attachment(PDF, "x.pdf", "application/pdf", 861);
-    const y = attachment(NOTES, "y.txt", "text/plain", 55);
-    const repeated = {
-      items: mapHistory([
-        ...run([{ type: "text", text: "Here they come." }], "Send both"),
-        row("row-a", 5, x),
-        row("row-b", 6, y),
-        row("row-c", 7, x),
-      ]),
-    } as unknown as Transcript;
-    // The turn lists each file once; its last message carried x.pdf again.
-    expect(repeated.items.at(-1)!.files!.map((file) => file.name)).toEqual(["x.pdf", "y.txt"]);
-    expect(taskWithFilePreview(task("Here they come."), repeated).preview).toBe("x.pdf");
-  });
-
-  it("F-115: any other preview, a message with text, or no loaded history keeps the gateway's", () => {
-    expect(taskWithFilePreview(task("Something newer"), only).preview).toBe("Something newer");
-    expect(taskWithFilePreview(task("Send the route"), transcript(ATTACHED)).preview).toBe(
-      "Send the route",
-    );
-    expect(taskWithFilePreview(task("Send the route"), undefined).preview).toBe("Send the route");
-    // A text message after the file-only one in the same run: the preview is the bot's text.
-    const later = {
-      items: mapHistory([
-        ...run([attachment(NOTES, "route.csv", "text/csv", 1_204)], "Send the route"),
-        {
-          role: "assistant",
-          content: [{ type: "text", text: "Done, it's attached." }],
-          model: "dev-1",
-          __openclaw: { runId: "probe-attach", id: "row-later", seq: 5 },
-        },
-      ]),
-    } as unknown as Transcript;
-    expect(taskWithFilePreview(task("Done, it's attached."), later).preview).toBe(
-      "Done, it's attached.",
-    );
   });
 });
 

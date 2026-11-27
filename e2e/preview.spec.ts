@@ -1,11 +1,16 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import type { ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { cpSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { protocolMismatch } from "../packages/core/src/connect-errors.ts";
-import { instanceForm, openInstance, recordedStartOptions } from "../tools/dev-gateway/src/cli.ts";
+import {
+  instanceForm,
+  openInstance,
+  openOperator,
+  recordedStartOptions,
+} from "../tools/dev-gateway/src/cli.ts";
 import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
 import {
   devGateway,
@@ -578,7 +583,7 @@ test("a task stays read after it was opened", async ({ page }) => {
   await expect(backup).toHaveAttribute("data-unread", "false");
 });
 
-test("F-015 F-017 F-019 F-031 F-425: the rail lists the gateway's bots by recent activity, with the primary bot's star, labels, previews and times", async ({
+test("F-015 F-017 F-019 F-031 F-425: the rail lists the gateway's bots by recent activity, each its picture and name with the primary bot's star and labels, and no preview or time", async ({
   page,
 }) => {
   await openShell(page);
@@ -625,7 +630,6 @@ async function railOfEveryBot(page: Page): Promise<void> {
     "Sort bots: Recent activity",
   );
 
-  let previewed = 0;
   for (const agent of bots) {
     const row = botRow(page, name(agent));
     // F-015: the gateway's default bot carries the star, and only it.
@@ -636,23 +640,14 @@ async function railOfEveryBot(page: Page): Promise<void> {
     if (agent.identity?.theme)
       await expect(row.locator(".bot-label")).toHaveText(agent.identity.theme);
     else await expect(row.locator(".bot-label")).toHaveCount(0);
-    // F-017: a preview of the latest message and the time of the latest activity.
-    const newest = sessions
-      .filter((s) => s.agentId === agent.id && !s.archived)
-      .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))[0]!;
-    // The gateway previews only a task with a message. One another check just made has none
-    // yet, and the row shows that task's title instead.
-    if (newest.lastMessagePreview) {
-      const words = newest.lastMessagePreview
-        .replace(/[*_`#|]/g, "")
-        .split(/\s+/)
-        .slice(0, 3);
-      await expect(row.locator(".bot-preview")).toContainText(words.join(" "));
-      previewed += 1;
-    }
-    await expect(row.locator(".bot-time")).toHaveText(/^(\d{1,2}:\d{2}\s[AP]M|Yesterday)$/);
+    // F-017: the picture and the name, and no preview of the latest message or time.
+    await expect(row.locator(".presence")).toBeVisible();
+    await expect(row.locator(".bot-name")).toHaveText(name(agent));
+    await expect(row.locator("time")).toHaveCount(0);
+    await expect(row.locator(".bot-line")).toHaveText(
+      `${name(agent)}${agent.identity?.theme ?? ""}`,
+    );
   }
-  expect(previewed).toBeGreaterThan(0);
   expect(agents.defaultId).toBe("main");
   await expect(page.getByTestId("primary-star")).toHaveCount(1);
 
@@ -1239,7 +1234,7 @@ test("F-227 F-387 F-457: Settings shows the gateway, this device and its granted
   expect(listed.pending ?? []).toEqual([]);
 });
 
-test("F-017 F-020: a run started on the gateway shows its bot working, then the row shows the reply", async ({
+test("F-017 F-020: a run started on the gateway shows its bot working, then not once the reply has come", async ({
   page,
 }) => {
   // Every state the host sends the page, to see the run while it lasts.
@@ -1261,11 +1256,11 @@ test("F-017 F-020: a run started on the gateway shows its bot working, then the 
   const task = (state: (typeof seen)[number]) =>
     state.tasksByBot?.marlow?.find((t) => t.key === key);
   await expect.poll(() => seen.some((state) => task(state)?.status === "running")).toBe(true);
-  // The row says the bot worked while it did, and shows the reply once it finished.
+  // The row says the bot worked while it did, and stops once the reply has come.
+  await expect
+    .poll(() => seen.some((state) => task(state)?.preview?.includes("scripted development model")))
+    .toBe(true);
   await expect(botRow(page, "Marlow")).not.toHaveAccessibleName(/working/);
-  await expect(botRow(page, "Marlow").locator(".bot-preview")).toContainText(
-    "This is the scripted development model",
-  );
   // Its count is every task the gateway lists for Marlow now, this check's own included.
   await expect(botRow(page, "Marlow")).toHaveAccessibleName(
     new RegExp(`^Marlow, ${await gatewayTaskCount("marlow")} tasks`),
@@ -1950,6 +1945,90 @@ test("F-071 F-070: / lists the bot's own skills by name and the gateway's comman
   await composer(page).fill("");
 });
 
+test("F-071: / lists a skill the person saved to their own library, as theirs, in a task started after it; the chosen skill runs on the gateway by its command", async ({
+  page,
+}) => {
+  // The person, on a paired connection as the app is: the CLI's shared token has no profile, so
+  // the gateway keeps no library for it and gives a task it makes no library skills. The
+  // development gateway has one profile, which the app acts for too. Paired before the page
+  // opens, so the app never shows its pairing request.
+  const person = await openOperator(
+    openInstance(INSTANCE),
+    "Clawtrate skill library check",
+    ["operator.read", "operator.write"],
+    [],
+  );
+  await openShell(page);
+  // A task the person starts, as the app's New task does (`sessions.create`), opened in the page.
+  const personTask = async (label: string) => {
+    const { key, title } = newTaskName("otto", label);
+    await person.request("sessions.create", { key, agentId: "otto", label: title });
+    await openNewTask(page, "Otto", title);
+    return { key, title };
+  };
+  const slug = `tide-table-${randomBytes(3).toString("hex")}`;
+  let saved: { entry: { skillId: string; name: string; revision: string } } | null = null;
+  try {
+    // A task that started before the save: the gateway has not given it the skill.
+    const before = await personTask("Before the skill");
+    saved = (await person.request("skills.library.save", {
+      expectedRevision: null,
+      slug,
+      content: `---\nname: ${slug}\ndescription: Use when someone asks when the tide turns at the harbour.\n---\n\nRead the harbour's tide table and give the next high and low water.\n`,
+    })) as { entry: { skillId: string; name: string; revision: string } };
+    const command = saved.entry.name;
+    const listed = (row: Locator) => row.and(page.locator(`[data-name="${slug}"]`));
+    const rows = page.getByRole("listbox", { name: "Skills and commands" }).getByRole("option");
+    // The task made before the save is still the one open.
+    await expect(
+      page.getByRole("button", { name: `Otto, ${before.title}. Show details.` }),
+    ).toBeVisible();
+    await composer(page).click();
+    await page.keyboard.type("/");
+    await expect(rows.first()).toBeVisible({ timeout: 30_000 });
+    await expect(listed(rows)).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await composer(page).fill("");
+
+    const { key } = await personTask("With the skill");
+    await composer(page).click();
+    await page.keyboard.type("/");
+    await expect(listed(rows)).toHaveCount(1, { timeout: 30_000 });
+    await expect(listed(rows).locator(".composer-menu-tag")).toHaveText("Your skill");
+    await page.keyboard.type(slug);
+    await expect(rows).toHaveCount(1);
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("token-chip")).toHaveText(new RegExp(`Your skill\\s*${slug}`));
+    await page.keyboard.type("for Saturday");
+    await page.keyboard.press("Enter");
+    // The gateway ran the skill: the model was told to read it.
+    await expect
+      .poll(() => gatewayHasMessage(key, `/skill ${command} for Saturday`), {
+        timeout: 30_000,
+      })
+      .toBe(true);
+    await expect.poll(() => gatewayIdle(key), { timeout: 60_000 }).toBe(true);
+    const history = await gatewayCall<{ messages: Array<{ role: string; content?: unknown }> }>(
+      "chat.history",
+      { sessionKey: key, limit: 10 },
+    );
+    const reply = JSON.stringify(history.messages.filter((row) => row.role === "assistant"));
+    expect(reply).toContain("Use the following explicitly referenced skills");
+    expect(reply).toContain(command);
+  } finally {
+    try {
+      if (saved)
+        await person.request("skills.library.mutate", {
+          skillId: saved.entry.skillId,
+          expectedRevision: saved.entry.revision,
+          action: "remove",
+        });
+    } finally {
+      await person.close();
+    }
+  }
+});
+
 test("F-100: with the Turn time limit set to 1 minute, a longer turn is stopped through the gateway, and once it confirms the card names the limit and who stopped it", async ({
   page,
 }) => {
@@ -2015,7 +2094,7 @@ test("F-099: a run stuck on a tool call that never returns reaches stopped withi
   await expect.poll(() => gatewayIdle(key), { timeout: 30_000 }).toBe(true);
 });
 
-test("F-296 F-298: Stop also stops the exact run of the bot this run messaged, and the note names it", async ({
+test("F-296 F-298: Stop also stops the exact run of the bot this run messaged, and the turn the gateway then starts by itself, and the notes name them", async ({
   page,
 }) => {
   await openShell(page);
@@ -2069,6 +2148,24 @@ test("F-296 F-298: Stop also stops the exact run of the bot this run messaged, a
     { runId: peer.runId, timeoutMs: 10_000 },
   );
   expect(ended).toMatchObject({ runId: peer.runId, stopReason: "rpc" });
+  // Marlow's run ended without a reply, so the gateway starts a turn of Pip's by itself, sent as
+  // Marlow's: the note that the message failed, which a bot may retry (#645). The scripted bot
+  // works on it for twenty seconds; Clawtrate stops it at once, by its id, and both notes say so.
+  const followUp = page
+    .getByTestId("stop-note")
+    .filter({ hasText: "The gateway started this turn on its own after your Stop" });
+  await expect(followUp).toHaveCount(1, { timeout: 30_000 });
+  await expect(note.getByTestId("stopped-with")).toContainText(
+    "Then stopped: the turn the gateway started here on its own once Marlow's run was stopped.",
+  );
+  const followUpRun = await followUp.getAttribute("data-run");
+  expect(followUpRun).not.toBe(runId);
+  expect(
+    await gatewayCall<{ runId?: string; stopReason?: string }>("agent.wait", {
+      runId: followUpRun,
+      timeoutMs: 10_000,
+    }),
+  ).toMatchObject({ runId: followUpRun, stopReason: "rpc" });
   await expect.poll(() => gatewayIdle(peer.sessionKey), { timeout: 10_000 }).toBe(true);
   await expect.poll(() => gatewayIdle(key), { timeout: 30_000 }).toBe(true);
 });
