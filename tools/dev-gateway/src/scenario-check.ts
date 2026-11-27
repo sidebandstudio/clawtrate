@@ -1167,6 +1167,7 @@ const BARE_TITLES: Record<string, string> = {
   sessions_list: "Sessions",
   sessions_send: "Send to session",
   sessions_spawn: "Start subagent",
+  sessions_create: "New session",
   sessions_history: "Read session history",
   image_generate: IMAGE_CALL_TITLE,
   message: "Message",
@@ -3518,24 +3519,36 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
     run: async (h) => {
       const key = await h.session("pip", "create-task");
       const view = await h.run("plain", key, "#create-task");
-      same(view.terminal.state, "final", "the run's end");
+      const args = { label: CREATE_TASK.label, message: CREATE_TASK.message };
       if (!shape().extraAllowedTools.includes("sessions_create")) {
-        // 2026.10.6 has no such tool: nothing is made.
-        expect(
-          view.finalText().startsWith("The task did not start ("),
-          `the reply without the tool: ${view.finalText()}`,
-        );
+        // 2026.10.6 has no such tool: the call is refused as unknown and nothing is made.
+        view.expectCalls([{ ...refusedCall("sessions_create", args), title: "Sessions Create" }]);
+        view.expectEnd("final", "The task did not start (unknown)");
         return;
       }
-      // A task made is its key, with no status; `details` keep only the key.
-      const made = view.result("sessions_create");
-      same(made.isError, false, "the call's error flag");
-      const answer = JSON.parse(made.text) as JsonRecord;
-      const childKey = String(answer.sessionKey);
-      expect(/^agent:pip:dashboard:/.test(childKey), `the task's key: ${childKey}`);
-      same(answer.status, undefined, "the result's status");
-      same(answer.runStarted, true, "the first turn started");
-      same(made.details, { sessionKey: childKey }, "the result's details");
+      // A task made is its key, its id and its first run, with no status, in the text and the
+      // details alike.
+      let made: JsonRecord | undefined;
+      view.expectCalls([
+        {
+          name: "sessions_create",
+          args,
+          isError: false,
+          details: (d: JsonRecord | undefined, where: string) => {
+            made = d;
+            detailsLike({
+              sessionKey: matchesPattern(/^agent:pip:dashboard:/),
+              sessionId: matchesPattern(UUID),
+              runStarted: true,
+              runId: matchesPattern(UUID),
+            })(d, where);
+          },
+          content: (texts: string[], where: string) =>
+            textsLike([jsonText(where, () => made!)])(texts, where),
+          title: "Sessions Create",
+        },
+      ]);
+      const childKey = String(made!.sessionKey);
       view.expectEnd("final", `I started a task for it: ${CREATE_TASK.label}.`);
       // Listed as a task started from this conversation, by the same fields as sessions_spawn's.
       const row = await listedRow(h, childKey);

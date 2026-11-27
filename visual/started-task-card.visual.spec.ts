@@ -1,8 +1,9 @@
 // Each task a bot starts, as a card where it was asked (docs/parity.md F-587). Otto's open task
 // becomes the conversation where Otto started four tasks with the gateway's sessions_spawn: one
 // working, one waiting for the person, one done that Otto reported back on, and one the gateway
-// refused because its label was in use. The rows are the shapes OpenClaw 2026.10.6 stores; the
-// tasks are listed under Otto as started from here, as the host's next snapshot would bring them.
+// refused because its label was in use; and, on its own, one start refused for its model (#799).
+// The rows are the shapes OpenClaw 2026.10.6 stores; the tasks are listed under Otto as started
+// from here, as the host's next snapshot would bring them.
 // Every name and text is invented.
 import { test, type Page } from "@playwright/test";
 import {
@@ -132,16 +133,61 @@ function startedTasks(statuses: string[]): Task[] {
 
 type Fixture = { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
 
-/** Otto's open task as the conversation the four starts were asked in. */
-async function scene(page: Page, statuses: string[] = []) {
-  const rows = history();
+/**
+ * One start the gateway refused because its model list doesn't allow the model the task would run
+ * on (#799), as both OpenClaw versions word it when the call names no model.
+ */
+function refusedForModel() {
+  return [
+    row("user", "ask", 0, {
+      content: "Put the log rotation in a task of its own.",
+      __openclaw: { idempotencyKey: `${RUN}:user` },
+    }),
+    row("assistant", "a-0", 1_000, {
+      content: [
+        {
+          type: "toolCall",
+          id: "call-0",
+          name: "sessions_spawn",
+          arguments: { task: STARTS[1].task, label: STARTS[1].label, visible: true },
+        },
+      ],
+      __openclaw: { runId: RUN },
+    }),
+    row("toolResult", "r-0", 1_050, {
+      toolCallId: "call-0",
+      toolName: "sessions_spawn",
+      isError: true,
+      content: [
+        {
+          type: "text",
+          text: JSON.stringify(
+            { status: "error", tool: "sessions_spawn", error: "model not allowed: openai/gpt-5.5" },
+            null,
+            2,
+          ),
+        },
+      ],
+      __openclaw: { runId: RUN },
+    }),
+    row("assistant", "said", 1_500, {
+      content: [{ type: "text", text: "The gateway wouldn't start that task." }],
+      __openclaw: { runId: RUN },
+    }),
+  ];
+}
+
+/** Otto's open task as the conversation the four starts (or `only` those rows) were asked in. */
+async function scene(page: Page, statuses: string[] = [], only?: unknown[]) {
+  const rows = only ?? history();
   const items = mapHistory(rows);
   const runs = runsFromHistory(rows, null, {
     sessionKey: HERE,
     now: NOW.getTime(),
     raw: new RawTable(),
   });
-  const tasks = startedTasks(statuses);
+  // The one refused start lists no task.
+  const tasks = only ? [] : startedTasks(statuses);
   await page.evaluate(
     ({ items, runs, tasks, key }) => {
       const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
@@ -200,6 +246,25 @@ for (const size of [SIZES[0]!, SIZES.at(-1)!]) {
   }
 }
 
+for (const size of [SIZES[0]!, SIZES.at(-1)!]) {
+  for (const theme of THEMES) {
+    test.describe(`a start refused for its model ${size.name} ${theme}`, () => {
+      test.use(contextFor(size, theme));
+      test(`#799: Couldn't start for its model matches its baseline, ${theme}, ${size.name}`, async ({
+        page,
+      }) => {
+        await open(page, theme);
+        await scene(page, [], refusedForModel());
+        const cards = page.getByTestId("started-task-card");
+        await expect(cards).toHaveCount(1);
+        await expect(cards.locator(".state")).toHaveText(["Couldn't start"]);
+        await settle(page);
+        await expect(page).toHaveScreenshot(`started-task-model-refused-${theme}-${size.name}.png`);
+      });
+    });
+  }
+}
+
 test.describe("a started task's card", () => {
   test.use(contextFor(SIZES[0]!));
 
@@ -226,6 +291,20 @@ test.describe("a started task's card", () => {
     await expect(refused.getByTestId("started-task-reason")).toHaveText(
       "label already in use: Check the backup drive",
     );
+    await expect(refused.getByRole("button", { name: /^Open/ })).toHaveCount(0);
+  });
+
+  test("#799: a start refused for its model says which model in plain words, not the gateway's", async ({
+    page,
+  }) => {
+    await open(page);
+    await scene(page, [], refusedForModel());
+    const refused = page.getByRole("group", {
+      name: "Couldn't start a task: Rotate the media logs",
+    });
+    await expect(refused).toContainText("This gateway doesn't allow tasks on OpenAI's gpt-5.5.");
+    await expect(refused).not.toContainText("model not allowed");
+    await expect(refused.getByTestId("started-task-reason")).toHaveCount(0);
     await expect(refused.getByRole("button", { name: /^Open/ })).toHaveCount(0);
   });
 

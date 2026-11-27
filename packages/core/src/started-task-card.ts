@@ -185,7 +185,8 @@ function jsonObject(text: unknown): Record<string, unknown> | null {
 /**
  * A `sessions_create` result read as a start's. A refusal is the gateway's `{status, tool, error}`,
  * as `sessions_spawn`'s; a task it made is `{sessionKey, sessionId, runStarted, runId}`, with no
- * status, whose `details` keep only `sessionKey` (OpenClaw 2026.11.10): it reads as
+ * status, whose `details` carry the same in the run's events and only `sessionKey` in history
+ * (its display projection; OpenClaw 2026.11.10): it reads as
  * `{status: "accepted", childSessionKey}` with the rest of what the text says.
  */
 function createdOf(step: Step, raw: StepRaw | null): Record<string, unknown> | null {

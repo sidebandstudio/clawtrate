@@ -743,8 +743,9 @@ describe("a start refused for its model says so in plain words (#799)", () => {
 
 // OpenClaw 2026.11.10's `sessions_create`, from the rows a development gateway of that version
 // keeps: the call's result is compact JSON as the row's only text, and on a task made its
-// `details` keep only `sessionKey`; the task's row says `createdVia: "spawn"` and the conversation
-// it came from in `spawnedBy`, as for `sessions_spawn`.
+// `details` keep only `sessionKey` in history (the run's events carry all four); the task's row
+// says `createdVia: "spawn"` and the conversation it came from in `spawnedBy`, as for
+// `sessions_spawn`.
 describe("a task a bot makes with sessions_create shows as the same card (2026.11.10)", () => {
   const CREATE = "sessions_create";
   const ASK = { label: LABEL, message: BRIEF };

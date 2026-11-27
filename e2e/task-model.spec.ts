@@ -36,34 +36,96 @@ async function approve(): Promise<void> {
     .toMatch(/^Approved /m);
 }
 
-/** A merge patch, after which the gateway runs with it (as account-checks.ts waits for one). */
-async function patchConfig(patch: Json): Promise<void> {
-  type Revision = { hash: string; configRevisionHash?: string; appliedConfigHash?: string };
-  const before = await admin.request<Revision>("config.get", {});
-  await admin.request("config.patch", { raw: JSON.stringify(patch), baseHash: before.hash });
-  await expect
-    .poll(
-      async () => {
-        const now = await admin.request<Revision>("config.get", {});
-        return (
-          now.configRevisionHash !== before.configRevisionHash &&
-          now.appliedConfigHash === now.configRevisionHash
-        );
-      },
-      { timeout: 20_000 },
-    )
-    .toBe(true);
+/** Whether `config` holds every value `patch` sets, arrays whole. */
+function holds(config: unknown, patch: unknown): boolean {
+  if (patch === null || typeof patch !== "object" || Array.isArray(patch))
+    return JSON.stringify(config) === JSON.stringify(patch);
+  const record = (config ?? {}) as Json;
+  return Object.entries(patch as Json).every(([key, value]) => holds(record[key], value));
 }
 
-/** The bot's own model list, replaced whole. */
+/**
+ * A merge patch, once the gateway runs with it. Read back by its content: on a machine under
+ * load the gateway's process can be frozen for a minute (its log: "host timing gap detected"),
+ * and a patch it took may answer too late. Then it is read again, and sent again if it isn't in.
+ */
+async function patchConfig(patch: Json, replacePaths: string[] = []): Promise<void> {
+  type Revision = {
+    hash: string;
+    config?: Json;
+    configRevisionHash?: string;
+    appliedConfigHash?: string;
+  };
+  const applied = async () => {
+    const now = await admin.request<Revision>("config.get", {});
+    return holds(now.config, patch) && now.appliedConfigHash === now.configRevisionHash;
+  };
+  for (let attempt = 1; ; attempt += 1) {
+    const before = await admin.request<Revision>("config.get", {});
+    if (holds(before.config, patch) && before.appliedConfigHash === before.configRevisionHash)
+      return;
+    try {
+      await admin.request("config.patch", {
+        raw: JSON.stringify(patch),
+        baseHash: before.hash,
+        ...(replacePaths.length > 0 ? { replacePaths } : {}),
+      });
+      await expect.poll(applied, { timeout: 20_000 }).toBe(true);
+      return;
+    } catch (error) {
+      if (attempt === 3) throw error;
+    }
+  }
+}
+
+/** The bot's own model list, replaced whole (a shorter one needs `replacePaths`). */
 const allow = (models: string[]) =>
-  patchConfig({ agents: { entries: { [BOT]: { modelPolicy: { allow: models } } } } });
+  patchConfig({ agents: { entries: { [BOT]: { modelPolicy: { allow: models } } } } }, [
+    `agents.entries.${BOT}.modelPolicy.allow`,
+  ]);
 
 const botRow = () => page.getByTestId("bot-list").getByRole("button", { name: /^Linnet\b/ });
+
+/** One bridge command, over the host's own bridge socket, as another viewer of the page sends it. */
+async function hostCommand(command: Json): Promise<void> {
+  await page.evaluate(
+    (command) =>
+      new Promise<void>((resolve, reject) => {
+        const socket = new WebSocket(`ws://${location.host}/bridge`);
+        socket.onmessage = (event) => {
+          const message = JSON.parse(String(event.data)) as { type: string; id?: string };
+          if (message.type === "hello")
+            socket.send(JSON.stringify({ type: "command", id: "do", command }));
+          else if (message.id === "do") {
+            socket.close();
+            resolve();
+          }
+        };
+        socket.onerror = () => reject(new Error("bridge socket error"));
+      }),
+    command,
+  );
+}
+
+/**
+ * The page connected. A gateway whose process the loaded machine froze for a while can drop the
+ * host's connection, and this development host then waits for a Retry (as after a restart in
+ * accounts.spec.ts): one is sent if the page is still reconnecting after 30 seconds.
+ */
+async function connected(): Promise<void> {
+  const plus = page.locator(".rail-top").getByRole("button", { name: "New", exact: true });
+  try {
+    await expect(plus).toBeVisible({ timeout: 30_000 });
+  } catch {
+    await hostCommand({ type: "retry" });
+    await expect(plus).toBeVisible({ timeout: 60_000 });
+  }
+}
 
 /** A new task for the bot, open, with the cursor in its composer. */
 async function newTask(): Promise<Locator> {
   await botRow().click();
+  await connected();
   await page.locator(".rail-top").getByRole("button", { name: "New", exact: true }).click();
   await page.getByRole("menuitem", { name: "New task for Linnet" }).click();
   const composer = page.getByTestId("composer-input");
