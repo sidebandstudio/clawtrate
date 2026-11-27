@@ -218,10 +218,20 @@ export function botDeleteCommands(params: BotDeleteParams) {
         throw new Error("Lost the preview host");
       }
       if (params.result === "noanswer")
-        return { kind: "unconfirmed", message: "request timed out", deleteFiles, listed: true };
+        return {
+          kind: "unconfirmed",
+          message: "it didn't answer in time",
+          deleteFiles,
+          listed: true,
+        };
       remove(command.botId);
       if (params.result === "unconfirmed") {
-        return { kind: "unconfirmed", message: "request timed out", deleteFiles, listed: false };
+        return {
+          kind: "unconfirmed",
+          message: "it didn't answer in time",
+          deleteFiles,
+          listed: false,
+        };
       }
       const base = {
         kind: "answered" as const,
