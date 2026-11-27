@@ -293,33 +293,75 @@ async function fieldTexts(): Promise<Map<string, string>> {
   return found;
 }
 
-/** Tap the glyphs on a link's first line, inside the scroll view's visible area. */
-export async function transcriptLinkTap(pattern: RegExp): Promise<Step> {
-  const stdout = await hierarchy();
-  const tree = JSON.parse(stdout.slice(stdout.indexOf("{"))) as Node;
+/**
+ * Tap, or touch and hold, a link in the transcript: at its middle, a little into its glyphs from
+ * where its lines start. A scroll to it counts the screen under the composer as showing it, so a
+ * link that isn't wholly in the scroll view is first dragged into it, slowly so the view doesn't
+ * coast past. A link still not wholly in the view fails the step.
+ */
+export async function transcriptLinkTap(
+  pattern: RegExp,
+  press: "tap" | "hold" = "tap",
+): Promise<Step> {
   type Bounds = { x1: number; y1: number; x2: number; y2: number };
-  const found: { viewport?: Bounds; link?: Bounds } = {};
-  const walk = (node: Node) => {
-    if (found.viewport && found.link) return;
-    const a = node.attributes ?? {};
-    const m = BOUNDS.exec(a.bounds ?? "");
-    if (m) {
-      const bounds = { x1: +m[1]!, y1: +m[2]!, x2: +m[3]!, y2: +m[4]! };
-      if (a["resource-id"] === "transcript") found.viewport = bounds;
-      if (!found.link && (pattern.test(a.accessibilityText ?? "") || pattern.test(a.text ?? "")))
-        found.link = bounds;
-    }
-    for (const child of node.children ?? []) walk(child);
+  const locate = async () => {
+    const stdout = await hierarchy();
+    const tree = JSON.parse(stdout.slice(stdout.indexOf("{"))) as Node;
+    const found: { viewport?: Bounds; link?: Bounds } = {};
+    const walk = (node: Node) => {
+      if (found.viewport && found.link) return;
+      const a = node.attributes ?? {};
+      const m = BOUNDS.exec(a.bounds ?? "");
+      if (m) {
+        const bounds = { x1: +m[1]!, y1: +m[2]!, x2: +m[3]!, y2: +m[4]! };
+        if (a["resource-id"] === "transcript") found.viewport = bounds;
+        if (!found.link && (pattern.test(a.accessibilityText ?? "") || pattern.test(a.text ?? "")))
+          found.link = bounds;
+      }
+      for (const child of node.children ?? []) walk(child);
+    };
+    walk(tree);
+    const { viewport, link } = found;
+    if (!viewport || !link) throw new Error(`Could not locate ${pattern} in the transcript`);
+    return { viewport, link };
   };
-  walk(tree);
-  const { viewport, link } = found;
-  if (!viewport || !link) throw new Error(`Could not locate ${pattern} in the transcript`);
-  const x = link.x1 + 24;
-  const y = link.y1 + 10;
-  if (x < viewport.x1 || x >= viewport.x2 || y < viewport.y1 || y >= viewport.y2) {
-    throw new Error(`Link ${pattern}: tap (${x}, ${y}) is outside ${JSON.stringify(viewport)}`);
+  let { viewport, link } = await locate();
+  for (let drag = 1; drag <= 3; drag += 1) {
+    const below = link.y2 - viewport.y2;
+    const above = viewport.y1 - link.y1;
+    if (below <= 0 && above <= 0) break;
+    // How far the content moves up (or down, when negative), with room for the touch to
+    // travel before the view starts to scroll, and never more than half the view.
+    const half = Math.floor((viewport.y2 - viewport.y1) / 2);
+    const by = Math.max(-half, Math.min(half, below > 0 ? below + 32 : -(above + 32)));
+    // The drag runs near the view's right edge, beside the bot's bubbles and their links.
+    const x = viewport.x2 - 8;
+    const middle = Math.floor((viewport.y1 + viewport.y2) / 2);
+    await steps(`link-into-view-${drag}`, [
+      {
+        swipe: {
+          start: `${x},${middle + Math.ceil(by / 2)}`,
+          end: `${x},${middle - Math.floor(by / 2)}`,
+          duration: 1500,
+        },
+      },
+    ]);
+    ({ viewport, link } = await locate());
   }
-  return { tapOn: { point: `${x},${y}` } };
+  const x = link.x1 + Math.min(24, Math.floor((link.x2 - link.x1) / 2));
+  const y = Math.floor((link.y1 + link.y2) / 2);
+  if (
+    link.y1 < viewport.y1 ||
+    link.y2 > viewport.y2 ||
+    link.x1 < viewport.x1 ||
+    link.x2 > viewport.x2
+  ) {
+    throw new Error(
+      `Link ${pattern} isn't wholly in the transcript: the link is at ${JSON.stringify(link)}, the transcript's view at ${JSON.stringify(viewport)}`,
+    );
+  }
+  const point = { point: `${x},${y}` };
+  return press === "hold" ? { longPressOn: point } : { tapOn: point };
 }
 
 /**

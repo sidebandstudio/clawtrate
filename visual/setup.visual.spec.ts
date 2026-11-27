@@ -1,7 +1,8 @@
-// F-491 F-492 F-515 F-516: every state of setting up on this computer
-// (docs/design/setup.md §3 to §7) matches its approved baseline, in light and
-// dark, at 1440 px and the phone; the first screen, a found gateway and
-// Connect's steps at 1100 and 800 px too.
+// F-491 F-492 F-515 F-516 F-602: every state of setting up on this computer
+// (docs/design/setup.md §3 to §7, setup-effortless.md §3) matches its approved
+// baseline, in light and dark, at 1440 px and the phone; the first screen, a
+// found gateway, Connect's steps and the first screen of a person's Mac app
+// with its gateway found and matched to its profile at 1100 and 800 px too.
 import { test } from "@playwright/test";
 import { contextFor, expect, openFixture, settle, SIZES, THEMES } from "./fixture.ts";
 
@@ -35,8 +36,15 @@ const STATES = [
   "cant-run",
   "endpoint",
   "bots",
+  // A person's Mac app, with local connect: the first screen with its gateway matched, a gateway
+  // it couldn't match, a profile with TLS on, and a Connect whose socket didn't pass the check.
+  "local-first",
+  "local-waiting",
+  "local-unverified",
+  "local-tls",
+  "local-failed",
 ];
-const EVERY_WIDTH = new Set(["first", "found", "connecting"]);
+const EVERY_WIDTH = new Set(["first", "found", "connecting", "local-first"]);
 
 for (const size of SIZES) {
   for (const theme of THEMES) {
@@ -47,7 +55,8 @@ for (const size of SIZES) {
           ? STATES
           : STATES.filter((state) => EVERY_WIDTH.has(state));
       for (const state of shown) {
-        test(`F-491 F-492 F-515 F-516: setup ${state}`, async ({ page }) => {
+        const rows = state.startsWith("local-") ? "F-602" : "F-491 F-492 F-515 F-516";
+        test(`${rows}: setup ${state}`, async ({ page }) => {
           await openFixture(page, `setup=${state}`, theme);
           await expect(page.getByTestId("setup")).toBeVisible();
           await settle(page);
