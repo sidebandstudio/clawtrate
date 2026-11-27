@@ -31,6 +31,7 @@ import { Updates } from "./Updates.tsx";
 import { BotGuidesPane } from "./BotGuides.tsx";
 import { useBridge, useClawtrateState, useCommand } from "./bridge.tsx";
 import { useAccountsSection } from "./bots/AccountsSection.tsx";
+import { useModelsSection } from "./bots/ModelsSection.tsx";
 import { useCheckInsSection } from "./check-ins/CheckIns.tsx";
 import { useUsageSection } from "./usage/UsageSection.tsx";
 import { useMachinesSection } from "./machines/Machines.tsx";
@@ -135,6 +136,7 @@ export function gatewayProblem(
 export type SettingsSection =
   | "gateway"
   | "accounts"
+  | "models"
   | "conversation"
   | "usage"
   | "machines"
@@ -146,6 +148,7 @@ type Section = SettingsSection;
 export const SETTINGS_SECTIONS: Array<[Section, string, string]> = [
   ["gateway", "Gateway", "The gateway, its address and this device"],
   ["accounts", "Accounts", "Provider accounts the bots run on"],
+  ["models", "Models", "The default model, and what to try if it can't answer"],
   ["conversation", "Conversation", "How long a bot's turn may run, and how the bots talk"],
   ["usage", "Usage", "Tokens, cost and warning budgets"],
   ["machines", "Machines", "Where the bots run"],
@@ -999,6 +1002,7 @@ export function Settings({
     announce,
     toNav,
   });
+  const modelsSection = useModelsSection({ accounts, bots, connection, info, announce, toNav });
   const usageSection = useUsageSection({
     bots,
     connection,
@@ -1187,7 +1191,7 @@ export function Settings({
   let content: ReactNode;
   if (section === "accounts" && accountsSection.connect) content = accountsSection.connect;
   else {
-    const view =
+    const shown =
       section === "accounts" && accountsSection.view
         ? accountsSection.view
         : section === "checkins"
@@ -1228,6 +1232,7 @@ export function Settings({
                         body: <AdvancedPane announce={announce} />,
                       }
                     : { title: "Gateway", back: toNav, body: gatewayPane, foot: null };
+    const view = section === "models" ? modelsSection : shown;
     content = (
       <>
         <header className="b-section-head">

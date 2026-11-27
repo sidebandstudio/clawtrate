@@ -1766,3 +1766,49 @@ button.b-open > .icon {
 .b-update-section {
   margin-top: var(--space-5);
 }
+
+/* Settings › Models (gateway-settings.md section 4.1). */
+.b-models .b-field select {
+  max-width: 420px;
+}
+
+.b-models-backups,
+.b-models-bots {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.b-models-backups li,
+.b-models-bots li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 12px;
+  min-height: 32px;
+}
+
+.b-models-bot {
+  font-weight: var(--weight-medium);
+}
+
+.b-models-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 12px 0;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  background: var(--bg-inset);
+  font-size: var(--text-sm);
+}
+
+.b-models-line > span {
+  flex: 1 1 240px;
+  min-width: 0;
+}

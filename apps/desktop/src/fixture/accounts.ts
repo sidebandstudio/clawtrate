@@ -57,6 +57,7 @@ import {
   INTERACTIVE_SCOPES,
   gatewayStamp,
   initialAccountsState,
+  type DefaultsValues,
   sameStamp,
   type AccountsState,
   type BotBinding,
@@ -339,6 +340,13 @@ export function fixtureAccounts(now: number, params: AccountParams): AccountsSta
     readAt: now - READ_AGO,
     labels: params.access === "admin",
     defaultModel: params.defacct ? "openai/gpt-5.5@openai:work" : "openai/gpt-5.5",
+    // Settings › Models (gateway-settings.md section 4.1): the same default, with one backup.
+    defaults: {
+      primary: params.defacct ? "openai/gpt-5.5@openai:work" : "openai/gpt-5.5",
+      fallbacks: ["openai/gpt-5.5-mini@openai:home"],
+      thinking: null,
+      reloadOff: false,
+    },
     modelAllowlist: params.allowlist
       ? { whole: [], wildcards: false, prefixWildcards: false }
       : null,
@@ -1653,6 +1661,46 @@ export function accountCommand(
         order(null);
         outcome("cleared");
       }
+      return Promise.resolve();
+    }
+    case "setModelDefaults": {
+      // Applied and read back as written: the fixture's gateway is the only writer.
+      const before: DefaultsValues = {};
+      for (const key of Object.keys(command.values) as Array<keyof DefaultsValues>)
+        before[key] = (accounts().defaults?.[key] ?? null) as never;
+      put((a) => ({
+        ...a,
+        defaultModel: command.values.primary ?? a.defaultModel,
+        defaults: a.defaults ? { ...a.defaults, ...command.values } : a.defaults,
+        defaultsChange: {
+          status: "saved",
+          before,
+          after: command.values,
+          current: null,
+          restart: false,
+          putBack: false,
+          error: null,
+          at: Date.now(),
+          gatewayId: null,
+        },
+      }));
+      return Promise.resolve();
+    }
+    case "putBackModelDefaults": {
+      const last = accounts().defaultsChange;
+      if (!last || last.status !== "saved") return Promise.resolve();
+      put((a) => ({
+        ...a,
+        defaultModel: last.before.primary ?? a.defaultModel,
+        defaults: a.defaults ? { ...a.defaults, ...last.before } : a.defaults,
+        defaultsChange: {
+          ...last,
+          before: last.after,
+          after: last.before,
+          putBack: true,
+          at: Date.now(),
+        },
+      }));
       return Promise.resolve();
     }
     case "removeBotFallbacks":
