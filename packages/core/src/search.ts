@@ -7,7 +7,13 @@
 
 import { cutText } from "./bounds.ts";
 import { establishFolder } from "./files.ts";
-import { asRecord, botIdFromSessionKey, type RawRecord } from "./mapping.ts";
+import {
+  asRecord,
+  botIdFromSessionKey,
+  isPlaceholderName,
+  mapSessionRow,
+  type RawRecord,
+} from "./mapping.ts";
 import { MAX_ID_CHARS } from "./state-bounds.ts";
 import { MAX_TASK_LABEL_CHARS } from "./task-actions.ts";
 
@@ -165,7 +171,11 @@ export function readMessageSearch(reply: RawRecord | null): MessageSearch {
   for (const raw of Array.isArray(reply?.sessions) ? reply.sessions : []) {
     const row = asRecord(raw);
     const key = exactId(row?.key);
-    const title = str(row?.label) ?? str(row?.displayName);
+    // The gateway's placeholder name is no title: the task's own fallback stands for it (#741).
+    const title =
+      row && key && isPlaceholderName(row, key)
+        ? (mapSessionRow({ ...row, archived: false })?.title ?? null)
+        : (str(row?.label) ?? str(row?.displayName));
     if (key && title && hits.some((hit) => hit.sessionKey === key))
       titles[key] = cutText(title, MAX_TASK_LABEL_CHARS);
   }

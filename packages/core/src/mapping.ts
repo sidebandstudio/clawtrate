@@ -189,6 +189,44 @@ function fallbackTitle(key: string): string {
 }
 
 /**
+ * The gateway's placeholder name for a task: one of its adjectives and one of its crustaceans
+ * (OpenClaw 2026.10.6 and 2026.11.10, `src/agents/session-slug.ts`, the same lists in both).
+ */
+const PLACEHOLDER_NAME =
+  /^(?:amber|briny|brisk|calm|clear|cool|crisp|dawn|delta|ember|faint|fast|fresh|gentle|glow|good|grand|keen|kind|lucky|marine|mellow|mild|neat|nimble|nova|oceanic|plaid|quick|quiet|rapid|salty|sharp|swift|tender|tidal|tidy|tide|vivid|warm|wild|young)-(?:barnacle|claw|crab|crayfish|krill|langoustine|lobster|prawn|shrimp|shell)$/u;
+
+/**
+ * Whether a row's `displayName` is the name the gateway gives a task when its model makes it no
+ * title (`createCrustaceanSlug`, written by `maybeGenerateSessionTitle` on both versions), not a
+ * name anyone chose. Nothing the gateway sends says so: the placeholder and a model's title go to
+ * the same field through the same code. So only where nothing else could have put it: a task the
+ * gateway titles itself (`dashboard:`, `ios-`, `node-` keys), with no `label` (a rename, a bot's
+ * name for it, a label given at creation), and a display name that is exactly one adjective and
+ * one crustacean from the gateway's own lists, as it always writes them there.
+ */
+export function isPlaceholderName(row: RawRecord, key: string): boolean {
+  if (str(row.label)) return false;
+  const rest = /^agent:[^:]+:(.*)$/u.exec(key)?.[1] ?? "";
+  if (!/^(?:dashboard:|ios-|node-)/u.test(rest)) return false;
+  return typeof row.displayName === "string" && PLACEHOLDER_NAME.test(row.displayName);
+}
+
+/**
+ * A task's title: its label, else the gateway's derived title or display name, else the key's.
+ * The gateway's placeholder counts as no title (its derived title is then the same name), and the
+ * title from the task's first message, where the client knows it, comes before the key's.
+ */
+function taskTitle(row: RawRecord, key: string, firstMessageTitle: string | null): string {
+  if (isPlaceholderName(row, key)) {
+    const derived = str(row.derivedTitle);
+    return (
+      (derived !== row.displayName ? derived : null) ?? firstMessageTitle ?? fallbackTitle(key)
+    );
+  }
+  return str(row.label) ?? str(row.derivedTitle) ?? str(row.displayName) ?? fallbackTitle(key);
+}
+
+/**
  * Whether a session belongs in the task list. Mirrors the gateway's own
  * `excludeCron` and `excludeSubagents` filters (2026.10.6), so rows that arrive
  * through `sessions.changed` follow the same rules as the initial snapshot.
@@ -216,8 +254,14 @@ export function rowBotOf(key: string, row: RawRecord): string | null {
   return str(row.agentId) ?? botIdFromSessionKey(key);
 }
 
-/** One session row to a task, or null for rows the sidebar should not show. */
-export function mapSessionRow(row: RawRecord): Task | null {
+/**
+ * One session row to a task, or null for rows the sidebar should not show. `firstMessageTitle`
+ * is the title the client made from the task's first message, when it knows it.
+ */
+export function mapSessionRow(
+  row: RawRecord,
+  firstMessageTitle: string | null = null,
+): Task | null {
   const key = sessionRowKey(row);
   if (!key || !isTaskSession(row)) return null;
   const botId = rowBotOf(key, row);
@@ -227,9 +271,7 @@ export function mapSessionRow(row: RawRecord): Task | null {
     key,
     botId,
     sessionId: str(row.sessionId),
-    title: channel
-      ? channelChatTitle(row, channel)
-      : (str(row.label) ?? str(row.derivedTitle) ?? str(row.displayName) ?? fallbackTitle(key)),
+    title: channel ? channelChatTitle(row, channel) : taskTitle(row, key, firstMessageTitle),
     preview: plainPreview(str(row.lastMessagePreview)),
     updatedAt: num(row.updatedAt) ?? num(row.lastActivityAt) ?? num(row.createdAt),
     status: taskStatus(row),
@@ -296,15 +338,21 @@ export function sessionRowsFromList(result: unknown): RawRecord[] {
  * Group tasks under their bot: pinned first, then newest first. Chats from an
  * external channel are left out unless `showChannelChats`, and sessions another
  * tool opened unless `showOtherToolSessions`, so nothing derived from the list
- * (a bot's preview, unread, recency, the badge) counts them.
+ * (a bot's preview, unread, recency, the badge) counts them. `firstMessageTitle` gives the
+ * title the client made from a task's first message, when it knows it.
  */
 export function groupTasks(
   rows: Iterable<RawRecord>,
-  options: { showChannelChats?: boolean; showOtherToolSessions?: boolean } = {},
+  options: {
+    showChannelChats?: boolean;
+    showOtherToolSessions?: boolean;
+    firstMessageTitle?: (key: string) => string | null;
+  } = {},
 ): Record<string, Task[]> {
   const grouped: Record<string, Task[]> = {};
   for (const row of rows) {
-    const task = mapSessionRow(row);
+    const key = sessionRowKey(row);
+    const task = mapSessionRow(row, key ? (options.firstMessageTitle?.(key) ?? null) : null);
     if (!task || (task.channel && options.showChannelChats !== true)) continue;
     if (task.otherTool && options.showOtherToolSessions !== true) continue;
     (grouped[task.botId] ??= []).push(task);

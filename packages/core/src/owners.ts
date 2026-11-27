@@ -41,6 +41,7 @@ import {
   MAX_APPROVAL_OUTCOMES,
   MAX_APPROVAL_READERS,
   MAX_DEFERRED_STOPS,
+  MAX_FIRST_MESSAGE_TITLES,
   MAX_OUTCOME_LOOKUPS,
   MAX_FILE_READS,
   MAX_PICTURE_READS,
@@ -91,6 +92,7 @@ import {
   MAX_RUN_LIST,
   MAX_RUN_TEXT_CHARS,
   MAX_STEPS_PER_TASK,
+  MAX_TITLE_CHARS,
   MAX_TRACKED_TASKS,
   MAX_UNROUTED,
   RUN,
@@ -311,6 +313,12 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
     row: "bookkeeping",
   },
   "sentSources.*": { max: MAX_SENT_SOURCES, each: 2 * MAX_INBOUND_REF_CHARS + N, row: null },
+  // The title each task's first message makes, by task key: shown in place of the gateway's placeholder.
+  firstMessageTitles: {
+    max: MAX_FIRST_MESSAGE_TITLES,
+    each: ID + 2 * MAX_TITLE_CHARS,
+    row: "bookkeeping",
+  },
   // The store's listeners: a host's windows and web viewers.
   "store.listeners": { max: MAX_STORE_LISTENERS, each: 0, row: null },
   // Settings reads a stop ends: connection commands run one at a time, each with one read.
