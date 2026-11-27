@@ -909,16 +909,23 @@ export function RunLineView({
   line,
   model,
   children,
+  notes,
 }: {
   runId: string;
   line: RunLine;
   model: string | null;
   /** Without commands shown, the run's action cards, its list (7.11). */
   children?: ReactNode;
+  /**
+   * The gateway's skill notes that follow the run (F-560): their words on the line, and, opened,
+   * their text and undo.
+   */
+  notes?: { words: string; body: ReactNode } | null;
 }) {
   const env = useActionEnv();
   const [open, setOpen] = useView<boolean>(env.taskKey, viewKeys.run(runId), false);
   const record = `${model ?? actionWords.RUN_LINE.modelNotReported} · ${actionWords.RUN_LINE.effort(env.effort)}`;
+  const named = notes ? `${line.text} · ${notes.words}` : line.text;
   return (
     <details
       className="run-line"
@@ -927,7 +934,7 @@ export function RunLineView({
       open={open}
       onToggle={(event) => setOpen(event.currentTarget.open)}
     >
-      <summary className="event-line" title={record} aria-label={line.text}>
+      <summary className="event-line" title={record} aria-label={named}>
         <span className="run-label">{line.label}</span>
         <span aria-hidden="true">·</span>
         <span className="run-count">
@@ -951,9 +958,16 @@ export function RunLineView({
             <span className="run-problem">{problem}</span>
           </span>
         ))}
+        {notes && (
+          <>
+            <span aria-hidden="true">·</span>
+            <span className="run-skill">{notes.words}</span>
+          </>
+        )}
         <ChevronIcon className="chevron" />
       </summary>
       {children && <div className="run-actions">{children}</div>}
+      {notes?.body}
       <p className="run-record">
         <span>{record}</span>
         <span aria-hidden="true">·</span>
