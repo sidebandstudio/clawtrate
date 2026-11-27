@@ -965,11 +965,7 @@ export function createFixtureBridge(
     () => gatewayStamp(state.connection),
     now,
   );
-  const guides = guidesCommands(
-    options.guides ?? null,
-    () => state.connection.canAdmin,
-    () => gatewayStamp(state.connection),
-  );
+  const guides = guidesCommands(options.guides ?? null, () => gatewayStamp(state.connection));
   const routineCommand = routineCommands(now, routineParams);
   let latestAccessRequest = 0;
   async function apply(command: BridgeCommand, view = PAGE_VIEW): Promise<unknown> {
@@ -991,9 +987,9 @@ export function createFixtureBridge(
       sent.push(command);
       return voice(command);
     }
-    if (command.type === "readBotGuides" || command.type === "changeBotGuides") {
+    if (command.type === "readBotGuides") {
       sent.push(command);
-      return guides(command);
+      return guides();
     }
     if (
       command.type === "listMemory" ||
