@@ -172,9 +172,16 @@ async function runOnGateway(botId: string, key: string, message: string): Promis
   ]);
 }
 
-/** A bot's task rows, all of them: past six the rail lists the newest, the rest behind Show all. */
+/**
+ * A bot's task rows, all of them: past six the rail lists the newest, the rest behind Show all.
+ * The bot is unfolded without being opened, so the conversation on screen stays.
+ */
 async function allTasks(page: Page, bot: string) {
-  await openBot(page, bot);
+  const row = botRow(page, bot);
+  if ((await row.getAttribute("aria-expanded")) === "false") {
+    await row.focus();
+    await page.keyboard.press("ArrowRight");
+  }
   const list = page.getByRole("list", { name: `${bot}'s tasks` });
   const showAll = list.getByRole("button", { name: /^Show all/ });
   if ((await showAll.count()) > 0) await showAll.click();
