@@ -5,7 +5,6 @@
 //   side   wide | narrow | rail     the sidebar's width (#792's three widths)
 //   bot    juniper | marlow | otto | pip   the open bot (default marlow)
 //   task   a task's id: that task is open; absent: the bot's main conversation
-//   view   started: Marlow's main conversation with the tasks it started
 //   menu   tasks: the header's Tasks menu open (only where the sidebar can't list them)
 //   pane   list | conversation      at phone width, which of the two is shown
 //
@@ -64,7 +63,6 @@
     side: ["wide", "narrow", "rail"].includes(p.get("side")) ? p.get("side") : "wide",
     bot: BOTS.some((b) => b.id === p.get("bot")) ? p.get("bot") : "marlow",
     task: p.get("task"),
-    view: p.get("view"),
     menu: p.get("menu") === "tasks",
     pane: p.get("pane") === "list" ? "list" : "conversation",
     // Bots whose tasks are unfolded without being open, and the open bot folded by hand.
@@ -137,10 +135,16 @@
   // ---- what a bot's row says --------------------------------------------------
   const urgent = (b) =>
     b.tasks.some((t) => t.state === "waiting") ? "waiting" : b.tasks.some((t) => t.state === "working") ? "working" : null;
+  // The rail only where the frame is wider than a phone: a phone's list is always full width.
+  const railed = () => state.side === "rail" && document.documentElement.dataset.width !== "phone";
   const isOpen = (b) =>
     b.tasks.length > 0 && (state.held.has(b.id) || (b.id === state.bot && !state.folded.has(b.id)));
-  // The row's dot: its main conversation unread, or a task that isn't shown under it.
-  const rowUnread = (b) => !isOpen(b) && b.tasks.some((t) => t.unread);
+  // Whether the sidebar shows the bot's task rows: unfolded, and not in the rail.
+  const shown = (b) => isOpen(b) && !railed();
+  // The row's dot: its main conversation unread, or an unread task whose row isn't shown (the
+  // task on screen aside).
+  const rowUnread = (b) =>
+    !shown(b) && b.tasks.some((t) => t.unread && !(b.id === state.bot && t.id === state.task));
   function botName(b) {
     const s = urgent(b);
     const n = b.tasks.length;
@@ -206,13 +210,13 @@
   function header() {
     const b = open();
     const t = openTask();
-    const railed = state.side === "rail" && document.documentElement.dataset.width !== "phone";
+    const rail = railed();
     const tasksButton =
-      railed && b.tasks.length
+      rail && b.tasks.length
         ? `<button type="button" class="bm-tasks-button" data-action="tasks" aria-haspopup="menu" aria-expanded="${state.menu}" aria-label="${esc(b.name)}'s tasks, ${b.tasks.length}">${ICON.list}${b.tasks.length}</button>`
         : "";
     const menu =
-      railed && state.menu
+      rail && state.menu
         ? `<ul class="bm-menu" role="menu" aria-label="${esc(b.name)}'s tasks">` +
           `<li role="none"><button type="button" class="bm-menu-item" role="menuitemradio" aria-checked="${!t}" data-bot="${b.id}">${esc(b.name)}</button></li>` +
           '<li class="bm-menu-rule" role="separator"></li>' +
@@ -270,7 +274,7 @@
           ? person("Compare the three trail apps we talked about: offline maps, price, and how they handle a dead battery.") +
             said("Looking at offline maps first. Two of the three keep maps on the phone; one needs a download per region.")
           : said("Here is where this task stands."));
-    } else if (b.id === "marlow" || state.view === "started") {
+    } else if (b.id === "marlow") {
       const [trail, club] = b.tasks;
       body =
         `<h1 class="bm-heading visually-hidden" tabindex="-1">${esc(b.name)}</h1>` +
@@ -302,7 +306,8 @@
   }
 
   function draw() {
-    root.dataset.side = state.side;
+    // At phone width the list is the whole screen, as at full width, whatever the side says.
+    root.dataset.side = railed() || state.side !== "rail" ? state.side : "wide";
     root.dataset.pane = state.pane;
     root.innerHTML = sidebar() + main();
   }
@@ -373,7 +378,8 @@
       root.querySelector(`.bm-bot[data-bot="${b.id}"]`)?.focus();
     } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
       event.preventDefault();
-      const rows = [...root.querySelectorAll(".bm-bot, .bm-task")];
+      // Only rows on screen: a folded bot's or the rail's task rows are hidden and can't take focus.
+      const rows = [...root.querySelectorAll(".bm-bot, .bm-task")].filter((each) => each.checkVisibility());
       const at = rows.indexOf(row) + (event.key === "ArrowDown" ? 1 : -1);
       rows[Math.max(0, Math.min(rows.length - 1, at))]?.focus();
     }

@@ -151,6 +151,49 @@ const noSideways = (page) =>
   await main.close();
 }
 
+// The rail hides task rows: Down skips them, and the picture carries an unread task's mark.
+{
+  const page = await open({ side: "rail", bot: "marlow" });
+  await page.locator('.bm-bot[data-bot="marlow"]').focus();
+  await page.keyboard.press("ArrowDown");
+  check(
+    "rail: Down goes from a bot to the next bot, past hidden task rows",
+    await page.evaluate(() => document.activeElement?.dataset.bot === "otto"),
+  );
+  check(
+    "rail: the open bot's picture has the unread mark of a task it hides",
+    (await page.locator('.bm-bot[data-bot="marlow"]').getAttribute("data-unread")) !== null,
+  );
+  await page.locator('.bm-bot[data-bot="marlow"]').click();
+  await page.getByRole("button", { name: "Marlow's tasks, 3" }).click();
+  await page.getByRole("menuitemradio", { name: /^Newsletter intro/ }).click();
+  check(
+    "rail: no unread mark for the task that is on screen",
+    (await page.locator('.bm-bot[data-bot="marlow"]').getAttribute("data-unread")) === null,
+  );
+  await page.close();
+}
+
+// At phone width the list is full width, whatever the side: its task rows show.
+{
+  const page = await open({ side: "rail", bot: "marlow", pane: "list" }, "phone");
+  check(
+    "phone with side=rail: the open bot's task rows are shown",
+    (await page.locator('.bm-task[data-bot="marlow"]:visible').count()) === 3,
+  );
+  check("phone with side=rail: folds are shown", (await page.locator(".bm-fold:visible").count()) === 3);
+  await page.close();
+}
+
+// Marlow's started tasks are Marlow's: another bot opened after them draws its own conversation.
+{
+  const page = await open({ bot: "marlow", view: "started" });
+  await page.locator('.bm-bot[data-bot="otto"]').click();
+  check("after Marlow, Otto's main conversation is drawn", (await page.locator(".bm-pill-name").textContent()) === "Otto");
+  check("and has no card of Marlow's", (await page.locator(".bm-card").count()) === 0);
+  await page.close();
+}
+
 for (const side of ["wide", "narrow", "rail"]) {
   const page = await open({ side, bot: "marlow" });
   check(`${side}: no sideways scroll`, await noSideways(page));
