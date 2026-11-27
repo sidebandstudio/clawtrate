@@ -443,7 +443,8 @@ if (HEARTBEATS) {
       expect(patches()).toBe(before + 3);
 
       // The patch is sent and the gateway answers it, but the suspend lands before the answer
-      // reaches the client: the patch may have taken, so unknown, and never failed.
+      // reaches the client: the patch may have taken, so unknown, and never failed. The client
+      // rejects the patch with its own "gateway client stopped", which is never shown (#788).
       patchId = undefined;
       answerWithheld = false;
       withholdAnswer = true;
@@ -456,6 +457,7 @@ if (HEARTBEATS) {
       expect(client.state.checkIns?.save).toMatchObject({
         id: "cut-unanswered",
         status: "unknown",
+        error: "The connection changed before Clawtrate could confirm the change.",
       });
       await reconnect();
       expect(client.state.checkIns?.jobs.find((job) => job.botId === "marlow")?.everyMs).toBe(

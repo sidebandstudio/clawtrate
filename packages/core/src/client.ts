@@ -12,21 +12,10 @@ import {
 import { listMemory, readMemory, writeMemory } from "./memory.ts";
 import { startTasksFrom } from "./start-tasks.ts";
 import {
-  applyGuidesChange,
-  GUIDES_DEFAULT_KEY,
-  GUIDES_DEFAULT_NOT_SAVED,
-  GUIDES_NOT_READ,
-  GUIDES_ON_NOT_RECORDED,
-  GUIDES_NOT_RECORDED,
-  GUIDES_NOT_SAVED,
-  guidesKey,
-  offRecord,
-  parseGuidesRecord,
+  keepGuidesCurrent,
+  oldGuidesKeys,
   readGuideFolders,
-  withdrawnRecord,
   type BotGuidesAnswer,
-  type GuidesChange,
-  type GuidesRecord,
 } from "./guides.ts";
 import {
   readVoice,
@@ -819,6 +808,12 @@ export type ClientOptions = {
    * never requested, so every write fails at once.
    */
   readOnly?: boolean;
+  /**
+   * Whether Clawtrate keeps its section in the bots' instructions current (guides.ts). Always,
+   * in every shipped host; only checks of other features turn it off, so their gateways see no
+   * file reads they don't count on.
+   */
+  keepGuides?: boolean;
   /**
    * Local connect: the proved sockets for a gateway saved with `route`, asked as
    * each connection to it opens, or null when the host can't prove that route
@@ -1677,10 +1672,15 @@ export class ClawtrateClient {
   /** The last guide change in line (`oneGuidesChangeAtATime`). */
   private guidesChanges: Promise<unknown> = Promise.resolve();
   /**
-   * The connection whose guide change after its connect found the gateway unnamed: it runs again
-   * once when that connection learns the name (`confirmGatewayIdentity`).
+   * The connection whose guide change after its connect didn't know the gateway's identity: it
+   * runs again once, when that connection learns it (`confirmGatewayIdentity`).
    */
   private guidesUnnamed: { generation: number; epoch: number } | null = null;
+  /**
+   * Settled once the change after this connection's connect is in line (or won't be): a read of
+   * the guides made before then waits for it, so it shows what that change leaves.
+   */
+  private guidesConnectPass: { epoch: number; queued: Promise<void> } | null = null;
   /** Bots of this connection whose `AGENTS.md` didn't exist yet at its guide change (`keepGuides`). */
   private readonly guidesMissing = new Set<string>();
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -6895,15 +6895,13 @@ export class ClawtrateClient {
       protocol && this.protocol === protocol && this.epoch === epoch && this.target === target
         ? this.request(method, params)
         : Promise.reject(new Error(CONNECTION_CHANGED));
-    // A bot made in Clawtrate gets the guides right away, as every bot does while the switch is
-    // on, on the connection it was made on. It never fails the creation.
-    if (gatewayId && !this.options.readOnly && this.state.connection.canAdmin)
-      await this.guidesByThemselves(
-        async () => gatewayId,
-        request,
-        () => true,
-        created.botId,
-      ).catch((error: unknown) => this.logFailure("warn", "guides for a new bot", error));
+    // A bot made in Clawtrate gets the guides right away, as every bot does, on the connection it
+    // was made on, once the gateway is known to be the one it was made on. It never fails the
+    // creation.
+    if (gatewayId !== null && this.routeIdentityHolds(gatewayId) && this.guidesWritable())
+      await this.guidesByThemselves(request, created.botId).catch((error: unknown) =>
+        this.logFailure("warn", "guides for a new bot", error),
+      );
     return created;
   }
 
@@ -7618,17 +7616,23 @@ export class ClawtrateClient {
   }
 
   /**
-   * Clawtrate's guides in the bots' `AGENTS.md` (guides.ts), read now, with this device's record
-   * for the gateway and whether the voice plugin adds its guide too, stamped with where it was
-   * read. A guide change on its way (one of Clawtrate's own after a connect included) finishes
-   * first, so what is shown is what it left. A record that can't be read is said, never guessed.
-   * Reads need `operator.read`.
+   * Clawtrate's guides in the bots' `AGENTS.md` (guides.ts), read now, stamped with where they were
+   * read. A guide change on its way (Clawtrate's own after a connect included) finishes first, so
+   * what is shown is what it left. Reads need `operator.read`.
    */
   async readBotGuides(): Promise<BotGuidesAnswer> {
-    await this.guidesChanges;
+    // Bound to the connection it was asked on, before any wait: one that changes meanwhile
+    // never answers for the one asked about.
     const protocol = this.protocol;
     const epoch = this.epoch;
     const target = this.target;
+    // The change after this connection's connect is put in line only once its first reads are
+    // done: a read made before then waits for it to be in line, then for it to finish.
+    const pass = this.guidesConnectPass;
+    if (pass?.epoch === epoch) await pass.queued;
+    await this.guidesChanges;
+    if (this.protocol !== protocol || this.epoch !== epoch || this.target !== target)
+      throw new Error(CONNECTION_CHANGED);
     const alive = () =>
       protocol !== null &&
       this.protocol === protocol &&
@@ -7637,146 +7641,20 @@ export class ClawtrateClient {
       this.state.connection.status === "connected";
     const gatewayId = await this.readGatewayIdentity();
     this.confirmGatewayIdentity(gatewayId, alive);
-    // Learning the name can queue Clawtrate's own change on this connection: what is shown is
+    // Learning the name here can put the change that waited for it in line: what is shown is
     // what that change leaves.
     await this.guidesChanges;
-    const record =
-      gatewayId === null ? null : await this.guidesRecord(gatewayId).catch(() => undefined);
-    // Off only by the device-wide default: this gateway has no choice of its own yet.
-    const inherited =
-      gatewayId !== null &&
-      record?.on === false &&
-      (await this.host.storage.get(guidesKey(gatewayId)).catch(() => "")) === null;
-    // Every read goes out on the connection this one began on: one gateway's record is never shown
-    // with another's files.
+    // Every read goes out on the connection this one began on: one gateway's files are never
+    // shown as another's.
     const request = (method: string, params: unknown) =>
       alive() ? this.request(method, params) : Promise.reject(new Error(CONNECTION_CHANGED));
-    const [folders, voice] = await Promise.all([
-      readGuideFolders(request, record ?? null),
-      readVoice(request, this.voiceAdvertised).catch(() => null),
-    ]);
-    return {
-      folders,
-      record: record ?? null,
-      unreadable: record === undefined,
-      inherited,
-      voicePlugin: voice?.status === "read" && voice.on && voice.hook === "allowed",
-      errors: [],
-      stamp: { gatewayId: alive() ? gatewayId : null, target },
-    };
+    const folders = await readGuideFolders(request);
+    return { folders, stamp: { gatewayId: alive() ? gatewayId : null, target } };
   }
 
   /**
-   * Change the guides as the person asked (`GuidesChange`: the switch, a row's Add, Replace or
-   * Remove), on the gateway and bots the screen was read from (`stamp`), then read them back: the
-   * answer is what the files hold, never what was sent. Each writes the bots' files, so each needs
-   * `operator.admin`. The voice plugin's own setting is never changed from here. Nothing is sent
-   * or saved once `owner`, the viewer that asked, is gone.
-   */
-  async changeBotGuides(
-    change: GuidesChange,
-    stamp: GatewayStamp,
-    owner: object | null = null,
-  ): Promise<BotGuidesAnswer> {
-    if (change.action === "auto") throw new Error("invalid guides change");
-    if (this.options.readOnly || !this.state.connection.canAdmin)
-      throw new AdminNeededError("Changing the bots' instructions");
-    const { gatewayId } = await this.requireSameGateway(stamp);
-    this.checkNotWithdrawn(owner);
-    const protocol = this.protocol;
-    const epoch = this.epoch;
-    const request = (method: string, params: unknown) =>
-      protocol && this.protocol === protocol && this.epoch === epoch && this.target === stamp.target
-        ? this.request(method, params)
-        : Promise.reject(new Error(CONNECTION_CHANGED));
-    const storage = this.host.storage;
-    const ok = (done: Promise<unknown>) =>
-      done.then(
-        () => true,
-        () => false,
-      );
-    const save = (record: GuidesRecord) =>
-      ok(storage.set(guidesKey(gatewayId), JSON.stringify(record)));
-    /** Saved when it differs from `was`: false only when a save was needed and failed. */
-    const saveIfChanged = (record: GuidesRecord | null, was: GuidesRecord | null) =>
-      !record || JSON.stringify(record) === JSON.stringify(was) ? true : save(record);
-    /** What a failed save after a change says: that files changed only when some did. */
-    const notSaved = (wrote: boolean) => (wrote ? GUIDES_NOT_RECORDED : GUIDES_NOT_SAVED);
-    const { errors } = await this.oneGuidesChangeAtATime(async () => {
-      // The viewer may have gone while the change waited its turn, or while the record was read:
-      // then nothing is sent or saved.
-      this.checkNotWithdrawn(owner);
-      const before = await this.guidesRecord(gatewayId).catch(() => undefined);
-      this.checkNotWithdrawn(owner);
-      // Unreadable: whether the switch is off can't be told, so nothing is changed.
-      if (before === undefined) return { record: null, errors: [GUIDES_NOT_READ] };
-      // The switch is saved first, off and on, as this gateway's own choice: if it can't be,
-      // nothing is changed, so the files and this device's record never disagree about what the
-      // person last asked for. Off holds from then on: nothing this device does adds a section
-      // while it lasts. Off is also saved as the device-wide default, so a gateway this device has
-      // no record of reads off too; On changes this gateway only and leaves that default as it
-      // is, so a gateway showing Off by the default keeps it until it is turned on there.
-      if (change.action === "switch") {
-        const first = withdrawnRecord(change) ?? { on: true, bots: before?.bots ?? [] };
-        if (!(await saveIfChanged(first, before)))
-          return { record: before, errors: [GUIDES_NOT_SAVED] };
-        const unseen =
-          !change.on && !(await ok(storage.set(GUIDES_DEFAULT_KEY, JSON.stringify(offRecord()))))
-            ? [GUIDES_DEFAULT_NOT_SAVED]
-            : [];
-        // A failure after the saves keeps what was saved, and says so with what failed.
-        const result = await applyGuidesChange(request, first, change).catch((error: unknown) => ({
-          record: first,
-          errors: [error instanceof Error ? error.message : String(error)],
-          wrote: false,
-          missing: [] as string[][],
-        }));
-        // A file that doesn't exist yet is read again when a run of its bot ends, as after a connect.
-        if (change.on) this.armGuidesMissing(result.missing.flat(), stamp.target);
-        if (change.on && !(await saveIfChanged(result.record, first)))
-          return {
-            ...result,
-            errors: [...result.errors, result.wrote ? GUIDES_NOT_RECORDED : GUIDES_ON_NOT_RECORDED],
-          };
-        return { ...result, errors: [...unseen, ...result.errors] };
-      }
-      // A row's Add, Replace or Remove is saved last, once the files hold it.
-      const result = await applyGuidesChange(request, before, change);
-      if (!(await saveIfChanged(result.record, before)))
-        return { ...result, errors: [...result.errors, notSaved(result.wrote)] };
-      return result;
-    });
-    // A read-back that fails still carries what the change said, the saves' warnings included.
-    const read = await this.readBotGuides().catch((error: unknown) => {
-      if (errors.length === 0) throw error;
-      throw new Error(
-        [...errors, error instanceof Error ? error.message : String(error)].join(" "),
-      );
-    });
-    return { ...read, errors };
-  }
-
-  /**
-   * This device's record for a gateway, or null when it has none. With none, the device-wide
-   * default applies: off once the person turned the switch off on any gateway. Turning it on for
-   * a gateway saves that gateway's own record and leaves the default as it is. A read the host's storage refuses, or a stored value that isn't a record, fails: it is
-   * never taken for no record, which reads as on.
-   */
-  private async guidesRecord(gatewayId: string): Promise<GuidesRecord | null> {
-    const unreadable = () => new Error("This device's record of the guides can't be read.");
-    const stored = await this.host.storage.get(guidesKey(gatewayId));
-    if (stored !== null) return parseGuidesRecord(stored) ?? Promise.reject(unreadable());
-    const fallback = await this.host.storage.get(GUIDES_DEFAULT_KEY);
-    if (fallback === null) return null;
-    const read = parseGuidesRecord(fallback);
-    if (!read) throw unreadable();
-    return read.on ? null : offRecord();
-  }
-
-  /**
-   * The guide changes (the person's, a new bot's, the one after a connect) run one at a time,
-   * each from reading the record to saving it, so none acts on a record another changed
-   * meanwhile: turning the switch off is never undone by a change that read the record before it.
+   * The guide changes (a new bot's, the one after a connect, the one after a run) run one at a
+   * time, so two never write the same file from the same read.
    */
   private oneGuidesChangeAtATime<T>(run: () => Promise<T>): Promise<T> {
     const turn = this.guidesChanges.then(run, run);
@@ -7784,84 +7662,94 @@ export class ClawtrateClient {
     return turn;
   }
 
+  /** Whether this client writes the bots' files at all: admin access, not read-only, not turned off. */
+  private guidesWritable(): boolean {
+    return (
+      this.options.keepGuides !== false && !this.options.readOnly && this.state.connection.canAdmin
+    );
+  }
+
   /**
-   * Clawtrate's own guide change (`auto`), with nothing asked: while the switch is on (no record
-   * yet reads as on, unless the device-wide default is off), with admin access and not from a
-   * read-only viewer, every bot this device never knew the section in gets it, unless its file
-   * doesn't exist yet or would grow past the gateway's own limit, and an older one is brought up
-   * to date, each held to the hash read; `bot` keeps it to one bot. What holds a marked section is
-   * recorded, so a section cleared later reads as removed and is left. It is saved after the
-   * files, and a failure is logged, never shown or thrown. Answers whether the gateway named
-   * itself, and the bots whose file doesn't exist yet.
+   * Clawtrate's own guide change, with nothing asked (`keepGuidesCurrent`): every bot's section
+   * kept as this build writes it, or `bot`'s alone, each file held to the hash read. A failure is
+   * logged, never shown or thrown, and nothing is remembered of it: the next occasion tries again.
+   * Answers the bots whose file doesn't exist yet.
    */
   private async guidesByThemselves(
-    identify: () => Promise<string | null>,
     request: (method: string, params: unknown) => Promise<unknown>,
-    current: () => boolean,
     bot?: string,
-  ): Promise<{ named: boolean; missing: string[] }> {
-    const { errors, named, missing } = await this.oneGuidesChangeAtATime(async () => {
-      const nothing = { errors: [] as string[], named: true, missing: [] as string[] };
-      const gatewayId = await identify();
-      if (gatewayId === null) return { ...nothing, named: false };
-      if (!current()) return nothing;
-      // A record that can't be read may say off: nothing is written until it can be.
-      const record = await this.guidesRecord(gatewayId).catch(() => undefined);
-      if (record === undefined) return { ...nothing, errors: [GUIDES_NOT_READ] };
-      if (!current()) return nothing;
-      const result = await applyGuidesChange(
-        request,
-        record,
-        bot === undefined ? { action: "auto" } : { action: "auto", bot },
-      ).catch((error: unknown) => ({
-        record: null,
-        errors: [error instanceof Error ? error.message : String(error)],
-        missing: [] as string[][],
-      }));
-      if (result.record && JSON.stringify(result.record) !== JSON.stringify(record))
-        await this.host.storage
-          .set(guidesKey(gatewayId), JSON.stringify(result.record))
-          .catch((error: unknown) => result.errors.push(String(error)));
-      return { errors: result.errors, named: true, missing: result.missing.flat() };
-    });
+    /** Decided in line, just before: whether to write at all. */
+    ready: () => Promise<boolean> = async () => true,
+  ): Promise<string[]> {
+    const { errors, missing } = await this.oneGuidesChangeAtATime(async () =>
+      (await ready())
+        ? keepGuidesCurrent(request, bot).catch((error: unknown) => ({
+            errors: [error instanceof Error ? error.message : String(error)],
+            missing: [] as string[],
+          }))
+        : { errors: [] as string[], missing: [] as string[] },
+    );
     for (const error of errors) this.logFailure("warn", "guides", error);
-    return { named, missing };
+    return missing;
   }
 
   /**
    * Clawtrate's own guide change on the gateway now connected (`guidesByThemselves`): after each
    * connect, for every bot; with `bot`, for one bot only (one made outside Clawtrate that the bot
-   * list showed on this connection, or one whose file was missing and whose run just ended).
-   * When the gateway doesn't name itself, the change runs again once, as soon as this connection
-   * learns its name (`confirmGatewayIdentity`). The bots whose file doesn't exist yet are read
-   * again, once each on this connection, when a run of theirs ends (`guidesAfterRun`).
+   * list showed on this connection, or one whose file was missing and whose run just ended). The
+   * bots whose file doesn't exist yet are read again, once each on this connection, when a run of
+   * theirs ends (`guidesAfterRun`).
    */
   private async keepGuides(
     generation: number,
     epoch: number,
-    options: { bot?: string; gatewayId?: string; afterRun?: boolean } = {},
+    options: { bot?: string; afterRun?: boolean; gatewayId?: string } = {},
   ): Promise<void> {
     const current = () =>
       generation === this.generation &&
       epoch === this.epoch &&
       this.state.connection.status === "connected" &&
-      this.state.connection.canAdmin &&
-      !this.options.readOnly;
+      this.guidesWritable();
     if (!current()) return;
-    if (options.bot === undefined) this.guidesMissing.clear();
+    if (options.bot === undefined) {
+      this.guidesMissing.clear();
+      // What builds before #795 kept on this device for their switch: nothing reads it now.
+      for (const key of oldGuidesKeys(this.state.connection.gatewayId))
+        void this.host.storage.delete(key).catch(() => undefined);
+    }
+    // In line at once, so a read of the guides made meanwhile waits for what it leaves. Nothing
+    // is written until the gateway has named itself, as the saved route's gateway when the
+    // connection has one: while it hasn't, the change waits for the name (`guidesUnnamed`).
     const known = options.gatewayId;
-    // In line at once, so a read of the guides made meanwhile waits for what it leaves.
-    const { named, missing } = await this.guidesByThemselves(
-      known === undefined ? () => this.readGatewayIdentity() : async () => known,
+    const missing = await this.guidesByThemselves(
       (method, params) =>
         current() ? this.request(method, params) : Promise.reject(new Error(CONNECTION_CHANGED)),
-      current,
       options.bot,
+      async () => {
+        // Named meanwhile by another read on this connection: that name, confirmed.
+        const id = known ?? (await this.readGatewayIdentity()) ?? this.state.connection.gatewayId;
+        if (!current()) return false;
+        if (id === null) {
+          this.guidesUnnamed = { generation, epoch };
+          return false;
+        }
+        return this.routeIdentityHolds(id);
+      },
     );
     if (!current()) return;
-    if (!named && options.bot === undefined) this.guidesUnnamed = { generation, epoch };
     // Read again once each: not after the read a run's end asked for.
     if (!options.afterRun) this.armGuidesMissing(missing, this.target);
+  }
+
+  /**
+   * Whether `id` can be this connection's gateway as its saved route knows it: a route that has
+   * bound an identity accepts only that one; no route, or one not bound yet, accepts any.
+   */
+  private routeIdentityHolds(id: string): boolean {
+    const settings = this.settings;
+    return (
+      settings?.route === undefined || settings.gatewayId === undefined || settings.gatewayId === id
+    );
   }
 
   /**
@@ -7869,7 +7757,7 @@ export class ClawtrateClient {
    * the connection now open (`target`), with admin access.
    */
   private armGuidesMissing(bots: string[], target: number): void {
-    if (this.target !== target || !this.state.connection.canAdmin || this.options.readOnly) return;
+    if (this.target !== target || !this.guidesWritable()) return;
     for (const id of bots)
       if (this.guidesMissing.size < MAX_BOTS) this.guidesMissing.add(capId(id, MAX_ID_CHARS));
   }
@@ -9960,6 +9848,13 @@ export class ClawtrateClient {
     };
     // Update is held from this moment until what this device keeps for the gateway is read.
     if (!this.isSetup(this.settings?.url)) this.openclawUpdates.onConnected();
+    // In place before anyone hears of the connect: a read of the guides that a subscriber makes
+    // on `connected` waits for this connect's own pass (`readBotGuides`).
+    let passQueued = () => {};
+    this.guidesConnectPass = {
+      epoch: this.epoch,
+      queued: new Promise<void>((done) => (passQueued = done)),
+    };
     this.setConnection({
       status: "connected",
       serverVersion: this.isSetup(this.settings?.url)
@@ -10016,15 +9911,18 @@ export class ClawtrateClient {
     this.pendingResync = null;
     this.quietReconnect = false;
     const epoch = this.epoch;
-    void this.bootstrap(generation, reason).then(() => {
-      if (generation !== this.generation || epoch !== this.epoch) return;
-      this.accounts.onHello();
-      // Every connect reads the list again: runs that started or ended while away are in it.
-      if (this.state.connection.status === "connected") void this.routines.load();
-      this.usage.onHello();
-      if (!this.isSetup(this.settings?.url)) void this.openclawUpdates.onHello();
-      void this.keepGuides(generation, epoch);
-    });
+    void this.bootstrap(generation, reason)
+      .then(() => {
+        if (generation !== this.generation || epoch !== this.epoch) return;
+        this.accounts.onHello();
+        // Every connect reads the list again: runs that started or ended while away are in it.
+        if (this.state.connection.status === "connected") void this.routines.load();
+        this.usage.onHello();
+        if (!this.isSetup(this.settings?.url)) void this.openclawUpdates.onHello();
+        void this.keepGuides(generation, epoch);
+      })
+      // The change is in line by now (keepGuides puts it there before its first await), or won't be.
+      .finally(passQueued);
   }
 
   /** After a connect, read back every approval whose last decision got no answer. */

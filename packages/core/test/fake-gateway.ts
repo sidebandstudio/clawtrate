@@ -2,6 +2,7 @@
 // shapes the pinned client expects: `connect.challenge`, then `connect`, then
 // requests. Scenarios override the connect response and method handlers.
 
+import type { ClientOptions } from "../src/client.ts";
 import type { ClawtrateHost, KeyValueStore, WebSocketLike } from "../src/host.ts";
 
 export type Frame = { type: string; id?: string; method?: string; params?: unknown };
@@ -171,19 +172,21 @@ export function memoryStorage(initial: Record<string, string> = {}): KeyValueSto
   };
 }
 
+const noGuides = new WeakSet<object>();
 /**
- * `storage` as a device on which "Bots know how Clawtrate works" is off for every gateway it has
- * no record for, for checks of other features: while it is on, as it is by default, an admin
- * connection reads and writes each bot's `AGENTS.md` by itself (guides.ts), which those checks
- * don't count on. The guides' own checks use storage without it.
+ * `storage` as a device whose client keeps no guides (`keepGuides: false`, by `guidesOptions`),
+ * for checks of other features: an admin connection otherwise reads and writes each bot's
+ * `AGENTS.md` by itself (guides.ts), which those checks don't count on. The guides' own checks use
+ * storage without it.
  */
 export function guidesOff<T extends KeyValueStore>(storage: T): T {
-  const get = storage.get.bind(storage);
-  storage.get = async (key) =>
-    (await get(key)) ??
-    (key.startsWith("clawtrate.guides.") ? JSON.stringify({ on: false, bots: [] }) : null);
+  noGuides.add(storage);
   return storage;
 }
+
+/** The options a client on `storage` is made with: no guides when it is `guidesOff`'s. */
+export const guidesOptions = (storage: object): ClientOptions =>
+  noGuides.has(storage) ? { keepGuides: false } : {};
 
 export function testHost(gateway: FakeGateway, storage = memoryStorage()): ClawtrateHost {
   return {
