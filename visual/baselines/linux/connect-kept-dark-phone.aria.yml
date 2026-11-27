@@ -73,7 +73,7 @@
     - button "Back to accounts"
     - heading "Connect an account" [level=2]
     - button "Close"
-  - paragraph: This gateway keeps this sign-in for Juniper only. Other bots, and a bot you are creating, won't be able to use it.
+  - paragraph: This gateway keeps this sign-in for main only. Other bots, and a bot you are creating, won't be able to use it.
   - paragraph: To give Viral an account of its own, create it with "Let the gateway choose", then connect from its settings.
   - paragraph: Sign in with a subscription you already pay for. Your gateway does the sign-in and keeps it; Clawtrate never sees your password and never keeps the sign-in.
   - list "Providers":

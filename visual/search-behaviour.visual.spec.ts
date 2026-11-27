@@ -751,7 +751,7 @@ test("F-033: a failed source says so with Try again and leaves the others alone;
   expect((await sent(page, "searchMessages")).map((each) => each.botId)).toEqual([
     null,
     null,
-    "main",
+    "clawtrate-main-bot",
     "marlow",
     "otto",
     "pip",
@@ -773,7 +773,7 @@ test("F-033: past 24 bots, Search the next bots adds the next batch and keeps th
       bots: [
         ...state.bots,
         ...Array.from({ length: 25 }, (_, i) => ({
-          ...state.bots[0]!,
+          ...state.bots.find((bot) => bot.id === "clawtrate-main-bot")!,
           id: `extra-${i + 1}`,
           name: `Extra ${i + 1}`,
         })),
