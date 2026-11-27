@@ -73,6 +73,13 @@ describe("F-195: at least five minutes apart", () => {
     expect(floor("0 9 * * MON")).toBeUndefined();
   });
 
+  it("reads `?` in a day field as the gateway does: every value, so 23:59 to 0:00 every day", () => {
+    // `?` lists every day of the week but is not `*`, so the 1st or any day of the week fires.
+    expect(problems(draft({ cron: "0,59 0,23 1 * ?", tz: NY }), NOW).cron).toBe(
+      "Routines run at least 5 minutes apart.",
+    );
+  });
+
   it("holds across the eight years from today, for a schedule whose first run is years away", () => {
     const floor = (cron: string) => problems(draft({ cron }), NOW).cron;
     expect(floor("0 0,1 8 * * * 2031")).toBe("Routines run at least 5 minutes apart.");
@@ -152,6 +159,23 @@ describe("F-189: the draft", () => {
       "2027-03-15T06:30:00.000Z",
       "2027-03-16T06:30:00.000Z",
     ]);
+  });
+
+  it("previews `?` in a day field as the gateway runs it: every day, not only the named weekday", () => {
+    // NOW is a Wednesday, after 9:00. `?` lists every day of the month, so any day fires.
+    expect(
+      nextRuns(draft({ cron: "0 9 ? * MON", tz: NY }), NOW).map((ms) => new Date(ms).toISOString()),
+    ).toEqual(["2026-11-19T14:00:00.000Z", "2026-11-20T14:00:00.000Z", "2026-11-21T14:00:00.000Z"]);
+  });
+
+  it("previews the hour an autumn clock change repeats as the gateway runs it: once", () => {
+    // New York's clocks go back from 2:00 to 1:00 on Nov 7, 2027; 1:00 and 1:30 run in the first pass.
+    const before = zonedTime(2027, 11, 6, 12, 0, NY);
+    expect(
+      nextRuns(draft({ cron: "0,30 1 * * *", tz: NY }), before).map((ms) =>
+        new Date(ms).toISOString(),
+      ),
+    ).toEqual(["2027-11-07T05:00:00.000Z", "2027-11-07T05:30:00.000Z", "2027-11-08T06:00:00.000Z"]);
   });
 
   it("writes Once as a time with its zone's offset", () => {

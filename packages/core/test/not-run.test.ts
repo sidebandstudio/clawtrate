@@ -5,7 +5,7 @@
 // "run-failed-before-reply" row for it. 2026.10.6 keeps the reason in that row and in the task's
 // row (`status: "failed"`, `lastRunError`); 2026.11.10, failing it at dispatch, keeps neither.
 
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { mapHistory, mergeSessionRow } from "../src/mapping.ts";
 import {
   applyAgentEvent,
@@ -550,6 +550,38 @@ describe("the rules underneath", () => {
       message: "Your request couldn't be completed: ⚠️ This model was not found.",
       beforeReply: true,
     });
+  });
+
+  it("history's row for a message the gateway couldn't run, with no words, keeps no reason", () => {
+    const rows = [
+      userRow("run-1"),
+      {
+        role: "custom",
+        customType: "run-failed-before-reply",
+        timestamp: T0 + 400,
+        __openclaw: { id: "c-1", seq: 2, runId: "run-1" },
+      },
+    ];
+    const [run] = runsFromHistory(rows, null, {
+      sessionKey: KEY,
+      now: T0 + 500,
+      raw: new RawTable(),
+    });
+    expect(run).toMatchObject({ id: "run-1", state: "failed" });
+    expect(run!.error).toMatchObject({ message: "", beforeReply: true });
+    expect(notRunCause(run!.error?.message)).toBeNull();
+  });
+
+  it("a streaming delta doesn't scan the task list; a run's end does", async () => {
+    const gateway = gatewayWith([{ key: KEY, agentId: "otto", updatedAt: T0 }]);
+    const { client } = await openTask({ gateway });
+    const scan = vi.spyOn(client as unknown as { keptKeys: () => Set<string> }, "keptKeys");
+    // The fake gateway's events are handled as they are emitted, so each check follows its event.
+    gateway.emit("chat", { runId: "r1", sessionKey: KEY, seq: 1, state: "delta" });
+    expect(scan).not.toHaveBeenCalled();
+    gateway.emit("chat", { runId: "r1", sessionKey: KEY, seq: 2, state: "final" });
+    expect(scan).toHaveBeenCalled();
+    client.stop();
   });
 
   it("a run history rebuilt that failed after it started is not one the gateway couldn't run", () => {

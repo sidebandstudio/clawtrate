@@ -22,7 +22,7 @@ import { modelIdProblem, type ModelList, type ModelRefresh } from "./accounts.ts
 import { parseInput, type ComputerFrame, type ComputerInput } from "./computer.ts";
 import type { MachineFacts } from "./machine.ts";
 import { FULL_SCOPES } from "./scopes.ts";
-import { type DeviceDecision } from "./device-approval.ts";
+import { type DeviceDecision, type DeviceListRead } from "./device-approval.ts";
 import type { QuestionAnswer, RunRawRead, StepRead } from "./runs.ts";
 import {
   MAX_SIDEBAR_BOTS,
@@ -588,7 +588,9 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends {
   ? DeviceDecision
   : C extends { type: "takeDevicePrompt" }
     ? { taken: boolean }
-    : BridgeResultStart<C>;
+    : C extends { type: "readDeviceRequests" }
+      ? DeviceListRead
+      : BridgeResultStart<C>;
 
 type BridgeResultStart<C extends BridgeCommand> = C extends { type: "readBotDelete" }
   ? BotDeleteRead

@@ -22,7 +22,7 @@ const STAMP = Date.now().toString(36);
 const NY = "America/New_York";
 
 type Job = { id: string; name: string; state?: { nextRunAtMs?: number } };
-type RunEntry = { runId: string; runAtMs: number; status: string };
+type RunEntry = { runId: string; runAtMs: number; status: string; sessionKey?: string };
 
 /** "Tue Nov 17, 8:00 AM", with "Today, " or "Tomorrow, " before it when it is: the page's words for a time. */
 function spelled(ms: number, tz: string): string {
@@ -351,7 +351,8 @@ test("F-190: shared routine runs open the recorded conversation", async () => {
       ...(target === "current" ? { sessionKey: key } : {}),
       ...(target === "main" ? { payload: { kind: "systemEvent", text: "A reminder." } } : {}),
     });
-    expect((await runNow(job.id)).run?.status).toBe("ok");
+    const ran = await runNow(job.id);
+    expect(ran.run?.status).toBe("ok");
     await openRoutines();
     await row(name).click();
     await view().getByTestId("run-row").first().click();
@@ -362,10 +363,23 @@ test("F-190: shared routine runs open the recorded conversation", async () => {
     } else {
       await expect(view().getByTestId("run-summary")).toBeVisible();
       if (target === "main") {
-        // The gateway records no session for a main-target run.
-        await expect(view().getByTestId("run-not-kept")).toContainText(
-          "Clawtrate can't confirm which conversation this run used.",
-        );
+        // OpenClaw 2026.10.6 records no session for a main-target run; 2026.11.10 records the
+        // bot's main conversation, and the page names it and opens it.
+        const recorded = ran.run?.sessionKey ?? null;
+        expect(recorded).toBe(admin.serverVersion === "2026.10.6" ? null : "agent:main:main");
+        if (recorded === null) {
+          await expect(view().getByTestId("run-not-kept")).toContainText(
+            "Clawtrate can't confirm which conversation this run used.",
+          );
+        } else {
+          await expect(view().getByTestId("run-not-kept")).toContainText(
+            "This run happened in Juniper's main conversation.",
+          );
+          await view()
+            .getByRole("button", { name: "Open Juniper's main conversation", exact: true })
+            .click();
+          await expect(page.getByTestId("transcript")).toContainText("A reminder.");
+        }
       } else {
         await view().getByRole("button", { name: "Open conversation", exact: true }).click();
         await expect(
