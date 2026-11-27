@@ -219,7 +219,7 @@ Connecting one, step by step, with no outside page for instructions:
    - the owner entry is removed from `commands.ownerAllowFrom` only if step 2 added it. A sender who was an owner before set-up stays one;
    - the sender approved in step 2 is removed, only if step 2 approved them.
 
-   Without that last part the sender would keep owner access afterwards. How to remove an approved sender over the connection is not established on either version: `channels.pairing.*` lists, approves and dismisses, and nothing removes (section 13). Until it is established, Disconnect is not offered as complete. Its confirmation says that sender stays approved until the chat app is connected again with a new token. An owner entry that set-up added is removed either way.
+   Without that last part the sender would keep owner access afterwards. How to remove an approved sender over the connection is not established on either version: `channels.pairing.*` lists, approves and dismisses, and nothing removes (section 13). Until it is established, Disconnect is not offered as complete. Its confirmation says so plainly: "The person you approved stays approved on OpenClaw, and could message the bot again if Telegram is connected again." Whether a new token clears the approval was not established on either version, so the design doesn't count on it. An owner entry that set-up added is removed either way. **What would close it:** a removal method for approved senders. If OpenClaw has none, it would come from Clawtrate's own plugin, following the project's rule that a missing gateway capability comes from a plugin, not from the client (section 13).
 
 **Why the gateway's own set-up and not Clawtrate's own form per chat app:** OpenClaw knows each chat app's fields, checks and accounts on each version, and every plugin chat app brings its own; a Clawtrate form per app would be wrong the day OpenClaw changes one. Clawtrate's part is drawing it in its own look and doing the owner step. A chat app whose set-up can't be done without a desktop page of the chat app's own (a developer portal) shows that one button with its steps in Clawtrate, and is marked "Needs a few steps in <app>" on its tile.
 
@@ -563,7 +563,7 @@ No ids are held for this design; they are proposed here and numbered by the pull
 The three decisions the first version was least sure of are decided (the page to decide from, "Decided since the first version"). What remains least sure:
 
 1. **Whether the plugin sees every nested tool-search and Code Mode result.** Until a run on each version shows it, a run that used them counts as having read outside content (8.2), so a bot that used tool search before proposing a change is refused rather than shown as a card.
-2. **How to remove an approved chat-app sender over the connection**, which Disconnect needs to reverse a set-up fully (section 4.3).
+2. **How to remove an approved chat-app sender over the connection**, which Disconnect needs to reverse a set-up fully, and whether a new token clears an approval (section 4.3). If OpenClaw has no way, the bots plugin would add a method for it.
 3. **What the card can't see beforehand** (8.4). It closes only with a gateway-side dry run of `config.patch`. The true Undo of section 6 needs a gateway write revision that every writer advances. Both are requests to OpenClaw.
 
 Also:
