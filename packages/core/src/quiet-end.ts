@@ -6,11 +6,12 @@
 // the same words, follows a turn that ended with reasoning only, or empty, or with an error the
 // gateway gave no cause for. Its history tells them apart: it leaves out a row whose answer was the
 // silent token, and keeps every other (`answeredNothing`). So a marked end is a quiet answer only
-// once a history read asked after it has found no row of the run that answered nothing; until
-// then it shows as the quiet answer it is meant to be, and a read refused or failed leaves the
-// failure.
+// once a history read asked after it, one that holds every row of the run (`historyCoversRun`), has
+// found no row of it that answered nothing; until then it shows as the quiet answer it is meant to
+// be, and a read refused, failed or not reaching the run's start leaves the failure.
 
 import { answeredNothing } from "./runs.ts";
+import { rowIdempotencyKey } from "./update-notice.ts";
 
 type RawRecord = Record<string, unknown>;
 
@@ -21,8 +22,15 @@ const asRecord = (value: unknown): RawRecord | null =>
 
 /** Tasks not followed whose row reports a marked failure: one check each, none giving way. */
 export const MAX_QUIET_CHECKS = 200;
-/** History rows a check reads: the run that just ended is at their end. */
-export const QUIET_CHECK_ROWS = 40;
+/**
+ * History rows a check reads, and a read on after a task's own read didn't reach a run's start:
+ * the most one page of 2026.11.10's history holds (`CHAT_HISTORY_MAX_ENTRIES`). A turn has no
+ * bound of its own on the rows it writes (only 20 identical tool calls in a row stop it), so a run
+ * whose start this page doesn't reach stays the failure the gateway sent.
+ */
+export const QUIET_CHECK_ROWS = 1000;
+/** Characters of each row's text such a read asks for: what tells an answer from none is kept. */
+export const QUIET_CHECK_CHARS = 200;
 /** JSON characters one check can take: its key, its run's id, its connection and its verdict. */
 export const quietCheckChars = (idChars: number) => 2 * idChars + 80;
 
@@ -30,6 +38,29 @@ export const quietCheckChars = (idChars: number) => 2 * idChars + 80;
 export type QuietVerdict = "pending" | "quiet" | "failed" | "unread";
 
 type Check = { runId: string; connection: number; verdict: QuietVerdict };
+
+/**
+ * Whether a history read holds every row of the run, so that no row of it answering nothing can
+ * be outside it: it reaches the transcript's start (`hasMore: false`) or the run's own input (the
+ * row keyed `<runId>:user`, or by the run's id), which the gateway writes before any row of the
+ * run; and it left no row out for size (`omission`, 2026.11.10's byte budget). A read that says
+ * neither (a full page, `hasMore` missing) proves nothing.
+ */
+export function historyCoversRun(history: RawRecord | null, runId: string): boolean {
+  if (!history || asRecord(history.omission)) return false;
+  if (history.hasMore === false) return true;
+  const rows = Array.isArray(history.messages) ? history.messages : [];
+  return rows.some((entry) => {
+    const row = asRecord(entry);
+    const key = row ? rowIdempotencyKey(row) : null;
+    return key === `${runId}:user` || key === runId;
+  });
+}
+
+/** The runs among `ids` that a history read holds whole (`historyCoversRun`). */
+export function coveredRuns(history: RawRecord | null, ids: ReadonlySet<string>): Set<string> {
+  return new Set([...ids].filter((id) => historyCoversRun(history, id)));
+}
 
 /** Whether history holds no row of the run that answered nothing (`answeredNothing`). */
 export function quietInHistory(messages: unknown, runId: string): boolean {

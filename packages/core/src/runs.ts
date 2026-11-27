@@ -1287,6 +1287,9 @@ export function answeredNothing(message: RawRecord): boolean {
   const stopReason = str(message.stopReason);
   if (stopReason === "aborted" || asRecord(message.openclawAbort)) return false;
   if (stopReason === "error") return true;
+  // A row 2026.11.10's history replaced for its size: what it answered can't be told.
+  const shown = meta(message);
+  if (shown.truncated === true && shown.reason === "oversized") return true;
   if (typeof message.content === "string") return !message.content.trim();
   const content = Array.isArray(message.content) ? message.content : [];
   return !content.some((part) => {

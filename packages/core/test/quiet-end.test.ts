@@ -9,8 +9,17 @@
 // same end and row on 2026.11.10; only its history tells it apart, with the run's reasoning rows.
 
 import { describe, expect, it } from "vitest";
-import { answeredNothing, quietPending, settleQuietEnds, type Run } from "../src/runs.ts";
 import {
+  answeredNothing,
+  isTerminal,
+  quietPending,
+  RawTable,
+  runsFromHistory,
+  settleQuietEnds,
+  type Run,
+} from "../src/runs.ts";
+import {
+  historyCoversRun,
   MAX_QUIET_CHECKS,
   QUIET_CHECK_ROWS,
   QuietChecks,
@@ -350,6 +359,15 @@ describe("a real failure is never hidden as a quiet answer (#680)", () => {
     expect(run.error).toMatchObject({ message: QUIET, quiet: true });
     expect(run.quietEnd).toBeUndefined();
     expect(run.unansweredInHistory).toBe(true);
+    // Its Raw is the end as the gateway sent it, kept while history was being read.
+    const raw = client.readRunRaw(KEY, "wake-5");
+    expect(raw?.status).toBe("available");
+    // (its lifecycle error, which came first).
+    expect(raw?.status === "available" && raw.payload).toMatchObject({
+      error: QUIET,
+      suppressErrorNotice: true,
+      terminalReply: { disposition: "empty" },
+    });
     // It ran: not a message the gateway couldn't run.
     expect(neverRan(run)).toBe(false);
     await sleep(50);
@@ -700,6 +718,234 @@ describe("a run followed for a card, in a task nobody has open (#680)", () => {
   }, 30_000);
 });
 
+describe("a read that doesn't hold the whole run proves nothing (#680)", () => {
+  // The reasoning-only row just outside what a page holds: the page has the run's later rows (a
+  // tool call and its result) and says the transcript goes on before it.
+  const outside = (runId: string) => ({ messages: toolRows(runId), hasMore: true });
+  const whole = (runId: string, ...rows: Row[]) => ({
+    messages: [eventRow, ...rows, ...toolRows(runId)],
+    hasMore: false,
+  });
+  const limitOf = (params: unknown) => (params as { limit?: number }).limit;
+  const keyOf = (params: unknown) => (params as { sessionKey: string }).sessionKey;
+
+  it("an open task: a page that doesn't reach the run's start is read on once; failed unless that holds it whole", async () => {
+    for (const [onward, state] of [
+      [whole("wake-20", thinkingRow("wake-20", 3)), "failed"],
+      [whole("wake-20"), "completed"],
+      [outside("wake-20"), "failed"],
+      [new Error("history unavailable"), "failed"],
+    ] as const) {
+      let page: unknown = { messages: [], hasMore: false };
+      const onwards: unknown[] = [];
+      const gateway = gatewayWith(
+        [{ key: KEY, agentId: "otto", hasActiveRun: false, updatedAt: T0 }],
+        () => [],
+      );
+      gateway.handlers["chat.history"] = (params) => {
+        if (limitOf(params) !== QUIET_CHECK_ROWS) return page;
+        onwards.push(limitOf(params));
+        if (onward instanceof Error) throw onward;
+        return onward;
+      };
+      const { client, transcript } = await openTask({ gateway });
+      page = outside("wake-20");
+      wakeAndEndMarked(gateway, "wake-20");
+      await until(() => {
+        const run = runOf(transcript, "wake-20");
+        return run?.state === "failed" || run?.quietEnd === "settled";
+      });
+      expect(runOf(transcript, "wake-20")?.state).toBe(state);
+      expect(onwards).toEqual([QUIET_CHECK_ROWS]);
+      await until(() => task(client)?.status === (state === "failed" ? "failed" : "done"));
+      client.stop();
+    }
+  }, 30_000);
+
+  it("a task not open: its row's check is quiet only with the run's start or its own input in the page", async () => {
+    const input = {
+      ...eventRow,
+      idempotencyKey: "wake-21:user",
+      __openclaw: { id: "i-1", seq: 3, idempotencyKey: "wake-21:user" },
+    };
+    const placeholder = {
+      role: "assistant",
+      content: [{ type: "text", text: "[chat.history omitted: message too large]" }],
+      timestamp: T0 + 2_050,
+      __openclaw: { runId: "wake-21", id: "o-1", seq: 4, truncated: true, reason: "oversized" },
+    };
+    for (const [history, status] of [
+      [outside("wake-21"), "failed"],
+      [{ messages: [input, ...toolRows("wake-21")], hasMore: true }, "done"],
+      [{ ...whole("wake-21"), omission: { omittedCount: 2, byteLimited: true } }, "failed"],
+      [whole("wake-21", placeholder), "failed"],
+      [{ messages: [eventRow, ...toolRows("wake-21")] }, "failed"],
+    ] as const) {
+      const gateway = gatewayWith(
+        [
+          { key: KEY, agentId: "otto", status: "done", hasActiveRun: false, updatedAt: T0 },
+          markedRow("wake-21", OTHER),
+        ],
+        () => [],
+      );
+      const asked: unknown[] = [];
+      gateway.handlers["chat.history"] = (params) => {
+        if (keyOf(params) !== OTHER) return { messages: [], hasMore: false };
+        asked.push(limitOf(params));
+        return history;
+      };
+      const { client } = await openTask({ gateway });
+      await until(() => asked.length > 0);
+      await sleep(50);
+      expect(task(client, OTHER)?.status).toBe(status);
+      expect(asked).toEqual([QUIET_CHECK_ROWS]);
+      client.stop();
+    }
+  }, 30_000);
+
+  it("a run followed for a card: a page that doesn't reach its start is read on once; failed unless that holds it whole", async () => {
+    type Foreign = Map<string, { runs: Run[] }>;
+    const foreignRun = (client: unknown) =>
+      (client as { foreign: Foreign }).foreign.get(OTHER)?.runs.find((run) => run.id === "wake-23");
+    for (const [onward, state] of [
+      [whole("wake-23", thinkingRow("wake-23", 3)), "failed"],
+      [whole("wake-23"), "completed"],
+      [outside("wake-23"), "failed"],
+    ] as const) {
+      const gateway = gatewayWith(
+        [{ key: KEY, agentId: "otto", hasActiveRun: false, updatedAt: T0 }],
+        () => [],
+      );
+      const { client } = await openTask({ gateway });
+      gateway.handlers["chat.history"] = (params) => {
+        if (keyOf(params) !== OTHER) return { messages: [], hasMore: false };
+        return limitOf(params) === QUIET_CHECK_ROWS ? onward : outside("wake-23");
+      };
+      gateway.emit("agent", {
+        ...agentEvent("wake-23", 3, "lifecycle", { phase: "start" }, OTHER),
+        ts: T0 + 2_000,
+      });
+      gateway.emit("chat", markedChat("wake-23", OTHER));
+      await until(() => {
+        const run = foreignRun(client);
+        return run !== undefined && run.quietEnd !== "pending" && isTerminal(run.state);
+      });
+      expect(foreignRun(client)?.state).toBe(state);
+      client.stop();
+    }
+  }, 30_000);
+
+  it("the rule alone: the transcript's start or the run's input, and nothing left out", () => {
+    const page = (rows: Row[], more?: boolean, extra: Row = {}) => ({
+      messages: rows,
+      ...(more === undefined ? {} : { hasMore: more }),
+      ...extra,
+    });
+    expect(historyCoversRun(page([], false), "r")).toBe(true);
+    expect(historyCoversRun(page([]), "r")).toBe(false);
+    expect(historyCoversRun(page([], true), "r")).toBe(false);
+    const keyed = { role: "user", __openclaw: { idempotencyKey: "r:user" } };
+    expect(historyCoversRun(page([keyed], true), "r")).toBe(true);
+    expect(historyCoversRun(page([{ role: "user", idempotencyKey: "r" }], true), "r")).toBe(true);
+    expect(historyCoversRun(page([{ role: "user", idempotencyKey: "s:user" }], true), "r")).toBe(
+      false,
+    );
+    expect(historyCoversRun(page([], false, { omission: { omittedCount: 1 } }), "r")).toBe(false);
+    expect(historyCoversRun(null, "r")).toBe(false);
+  });
+});
+
+describe("the sidebar and the run this client holds agree (#680)", () => {
+  type Foreign = Map<string, { runs: Run[] }>;
+  const foreignRun = (client: unknown, id: string) =>
+    (client as { foreign: Foreign }).foreign.get(OTHER)?.runs.find((run) => run.id === id);
+  const keyOf = (params: unknown) => (params as { sessionKey: string }).sessionKey;
+
+  it("a task opened after its row's check found it quiet stays done: its run rebuilt from rows alone doesn't overrule the check", async () => {
+    // A routine's turn that used a tool, then answered quietly, on a task opened cold.
+    const gateway = gatewayWith(
+      [
+        { key: KEY, agentId: "otto", status: "done", hasActiveRun: false, updatedAt: T0 },
+        markedRow("wake-22", OTHER),
+      ],
+      () => [],
+    );
+    let checks = 0;
+    gateway.handlers["chat.history"] = (params) => {
+      if (keyOf(params) !== OTHER) return { messages: [], hasMore: false };
+      checks += 1;
+      return { messages: [eventRow, ...toolRows("wake-22")], hasMore: false };
+    };
+    const { client } = await openTask({ gateway });
+    await until(() => checks > 0 && task(client, OTHER)?.status === "done");
+    client.openSession(OTHER);
+    await until(() => client.state.transcripts[OTHER]?.status === "ready");
+    const run = client.state.transcripts[OTHER]!.runs.find((each) => each.id === "wake-22");
+    expect(run).toMatchObject({ origin: "history", state: "completed" });
+    // An ordinary refresh of its row.
+    changed(gateway, { ...markedRow("wake-22", OTHER), updatedAt: T0 + 9_000 });
+    await sleep(100);
+    expect(task(client, OTHER)?.status).toBe("done");
+    client.stop();
+  });
+
+  it("a run followed for a card that its history fails turns its row failed as it settles", async () => {
+    const gateway = gatewayWith(
+      [
+        { key: KEY, agentId: "otto", status: "done", hasActiveRun: false, updatedAt: T0 },
+        { key: OTHER, agentId: "otto", status: "done", hasActiveRun: false, updatedAt: T0 },
+      ],
+      () => [],
+    );
+    const { client } = await openTask({ gateway });
+    gateway.handlers["chat.history"] = (params) =>
+      keyOf(params) === OTHER
+        ? { messages: [eventRow, thinkingRow("wake-25", 4)], hasMore: false }
+        : { messages: [], hasMore: false };
+    gateway.emit("agent", {
+      ...agentEvent("wake-25", 3, "lifecycle", { phase: "start" }, OTHER),
+      ts: T0 + 2_000,
+    });
+    gateway.emit("chat", markedChat("wake-25", OTHER));
+    // The row comes while the run waits for its history: the sidebar goes by the run.
+    changed(gateway, markedRow("wake-25", OTHER));
+    expect(task(client, OTHER)?.status).toBe("done");
+    await until(() => foreignRun(client, "wake-25")?.state === "failed");
+    await until(() => task(client, OTHER)?.status === "failed");
+    client.stop();
+  });
+
+  it("a run followed for a card whose read failed is the sidebar's failure too, though a check would find it quiet", async () => {
+    const gateway = gatewayWith(
+      [
+        { key: KEY, agentId: "otto", status: "done", hasActiveRun: false, updatedAt: T0 },
+        { key: OTHER, agentId: "otto", status: "done", hasActiveRun: false, updatedAt: T0 },
+      ],
+      () => [],
+    );
+    let fail = true;
+    const { client } = await openTask({ gateway });
+    gateway.handlers["chat.history"] = (params) => {
+      if (keyOf(params) !== OTHER) return { messages: [], hasMore: false };
+      if (fail) throw new Error("history unavailable");
+      return { messages: [eventRow], hasMore: false };
+    };
+    gateway.emit("agent", {
+      ...agentEvent("wake-24", 3, "lifecycle", { phase: "start" }, OTHER),
+      ts: T0 + 2_000,
+    });
+    gateway.emit("chat", markedChat("wake-24", OTHER));
+    await until(() => foreignRun(client, "wake-24")?.state === "failed");
+    // Its row now says the same; reads succeed from here on.
+    fail = false;
+    changed(gateway, markedRow("wake-24", OTHER));
+    await sleep(150);
+    expect(foreignRun(client, "wake-24")?.state).toBe("failed");
+    expect(task(client, OTHER)?.status).toBe("failed");
+    client.stop();
+  });
+});
+
 describe("the rules, alone", () => {
   const run = (over: Partial<Run>): Run =>
     ({
@@ -710,6 +956,17 @@ describe("the rules, alone", () => {
       quietError: { message: QUIET, kind: null, quiet: true },
       ...over,
     }) as Run;
+
+  it("after a reload, a turn of reasoning only is rebuilt from history as completed, its rows marked (#766)", () => {
+    const [run] = runsFromHistory([eventRow, thinkingRow("wake-30", 4)], null, {
+      sessionKey: KEY,
+      now: T0 + 9_000,
+      raw: new RawTable(),
+    });
+    // What the conversation shows after a reload; the sidebar goes by the row and its check.
+    expect(run).toMatchObject({ id: "wake-30", state: "completed", unansweredInHistory: true });
+    expect(run?.error).toBeNull();
+  });
 
   it("a row answers nothing with no text and no tool call, or when it failed; a silent row is left out by the gateway", () => {
     const row = (content: unknown, stopReason = "stop") => ({
