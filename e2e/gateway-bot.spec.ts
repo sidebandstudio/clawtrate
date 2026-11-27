@@ -442,11 +442,25 @@ test("F-562: the gateway's own bot stays out while untouched, and shows once the
           })
         ).messages.filter((row) => row.role === "assistant").length;
       const before = await replies();
-      await admin.request("chat.send", {
-        sessionKey: key,
-        message,
-        idempotencyKey: `gwused-${STAMP}-${before}`,
-      });
+      // A just-started gateway may answer that its session storage isn't ready yet: sent again.
+      await expect
+        .poll(
+          async () => {
+            try {
+              await admin.request("chat.send", {
+                sessionKey: key,
+                message,
+                idempotencyKey: `gwused-${STAMP}-${before}`,
+              });
+              return "sent";
+            } catch (error) {
+              if (/retry after session storage is ready/.test(String(error))) return "not ready";
+              throw error;
+            }
+          },
+          { timeout: 60_000, intervals: [1000] },
+        )
+        .toBe("sent");
       await expect.poll(replies, { timeout: 120_000 }).toBeGreaterThan(before);
     };
 

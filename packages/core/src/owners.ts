@@ -435,6 +435,8 @@ export const CLIENT_NOT_WALKED: Record<string, string> = {
   "routines.ctx": "the client's own functions, handed to the routines engine",
   "usage.ctx": "the client's own functions, handed to the usage engine",
   "botNames.ctx": "the client's own functions, handed to the bot names engine",
+  "gatewayBotFiles.deps":
+    "the client's own functions, handed to the reader of the gateway's own bot's files, which keeps two numbers, a flag and one bot id",
   "botNames.declines":
     "Not now as read from the host's storage, at most `MAX_NAME_DECLINES` names, each bounded when read",
   "machines.ctx": "the client's own functions, handed to the machines engine, which keeps nothing",
@@ -458,6 +460,7 @@ export const CLIENT_PARTS: Record<string, string> = {
   routines: "RoutinesEngine",
   usage: "UsageEngine",
   botNames: "BotNames",
+  gatewayBotFiles: "GatewayBotFiles",
   openclawUpdates: "OpenClawUpdates",
   deviceApprovals: "DeviceApprovals",
   machines: "MachinesEngine",

@@ -85,6 +85,7 @@ describe("the clawtrate.used marker on connecting", () => {
   /** A device that holds `scopes` for the gateway, as one paired earlier does. */
   async function connect(scopes: string[]) {
     const gateway = grantingGateway();
+    gateway.answersUsedMarker = false;
     const prefs = prefsGateway();
     gateway.handlers["users.prefs.get"] = (params) => prefs.request("users.prefs.get", params);
     gateway.handlers["users.prefs.set"] = (params) => prefs.request("users.prefs.set", params);
