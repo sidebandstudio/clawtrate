@@ -38,10 +38,15 @@ const MARKER_PREFIX_CHARS = 13;
 /** JSON characters one kept marker can take: its id, and its kind, run id and time. */
 export const WAITING_MARKER_CHARS =
   MAX_WAITING_ID_CHARS + MARKER_PREFIX_CHARS + MAX_WAITING_ID_CHARS + 64;
-/** JSON characters one entry of the latest-run map can take: its key, run id, time, mark and flags. */
-export const WAITING_RUN_CHARS = 2 * MAX_WAITING_ID_CHARS + 160;
-/** JSON characters one held task can take: its key, a waiting kind and three times. */
-export const WAITING_HELD_CHARS = MAX_WAITING_ID_CHARS + 128;
+/** The run ids a task's latest run keeps as known older: the ones the starts before it replaced. */
+export const MAX_OLDER_RUNS = 4;
+/**
+ * JSON characters one entry of the latest-run map can take: its key, run id, the older run ids,
+ * time, mark and flags.
+ */
+export const WAITING_RUN_CHARS = (2 + MAX_OLDER_RUNS) * MAX_WAITING_ID_CHARS + 160;
+/** JSON characters one held task can take: its key, a waiting kind, three times and a flag. */
+export const WAITING_HELD_CHARS = MAX_WAITING_ID_CHARS + 160;
 
 export type WaitingKind = "approval" | "question";
 
@@ -56,6 +61,8 @@ export type HeldTask = {
   waiting: Waiting | null;
   stoppedAt: number | null;
   failedAt: number | null;
+  /** The latest run ended with a quiet answer (#680): its row's marked failure is none. */
+  quietEnd: boolean;
 };
 
 const str = (value: unknown): string | null =>
@@ -68,7 +75,7 @@ const time = (value: unknown, fallback: number): number =>
 
 /** Whether a `chat` event ends a run: the only kind `WaitingIndex.onChat` reads. */
 export function endsRun(payload: RawRecord): boolean {
-  return payload.state === "error" || payload.state === "final";
+  return payload.state === "error" || payload.state === "final" || payload.state === "aborted";
 }
 
 /** What a held task's runs say: a run waiting on a card, or a latest run that was stopped or failed. */
@@ -102,7 +109,8 @@ export function fromActivity(
     !active && latest && neverRan(latest) && !supersededByOrder(latest, runs, activity.items)
       ? (latest.endedAt ?? latest.startedAt ?? 0)
       : null;
-  return { waiting, stoppedAt, failedAt };
+  const quietEnd = !active && latest?.state === "completed" && latest.quietEnd !== undefined;
+  return { waiting, stoppedAt, failedAt, quietEnd };
 }
 
 /**
@@ -131,8 +139,19 @@ const sameHeld = (a: HeldTask | undefined, b: HeldTask): boolean =>
   a !== undefined &&
   a.stoppedAt === b.stoppedAt &&
   a.failedAt === b.failedAt &&
+  a.quietEnd === b.quietEnd &&
   a.waiting?.kind === b.waiting?.kind &&
   a.waiting?.since === b.waiting?.since;
+
+/** The runs known older than `runId` once it replaces `latest`: `latest` itself, if another run. */
+function olderThan(
+  latest: { runId: string; older: readonly string[] } | undefined,
+  runId: string,
+): readonly string[] {
+  if (!latest) return [];
+  if (latest.runId === runId) return latest.older;
+  return [latest.runId, ...latest.older].slice(0, MAX_OLDER_RUNS);
+}
 
 /** Keep a map within `max` entries, the oldest giving way. */
 function cap<V>(map: Map<string, V>, max: number): void {
@@ -159,6 +178,11 @@ export class WaitingIndex {
        * start, after this run ended well, is an older message's late error (#686).
        */
       inputSince: boolean;
+      /**
+       * Runs known to be older than this one, newest first: the starts and ends since replaced
+       * them. A late end of one says nothing, whatever was admitted since.
+       */
+      older: readonly string[];
     }
   >();
   /** Counts the run ends seen as stopped, in the order they arrived: each task keeps its latest. */
@@ -210,7 +234,8 @@ export class WaitingIndex {
     switch (data.phase) {
       case "start": {
         const latest = this.runs.get(key);
-        if (latest?.runId === runId) return false;
+        // Seen already, or a run a later start replaced: a start sent again says nothing.
+        if (latest?.runId === runId || latest?.older.includes(runId)) return false;
         this.runs.delete(key);
         this.runs.set(key, {
           runId,
@@ -220,6 +245,7 @@ export class WaitingIndex {
           failed: false,
           active: true,
           inputSince: false,
+          older: olderThan(latest, runId),
         });
         cap(this.runs, MAX_WAITING_SESSIONS);
         return latest?.stopped === true || latest?.failed === true;
@@ -253,6 +279,7 @@ export class WaitingIndex {
           failed: latest?.runId === runId && latest.failed,
           active: false,
           inputSince: false,
+          older: olderThan(latest, runId),
         });
         cap(this.runs, MAX_WAITING_SESSIONS);
         return changed || stopped || latest?.stopped === true;
@@ -265,7 +292,8 @@ export class WaitingIndex {
   /**
    * A `chat` event. Its error is the word that the run failed, the only one when the gateway
    * failed the message before any run of it started (OpenClaw 2026.11.10 leaves the row no
-   * status then); its final is the word that the run succeeded. Returns whether the rail's word
+   * status then); its final is the word that the run succeeded, and its abort that the run is
+   * over, whose stop the lifecycle end marks if it comes (#722). Returns whether the rail's word
    * may have changed.
    */
   onChat(payload: RawRecord, at: number): boolean {
@@ -276,8 +304,12 @@ export class WaitingIndex {
     // Another run of the task is going: this is an older run's late end, and the newer one's own
     // end will say how the task stands.
     if (latest && latest.runId !== runId && latest.active) return false;
+    // A run a later one replaced: its end is late, whatever was admitted since.
+    if (latest?.older.includes(runId)) return false;
     // Another run of the task ended well and no new message was admitted since: the error is an
     // older message's, arriving late. The newest run decides the mark, not the order of arrival.
+    // After a failure, a run not known to be older counts: on 2026.11.10 a second message's
+    // dispatch error can come before the debounced row that admits it.
     if (latest && latest.runId !== runId && !latest.failed && !latest.inputSince) return false;
     // An end the gateway marked not to show is a quiet one, not a failure (#680, 2026.11.10).
     const failed = payload.state === "error" && payload.suppressErrorNotice !== true;
@@ -295,6 +327,7 @@ export class WaitingIndex {
       failed,
       active: false,
       inputSince: false,
+      older: olderThan(latest, runId),
     });
     cap(this.runs, MAX_WAITING_SESSIONS);
     return true;
