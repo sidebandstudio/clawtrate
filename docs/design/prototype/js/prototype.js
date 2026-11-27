@@ -25,10 +25,8 @@
   };
 
   const settings = {
-    theme:
-      params.get("theme") ||
-      stored("theme") ||
-      (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"),
+    // Dark is the default whatever the system prefers, as in the app (docs/decisions.md).
+    theme: params.get("theme") || stored("theme") || "dark",
     width: params.get("width") || stored("width") || "full",
     motion:
       params.get("motion") ||
