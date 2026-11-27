@@ -3,7 +3,7 @@
 // process is started. The only processes started are `sleep` stand-ins and
 // lock workers, stopped by PID.
 import { spawn, spawnSync, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { devConfig, list, prune, reset, sandboxProblems, start, stop } from "../src/cli.ts";
@@ -22,6 +22,7 @@ import {
 import { instanceLockPath, portLockPath, withLock } from "../src/lock.ts";
 import { candidateBlocks, choosePorts } from "../src/registry.ts";
 import {
+  activityRefusal,
   inUseRefusal,
   MARKER_FILE,
   newRunId,
@@ -558,6 +559,27 @@ describe("deletion needs proof that nothing runs (A5)", () => {
         expect(lines.join("\n")).toMatch(/Kept .*listening on its port 19240/);
       }
       expect(snapshot(stateDir)).toEqual(before);
+    }
+  });
+
+  it("proves an instance idle once its recorded processes have exited, with no command on PATH", () => {
+    // This test's own folder holds its home and an empty PATH folder, where no command such as
+    // `true` can be found by name. It is removed afterwards, and nothing else.
+    const root = tempDir("clawtrate-idle-");
+    try {
+      const home = join(root, "home");
+      const emptyPath = join(root, "path");
+      mkdirSync(home);
+      mkdirSync(emptyPath);
+      vi.stubEnv("PATH", emptyPath);
+      const { stateDir } = seedInstance(home, "alpha", {
+        gateway: deadProcess(),
+        provider: deadProcess(),
+      });
+      expect(activityRefusal(stateDir, "alpha")).toBeNull();
+    } finally {
+      vi.unstubAllEnvs();
+      rmSync(root, { recursive: true, force: true });
     }
   });
 
