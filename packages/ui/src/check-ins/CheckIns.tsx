@@ -15,6 +15,7 @@
 // "routines") has no setting here to read or change: each block says so and
 // leads to the bot's routines, and nothing opens the dialog.
 
+import { InfoCard, InfoTip } from "../InfoTip.tsx";
 import {
   cannotKeep,
   CHECKIN_BOT_DELETED,
@@ -440,37 +441,51 @@ function CheckInsDialog({
           )}
           <details className="ci-prompt" open={Boolean(base.was.prompt || prompt) || undefined}>
             <summary>What to check</summary>
-            <label htmlFor="ci-prompt-field" className="ci-label">
-              Prompt
-            </label>
-            <textarea
-              id="ci-prompt-field"
-              className="input"
-              rows={4}
-              value={prompt}
-              readOnly={base.promptCut || saving}
-              maxLength={MAX_CHECKIN_PROMPT_CHARS}
-              placeholder={inheritedPrompt ?? DEFAULT_PROMPT}
-              aria-describedby={typed ? "ci-prompt-note ci-prompt-hint" : "ci-prompt-hint"}
-              onChange={(event) =>
-                change({ prompt: event.target.value, touched: { ...touched, prompt: true } })
-              }
-            />
-            {typed && (
-              <p className="ci-hint" id="ci-prompt-note" data-testid="prompt-note">
-                {promptKind(null, checkIns.defaults) === "builtin"
-                  ? `This prompt replaces the gateway's own, which asks ${bot.name} to reply NO_REPLY when nothing needs attention.`
-                  : "This prompt replaces the gateway's default for this bot."}{" "}
-                Whether {bot.name} stays quiet depends on what this prompt asks.
-              </p>
-            )}
-            <p className="ci-hint" id="ci-prompt-hint">
-              {base.promptCut
-                ? "This prompt is longer than Clawtrate edits. Saving leaves it as it is."
-                : inheritedPrompt !== null
-                  ? `Empty uses the prompt the gateway sets for every bot. Up to ${MAX_CHECKIN_PROMPT_CHARS.toLocaleString("en-US")} characters.`
-                  : `Empty uses the gateway's built-in prompt, which asks the bot to reply NO_REPLY when nothing needs attention. Up to ${MAX_CHECKIN_PROMPT_CHARS.toLocaleString("en-US")} characters.`}
-            </p>
+            <div>
+              <span className="ci-label">
+                <label htmlFor="ci-prompt-field">Prompt</label>
+                <InfoTip id="ci-prompt-hint" about="Prompt" />
+              </span>
+              <textarea
+                id="ci-prompt-field"
+                className="input"
+                rows={4}
+                value={prompt}
+                readOnly={base.promptCut || saving}
+                maxLength={MAX_CHECKIN_PROMPT_CHARS}
+                placeholder={inheritedPrompt ?? DEFAULT_PROMPT}
+                aria-describedby={[
+                  typed ? "ci-prompt-note" : null,
+                  base.promptCut ? "ci-prompt-cut" : null,
+                  "ci-prompt-hint",
+                ]
+                  .filter(Boolean)
+                  .join(" ")}
+                onChange={(event) =>
+                  change({ prompt: event.target.value, touched: { ...touched, prompt: true } })
+                }
+              />
+              <InfoCard id="ci-prompt-hint">
+                {inheritedPrompt !== null
+                  ? "Empty uses the prompt the gateway sets for every bot."
+                  : "Empty uses the gateway's built-in prompt, which asks the bot to reply NO_REPLY when nothing needs attention."}{" "}
+                Up to {MAX_CHECKIN_PROMPT_CHARS.toLocaleString("en-US")} characters.
+              </InfoCard>
+              {typed && (
+                <p className="ci-hint" id="ci-prompt-note" data-testid="prompt-note">
+                  {promptKind(null, checkIns.defaults) === "builtin"
+                    ? `This prompt replaces the gateway's own, which asks ${bot.name} to reply NO_REPLY when nothing needs attention.`
+                    : "This prompt replaces the gateway's default for this bot."}{" "}
+                  Whether {bot.name} stays quiet depends on what this prompt asks.
+                </p>
+              )}
+              {/* Why it can't be edited: status, so it stays in view. */}
+              {base.promptCut && (
+                <p className="ci-hint" id="ci-prompt-cut">
+                  This prompt is longer than Clawtrate edits. Saving leaves it as it is.
+                </p>
+              )}
+            </div>
           </details>
           {blocked && (
             <Note tone="warn" testId="catch-blocked">

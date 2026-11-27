@@ -187,7 +187,11 @@ test("S17 the budget form says what it takes, refuses what it can't keep, and sa
   await page.getByTestId("budget-new").click();
   const field = page.getByTestId("budget-tokens");
   await expect(field).toBeFocused();
-  await expect(page.getByTestId("budget-form")).toContainText("A whole number of 1,000 or more.");
+  // Behind the field's "i", and its description (#798); the warning stays in view.
+  await expect(field).toHaveAccessibleDescription(/^A whole number of 1,000 or more: /);
+  await expect(page.getByTestId("budget-form")).toContainText(
+    "A warning only: nothing on the gateway stops a bot at its budget.",
+  );
   await expect(page.getByTestId("budget-save")).toBeDisabled();
   await field.fill("900");
   await expect(field).toHaveAttribute("aria-invalid", "true");

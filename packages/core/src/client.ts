@@ -204,6 +204,7 @@ import {
   type RawRecord,
 } from "./mapping.ts";
 import { holdsUpdateNotice, mainToReadAgain } from "./update-notice.ts";
+import { SKILL_REVIEW_RUN_PREFIX } from "./skill-notes.ts";
 import {
   MAX_SEARCHES_IN_FLIGHT,
   searchFiles,
@@ -393,6 +394,7 @@ import { nameTask } from "./task-names.ts";
 import { endsRun, fromActivity, WaitingIndex } from "./waiting.ts";
 import {
   coveredRuns,
+  failedByRow,
   runAliases,
   QUIET_CHECK_CHARS,
   QUIET_CHECK_ROWS,
@@ -6842,6 +6844,14 @@ export class ClawtrateClient {
   }
 
   /**
+   * The gateway marks its skill notes (`mapHistory`'s `skillNotesMarked`): OpenClaw 2026.11.10, by
+   * its reported version. An unmarked row of the note's form is then a bot's, never the note.
+   */
+  private marksSkillNotes(): boolean {
+    return openClawAtLeast(this.state.connection.serverVersion, 2026, 11, 10);
+  }
+
+  /**
    * A history item whole, as the gateway has it now, returned without being
    * kept: the way to read text cut to its bound (`TranscriptItem.cut`).
    */
@@ -6853,6 +6863,7 @@ export class ClawtrateClient {
       mapHistory(history?.messages, {
         startedAt: startedTaskSince(history),
         gatewayEvents: this.writesEvents(),
+        skillNotesMarked: this.marksSkillNotes(),
       }).find((item) => item.id === itemId) ?? null
     );
   }
@@ -8007,6 +8018,38 @@ export class ClawtrateClient {
       on,
     );
     return { ...voice, stamp };
+  }
+
+  /**
+   * Undo what a background skill review changed, the gateway's own way (OpenClaw 2026.11.10,
+   * `skills.workshop.undo`, which needs `operator.admin`): `undone` is false when the gateway says
+   * it was already undone. A refusal comes back with the gateway's words.
+   */
+  async undoSkillChange(
+    agentId: string,
+    reviewId: string,
+    stamp: GatewayStamp,
+    owner: object | null = null,
+  ): Promise<{ undone: boolean }> {
+    if (this.options.readOnly || !this.state.connection.canAdmin)
+      throw new Error("Undoing a skill change needs admin access to the gateway.");
+    // The connection the guard checks is the one the undo goes out on, as for the bots' voice.
+    const protocol = this.protocol;
+    const epoch = this.epoch;
+    const alive = () =>
+      protocol !== null &&
+      this.protocol === protocol &&
+      this.epoch === epoch &&
+      this.target === stamp.target &&
+      this.state.connection.status === "connected";
+    await this.requireSameGateway(stamp);
+    if (!alive()) throw new Error(CONNECTION_CHANGED);
+    this.checkNotWithdrawn(owner);
+    const answer = await protocol!.request("skills.workshop.undo", {
+      agentId,
+      runId: `${SKILL_REVIEW_RUN_PREFIX}${reviewId}`,
+    });
+    return { undone: asRecord(answer)?.status === "undone" };
   }
 
   /** A task's files and the folder it works in, read now (`sessions.files.list`, `sessions.describe`). */
@@ -11076,11 +11119,17 @@ export class ClawtrateClient {
       // The gateway has a turn of this task in flight or queued: a run history only infers to
       // have ended is not ended by this read.
       const busy = inFlightId !== null || holdsInput(history);
-      const fromHistory = runsFromHistory(
+      // What the rows alone rebuild, the run the row says failed unseen failed too (#766).
+      const fromHistory = failedByRow(
+        runsFromHistory(
+          messages,
+          inFlight,
+          { ...ctx, raw: scratch },
+          { windowCut: history?.hasMore === true, busy },
+        ),
         messages,
-        inFlight,
-        { ...ctx, raw: scratch },
-        { windowCut: history?.hasMore === true, busy },
+        this.rows.get(key),
+        this.state.transcripts[key]?.queueAliases ?? {},
       );
       const current = this.state.transcripts[key] ?? this.emptyTranscript(key);
       const merge = mergeHistoryRuns(current.runs, fromHistory, ctx, busy);
@@ -11132,6 +11181,7 @@ export class ClawtrateClient {
       const items = mapHistory(messages, {
         startedAt: startedTaskSince(history),
         gatewayEvents: this.writesEvents(),
+        skillNotesMarked: this.marksSkillNotes(),
       });
       this.sentSources.set(key, sentSources(messages));
       const rebuilt: Transcript = {
