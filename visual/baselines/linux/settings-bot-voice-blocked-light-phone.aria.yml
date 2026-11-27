@@ -15,7 +15,7 @@
     - link "Where the guide doesn't reach":
       - /url: https://github.com/sidebandstudio/clawtrate/blob/main/plugins/clawtrate-voice/README.md#where-the-guide-doesnt-reach
     - paragraph:
-      - text: The gateway's config doesn't permit the voice plugin's prompt hook, so no bot gets the guide. Under
+      - text: The gateway's config doesn't permit the voice plugin's prompt hook, so the plugin adds its guide to no bot's system prompt. Under
       - code: plugins.entries.clawtrate-voice.hooks
       - text: "both of these must permit it:"
     - list:
@@ -26,16 +26,7 @@
         - code: allowPromptInjection
         - text: must not be false. It does.
     - paragraph: Then restart the gateway. Clawtrate doesn't change the gateway's config.
-    - link "How to set it up":
-      - /url: https://github.com/sidebandstudio/clawtrate/blob/main/plugins/clawtrate-voice/README.md#turning-it-on-for-a-gateway
     - group: What the guide asks the bots to do
-    - text: Bots know how Clawtrate works On
-    - switch "Bots know how Clawtrate works" [checked] [disabled]
-    - paragraph:
-      - text: Clawtrate keeps a short section at the top of the
-      - code: AGENTS.md
-      - text: of each bot on this gateway that tells it how to talk to you and what a task is in Clawtrate. This connection doesn't have admin access, so Clawtrate can't add or remove it from here.
-    - group: Read it
   - status
 - region "Conversation":
   - button "Back to bots"
