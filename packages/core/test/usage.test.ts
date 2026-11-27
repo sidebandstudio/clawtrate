@@ -2,6 +2,10 @@
 // the shapes OpenClaw 2026.10.6 returned on a development gateway: `usage.cost`,
 // `sessions.usage`, `chat.history` rows and `usage.status`.
 
+import {
+  GatewayProtocolRequestError,
+  GatewayProtocolRequestTimeoutError,
+} from "@openclaw/gateway-client/browser";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseBridgeCommand } from "../src/bridge.ts";
 import { ClawtrateClient } from "../src/client.ts";
@@ -833,6 +837,69 @@ describe("the usage engine", () => {
     engine.onClose();
   });
 
+  it("#848: a budget change whose answer was lost on a live connection says why in Clawtrate's words, never the client's; a refusal is the gateway's", async () => {
+    const budget: BudgetInput = {
+      botId: "otto",
+      routineId: null,
+      routineName: null,
+      period: "weekly",
+      tokens: 5_000,
+      timeZone: NY,
+    };
+    const timedOut = (method: string) =>
+      new GatewayProtocolRequestTimeoutError({ method, timeoutMs: 15_000, requestSent: true });
+    /** `users.prefs.set` rejected with `error`, the gateway keeping nothing; then reads `after`. */
+    const said = async (error: () => Error, after: () => unknown = () => undefined) => {
+      const fake = fakeGateway();
+      let wrote = false;
+      const { engine } = engineOn({
+        ...fake,
+        request: async (method, raw) => {
+          if (method === "users.prefs.set") {
+            wrote = true;
+            throw error();
+          }
+          if (wrote) {
+            const read = after();
+            if (read instanceof Error) throw read;
+          }
+          return fake.request(method, raw);
+        },
+      });
+      const failure = await engine.changeBudget({ op: "set", budget }).then(
+        () => "kept",
+        (failed: Error) => failed.message,
+      );
+      engine.onClose();
+      return failure;
+    };
+    const unconfirmed = "The change couldn't be confirmed:";
+    const notTaken = "The read-back did not confirm this change.";
+    expect(await said(() => new Error("gateway closed (1006): "))).toBe(
+      `${unconfirmed} the connection changed before the gateway answered. ${notTaken}`,
+    );
+    expect(await said(() => new Error("gateway client stopped"))).toBe(
+      `${unconfirmed} the connection changed before the gateway answered. ${notTaken}`,
+    );
+    expect(await said(() => timedOut("users.prefs.set"))).toBe(
+      `${unconfirmed} the gateway didn't answer in time. ${notTaken}`,
+    );
+    expect(
+      await said(
+        () => new GatewayProtocolRequestError({ code: "UNAVAILABLE", message: "prefs busy" }),
+      ),
+    ).toBe(`${unconfirmed} prefs busy. ${notTaken}`);
+    // The read back fails too, the same way: said in the same words.
+    expect(
+      await said(
+        () => timedOut("users.prefs.set"),
+        () => timedOut("users.prefs.get"),
+      ),
+    ).toBe(
+      `${unconfirmed} the gateway didn't answer in time. Reading the gateway's budgets again failed too: the gateway didn't answer in time.`,
+    );
+  });
+
   it("F-234: a write whose answer was lost is confirmed only by reading what the gateway holds, which is then shown", async () => {
     const budget: BudgetInput = {
       botId: "otto",
@@ -863,7 +930,7 @@ describe("the usage engine", () => {
     };
     const two = engineOn({ ...lost, request: neverKept });
     await expect(two.engine.changeBudget({ op: "set", budget })).rejects.toThrow(
-      "The change couldn't be confirmed: Connection lost. The read-back did not confirm this change.",
+      "The change couldn't be confirmed: the connection changed before the gateway answered. The read-back did not confirm this change.",
     );
     expect(two.usage()).toMatchObject({ budgetsStatus: "ok", budgets: [] });
     expect(asked).toEqual(["users.prefs.get", "users.prefs.set", "users.prefs.get"]);
@@ -941,7 +1008,7 @@ describe("the usage engine", () => {
       },
     });
     await expect(five.engine.changeBudget({ op: "set", budget })).rejects.toThrow(
-      "The change couldn't be confirmed: response lost. Reading the gateway's budgets again was unavailable.",
+      "The change couldn't be confirmed: the connection changed before the gateway answered. Reading the gateway's budgets again was unavailable.",
     );
     five.engine.onClose();
 

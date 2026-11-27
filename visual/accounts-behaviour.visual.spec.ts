@@ -2422,7 +2422,7 @@ for (const [end, words, word] of [
   ],
   [
     "unanswered",
-    "The gateway didn't answer (gateway request timeout for models.authOrderSet), so Clawtrate can't tell yet whether Otto's order was cleared. Check now reads it again.",
+    "The gateway didn't answer, so Clawtrate can't tell yet whether Otto's order was cleared. Check now reads it again.",
     "locked",
   ],
   [

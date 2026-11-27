@@ -31,7 +31,8 @@ const SCENES: Scene[] = [
   { name: "checkins-scheduler-off", query: `${ADMIN}&scheduler=off`, ready: checkIns },
   { name: "checkins-mixed", query: `${ADMIN}&checkins=every`, ready: checkIns },
   { name: "checkins-routines", query: `${ADMIN}&checkins=routines`, ready: checkIns },
-  { name: "checkins-dialog-asneeded", query: ADMIN, ready: dialog("Juniper") },
+  // The gateway's own bot, whose check-ins are the gateway's default.
+  { name: "checkins-dialog-asneeded", query: ADMIN, ready: dialog("main") },
   {
     name: "checkins-dialog-daily",
     query: ADMIN,
