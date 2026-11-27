@@ -4,8 +4,15 @@
 // only on the stand-in gateway's answer.
 //
 //   node docs/design/prototype/tools/checks/main-bot.mjs
+//
+// With `--pictures <folder>` it also writes section 15's pictures there.
 import assert from "node:assert/strict";
+import { mkdirSync } from "node:fs";
+import { join } from "node:path";
 import { chromium, pageUrl } from "./browser.mjs";
+
+const at = process.argv.indexOf("--pictures");
+const pictures = at === -1 ? null : process.argv[at + 1];
 
 const browser = await chromium.launch();
 let failed = 0;
@@ -574,6 +581,162 @@ await check(
     );
   },
 );
+
+// ---- section 15: a gateway the person brings ----
+
+const QUIET_TIP =
+  "Clawtrate made this bot on your gateway, with its own folder. Your other bots, chat apps and settings are as they were. To remove it, delete it in its settings.";
+
+await check(
+  "MB-22 a brought gateway: the same first run, with the gateway's own bot the person used listed beside it",
+  async ({ page, open, width }) => {
+    await open("gateway=brought&at=greeted");
+    await page.getByText("what would you like to call me?").waitFor();
+    await has(page, '[data-testid="brief-line"]', "Clawtrate started this conversation");
+    await page.getByTestId("skip").waitFor();
+    await noPrompt(page);
+    if (width === "phone") {
+      await open("gateway=brought&at=greeted&pane=list");
+      // The list on a phone: the Main Bot's tile first, then the person's bots.
+      const names = await page.locator(".mb-name").allInnerTexts();
+      assert.deepEqual(names.slice(0, 2), ["Clawtrate Main Bot", "Juniper"]);
+      await page.getByTestId("main-tile").click();
+      await page.getByTestId("transcript").waitFor();
+      return;
+    }
+    assert.equal(await railName(page, "main", width), "Juniper");
+    // An ordinary row: never starred.
+    assert.equal(await page.locator('[data-bot="main"] .mb-star').count(), 0);
+    // An untouched one stays out, as before.
+    await open("at=greeted");
+    assert.equal(await page.getByTestId("rail-name-main").count(), 0);
+  },
+);
+
+await check("MB-23 the quiet line's \"i\" says what Clawtrate added, on press", async ({ page, open }) => {
+  await open("gateway=brought&at=start");
+  const i = page.getByRole("button", { name: "What Clawtrate added" });
+  assert.equal(await i.getAttribute("aria-expanded"), "false");
+  assert.equal(await page.getByTestId("tip-quiet").isVisible(), false);
+  await i.click();
+  assert.equal(
+    await page.getByRole("button", { name: "What Clawtrate added" }).getAttribute("aria-expanded"),
+    "true",
+  );
+  assert.equal((await page.getByTestId("tip-quiet").innerText()).trim(), QUIET_TIP);
+  assert.equal(
+    await page.evaluate(() => document.activeElement?.dataset.tip),
+    "quiet",
+    "focus stays on the i",
+  );
+});
+
+await check(
+  "MB-24 someone who used Clawtrate here before: nothing sent, the tile offers Set up and Hide",
+  async ({ page, open, width }) => {
+    await open(`offer=1${width === "phone" ? "&pane=list" : ""}`);
+    const tile = page.getByTestId("setup-tile");
+    await tile.waitFor();
+    assert.equal(await page.getByTestId("main-tile").count(), 0, "no Main Bot is made");
+    assert.equal(await page.getByTestId("brief-line").count(), 0, "nothing is sent");
+    assert.equal(await tile.getByRole("button", { name: "Set up", exact: true }).count(), 1);
+    await tile.getByRole("button", { name: "Hide", exact: true }).click();
+    assert.equal(await page.getByTestId("setup-tile").count(), 0);
+    await page.waitForFunction(() => document.getElementById("mb-live").textContent === "Hidden");
+    if (width === "phone") return;
+    assert.equal(await railName(page, "main", width), "Juniper");
+    // Set up runs the first run from the start.
+    await open("offer=1");
+    await page.getByRole("button", { name: "Set up", exact: true }).click();
+    await page.getByTestId("main-tile").waitFor();
+    await page.getByTestId("brief-line").waitFor();
+    await page.getByText("what would you like to call me?").waitFor();
+  },
+);
+
+await check(
+  "MB-25 a gateway the steps don't fit: one line that the Main Bot is waiting, and Try again",
+  async ({ page, open, width }) => {
+    const words = {
+      version: "Your Main Bot is waiting: this OpenClaw can't make one yet.",
+      include:
+        "Your Main Bot is waiting: OpenClaw won't add a bot while your channel settings are kept in a separate file.",
+      refused: "Your Main Bot is waiting: OpenClaw didn't add it.",
+    };
+    for (const [reason, line] of Object.entries(words)) {
+      await open(`waiting=${reason}${width === "phone" ? "&pane=list" : ""}`);
+      assert.equal(
+        (await page.getByTestId("setup-line").innerText()).replace(/\s*i$/, "").trim(),
+        line,
+      );
+      assert.equal(await page.getByRole("button", { name: "Try again" }).count(), 1);
+      assert.equal(await page.getByTestId("main-tile").count(), 0);
+      assert.equal(await page.getByRole("link").count(), 0, "no link out");
+    }
+    await open(`waiting=include${width === "phone" ? "&pane=list" : ""}`);
+    await page.getByRole("button", { name: "Why" }).click();
+    assert.equal(
+      (await page.getByTestId("tip-waiting").innerText()).trim(),
+      "OpenClaw adds a second bot only where it can record which bot your chat apps reach, and it doesn't write that file.",
+    );
+  },
+);
+
+await check(
+  "MB-26 no full control: the person's bots as they are, and the one request",
+  async ({ page, open, width }) => {
+    await open(`device=readonly${width === "phone" ? "&pane=list" : ""}`);
+    assert.equal(
+      (await page.getByTestId("setup-line").innerText()).trim(),
+      "Clawtrate needs full control of your gateway to make your Main Bot.",
+    );
+    assert.equal(await page.getByRole("button", { name: "Give full control" }).count(), 1);
+    assert.equal(await page.getByTestId("rail-name-main").innerText(), "Juniper");
+  },
+);
+
+await check("MB-27 #799: the Main Bot's model added to the allowlist, with Undo", async ({ page, open }) => {
+  await open("gateway=brought&at=start&allowlist=1");
+  const line = page.getByTestId("allow-line");
+  await has(page, '[data-testid="allow-line"]', "Added GPT-5.5 to the models this gateway allows");
+  await line.getByRole("button", { name: "Undo" }).click();
+  await has(page, '[data-testid="allow-line"]', "Removed GPT-5.5 from the models this gateway allows");
+});
+
+if (pictures) {
+  mkdirSync(pictures, { recursive: true });
+  const shoot = async (name, query, phone, act) => {
+    const page = await browser.newPage({
+      viewport: phone ? { width: 390, height: 844 } : { width: 1100, height: 720 },
+    });
+    await page.route(/^https?:/, (route) => route.abort());
+    await page.goto(
+      `${pageUrl("main-bot.html")}?chrome=0&motion=reduce${phone ? "&width=phone" : ""}&${query}`,
+    );
+    await page.evaluate(() => document.fonts.ready);
+    if (act) await act(page);
+    await page.screenshot({ path: join(pictures, `${name}.png`) });
+    await page.close();
+  };
+  const greeted = (page) => page.getByText("what would you like to call me?").waitFor();
+  for (const theme of ["dark", "light"]) {
+    await shoot(`brought-desktop-${theme}`, `theme=${theme}&gateway=brought&at=greeted`, false, greeted);
+    await shoot(`offer-desktop-${theme}`, `theme=${theme}&offer=1`);
+  }
+  await shoot("brought-phone-dark", "theme=dark&gateway=brought&at=greeted&pane=list", true, greeted);
+  await shoot("brought-info-desktop-dark", "theme=dark&gateway=brought&at=greeted&info=1&allowlist=1", false, greeted);
+  await shoot("offer-phone-dark", "theme=dark&offer=1&pane=list", true);
+  await shoot("waiting-desktop-dark", "theme=dark&waiting=include", false, (page) =>
+    page.getByRole("button", { name: "Why" }).click(),
+  );
+  await shoot("waiting-phone-dark", "theme=dark&waiting=version&pane=list", true);
+  await shoot("no-full-control-desktop-dark", "theme=dark&device=readonly");
+  await shoot("skipped-desktop-dark", "theme=dark&gateway=brought&at=greeted", false, async (page) => {
+    await greeted(page);
+    await page.getByTestId("skip").click();
+    await page.getByText("Sure, no tour.").waitFor();
+  });
+}
 
 await browser.close();
 console.log(`${passed} ok, ${failed} failed`);

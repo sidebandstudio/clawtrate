@@ -15,6 +15,15 @@
 //   from      juniper: the Main Bot started from what another bot knows
 //   existing  1: a Main Bot already made, on another device
 //   plugin    missing: the Main Bot's menu without Clawtrate's bot tools
+//   gateway   brought: a gateway the person already ran, whose own bot (Juniper)
+//             they have used, so it stays in the rail; the Main Bot starts from it
+//   offer     1: someone who used Clawtrate with this gateway before: no Main Bot,
+//             the "Set up your Main Bot" tile with Set up and Hide (section 15.7)
+//   waiting   version | include | refused: the first run's steps don't fit (15.6)
+//   device    readonly: a connection that can't make the Main Bot (15.4)
+//   info      1: the quiet line's "i" open
+//   allowlist 1: the Main Bot's model added to the gateway's model allowlist (#799)
+//   pane      list: at phone width, the bot list in place of the conversation
 //
 // The bot's lines are a fixture: one way a real model might follow Clawtrate's
 // brief. The app's own lines are Clawtrate's. Nothing here asks the person to
@@ -27,7 +36,22 @@
   const root = document.getElementById("mb-root");
   const live = document.getElementById("mb-live");
 
+  const waiting = ["version", "include", "refused"].includes(p.get("waiting"))
+    ? p.get("waiting")
+    : null;
+  // No Main Bot is listed: offered once, waiting on the gateway, or out of reach.
+  const noMain = p.get("offer") === "1" || waiting !== null || p.get("device") === "readonly";
+  const brought = p.get("gateway") === "brought" || noMain;
   const state = {
+    brought,
+    noMain,
+    offer: p.get("offer") === "1",
+    waiting,
+    readonly: p.get("device") === "readonly",
+    hidden: false,
+    tips: new Set(p.get("info") === "1" ? ["quiet"] : []),
+    allowlist: p.get("allowlist") === "1",
+    list: p.get("pane") === "list",
     at: p.get("at"),
     account: p.get("account") === "none" ? "none" : "ok",
     selfName: p.get("name") === "bot",
@@ -35,8 +59,9 @@
     opening: p.get("opening"),
     // Only while the first run's questions are open; a Main Bot already made has none.
     limited: p.get("device") === "limited" && p.get("existing") !== "1",
-    fromKept: p.get("from") === "juniper",
-    from: p.get("from") === "juniper",
+    // On a brought gateway the Main Bot starts from what its own bot knows (#495).
+    fromKept: p.get("from") === "juniper" || brought,
+    from: p.get("from") === "juniper" || brought,
     existing: p.get("existing") === "1",
     plugin: p.get("plugin") === "missing" ? "missing" : "present",
     mainMenu: false,
@@ -136,22 +161,30 @@
   // The Main Bot is a bot Clawtrate made (id MAIN), never the gateway's own
   // bot. The gateway's own bot (`own`) stays on the gateway and out of the rail
   // once another bot exists (#490). Pip, Otto and Marlow stay as they were.
+  // On a brought gateway the gateway's own bot is Juniper, which the person has
+  // used for months: no BOOTSTRAP.md, a name and a MEMORY.md of its own, so it
+  // is a row like the others (section 15.2).
   function seedBots() {
     const main = state.existing
       ? { id: MAIN, name: "Juniper", main: true }
       : { id: MAIN, name: START_NAME, main: true };
     gateway.bots = [
-      { id: "main", name: "main", own: true, preview: "Channel messages" },
-      main,
-      { id: "pip", name: "Pip", preview: "Saturday errands route" },
-      { id: "otto", name: "Otto", preview: "Weekly backup check" },
-      { id: "marlow", name: "Marlow", preview: "Neighborhood newsletter intro" },
+      state.brought
+        ? { id: "main", name: "Juniper", own: true, used: true }
+        : { id: "main", name: "main", own: true },
+      ...(state.noMain ? [] : [main]),
+      { id: "pip", name: "Pip" },
+      { id: "otto", name: "Otto" },
+      { id: "marlow", name: "Marlow" },
     ];
   }
   const botById = (id) => gateway.bots.find((b) => b.id === id);
   const mainBot = () => botById(MAIN);
+  // The bot whose conversation is open: the Main Bot, or, with none, Juniper.
+  const openBot = () => mainBot() || botById("main");
+  // F-562 leaves out only an untouched gateway's own bot, and only beside another.
   const shown = () => {
-    const others = gateway.bots.filter((b) => !b.own);
+    const others = gateway.bots.filter((b) => !b.own || b.used);
     return others.length ? others : gateway.bots;
   };
   // The name before, kept so Undo works after a restart and on the person's
@@ -176,20 +209,66 @@
       ? `<div class="mb-tile-wrap"><button type="button" class="mb-tile" data-bot="${m.id}" data-testid="main-tile"${task?.open ? "" : ' aria-current="true"'} aria-label="${esc(`${m.name}, Main Bot`)}">` +
         `${claw(m.name, 56, { star: true })}<strong class="mb-name" data-testid="rail-name-${m.id}" title="${esc(m.name)}">${esc(m.name)}</strong></button>` +
         `<button type="button" class="mb-tile-more" data-act="main-menu" aria-expanded="${state.mainMenu}" aria-label="${esc(`${m.name} options`)}">⋯</button>${mainMenu()}</div>${sub}`
-      : "";
+      : setupTile();
     const rows = shown()
       .filter((b) => !b.main)
       .map(
         (b) =>
-          `<li><button type="button" class="mb-row" data-bot="${b.id}" aria-label="${esc(b.name)}">` +
-          `${claw(b.name, 40)}<span class="mb-row-text"><strong class="mb-name" data-testid="rail-name-${b.id}">${esc(b.name)}</strong>` +
-          `<span class="mb-preview">${esc(b.preview || "")}</span></span></button></li>`,
+          `<li><button type="button" class="mb-row" data-bot="${b.id}"${!m && b === openBot() ? ' aria-current="true"' : ""} aria-label="${esc(b.name)}">` +
+          `${claw(b.name, 40)}<span class="mb-row-text"><strong class="mb-name" data-testid="rail-name-${b.id}">${esc(b.name)}</strong></span></button></li>`,
       )
       .join("");
     return (
       `<nav class="mb-rail" aria-label="Bots"><div class="mb-rail-top"><span class="mb-brand">Clawtrate</span>` +
       `<button type="button" class="mb-round" aria-label="New">+</button></div>${tile}<ul class="mb-list">${rows}</ul>` +
       `<div class="mb-rail-foot"><button type="button" class="mb-gw"><span class="mb-dot"></span><span><strong>Home gateway</strong><span>Connected</span></span></button></div></nav>`
+    );
+  }
+
+  // "i": a small button that shows its explanation under the line, on press,
+  // so a keyboard and a screen reader reach it.
+  const tipButton = (id, label) =>
+    `<button type="button" class="mb-info" data-act="tip" data-tip="${id}" aria-label="${esc(label)}" aria-expanded="${state.tips.has(id)}" aria-controls="mb-tip-${id}">i</button>`;
+  const tipText = (id, text) =>
+    `<p class="mb-tip" id="mb-tip-${id}" data-testid="tip-${id}"${state.tips.has(id) ? "" : " hidden"}>${esc(text)}</p>`;
+
+  // With no Main Bot listed, its place at the top of the rail says why, with
+  // the one press that moves it on (sections 4 and 15.4 to 15.7).
+  const WAITING = {
+    version: ["Your Main Bot is waiting: this OpenClaw can't make one yet.", null],
+    include: [
+      "Your Main Bot is waiting: OpenClaw won't add a bot while your channel settings are kept in a separate file.",
+      "OpenClaw adds a second bot only where it can record which bot your chat apps reach, and it doesn't write that file.",
+    ],
+    refused: [
+      "Your Main Bot is waiting: OpenClaw didn't add it.",
+      "OpenClaw said: the config file is read-only.",
+    ],
+  };
+  function setupTile() {
+    if (state.offer && state.hidden) return "";
+    let line = "";
+    let tip = "";
+    let buttons = "";
+    if (state.waiting) {
+      const [words, why] = WAITING[state.waiting];
+      line = `${esc(words)}${why ? ` ${tipButton("waiting", "Why")}` : ""}`;
+      tip = why ? tipText("waiting", why) : "";
+      buttons = `<button type="button" class="mb-btn" data-variant="quiet" data-act="setup-retry">Try again</button>`;
+    } else if (state.readonly) {
+      line = "Clawtrate needs full control of your gateway to make your Main Bot.";
+      buttons = `<button type="button" class="mb-btn" data-variant="primary" data-act="full-control">Give full control</button>`;
+    } else {
+      buttons =
+        `<button type="button" class="mb-btn" data-variant="primary" data-act="setup">Set up</button>` +
+        `<button type="button" class="mb-btn" data-variant="quiet" data-act="hide-offer">Hide</button>`;
+    }
+    return (
+      `<div class="mb-tile-wrap"><section class="mb-setup" data-testid="setup-tile" aria-labelledby="mb-setup-title">` +
+      `<span class="mb-avatar mb-empty" style="--size:56px" aria-hidden="true"><span class="mb-star is-outline"><svg viewBox="0 0 16 16"><path d="M8 1.6l1.9 4 4.4.5-3.3 3 .9 4.3L8 11.2l-3.9 2.2.9-4.3-3.3-3 4.4-.5z"/></svg></span></span>` +
+      `<strong class="mb-name" id="mb-setup-title">Set up your Main Bot</strong>` +
+      (line ? `<p class="mb-hint" data-testid="setup-line">${line}</p>${tip}` : "") +
+      `<div class="mb-setup-actions">${buttons}</div></section></div>`
     );
   }
 
@@ -205,13 +284,13 @@
   }
 
   function header() {
-    const b = mainBot();
+    const b = openBot();
     const back = phone()
-      ? `<button type="button" class="mb-round mb-back" aria-label="Back to bots">‹</button>`
+      ? `<button type="button" class="mb-round mb-back" data-act="to-list" aria-label="Back to bots">‹</button>`
       : "";
     return (
-      `<header class="mb-head">${back}<button type="button" class="mb-pill" data-testid="title-pill" aria-label="${esc(`${b.name}, Main Bot`)}">` +
-      `${claw(b.name, 22, { star: true })}<span class="mb-pill-name" data-testid="title-name">${esc(b.name)}</span></button></header>`
+      `<header class="mb-head">${back}<button type="button" class="mb-pill" data-testid="title-pill" aria-label="${esc(b.main ? `${b.name}, Main Bot` : b.name)}">` +
+      `${claw(b.name, 22, { star: !!b.main })}<span class="mb-pill-name" data-testid="title-name">${esc(b.name)}</span></button></header>`
     );
   }
 
@@ -231,13 +310,17 @@
       case "quiet":
         return (
           `<div class="mb-quiet" data-testid="brief-line"><p>Clawtrate started this conversation · ` +
-          `<button type="button" class="mb-link" data-act="brief" aria-expanded="${state.briefOpen}" aria-controls="mb-brief">${state.briefOpen ? "Hide" : "Show"}</button></p>` +
+          `<button type="button" class="mb-link" data-act="brief" aria-expanded="${state.briefOpen}" aria-controls="mb-brief">${state.briefOpen ? "Hide" : "Show"}</button> ${tipButton("quiet", "What Clawtrate added")}</p>` +
+          tipText(
+            "quiet",
+            "Clawtrate made this bot on your gateway, with its own folder. Your other bots, chat apps and settings are as they were. To remove it, delete it in its settings.",
+          ) +
           `<p class="mb-brief" id="mb-brief" data-testid="brief-text"${state.briefOpen ? "" : " hidden"}>${esc(BRIEF)}</p></div>`
         );
       case "user":
         return `<div class="mb-msg is-user"><p class="mb-bubble">${esc(it.text)}</p></div>`;
       case "bot":
-        return `<div class="mb-msg is-bot">${claw(mainBot().name, 18)}<p class="mb-bubble">${esc(it.text)}</p></div>`;
+        return `<div class="mb-msg is-bot">${claw(openBot().name, 18)}<p class="mb-bubble">${esc(it.text)}</p></div>`;
       case "status":
         return `<p class="mb-status" role="status"><span class="mb-dots" aria-hidden="true"><i></i><i></i><i></i></span>${esc(it.text)}</p>`;
       case "line": {
@@ -303,7 +386,7 @@
   function render() {
     const focus = document.activeElement?.id;
     const focusAct = document.activeElement?.dataset?.act;
-    const b = mainBot();
+    const b = openBot();
     const skip =
       tour.active && !state.limited
         ? `<div class="mb-skip-wrap"><button type="button" class="mb-chip" data-act="skip" data-testid="skip">Skip the tour</button></div>`
@@ -318,9 +401,11 @@
         : `<form class="mb-composer" data-testid="composer"><label class="visually-hidden" for="mb-input">Message</label>` +
           `<textarea id="mb-input" rows="1" placeholder="Message ${esc(b.name)}">${esc(composer.value)}</textarea>` +
           `<button type="submit" class="mb-send" aria-label="Send" ${composer.value ? "" : "disabled"}>↑</button></form></section>`);
-    root.innerHTML = `<div class="mb-shell" data-phone="${phone()}">${phone() ? "" : rail()}${pane}</div>`;
+    // On a phone the bot list takes the whole screen, the Main Bot's tile first.
+    const body = phone() ? (state.list ? rail() : pane) : rail() + pane;
+    root.innerHTML = `<div class="mb-shell" data-phone="${phone()}">${body}</div>`;
     const t = root.querySelector(".mb-transcript");
-    t.scrollTop = t.scrollHeight;
+    if (t) t.scrollTop = t.scrollHeight;
     if (focus && document.getElementById(focus)) document.getElementById(focus).focus();
     else if (focusAct) root.querySelector(`[data-act="${focusAct}"]`)?.focus();
   }
@@ -341,6 +426,12 @@
   }
 
   async function play() {
+    // No Main Bot yet: the person's own conversation with Juniper, as it was.
+    if (state.noMain) {
+      items.push({ kind: "user", text: "Did the backup run last night?" });
+      items.push({ kind: "bot", text: "Yes, it finished at 6:10 with nothing skipped." });
+      return render();
+    }
     if (state.existing) {
       items.push({ kind: "bot", text: "Morning! Your backup finished at 6:10." });
       return render();
@@ -368,6 +459,14 @@
     // message, drawn as what it is; only the published brief is the quiet line.
     if (state.opening === "taken") items.push({ kind: "user", text: "Hey, are you there?" });
     else items.push({ kind: "quiet" });
+    // #799: the gateway's model allowlist named exact models, not the Main Bot's.
+    if (state.allowlist)
+      items.push({
+        kind: "line",
+        testid: "allow-line",
+        text: "Added GPT-5.5 to the models this gateway allows",
+        actions: [["Undo", "undo-allow"]],
+      });
     if (state.from)
       items.push({
         kind: "line",
@@ -554,9 +653,60 @@
   // ---- events ---------------------------------------------------------------
 
   root.addEventListener("click", async (event) => {
+    // On a phone's bot list, a row or the tile opens its conversation.
+    const row = event.target.closest(".mb-row, .mb-tile");
+    if (row && phone() && state.list) {
+      state.list = false;
+      return render();
+    }
     const t = event.target.closest("[data-act]");
     if (!t) return;
     const act = t.dataset.act;
+    if (act === "tip") {
+      const id = t.dataset.tip;
+      if (state.tips.has(id)) state.tips.delete(id);
+      else state.tips.add(id);
+      render();
+      return root.querySelector(`[data-act="tip"][data-tip="${id}"]`)?.focus();
+    }
+    if (act === "to-list") {
+      state.list = true;
+      return render();
+    }
+    if (act === "setup") {
+      // Set up runs the first run from the start, as for anyone (15.7).
+      state.offer = false;
+      state.noMain = false;
+      items = [];
+      seedBots();
+      render();
+      say("Setting up your Main Bot");
+      await opening();
+      return;
+    }
+    if (act === "hide-offer") {
+      // Kept in the person's users.prefs: no device of theirs offers it again.
+      state.hidden = true;
+      render();
+      say("Hidden");
+      return root.querySelector(".mb-round")?.focus();
+    }
+    if (act === "setup-retry") {
+      // The stand-in gateway still can't: the line stays as it was.
+      say("Tried again. Your Main Bot is still waiting.");
+      return;
+    }
+    if (act === "full-control") {
+      // #418's request; the gateway's owner answers it.
+      say("Asked the gateway for full control");
+      return;
+    }
+    if (act === "undo-allow") {
+      const it = items.find((x) => x.testid === "allow-line");
+      Object.assign(it, { text: "Removed GPT-5.5 from the models this gateway allows", actions: [] });
+      render();
+      return say("Removed GPT-5.5 from the allowed models");
+    }
     if (act === "main-menu") {
       state.mainMenu = !state.mainMenu;
       render();
