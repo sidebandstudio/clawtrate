@@ -213,7 +213,7 @@ describe("the bot's markdown on iOS", () => {
       expect(linkPlace(new URL(url)), url).toBe("device");
   });
 
-  it("knows the person's own network: private, shared and link-local ranges, IPv6 local ranges, .local and a name without a dot", () => {
+  it("knows the person's own network: every address that isn't global unicast, .local and a name without a dot", () => {
     for (const url of [
       `http://${join4(10, 0, 0, 5)}/`,
       `http://${join4(172, 16, 0, 1)}/`,
@@ -229,6 +229,23 @@ describe("the bot's markdown on iOS", () => {
       "http://studio.local./",
       "http://nas:5000/",
       "http://nas./",
+      // Every other address that isn't global unicast: documentation, benchmarking, reserved,
+      // multicast and broadcast, IPv4 written as IPv6, and IPv6 documentation, NAT64 and 6to4.
+      "http://192.0.2.1/",
+      `http://${join4(198, 18, 0, 1)}/`,
+      `http://${join4(198, 19, 255, 1)}/`,
+      "http://203.0.113.9/",
+      `http://${join4(240, 0, 0, 1)}/`,
+      `http://${join4(224, 0, 0, 251)}/`,
+      `http://${join4(255, 255, 255, 255)}/`,
+      `http://${join4(192, 0, 0, 8)}/`,
+      "http://[::ffff:192.0.2.1]/",
+      `http://[${join6("fd00", "", "1")}]/`,
+      "http://[2001:db8::1]/",
+      `http://[${join6("64", "ff9b", "", "c000", "201")}]/`,
+      `http://[${join6("2002", "c000", "201", "", "1")}]/`,
+      "http://[3fff::1]/",
+      `http://[${join6("ff02", "", "1")}]/`,
     ])
       expect(linkPlace(new URL(url)), url).toBe("network");
     for (const url of [
@@ -236,6 +253,14 @@ describe("the bot's markdown on iOS", () => {
       // Just past the private 172.16/12 range and the shared 100.64/10 one.
       `http://${join4(172, 32, 0, 1)}/`,
       `http://${join4(100, 128, 0, 1)}/`,
+      // Just past benchmarking, and the two globally reachable addresses in 192.0.0/24.
+      `http://${join4(198, 20, 0, 1)}/`,
+      `http://${join4(192, 0, 0, 9)}/`,
+      `http://${join4(192, 0, 0, 10)}/`,
+      // Global IPv6, and the entries in 2001::/23 marked globally reachable.
+      `http://[${join6("2606", "4700", "", "1111")}]/`,
+      `http://[${join6("2001", "4", "112", "", "1")}]/`,
+      `http://[${join6("2001", "1", "", "1")}]/`,
       // A name that starts like an address is a name.
       "https://100.64.example/",
       "https://local.example/",

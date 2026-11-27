@@ -14,7 +14,6 @@ import { fromMarkdown } from "mdast-util-from-markdown";
 import { gfmFromMarkdown } from "mdast-util-gfm";
 import { gfm } from "micromark-extension-gfm";
 import { REDACTED } from "./host/secrets.ts";
-import { isLocalAddress } from "./local-network.ts";
 
 export type Inline =
   | { t: "text"; text: string }
@@ -93,25 +92,93 @@ function writtenHost(address: string): string {
 export type LinkPlace = "device" | "network";
 
 /**
+ * IPv4 ranges that aren't global unicast: IANA's special-purpose entries not marked globally
+ * reachable, multicast and the reserved block, as a first address's parts and a prefix length.
+ * Parts, not dotted, so no tracked file writes a private address out (test/addresses.test.ts).
+ */
+const NOT_GLOBAL_V4: [number[], number][] = [
+  [[0, 0, 0, 0], 8], // this network
+  [[10, 0, 0, 0], 8], // private
+  [[100, 64, 0, 0], 10], // shared
+  [[127, 0, 0, 0], 8], // loopback
+  [[169, 254, 0, 0], 16], // link-local
+  [[172, 16, 0, 0], 12], // private
+  [[192, 0, 0, 0], 24], // IETF protocol assignments, but for .9 and .10
+  [[192, 0, 2, 0], 24], // documentation
+  [[192, 88, 99, 0], 24], // the retired 6to4 relay
+  [[192, 168, 0, 0], 16], // private
+  [[198, 18, 0, 0], 15], // benchmarking
+  [[198, 51, 100, 0], 24], // documentation
+  [[203, 0, 113, 0], 24], // documentation
+  [[224, 0, 0, 0], 4], // multicast
+  [[240, 0, 0, 0], 4], // reserved, the broadcast address included
+];
+
+function v4Number(parts: number[]): number {
+  return parts.reduce((n, part) => n * 256 + part, 0);
+}
+
+function globalV4(parts: number[]): boolean {
+  const address = v4Number(parts);
+  // Two addresses in 192.0.0/24 are marked globally reachable.
+  if (parts[0] === 192 && parts[1] === 0 && parts[2] === 0 && (parts[3] === 9 || parts[3] === 10))
+    return true;
+  return !NOT_GLOBAL_V4.some(([first, bits]) => {
+    const size = 2 ** (32 - bits);
+    return Math.floor(address / size) === Math.floor(v4Number(first) / size);
+  });
+}
+
+/** An IPv6 address as the parser writes it, without brackets, as its eight groups. */
+function v6Groups(text: string): number[] | null {
+  const halves = text.split("::");
+  if (halves.length > 2) return null;
+  const groups = (part: string) => (part === "" ? [] : part.split(":").map((g) => parseInt(g, 16)));
+  const head = groups(halves[0]!);
+  const tail = halves.length === 2 ? groups(halves[1]!) : [];
+  const zeros = 8 - head.length - tail.length;
+  if (halves.length === 1 ? zeros !== 0 : zeros < 1) return null;
+  return [...head, ...Array<number>(zeros).fill(0), ...tail];
+}
+
+/**
+ * Whether an IPv6 address is global unicast: in 2000::/3 and in no special-purpose entry there
+ * that isn't marked globally reachable. Outside 2000::/3 are the unique-local, link-local,
+ * multicast, NAT64 (64:ff9b::/96, refused by docs/decisions.md) and discard ranges. IPv4 written
+ * as IPv6 is judged as IPv4.
+ */
+function globalV6(g: number[]): boolean {
+  const [a, b, c] = g as [number, number, number];
+  if (g.slice(0, 5).every((x) => x === 0) && g[5] === 0xffff)
+    return globalV4([g[6]! >> 8, g[6]! & 255, g[7]! >> 8, g[7]! & 255]);
+  if ((a & 0xe000) !== 0x2000) return false;
+  if (a === 0x2002) return false; // 6to4
+  if (a === 0x3fff && b < 0x1000) return false; // documentation, 3fff::/20
+  if (a === 0x2001 && b === 0xdb8) return false; // documentation
+  if (a === 0x2001 && b < 0x200) {
+    // IETF protocol assignments, 2001::/23, but for the entries marked globally reachable.
+    const anycast = b === 1 && g.slice(2, 7).every((x) => x === 0) && g[7]! >= 1 && g[7]! <= 3;
+    return anycast || b === 3 || (b === 4 && c === 0x112) || b >> 4 === 2 || b >> 4 === 3;
+  }
+  return true;
+}
+
+/**
  * Where a link's host is, from the host as parsed and with no lookup (docs/decisions.md, "The
- * person's own network"): this iPhone for loopback, and the person's own network for a private,
- * shared or link-local IPv4 address, IPv4 written as IPv6 included, an IPv6 unique-local or
- * link-local one, a .local name and a name without a dot. One final dot is ignored.
+ * person's own network"): this iPhone for loopback, and the person's own network for any other
+ * IP address that isn't global unicast, IPv4 written as IPv6 included, a .local name and a name
+ * without a dot. One final dot is ignored.
  */
 export function linkPlace(url: URL): LinkPlace | null {
   if (loopbackHost(url.hostname)) return "device";
-  let host = url.hostname.toLowerCase().replace(/\.$/, "");
-  // The parser writes IPv4 written as IPv6 (::ffff:a.b.c.d) in hex; it is judged as IPv4.
-  const mapped = /^\[::ffff:([0-9a-f]{1,4}):([0-9a-f]{1,4})\]$/.exec(host);
-  if (mapped) {
-    const [high, low] = [Number.parseInt(mapped[1]!, 16), Number.parseInt(mapped[2]!, 16)];
-    host = [high >> 8, high & 255, low >> 8, low & 255].join(".");
+  const host = url.hostname.toLowerCase().replace(/\.$/, "");
+  if (host.startsWith("[")) {
+    const groups = v6Groups(host.slice(1, -1));
+    return groups && globalV6(groups) ? null : "network";
   }
-  // The shared range, 100.64/10, that a carrier or a private network such as a VPN hands out.
-  const v4 = /^(\d+)\.(\d+)\.\d+\.\d+$/.exec(host);
-  const shared = v4 !== null && v4[1] === "100" && Number(v4[2]) >= 64 && Number(v4[2]) <= 127;
-  const bare = !host.startsWith("[") && !host.includes(".");
-  return isLocalAddress(`http://${host}/`) || shared || bare ? "network" : null;
+  const v4 = /^(\d+)\.(\d+)\.(\d+)\.(\d+)$/.exec(host);
+  if (v4) return globalV4(v4.slice(1, 5).map(Number)) ? null : "network";
+  return host === "local" || host.endsWith(".local") || !host.includes(".") ? "network" : null;
 }
 
 /** The plain text of inlines. */
