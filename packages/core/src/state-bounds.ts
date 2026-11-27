@@ -655,11 +655,15 @@ const sentAttachment = object<SentAttachment>()({
   mimeType: NAME,
   sizeBytes: NUMBER,
 });
-const skillNoteSkill = object<SkillNoteSkill>()({ name: id(MAX_SKILL_NAME_CHARS), action: ENUM });
+// Each id with its two quotes, as bounds count JSON characters.
+const skillNoteSkill = object<SkillNoteSkill>()({
+  name: id(MAX_SKILL_NAME_CHARS + 2),
+  action: ENUM,
+});
 const skillNote = object<SkillNote>()({
-  reviewId: id(SKILL_REVIEW_ID_CHARS),
+  reviewId: id(SKILL_REVIEW_ID_CHARS + 2),
   skills: list(MAX_SKILL_NOTE_SKILLS, skillNoteSkill),
-  agentId: id(MAX_SKILL_NOTE_AGENT_CHARS),
+  agentId: id(MAX_SKILL_NOTE_AGENT_CHARS + 2),
   after: NUMBER,
 });
 const item = flagged<TranscriptItem>()({

@@ -200,13 +200,10 @@ test.beforeAll(async ({ browser }) => {
   });
   await approve();
   await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 30_000 });
-  // A connection that writes, so opening a task reads it on the gateway, as most viewers do; with
-  // admin access, which the gateway's own undo needs on 2026.11.10.
+  // A connection that writes, so opening a task reads it on the gateway, as most viewers do.
   await hostCommand({ type: "requestAccess" });
   await approve();
   await expect(page.getByTestId("plus")).toBeVisible({ timeout: 30_000 });
-  await hostCommand({ type: "requestAccess", tier: "admin" });
-  await approve();
 });
 
 test.afterAll(async () => {
@@ -238,6 +235,11 @@ test("F-560: a real skill note folds into its run's line, is not the bot's previ
       await op.close();
     }
   }
+  // Admin access, which the gateway's own undo needs on 2026.11.10: asked for once the check's
+  // own device is paired, so the app has no pairing request of it to show.
+  await hostCommand({ type: "requestAccess", tier: "admin" });
+  await approve();
+  await expect(page.getByTestId("device-request")).toHaveCount(0);
 
   // The person reads the bot's reply, then goes to another bot before the review ends.
   await botRow("main").click();

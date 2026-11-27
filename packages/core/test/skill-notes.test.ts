@@ -16,6 +16,7 @@ import {
   type Task,
   type Transcript,
 } from "../src/index.ts";
+import { enforceState } from "../src/state-bounds.ts";
 
 const NOTE_KEY = "skill-workshop-notice:skill-workshop-review:0357efcc-6ce0-4f3f-9f39-c9cd6905189a";
 const NOTE_TEXT =
@@ -511,5 +512,35 @@ describe("F-560: the note is not the bot's preview, and doesn't mark the task un
     // A note alone on a page that isn't the whole history proves nothing.
     expect(seenThroughSkillNote(task(LISTED_NOTE, at), seen, loaded([NOTE_1006], true))).toBe(seen);
     expect(seenThroughSkillNote(task(LISTED_NOTE, at), seen, loaded([NOTE_1006]))).toBe(at);
+  });
+});
+
+describe("F-560: the note's mark is kept whole in the state", () => {
+  it("the review's id, the longest skill name and the longest bot id survive the state's bounds", () => {
+    const name = `a${"b".repeat(62)}`;
+    const agentId = "c".repeat(128);
+    const text = `💾 Learned: updated \`${name}\`. Say "undo" to revert this skill change.`;
+    const row = {
+      ...withText(NOTE_1110, text),
+      openclawDeliveryMirror: {
+        ...NOTE_1110.openclawDeliveryMirror,
+        data: {
+          ...NOTE_1110.openclawDeliveryMirror.data,
+          agentId,
+          skills: [{ name, action: "updated" }],
+        },
+      },
+    };
+    const items = mapHistory([row], { skillNotesMarked: true });
+    expect(items[0]!.skillNote).toEqual({
+      reviewId: REVIEW,
+      skills: [{ name, action: "updated" }],
+      agentId,
+    });
+    const transcript = { items } as unknown as Transcript;
+    const kept = enforceState({ transcripts: { t: transcript } } as never) as unknown as {
+      transcripts: Record<string, Transcript>;
+    };
+    expect(kept.transcripts.t!.items[0]!.skillNote).toEqual(items[0]!.skillNote);
   });
 });
