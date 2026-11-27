@@ -1959,13 +1959,15 @@ test("F-100: with the Turn time limit set to 1 minute, a longer turn is stopped 
     await page.keyboard.press("ControlOrMeta+,");
     const settings = page.getByRole("dialog", { name: "Settings" });
     await settings.getByRole("button", { name: "Conversation", exact: true }).click();
-    const field = settings.getByLabel("Turn time limit");
+    const field = settings.getByRole("spinbutton", { name: "Turn time limit" });
     await field.fill(minutes);
     await field.press("Enter");
     await page.keyboard.press("Escape");
     await expect(settings).toHaveCount(0);
     await page.keyboard.press("ControlOrMeta+,");
-    await expect(settings.getByLabel("Turn time limit")).toHaveValue(minutes);
+    await expect(settings.getByRole("spinbutton", { name: "Turn time limit" })).toHaveValue(
+      minutes,
+    );
     await page.keyboard.press("Escape");
   };
   // The host is shared by later checks: its limit goes back to the default whatever happens.

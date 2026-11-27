@@ -14,7 +14,7 @@ const APP = join(import.meta.dirname, "..");
 const FUSE_SENTINEL = "dL7pKGdnNz796PbbjQWNKmHXBZaB9tsX";
 
 describe("packaging configuration", () => {
-  it("names the app and ships only the bundled main, preload and renderer", () => {
+  it("names the app and ships only the bundled main, preload, renderer and carried plugins", () => {
     const config = builderConfig({}, "45.3.2");
     expect(config.appId).toBe(APP_ID);
     expect(APP_ID).toBe("dev.clawtrate.desktop");
@@ -25,7 +25,11 @@ describe("packaging configuration", () => {
       "out/preload/**",
       "out/renderer/**",
       "resources/icon.png",
+      "out/plugins/plugins.json",
       "!**/node_modules/**",
+    ]);
+    expect(config.extraResources).toEqual([
+      { from: "out/plugins", to: "plugins", filter: ["*.tgz"] },
     ]);
     expect(JSON.stringify(config)).not.toMatch(/fixture|out\/web/);
   });
