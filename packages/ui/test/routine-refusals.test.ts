@@ -69,12 +69,12 @@ it("#848: a Run now whose answer was lost is not confirmed, never couldn't, with
     runNoteWords(
       {
         status: "unknown",
-        error: `${LATE} Read back just now, no run is under way: it hasn't started, or not yet.`,
+        error: `${LATE} Read back just now, no run is under way: this one may still start, or may already have finished.`,
       },
       false,
     ),
   ).toBe(
-    "Not confirmed. The gateway didn't answer in time. Read back just now, no run is under way: it hasn't started, or not yet.",
+    "Not confirmed. The gateway didn't answer in time. Read back just now, no run is under way: this one may still start, or may already have finished.",
   );
   expect(runNoteWords({ status: "failed", error: "cron busy" }, false)).toBe(
     "Couldn't start a run: cron busy",

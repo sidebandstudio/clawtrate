@@ -792,7 +792,8 @@ export class RoutinesEngine {
    * another gateway at the same address, they wait for this connection's list.
    */
   private listedEpoch = 0;
-  private readonly updates = new Set<{ id: string; removed: boolean }>();
+  /** Writes out for a routine. `evented`: a `cron` event for it arrived since the write was sent. */
+  private readonly updates = new Set<{ id: string; removed: boolean; evented?: boolean }>();
   /**
    * Jobs read again (`cron.get`) after an event carried only their summary, one read each:
    * `again` when another event came while it was out, so its answer may be older than that.
@@ -946,6 +947,7 @@ export class RoutinesEngine {
     const jobId = str(record.jobId);
     const action = str(record.action);
     const summary = isJobSummary(record.job);
+    for (const update of this.updates) if (update.id === jobId) update.evented = true;
     if (action === "removed") {
       for (const update of this.updates) if (update.id === jobId) update.removed = true;
       if (jobId) this.reads.delete(jobId);
@@ -1402,7 +1404,7 @@ export class RoutinesEngine {
     if (this.updates.size >= MAX_ROUTINE_UPDATES)
       return { status: "refused", error: "Too many routine changes are in flight." };
     // Registered as an update, so a removal confirmed meanwhile is not undone by this reply.
-    const pending = { id, removed: false };
+    const pending: { id: string; removed: boolean; evented?: boolean } = { id, removed: false };
     this.updates.add(pending);
     try {
       const routine = parseRoutine(
@@ -1420,16 +1422,25 @@ export class RoutinesEngine {
       // The answer was lost: a read that shows the change is the save an answer would confirm.
       const read = await this.readBack(id, epoch);
       if (pending.removed || read === null) return { status: "deleted" };
-      if (read === undefined)
+      const still = `it is still ${enabled ? "paused" : "not paused"}: the change hasn't taken, or not yet.`;
+      if (pending.evented) {
+        // A `cron` event for it since the write was sent is newer than this read, which may
+        // predate it: the routine as that event left it decides, and the read is never kept.
+        const shown = this.ctx.get().routines.find((each) => each.id === id);
+        if (shown?.enabled === enabled) return { status: "saved", routine: shown };
+        if (shown)
+          return {
+            status: "unknown",
+            error: `${failed.error} As the gateway last reported it, ${still}`,
+          };
+      }
+      if (read === undefined || pending.evented)
         return {
           status: "unknown",
           error: `${failed.error} Clawtrate couldn't read the routine back, so whether it was ${enabled ? "resumed" : "paused"} isn't known.`,
         };
       if (read.routine.enabled !== enabled)
-        return {
-          status: "unknown",
-          error: `${failed.error} Read back just now, it is still ${enabled ? "paused" : "not paused"}: the change hasn't taken, or not yet.`,
-        };
+        return { status: "unknown", error: `${failed.error} Read back just now, ${still}` };
       this.keep(read.routine, epoch);
       return { status: "saved", routine: read.routine };
     } finally {
@@ -1472,7 +1483,8 @@ export class RoutinesEngine {
               ? "Read back just now, the gateway no longer has this routine."
               : read.routine.runningAt !== null
                 ? "Read back just now, a run is under way, which may be this one."
-                : "Read back just now, no run is under way: it hasn't started, or not yet."
+                : // A short run can start and finish before the read: never "hasn't started".
+                  "Read back just now, no run is under way: this one may still start, or may already have finished."
         }`,
       };
     }

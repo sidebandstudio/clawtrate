@@ -2377,6 +2377,55 @@ describe("#848: a routine write whose answer was lost is never said in the clien
     });
   });
 
+  it("#848: a pause whose answer was lost never keeps a read-back that a cron event for the routine since the write was sent may postdate", async () => {
+    /** The pause's answer is lost; while the read back is out, `event` arrives; the read answers `read`. */
+    const pause = async (event: Record<string, unknown>, read: Record<string, unknown>) => {
+      const holder: { routines?: RoutinesEngine } = {};
+      const made = engine(
+        {
+          "cron.list": () => ({ jobs: [job()], hasMore: false }),
+          "cron.status": () => ({ enabled: true }),
+          "cron.update": () => {
+            throw timedOut("cron.update")();
+          },
+          "cron.get": () => {
+            holder.routines!.onEvent({ action: "updated", jobId: JOB, job: event });
+            return read;
+          },
+        },
+        initialRoutinesState,
+        ADMIN,
+      );
+      holder.routines = made.routines;
+      await made.routines.load();
+      const outcome = await made.routines.setEnabled(JOB, false);
+      return { outcome, shown: made.state().routines.find((each) => each.id === JOB) };
+    };
+    // Paused, then resumed elsewhere: the event says running, the older read says paused.
+    const resumed = await pause(job(), job({ enabled: false }, { nextRunAtMs: undefined }));
+    expect(resumed.outcome).toEqual({
+      status: "unknown",
+      error: `${LATE} As the gateway last reported it, it is still not paused: the change hasn't taken, or not yet.`,
+    });
+    expect(resumed.shown?.enabled).toBe(true);
+    // The pause's own event arrives and a read from before it says running: the event decides.
+    const paused = await pause(job({ enabled: false }, { nextRunAtMs: undefined }), job());
+    expect(paused.outcome).toMatchObject({ status: "saved", routine: { enabled: false } });
+    expect(paused.shown?.enabled).toBe(false);
+  });
+
+  it("#848: a Run now whose answer was lost never says a run hasn't started when it may have finished before the read", async () => {
+    // The run started and finished before `cron.get` answered: no run under way, a last run now.
+    expect(
+      await lost("cron.run", timedOut("cron.run"), {
+        read: job({}, { lastRunAtMs: 1_795_093_200_000, lastRunStatus: "ok" }),
+      }).routines.runNow(JOB),
+    ).toEqual({
+      status: "unknown",
+      error: `${LATE} Read back just now, no run is under way: this one may still start, or may already have finished.`,
+    });
+  });
+
   it("#848: a Run now whose answer was lost reads the routine back and says what it found, never that a run started; a refusal is the gateway's", async () => {
     for (const cut of [dropped, stopped])
       expect(await lost("cron.run", cut, { down: true }).routines.runNow(JOB)).toEqual({
@@ -2385,7 +2434,7 @@ describe("#848: a routine write whose answer was lost is never said in the clien
       });
     expect(await lost("cron.run", timedOut("cron.run")).routines.runNow(JOB)).toEqual({
       status: "unknown",
-      error: `${LATE} Read back just now, no run is under way: it hasn't started, or not yet.`,
+      error: `${LATE} Read back just now, no run is under way: this one may still start, or may already have finished.`,
     });
     expect(
       await lost("cron.run", timedOut("cron.run"), {
