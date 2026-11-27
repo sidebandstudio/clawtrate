@@ -60,7 +60,7 @@ One plugin of an instance may also declare `botBrowsers`: which seeded bots get 
 pnpm dev-gateway start --instance browse --with-plugin clawtrate-computer
 ```
 
-[`plugins/clawtrate-tool-rules`](../../plugins/clawtrate-tool-rules/README.md), the rules plugin (what each bot may do without asking, after asking, or never), declares no setting and no tool, so it adds only its entry and its load path; every bot keeps the development config's denies. The development config keeps the Codex harness's plugin from loading (`plugins.entries.codex: {enabled: false}`, OpenClaw's own uninstall marker), since the rules plugin refuses every Ask wherever the config lets it load:
+[`plugins/clawtrate-tool-rules`](../../plugins/clawtrate-tool-rules/README.md), the rules plugin (what each bot may do without asking, after asking, or never), declares no setting and no tool, so it adds only its entry and its load path; every bot keeps the development config's denies.:
 
 ```bash
 pnpm dev-gateway start --instance rules --with-plugin clawtrate-tool-rules
