@@ -32,6 +32,8 @@ export type OperatorOptions = {
   /** Approve one pairing request id on this instance. */
   approvePairing: (requestId: string) => Promise<void>;
   timeoutMs?: number;
+  /** Each request's limit when it names none (60 s by default). */
+  requestTimeoutMs?: number;
 };
 
 type JsonRecord = Record<string, unknown>;
@@ -66,6 +68,8 @@ export class OperatorSession {
   deviceId = "";
   /** The OpenClaw version the gateway reported in its hello. */
   serverVersion: OpenclawVersion | null = null;
+  /** Each request's limit when it names none. */
+  private requestTimeoutMs = 60_000;
 
   private constructor() {}
 
@@ -79,6 +83,7 @@ export class OperatorSession {
     const tokens = new Map<string, { token: string; scopes: string[] }>();
     const session = new OperatorSession();
     session.deviceId = identity.deviceId;
+    if (options.requestTimeoutMs !== undefined) session.requestTimeoutMs = options.requestTimeoutMs;
     const deadline = Date.now() + (options.timeoutMs ?? 60_000);
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const outcome = await new Promise<
@@ -191,7 +196,7 @@ export class OperatorSession {
   async request<T = JsonRecord>(
     method: string,
     params: unknown = {},
-    timeoutMs = 60_000,
+    timeoutMs = this.requestTimeoutMs,
   ): Promise<T> {
     const client = this.client;
     if (!client) throw new Error("not connected");

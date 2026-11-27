@@ -1908,6 +1908,7 @@ test.describe("errors and resync", () => {
                   uncertain: [],
                   refused: ["agent:marlow:main"],
                   unanswered: [],
+                  followUps: [],
                   omitted: 0,
                   recipientsAsked: true,
                 },

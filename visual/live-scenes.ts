@@ -70,6 +70,14 @@ export const LIVE_VIEWS: Array<{
     ready: (page) => expect(page.getByTestId("stopped-with")).toBeVisible(),
   },
   {
+    scene: "run-stopped-follow-up",
+    rows: "F-296 F-298",
+    ready: (page) =>
+      expect(page.getByTestId("stop-note").last()).toContainText(
+        "The gateway started this turn on its own",
+      ),
+  },
+  {
     scene: "message-actions",
     rows: "F-283 F-067",
     ready: (page) => expect(page.getByTestId("reactions")).toBeVisible(),
