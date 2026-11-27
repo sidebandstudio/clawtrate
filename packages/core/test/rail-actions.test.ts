@@ -1176,6 +1176,24 @@ describe("an archive or a delete bound to the connection it began on", () => {
     client.stop();
   });
 
+  it("a request asked for in Settings while the reconnect's identity is read stays shown while it runs", async () => {
+    const { client, gateway, stamp } = await granted("gateway-b");
+    gateway.handlers["device.scopes.waitUpgrade"] = () => new Promise(() => {});
+    const naming = deferred<{ deviceId: string }>();
+    gateway.handlers["gateway.identity.get"] = () => naming.promise;
+    gateway.dropAll();
+    const renaming = outcome(client.renameTask("agent:pip:main", "Weekly", { stamp }));
+    await until(() => client.state.connection.status === "connected");
+    // On the gateway that answered, the person asks for access before it has named itself.
+    await client.requestAccess("admin");
+    await until(() => client.state.connection.upgrade.status === "pending");
+    naming.resolve({ deviceId: "gateway-b" });
+    expect(await renaming).toBe("This change was made for another gateway, so nothing was sent.");
+    expect(gateway.calls("device.scopes.requestUpgrade")).toHaveLength(1);
+    expect(client.state.connection.upgrade.status).toBe("pending");
+    client.stop();
+  });
+
   it("a task change on a gateway whose identity can't be read says so, not that it is another gateway", async () => {
     const { client, gateway } = await connected(INTERACTIVE_SCOPES);
     gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway-a" });

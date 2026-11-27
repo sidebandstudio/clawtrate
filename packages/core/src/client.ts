@@ -3539,6 +3539,8 @@ export class ClawtrateClient {
           waiter.reject(new Error(id === null ? IDENTITY_UNREAD : ANOTHER_GATEWAY));
       if (this.accessWaiters.length > 0 || (id !== null && named.has(id)))
         return this.startUpgrade();
+      // A request asked for on this connection meanwhile is under way: its answer settles it.
+      if (this.scopeUpgrade) return;
       // shortcut: an ask with no waiter (Settings' own) queued beside them is dropped too; keep
       // asks apart from their waiters if that ever matters. A dropped accept of full control
       // is released, so it can be made again.
