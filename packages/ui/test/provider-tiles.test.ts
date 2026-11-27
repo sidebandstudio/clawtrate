@@ -402,6 +402,13 @@ describe("a provider or method the app doesn't know", () => {
     ]);
   });
 
+  it("is named by its id even when the id is a name every object has, such as constructor", () => {
+    const tiles = shape([
+      { provider: "constructor", loginOptions: [{ id: "constructor/x", kind: "oauth" }] },
+    ]);
+    expect(tiles.map((tile) => tile.name)).toEqual(["Constructor"]);
+  });
+
   it("an account of it says so on its tile", () => {
     const tiles = providerTiles(readMethods([PLUGIN]), [account("nimbus:main")]);
     expect(tiles[0]!.connected).toBe(true);

@@ -728,7 +728,7 @@ export function useConnect({
       onClick={() =>
         void (current && (current.byKey || current.flow === "key")
           ? toKey(current.provider)
-          : start(where.method))
+          : start(where.method, where.tile))
       }
     >
       {word}

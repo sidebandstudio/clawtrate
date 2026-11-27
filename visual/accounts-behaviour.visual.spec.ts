@@ -429,6 +429,24 @@ test("F-474: Connect an account is a grid of providers, each named, reached by k
   });
 });
 
+test("F-474: a sign-in chosen among a provider's methods and started again still goes back to them", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&signin=failed`, "light");
+  await page.keyboard.press("ControlOrMeta+n");
+  await page.getByRole("button", { name: "Next" }).click();
+  await page.getByRole("button", { name: "Connect another account" }).click();
+  await newBot(page)
+    .getByRole("button", { name: /^OpenAI\b/ })
+    .click();
+  await newBot(page).getByRole("button", { name: "Use a device code" }).click();
+  await expect(page.getByRole("heading", { name: "Couldn't connect" })).toBeVisible();
+  await page.getByRole("button", { name: "Try again" }).click();
+  await expect(page.getByRole("heading", { name: "Couldn't connect" })).toBeVisible();
+  await page.getByRole("button", { name: "Back to sign-in methods" }).click();
+  await expect(page.getByRole("heading", { name: "OpenAI", level: 2 })).toBeVisible();
+});
+
 test("F-474: a provider the app doesn't know shows under the gateway's name, and its sign-in works", async ({
   page,
 }) => {

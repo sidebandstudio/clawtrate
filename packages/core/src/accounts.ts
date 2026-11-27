@@ -666,7 +666,8 @@ const PROVIDER_NAMES: Record<string, string> = {
 /** A provider's name in text. */
 export function providerName(provider: string): string {
   return (
-    PROVIDER_NAMES[provider] ??
+    // Its own names only: an id such as `constructor` is not one of them.
+    (Object.hasOwn(PROVIDER_NAMES, provider) ? PROVIDER_NAMES[provider] : undefined) ??
     (provider ? provider.charAt(0).toUpperCase() + provider.slice(1) : provider)
   );
 }
