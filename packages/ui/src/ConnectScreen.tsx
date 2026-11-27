@@ -12,6 +12,7 @@ import {
   protectedGatewayUrl,
   SETUP_PAIRING_APPEARED,
   SETUP_PAIRING_GONE,
+  spokenCode,
 } from "@clawtrate/core";
 import {
   useEffect,
@@ -197,6 +198,18 @@ function PairingPanel({ connection }: { connection: ConnectionState }) {
         {gatewayLabel(connection.gatewayUrl)} has not seen this device before. Approve it once on
         the gateway's machine and {PRODUCT_NAME} connects by itself.
       </p>
+      {pairing.code && (
+        <div className="pair-code" data-testid="pairing-code">
+          <p className="pair-code-value">
+            <span className="visually-hidden">This device's code: {spokenCode(pairing.code)}</span>
+            <span aria-hidden="true">{pairing.code}</span>
+          </p>
+          <p className="pair-code-note">
+            Or approve it with one click: open {PRODUCT_NAME} on a device that already has full
+            control of this gateway and pick this code there.
+          </p>
+        </div>
+      )}
       {pairing.approveNote && <p className="approve-note">{pairing.approveNote}</p>}
       <CommandLine command={pairing.approveCommand} label="Copy approve command" />
       <SetupSteps

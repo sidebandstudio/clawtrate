@@ -52,6 +52,7 @@ import { gatewayTitle } from "./format.ts";
 import { useShowCommands, useShowThinking } from "./preferences.ts";
 import { useForget } from "./forget.ts";
 import { thisComputer, ThisComputerStage } from "./this-computer.ts";
+import { DeviceRequestsList } from "./DeviceApproval.tsx";
 import { BackIcon, ChevronIcon, CloseIcon, ExternalIcon } from "./icons.tsx";
 
 // The width below which a section replaces the list instead of sitting beside it (bots.css).
@@ -1089,6 +1090,8 @@ export function Settings({
           </div>
         )}
       </dl>
+      {/* Devices waiting for approval (setup-effortless.md §5). */}
+      <DeviceRequestsList />
       {/* A newer OpenClaw, or its update under way: the line, and where it is made (#590). */}
       {updateLine && <UpdateOpenClawLink line={updateLine} where="gateway" />}
       {missing.length > 0 && (
