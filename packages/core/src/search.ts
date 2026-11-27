@@ -7,7 +7,14 @@
 
 import { cutText } from "./bounds.ts";
 import { establishFolder } from "./files.ts";
-import { asRecord, botIdFromSessionKey, generatedName, type RawRecord } from "./mapping.ts";
+import {
+  asRecord,
+  botIdFromSessionKey,
+  generatedName,
+  isPlaceholderName,
+  mapSessionRow,
+  type RawRecord,
+} from "./mapping.ts";
 import { markerTextOut, snippetWithoutMarker, titleWithoutMarker } from "./send-marker.ts";
 import { MAX_ID_CHARS } from "./state-bounds.ts";
 import { MAX_TASK_LABEL_CHARS } from "./task-actions.ts";
@@ -255,12 +262,13 @@ export function readMessageSearch(reply: RawRecord | null, query = ""): MessageS
     const row = asRecord(raw);
     const key = exactId(row?.key);
     // A title the gateway made from the first message loses the marker, as the task list's does.
+    // The gateway's placeholder name is no title: the task's own fallback stands for it (#741).
     const named = str(row?.displayName);
-    // A small model's name for the task comes after the person's, as in the task list (#750).
+    // A small model's name for the task (#750) is placed as the task list places it.
     const title =
-      str(row?.label) ??
-      (row && key ? generatedName(row, key) : null) ??
-      (named === null ? null : str(titleWithoutMarker(named)));
+      row && key && (isPlaceholderName(row, key) || generatedName(row, key))
+        ? (mapSessionRow({ ...row, archived: false })?.title ?? null)
+        : (str(row?.label) ?? (named === null ? null : str(titleWithoutMarker(named))));
     if (key && title && hits.some((hit) => hit.sessionKey === key))
       titles[key] = cutText(title, MAX_TASK_LABEL_CHARS);
   }

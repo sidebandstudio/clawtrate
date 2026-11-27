@@ -43,6 +43,7 @@ import {
   MAX_DEFERRED_STOPS,
   MAX_NAMED_TASKS,
   MAX_TEXTLESS_SENDS,
+  MAX_FIRST_MESSAGE_TITLES,
   MAX_OUTCOME_LOOKUPS,
   MAX_FILE_READS,
   MAX_PICTURE_READS,
@@ -93,6 +94,7 @@ import {
   MAX_RUN_LIST,
   MAX_RUN_TEXT_CHARS,
   MAX_STEPS_PER_TASK,
+  MAX_TITLE_CHARS,
   MAX_TRACKED_TASKS,
   MAX_UNROUTED,
   RUN,
@@ -326,6 +328,13 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
     each: ID,
     row: null,
     opaque: "counted in `taskNames`",
+  },
+  // The title each task's first message makes, by task key, with the outgoing message it was
+  // made from until history holds it.
+  firstMessageTitles: {
+    max: MAX_FIRST_MESSAGE_TITLES,
+    each: 2 * ID + 2 * MAX_TITLE_CHARS + N,
+    row: "bookkeeping",
   },
   // The store's listeners: a host's windows and web viewers.
   "store.listeners": { max: MAX_STORE_LISTENERS, each: 0, row: null },

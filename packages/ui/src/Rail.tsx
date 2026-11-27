@@ -544,6 +544,7 @@ export function Rail({
   bubbles,
   onBubbles,
   top,
+  notice,
   onOpenSettings,
   settingsKeys = "⌘,",
   onNewBot,
@@ -579,6 +580,8 @@ export function Rail({
   onBubbles: (choice: BubbleChoice) => void;
   /** The one-pane layout's brand and update button, at the start of the top band (titlebar.md). */
   top?: ReactNode;
+  /** A quiet line above the gateway row: the devices asking to use this gateway (setup-effortless.md §5). */
+  notice?: ReactNode;
   onOpenSettings: (section?: SettingsSection) => void;
   /** Settings' keys as this platform names them, for the gear's tooltip. */
   settingsKeys?: string;
@@ -2314,6 +2317,7 @@ export function Rail({
           Waiting for the gateway's owner to approve access. The change is made once they do.
         </p>
       )}
+      {notice}
       <div className="rail-footer">
         <button
           type="button"

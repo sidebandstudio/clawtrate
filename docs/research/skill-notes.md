@@ -79,6 +79,28 @@ Observed on the same kind of instance, also started with `--with-message-tool`. 
 
 The only difference is the run. It does not mark the note. A send to a channel is mirrored into the task the channel's peer maps to (`mirrorDeliveredPayloads`), with the bot's key and no run, and the note in a channel's task is mirrored by the same code, also with no run (read from the source, not produced here: a development gateway has no channel). So a bot can write a row with every field the note has.
 
+## Which turns are reviewed
+
+Observed on development gateways of each version started with `--with-skill-review --no-seed`. One `#learn` turn (ten model calls) was sent to Juniper (`main`) in a new task per sender, and `chat.history` was read every five seconds for two minutes for a row keyed `skill-workshop-notice:…`:
+
+| The turn was sent by                                                    | 2026.10.6        | 2026.11.10       |
+| ----------------------------------------------------------------------- | ---------------- | ---------------- |
+| a paired operator with `operator.read` and `operator.write`             | note, after 70 s | none             |
+| a paired operator with Clawtrate's interactive tier (read, write, approvals, questions) | note, after 40 s | none |
+| a paired operator with `operator.admin`, `operator.read`, `operator.write` | note, after 45 s | note, after 40 s |
+| the CLI (`openclaw gateway call chat.send`)                             | note, after 35 s | none             |
+
+On 2026.11.10 the scripted model saw 23 tools in the admin's turn and 22 in the others: the same list without `skill_workshop`. `skill_library` was in both. No review request reached the model after the turns with no note.
+
+Why, from each version's source:
+
+- **The review's gate is the same on both:** a turn is counted only when it was offered `skill_workshop`. 2026.10.6 reads `skillWorkshopAvailable`, set from the turn's effective tools (`agent-end-side-effects-*.mjs`, `isEligibleContext`; `builtin-openclaw-*.mjs`). 2026.11.10 reads the turn's `toolNames`, its effective tools (`extensions/skill-workshop`, `experience-review-scheduler.ts`, `isEligibleContext`); its documentation lists "turns where tool policy hides `skill_workshop`" among the turns that don't count (`docs/tools/self-learning.md`).
+- **2026.10.6** has one tool for both stores: `skill_workshop` writes the bot's learned skills, or the person's own library with `target` (`openclaw-tools-*.mjs`). Every sender above was offered it.
+- **2026.11.10** splits them. A turn's skill authoring goes to the person's own library (`defaultTarget: "personal"`) when the sender has a user profile and either lacks `operator.admin` or the gateway has more than one user profile; an admin on a gateway with one profile authors the bot's skills (`"workspace"`) (`projectSkillLibraryPresentation`, `src/gateway/skill-library-authoring.ts`). For a personal turn the gateway removes the tools of every plugin with its own skills folder, `skill-workshop` among them, and offers `skill_library` (`applySkillLibraryGrant`). With `skill_workshop` gone the turn isn't counted, so no review runs.
+- The more-than-one-profile case was read, not run: a development gateway has one profile.
+
+Read from the source, no 2026.11.10 setting changes this for a sender without `operator.admin`: the choice reads only the sender's profile, its admin scope and the number of profiles.
+
 ## Undo
 
 Saying "undo" in the task is the gateway's own way back: the queued system event tells the bot which call reverts the change. A client can also call `skills.workshop.restore`, which needs `operator.admin`.
