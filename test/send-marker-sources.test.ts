@@ -14,6 +14,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
@@ -24,6 +25,9 @@ const SITES = {
   workContext: /\bworkContext\s*:/g,
   "chat.send": /\brequest\s*(?:<[^>]*>)?\(\s*["'`]chat\.send["'`]/g,
 };
+
+// Comments go by the parser's tokens, so a `//` inside a string (a URL) keeps the code after it.
+const uncommented = ts.createPrinter({ removeComments: true });
 
 const NOT_SOURCE = new Set(["node_modules", "out", "dist", "build", "coverage", "test"]);
 
@@ -40,7 +44,9 @@ function sources(dir: string): string[] {
 function sites(dir: string): Record<string, number> {
   const found: Record<string, number> = {};
   for (const file of ["packages", "apps"].flatMap((top) => sources(join(dir, top)))) {
-    const code = readFileSync(file, "utf8").replace(/\/\/.*$|^\s*\*.*$/gm, "");
+    const code = uncommented.printFile(
+      ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest),
+    );
     const name = relative(dir, file).split(sep).join("/");
     for (const [kind, pattern] of Object.entries(SITES)) {
       const count = code.match(pattern)?.length ?? 0;
@@ -75,6 +81,11 @@ describe("what isn't a person's message never carries the mark", () => {
         ["packages/core/src/node/relay.ts", send],
         ["packages/core/test/client.ts", send],
         ["apps/desktop/src/main/send.ts", send],
+        // A `//` in a string on the same line as the send.
+        [
+          "packages/core/src/url.ts",
+          'const url = "https://example.invalid"; this.request("chat.send", {});\n',
+        ],
       ] as const) {
         mkdirSync(dirname(join(dir, path)), { recursive: true });
         writeFileSync(join(dir, path), text);
@@ -89,6 +100,7 @@ describe("what isn't a person's message never carries the mark", () => {
         "packages/core/src/node/relay.ts: chat.send": 1,
         "packages/core/src/node/relay.ts: marker": 1,
         "packages/core/src/node/relay.ts: workContext": 1,
+        "packages/core/src/url.ts: chat.send": 1,
       });
     } finally {
       rmSync(dir, { recursive: true, force: true });
