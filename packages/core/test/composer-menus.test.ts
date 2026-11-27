@@ -25,7 +25,8 @@ const metadata = {
 // task that has two library skills: the person's own and one another person shared. Names made up.
 const entry = (overrides: Record<string, unknown>) => ({
   skillId: "5ace502a-23c5-418a-9319-61c19260d698",
-  revision: "8d0e583b89fedcd9254155eb18317ddcc42d8338cbece9f4f8092d375ab848c3",
+  // A revision is a SHA-256 in hex; this one is made up.
+  revision: "0123456789abcdef".repeat(4),
   slug: "tide-table",
   name: "s_tide_tabl_5ace502a23c5418a9319",
   ownerLabel: "Rowan Example",
