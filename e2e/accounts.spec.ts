@@ -603,11 +603,22 @@ async function connectFromSettings() {
   return settings;
 }
 
+/**
+ * One of Acme's sign-ins, by its label: Acme, a plugin's provider the app has no logo for, is a
+ * tile after the gateway's own providers, behind Show more, and its two sign-ins sit behind it.
+ */
+async function chooseAcme(settings: ReturnType<typeof dialog>, method: RegExp) {
+  await settings.getByRole("button", { name: "Show more" }).click();
+  await settings.getByRole("button", { name: /^Acme \(scripted\)/ }).click();
+  await expect(settings.getByRole("heading", { name: "Acme (scripted)" })).toBeVisible();
+  await settings.getByRole("button", { name: method }).click();
+}
+
 test("F-474 F-476: a sign-in with a link and a code lands where the screen says it landed, and takes a label", async () => {
   const settings = await connectFromSettings();
   await shots("settings-accounts");
   await settings.getByRole("button", { name: "Connect an account" }).first().click();
-  await settings.getByRole("button", { name: /^Acme \(scripted\)/ }).click();
+  await chooseAcme(settings, /^Acme \(scripted\)/);
   const code = settings.locator(".b-code code");
   await expect(code).toBeVisible({ timeout: 20_000 });
   await expect(settings.getByText(/The code works for 15 minutes\./)).toBeVisible();
@@ -655,7 +666,7 @@ test("F-474 F-476: a sign-in with a link and a code lands where the screen says 
 test("F-474: a browser sign-in with the code pasted back lands where the screen says it landed", async () => {
   const settings = await connectFromSettings();
   await settings.getByRole("button", { name: "Connect an account" }).first().click();
-  await settings.getByRole("button", { name: /^Acme in the browser \(scripted\)/ }).click();
+  await chooseAcme(settings, /^Acme in the browser \(scripted\)/);
   const paste = settings.getByTestId("paste");
   await expect(paste).toBeVisible({ timeout: 20_000 });
   await expect(paste).toHaveAttribute("type", "password");
@@ -720,7 +731,7 @@ test("F-474 F-475: an API key typed into the key path reaches the gateway once a
 test("F-474: a sign-in that is refused says so, and what the gateway now has", async () => {
   const settings = await connectFromSettings();
   await settings.getByRole("button", { name: "Connect an account" }).first().click();
-  await settings.getByRole("button", { name: /^Acme \(scripted\)/ }).click();
+  await chooseAcme(settings, /^Acme \(scripted\)/);
   const code = settings.locator(".b-code code");
   await expect(code).toBeVisible({ timeout: 20_000 });
   await scripted("/scripted/signin/answer", {

@@ -345,6 +345,119 @@
     0 0 0 4.5px var(--text-muted);
 }
 
+/* Providers: Connect an account's grid, one tile per provider with its logo and name. Two
+   columns where there is room for them, one where there isn't (a phone, a bot's Settings tab);
+   tiles read left to right, row by row. */
+.b-tiles {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.b-tile {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  min-height: 58px;
+  padding: 9px 14px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-lg);
+  background: var(--bg-bubble);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.b-tile:hover {
+  background: var(--bg-hover);
+}
+
+.b-tile[aria-disabled="true"] {
+  cursor: default;
+}
+
+.b-tile-text {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+  gap: 1px;
+}
+
+.b-tile-name {
+  overflow: hidden;
+  font-size: var(--text-base);
+  font-weight: var(--weight-medium);
+  line-height: 20px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.b-tile-note {
+  overflow: hidden;
+  font-size: var(--text-sm);
+  line-height: 18px;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--text-faint);
+}
+
+/* A provider's logo on a small square of its own; a provider without one shows its initial. */
+.b-logo {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-pane);
+  color: var(--text);
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+}
+
+.b-logo svg {
+  width: 20px;
+  height: 20px;
+}
+
+.b-logo[data-logo="none"] {
+  color: var(--text-muted);
+}
+
+.b-more {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 32px;
+  margin-top: 8px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  font-size: var(--text-md);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.b-more:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.b-more .icon {
+  width: 13px;
+  height: 13px;
+  transform: rotate(90deg);
+}
+
+[data-input="touch"] .b-more {
+  min-height: var(--tap-min);
+}
+
 /* Choices: accounts and sign-in methods --------------------------------------- */
 
 /* new: a list of choices in one soft block, with hairlines between rows, as
