@@ -166,10 +166,14 @@ describe("a small model's name in the order (#750)", () => {
   // The task list, the archived list and search, each from the same row as 2026.11.10 sends it.
   const first = (key: string) => (key === KEY ? "What I asked" : null);
   const searched = (row: Record<string, unknown>) =>
-    readMessageSearch({
-      results: [{ sessionKey: KEY, messageId: "m1", role: "assistant", snippet: "A plan." }],
-      sessions: [row],
-    }).titles[KEY];
+    readMessageSearch(
+      {
+        results: [{ sessionKey: KEY, messageId: "m1", role: "assistant", snippet: "A plan." }],
+        sessions: [row],
+      },
+      "",
+      first,
+    ).titles[KEY];
   const titles = (row: Record<string, unknown>) => [
     mapSessionRow(row, { firstMessage: first(KEY) })?.title,
     mapArchivedRow({ ...row, archived: true }, "main", first)?.title,
@@ -184,8 +188,8 @@ describe("a small model's name in the order (#750)", () => {
     // Over a real title the gateway supplied.
     const titled = { ...named, displayName: "A model's title", derivedTitle: "A model's title" };
     expect(titles(titled)).toEqual(["Garden plan", "Garden plan", "Garden plan"]);
-    // Until it arrives, the first message's title (search has none of its own: the key's).
-    expect(titles(ROW_1110)).toEqual(["What I asked", "What I asked", "New task"]);
+    // Until it arrives, the first message's title.
+    expect(titles(ROW_1110)).toEqual(["What I asked", "What I asked", "What I asked"]);
   });
 
   it("an archived row that carries only `sessionKey` is read as the task list reads it", () => {
@@ -427,6 +431,21 @@ describe("a task titled from its first message", () => {
       gateway.emit("sessions.changed", { sessionKey: KEY, reason: "delete" });
       await until(() => !kept.has(KEY));
       expect(shownIn(client)).toBeUndefined();
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("is a message match's title in search, for a task outside the list too", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["sessions.search"] = () => ({
+      results: [{ sessionKey: KEY, messageId: "m1", role: "assistant", snippet: "A plan." }],
+      sessions: [ROW_1110],
+    });
+    const { client } = await openTask({ gateway });
+    try {
+      keep(client, KEY, "Plan the garden", null);
+      expect((await client.searchMessages("plan", null)).titles[KEY]).toBe("Plan the garden");
     } finally {
       client.stop();
     }

@@ -11801,7 +11801,9 @@ export class ClawtrateClient {
         (!this.showOtherToolSessions && row !== null && isOtherToolSession(row))
       );
     };
-    return this.search((request) => searchMessages(request, query, botId, hidden));
+    return this.search((request) =>
+      searchMessages(request, query, botId, hidden, (key) => this.firstMessageTitle(key)),
+    );
   }
 
   /** One page of routines matching the query (`cron.list`). */
