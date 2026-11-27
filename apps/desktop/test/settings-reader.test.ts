@@ -84,7 +84,10 @@ beforeAll(() => {
     writeFileSync(join(scratch, name), `#!/bin/sh\n${body}\n`, { mode: 0o700 });
   if (platform === "darwin") {
     helper = join(scratch, LOCAL_GATEWAY_HELPER);
-    execFileSync("/usr/bin/xcrun", localGatewayBuild(helper));
+    // clang's two-architecture build leaves empty folders in TMPDIR: the scratch folder takes them.
+    execFileSync("/usr/bin/xcrun", localGatewayBuild(helper), {
+      env: { ...process.env, TMPDIR: scratch },
+    });
   }
 }, 60_000);
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));

@@ -103,8 +103,11 @@ describe("the feed's address is the build's", () => {
       });
       expect(server.requests).toEqual([]);
     } finally {
-      await server.close();
-      dir.remove();
+      try {
+        dir.remove();
+      } finally {
+        await server.close();
+      }
     }
   });
 

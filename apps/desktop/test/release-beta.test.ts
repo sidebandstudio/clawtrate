@@ -28,6 +28,7 @@ import { builderConfig } from "../packaging/config.ts";
 import { basename, dirname, join } from "node:path";
 import type * as Fs from "node:fs";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { tempDir } from "../../../test/temp-dir.ts";
 
 // Two calls a test can make fail, to show what a setup step that fails
 // partway leaves; every other call is the real one.
@@ -631,7 +632,7 @@ const CARRIED_LIST = {
  * does, with the list of the plugins it carries (`list`, or none when null).
  */
 async function compiledAsar(feeds: string[], list: unknown = CARRIED_LIST): Promise<string> {
-  const dir = mkdtempSync(join(tmpdir(), "clawtrate-asar-"));
+  const dir = tempDir("clawtrate-asar-");
   mkdirSync(join(dir, "app", "out", "main"), { recursive: true });
   writeFileSync(
     join(dir, "app", "out", "main", "index.js"),
@@ -827,7 +828,7 @@ describe("preparing a beta from start to finish, with stand-ins for every tool",
     [
       "no main bundle",
       async () => {
-        const dir = mkdtempSync(join(tmpdir(), "clawtrate-asar-"));
+        const dir = tempDir("clawtrate-asar-");
         mkdirSync(join(dir, "app", "out", "plugins"), { recursive: true });
         writeFileSync(join(dir, "app", "package.json"), "{}");
         writeFileSync(
