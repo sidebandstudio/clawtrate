@@ -3,6 +3,11 @@
 // gained a model (`LATER_MODELS`, written by the admin client as a config change) names it and
 // puts it in the menu. The scripted providers are declared in the gateway's config, so a
 // refresh asks none of them; no real provider is involved.
+//
+// New bot reads the accounts when it opens (bots.md section 9: "opening the menu reads as
+// before"), and that read's picker is the menu's rows. So a model added while that read is out
+// is in the menu when it lands, with no press. Each order is checked on purpose: the page's
+// account reads are watched on its bridge socket, and held there for the second.
 import { expect, type Page } from "@playwright/test";
 import type { ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -25,6 +30,28 @@ test.describe.configure({ mode: "serial" });
 let host: { child: ChildProcess; url: string; data: string } | null = null;
 let page: Page;
 let admin: OperatorSession;
+
+/** The page's account reads (`refreshAccounts`): how many it sent, and which await an answer. */
+const reads = { sent: 0, waiting: new Set<string>() };
+/** While set, the page's account reads, and what it sends after them, wait for it. */
+let held: Promise<void> | null = null;
+
+/** The id of an account read the page sends; null for anything else. */
+function accountRead(message: string | Buffer): string | null {
+  const frame = JSON.parse(String(message)) as {
+    type?: string;
+    id?: string;
+    command?: { type?: string };
+  };
+  return frame.type === "command" && frame.command?.type === "refreshAccounts"
+    ? (frame.id ?? null)
+    : null;
+}
+
+/** Every account read the page asked for has its answer. */
+async function readsAnswered(): Promise<void> {
+  await expect.poll(() => reads.waiting.size, { timeout: 30_000 }).toBe(0);
+}
 
 async function approve(): Promise<void> {
   await expect
@@ -81,8 +108,9 @@ async function acmeModels(models: unknown[]): Promise<void> {
     .toBe(true);
 }
 
-/** New bot's Model menu for Acme · Work, open. */
+/** New bot's Model menu for Acme · Work, open, with the account read New bot asked for sent. */
 async function acmeMenu() {
+  const sent = reads.sent;
   await page.keyboard.press("ControlOrMeta+n");
   // New bot opens on its first step, or on the Account step it was left on.
   const next = page.getByRole("dialog", { name: "New bot" }).getByRole("button", { name: "Next" });
@@ -93,6 +121,7 @@ async function acmeMenu() {
   await account.getByTestId("model-select").click();
   const menu = page.getByRole("menu", { name: "Model" });
   await expect(menu.getByRole("menuitem", { name: "Refresh" })).toBeVisible();
+  await expect.poll(() => reads.sent).toBeGreaterThan(sent);
   return menu;
 }
 
@@ -120,6 +149,25 @@ test.beforeAll(async ({ accountsInstance, browser }) => {
   host = { child: started.host, url: "", data };
   host.url = await started.url;
   page = await (await browser.newContext({ viewport: { width: 1440, height: 900 } })).newPage();
+  await page.routeWebSocket(/\/bridge$/, (ws) => {
+    const server = ws.connectToServer();
+    // In the page's order: what it sends after a held read waits behind it.
+    let queue = Promise.resolve();
+    ws.onMessage((message) => {
+      const id = accountRead(message);
+      const wait = id === null ? null : held;
+      if (id !== null) {
+        reads.sent++;
+        reads.waiting.add(id);
+      }
+      queue = queue.then(() => wait).then(() => server.send(message));
+    });
+    server.onMessage((message) => {
+      const frame = JSON.parse(String(message)) as { type?: string; id?: string };
+      if (frame.type === "result" && frame.id !== undefined) reads.waiting.delete(frame.id);
+      ws.send(message);
+    });
+  });
   await page.goto(host.url);
   await page.getByRole("button", { name: "Use the development gateway" }).click();
   await expect(page.getByRole("heading", { name: "Approve this device" })).toBeVisible({
@@ -156,6 +204,8 @@ test("F-588: a refresh that finds nothing says why: the gateway's config lists t
 test("F-588: a refresh after the provider gained a model names it and lists it; one after it went says so", async () => {
   test.setTimeout(120_000);
   const menu = await acmeMenu();
+  // The read New bot asked for as it opened has landed: the model is added after it.
+  await readsAnswered();
   await expect(menu.getByRole("menuitemradio", { name: LATER })).toHaveCount(0);
   try {
     // Inside the try: a growth that half landed, or whose wait failed, is put back too.
@@ -175,5 +225,38 @@ test("F-588: a refresh after the provider gained a model names it and lists it; 
     timeout: 30_000,
   });
   await expect(menu.getByRole("menuitemradio", { name: LATER })).toHaveCount(0);
+  await closeNewBot();
+});
+
+test("F-588: a model added while New bot's own account read is out is in the menu when that read lands; Refresh then finds nothing new", async () => {
+  test.setTimeout(120_000);
+  let release = () => {};
+  held = new Promise((resolve) => (release = resolve));
+  try {
+    const menu = await acmeMenu();
+    await expect(menu.getByRole("menuitemradio", { name: LATER })).toHaveCount(0);
+    try {
+      await acmeModels(grownModels("acme"));
+      // Its read is held: the menu still has the rows it opened with.
+      await expect(menu.getByRole("menuitemradio", { name: LATER })).toHaveCount(0);
+      release();
+      await readsAnswered();
+      // The read lists the model, with no press and no line under the row.
+      await expect(menu.getByRole("menuitemradio", { name: LATER })).toBeVisible();
+      await expect(menu.getByText(/^New: /)).toHaveCount(0);
+      // The menu already has it, so a press finds nothing new.
+      await menu.getByRole("menuitem", { name: "Refresh" }).click();
+      await expect(
+        menu.getByText("Nothing new. Acme's models are the ones the gateway's config lists.", {
+          exact: true,
+        }),
+      ).toBeVisible({ timeout: 30_000 });
+    } finally {
+      await acmeModels(grownModels("acme").slice(0, -1));
+    }
+  } finally {
+    held = null;
+    release();
+  }
   await closeNewBot();
 });

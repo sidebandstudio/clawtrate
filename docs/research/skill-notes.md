@@ -1,6 +1,6 @@
 # The gateway's skill notes: what reaches a client
 
-Observed on a development gateway running OpenClaw 2026.10.6, started with `pnpm dev-gateway start --instance <name> --with-skill-review --no-seed`. A `#learn` turn (ten model calls) was sent to Juniper (`main`) in a task with no channel, by the gateway's owner through `chat.send`, and watched by a paired operator with `operator.read` and `operator.write`. Read with the gateway's own source (`experience-review-*.mjs`, `transcript-*.mjs`, `session-transcript-*.mjs`, `agent-end-side-effects-*.mjs`).
+Observed first on a development gateway running OpenClaw 2026.10.6 (2026.11.10 [below](#on-openclaw-20261110)), started with `pnpm dev-gateway start --instance <name> --with-skill-review --no-seed`. A `#learn` turn (ten model calls) was sent to Juniper (`main`) in a task with no channel, by the gateway's owner through `chat.send`, and watched by a paired operator with `operator.read` and `operator.write`. Read with the gateway's own source (`experience-review-*.mjs`, `transcript-*.mjs`, `session-transcript-*.mjs`, `agent-end-side-effects-*.mjs`).
 
 ## How the note is made
 
@@ -55,6 +55,40 @@ The row itself carries nothing that says its preview is the note. Its `updatedAt
 
 The preview is built from the transcript's last message with text (`findLastMessageText`, `session-transcript-title-reader`): `projectSessionDisplayMessage(message, {flattenMarkdown: true})`, which takes the assistant's text, trims it, flattens its Markdown to one line (`flattenMarkdownToPlainText`: fenced code dropped, inline code marks, link syntax, emphasis, strikethrough and line markers removed, runs of space made one) and cuts it to 240 characters as the first 237 and "...", never inside a surrogate pair. For the note above that is its text without the code marks.
 
+## On OpenClaw 2026.11.10
+
+Observed on a development gateway of 2026.11.10 started with `--with-skill-review --with-message-tool --no-seed`, after a `#learn` turn sent by a paired operator with `operator.admin`, `operator.read` and `operator.write` (the only sender that version reviews on a one-profile gateway; below). The note's text is the same as on 2026.10.6, and so are its three fields, its key and its missing run. The row also carries a mark 2026.10.6 doesn't write:
+
+```json
+{
+  "role": "assistant",
+  "content": [{ "type": "text", "text": "💾 Learned: created `trail-check` (check the trail before a hike). Say \"undo\" to revert this skill change." }],
+  "api": "openclaw-transcript",
+  "provider": "openclaw",
+  "model": "delivery-mirror",
+  "stopReason": "stop",
+  "timestamp": 1795763600317,
+  "openclawDeliveryMirror": {
+    "kind": "plugin-notice",
+    "pluginId": "skill-workshop",
+    "type": "skills-changed",
+    "data": {
+      "agentId": "main",
+      "runId": "skill-workshop-review:<uuid>",
+      "skills": [{ "name": "trail-check", "action": "created", "summary": "check the trail before a hike" }]
+    }
+  },
+  "idempotencyKey": "skill-workshop-notice:skill-workshop-review:<uuid>",
+  "__openclaw": { "id": "<row id>", "idempotencyKey": "skill-workshop-notice:skill-workshop-review:<uuid>", "recordTimestampMs": 1795763600350, "transcriptPosition": { "source": "<source>", "rawSeq": 36 }, "seq": 21 }
+}
+```
+
+- **Where it is.** It was the task's last row, after the run's reply, with nothing between. It names no run: `data.runId` is the review's own run, not the reviewed one. The review waits until nothing runs in the task, so the note follows the task's last run.
+- **Who writes the mark.** The skill workshop posts the note through the plugin runtime's `postSessionNotice` (`experience-review-*.mjs`, `session-notice-*.mjs`), which writes the row with `appendAssistantMessageToSessionTranscript` and `deliveryMirror: {kind: "plugin-notice", pluginId, type, data}`. `pluginId` comes from the runtime scope of the plugin that calls it (`postPluginSessionNotice`, `loader-runtime-load-*.mjs`), not from the caller's arguments. On a channel task the same notice is also sent to the channel. The gateway's own web interface draws a row with this mark as a "skill learned" notice with an Undo button (`control-ui` assets, `chat-skill-learned-notice-*.js`).
+- **The bot's copy.** The `#send-keyed` row on the same instance had the note's three fields, its key shape, the bot's run in `__openclaw.runId`, and no `openclawDeliveryMirror`.
+- **The list.** In `sessions.list`, the note became `lastMessagePreview` (the text without its code marks, as on 2026.10.6) and moved `updatedAt`; `lastActivityAt` stayed the end of the turn. A task marked read (`sessions.patch {unread: false}`) by a writing connection before the note was still `unread: false` after it.
+- **Events.** A `session.message` for the task carried the row; `skills.changed` events came with it.
+
 ## Rows that look alike
 
 Read from the source, not produced live:
@@ -78,7 +112,7 @@ Observed on the same kind of instance, also started with `--with-message-tool`. 
 | `__openclaw.runId`                   | the bot's turn                                          | none                                                    |
 | `__openclaw` `id`, `seq`, `recordTimestampMs`, `transcriptPosition` | present                  | present                                                 |
 
-The only difference is the run. It does not mark the note. A send to a channel is mirrored into the task the channel's peer maps to (`mirrorDeliveredPayloads`), with the bot's key and no run, and the note in a channel's task is mirrored by the same code, also with no run (read from the source, not produced here: a development gateway has no channel). So a bot can write a row with every field the note has.
+On 2026.10.6 the only difference is the run, and it does not mark the note. On 2026.11.10 the note also has the skill workshop's mark and the bot's copy hasn't ([above](#on-openclaw-20261110)). A send to a channel is mirrored into the task the channel's peer maps to (`mirrorDeliveredPayloads`), with the bot's key and no run, and the note in a channel's task is mirrored by the same code, also with no run (read from the source, not produced here: a development gateway has no channel). So a bot can write a row with every field the note has.
 
 ## Which turns are reviewed
 
@@ -104,4 +138,8 @@ Read from the source, no 2026.11.10 setting changes this for a sender without `o
 
 ## Undo
 
-Saying "undo" in the task is the gateway's own way back: the queued system event tells the bot which call reverts the change. A client can also call `skills.workshop.restore`, which needs `operator.admin`.
+Observed on development gateways of each version, after a `#learn` turn an admin connection sent.
+
+- **2026.10.6.** Saying "undo" in the task is the gateway's own way back: the queued system event tells the bot which call reverts the change. The gateway has no method that undoes a review as one: `skills.workshop.archive` and `skills.workshop.restore` need `operator.admin` and act on one skill each (`core-method-policy-*.mjs`).
+- **2026.11.10.** The gateway undoes a review itself. `skills.workshop.undo {agentId, runId: "skill-workshop-review:<id>"}`, from an admin connection, answered `{status: "undone", changes: [{skillName: "trail-check-2", action: "archive", runId: "skill-workshop-undo:<id>", …}]}`; the same call from a connection with read, write, approvals and questions was refused: "missing scope: operator.admin". The method is registered with `ADMIN` (`extensions/skill-workshop`), and on a second call for the same review it answers with a status other than `undone` (`revertReview`: nothing left to revert). The gateway's own command `/learn undo <id>`, sent with `chat.send`, did the same from the admin connection, answering in the task "↩️ Undid the skill change: archived `trail-check`." as a `gateway-injected` row; from the connection without admin it answered "You are not authorized to use this owner-only command. Ask the operator to grant this Gateway client operator.admin access." Saying "undo" to the bot needs `skill_workshop`, which that version doesn't offer a sender without admin (above).
+- The changes, with the run that made each, are listed by `skills.workshop.changes` (`operator.read` on both versions): a client could check from it that a review saved what its note says.

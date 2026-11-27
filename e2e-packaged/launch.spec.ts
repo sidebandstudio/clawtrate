@@ -30,6 +30,7 @@ import { openInstance } from "../tools/dev-gateway/src/cli.ts";
 import { provenEndpoint } from "../tools/dev-gateway/src/endpoint.ts";
 import { gatedSpawn, parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
 import { runDirFor } from "../tools/dev-gateway/src/instance.ts";
+import { packagedCarried } from "../apps/desktop/packaging/carried-plugins.ts";
 import { fuseMismatches } from "../apps/desktop/packaging/fuse-check.ts";
 import { newerCopy, packagedManifest } from "../apps/desktop/packaging/newer-copy.ts";
 import { parseVersion } from "../apps/desktop/src/main/update/version.ts";
@@ -400,6 +401,18 @@ test("keeps the fuses it was packaged with", async () => {
   // Read from the binary as it was built or installed: Node's own entry points
   // off, and only its archive loaded, checked against its hash.
   expect(await fuseMismatches(packagedExecutable(APP), process.platform)).toEqual([]);
+});
+
+test("carries the voice plugin outside its archive, as the list inside it names it", () => {
+  const { list, tarballs } = packagedCarried(
+    WINDOWS ? join(APP, "resources") : join(APP, "Contents/Resources"),
+  );
+  expect(list.plugins.map((plugin) => plugin.pluginId)).toEqual(["clawtrate-voice"]);
+  expect(readdirSync(tarballs)).toEqual(list.plugins.map((plugin) => plugin.file));
+  for (const plugin of list.plugins) {
+    const bytes = readFileSync(join(tarballs, plugin.file));
+    expect(`sha512-${createHash("sha512").update(bytes).digest("base64")}`).toBe(plugin.integrity);
+  }
 });
 
 function runEndpoint() {

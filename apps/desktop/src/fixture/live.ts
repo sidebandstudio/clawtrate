@@ -59,6 +59,7 @@ export const LIVE_SCENES = [
   "message-thread-question",
   "message-thread-failed",
   "run-stopped-with",
+  "run-stopped-follow-up",
   "run-stopped-timeouts",
   "run-reasoning",
 ] as const;
@@ -161,6 +162,9 @@ function toolStep(
 }
 
 const ASK = "Can you check the backup log from last night too?";
+/** The gateway's own note that a message to another bot failed (OpenClaw 2026.10.6 and 2026.11.10). */
+const GATEWAY_DELIVERY_NOTE =
+  "sessions_send delivery to agent:marlow:main failed. The target may not have received the message; retry or report the failure instead of assuming delivery succeeded.";
 const REPLY =
   "The backup finished at 02:14 and wrote 41 GB. Two folders were skipped because they were";
 
@@ -604,12 +608,104 @@ export function liveScene(
             uncertain: ["agent:pip:main"],
             refused: [],
             unanswered: [],
+            followUps: [],
             omitted: 0,
             recipientsAsked: true,
           },
         }),
         steps: [],
       };
+    case "run-stopped-follow-up": {
+      // Otto's message to Marlow was stopped, and so was the turn the gateway then started in
+      // Otto's task by itself (#645): its note that the message failed, which the bot meant to
+      // retry. As history gives it on OpenClaw 2026.10.6 and 2026.11.10: the person's message
+      // and the stopped reply as rows, then the gateway's note as an assistant row keyed
+      // `<run>:user` with inter-session provenance (`projectForwardedMessages` turns the stored
+      // input row into an assistant row for `chat.history`), which the turn is anchored to.
+      const ask = "h-ask:900";
+      const note = "h-note:902";
+      const at = (seconds: number) => now - seconds * SECOND;
+      const text = (id: string, role: "user" | "assistant", body: string, ago: number) => ({
+        id,
+        role,
+        timestamp: at(ago),
+        blocks: [{ kind: "text" as const, text: body }],
+        model: null,
+        messageId: id.split(":")[0]!,
+      });
+      return {
+        initial: withTranscript(interactive(base), (transcript) => ({
+          ...transcript,
+          outbox: [],
+          items: [
+            ...transcript.items,
+            text(ask, "user", ASK, 42),
+            text("h-reply:901", "assistant", REPLY, 8),
+            {
+              ...text(note, "assistant", GATEWAY_DELIVERY_NOTE, 5),
+              runless: true,
+            },
+            text(
+              "h-again:903",
+              "assistant",
+              "Marlow didn't get the message. I'll send it again.",
+              4,
+            ),
+          ],
+          interSession: [
+            ...transcript.interSession,
+            {
+              itemId: note,
+              text: GATEWAY_DELIVERY_NOTE,
+              sourceSessionKey: "agent:marlow:main",
+              sourceTool: "sessions_send",
+              senderLabel: "Marlow",
+              senderAgentId: "marlow",
+              timestamp: at(5),
+            },
+          ],
+          runs: [
+            run(now, {
+              state: "stopped",
+              origin: "history",
+              messageId: null,
+              anchorItemId: ask,
+              anchorKeyed: true,
+              stopRequestedAt: at(6),
+              endedAt: at(6),
+              steps: [readStep(at(30), { status: "done", endedAt: at(29) })],
+              stoppedWith: {
+                helpers: 0,
+                bots: ["agent:marlow:main"],
+                uncertain: [],
+                refused: [],
+                unanswered: [],
+                followUps: ["agent:marlow:main"],
+                omitted: 0,
+                recipientsAsked: true,
+              },
+            }),
+            newRun(
+              "run-follow-up",
+              {
+                state: "stopped",
+                origin: "history",
+                bound: true,
+                messageId: null,
+                anchorItemId: note,
+                anchorKeyed: true,
+                reportedStartAt: at(5),
+                stopRequestedAt: at(4),
+                endedAt: at(4),
+                stoppedAsFollowUp: true,
+              },
+              at(5),
+            ),
+          ],
+        })),
+        steps: [],
+      };
+    }
     case "run-stopped-timeouts":
       // Three commands in a row ran out of time; the client stopped the run.
       return {

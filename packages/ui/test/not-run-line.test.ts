@@ -13,10 +13,15 @@ import {
   registerRunAlias,
   runsFromHistory,
   throughRunAliases,
+  type Bot,
+  type ClawtrateBridge,
   type Run,
   type TaskActivity,
   type Transcript,
+  wordsCut,
 } from "@clawtrate/core";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import {
   requestBotSettings,
@@ -31,8 +36,15 @@ import {
   forEarlierMessage,
   notRunWords,
   type RunEnding,
+  userMessageAfter,
 } from "../src/live.ts";
-import { messageReplyOf, messageTextOf, retryPlan } from "../src/LiveTurn.tsx";
+import { BridgeProvider } from "../src/bridge.tsx";
+import {
+  messageReplyOf,
+  messageTextOf,
+  retryPlan,
+  RunEnding as RunEndingCard,
+} from "../src/LiveTurn.tsx";
 
 const KEY = "agent:otto:disk-space";
 
@@ -237,6 +249,51 @@ describe("#686: a not-run line sits only under the message its run is known to h
       item.blocks.some((block) => block.kind === "text" && block.text === text),
     )!.id;
 
+  /** Another bot's message that started a run, as both versions keep it: an assistant row keyed `<run>:user`. */
+  const fromBotRow = (runId: string, text: string, seq: number) => ({
+    role: "assistant",
+    content: [{ type: "text", text }],
+    timestamp: T0 + seq,
+    provenance: {
+      kind: "inter_session",
+      sourceSessionKey: "agent:marlow:main",
+      sourceTool: "sessions_send",
+    },
+    __openclaw: { id: `i-${seq}`, seq, idempotencyKey: `${runId}:user`, senderIsOwner: false },
+  });
+
+  it("#645: a run another bot's message started has its ending under that message, not above the conversation's first message", () => {
+    const rows = [
+      userRow("run-0", "Plan the week.", 1),
+      replyRow("run-0", 2),
+      fromBotRow("run-f", "sessions_send delivery to agent:marlow:main failed.", 3),
+    ];
+    const ctx = { raw: new RawTable(), sessionKey: KEY, now: T0 + 10_000 };
+    const items = mapHistory(rows);
+    const run = runsFromHistory(rows, { runId: "run-f" }, ctx).find((each) => each.id === "run-f")!;
+    expect(run.anchorItemId).toBe(
+      itemOf({ items } as Transcript, "sessions_send delivery to agent:marlow:main failed."),
+    );
+    // Nothing after it: its ending goes last, under its turn.
+    expect(userMessageAfter(items, run.anchorItemId!)).toBeNull();
+    // A message the person sends later: the ending sits before it.
+    const later = mapHistory([...rows, userRow("run-g", "Thanks.", 4)]);
+    expect(userMessageAfter(later, run.anchorItemId!)).toBe(
+      itemOf({ items: later } as Transcript, "Thanks."),
+    );
+  });
+
+  it("#645: Try again never sends another bot's message as the person's", () => {
+    const { transcript, run } = reloaded([
+      userRow("run-0", "Plan the week.", 1),
+      fromBotRow("run-a", "Here is the plan.", 2),
+      failedRow("run-a", 3),
+    ]);
+    expect(run.state).toBe("failed");
+    expect(run.anchorKeyed).toBe(true);
+    expect(retryPlan(run, transcript)).toBeNull();
+  });
+
   it("A, B, A's failure, B's reply: the line is not under B, and Try again never sends B", () => {
     const { transcript, run } = reloaded([
       userRow("run-a", "Back up the photos.", 1),
@@ -370,6 +427,84 @@ describe("#686: a not-run line sits only under the message its run is known to h
     const full = Array.from({ length: 8 }, (_, i) => `blocks[${i}].text`);
     expect(attachmentsCut({ cut: full })).toBe(true);
     expect(attachmentsCut({ cut: full.slice(1) })).toBe(false);
+  });
+
+  it("words go again only when they are known whole (#726)", () => {
+    const long = "Back up the photos. ".repeat(150);
+    const { transcript } = reloaded([userRow("run-a", long, 1), failedRow("run-a", 2)]);
+    const failed = transcript.runs.find((each) => each.id === "run-a")!;
+    const anchorOf = (t: Transcript) => t.items.find((item) => item.id === failed.anchorItemId)!;
+    // Its text cut to the block's bound as the client keeps it: no Try again.
+    const state = enforceState({ transcripts: { [KEY]: transcript } } as never);
+    const kept = (state as unknown as { transcripts: Record<string, Transcript> }).transcripts[
+      KEY
+    ]!;
+    expect(wordsCut(anchorOf(kept))).toBe(true);
+    expect(retryPlan(failed, kept)).toEqual({ kind: "words-cut" });
+    // The gateway cut its row: no Try again either.
+    const short = reloaded([userRow("run-a", "Back up the photos.", 1), failedRow("run-a", 2)]);
+    const marked = {
+      ...short.transcript,
+      items: short.transcript.items.map((item) =>
+        item.id === failed.anchorItemId ? { ...item, truncated: true } : item,
+      ),
+    } as Transcript;
+    expect(retryPlan(failed, marked)).toEqual({ kind: "words-cut" });
+    // Whole: its words go again.
+    expect(retryPlan(failed, short.transcript)).toMatchObject({
+      kind: "text",
+      text: "Back up the photos.",
+    });
+    // A full list of cut paths (eight, `MAX_CUT_PATHS`) may have let the one for its text go.
+    const full = Array.from({ length: 8 }, (_, i) => `attachments[${i}]`);
+    expect(wordsCut({ cut: full })).toBe(true);
+    expect(wordsCut({ cut: full.slice(1) })).toBe(false);
+    // With a files plan, the person is told both: its files, and to send its words in full.
+    const withCut = (change: object) =>
+      ({
+        ...short.transcript,
+        items: short.transcript.items.map((item) =>
+          item.id === failed.anchorItemId ? { ...item, ...change } : item,
+        ),
+      }) as Transcript;
+    const textCuts = Array.from({ length: 8 }, (_, i) => `blocks[${i}].text`);
+    expect(retryPlan(failed, withCut({ cut: textCuts }))).toEqual({
+      kind: "files-unknown",
+      wordsCut: true,
+    });
+    expect(
+      retryPlan(
+        failed,
+        withCut({ truncated: true, attachments: [{ name: "a.jpg", mimeType: "image/jpeg" }] }),
+      ),
+    ).toEqual({ kind: "files-gone", wordsCut: true });
+  });
+
+  it("a short message whose text the transcript's shared blocks let go is not called too long (#726)", () => {
+    const { transcript, run } = reloaded([userRow("run-a", "Hi", 1), failedRow("run-a", 2)]);
+    // Newer messages filled the transcript's blocks: this one kept no text, and says so.
+    const dropped = {
+      ...transcript,
+      items: transcript.items.map((item) =>
+        item.id === run.anchorItemId ? { ...item, blocks: [], cut: ["blocks"] } : item,
+      ),
+    } as Transcript;
+    expect(retryPlan(run, dropped)).toEqual({ kind: "words-cut" });
+    const html = renderToStaticMarkup(
+      createElement(BridgeProvider, {
+        bridge: { getState: () => ({ bots: [] }) } as unknown as ClawtrateBridge,
+        children: createElement(RunEndingCard, {
+          run,
+          bot: { id: "otto", name: "Otto" } as Bot,
+          transcript: dropped,
+          taskKey: KEY,
+        }),
+      }),
+    );
+    expect(html).toContain(
+      "The full text of this message isn&#x27;t available here. To try again, send it again in full.",
+    );
+    expect(html).not.toContain("too long");
   });
 
   it("a run that started, then failed before replying: the gateway's row says nothing more", () => {
