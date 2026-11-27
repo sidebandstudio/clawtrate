@@ -1,0 +1,31 @@
+- status
+- main "Routines":
+  - button "Back to routines"
+  - heading "Stretch break" [level=1]
+  - paragraph: Juniper
+  - status: Runs every 2 hours.
+  - heading "Instruction" [level=3]
+  - paragraph: "Posts a reminder in Juniper's main conversation:"
+  - paragraph: Time to stand up and stretch.
+  - heading "When to run" [level=3]
+  - term: Schedule
+  - definition: Every 2 hours
+  - term: Next run
+  - definition: Today, Mon Nov 16, 6:20 PM Your time
+  - term: Runs in
+  - definition: Juniper's main conversation
+  - term: Results
+  - definition: Announced to the gateway's channels
+  - term: Triggers
+  - definition: Its schedule only. This gateway's webhooks start a bot directly, not a routine.
+  - region "Runs":
+    - heading "Runs" [level=3]
+    - list "Runs":
+      - listitem:
+        - button "today 4:20 PM, Succeeded · 1.1 s": Today 4:20 PM Succeeded · 1.1 s
+    - paragraph: Clawtrate shows the 20 runs that finished most recently. By default the gateway keeps 7 days of runs, and each run's conversation for 24 hours; it can be set to keep them longer.
+  - region "Access":
+    - text: Read-only. Creating and changing routines needs admin access.
+    - button "Request admin access"
+  - status
+- status

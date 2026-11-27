@@ -1,0 +1,15 @@
+- status
+- main "Routines":
+  - button "Back to Stretch break, all runs"
+  - heading "Stretch break" [level=1]
+  - paragraph: Juniper · Today 4:20 PM
+  - paragraph:
+    - strong: Clawtrate can't confirm which conversation this run used.
+    - text: The gateway recorded no session for it, and the routine may have been edited since it ran.
+  - paragraph: "What the run returned: Time to stand up and stretch."
+  - text: This run has finished. A run can't be answered; to change what it does, edit the routine. Succeeded · 1.1 s
+  - region "Access":
+    - text: Read-only. Creating and changing routines needs admin access.
+    - button "Request admin access"
+  - status
+- status
