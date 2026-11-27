@@ -588,12 +588,14 @@ function assistantBlocks(content: unknown): TranscriptBlock[] {
 }
 
 /**
- * The description an earlier `image_generate` call asked for, when `runId` is the
- * turn the gateway runs by itself to deliver that call's background task
- * (`image_generate:<taskId>:ok:…`): the call whose result named the task.
+ * The description an earlier `image_generate` call asked for, when `delivery` is the
+ * gateway's delivery of that call's background task (`image_generate:<taskId>:ok:…`,
+ * `pictureDelivery`): the call whose result named the task.
  */
-function imagePrompt(runId: string | null, items: TranscriptItem[]): string | null {
-  const task = runId ? /^image_generate:(tool:image_generate:[^:\s]+):ok:/.exec(runId)?.[1] : null;
+function imagePrompt(delivery: string | null, items: TranscriptItem[]): string | null {
+  const task = delivery
+    ? /^image_generate:(tool:image_generate:[^:\s]+):ok:/.exec(delivery)?.[1]
+    : null;
   if (!task) return null;
   for (const item of [...items].reverse())
     for (const block of item.blocks)
@@ -610,6 +612,26 @@ function imagePrompt(runId: string | null, items: TranscriptItem[]): string | nu
         }
       }
   return null;
+}
+
+/**
+ * The delivery a row with pictures names, for `imagePrompt`. On OpenClaw 2026.10.6 it is the row's
+ * run: the turn the gateway runs by itself to deliver the picture. On 2026.11.10 the gateway
+ * writes the picture into the task as a row of its own, with no run and `model: "delivery-mirror"`,
+ * under that delivery's key with `:generated-media-host-transcript` after it
+ * (`persistQueuedGeneratedMedia`). A bot's message tool send can give its copy any key, but the
+ * copy in the bot's own task names the bot's run, so it is never read as a delivery.
+ */
+function pictureDelivery(message: RawRecord, runId: string | null): string | null {
+  if (runId !== null) return runId;
+  if (message.model !== "delivery-mirror") return null;
+  const key = rowIdempotencyKey(message);
+  const delivery = key
+    ? /^(image_generate:tool:image_generate:[^:\s]+:ok:agent-loop)(?::attempt:\d+)?:generated-media-host-transcript$/.exec(
+        key,
+      )
+    : null;
+  return delivery?.[1] ?? null;
 }
 
 function meta(message: RawRecord): RawRecord {
@@ -839,7 +861,8 @@ export function mapHistory(
         const runId = str(info.runId);
         const pictures = assistantPictures(message.content);
         const files = assistantFiles(message.content);
-        const prompt = pictures.length > 0 ? imagePrompt(runId, items) : null;
+        const prompt =
+          pictures.length > 0 ? imagePrompt(pictureDelivery(message, runId), items) : null;
         for (const picture of pictures) picture.prompt = prompt;
         if (runId !== null && runId === precedingRun) {
           for (const user of pendingUsers) user.steered = true;

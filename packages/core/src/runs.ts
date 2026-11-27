@@ -455,6 +455,12 @@ export type Run = {
   /** Which projection the text comes from. The map says a run's text arrives as one or the other. */
   textSource: "chat" | "agent" | null;
   textItemId: string | null;
+  /**
+   * `textItemId` is an earlier message's: the gateway started another message after it (its
+   * `lifecycle` `model` event, sent at each message's start). No call of a later message places it
+   * beside itself, nor does that message's preamble item take it.
+   */
+  textEarlier?: true;
   /** True once the gateway reported the reply complete. */
   textComplete: boolean;
   steps: Step[];
@@ -578,6 +584,12 @@ export type Run = {
 export type Preamble = {
   /** The gateway's item id. */
   id: string;
+  /**
+   * The `assistant` stream's item whose text this is, as its call started: the run's text while
+   * that item is the run's (`Run.textItemId`) is drawn here, not as the reply. Absent when the
+   * stream had none.
+   */
+  item?: string;
   text: string;
   /** The item's `end` arrived: no caret. */
   ended: boolean;
@@ -2329,9 +2341,16 @@ function applyLifecycle(run: Run, data: RawRecord, ts: number, ctx: EngineContex
         startedAt: num(data.startedAt) ?? run.startedAt ?? ts,
         reportedStartAt: num(data.startedAt) ?? ts,
       };
-    case "model":
-      // Each model call starts a new reasoning segment.
-      return closeReasoning({ ...run, model: str(data.model) ?? run.model }, ctx, ts);
+    case "model": {
+      // Each model call starts a new reasoning segment, and a new message: text still streaming
+      // and not placed beside a call is an earlier message's.
+      const earlier = run.textItemId !== null && !textPlaced(run);
+      return closeReasoning(
+        { ...run, model: str(data.model) ?? run.model, ...(earlier ? { textEarlier: true } : {}) },
+        ctx,
+        ts,
+      );
+    }
     case "waiting-approval": {
       if (run.state !== "running" && run.state !== "waiting") return run;
       const id =
@@ -2669,7 +2688,13 @@ function applyAssistant(run: Run, data: RawRecord, ts: number, ctx: EngineContex
   // Text cut to its bound is not extended by deltas: they would join non-adjacent text.
   if (cumulative === null && sameItem && closed.cut?.includes("text")) return closed;
   const text = cumulative ?? (sameItem ? closed.text + delta : delta);
-  return { ...closed, textSource: "agent", textItemId: itemId ?? closed.textItemId, text };
+  const { textEarlier: _earlier, ...rest } = closed;
+  return {
+    ...(sameItem ? closed : rest),
+    textSource: "agent",
+    textItemId: itemId ?? closed.textItemId,
+    text,
+  };
 }
 
 function toolStepId(toolCallId: string): string {
@@ -2727,7 +2752,7 @@ function applyTool(run: Run, data: RawRecord, ts: number, ctx: EngineContext): R
       ctx.raw.set(ctx.sessionKey, id, { source: "live", runId: run.id, call: data, result: null });
       // The call is known now; carry it inline while the tool runs when it is small.
       return upsertStep(
-        current,
+        existing ? current : textBesideCall(current),
         settleRaw(
           {
             ...step,
@@ -2806,13 +2831,50 @@ function applyItem(run: Run, data: RawRecord, ts: number, ctx: EngineContext): R
   if (!existing && data.phase !== "start") return run;
   const step = existing ?? blankToolStep(toolCallId, str(data.name), num(data.startedAt));
   const title = str(data.title);
-  return upsertStep(run, {
+  return upsertStep(existing ? run : textBesideCall(run), {
     ...step,
     ...(data.commandBearing === true ? { commandBearing: true } : {}),
     ...(title ? { gatewayTitle: title } : {}),
     startedAt: num(data.startedAt) ?? step.startedAt,
     endedAt: isOpenStep(step) ? step.endedAt : (num(data.endedAt) ?? step.endedAt),
   });
+}
+
+/**
+ * As a tool call starts, the `assistant` stream's item that was streaming is text beside that
+ * call, placed once, by its item id (`Preamble.item`), never by its words. When the gateway sent a
+ * `preamble` item that waits for this call (2026.10.6), that item holds the message's text and
+ * takes the stream's item. OpenClaw 2026.11.10 sends none: the stream's item becomes the text
+ * beside the call, and the next item would replace it. An item already placed, by an earlier call
+ * of the same message, places nothing again.
+ */
+function textBesideCall(run: Run): Run {
+  const itemId = run.textItemId;
+  // An item id comes only with the `assistant` stream's text, never the chat stream's. An earlier
+  // message's text (`textEarlier`) is never placed beside a later message's call, at any of its
+  // calls: it stays the reply, where it was read.
+  if (itemId === null || run.textEarlier || !run.text.trim() || textPlaced(run)) return run;
+  const list = run.preambles ?? [];
+  const waiting = list.findLastIndex((p) => p.beforeCall === null);
+  if (waiting !== -1)
+    return { ...run, preambles: list.map((p, i) => (i === waiting ? { ...p, item: itemId } : p)) };
+  const next: Preamble = {
+    id: itemId,
+    item: itemId,
+    text: run.text,
+    ended: true,
+    beforeCall: null,
+  };
+  return { ...run, preambles: [...list, next].slice(-MAX_PREAMBLES_PER_RUN) };
+}
+
+/**
+ * The run's text is an `assistant` item a call already placed as the text beside it: it is drawn
+ * there, not again as the reply. Decided by the item's id, never by its words.
+ */
+export function textPlaced(run: Pick<Run, "textItemId" | "preambles">): boolean {
+  const itemId = run.textItemId;
+  return itemId !== null && (run.preambles ?? []).some((p) => p.item === itemId);
 }
 
 /** Text beside a tool call: its updates replace its text in place; `end` ends it. */
@@ -2822,6 +2884,8 @@ function applyPreamble(run: Run, data: RawRecord): Run {
   if (!id || (text === null && data.phase !== "end")) return run;
   const list = run.preambles ?? [];
   const existing = list.find((each) => each.id === id);
+  // An item with no text of its own (the gateway sends one only with text) holds nothing.
+  if (!existing && !text?.trim()) return run;
   const ended = data.phase === "end";
   const next: Preamble = existing
     ? { ...existing, text: text ?? existing.text, ended: existing.ended || ended }
