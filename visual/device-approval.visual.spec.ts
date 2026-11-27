@@ -432,6 +432,8 @@ for (const [busy, start] of [
     async (page: Page) => {
       await page.keyboard.press("ControlOrMeta+K");
       await expect(page.getByRole("dialog", { name: /search/i })).toBeVisible();
+      // Its own text field aside: the dialog alone keeps the sheet away.
+      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
     },
   ],
   [
@@ -439,6 +441,8 @@ for (const [busy, start] of [
     async (page: Page) => {
       await page.keyboard.press("ControlOrMeta+N");
       await expect(page.getByRole("dialog", { name: /new bot/i })).toBeVisible();
+      // Its own text field aside: the dialog alone keeps the sheet away.
+      await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
     },
   ],
 ] as const) {
