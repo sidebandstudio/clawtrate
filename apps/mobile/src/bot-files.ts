@@ -13,7 +13,7 @@ import type {
   TranscriptItem,
 } from "@clawtrate/core";
 import { screenStamp, shownStamp, type ShownStamp } from "../../../packages/ui/src/stamp.ts";
-import type { ShareFile } from "./host/share.ts";
+import type { ShareFile, Viewer } from "./host/share.ts";
 import type { BotFilePhase } from "./presentation/bot-files.ts";
 import { collectPicture } from "./sent-pictures.ts";
 
@@ -50,9 +50,11 @@ export function historyStamps(source: StateSource): {
 
 /**
  * Save one file: read it through core, then offer it in the share sheet, saying each state
- * as it comes (`set`). A closed sheet goes back to ready. `gone` says the row has left the
- * screen: from then on nothing more is asked or offered, and bytes already read are let go; it is
- * asked last just before the sheet would open. Why a Save failed is shown and read out only with
+ * as it comes (`set`). A closed sheet goes back to ready. Once `viewer` has left the screen,
+ * nothing more is asked or offered: a transfer under way is let go between its parts, bytes
+ * already read are dropped, and the native side presents no sheet (`host/share.ts`). Core keeps
+ * a read already waiting for its place (its owner is the app's one bridge session), but its
+ * bytes are let go as soon as they come. Why a Save failed is shown and read out only with
  * every credential this host holds scrubbed out (`redact`): a gateway's error can echo one.
  */
 export async function saveBotFile(
@@ -63,12 +65,13 @@ export async function saveBotFile(
   file: ChatFile,
   shareFile: ShareFile,
   set: (phase: BotFilePhase) => void,
-  gone: () => boolean,
+  viewer: Viewer,
   redact: (text: string) => string,
 ): Promise<void> {
   const artifactId = file.artifactId;
   if (artifactId === null) return;
   const fail = (message: string) => set({ status: "failed", message: redact(message) });
+  const gone = viewer.gone;
   set({ status: "reading" });
   try {
     // Right after a connect this waits for the gateway to name itself.
@@ -82,11 +85,11 @@ export async function saveBotFile(
         void send({ type: "releaseFile", id: read.transfer.id }).catch(() => {});
       return;
     }
-    const bytes = await collectPicture(send, read.transfer, read.bytes);
-    if (!bytes) return fail("The file's content could not be read.");
+    const bytes = await collectPicture(send, read.transfer, read.bytes, gone);
     if (gone()) return;
+    if (!bytes) return fail("The file's content could not be read.");
     set({ status: "sharing" });
-    const outcome = await shareFile(file.name, bytes, () => !gone());
+    const outcome = await shareFile(file.name, bytes, viewer);
     set(outcome === "dismissed" ? { status: "ready" } : { status: outcome });
   } catch (error) {
     fail(error instanceof Error ? error.message : String(error));

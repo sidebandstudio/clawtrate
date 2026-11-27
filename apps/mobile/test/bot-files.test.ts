@@ -36,10 +36,13 @@ import { historyStamps, saveBotFile } from "../src/bot-files.ts";
 import { createHostFetch, type NativeFetch } from "../src/host/fetch.ts";
 import {
   createSharing,
+  createViewer,
   SAVE_TO_FILES,
   SHARE_WORDS,
   type ShareFile,
   type ShareSystem,
+  type SheetEnd,
+  type Viewer,
 } from "../src/host/share.ts";
 import {
   BOT_FILE_WORDS as W,
@@ -160,6 +163,14 @@ async function iphone(
   return { client, gateway, send, source, reads };
 }
 
+/** A row on screen, and one that has left it. */
+const here = (): Viewer => createViewer();
+const away = (): Viewer => {
+  const viewer = createViewer();
+  viewer.leave();
+  return viewer;
+};
+
 /** A share sheet that records what it was given and closes as `closes` says. */
 function sheetThatCloses(closes: "saved" | "shared" | "dismissed" = "saved") {
   const offered: Array<{ name: string; bytes: Uint8Array }> = [];
@@ -220,7 +231,7 @@ describe("F-115: what a bot's file row says on iPhone", () => {
   const view = (phase: BotFilePhase, over: Partial<ChatFile> = {}, canLoad = true) =>
     botFileView(file(over), phase, canLoad);
 
-  it("F-115: before Save, it offers Save and says nothing; while reading it says so and a second press does nothing; once the sheet is open Save can be pressed again", () => {
+  it("F-115: before Save, it offers Save and says nothing; while reading it says so and a second press does nothing; and while the sheet is up", () => {
     expect(view({ status: "ready" })).toEqual({
       state: "ready",
       note: null,
@@ -234,9 +245,8 @@ describe("F-115: what a bot's file row says on iPhone", () => {
       busy: true,
     });
     // The sheet says the rest while it is open.
-    // Pressable again: the sheet covers the row while it is open, and one that never said it
-    // closed leaves nothing stuck.
-    expect(view({ status: "sharing" })).toMatchObject({ note: null, action: "save", busy: false });
+    // The native side settles the sheet exactly once, every way it ends.
+    expect(view({ status: "sharing" })).toMatchObject({ note: null, action: "save", busy: true });
   });
 
   it("F-115: once the sheet closed it says where the file went, and Save stays to save it again", () => {
@@ -317,7 +327,7 @@ describe("F-115: Save on iPhone", () => {
       file(),
       sheet.share,
       (p) => phases.push(p),
-      () => false,
+      here(),
       (text) => text,
     );
     expect(phases).toEqual([{ status: "reading" }, { status: "sharing" }, { status: "saved" }]);
@@ -341,7 +351,7 @@ describe("F-115: Save on iPhone", () => {
       file({ sizeBytes: 0 }),
       sheet.share,
       (p) => phases.push(p),
-      () => false,
+      here(),
       (text) => text,
     );
     expect(phases.at(-1)).toEqual({ status: "shared" });
@@ -363,7 +373,7 @@ describe("F-115: Save on iPhone", () => {
       file(),
       sheet.share,
       (p) => phases.push(p),
-      () => false,
+      here(),
       (text) => text,
     );
     expect(phases.at(-1)).toEqual({ status: "failed", message: FILE_FROM_ANOTHER_GATEWAY });
@@ -385,7 +395,7 @@ describe("F-115: Save on iPhone", () => {
       file(),
       sheetThatCloses("dismissed").share,
       (p) => phases.push(p),
-      () => false,
+      here(),
       (text) => text,
     );
     expect(phases.at(-1)).toEqual({ status: "ready" });
@@ -399,7 +409,7 @@ describe("F-115: Save on iPhone", () => {
       file({ artifactId: null }),
       sheetThatCloses().share,
       (p) => none.push(p),
-      () => false,
+      here(),
       (text) => text,
     );
     expect(none).toEqual([]);
@@ -439,7 +449,7 @@ describe("F-115: a row that has left the screen", () => {
       file(),
       sheet.share,
       () => {},
-      () => true,
+      away(),
       (text) => text,
     );
     expect(sent).toEqual([]);
@@ -453,11 +463,11 @@ describe("F-115: a row that has left the screen", () => {
       bytes: 2,
       transfer: { id: "transfer-1", chunks: 2, data: "AA==" },
     });
-    let gone = false;
+    const viewer = createViewer();
     const sheet = sheetThatCloses();
     const tracking = (async (command: BridgeCommand) => {
       const answer = await send(command);
-      if (command.type === "readChatFile") gone = true;
+      if (command.type === "readChatFile") viewer.leave();
       return answer;
     }) as typeof send;
     await saveBotFile(
@@ -468,7 +478,7 @@ describe("F-115: a row that has left the screen", () => {
       file(),
       sheet.share,
       () => {},
-      () => gone,
+      viewer,
       (text) => text,
     );
     expect(sent.map((command) => command.type)).toEqual(["readChatFile", "releaseFile"]);
@@ -476,19 +486,55 @@ describe("F-115: a row that has left the screen", () => {
     expect(sheet.offered).toEqual([]);
   });
 
-  it("F-115: one gone while its file was written asks the share step for no sheet", async () => {
+  it("F-115: one gone between the parts of its file asks for no more of them and lets the transfer go", async () => {
+    const { send, sent } = stubSend({
+      status: "content",
+      mimeType: "application/pdf",
+      bytes: 3,
+      transfer: { id: "transfer-2", chunks: 3, data: "AA==" },
+    });
+    const viewer = createViewer();
+    const sheet = sheetThatCloses();
+    const phases: BotFilePhase[] = [];
+    const tracking = (async (command: BridgeCommand) => {
+      const answer = await send(command);
+      // The person goes Back while the second part is on its way.
+      if (command.type === "readFileChunk") viewer.leave();
+      return answer;
+    }) as typeof send;
+    await saveBotFile(
+      tracking,
+      source,
+      drawnOn,
+      KEY,
+      file(),
+      sheet.share,
+      (p) => phases.push(p),
+      viewer,
+      (text) => text,
+    );
+    expect(sent.map((command) => command.type)).toEqual([
+      "readChatFile",
+      "readFileChunk",
+      "releaseFile",
+    ]);
+    expect(sent.at(-1)).toEqual({ type: "releaseFile", id: "transfer-2" });
+    expect(sheet.offered).toEqual([]);
+    // Nothing is said for a row that has gone.
+    expect(phases.at(-1)).toEqual({ status: "reading" });
+  });
+
+  it("F-115: the share step is handed the row itself, so it knows at once when the row has gone", async () => {
     const { send } = stubSend({
       status: "content",
       mimeType: "application/pdf",
       bytes: BYTES.length,
       transfer: { id: null, chunks: 1, data: toBase64(BYTES) },
     });
-    let gone = false;
-    const asked: boolean[] = [];
-    const share: ShareFile = async (_name, _bytes, wanted = () => true) => {
-      // The person goes Back while the file is written.
-      gone = true;
-      asked.push(wanted());
+    const viewer = createViewer();
+    let given: Viewer | null = null;
+    const share: ShareFile = async (_name, _bytes, row) => {
+      given = row;
       return "dismissed";
     };
     await saveBotFile(
@@ -499,10 +545,10 @@ describe("F-115: a row that has left the screen", () => {
       file(),
       share,
       () => {},
-      () => gone,
+      viewer,
       (t) => t,
     );
-    expect(asked).toEqual([false]);
+    expect(given).toBe(viewer);
   });
 });
 
@@ -527,7 +573,7 @@ describe("F-115: why a Save failed, on iPhone", () => {
       file(),
       sheetThatCloses().share,
       (p) => phases.push(p),
-      () => false,
+      here(),
       (text) => text.replaceAll(TOKEN, "[hidden]"),
     );
     const last = phases.at(-1)!;
@@ -581,144 +627,209 @@ describe("F-115: which read drew a task's history", () => {
 });
 
 describe("F-115: the share step", () => {
-  type Closes = { completed: boolean; activityType: string | null } | "throws" | "never";
-  function fakeSystem(closes: Closes = { completed: true, activityType: SAVE_TO_FILES }) {
+  /**
+   * A stand-in for the cache and the native sheet. Each sheet is held until `end` settles it,
+   * unless `ends` settles every one at once; `cancel` before it settles presents nothing.
+   */
+  function fakeSystem(ends?: SheetEnd) {
     const log: string[] = [];
     const later: Array<() => void> = [];
+    const folders = new Set<string>();
+    const open = new Map<string, (end: SheetEnd) => void>();
+    const cancelled = new Set<string>();
     let made = 0;
     let failRemoves = 0;
-    let failClears = 0;
     const system: ShareSystem = {
-      clear: () => {
-        log.push("clear");
-        if (failClears > 0) {
-          failClears -= 1;
+      newName: () => `folder-${(made += 1)}`,
+      list: () => [...folders],
+      write: async (folder, name, bytes) => {
+        folders.add(folder);
+        log.push(`write ${folder}/${name} ${bytes.length}`);
+        return `file:///cache/clawtrate-share/${folder}/${encodeURIComponent(name)}`;
+      },
+      remove: (folder) => {
+        log.push(`remove ${folder}`);
+        if (failRemoves > 0) {
+          failRemoves -= 1;
           throw new Error("busy");
         }
+        folders.delete(folder);
       },
-      folder: () => {
-        made += 1;
-        const name = `folder-${made}`;
-        log.push(`make ${name}`);
-        return {
-          write: async (file, bytes) => {
-            log.push(`write ${name}/${file} ${bytes.length}`);
-            return `file:///cache/clawtrate-share/${name}/${encodeURIComponent(file)}`;
-          },
-          remove: () => {
-            log.push(`remove ${name}`);
-            if (failRemoves > 0) {
-              failRemoves -= 1;
-              throw new Error("busy");
-            }
-          },
-        };
-      },
-      sheet: (uri) => {
-        log.push(`sheet ${uri}`);
-        if (closes === "throws") return Promise.reject(new Error("no view controller"));
-        if (closes === "never") return new Promise(() => {});
-        return Promise.resolve(closes);
+      sheet: (id) =>
+        new Promise((resolve) => {
+          // The native side checks for a cancel just before it presents.
+          if (cancelled.has(id)) return resolve({ end: "not-presented" });
+          log.push(`sheet ${id}`);
+          if (ends) return resolve(ends);
+          open.set(id, resolve);
+        }),
+      cancel: (id) => {
+        log.push(`cancel ${id}`);
+        cancelled.add(id);
       },
       later: (work) => void later.push(work),
     };
     return {
       system,
       log,
+      folders,
+      end: (id: string, end: SheetEnd) => {
+        open.get(id)!(end);
+        open.delete(id);
+      },
+      opened: (id: string) => open.has(id),
       runLater: () => later.splice(0).forEach((work) => work()),
       failNextRemove: () => void (failRemoves += 1),
-      failNextClear: () => void (failClears += 1),
+      leftOver: (name: string) => folders.add(name),
     };
   }
+  const saved: SheetEnd = { end: "completed", activityType: SAVE_TO_FILES };
 
-  it("F-115: the file is written to a folder of its own under core's cleaned name, offered, and deleted once the sheet closes; the share folder is swept before each file", async () => {
-    const { system, log } = fakeSystem();
+  it("F-115: the file is written to a folder of its own under core's cleaned name, offered, and deleted once the sheet is done with", async () => {
+    const { system, log, folders } = fakeSystem(saved);
     const { share } = createSharing(system);
     const name = `${"a".repeat(300)}.pdf`;
-    expect(await share(name, BYTES)).toBe("saved");
+    expect(await share(name, BYTES, here())).toBe("saved");
     expect(log).toEqual([
-      "clear",
-      "make folder-1",
       `write folder-1/${cleanFileName(name)} ${BYTES.length}`,
-      expect.stringMatching(/^sheet file:\/\/\/cache\/clawtrate-share\/folder-1\//),
+      "sheet folder-1",
       "remove folder-1",
     ]);
+    expect(folders.size).toBe(0);
     expect(new TextEncoder().encode(cleanFileName(name)).length).toBeLessThanOrEqual(255);
     expect(cleanFileName(name).endsWith(".pdf")).toBe(true);
-    expect(await share("b.txt", new Uint8Array(0))).toBe("saved");
-    expect(log.filter((line) => line === "clear")).toHaveLength(2);
   });
 
-  it("F-115: the app sweeps the share folder when it starts, so a force-quit with the sheet open leaves nothing", () => {
-    const { system, log } = fakeSystem();
-    createSharing(system).sweep();
-    expect(log).toEqual(["clear"]);
+  it("F-115: what an earlier run left is swept when the app starts and before each file, but never a folder in use", async () => {
+    const fake = fakeSystem();
+    const { share, sweep } = createSharing(fake.system);
+    fake.leftOver("from-a-force-quit");
+    sweep();
+    expect(fake.folders.has("from-a-force-quit")).toBe(false);
+    fake.leftOver("left-again");
+    const first = share("a.pdf", BYTES, here());
+    await until(() => fake.opened("folder-1"));
+    expect(fake.folders.has("left-again")).toBe(false);
+    // A sweep while the sheet is up spares the file iOS is offering.
+    sweep();
+    expect(fake.folders.has("folder-1")).toBe(true);
+    fake.end("folder-1", { end: "dismissed", activityType: null });
+    expect(await first).toBe("dismissed");
+    expect(fake.folders.size).toBe(0);
   });
 
-  it("F-115: a cancelled sheet, an activity chosen and then cancelled, another activity, or a sheet that didn't open each delete the file", async () => {
-    for (const [closes, outcome] of [
-      [{ completed: false, activityType: null }, "dismissed"],
+  it("F-115: a sweep tried again later, while another file is being shared, still spares that file", async () => {
+    const fake = fakeSystem();
+    const { share, sweep } = createSharing(fake.system);
+    fake.leftOver("stale");
+    fake.failNextRemove();
+    sweep();
+    expect(fake.folders.has("stale")).toBe(true);
+    const sharing = share("a.pdf", BYTES, here());
+    await until(() => fake.opened("folder-1"));
+    fake.runLater();
+    expect(fake.folders.has("stale")).toBe(false);
+    expect(fake.folders.has("folder-1")).toBe(true);
+    fake.end("folder-1", saved);
+    expect(await sharing).toBe("saved");
+  });
+
+  it("F-115: a second Save while a sheet is up is refused with words that say so, and the first file stays until its sheet is done", async () => {
+    const fake = fakeSystem();
+    const { share } = createSharing(fake.system);
+    const first = share("a.pdf", BYTES, here());
+    await until(() => fake.opened("folder-1"));
+    await expect(share("b.pdf", BYTES, here())).rejects.toThrow(SHARE_WORDS.busy);
+    expect(fake.folders.has("folder-1")).toBe(true);
+    expect(fake.log.some((line) => line.startsWith("write folder-2"))).toBe(false);
+    fake.end("folder-1", saved);
+    expect(await first).toBe("saved");
+    // Once it is done, the next Save goes ahead.
+    const second = share("b.pdf", BYTES, here());
+    await until(() => fake.opened("folder-2"));
+    fake.end("folder-2", { end: "completed", activityType: "com.apple.UIKit.activity.AirDrop" });
+    expect(await second).toBe("shared");
+  });
+
+  it("F-115: two Saves in a row, the second pressed before the first's file was written, never touch the first's file", async () => {
+    const fake = fakeSystem();
+    const { share } = createSharing(fake.system);
+    const first = share("a.pdf", BYTES, here());
+    const second = share("b.pdf", BYTES, here());
+    await expect(second).rejects.toThrow(SHARE_WORDS.busy);
+    await until(() => fake.opened("folder-1"));
+    expect(fake.log.filter((line) => line.startsWith("remove"))).toEqual([]);
+    fake.end("folder-1", saved);
+    expect(await first).toBe("saved");
+  });
+
+  it("F-115: every way the sheet ends deletes the file: closed, an activity chosen and then cancelled, another activity, a failed activity, no screen to open on", async () => {
+    for (const [end, outcome] of [
+      [{ end: "dismissed", activityType: null }, "dismissed"],
       // Save to Files picked, then its picker cancelled.
-      [{ completed: false, activityType: SAVE_TO_FILES }, "dismissed"],
-      [{ completed: true, activityType: "com.apple.UIKit.activity.AirDrop" }, "shared"],
+      [{ end: "dismissed", activityType: SAVE_TO_FILES }, "dismissed"],
+      [{ end: "completed", activityType: "com.apple.UIKit.activity.AirDrop" }, "shared"],
     ] as const) {
-      const { system, log } = fakeSystem(closes);
-      expect(await createSharing(system).share("a.pdf", BYTES)).toBe(outcome);
+      const { system, log } = fakeSystem(end);
+      expect(await createSharing(system).share("a.pdf", BYTES, here())).toBe(outcome);
       expect(log.at(-1)).toBe("remove folder-1");
     }
-    const { system, log } = fakeSystem("throws");
-    await expect(createSharing(system).share("a.pdf", BYTES)).rejects.toThrow(SHARE_WORDS.noSheet);
-    expect(log.at(-1)).toBe("remove folder-1");
-  });
-
-  it("F-115: a sheet that never says it closed doesn't hold its file or its row: the next file takes it as closed and deletes it", async () => {
-    const stuck = fakeSystem("never");
-    const { share } = createSharing(stuck.system);
-    const first = share("a.pdf", BYTES);
-    await until(() => stuck.log.some((line) => line.startsWith("sheet")));
-    const second = share("b.pdf", BYTES);
-    expect(await first).toBe("dismissed");
-    // Swept before the second file, and its own folder deleted as it ended.
-    expect(stuck.log).toContain("remove folder-1");
-    expect(stuck.log.indexOf("clear", 1)).toBeLessThan(stuck.log.indexOf("make folder-2"));
-    void second;
+    for (const [end, words] of [
+      [{ end: "failed" }, SHARE_WORDS.activityFailed],
+      [{ end: "no-screen" }, SHARE_WORDS.noSheet],
+    ] as const) {
+      const { system, log } = fakeSystem(end);
+      await expect(createSharing(system).share("a.pdf", BYTES, here())).rejects.toThrow(words);
+      expect(log.at(-1)).toBe("remove folder-1");
+    }
   });
 
   it("F-115: a row gone while its file was written opens no sheet, and the file is deleted", async () => {
-    const { system, log } = fakeSystem();
-    expect(await createSharing(system).share("a.pdf", BYTES, () => false)).toBe("dismissed");
+    const { system, log } = fakeSystem(saved);
+    expect(await createSharing(system).share("a.pdf", BYTES, away())).toBe("dismissed");
     expect(log.some((line) => line.startsWith("sheet"))).toBe(false);
     expect(log.at(-1)).toBe("remove folder-1");
   });
 
-  it("F-115: a delete that fails is tried again later, and a failed sweep too", async () => {
-    const fake = fakeSystem();
-    const { share, sweep } = createSharing(fake.system);
+  it("F-115: a row gone between the check and the native present is cancelled there: nothing is presented and the file is deleted", async () => {
+    const fake = fakeSystem(saved);
+    const viewer = createViewer();
+    const system: ShareSystem = {
+      ...fake.system,
+      // The person goes Back just as the present is handed to the native side.
+      sheet: (id, uri) => {
+        viewer.leave();
+        return fake.system.sheet(id, uri);
+      },
+    };
+    expect(await createSharing(system).share("a.pdf", BYTES, viewer)).toBe("dismissed");
+    expect(fake.log).toContain("cancel folder-1");
+    expect(fake.log.some((line) => line.startsWith("sheet"))).toBe(false);
+    expect(fake.log.at(-1)).toBe("remove folder-1");
+  });
+
+  it("F-115: a delete that fails is tried again later", async () => {
+    const fake = fakeSystem(saved);
+    const { share } = createSharing(fake.system);
     fake.failNextRemove();
-    expect(await share("a.pdf", BYTES)).toBe("saved");
-    expect(fake.log.filter((line) => line === "remove folder-1")).toHaveLength(1);
+    expect(await share("a.pdf", BYTES, here())).toBe("saved");
+    expect(fake.folders.has("folder-1")).toBe(true);
     fake.runLater();
-    expect(fake.log.filter((line) => line === "remove folder-1")).toHaveLength(2);
-    fake.failNextClear();
-    sweep();
-    fake.runLater();
-    expect(fake.log.filter((line) => line === "clear")).toHaveLength(3);
+    expect(fake.folders.has("folder-1")).toBe(false);
   });
 
   it("F-115: a file that can't be written is said plainly, and its folder still goes", async () => {
-    const { system, log } = fakeSystem({ completed: true, activityType: null });
+    const fake = fakeSystem(saved);
     const failing: ShareSystem = {
-      ...system,
-      folder: () => ({
-        ...system.folder(),
-        write: async () => {
-          throw new Error("ENOSPC");
-        },
-      }),
+      ...fake.system,
+      write: async (folder) => {
+        fake.folders.add(folder);
+        throw new Error("ENOSPC");
+      },
     };
-    await expect(createSharing(failing).share("a.pdf", BYTES)).rejects.toThrow(
+    await expect(createSharing(failing).share("a.pdf", BYTES, here())).rejects.toThrow(
       SHARE_WORDS.notWritten,
     );
-    expect(log.at(-1)).toBe("remove folder-1");
+    expect(fake.folders.size).toBe(0);
   });
 });

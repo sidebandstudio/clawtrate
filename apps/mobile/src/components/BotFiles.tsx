@@ -6,9 +6,10 @@
 // A line under the name says why a file can't be saved, or why Save failed, with Try again.
 
 import type { ChatFile } from "@clawtrate/core";
-import { useEffect, useRef, useState } from "react";
+import { useLayoutEffect, useRef, useState } from "react";
 import { AccessibilityInfo, View } from "react-native";
 import { saveBotFile } from "../bot-files.ts";
+import { createViewer } from "../host/share.ts";
 import { BOT_FILE_WORDS as W, botFileView, type BotFilePhase } from "../presentation/bot-files.ts";
 import { fileSize } from "../presentation/sent-files.ts";
 import { useRuntime } from "../runtime.ts";
@@ -31,22 +32,21 @@ function BotFile({
   const { send, client, shareFile, redact } = useRuntime();
   const { c } = useTheme();
   const [phase, setPhase] = useState<BotFilePhase>({ status: "ready" });
-  // A row that has left the screen reads nothing more and opens no sheet.
-  const shown = useRef(true);
-  useEffect(() => {
-    shown.current = true;
-    return () => {
-      shown.current = false;
-    };
+  // A row that has left the screen reads nothing more and opens no sheet. It is marked gone in
+  // the commit that removes it (a layout effect's cleanup runs then, not after paint), and that
+  // reaches a share waiting to be presented at once (`host/share.ts`).
+  const viewer = useRef(createViewer());
+  useLayoutEffect(() => {
+    if (viewer.current.gone()) viewer.current = createViewer();
+    const shown = viewer.current;
+    return () => shown.leave();
   }, []);
-  // Only the latest Save's states are shown: one taken as closed by a later share says nothing.
-  const attempt = useRef(0);
   const view = botFileView(file, phase, canLoad);
   const size = file.sizeBytes === null ? "" : fileSize(file.sizeBytes);
 
   const save = () => {
     if (view.busy) return;
-    const mine = ++attempt.current;
+    const shown = viewer.current;
     const source = { getState: client.store.get, subscribe: client.store.subscribe };
     void saveBotFile(
       send,
@@ -56,13 +56,13 @@ function BotFile({
       file,
       shareFile,
       (next) => {
-        if (!shown.current || mine !== attempt.current) return;
+        if (shown.gone()) return;
         setPhase(next);
         // Each state is said as it comes, as the desktop's live region says it.
         const note = botFileView(file, next, true).note;
         if (note) AccessibilityInfo.announceForAccessibility(note);
       },
-      () => !shown.current,
+      shown,
       redact,
     );
   };
