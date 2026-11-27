@@ -4,7 +4,12 @@
 
 import { cutText, jsonTextLength } from "./bounds.ts";
 import { utf8Length } from "./encoding.ts";
-import { channelChatTitle, externalChannelOf, stripChannelMetadata } from "./channels.ts";
+import {
+  channelChatTitle,
+  externalChannelOf,
+  isMainSession,
+  stripChannelMetadata,
+} from "./channels.ts";
 import { isOtherToolSession } from "./origins.ts";
 import { previewWithoutMarker, titleWithoutMarker } from "./send-marker.ts";
 import {
@@ -325,9 +330,9 @@ export function mapSessionRow(row: RawRecord, names: TaskTitleNames = {}): Task 
     updatedAt: num(row.updatedAt) ?? num(row.lastActivityAt) ?? num(row.createdAt),
     status: taskStatus(row),
     unread: row.unread === true,
-    ...((typeof row.isMain === "boolean" ? row.isMain : /^agent:[^:]+:main$/.test(key))
-      ? { isMain: true }
-      : {}),
+    // The gateway's own word first (`isMain`, `classification: "main"`), then the key, as
+    // `isMainSession` decides for channels: a bot's main conversation is never one of its tasks.
+    ...(isMainSession(row) ? { isMain: true } : {}),
     ...(row.pinned === true ? { pinned: true } : {}),
     ...(row.markedUnreadAt !== undefined ? { unreadMarker: num(row.markedUnreadAt) } : {}),
     ...contextOf(row),

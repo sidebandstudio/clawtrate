@@ -25,6 +25,13 @@ describe("a bot's main conversation (docs/design/bot-opens-main.md)", () => {
     expect(botMainConversationKey("marlow", [marked])).toBe("global");
   });
 
+  it("is the row the gateway classifies as main, whatever its key, and is not one of its tasks", () => {
+    const classified = task("agent:marlow:home", { agentId: "marlow", classification: "main" });
+    expect(classified.isMain).toBe(true);
+    expect(botMainConversationKey("marlow", [classified])).toBe("agent:marlow:home");
+    expect(tasksUnderBot([classified])).toEqual([]);
+  });
+
   it("is never another bot's main row", () => {
     expect(botMainConversationKey("pip", [task("agent:marlow:main")])).toBe("agent:pip:main");
   });

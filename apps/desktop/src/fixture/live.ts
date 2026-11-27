@@ -836,6 +836,13 @@ export function liveCommand(
 ): Promise<unknown> | undefined {
   const now = Date.now();
   const update = (change: (t: Transcript) => Transcript) => set(withTranscript(get(), change));
+  /** The conversation a command names, when the fixture holds it; else the open task, as before. */
+  const updateAt = (key: string, change: (t: Transcript) => Transcript) => {
+    const state = get();
+    const current = state.transcripts[key];
+    if (!current) return update(change);
+    set({ ...state, transcripts: { ...state.transcripts, [key]: change(current) } });
+  };
   switch (command.type) {
     case "requestAccess": {
       set(upgrade(get(), { status: "requesting" }));
@@ -857,7 +864,7 @@ export function liveCommand(
         const file = files.get(each);
         return file ? [file] : [];
       });
-      update((transcript) => {
+      updateAt(command.key, (transcript) => {
         const active = transcript.runs.find((each) =>
           ["running", "waiting", "stopping"].includes(each.state),
         );

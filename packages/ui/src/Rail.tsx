@@ -848,7 +848,9 @@ export function Rail({
   const archive = (bot: Bot, task: Task, trigger: HTMLElement | null) => {
     const tasks = tasksByBot[bot.id] ?? [];
     const remaining = tasks.filter((other) => other.key !== task.key);
-    const next = neighbour(tasks, task.key);
+    // The row focus moves to: a task listed under the bot, never its main conversation, which has
+    // no row (the bot's own row takes focus then).
+    const next = neighbour(tasksUnderBot(tasks), task.key);
     // Where the row was listed: a restored copy has the same keys, so the host sends it nowhere else.
     const shown = listedOn();
     const act = async (stop: boolean) => {
@@ -907,7 +909,9 @@ export function Rail({
   ) => {
     const tasks = tasksByBot[bot.id] ?? [];
     const remaining = tasks.filter((other) => other.key !== task.key);
-    const next = neighbour(tasks, task.key);
+    // The row focus moves to: a task listed under the bot, never its main conversation, which has
+    // no row (the bot's own row takes focus then).
+    const next = neighbour(tasksUnderBot(tasks), task.key);
     setDialog({
       botId: bot.id,
       title: `Delete “${task.title}”?`,

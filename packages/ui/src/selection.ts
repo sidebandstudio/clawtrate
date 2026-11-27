@@ -472,6 +472,13 @@ export function useSelection(
       const { key } = opening;
       markRead();
       keepIfLeftOut(id);
+      // Opening it reads it again from now on, as opening a task kept unread does.
+      setKeptUnread((current) => {
+        if (!current.has(key)) return current;
+        const next = new Set(current);
+        next.delete(key);
+        return next;
+      });
       if (opening.otherBot) {
         setBotId(id);
         writePreference("bot", id);
