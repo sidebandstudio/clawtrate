@@ -805,6 +805,33 @@ describe("the switch and the rows' changes", () => {
     expect(files.sets).toEqual([]);
   });
 
+  it("a bot whose id is a name every object has reads its own folder entry only, and none means any folder", async () => {
+    const files = fakeFiles({ constructor: BOT_FILE, pip: BOT_FILE });
+    // The record kept a folder for Pip, and none for `constructor`, recorded before folders were.
+    const record = { on: true, bots: ["constructor", "pip"], folders: at(["pip"]) };
+    expect((await readGuideFolders(files.request, record)).map((folder) => folder.state)).toEqual([
+      "removed",
+      "removed",
+    ]);
+  });
+
+  it("with a full history, a bot recorded in another folder doesn't make its new folder known", async () => {
+    // Moved and Other share a folder; the history, full, has Moved only, recorded in the old one.
+    const files = fakeFiles(
+      { moved: BOT_FILE, other: BOT_FILE },
+      { moved: "shared", other: "shared" },
+    );
+    files.store.set("shared", BOT_FILE);
+    files.prefs.entries.set(GUIDES_HISTORY_KEY, {
+      v: 1,
+      bots: ["moved"],
+      full: true,
+      folders: at(["moved"], { moved: "old" }),
+    });
+    await applyGuidesChange(files.request, null, { action: "auto" });
+    expect(files.sets).toEqual([]);
+  });
+
   it("a removal records nothing for a file it can't read, so another device doesn't read it as removed", async () => {
     // Pip never had the section; the read the removal makes first fails once.
     const files = fakeFiles({ pip: BOT_FILE });

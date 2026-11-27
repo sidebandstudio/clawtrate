@@ -591,6 +591,10 @@ export function guideFolders(agents: unknown): string[][] {
 }
 
 /** Whether a bot recorded in `folder` was recorded in the one it reads now; no folder is any. */
+/** A bot's recorded folder, read only as the record's own entry: a bot id can be `constructor`. */
+const folderIn = (folders: Record<string, string> | undefined, bot: string) =>
+  folders && Object.hasOwn(folders, bot) ? folders[bot] : undefined;
+
 const sameFolder = (where: Map<string, string>, bot: string, folder: string | undefined) =>
   (folder ?? where.get(bot)) === where.get(bot);
 
@@ -612,11 +616,12 @@ export async function readGuideFolders(
   // A bot another of this person's devices recorded counts as one this device knew, while on.
   // Each counts only in the folder it was recorded in: a bot moved to another has none there.
   const knew = (bot: string) =>
-    (record?.bots.includes(bot) === true && sameFolder(where, bot, record.folders?.[bot])) ||
+    (record?.bots.includes(bot) === true &&
+      sameFolder(where, bot, folderIn(record.folders, bot))) ||
     (record?.on !== false &&
       history.known &&
       history.history.bots.includes(bot) &&
-      sameFolder(where, bot, history.history.folders?.[bot]));
+      sameFolder(where, bot, folderIn(history.history.folders, bot)));
   const refusedOf = (bots: string[]) =>
     bots.map((bot) => record?.refused?.[bot]).find((reason) => reason !== undefined) ?? null;
   return Promise.all(
@@ -806,16 +811,16 @@ export async function applyGuidesChange(
   /** A bot the history recorded in the folder it reads now. */
   const elsewhereHere = (bot: string) =>
     elsewhere.has(bot) &&
-    sameFolder(where, bot, history.known ? history.history.folders?.[bot] : undefined);
+    sameFolder(where, bot, history.known ? folderIn(history.history.folders, bot) : undefined);
   /** Whether a folder's history is known: a bot not in a history that is full has none. */
   const historyKnown = (bots: string[]) =>
-    history.known && (!history.history.full || bots.some((bot) => elsewhere.has(bot)));
+    history.known && (!history.history.full || bots.some((bot) => elsewhereHere(bot)));
   /** Bots whose folder held a marked section in this change, for the gateway's history. */
   const held = new Set<string>();
   const errors: string[] = [];
   /** The bots this device knows held the section, each with the folder it held it in. */
   const kept = new Map(
-    (on ? (record?.bots ?? []) : []).map((bot) => [bot, record?.folders?.[bot]] as const),
+    (on ? (record?.bots ?? []) : []).map((bot) => [bot, folderIn(record?.folders, bot)] as const),
   );
   const keep = (bot: string) => kept.set(bot, where.get(bot));
   const keptHere = (bot: string) => kept.has(bot) && sameFolder(where, bot, kept.get(bot));
