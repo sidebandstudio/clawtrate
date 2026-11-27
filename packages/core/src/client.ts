@@ -5142,8 +5142,8 @@ export class ClawtrateClient {
         noteStoppedWith(activity, runId, (now) => ({ ...now, [kind]: [...now[kind], sessionKey] })),
       );
     const rawOf = (step: Run["steps"][number]) => step.raw ?? this.raw.get(key, step.id);
-    // The connection the run ended on: the wait for the gateway's own turn is recorded only on it
-    // (#645). (A retry after a switch to another gateway is given up by `ensureScope`.)
+    // The connection the run ended on: no retry goes to another gateway, and the wait for the
+    // gateway's own turn is recorded only on this connection (#645).
     const target = this.target;
     const epoch = this.epoch;
     const recipients = recipientLinks([run], rawOf).map(async (link) => {
@@ -5153,6 +5153,8 @@ export class ClawtrateClient {
       if (!link.runId) return note("uncertain", link.sessionKey);
       const params = { sessionKey: link.sessionKey, runId: link.runId };
       for (let attempt = 0; ; attempt += 1) {
+        // Never asked of another gateway: after a switch, a retry's wait for access can end on it.
+        if (this.target !== target) return note("unanswered", link.sessionKey);
         try {
           const stopped = asRecord(await this.request("chat.abort", params));
           // `aborted: false`: nothing of it was running any more.
