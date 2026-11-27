@@ -4,6 +4,7 @@ import {
   mapSessionRow,
   NOT_OPEN_IN_VIEW,
   tasksWithFilePreviews,
+  tasksWithoutSkillNotes,
   tasksWithoutUpdateNotices,
   updateNoticeScope,
   type BridgeCommand,
@@ -357,12 +358,15 @@ export function Shell({
   const { updated, mainKey } = updateNoticeScope(state);
   const gatewayId = state.connection.gatewayId;
   // The rail's preview of a task whose history ends with a bot's message that is only files reads
-  // as their names (F-115); one whose history ends with the gateway's update line shows what came
-  // before it (F-590).
+  // as their names (F-115); one whose history ends with the gateway's update line (F-590) or skill
+  // note (F-560) shows what came before it.
   const listedTasks = useMemo(
     () =>
       tasksWithFilePreviews(
-        tasksWithoutUpdateNotices(tasksByBot, transcripts, { updated, gatewayId, mainKey }),
+        tasksWithoutSkillNotes(
+          tasksWithoutUpdateNotices(tasksByBot, transcripts, { updated, gatewayId, mainKey }),
+          transcripts,
+        ),
         transcripts,
       ),
     [tasksByBot, transcripts, updated, gatewayId, mainKey],

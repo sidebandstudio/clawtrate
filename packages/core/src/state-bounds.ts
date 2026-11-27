@@ -21,6 +21,7 @@ import {
   type DeviceRequestsState,
 } from "./device-approval.ts";
 import { MAX_UPDATED_RUNS, type UpdatedRun } from "./update-notice.ts";
+import { MAX_SKILL_NOTE_SKILLS, type SkillNote, type SkillNoteSkill } from "./skill-notes.ts";
 import {
   MAX_ACCOUNTS,
   MAX_CATALOG_MODELS,
@@ -647,6 +648,13 @@ const sentAttachment = object<SentAttachment>()({
   mimeType: NAME,
   sizeBytes: NUMBER,
 });
+const skillNoteSkill = object<SkillNoteSkill>()({ name: NAME, action: ENUM });
+const skillNote = object<SkillNote>()({
+  reviewId: ID,
+  skills: list(MAX_SKILL_NOTE_SKILLS, skillNoteSkill),
+  agentId: NAME,
+  after: NUMBER,
+});
 const item = flagged<TranscriptItem>()({
   id: ID,
   role: ENUM,
@@ -666,6 +674,7 @@ const item = flagged<TranscriptItem>()({
   }),
   idempotencyKey: ID,
   runless: FLAG,
+  skillNote,
   brief: FLAG,
   reportRunId: ID,
   updateRunId: ID,

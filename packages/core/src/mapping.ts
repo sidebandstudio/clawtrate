@@ -7,6 +7,7 @@ import { utf8Length } from "./encoding.ts";
 import { channelChatTitle, externalChannelOf, stripChannelMetadata } from "./channels.ts";
 import { isOtherToolSession } from "./origins.ts";
 import { previewWithoutMarker, titleWithoutMarker } from "./send-marker.ts";
+import { skillNoteOf } from "./skill-notes.ts";
 import {
   gatewayPreviewOf,
   LIST_PREVIEW_MAX_CHARS,
@@ -826,6 +827,11 @@ export function mapHistory(
      * stays the line alone. Only the gateway's reported version tells them apart.
      */
     gatewayEvents?: boolean;
+    /**
+     * The gateway marks its skill notes (`openclawDeliveryMirror`, OpenClaw 2026.11.10 and newer,
+     * by its reported version): a row without the mark is then never the note (`skillNoteOf`).
+     */
+    skillNotesMarked?: boolean;
   } = {},
 ): TranscriptItem[] {
   const items: TranscriptItem[] = [];
@@ -963,6 +969,10 @@ export function mapHistory(
           if (runId === null && str(asRecord(message.openclawAbort)?.runId) === null) {
             item.runless = true;
           }
+          // Perhaps the gateway's skill note, folded into the line of the run it follows.
+          const skillNote = skillNoteOf(message, options.skillNotesMarked === true);
+          if (skillNote)
+            item.skillNote = before !== null ? { ...skillNote, after: before } : skillNote;
           // Perhaps the gateway's update notice: the first row with its key, never a later one.
           const updateRunId = firstOfKey ? updateNoticeRunId(message) : null;
           if (updateRunId) {
@@ -1232,6 +1242,87 @@ export function seenThroughUpdateNotice(
     return transcript!.hasMore ? seenAt : task.updatedAt;
   }
   const after = items[first]!.updateNoticeAfter;
+  if (after === undefined || seenAt < after) return seenAt;
+  return task.updatedAt;
+}
+
+/**
+ * When a task's loaded history ends with skill notes (`TranscriptItem.skillNote`) and its listed
+ * preview is the one the gateway makes of the last of them (`gatewayPreviewOf`): the index of the
+ * first of those notes. Undefined otherwise: the listed row then has something newer.
+ */
+function trailingSkillNotes(task: Task, transcript: Transcript | undefined): number | undefined {
+  const items = transcript?.items ?? [];
+  const last = items.at(-1);
+  if (!last?.skillNote || last.truncated === true || task.preview === null) return undefined;
+  const listed = gatewayPreviewOf(updateNoticeText(last));
+  if (listed === null || plainPreview(listed) !== task.preview) return undefined;
+  let first = items.length - 1;
+  while (first > 0 && items[first - 1]!.skillNote) first -= 1;
+  return first;
+}
+
+/**
+ * A task's preview in the sidebar when its listed preview is the skill note its loaded history
+ * ends with (F-560): the text of the last item before the notes (null when none has text, so the
+ * title shows). The note is not what the bot said. No time is changed, so the order is the
+ * gateway's.
+ */
+export function taskWithoutSkillNote(task: Task, transcript: Transcript | undefined): Task {
+  const first = trailingSkillNotes(task, transcript);
+  if (first === undefined) return task;
+  const items = transcript!.items;
+  let preview: string | null = null;
+  for (let index = first - 1; index >= 0 && preview === null; index -= 1) {
+    const item = items[index]!;
+    if (item.role === "system" || item.skillNote) continue;
+    // A bot's message that is only files reads as their names, as the rail shows it (F-115).
+    if (item.role === "assistant" && item.filesPreview) {
+      preview = item.filesPreview;
+      continue;
+    }
+    const text = item.blocks.findLast((block) => block.kind === "text" && block.text.trim());
+    if (text?.kind === "text") preview = plainPreview(text.text.slice(0, MAX_PREVIEW_SOURCE_CHARS));
+  }
+  return preview === task.preview ? task : { ...task, preview };
+}
+
+/** Every listed task as `taskWithoutSkillNote` shows it, by bot. */
+export function tasksWithoutSkillNotes(
+  tasksByBot: Record<string, Task[]>,
+  transcripts: Record<string, Transcript>,
+): Record<string, Task[]> {
+  let changed = false;
+  const shown: Record<string, Task[]> = {};
+  for (const [botId, tasks] of Object.entries(tasksByBot)) {
+    shown[botId] = tasks.map((task) => {
+      const quiet = taskWithoutSkillNote(task, transcripts[task.key]);
+      if (quiet !== task) changed = true;
+      return quiet;
+    });
+  }
+  return changed ? shown : tasksByBot;
+}
+
+/**
+ * For a viewer that keeps its own memory of what it read (a read-only connection), when it read a
+ * task through, past skill notes that are all that came since: when the task's listed preview is
+ * the note its loaded history ends with, and the viewer read the task at or after the latest row
+ * before the first of them (`SkillNote.after`; both are the gateway's times), the task's own
+ * time. Otherwise `seenAt`. On a connection that writes, the gateway keeps unread, and the note
+ * doesn't raise it (OpenClaw 2026.10.6 and 2026.11.10: writing it moves only `updatedAt`).
+ */
+export function seenThroughSkillNote(
+  task: Task,
+  seenAt: number | undefined,
+  transcript: Transcript | undefined,
+): number | undefined {
+  if (seenAt === undefined || task.updatedAt === null || task.updatedAt <= seenAt) return seenAt;
+  const first = trailingSkillNotes(task, transcript);
+  if (first === undefined) return seenAt;
+  // Nothing loaded before the notes: the conversation had nothing else only if it is all loaded.
+  if (first === 0) return transcript!.hasMore ? seenAt : task.updatedAt;
+  const after = transcript!.items[first]!.skillNote!.after;
   if (after === undefined || seenAt < after) return seenAt;
   return task.updatedAt;
 }
