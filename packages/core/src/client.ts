@@ -2039,10 +2039,13 @@ export class ClawtrateClient {
     runFacts: (sessionKey, runId) => {
       const transcript = this.state.transcripts[sessionKey];
       const run = transcript?.runs.find((each) => each.id === runId);
-      if (!transcript || !run) return { steps: null, steered: false };
+      if (!transcript || !run) return { steps: null, steered: false, owner: false };
       const anchor = run.anchorItemId
         ? transcript.items.findIndex((item) => item.id === run.anchorItemId)
         : -1;
+      // The run's own message (a keyed anchor, not merely where it is drawn), stored as the owner's.
+      const owner =
+        run.anchorKeyed === true && anchor !== -1 && transcript.items[anchor]!.owner === true;
       const end = run.endedAt ?? Number.POSITIVE_INFINITY;
       const steered =
         anchor !== -1 &&
@@ -2059,6 +2062,7 @@ export class ClawtrateClient {
               }))
             : null,
         steered,
+        owner,
       };
     },
     missingScope: (error) => {
@@ -11517,6 +11521,11 @@ export class ClawtrateClient {
     }
     this.updateActivity(key, (activity, ctx) => applyAgentEvent(activity, payload, ctx).activity);
     const phase = asRecord(payload.data)?.phase;
+    // A run of an open task starting: its bot's IDENTITY.md as the run finds it (`runStarted`).
+    if (payload.stream === "lifecycle" && phase === "start" && this.openSessions.has(key)) {
+      const botId = botIdFromSessionKey(key);
+      if (botId) void this.botNames.runStarted(botId, payload.runId);
+    }
     if (payload.stream === "lifecycle" && (phase === "end" || phase === "error")) {
       this.scheduleHistory(key);
       // Only while a viewer has the task open: a task kept for its unsettled work reads nothing.

@@ -933,6 +933,7 @@ export function mapHistory(
           ...(messageId ? { messageId } : {}),
           ...(replyTo ? { replyTo } : {}),
           ...(idempotencyKey ? { idempotencyKey } : {}),
+          ...(info.senderIsOwner === true ? { owner: true as const } : {}),
           ...(brief ? { brief: true as const } : {}),
         };
         items.push(user);

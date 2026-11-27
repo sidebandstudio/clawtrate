@@ -21,6 +21,7 @@ import {
   MAX_RECORD_CHANGES,
   MAX_RECORD_COUNTS,
   CLAIM_SEND_MS,
+  NAME_DECLINES_KEY,
   NAME_RECORD_KEY,
   namesInText,
   parseNameRecord,
@@ -37,7 +38,7 @@ import { utf8Length } from "../src/encoding.ts";
 import { ADMIN_SCOPES } from "../src/scopes.ts";
 import type { Bot, GatewayStamp, NameLine, NameRecordChange } from "../src/types.ts";
 import { agentEvent, grantingGateway, openTask, URL_A } from "./client-harness.ts";
-import { deferred, guidesOff, memoryStorage, tokenKey, until } from "./fake-gateway.ts";
+import { deferred, guidesOff, memoryStorage, sleep, tokenKey, until } from "./fake-gateway.ts";
 
 const NOW = 1_795_000_000_000;
 const KEY = "agent:pip:main";
@@ -355,6 +356,13 @@ function device(
     cached?: boolean;
     /** Whether the task's history could be read at the run's end. */
     history?: boolean;
+    /** Whether the run's message was stored as the owner's (default: it was). */
+    owner?: boolean;
+    /**
+     * The name the run found in IDENTITY.md: by default the bot's name when its end is checked, as
+     * a read when the run started would have found it; null for no start read at all.
+     */
+    start?: string | null;
   } = {},
 ) {
   let lines: NameLine[] = [];
@@ -386,6 +394,7 @@ function device(
     runFacts: () => ({
       steps: options.steps === undefined ? [EDIT_OWN] : options.steps,
       steered: options.steered ?? false,
+      owner: options.owner ?? true,
     }),
     missingScope: () => false,
     certainRefusal: (error) => error instanceof Error && error.message === "refused",
@@ -399,6 +408,17 @@ function device(
     log: () => {},
   };
   const engine = new BotNames(ctx);
+  // Each run's start as a read when it started found it, unless the test reads it itself.
+  const afterRun = engine.afterRun.bind(engine);
+  engine.afterRun = async (botId: string, sessionKey: string, runId?: string) => {
+    const starts = engine["starts"] as Map<string, { botId: string; name: string | null }>;
+    if (runId !== undefined && options.start !== null && !starts.has(runId))
+      starts.set(runId, {
+        botId,
+        name: options.start ?? gw.state.bots.find((each) => each.id === botId)?.name ?? null,
+      });
+    return afterRun(botId, sessionKey, runId);
+  };
   const line = () => lines.find((each) => each.botId === "pip");
   return {
     engine,
@@ -960,20 +980,17 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
     expect(restarted.lines()).toEqual([]);
   });
 
-  it("F-552: a decline belongs to one edit: the same edit isn't applied again, a fresh request for the same name is, with its line", async () => {
+  it("F-552: after Undo, the file picked up again with no write of a run's changes nothing; a fresh request for the same name is applied, with its line", async () => {
     const gw = gateway();
     const me = device(gw);
     me.engine.sent(KEY, "run-1", "call yourself Juniper");
     await me.engine.afterRun("pip", KEY, "run-1");
     await me.engine.undo("pip", runTag("run-1"), "Pip", STAMP);
-    // The file as it was, picked up again with no write of the run's: declined, and nothing said.
+    // The file as it was, picked up again by a run that wrote nothing: nothing done or said.
     const quiet = device(gw, { steps: [] });
     await quiet.engine.afterRun("pip", KEY, "run-2");
     expect(gw.state.updates).toEqual(["Juniper", "Pip"]);
-    // It shows only the record's line for the change that was undone.
-    expect(quiet.lines()).toEqual([
-      expect.objectContaining({ run: runTag("run-1"), status: "undone", after: "Pip" }),
-    ]);
+    expect(quiet.lines()).toEqual([]);
     // The person asks again: a fresh edit, applied, with its line.
     me.engine.sent(KEY, "run-3", "Juniper after all, please");
     await me.engine.afterRun("pip", KEY, "run-3");
@@ -981,52 +998,38 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
     expect(me.line()).toMatchObject({ run: runTag("run-3"), whose: "person", status: "renamed" });
   });
 
-  it("F-552: a decline expires with Undo's window, and covers only the file as it was", async () => {
-    for (const declined of [
-      { bot: "pip", name: "Juniper", file: FILE_TAG, at: NOW - UNDO_WINDOW_MS - 1 },
-      { bot: "pip", name: "Juniper", file: runTag("another file"), at: NOW },
-    ]) {
-      const gw = gateway();
-      gw.state.record = record({ declined: [declined] });
-      const me = device(gw, { steps: [] });
-      await me.engine.afterRun("pip", KEY, "run-1");
-      expect(gw.state.updates).toEqual(["Juniper"]);
-      expect(me.line()).toMatchObject({ whose: "file", status: "renamed" });
-    }
-  });
-
-  it("F-552: an Undo whose record couldn't be kept says so, and this device still won't apply that edit again", async () => {
+  it("F-552: an Undo whose record couldn't be kept says so, and its decline is written before this device's next rename", async () => {
     const gw = gateway();
-    const me = device(gw, { steps: [] });
+    const me = device(gw);
     await me.engine.afterRun("pip", KEY, "run-1");
     // Undo's claim is written; the write that marks it undone and declines the edit isn't.
     gw.state.downAt = gw.state.sets + 2;
     await me.engine.undo("pip", runTag("run-1"), "Pip", STAMP);
     expect(me.line()).toMatchObject({ status: "undone", after: "Pip" });
     expect(me.line()!.error).toMatch(/couldn't keep this on the gateway/);
-    // While the gateway still won't take it, the same edit changes nothing here.
-    await me.engine.afterRun("pip", KEY, "run-2");
-    expect(me.line()).toMatchObject({ status: "undone" });
     gw.state.prefsDown = false;
     gw.state.downAt = null;
+    // The next rename here writes the decline first.
+    gw.state.file = "- **Name:** Maple\n";
     await me.engine.afterRun("pip", KEY, "run-3");
-    expect(gw.state.updates).toEqual(["Juniper", "Pip"]);
-    // Written once the gateway takes it again.
+    expect(gw.state.updates).toEqual(["Juniper", "Pip", "Maple"]);
     expect(gw.kept().declined).toEqual([{ bot: "pip", name: "Juniper", file: FILE_TAG, at: NOW }]);
   });
 
-  it("F-552: the line's three forms through the engine: a read of the bot's own file first, and no write at all", async () => {
+  it("F-552: the line's forms through the engine: a read of the bot's own file first; and no write of the run's, or history unread, changes nothing", async () => {
     const read = gateway();
     const r = device(read, { steps: [READ_OWN, EDIT_OWN] });
     r.engine.sent(KEY, "run-1", "call yourself Juniper");
     await r.engine.afterRun("pip", KEY, "run-1");
     expect(r.line()).toMatchObject({ whose: "bot", source: "file" });
 
+    // No write of the name among the run's steps: not shown to be this run's change, so nothing.
     const none = gateway();
     const n = device(none, { steps: [] });
     n.engine.sent(KEY, "run-1", "call yourself Juniper");
     await n.engine.afterRun("pip", KEY, "run-1");
-    expect(n.line()).toMatchObject({ whose: "file", source: null });
+    expect(n.lines()).toEqual([]);
+    expect(none.state.updates).toEqual([]);
 
     const steered = gateway();
     const s = device(steered, { steered: true });
@@ -1034,12 +1037,13 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
     await s.engine.afterRun("pip", KEY, "run-1");
     expect(s.line()).toMatchObject({ whose: "bot" });
 
-    // History unread at the run's end: a steer from another device may be in it.
+    // History unread at the run's end: who sent the run isn't known, so nothing is done.
     const unread = gateway();
     const u = device(unread, { history: false });
     u.engine.sent(KEY, "run-1", "call yourself Juniper");
     await u.engine.afterRun("pip", KEY, "run-1");
-    expect(u.line()).toMatchObject({ whose: "bot" });
+    expect(u.lines()).toEqual([]);
+    expect(unread.state.updates).toEqual([]);
 
     const files = gateway();
     const f = device(files);
@@ -1127,7 +1131,7 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
   it("F-552: an Undo's unsaved decline is kept and written again after a reconnect to the same gateway", async () => {
     const gw = gateway();
     let stamp = STAMP;
-    const me = device(gw, { steps: [], stamp: () => stamp });
+    const me = device(gw, { stamp: () => stamp });
     await me.engine.afterRun("pip", KEY, "run-1");
     // Undo's claim is written; the write that declines the edit isn't.
     gw.state.downAt = gw.state.sets + 2;
@@ -1137,14 +1141,12 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
     me.engine.reset();
     // Another device cleared the record meanwhile: only this device's copy holds the decline.
     gw.state.record = undefined;
-    await me.engine.afterRun("pip", KEY, "run-2");
-    expect(gw.state.updates).toEqual(["Juniper", "Pip"]);
-    // Declined here, so nothing is said: not a rename the record couldn't hold.
-    expect(me.line()).toBeUndefined();
     gw.state.prefsDown = false;
     gw.state.downAt = null;
+    // The next rename on that gateway writes it first.
+    gw.state.file = "- **Name:** Maple\n";
     await me.engine.afterRun("pip", KEY, "run-3");
-    expect(gw.state.updates).toEqual(["Juniper", "Pip"]);
+    expect(gw.state.updates).toEqual(["Juniper", "Pip", "Maple"]);
     expect(gw.kept().declined).toEqual([{ bot: "pip", name: "Juniper", file: FILE_TAG, at: NOW }]);
   });
 
@@ -1503,6 +1505,36 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
     expect(me.line()!.error).toContain("couldn't save this rename");
   });
 
+  it("F-552: an earlier build's Not now carries over: the bot doesn't take that name again by itself; the person can ask for it", async () => {
+    // As an earlier build kept it on this device: gateway and bot, the name declined.
+    const legacy = JSON.stringify({ "gw-a\npip": "Juniper" });
+
+    // The file still names Juniper; an unrelated run writes the file and leaves the name.
+    const kept = gateway();
+    const a = device(kept, { start: "Juniper" });
+    await a.ctx.storage.set(NAME_DECLINES_KEY, legacy);
+    await a.engine.afterRun("pip", KEY, "run-1");
+    expect(kept.state.updates).toEqual([]);
+    expect(await a.ctx.storage.get(NAME_DECLINES_KEY)).toBe(legacy);
+
+    // The bot writes the declined name in a run of its own: not applied, nothing said.
+    const itself = gateway();
+    const b = device(itself);
+    await b.ctx.storage.set(NAME_DECLINES_KEY, legacy);
+    await b.engine.afterRun("pip", KEY, "run-1");
+    expect(itself.state.updates).toEqual([]);
+    expect(b.lines()).toEqual([]);
+
+    // The person asks for it in their own words: applied, with its line.
+    const asked = gateway();
+    const c = device(asked);
+    await c.ctx.storage.set(NAME_DECLINES_KEY, legacy);
+    c.engine.sent(KEY, "run-1", "call yourself Juniper");
+    await c.engine.afterRun("pip", KEY, "run-1");
+    expect(asked.state.updates).toEqual(["Juniper"]);
+    expect(c.line()).toMatchObject({ whose: "person", status: "renamed" });
+  });
+
   it("F-552: a claim's entry is never the one the record's room drops", () => {
     const changes = Array.from({ length: 9 }, (_, n) =>
       change({ bot: `bot-${n}`, run: runTag(`r${n}`), done: NOW }),
@@ -1570,7 +1602,7 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
 
 describe("F-552: through the client", () => {
   /** A client with one New bot whose IDENTITY.md the test writes, and the gateway's record. */
-  async function namingClient(options: { identityFails?: number } = {}) {
+  async function namingClient(options: { identityFails?: number; owner?: boolean } = {}) {
     const files = { content: "- **Name:** New bot\n" };
     const held = ADMIN_SCOPES;
     const storage = guidesOff(
@@ -1593,10 +1625,26 @@ describe("F-552: through the client", () => {
       }
       return { deviceId: "gw-a" };
     };
-    // The gateway runs a message under its idempotency key (`chat-send-handler`, both versions).
-    gw.handlers["chat.send"] = (params) => ({
-      runId: (params as { idempotencyKey: string }).idempotencyKey,
-      status: "started",
+    // The gateway runs a message under its idempotency key (`chat-send-handler`, both versions),
+    // and stores it with `senderIsOwner` when the sender holds admin; history returns those rows.
+    const sent: Array<{ message: string; key: string; at: number }> = [];
+    gw.handlers["chat.send"] = (params) => {
+      const { message, idempotencyKey } = params as { message: string; idempotencyKey: string };
+      sent.push({ message, key: idempotencyKey, at: Date.now() });
+      return { runId: idempotencyKey, status: "started" };
+    };
+    gw.handlers["chat.history"] = () => ({
+      messages: sent.map((each, n) => ({
+        role: "user",
+        content: each.message,
+        timestamp: each.at,
+        __openclaw: {
+          id: `u-${n}`,
+          seq: n + 1,
+          idempotencyKey: each.key,
+          ...((options.owner ?? true) ? { senderIsOwner: true } : {}),
+        },
+      })),
     });
     const bots = { name: "New bot" };
     // With a failing identity read, a record kept from before: what Recent changes would list.
@@ -1683,16 +1731,24 @@ describe("F-552: through the client", () => {
         ),
       );
     };
-    return { client, gw, files, bots, edit };
+    /** The run `id` starts, and its IDENTITY.md is read as the run finds it. */
+    const begin = async (id: string) => {
+      const reads = gw.calls("agents.files.get").length;
+      gw.emit("agent", agentEvent(id, 1, "lifecycle", { phase: "start" }, "agent:new-bot:main"));
+      await until(() => gw.calls("agents.files.get").length > reads);
+      await sleep(20);
+    };
+    return { client, gw, files, bots, edit, begin, sent };
   }
 
   it("F-552: a name the bot writes in a run this device sent is the person's ask, applied with the picture kept out of its file, and Undo puts back the name it names", async () => {
-    const { client, gw, files, bots, edit } = await namingClient();
+    const { client, gw, files, bots, edit, begin } = await namingClient();
     try {
       const id = client.sendMessage("agent:new-bot:main", "call yourself Johnny");
       await until(() => gw.calls("chat.send").length === 1);
-      edit(id, "Johnny");
-      gw.emit("agent", agentEvent(id, 3, "lifecycle", { phase: "end" }, "agent:new-bot:main"));
+      await begin(id);
+      edit(id, "Johnny", 2);
+      gw.emit("agent", agentEvent(id, 4, "lifecycle", { phase: "end" }, "agent:new-bot:main"));
       await until(() => client.state.botNames?.[0]?.status === "renamed");
       expect(client.state.botNames![0]).toMatchObject({
         from: "New bot",
@@ -1705,6 +1761,76 @@ describe("F-552: through the client", () => {
       await client.undoBotName("new-bot", line.run, "New bot", line.stamp);
       expect(bots.name).toBe("New bot");
       expect(client.state.botNames![0]).toMatchObject({ status: "undone", after: "New bot" });
+    } finally {
+      client.stop();
+    }
+  });
+
+  /** The run's end was checked: its file and history read, and whatever it led to done. */
+  async function settledEnd(gw: { calls: (method: string) => unknown[] }, reads: number) {
+    await until(() => gw.calls("agents.files.get").length > reads, 10_000);
+    await sleep(200);
+  }
+
+  it("F-552: a run whose message the gateway didn't store as the owner's renames nothing", async () => {
+    const { client, gw, edit, begin } = await namingClient({ owner: false });
+    try {
+      const id = client.sendMessage("agent:new-bot:main", "call yourself Johnny");
+      await until(() => gw.calls("chat.send").length === 1);
+      await begin(id);
+      edit(id, "Johnny", 2);
+      const reads = gw.calls("agents.files.get").length;
+      gw.emit("agent", agentEvent(id, 4, "lifecycle", { phase: "end" }, "agent:new-bot:main"));
+      await settledEnd(gw, reads);
+      expect(gw.calls("agents.update")).toEqual([]);
+      expect(client.state.botNames ?? []).toEqual([]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("F-552: a start read served after the run wrote the file finds the run's own name: nothing is renamed", async () => {
+    const { client, gw, edit } = await namingClient();
+    try {
+      const id = client.sendMessage("agent:new-bot:main", "call yourself Johnny");
+      await until(() => gw.calls("chat.send").length === 1);
+      // The start read is answered only after the run's edit of the file began.
+      const read = gw.handlers["agents.files.get"]!;
+      const held = deferred<void>();
+      gw.handlers["agents.files.get"] = async (params) => {
+        await held.promise;
+        return read(params);
+      };
+      gw.emit("agent", agentEvent(id, 1, "lifecycle", { phase: "start" }, "agent:new-bot:main"));
+      await until(() => gw.calls("agents.files.get").length === 1);
+      edit(id, "Johnny", 2);
+      await sleep(20);
+      gw.handlers["agents.files.get"] = read;
+      held.resolve();
+      await sleep(20);
+      gw.emit("agent", agentEvent(id, 4, "lifecycle", { phase: "end" }, "agent:new-bot:main"));
+      await settledEnd(gw, 1);
+      expect(gw.calls("agents.update")).toEqual([]);
+      expect(client.state.botNames ?? []).toEqual([]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("F-552: a name another writer put in the file before the run started isn't this run's change", async () => {
+    const { client, gw, files, edit, begin } = await namingClient();
+    try {
+      // Someone else wrote Johnny into the file; the bot's own name is still New bot.
+      files.content = "- **Name:** Johnny\n";
+      const id = client.sendMessage("agent:new-bot:main", "call yourself Johnny");
+      await until(() => gw.calls("chat.send").length === 1);
+      await begin(id);
+      // The run writes the file, leaving the name as it found it.
+      edit(id, "Johnny", 2);
+      const reads = gw.calls("agents.files.get").length;
+      gw.emit("agent", agentEvent(id, 4, "lifecycle", { phase: "end" }, "agent:new-bot:main"));
+      await settledEnd(gw, reads);
+      expect(gw.calls("agents.update")).toEqual([]);
     } finally {
       client.stop();
     }
@@ -1723,11 +1849,11 @@ describe("F-552: through the client", () => {
   });
 
   it("F-552: a person's message another device sent within the run makes the rename the bot's own", async () => {
-    const { client, gw, edit } = await namingClient();
+    const { client, gw, edit, begin } = await namingClient();
     try {
       const id = client.sendMessage("agent:new-bot:main", "call yourself Johnny");
       await until(() => gw.calls("chat.send").length === 1);
-      gw.emit("agent", agentEvent(id, 1, "lifecycle", { phase: "start" }, "agent:new-bot:main"));
+      await begin(id);
       // History, read again as the gateway says a message arrived: this device's message, then
       // one from another device while the run was running.
       const row = (n: number, content: string, extra: Record<string, unknown> = {}) => ({
@@ -1738,7 +1864,7 @@ describe("F-552: through the client", () => {
       });
       gw.handlers["chat.history"] = () => ({
         messages: [
-          row(1, "call yourself Johnny", { idempotencyKey: id }),
+          row(1, "call yourself Johnny", { idempotencyKey: id, senderIsOwner: true }),
           row(2, "or anything you like"),
         ],
         inFlightRun: { runId: id },
@@ -1754,26 +1880,29 @@ describe("F-552: through the client", () => {
     }
   });
 
-  it("F-552: a run whose history can't be read at its end isn't shown to be the person's ask", async () => {
-    const { client, gw, edit } = await namingClient();
+  it("F-552: a run whose history can't be read at its end renames nothing: who sent it isn't known", async () => {
+    const { client, gw, edit, begin } = await namingClient();
     try {
       const id = client.sendMessage("agent:new-bot:main", "call yourself Johnny");
       await until(() => gw.calls("chat.send").length === 1);
-      edit(id, "Johnny");
-      // A steer from another device may be in what couldn't be read.
+      await begin(id);
+      edit(id, "Johnny", 2);
       gw.handlers["chat.history"] = () => {
         throw new Error("the gateway was busy");
       };
-      gw.emit("agent", agentEvent(id, 3, "lifecycle", { phase: "end" }, "agent:new-bot:main"));
-      await until(() => client.state.botNames?.[0]?.status === "renamed", 10_000);
-      expect(client.state.botNames![0]).toMatchObject({ to: "Johnny", whose: "bot" });
+      const reads = gw.calls("agents.files.get").length;
+      gw.emit("agent", agentEvent(id, 4, "lifecycle", { phase: "end" }, "agent:new-bot:main"));
+      await settledEnd(gw, reads);
+      await sleep(300);
+      expect(gw.calls("agents.update")).toEqual([]);
+      expect(client.state.botNames ?? []).toEqual([]);
     } finally {
       client.stop();
     }
   });
 
-  it("F-552: a task without live updates has no history read shown to cover the run's end: the rename is the bot's own", async () => {
-    const { client, gw, edit } = await namingClient();
+  it("F-552: a task without live updates has no history read shown to cover the run's end: it renames nothing", async () => {
+    const { client, gw, edit, begin } = await namingClient();
     const key = "agent:new-bot:main";
     try {
       // A read fails, and Try again can't start the task's live updates: a read at the run's end
@@ -1793,23 +1922,27 @@ describe("F-552: through the client", () => {
       await until(() => client.state.transcripts[key]?.error === LIVE_UPDATES_NOT_STARTED);
       const id = client.sendMessage(key, "call yourself Johnny");
       await until(() => gw.calls("chat.send").length === 1);
-      edit(id, "Johnny");
-      gw.emit("agent", agentEvent(id, 3, "lifecycle", { phase: "end" }, key));
-      await until(() => client.state.botNames?.[0]?.status === "renamed");
-      expect(client.state.botNames![0]).toMatchObject({ to: "Johnny", whose: "bot" });
+      await begin(id);
+      edit(id, "Johnny", 2);
+      const reads = gw.calls("agents.files.get").length;
+      gw.emit("agent", agentEvent(id, 4, "lifecycle", { phase: "end" }, key));
+      await settledEnd(gw, reads);
+      expect(gw.calls("agents.update")).toEqual([]);
+      expect(client.state.botNames ?? []).toEqual([]);
     } finally {
       client.stop();
     }
   });
 
-  it("F-552: a history read that failed and was tried again at once isn't read: the rename is the bot's own", async () => {
-    const { client, gw, edit } = await namingClient();
+  it("F-552: a history read that failed and was tried again at once isn't read: it renames nothing", async () => {
+    const { client, gw, edit, begin } = await namingClient();
     const key = "agent:new-bot:main";
     let stop = () => {};
     try {
       const id = client.sendMessage(key, "call yourself Johnny");
       await until(() => gw.calls("chat.send").length === 1);
-      edit(id, "Johnny");
+      await begin(id);
+      edit(id, "Johnny", 2);
       // A read already on its way when the run ends, answered only after the history read began.
       const history = gw.handlers["chat.history"]!;
       const held = deferred<void>();
@@ -1825,7 +1958,8 @@ describe("F-552: through the client", () => {
       };
       client.reloadSession(key);
       await until(() => reads === 1);
-      gw.emit("agent", agentEvent(id, 3, "lifecycle", { phase: "end" }, key));
+      const fileReads = gw.calls("agents.files.get").length;
+      gw.emit("agent", agentEvent(id, 4, "lifecycle", { phase: "end" }, key));
       // The history read is queued behind the one on its way.
       await until(() => (client["loads"].get(key)?.again ?? null) !== null);
       // Try again, pressed as soon as the failure shows, sets the task loading.
@@ -1833,8 +1967,9 @@ describe("F-552: through the client", () => {
         if (state.transcripts[key]?.status === "error") client.reloadSession(key);
       });
       held.resolve();
-      await until(() => client.state.botNames?.[0]?.status === "renamed");
-      expect(client.state.botNames![0]).toMatchObject({ to: "Johnny", whose: "bot" });
+      await settledEnd(gw, fileReads);
+      expect(gw.calls("agents.update")).toEqual([]);
+      expect(client.state.botNames ?? []).toEqual([]);
     } finally {
       stop();
       client.stop();
@@ -1842,11 +1977,11 @@ describe("F-552: through the client", () => {
   });
 
   it("F-552: a steer this device sent into the run makes the rename the bot's own", async () => {
-    const { client, gw, edit } = await namingClient();
+    const { client, gw, edit, begin } = await namingClient();
     try {
       const id = client.sendMessage("agent:new-bot:main", "call yourself Johnny");
       await until(() => gw.calls("chat.send").length === 1);
-      gw.emit("agent", agentEvent(id, 1, "lifecycle", { phase: "start" }, "agent:new-bot:main"));
+      await begin(id);
       await until(
         () => client.state.transcripts["agent:new-bot:main"]?.runs[0]?.state === "running",
       );

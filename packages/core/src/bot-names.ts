@@ -496,7 +496,7 @@ export type BotNamesContext = {
   generation: () => string;
   /** Refuse unless `stamp` is still where the host is connected, as every bot write does. */
   sameGateway: (stamp: GatewayStamp) => Promise<void>;
-  /** The host's storage: only to forget what the earlier card kept there. */
+  /** The host's storage: only to read the "Not now" answers the earlier card kept there. */
   storage: KeyValueStore;
   /** Take one of the client's file reads, or null when they are all in use. */
   takeRead: () => (() => void) | null;
@@ -508,7 +508,7 @@ export type BotNamesContext = {
   runFacts: (
     sessionKey: string,
     runId: string,
-  ) => { steps: RunStepFacts[] | null; steered: boolean };
+  ) => { steps: RunStepFacts[] | null; steered: boolean; owner: boolean };
   /** Read a task's history now, so what it holds covers a run that just ended. Whether it did. */
   readHistory: (sessionKey: string) => Promise<boolean>;
   /** Whether an error is the gateway refusing for a missing scope (and note it). */
@@ -582,9 +582,18 @@ export class BotNames {
   >();
   /** The record as last published: the same object the state holds. */
   private published: { stamp: GatewayStamp; changes: NameRecordChange[] } | null = null;
+  /**
+   * The name in a run's IDENTITY.md as the run found it (`MAX_CHECKED_RUNS`), by run id: read when
+   * the run started, kept only when the answer came before any write of the file in that run.
+   */
+  private readonly starts = new Map<string, { botId: string; name: string | null }>();
+  /**
+   * The "Not now" answers an earlier build kept on this device (`NAME_DECLINES_KEY`), by gateway
+   * and bot, at most `MAX_NAME_CARDS`: read once, kept as they are.
+   */
+  private legacy: Map<string, string> | null = null;
   /** Moves on with every reset, so a read begun before it changes nothing after. */
   private epoch = 0;
-  private forgotDeclines = false;
 
   private readonly ctx: BotNamesContext;
 
@@ -614,12 +623,50 @@ export class BotNames {
   }
 
   /**
+   * A run of `botId` started in an open task: read its IDENTITY.md once, to know the name the run
+   * found there. A read served after the run's own write finds the run's name, and its end then
+   * changes nothing; with no read free, nor does it.
+   */
+  async runStarted(botId: string, runId: string): Promise<void> {
+    if (runId.length > MAX_CHECKED_RUN_CHARS || this.starts.has(runId)) return;
+    const bot = this.ctx.bots().find((each) => each.id === botId);
+    if (!bot || bot.isDefault) return;
+    const release = this.ctx.takeRead();
+    if (!release) return;
+    const epoch = this.epoch;
+    const stamp = this.ctx.stamp();
+    const generation = this.ctx.generation();
+    try {
+      const answer = asRecord(
+        asRecord(
+          await this.ctx.request("agents.files.get", { agentId: botId, name: "IDENTITY.md" }),
+        )?.file,
+      );
+      if (
+        epoch !== this.epoch ||
+        !sameStamp(this.ctx.stamp(), stamp) ||
+        generation !== this.ctx.generation()
+      )
+        return;
+      const content =
+        typeof answer?.content === "string" ? answer.content.replace(PICTURE_LINE, "") : null;
+      if (content === null || content.length > MAX_IDENTITY_CHARS) return;
+      const raw = identityName(content);
+      this.starts.set(runId, { botId, name: raw === null ? null : plainName(raw) });
+      if (this.starts.size > MAX_CHECKED_RUNS) this.starts.delete(this.starts.keys().next().value!);
+    } catch (error) {
+      this.ctx.log(`could not read ${botId}'s IDENTITY.md as its run started: ${errorText(error)}`);
+    } finally {
+      release();
+    }
+  }
+
+  /**
    * A run of `botId` ended in an open task: read its name line once, and apply a new name, or
    * say why not. A run already checked (its end delivered twice) reads nothing again.
    */
   async afterRun(botId: string, sessionKey: string, runId?: string): Promise<void> {
     if (this.reading.has(botId) || this.skipped.has(botId)) return;
-    void this.forgetOldDeclines();
     const counted = runId !== undefined && runId.length <= MAX_CHECKED_RUN_CHARS;
     if (counted && this.checkedRuns.has(runId)) return;
     const bot = this.ctx.bots().find((each) => each.id === botId);
@@ -671,6 +718,10 @@ export class BotNames {
       // A name the bot already has, longer than a line's, is not a new one cut short. Another
       // device may have applied it: the line follows the record.
       if (name === now.name || name === plainName(now.name)) return this.reconcile();
+      // Only a name change this run made: the file as the run found it named the bot otherwise.
+      // An edit by another run or writer, or a run whose start wasn't read here, changes nothing.
+      const start = runId === undefined ? undefined : this.starts.get(runId);
+      if (!start || start.botId !== botId || start.name === name) return this.reconcile();
       const sent = runId === undefined ? undefined : this.sentRuns.get(runId);
       const mine = sent?.sessionKey === sessionKey;
       // History read through the run's end: a steer another device sent is in it by then. Unread,
@@ -678,6 +729,9 @@ export class BotNames {
       const read = runId !== undefined && (await this.ctx.readHistory(sessionKey));
       if (stale()) return;
       const run = runId === undefined ? null : this.ctx.runFacts(sessionKey, runId);
+      // Only the owner's own turn: the run's message as the gateway stored it says its sender is
+      // the owner (`__openclaw.senderIsOwner`). Unread or not said, nothing is done.
+      if (!read || !run?.owner) return this.reconcile();
       const facts: RunFacts = {
         sentHere: mine,
         text: mine ? sent!.text : null,
@@ -686,9 +740,19 @@ export class BotNames {
         steered: (mine && sent!.steered) || !read || (run?.steered ?? false),
         steps: run?.steps ?? null,
       };
+      const judged = judgeRename(facts, name);
+      // No write of the name seen in the run's own steps: not shown to be this run's change.
+      if (judged.whose === "file") return this.reconcile();
+      // A name the person answered "Not now" to with an earlier build stays declined, unless the
+      // person asks for it now in their own words.
+      if (judged.whose !== "person" && (await this.legacyDeclined(stamp, botId, name))) {
+        if (stale()) return;
+        return this.reconcile();
+      }
+      if (stale()) return;
       const origin: RenameOrigin = {
-        ...judgeRename(facts, name),
-        run: runTag(runId ?? `${botId}\n${name}\n${this.ctx.now()}`),
+        ...judged,
+        run: runTag(runId!),
         file: runTag(content),
       };
       // The device that sent the run has `CLAIM_DELAY_MS` to claim it; then any device may.
@@ -1188,6 +1252,7 @@ export class BotNames {
   reset(): void {
     this.epoch += 1;
     this.reading.clear();
+    this.starts.clear();
     this.skipped.clear();
     this.checkedRuns.clear();
     this.published = null;
@@ -1385,10 +1450,28 @@ export class BotNames {
   }
 
   /** The earlier card kept Not now on this device; the record on the gateway replaces it. */
-  private async forgetOldDeclines(): Promise<void> {
-    if (this.forgotDeclines) return;
-    this.forgotDeclines = true;
-    await this.ctx.storage.delete(NAME_DECLINES_KEY).catch(() => {});
+  /**
+   * Whether an earlier build's "Not now" (`NAME_DECLINES_KEY`, `{"<gateway>\n<bot>": name}`)
+   * declined this name for this bot on this gateway. Read once and kept as it is: those answers
+   * carry over as declines.
+   */
+  private async legacyDeclined(stamp: GatewayStamp, botId: string, name: string): Promise<boolean> {
+    if (stamp.gatewayId === null) return false;
+    if (this.legacy === null) {
+      const read = new Map<string, string>();
+      try {
+        const parsed = asRecord(
+          JSON.parse((await this.ctx.storage.get(NAME_DECLINES_KEY)) ?? "{}"),
+        );
+        for (const [key, value] of Object.entries(parsed ?? {}).slice(-MAX_NAME_CARDS))
+          if (key.length <= 2 * 1_024 + 1 && typeof value === "string")
+            read.set(key, plainName(value) ?? value);
+      } catch {
+        // Unreadable: nothing declined.
+      }
+      this.legacy ??= read;
+    }
+    return this.legacy.get(`${stamp.gatewayId}\n${botId}`) === name;
   }
 
   private setLine(line: NameLine): void {

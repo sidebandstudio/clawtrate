@@ -431,6 +431,11 @@ export type TranscriptItem = {
    */
   idempotencyKey?: string;
   /**
+   * The gateway stored this user row as the owner's (`__openclaw.senderIsOwner`, both versions:
+   * a connection with admin, or the owner in a chat app). Present and true only then.
+   */
+  owner?: true;
+  /**
    * An assistant item whose first row names no run (neither `__openclaw.runId` nor
    * `openclawAbort.runId`), such as a row the gateway appends after a turn: not a run's reply,
    * so never a stopped or failed run's last text. Present and true only then. It goes by the run

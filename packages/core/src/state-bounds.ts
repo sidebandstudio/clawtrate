@@ -703,6 +703,7 @@ const item = flagged<TranscriptItem>()({
     sender: NAME,
   }),
   idempotencyKey: ID,
+  owner: FLAG,
   runless: FLAG,
   skillNote,
   brief: FLAG,
