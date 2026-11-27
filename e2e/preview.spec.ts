@@ -1933,23 +1933,33 @@ test("F-071: / lists a skill the person saved to their own library, as theirs, i
   page,
 }) => {
   await openShell(page);
-  // A task that started before the save: the gateway has not given it the skill.
-  const before = await ownTask(page, "Before the skill");
-  const slug = `tide-table-${randomBytes(3).toString("hex")}`;
-  // The person's own save, from a paired connection: the CLI's shared token has no profile, and
-  // the gateway keeps no personal library for it. The dev gateway has one profile, the app's too.
+  // The person, on a paired connection as the app is: the CLI's shared token has no profile, so
+  // the gateway keeps no library for it and gives a task it makes no library skills. The
+  // development gateway has one profile, which the app acts for too.
   const person = await openOperator(
     openInstance(INSTANCE),
     "Clawtrate skill library check",
     ["operator.read", "operator.write"],
     [],
   );
-  const saved = (await person.request("skills.library.save", {
-    expectedRevision: null,
-    slug,
-    content: `---\nname: ${slug}\ndescription: Use when someone asks when the tide turns at the harbour.\n---\n\nRead the harbour's tide table and give the next high and low water.\n`,
-  })) as { entry: { skillId: string; name: string; revision: string } };
+  // A task the person starts, as the app's New task does (`sessions.create`), opened in the page.
+  const personTask = async (label: string) => {
+    const { key, title } = newTaskName("otto", label);
+    await person.request("sessions.create", { key, agentId: "otto", label: title });
+    await openNewTask(page, "Otto", title);
+    return { key, title };
+  };
+  const slug = `tide-table-${randomBytes(3).toString("hex")}`;
+  let saved: { entry: { skillId: string; name: string; revision: string } } | null = null;
   try {
+    // A task that started before the save: the gateway has not given it the skill.
+    const before = await personTask("Before the skill");
+    saved = (await person.request("skills.library.save", {
+      expectedRevision: null,
+      slug,
+      content: `---\nname: ${slug}\ndescription: Use when someone asks when the tide turns at the harbour.\n---\n\nRead the harbour's tide table and give the next high and low water.\n`,
+    })) as { entry: { skillId: string; name: string; revision: string } };
+    const command = saved.entry.name;
     const listed = (row: Locator) => row.and(page.locator(`[data-name="${slug}"]`));
     const rows = page.getByRole("listbox", { name: "Skills and commands" }).getByRole("option");
     // The task made before the save is still the one open.
@@ -1963,7 +1973,7 @@ test("F-071: / lists a skill the person saved to their own library, as theirs, i
     await page.keyboard.press("Escape");
     await composer(page).fill("");
 
-    const { key } = await ownTask(page, "With the skill");
+    const { key } = await personTask("With the skill");
     await composer(page).click();
     await page.keyboard.type("/");
     await expect(listed(rows)).toHaveCount(1, { timeout: 30_000 });
@@ -1976,7 +1986,7 @@ test("F-071: / lists a skill the person saved to their own library, as theirs, i
     await page.keyboard.press("Enter");
     // The gateway ran the skill: the model was told to read it.
     await expect
-      .poll(() => gatewayHasMessage(key, `/skill ${saved.entry.name} for Saturday`), {
+      .poll(() => gatewayHasMessage(key, `/skill ${command} for Saturday`), {
         timeout: 30_000,
       })
       .toBe(true);
@@ -1987,14 +1997,15 @@ test("F-071: / lists a skill the person saved to their own library, as theirs, i
     );
     const reply = JSON.stringify(history.messages.filter((row) => row.role === "assistant"));
     expect(reply).toContain("Use the following explicitly referenced skills");
-    expect(reply).toContain(saved.entry.name);
+    expect(reply).toContain(command);
   } finally {
     try {
-      await person.request("skills.library.mutate", {
-        skillId: saved.entry.skillId,
-        expectedRevision: saved.entry.revision,
-        action: "remove",
-      });
+      if (saved)
+        await person.request("skills.library.mutate", {
+          skillId: saved.entry.skillId,
+          expectedRevision: saved.entry.revision,
+          action: "remove",
+        });
     } finally {
       await person.close();
     }
