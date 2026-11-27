@@ -88,6 +88,7 @@ node docs/design/prototype/tools/checks/routines.mjs
 node docs/design/prototype/tools/checks/setup.mjs
 node docs/design/prototype/tools/checks/controls.mjs
 node docs/design/prototype/tools/checks/device.mjs
+node docs/design/prototype/tools/checks/gateway-settings.mjs
 node docs/design/prototype/tools/checks/bot-main.mjs
 ```
 
