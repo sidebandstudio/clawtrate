@@ -779,8 +779,9 @@ export class BotNames {
     line({ status: "renaming" });
     try {
       let sent = false;
-      // The day this rename is counted on: its claim's, wherever its confirmation falls.
-      let countDay = dayOf(change.at);
+      // When this rename's claim was taken: the day it is counted on, wherever its confirmation
+      // falls, and the time its entry carries.
+      let claimAt = change.at;
       for (let attempt = 0; attempt < CLAIM_ATTEMPTS && !sent; attempt += 1) {
         op = { stamp, generation: this.ctx.generation() };
         let claimedAt = this.ctx.now();
@@ -800,7 +801,8 @@ export class BotNames {
             return "limit";
           const next = {
             ...record,
-            changes: [...record.changes.filter((each) => each !== same), change],
+            // The entry carries the claim's own time: the day it is counted on and listed under.
+            changes: [...record.changes.filter((each) => each !== same), { ...change, at: now }],
             claims: [...record.claims.filter((each) => each.op !== opId), { ...claim, at: now }],
           };
           // Room now for what confirming it writes too. A rename is counted on the day its claim
@@ -828,7 +830,7 @@ export class BotNames {
         if (claimed === "limit") return line({ status: "not-done", reason: "limit" });
         if (claimed === "full") return line({ status: "not-done", reason: "full" });
         if (claimed === "unavailable") return line({ status: "not-done", reason: "no-record" });
-        countDay = dayOf(claimedAt);
+        claimAt = claimedAt;
         // Holding the claim: the bot as the gateway lists it now, on the gateway the read was for.
         await this.ctx.refreshBots();
         await this.ctx.sameGateway(stamp);
@@ -884,8 +886,8 @@ export class BotNames {
         // the rename landed, so it has its record, its Undo and its count.
         const changes = entry
           ? record.changes.map((each) => (each === entry ? { ...each, done } : each))
-          : [...record.changes, { ...change, done }];
-        return withCount({ ...record, changes, claims }, botId, countDay);
+          : [...record.changes, { ...change, at: claimAt, done }];
+        return withCount({ ...record, changes, claims }, botId, dayOf(claimAt));
       }).catch((error: unknown) => {
         this.ctx.log(`could not mark ${botId}'s rename done: ${errorText(error)}`);
         return "unavailable" as const;

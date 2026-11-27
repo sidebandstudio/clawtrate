@@ -286,6 +286,9 @@ function gateway(options: { prefs?: "ok" | "none"; file?: string } = {}) {
     downAt: null as number | null,
     /** Every `agents.files.get` the gateway was sent. */
     reads: 0,
+    /** Runs as each `users.prefs.get` arrives, with how many came before it. */
+    onGet: null as null | ((before: number) => void),
+    gets: 0,
   };
   const request = async (method: string, raw: unknown): Promise<unknown> => {
     const params = raw as Record<string, unknown>;
@@ -309,11 +312,14 @@ function gateway(options: { prefs?: "ok" | "none"; file?: string } = {}) {
       return { ok: true };
     }
     if (options.prefs === "none") return { status: "no_durable_identity" };
-    if (method === "users.prefs.get")
+    if (method === "users.prefs.get") {
+      state.onGet?.(state.gets);
+      state.gets += 1;
       return {
         status: "ok",
         entries: state.record === undefined ? {} : { [NAME_RECORD_KEY]: state.record },
       };
+    }
     if (method === "users.prefs.set") {
       state.sets += 1;
       if (state.downAt !== null && state.sets >= state.downAt) state.prefsDown = true;
@@ -1368,6 +1374,65 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
     };
     await device(gw).engine.afterRun("pip", KEY, "run-1");
     expect(gw.kept().counts).toEqual([{ bot: "pip", day: dayOf(beforeMidnight), n: 1 }]);
+  });
+
+  it("F-552: a rename whose claim is written past midnight is listed and counted on that day, not the day it was read", async () => {
+    const gw = gateway();
+    const beforeMidnight = Date.parse(`${dayOf(NOW)}T23:59:59Z`);
+    const dayA = dayOf(beforeMidnight);
+    // Pip was renamed twice on day A.
+    gw.state.bots = [bot("pip", "Birch"), bot("otto", "Otto")];
+    gw.state.record = record({
+      changes: [
+        change({
+          from: "Pip",
+          to: "Ash",
+          run: runTag("a1"),
+          at: beforeMidnight - 60_000,
+          done: beforeMidnight - 59_000,
+        }),
+        change({
+          from: "Ash",
+          to: "Birch",
+          run: runTag("a2"),
+          at: beforeMidnight - 30_000,
+          done: beforeMidnight - 29_000,
+        }),
+      ],
+      counts: [{ bot: "pip", day: dayA, n: 2 }],
+    });
+    gw.state.now = beforeMidnight;
+    // The claim's write reads the record just after midnight.
+    gw.state.onGet = (before) => {
+      if (before === 1) gw.state.now = beforeMidnight + 2_000;
+    };
+    await device(gw).engine.afterRun("pip", KEY, "run-1");
+    gw.state.onGet = null;
+    expect(gw.state.updates).toEqual(["Juniper"]);
+    const kept = gw.kept().changes.find((each) => each.run === runTag("run-1"))!;
+    expect(dayOf(kept.at)).not.toBe(dayA);
+    // A device still on day A sees two renames of Pip that day, and may make a third.
+    gw.state.now = beforeMidnight;
+    gw.state.file = "- **Name:** Maple\n";
+    const earlier = device(gw);
+    await earlier.engine.afterRun("pip", KEY, "run-2");
+    expect(gw.state.updates).toEqual(["Juniper", "Maple"]);
+  });
+
+  it("F-552: an entry recorded again after it was settled away carries its claim's time", async () => {
+    const gw = gateway();
+    const beforeMidnight = Date.parse(`${dayOf(NOW)}T23:59:59Z`);
+    gw.state.now = beforeMidnight;
+    // The claim is written just past midnight; another device then settles its entry away.
+    gw.state.onGet = (before) => {
+      if (before === 1) gw.state.now = beforeMidnight + 2_000;
+    };
+    gw.state.onUpdate = () =>
+      (gw.state.record = { ...gw.kept(), changes: [], claims: [] } as unknown);
+    await device(gw).engine.afterRun("pip", KEY, "run-1");
+    const dayB = dayOf(beforeMidnight + 2_000);
+    expect(dayOf(gw.kept().changes[0]!.at)).toBe(dayB);
+    expect(gw.kept().counts).toEqual([{ bot: "pip", day: dayB, n: 1 }]);
   });
 
   it("F-552: the day's limit counts a rename on its claim's day, not the day it was confirmed", async () => {
