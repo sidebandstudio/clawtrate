@@ -67,7 +67,7 @@ It builds on, and doesn't redesign:
 ### What the gateway calls a bot's main conversation
 
 - **The same on both versions.** "The main session is an ordinary session with the canonical key `agent:<agentId>:main` … The suffix is fixed; custom `session.mainKey` values are ignored" (`<1006>/docs/concepts/main-session.md:16-21`; `<1110>/…` the same, "standard key"). Every direct message from every channel lands in it by default; "heartbeats wake it, background work reports back to it" (`:19-21`, `:75-79`). Rows carry `isMain` and `classification: "main"` (`docs/research/gateway-capabilities.md`, the session rows).
-- **One exception:** with `session.scope: "global"`, the main key is `global` rather than `agent:<id>:main` (`resolveCanonicalMainSessionKey`, `<1006>/dist/main-session-key-C_jT8gfN.mjs`; the same in `<1110>/dist/main-session-key-f4Vqtjb_.mjs`). What a row says there is not established (section 14).
+- **One exception:** with `session.scope: "global"`, the main key is `global` rather than `agent:<id>:main` (`resolveCanonicalMainSessionKey`, `<1006>/dist/main-session-key-C_jT8gfN.mjs`; the same in `<1110>/dist/main-session-key-f4Vqtjb_.mjs`). Run on development gateways of both versions: there `sessions.list` lists no row for it, while `chat.history` and `chat.send` at `agent:<bot>:main` reach it (the history answers `sessionInfo.key: "global"`, `isMain: true`). A main row made before the scope changed stays listed and can't be read: 2026.10.6 answers "Session access facts are unavailable", and 2026.11.10 asks for `openclaw doctor --fix`.
 - **Not every bot has one.** A session exists once something made it. New bot makes it; a bot made elsewhere that nobody has written to, or one whose only conversations are Clawtrate's own tasks (`agent:<bot>:dashboard:<id>`), has no main row. In the repository's fixture, only Marlow has one (`apps/desktop/src/fixture/data.ts:137-145`). A `chat.send` to `agent:<bot>:main` makes it (`docs/research/session-origins.md`, "An operator's `chat.send` to a new key").
 
 ### What today's pictures and tests pin
@@ -263,7 +263,6 @@ The bots design's own steps (its section 10) bring the rest of section 4: step 3
 
 ## 14. Not established
 
-- **What `sessions.list` rows say under `session.scope: "global"`**, where the main key is `global`: whether the row carries `isMain`. Until it is shown, Clawtrate treats a gateway in that scope like a bot with no main row on its own key, and the first message goes to `agent:<bot>:main`; whether the gateway then routes it to `global` was not run.
 - **#799's cause** (section 5): read, not run.
 - **What a model says in the main conversation when a task fails:** the report-back is the gateway's; its words for each kind of failure were not run here.
 - **How a real model uses the main conversation to manage tasks:** the scripted model does only what it is scripted to.
