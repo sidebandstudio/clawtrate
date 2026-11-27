@@ -965,7 +965,9 @@ describe("the iOS app", () => {
       // A link to the person's own network says so beside its host, and a look-alike host
       // shows in ASCII, even where the address is the text.
       scrollTo({ text: `Then sign in at .*${beside(lit(LOOKALIKE_HOST.ascii))}\\.` }, "DOWN"),
-      see({ text: `Check the router's settings${beside(`${lit(ROUTER)}, your network`)} first\\.` }),
+      see({
+        text: `Check the router's settings${beside(`${lit(ROUTER)}, your network`)} first\\.`,
+      }),
     ]);
     await shoot("transcript-links");
     const lookalikeText = `${lit(lookalike().text)}${beside(`${lit(new URL(browserUrl).host)}, this iPhone`)}`;
