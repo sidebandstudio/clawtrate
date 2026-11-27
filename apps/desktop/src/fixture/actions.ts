@@ -1222,6 +1222,14 @@ function liveRun(
         endedAt: t0 + 6 * SECOND,
       },
     ],
+    // As OpenClaw 2026.10.6 sends a message's text beside its call: first on the `assistant`
+    // stream, as that message's item (the run's third message), then the preamble item holding it.
+    [
+      7,
+      "assistant",
+      { text: "Both logs are fine.", delta: "Both logs are fine.", itemId: "stream-live:3" },
+    ],
+    [7, "assistant", { delta: " Checking how full the disk is.", itemId: "stream-live:3" }],
     [
       8,
       "item",
