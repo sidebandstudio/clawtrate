@@ -849,7 +849,11 @@ const wait = setInterval(() => {
       () => {
         throw new Error("stand-in: the process list failed");
       },
-      "stand-in: the process list failed",
+      [
+        "asking the app to close failed: ERROR: stand-in refusal",
+        "the wait for the app's helpers to quit stopped early: the process list could not be read",
+        "whether any process still names the run's data folder is unknown: the process list could not be read",
+      ].join("\n"),
     ],
     ["is already empty", () => [], "asking the app to close failed: ERROR: stand-in refusal"],
   ])(
@@ -1042,6 +1046,49 @@ const wait = setInterval(() => {
       waits?.mockRestore();
       process.exitCode = exitCode;
     }
+  });
+
+  it("when the process list fails at the wait's first look after a refused close, keeps the refusal first, says the wait stopped by fixed words and an allowed code alone, ends the app by its handle, looks once more and has removed the run's folder when the teardown rejects, though the app never exits", async () => {
+    const printed = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { path, error } = fakeError("ETIMEDOUT");
+    let looks = 0;
+    await windowsRun(
+      {
+        refusal: "ERROR: stand-in refusal",
+        quitsAfter: null,
+        lateExit: true,
+        // Failing once, at the wait's first look; the last look lists the app Node still holds.
+        listing: (running) => {
+          looks += 1;
+          if (looks === 1) throw error;
+          return running ? [running] : [];
+        },
+      },
+      async ({ setup, sidecar, launched }) => {
+        const teardown = await setup();
+        const { app } = launched()!;
+        const place = process.env.CLAWTRATE_PACKAGED_PLACE!;
+        const verdict = String(await teardown().catch((caught: unknown) => caught));
+        expect(verdict).toBe(
+          [
+            "Error: asking the app to close failed: ERROR: stand-in refusal",
+            "the wait for the app's helpers to quit stopped early: the process list could not be read (ETIMEDOUT)",
+          ].join("\n"),
+        );
+        expect(verdict).not.toContain(path);
+        expect(looks, "the failed look, then the last").toBe(2);
+        expect(app.kill, "by its handle, once").toHaveBeenCalledOnce();
+        expect(exitOf(app), "the app still runs").toBe("not reported");
+        expect(existsSync(place), "removed before the runner's exit").toBe(false);
+        expect(forceEnd).not.toHaveBeenCalled();
+        expect(JSON.parse(readFileSync(sidecar, "utf8"))).toEqual({
+          beforeClose: "not reported",
+          afterClose: "not asked",
+          lastReported: "not reported",
+        });
+        expect(printed).not.toHaveBeenCalled();
+      },
+    );
   });
 
   it.each([

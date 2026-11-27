@@ -644,8 +644,15 @@ async function windowsSetup(outputDirs: string[]) {
         exits.afterClose = exitOf(appProcess);
       }
     }
-    // The helpers' 10 seconds; what is still listed then, finish reports.
-    for (let i = 0; i < 50 && processesUsing(userData).length > 0; i += 1) await sleep(200);
+    // The helpers' 10 seconds; what is still listed then, finish reports. A list that
+    // cannot be read ends the wait, said so by its code alone, and finish still runs.
+    try {
+      for (let i = 0; i < 50 && processesUsing(userData).length > 0; i += 1) await sleep(200);
+    } catch (error) {
+      problems.push(
+        `the wait for the app's helpers to quit stopped early: the process list could not be read${codeOf(error)}`,
+      );
+    }
     problems.push(...finish());
     if (problems.length > 0) throw new Error(problems.join("\n"));
     console.log(`Closed the packaged app and removed ${dir}`);
