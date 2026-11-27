@@ -27,6 +27,8 @@
         - radio "Never allow"
       - paragraph: "Not set in this file. The gateway reports the defaults it resolved: Allow every command."
       - paragraph: Entries
+      - term: main
+      - definition: No entry of its own
       - term: Juniper
       - definition: No entry of its own
       - term: Marlow
@@ -47,6 +49,8 @@
         - radio "Allow every command"
         - radio "Never allow"
       - paragraph: Entries
+      - term: main
+      - definition: No entry of its own
       - term: Juniper
       - definition: No entry of its own
       - term: Marlow
