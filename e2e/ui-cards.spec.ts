@@ -583,7 +583,7 @@ test.describe("Messaged cards on a real gateway", () => {
     await expect(state(page)).toHaveText("Failed");
   });
 
-  test("F-122 F-469: a slow recipient: Sent, Working while its run is seen, then No reply yet, in that order, and its reply arrives in the task", async () => {
+  test("F-122 F-469: a slow recipient: Sent, Working while its run is seen, then Finished, in that order, and its reply arrives in the task", async () => {
     test.setTimeout(180_000);
     const t = await sent("message-slow", "#message-slow");
     await clients.plain.terminal(t.runId);
@@ -624,14 +624,15 @@ test.describe("Messaged cards on a real gateway", () => {
       await page.waitForTimeout(250);
     }
     await expect(incoming).toContainText("Marlow");
-    // In lifecycle order only: Sent before the run is seen, Working while it is, No reply yet
-    // once it ended without a reply. Never back to an earlier state, and never Sent again once
-    // the run was seen: what was known of the recipient is not lost. The host follows every
+    // In lifecycle order only: Sent before the run is seen, Working while it is, Finished once
+    // it ended: the send was accepted without a reply, so the answer is in the recipient's task.
+    // Never back to an earlier state, and never Sent again once the run was seen: what was
+    // known of the recipient is not lost. The host follows every
     // session from before the send, so it sees the recipient's run: once the gateway has ended
     // it, the card says so, and a card still Sent has lost it.
     // Before the send's own result is read the card can say Unknown: the gateway sends a run's
     // tool results to other clients as session.tool, and this host reads them from history.
-    const order = ["Unknown", "Sent", "Working", "No reply yet"];
+    const order = ["Unknown", "Sent", "Working", "Finished"];
     expect(
       states.every((each) => order.includes(each)),
       states.join(" → "),
@@ -642,7 +643,7 @@ test.describe("Messaged cards on a real gateway", () => {
     ).toBe(true);
     // It was seen working: the card said so before it said how the run ended.
     expect(states, states.join(" → ")).toContain("Working");
-    expect(states.at(-1), states.join(" → ")).toBe("No reply yet");
+    expect(states.at(-1), states.join(" → ")).toBe("Finished");
     await shot(page, "messaged-slow-reply-arrived");
   });
 
@@ -655,7 +656,7 @@ test.describe("Messaged cards on a real gateway", () => {
     // The host follows every session (sessions.subscribe), so whether it has seen Marlow's run
     // yet, and so whether the card says Sent or how that run stands, depends only on when its
     // events arrive. Each of these is right.
-    await expect(state(page)).toHaveText(/^(Sent|Working|Recipient waiting|No reply yet)$/);
+    await expect(state(page)).toHaveText(/^(Sent|Working|Recipient waiting|Finished)$/);
     await shot(card(page, "messaged-card"), "messaged-recipient-asked");
     await openTask(page, "Marlow", "Notes for Pip");
     // Marlow's main task is shared by every check that messages Marlow: this check's question is
@@ -685,7 +686,7 @@ test.describe("Messaged cards on a real gateway", () => {
     await expect(
       page.getByTestId("incoming-line").or(page.getByTestId("received-card")),
     ).toHaveCount(1, { timeout: 60_000 });
-    await expect(state(page)).toHaveText(/^(Sent|No reply yet)$/, { timeout: 30_000 });
+    await expect(state(page)).toHaveText(/^(Sent|Finished)$/, { timeout: 30_000 });
   });
 });
 
@@ -705,18 +706,18 @@ test.describe("Messaged cards sent from this app on a real gateway", () => {
     return states;
   };
 
-  test("F-122 F-438 F-469: a slow recipient: Working while its run is seen, then No reply yet; its later reply arrives as a message from Marlow", async () => {
+  test("F-122 F-438 F-469: a slow recipient: Working while its run is seen, then Finished; its later reply arrives as a message from Marlow", async () => {
     const { title } = await hostTask("pip", "Slow from here", "message your slow partner");
     await openTask(page, "Pip", title);
-    const states = await seen(/^No reply yet$/);
+    const states = await seen(/^Finished$/);
     expect(states).toContain("Working");
-    expect(states.at(-1)).toBe("No reply yet");
+    expect(states.at(-1)).toBe("Finished");
     await shot(card(page, "messaged-card"), "messaged-no-reply-yet");
     // Nothing in the late reply names this message: it arrives on its own, and the card stays.
     await expect(
       page.getByTestId("incoming-line").or(page.getByTestId("received-card")),
     ).toHaveCount(1, { timeout: 30_000 });
-    await expect(card(page, "messaged-card").locator("summary .state")).toHaveText("No reply yet");
+    await expect(card(page, "messaged-card").locator("summary .state")).toHaveText("Finished");
   });
 
   test("F-122 F-434: a recipient whose run is stopped while it works: Recipient stopped", async () => {
@@ -767,8 +768,8 @@ test.describe("Messaged cards sent from this app on a real gateway", () => {
     await question.getByRole("radio", { name: /Lake loop/ }).click();
     await expect(question).toHaveAttribute("data-state", "answered", { timeout: 30_000 });
     await openTask(page, "Pip", title);
-    const after = await seen(/^(No reply yet|Replied)$/);
-    expect(after.at(-1)).toMatch(/^(No reply yet|Replied)$/);
+    const after = await seen(/^(Finished|Replied)$/);
+    expect(after.at(-1)).toMatch(/^(Finished|Replied)$/);
   });
 });
 

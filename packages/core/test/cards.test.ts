@@ -437,6 +437,12 @@ describe("Messaged cards (F-119, F-122, F-123, F-309)", () => {
     expect(select(accepted, {}, { ...OPTIONS, previous: working }).botMessages[0]!.state).toBe(
       "working",
     );
+    // A completed recipient run that has since left linkedRuns keeps the outcome Finished reads (#732).
+    const finished = select(accepted, { linkedRuns: linked("completed") });
+    expect(select(accepted, {}, { ...OPTIONS, previous: finished }).botMessages[0]).toMatchObject({
+      state: "no-reply-yet",
+      recipientRunState: "completed",
+    });
     expect(advanceBotMessageState("replied", "working")).toBe("replied");
     expect(advanceBotMessageState("no-reply-yet", "replied")).toBe("replied");
     expect(advanceBotMessageState("working", "recipient-waiting")).toBe("recipient-waiting");
