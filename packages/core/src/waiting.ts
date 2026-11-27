@@ -66,6 +66,11 @@ const str = (value: unknown): string | null =>
 const time = (value: unknown, fallback: number): number =>
   typeof value === "number" && Number.isFinite(value) ? value : fallback;
 
+/** Whether a `chat` event ends a run: the only kind `WaitingIndex.onChat` reads. */
+export function endsRun(payload: RawRecord): boolean {
+  return payload.state === "error" || payload.state === "final";
+}
+
 /** What a held task's runs say: a run waiting on a card, or a latest run that was stopped or failed. */
 export function fromActivity(
   activity: Pick<TaskActivity, "runs"> & { items?: ReadonlyArray<{ id: string }> },
@@ -266,8 +271,7 @@ export class WaitingIndex {
   onChat(payload: RawRecord, at: number): boolean {
     const key = str(payload.sessionKey);
     const runId = str(payload.runId);
-    const state = payload.state;
-    if (!key || !runId || (state !== "error" && state !== "final")) return false;
+    if (!key || !runId || !endsRun(payload)) return false;
     const latest = this.runs.get(key);
     // Another run of the task is going: this is an older run's late end, and the newer one's own
     // end will say how the task stands.
@@ -276,7 +280,7 @@ export class WaitingIndex {
     // older message's, arriving late. The newest run decides the mark, not the order of arrival.
     if (latest && latest.runId !== runId && !latest.failed && !latest.inputSince) return false;
     // An end the gateway marked not to show is a quiet one, not a failure (#680, 2026.11.10).
-    const failed = state === "error" && payload.suppressErrorNotice !== true;
+    const failed = payload.state === "error" && payload.suppressErrorNotice !== true;
     if (latest?.runId === runId && latest.failed === failed) {
       // Its terminal: the run is no longer going, even if its lifecycle end never arrives.
       if (latest.active) this.runs.set(key, { ...latest, active: false });
