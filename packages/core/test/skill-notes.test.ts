@@ -409,6 +409,8 @@ describe("F-560: the note's exact form", () => {
       NOTE_TEXT.replace("`trail-check`", "trail-check"),
       NOTE_TEXT.replace("`trail-check`", "`Trail-Check`"),
       NOTE_TEXT.replace(" (check", "(check"),
+      NOTE_TEXT.replace("(check", "( check"),
+      NOTE_TEXT.replace("hike)", "hike )"),
       NOTE_TEXT.replace("hike)", "hike) "),
       NOTE_TEXT.replace('Say "undo"', "Say undo"),
       NOTE_TEXT.replace("change.", "change"),

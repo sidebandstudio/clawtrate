@@ -77,9 +77,9 @@ const CHANGE_START =
 /**
  * The skills a note's text names, when the text has the note's exact form: the gateway's sentence
  * around changes of one of its verbs, each a skill name in code marks and perhaps a reason in
- * parentheses, joined by "; ". Null for anything else, even one character off: written again from
- * what was read, it must be the same text. A reason that itself reads as "; updated `name`" splits
- * there; the text is the same either way, and the folded line's full text is the note's own.
+ * parentheses, trimmed, joined by "; ". Null for anything else, even one character off. A reason
+ * that itself reads as "; updated `name`" splits there; the folded line's full text is the note's
+ * own either way.
  */
 export function skillNoteChanges(text: string): SkillNoteChange[] | null {
   if (text.length > MAX_SKILL_NOTE_CHARS) return null;
@@ -90,13 +90,15 @@ export function skillNoteChanges(text: string): SkillNoteChange[] | null {
     const match = CHANGE.exec(part);
     if (!match || skills.length >= MAX_SKILL_NOTE_SKILLS) return null;
     const summary = match[3];
+    // The gateway trims a reason before it writes one.
+    if (summary !== undefined && summary !== summary.trim()) return null;
     skills.push({
       action: match[1] as SkillNoteAction,
       name: match[2]!,
       ...(summary !== undefined ? { summary } : {}),
     });
   }
-  return skillNoteText(skills) === text ? skills : null;
+  return skills;
 }
 
 /** OpenClaw 2026.11.10's mark on the note's row: its skills and bot, when the mark is whole. */
