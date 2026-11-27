@@ -720,6 +720,22 @@ describe("the rules underneath", () => {
       expect(index.failedAt(KEY)).toBe(quiet ? null : 3_000);
     });
 
+  it("a start sent again for a run a later start replaced says nothing", () => {
+    const index = new WaitingIndex();
+    for (const [runId, ts] of [
+      ["r1", 1_000],
+      ["r2", 1_500],
+      ["r1", 1_000],
+    ] as const)
+      index.onAgent(
+        { sessionKey: KEY, runId, stream: "lifecycle", ts, data: { phase: "start" } },
+        ts,
+      );
+    expect(index.latestRunId(KEY)).toBe("r2");
+    expect(index.onChat({ sessionKey: KEY, runId: "r2", state: "error" }, 2_000)).toBe(true);
+    expect(index.failedAt(KEY)).toBe(1_500);
+  });
+
   it("an older run's late chat end says nothing while a newer run of the task is going", () => {
     const index = new WaitingIndex();
     index.onAgent(

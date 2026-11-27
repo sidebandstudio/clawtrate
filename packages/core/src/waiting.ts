@@ -230,7 +230,8 @@ export class WaitingIndex {
     switch (data.phase) {
       case "start": {
         const latest = this.runs.get(key);
-        if (latest?.runId === runId) return false;
+        // Seen already, or a run a later start replaced: a start sent again says nothing.
+        if (latest?.runId === runId || latest?.older.includes(runId)) return false;
         this.runs.delete(key);
         this.runs.set(key, {
           runId,
