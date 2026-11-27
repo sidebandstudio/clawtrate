@@ -134,6 +134,18 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
       expect(g.writes()).toEqual([]);
     });
 
+    it("row 4: a newer copy than this app's pin is never touched, by install or update", async () => {
+      // An app pinned to 0.1.0 meeting what a newer Clawtrate installed: never an older over a newer.
+      const g = at(version, "on");
+      g.staged = { version: "0.2.0", integrity: "sha512-newer", digest: "2".repeat(64) };
+      const engine = new PluginInstaller(contextFor(g));
+      expect(await engine.install(PIN, ARCHIVE, CONFIRM)).toMatchObject({ stop: "other-copy" });
+      expect(await engine.update(PIN, ARCHIVE, CONFIRM)).toMatchObject({ stop: "other-copy" });
+      expect(await engine.turnOn(PIN, ARCHIVE, CONFIRM)).toMatchObject({ stop: "other-copy" });
+      expect(g.writes()).toEqual([]);
+      expect(g.staged.version).toBe("0.2.0");
+    });
+
     it("row 4: an older copy this app never shipped is left as it is", async () => {
       const g = at(version, "older-on");
       const ctx = { ...contextFor(g), shipped: [] };
