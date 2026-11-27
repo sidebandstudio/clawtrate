@@ -50,13 +50,13 @@ const noSideways = (page) =>
 {
   const page = await open({ bot: "juniper", task: "heat" });
   check("a task is open: its row is current", (await page.locator('.bm-task[aria-current="page"]').count()) === 1);
-  await page.getByRole("treeitem", { name: /^Marlow/ }).click();
+  await page.getByRole("button", { name: /^Marlow,/ }).click();
   check("clicking a bot opens its main conversation", (await page.locator(".bm-pill-task").count()) === 0);
   check("the header names the bot alone", (await page.locator(".bm-pill-name").textContent()) === "Marlow");
   check("the bot's row is current", (await page.locator('.bm-bot[aria-current="page"]').getAttribute("data-bot")) === "marlow");
-  check("no row is called Main", (await page.getByRole("treeitem", { name: /^Main\b/ }).count()) === 0);
-  check("the open bot's tasks are listed under it", (await page.locator('.bm-task[data-bot="marlow"]').count()) === 3);
-  check("another bot's tasks are folded", (await page.locator('.bm-task[data-bot="juniper"]').count()) === 0);
+  check("no row is called Main", (await page.getByRole("button", { name: /^Main\b/ }).count()) === 0);
+  check("the open bot's tasks are listed under it", (await page.locator('.bm-task[data-bot="marlow"]:visible').count()) === 3);
+  check("another bot's tasks are folded", (await page.locator('.bm-task[data-bot="juniper"]:visible').count()) === 0);
   await page.locator('.bm-task[data-task="trail"]').click();
   check("a task opens with the bot and the task in the header", (await page.locator(".bm-pill-task").textContent()) === "Trail apps compared");
   check(
@@ -65,8 +65,22 @@ const noSideways = (page) =>
   );
   await page.locator('.bm-bot[data-bot="marlow"]').click();
   check("clicking the open bot's row goes back to its main conversation", (await page.locator(".bm-pill-task").count()) === 0);
-  await page.locator('.bm-fold[data-fold="juniper"]').click();
-  check("the fold shows another bot's tasks without opening it", (await page.locator('.bm-task[data-bot="juniper"]').count()) === 2);
+  const fold = page.getByRole("button", { name: "Show Juniper's tasks" });
+  check(
+    "the fold is its own button that controls the bot's task list",
+    (await fold.getAttribute("aria-expanded")) === "false" &&
+      (await fold.getAttribute("aria-controls")) === "bm-tasks-juniper",
+  );
+  check(
+    "the row's name says nothing about folding",
+    (await page.locator('.bm-bot[data-bot="juniper"]').getAttribute("aria-expanded")) === null,
+  );
+  await fold.click();
+  check(
+    "after it, the fold says Hide and is expanded",
+    (await page.getByRole("button", { name: "Hide Juniper's tasks" }).getAttribute("aria-expanded")) === "true",
+  );
+  check("the fold shows another bot's tasks without opening it", (await page.locator('.bm-task[data-bot="juniper"]:visible').count()) === 2);
   check("and the open bot stays open", (await page.locator(".bm-pill-name").textContent()) === "Marlow");
   await page.close();
 }
@@ -76,7 +90,7 @@ const noSideways = (page) =>
   const page = await open({ bot: "marlow" });
   await page.locator('.bm-bot[data-bot="otto"]').focus();
   await page.keyboard.press("ArrowRight");
-  check("Right shows a bot's tasks", (await page.locator('.bm-task[data-bot="otto"]').count()) === 1);
+  check("Right shows a bot's tasks", (await page.locator('.bm-task[data-bot="otto"]:visible').count()) === 1);
   await page.keyboard.press("ArrowDown");
   await page.keyboard.press("ArrowLeft");
   check(
@@ -84,7 +98,7 @@ const noSideways = (page) =>
     await page.evaluate(() => document.activeElement?.dataset.bot === "otto" && document.activeElement.classList.contains("bm-bot")),
   );
   await page.keyboard.press("ArrowLeft");
-  check("Left on an unfolded bot hides its tasks", (await page.locator('.bm-task[data-bot="otto"]').count()) === 0);
+  check("Left on an unfolded bot hides its tasks", (await page.locator('.bm-task[data-bot="otto"]:visible').count()) === 0);
   await page.keyboard.press("Enter");
   check("Enter on a bot opens its main conversation", (await page.locator(".bm-pill-name").textContent()) === "Otto");
   check(
@@ -129,7 +143,7 @@ const noSideways = (page) =>
   await page.locator('.bm-bot[data-bot="juniper"]').click();
   check("phone: a bot opens its main conversation", (await page.locator(".bm-pill-name").textContent()) === "Juniper");
   await page.getByRole("button", { name: "Back to bots" }).click();
-  check("phone: Back shows the list with the bot's tasks under it", (await page.locator('.bm-task[data-bot="juniper"]').count()) === 2);
+  check("phone: Back shows the list with the bot's tasks under it", (await page.locator('.bm-task[data-bot="juniper"]:visible').count()) === 2);
   check("phone: no sideways scroll in the list", await noSideways(page));
   await page.close();
   const main = await open({ bot: "marlow", pane: "conversation" }, "phone");

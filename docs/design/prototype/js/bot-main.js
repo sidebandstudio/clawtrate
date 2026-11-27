@@ -157,12 +157,12 @@
       const opened = isOpen(b);
       const current = b.id === state.bot && !state.task;
       const s = urgent(b);
-      const tasks = opened
-        ? `<ul class="bm-tasks" role="group" aria-label="${esc(b.name)}'s tasks">${b.tasks
+      const tasks = b.tasks.length
+        ? `<ul class="bm-tasks" id="bm-tasks-${b.id}" aria-label="${esc(b.name)}'s tasks"${opened ? "" : " hidden"}>${b.tasks
             .map((t) => {
               const here = b.id === state.bot && t.id === state.task;
               return (
-                `<li role="none"><button type="button" class="bm-task" role="treeitem" data-bot="${b.id}" data-task="${t.id}"` +
+                `<li><button type="button" class="bm-task" data-bot="${b.id}" data-task="${t.id}"` +
                 `${here ? ' aria-current="page"' : ""} aria-label="${esc(t.title)}${t.state ? `, ${STATE_WORDS[t.state].toLowerCase()}` : ""}${t.unread ? ", unread" : ""}" title="${esc(t.title)}">` +
                 `<span class="bm-task-title">${esc(t.title)}</span>` +
                 (t.state ? `<span class="bm-task-state" data-state="${t.state}">${STATE_WORDS[t.state]}</span>` : "") +
@@ -173,16 +173,16 @@
             .join("")}</ul>`
         : "";
       return (
-        `<li class="bm-group" role="none"${opened ? " data-open" : ""}>` +
-        `<div class="bm-row"><button type="button" class="bm-bot" role="treeitem" data-bot="${b.id}"` +
-        `${current ? ' aria-current="page"' : ""}${b.tasks.length ? ` aria-expanded="${opened}"` : ""}` +
+        `<li class="bm-group"${opened ? " data-open" : ""}>` +
+        `<div class="bm-row"><button type="button" class="bm-bot" data-bot="${b.id}"` +
+        `${current ? ' aria-current="page"' : ""}` +
         `${rowUnread(b) ? " data-unread" : ""} aria-label="${esc(botName(b))}" title="${esc(b.name)}">` +
         `<span class="bm-avatar-wrap">${avatar(b)}${s ? `<span class="bm-mark" data-state="${s}" aria-hidden="true"></span>` : ""}</span>` +
         `<span class="bm-name">${esc(b.name)}</span>` +
         (rowUnread(b) ? '<span class="bm-dot" aria-hidden="true"></span>' : "") +
         "</button>" +
         (b.tasks.length
-          ? `<button type="button" class="bm-fold" data-fold="${b.id}" tabindex="-1" aria-hidden="true">${ICON.chevron}</button>`
+          ? `<button type="button" class="bm-fold" data-fold="${b.id}" aria-expanded="${opened}" aria-controls="bm-tasks-${b.id}" aria-label="${opened ? "Hide" : "Show"} ${esc(b.name)}'s tasks">${ICON.chevron}</button>`
           : "") +
         `</div>${tasks}</li>`
       );
@@ -191,7 +191,7 @@
       '<nav class="bm-side" aria-label="Bots">' +
       `<div class="bm-side-top"><button type="button" class="bm-icon" aria-label="Search">${ICON.search}</button>` +
       `<button type="button" class="bm-icon" aria-label="New">${ICON.plus}</button></div>` +
-      `<ul class="bm-list" role="tree" aria-label="Bots">${rows}</ul>` +
+      `<ul class="bm-list" aria-label="Bots">${rows}</ul>` +
       '<div class="bm-side-foot"><span class="bm-gw"><strong>Home gateway</strong>Connected</span>' +
       `<span class="bm-foot-buttons">` +
       (state.side === "rail"
@@ -350,7 +350,7 @@
     if (el.dataset.bot) openBot(el.dataset.bot, el.dataset.task ?? null);
   });
 
-  // Right and Left on a bot's row show and hide its tasks; Left on a task goes to its bot.
+  // Right and Left on a bot's row show and hide its tasks, as its fold does; Left on a task goes to its bot.
   root.addEventListener("keydown", (event) => {
     const row = event.target.closest?.(".bm-bot, .bm-task");
     if (!row) return;

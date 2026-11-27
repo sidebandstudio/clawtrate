@@ -82,7 +82,7 @@ It builds on, and doesn't redesign:
 
 **A bot's row.** _Decision:_ the row is one control that opens the bot's main conversation, every time: a click, Enter, ⌘1–9, ⌥↑ ⌥↓, ⌃Tab, a link and a search result for the bot all land there, also when the bot is already open on one of its tasks. _Reason:_ that is the whole ask, and a row that sometimes folds and sometimes opens (today's `clickBot`) can't also be the way back to the main conversation.
 
-**Where its tasks show.** _Decision:_ under the bot, while the bot is open (its main conversation or one of its tasks), with today's caps and "Show all". Any other bot's tasks show under it by its fold: a chevron at the row's end for a pointer, Right and Left for the keyboard. A bot with no tasks has no fold. Folding by clicking the row goes. What was unfolded by hand stays unfolded, as today. _Reason:_ a person sees the open bot's work without a click, and nothing else about the list moves; only the row's click changes meaning, so the fold needs its own place.
+**Where its tasks show.** _Decision:_ under the bot, while the bot is open (its main conversation or one of its tasks), with today's caps and "Show all". Any other bot's tasks show under it by its fold: a chevron button at the row's end, "Show <bot>'s tasks", with Right and Left on the row doing the same. A bot with no tasks has no fold. Folding by clicking the row goes. What was unfolded by hand stays unfolded, as today. _Reason:_ a person sees the open bot's work without a click, and nothing else about the list moves; only the row's click changes meaning, so the fold needs its own place.
 
 **From a task back to the main conversation.** _Decision:_ the bot's row (or its picture in the rail), which is always on screen beside the task, and on the keyboard Left from the task's row, then Enter. The line at the top of a task a bot started says "from its main conversation · Open". No new shortcut. _Reason:_ the way back is the same thing that opens the bot; a second path would be one more thing to learn.
 
@@ -97,7 +97,7 @@ It builds on, and doesn't redesign:
 | The rail                  | The picture, its state mark and unread corner | Not in the sidebar. The header shows a Tasks button ("3") for the open bot; its menu lists the main conversation first (checked when open), then each task with its state, then New task (⌘T) |
 | Phone (one pane)          | As wide, full width                           | As wide. Opening a bot shows its main conversation; Back shows the list with the bot's tasks under it                                                                                         |
 
-_Reason for the rail:_ the rail has no room for titles, and a menu that appears only there keeps the wider sidebar free of a second way to the same rows.
+_Reason for the rail:_ the rail has no room for titles, and a menu that appears only there keeps the wider sidebar free of a second way to the same rows. It is looked at again once #792's resizable sidebar exists.
 
 ## 3. New task
 
@@ -123,7 +123,7 @@ _Reason:_ the main conversation is the place to ask for a task, but a person who
 **What is missing, and what this design does about it** (Proposed):
 
 - **The bot telling its person, once, that a task waits for them.** That is the bots design's C4, its step 3. Nothing is added to the conversation before it: the card and the row already show the wait.
-- **No new lines, panels or strips for task states.** A long main conversation scrolls its cards away, but the open bot's task rows, right beside it, carry the same states, and ⌘J goes to what needs the person. Adding a strip would put the same state on screen three times.
+- **No new lines, panels, strips or summaries for task states** (decided: not even one line above the message box). A long main conversation scrolls its cards away, but the open bot's task rows, right beside it, carry the same states, and ⌘J goes to what needs the person. Adding a strip would put the same state on screen three times.
 - **A task the person started directly** (New task) doesn't appear in the main conversation. The main conversation shows what the bot did there; the sidebar lists every task.
 
 ### What the bot can do, tool by tool
@@ -190,11 +190,11 @@ _Decision:_ the bot's name, wherever the bot is named anyway; "main conversation
 
 _Decision:_
 
-- **The list is a tree.** Each bot is an item that opens its main conversation on Enter or Space, and is expanded or collapsed when it has tasks (`aria-expanded`); its tasks are its items. `aria-current="page"` is on the one conversation on screen. The chevron is for a pointer and isn't a tab stop; Right and Left do what it does. _Reason:_ a row that opens one thing and shows or hides others is a tree item; a button can't say both.
-- **Focus order:** the sidebar's buttons, then the tree (one tab stop; Up, Down, Home and End move through bots and the tasks shown), then the conversation. Right on a folded bot shows its tasks; Right again goes to the first; Left on a task goes to its bot; Left on an unfolded bot folds it. ⌥⇧↑ ⌥⇧↓ keep moving a bot in the manual order.
+- **The rows stay buttons, and the fold is a disclosure.** A bot's row is a button that opens its main conversation on Enter or Space; its name says nothing about folding. The chevron is a button of its own, "Show Marlow's tasks" or "Hide Marlow's tasks", with `aria-expanded` and `aria-controls` naming the list of that bot's tasks. `aria-current="page"` is on the one row whose conversation is on screen. _Reason:_ each control does one thing and says it; it is the smaller correct pattern, and it leaves the rail's rows as they are rather than rebuilding them as a tree.
+- **Focus order:** the sidebar's buttons, then each bot's row followed by its fold, then the tasks shown under it, then the next bot; then the conversation. Up, Down, Home and End keep moving between rows as today. Right on a folded bot's row shows its tasks and Left on an unfolded one hides them, as the fold does; Left on a task goes to its bot. ⌥⇧↑ ⌥⇧↓ keep moving a bot in the manual order.
 - **Names:** a bot is "Marlow, waiting for you, 3 tasks, unread" (state, tasks, then unread for its main conversation or a task not shown); a task is "Trail apps compared, working"; the rail's button is "Marlow's tasks, 3" and opens a menu named "Marlow's tasks" whose first item is "Marlow", checked when the main conversation is open.
 - **After opening** a bot or a task, focus goes to the conversation's heading, as today, and the change is announced as "Marlow, main conversation" or "Marlow, Trail apps compared".
-- **Shortcuts:** ⌘1–9, ⌥↑ ⌥↓ and ⌃Tab open bots' main conversations; ⌘T stays New task; ⌘J goes to what needs you. No new shortcut: the tree's arrows move between a bot's main conversation and its tasks.
+- **Shortcuts:** ⌘1–9, ⌥↑ ⌥↓ and ⌃Tab open bots' main conversations; ⌘T stays New task; ⌘J goes to what needs you. No new shortcut: the rows' arrows move between a bot's main conversation and its tasks.
 
 ## 9. The iPhone app
 
@@ -254,7 +254,7 @@ The bots, tasks and words are made up. Clicking works: a bot's row opens its mai
 Each is releasable alone and carries before and after pictures at desktop and phone width, dark, and light where it differs in more than colour.
 
 1. **A bot's row opens its main conversation, and "Main" is not a row.** The smallest change that gives the owner the main thing. Core: `mainConversationKey(botId, tasks)` (the row marked main, else `agent:<bot>:main`) and `listedTasks(tasks)` (without it), for the desktop and the iPhone app. UI: `selectBot` and `clickBot` open the main conversation, also for the open bot; ⌘1–9, ⌥↑ ⌥↓, ⌃Tab, links and search's bot results the same; the rows under a bot leave it out; a bot with one task or more unfolds while open; the pill, the heading and the spoken names of section 7; an empty main conversation for a bot without one, with its line. F-424's replacement stays as it is in this step (it makes the canonical main, which now simply opens). _Tests:_ selection and rail unit tests for each rule, failing with the rule undone (a click on the open bot's row while a task is open; a bot whose remembered task is another; a bot with no main row; the count); the header's exact words; `shell-frame` and `rail-tasks-behaviour` visual specs updated; `e2e/rail-tasks.spec.ts`'s F-424 test reads the main conversation through the bot's row. _Pictures:_ every baseline whose open conversation came from clicking a bot moves to that bot's main conversation, and the four fixture bots without one show it empty; list each in the pull request. Lands after #757, which changes the same fixture.
-2. **The fold and the tree.** The chevron, Right and Left, the tree's roles and names, focus order, the unread rule (main conversation, or a task not shown). _Tests:_ keyboard and screen-reader names, each by its exact words; the visual specs of the rail at desktop and phone. Needs 1; independent of #792.
+2. **The fold.** The chevron as its own disclosure button (`aria-expanded`, `aria-controls`), Right and Left on the row, the rows' and the fold's names, focus order, the unread rule (main conversation, or a task not shown). The rows stay buttons. _Tests:_ keyboard and screen-reader names, each by its exact words; the visual specs of the rail at desktop and phone. Needs 1; independent of #792.
 3. **The rail's Tasks button.** Only at the rail width, with its menu. Needs #792's rail; tests and pictures at that width.
 4. **The words.** F-565's line, search's places, the guide's sentence (its character counts and tests), New bot without the label "Main", F-424 without the replacement main, and the parity rows of section 15. _Tests:_ each sentence by its exact words; the guide's tests. Needs 1.
 5. **#799, established.** A run on development gateways of both versions (section 5), recorded in `docs/research/`, then the plugin's model rule in the bots design's step 2b or 3, with its scenario check failing with the rule undone. Needs #691 and #692.
