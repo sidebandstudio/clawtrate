@@ -7621,14 +7621,18 @@ export class ClawtrateClient {
    * what is shown is what it left. Reads need `operator.read`.
    */
   async readBotGuides(): Promise<BotGuidesAnswer> {
-    // The change after this connection's connect is put in line only once its first reads are
-    // done: a read made before then waits for it to be in line, then for it to finish.
-    const pass = this.guidesConnectPass;
-    if (pass?.epoch === this.epoch) await pass.queued;
-    await this.guidesChanges;
+    // Bound to the connection it was asked on, before any wait: one that changes meanwhile
+    // never answers for the one asked about.
     const protocol = this.protocol;
     const epoch = this.epoch;
     const target = this.target;
+    // The change after this connection's connect is put in line only once its first reads are
+    // done: a read made before then waits for it to be in line, then for it to finish.
+    const pass = this.guidesConnectPass;
+    if (pass?.epoch === epoch) await pass.queued;
+    await this.guidesChanges;
+    if (this.protocol !== protocol || this.epoch !== epoch || this.target !== target)
+      throw new Error(CONNECTION_CHANGED);
     const alive = () =>
       protocol !== null &&
       this.protocol === protocol &&
@@ -7637,6 +7641,9 @@ export class ClawtrateClient {
       this.state.connection.status === "connected";
     const gatewayId = await this.readGatewayIdentity();
     this.confirmGatewayIdentity(gatewayId, alive);
+    // Learning the name here can put the change that waited for it in line: what is shown is
+    // what that change leaves.
+    await this.guidesChanges;
     // Every read goes out on the connection this one began on: one gateway's files are never
     // shown as another's.
     const request = (method: string, params: unknown) =>
@@ -9841,6 +9848,13 @@ export class ClawtrateClient {
     };
     // Update is held from this moment until what this device keeps for the gateway is read.
     if (!this.isSetup(this.settings?.url)) this.openclawUpdates.onConnected();
+    // In place before anyone hears of the connect: a read of the guides that a subscriber makes
+    // on `connected` waits for this connect's own pass (`readBotGuides`).
+    let passQueued = () => {};
+    this.guidesConnectPass = {
+      epoch: this.epoch,
+      queued: new Promise<void>((done) => (passQueued = done)),
+    };
     this.setConnection({
       status: "connected",
       serverVersion: this.isSetup(this.settings?.url)
@@ -9897,8 +9911,6 @@ export class ClawtrateClient {
     this.pendingResync = null;
     this.quietReconnect = false;
     const epoch = this.epoch;
-    let passQueued = () => {};
-    this.guidesConnectPass = { epoch, queued: new Promise<void>((done) => (passQueued = done)) };
     void this.bootstrap(generation, reason)
       .then(() => {
         if (generation !== this.generation || epoch !== this.epoch) return;
