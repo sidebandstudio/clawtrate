@@ -43,7 +43,10 @@ beforeAll(async () => {
   scratch = realpathSync(mkdtempSync(join(tmpdir(), "clawtrate-prove-")));
   if (platform === "darwin") {
     helper = join(scratch, "helper");
-    execFileSync("/usr/bin/xcrun", localGatewayBuild(helper));
+    // clang's two-architecture build leaves empty folders in TMPDIR: the scratch folder takes them.
+    execFileSync("/usr/bin/xcrun", localGatewayBuild(helper), {
+      env: { ...process.env, TMPDIR: scratch },
+    });
   }
   // A listener of this process's own: this account's, running Node, and no OpenClaw.
   server = createServer((socket) => accepted.push(socket.on("error", () => {})));
@@ -230,7 +233,9 @@ int main(int argc, char **argv) {
   it("refuses a holder whose start differs from the one the scan recorded", async () => {
     // A test build records every start a microsecond late: (f) must refuse the PID it then sees.
     const skewed = join(scratch, "helper-skewed");
-    execFileSync("/usr/bin/xcrun", [...localGatewayBuild(skewed), "-DPROVE_START_SKEW=1"]);
+    execFileSync("/usr/bin/xcrun", [...localGatewayBuild(skewed), "-DPROVE_START_SKEW=1"], {
+      env: { ...process.env, TMPDIR: scratch },
+    });
     const { localPort, end } = await connection(port);
     const at = home();
     const files = held(at).map((file) => openSync(file, "r"));
