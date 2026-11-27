@@ -647,6 +647,36 @@ describe("F-560 F-590: a read-only viewer's read goes past any run of quiet line
     );
   });
 
+  it("a row the gateway cut stops the walk: it is still to read", () => {
+    /** The row as `chat.history` gives one it cut to its display length. */
+    const cut = <T extends { __openclaw: object }>(row: T): T => ({
+      ...row,
+      __openclaw: { ...row.__openclaw, truncated: true },
+    });
+    // The same runs read through uncut.
+    expect(
+      seenThrough([reply, update(T + 200), note(T + 250), note(T + 300)], LISTED_NOTE, T + 100),
+    ).toBe(T + 400);
+    expect(
+      seenThrough([reply, note(T + 200), update(T + 250), note(T + 300)], LISTED_NOTE, T + 100),
+    ).toBe(T + 400);
+    // A cut row in the middle of either run: unread.
+    expect(
+      seenThrough(
+        [reply, update(T + 200), cut(note(T + 250)), note(T + 300)],
+        LISTED_NOTE,
+        T + 100,
+      ),
+    ).toBe(T + 100);
+    expect(
+      seenThrough(
+        [reply, note(T + 200), cut(update(T + 250)), note(T + 300)],
+        LISTED_NOTE,
+        T + 100,
+      ),
+    ).toBe(T + 100);
+  });
+
   it("2026.10.6: a bot's copy in the note's exact form, which folds there, is still to read, in either order", () => {
     // On a client that takes the unmarked form for the note, the copy is a skill note item, but
     // nothing vouches for it: it stops the walk.

@@ -1141,8 +1141,9 @@ export function seenThroughUpdateNotice(
  * Past the quiet lines a loaded history ends with, whose last one the listed preview is: back
  * through every earlier one to the first. Quiet is only what the gateway vouches for: a skill note
  * it marks (OpenClaw 2026.11.10, `SkillNote.agentId`) and an update line this device followed
- * (F-560, F-590). An unmarked note, which a bot's message can imitate (2026.10.6), and anything
- * else is what the viewer must have read: it stops the walk, and as the last line it isn't passed.
+ * (F-560, F-590). An unmarked note, which a bot's message can imitate (2026.10.6), a row the
+ * gateway cut, and anything else is what the viewer must have read: it stops the walk, and as the
+ * last line it isn't passed.
  * The viewer read the task through when it read at or after the latest row before the first quiet
  * line (`updateNoticeAfter` or `SkillNote.after`, both the gateway's times): then the task's own
  * time.
@@ -1154,9 +1155,12 @@ function readThroughQuietLines(
   scope: UpdateNoticeScope,
 ): number {
   const items = transcript.items;
+  // A row the gateway cut is still to read: a real notice is never that long (the gateway cuts at
+  // 8,000 characters; a note folds only up to `MAX_SKILL_NOTE_CHARS`).
   const quiet = (item: TranscriptItem | undefined) =>
-    (item?.skillNote !== undefined && item.skillNote.agentId !== null) ||
-    updateNoticeLine(item, task.key, scope) !== null;
+    item?.truncated !== true &&
+    ((item?.skillNote !== undefined && item.skillNote.agentId !== null) ||
+      updateNoticeLine(item, task.key, scope) !== null);
   if (!quiet(items.at(-1))) return seenAt;
   let first = items.length - 1;
   while (first > 0 && quiet(items[first - 1])) first -= 1;
