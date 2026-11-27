@@ -7,6 +7,7 @@
     - radio "Day"
   - combobox "Bots":
     - option "All bots" [selected]
+    - option "main"
     - option "Juniper"
     - option "Marlow"
     - option "Otto"
@@ -15,7 +16,7 @@
   - text: 8 routines
   - region "Juniper":
     - heading "Juniper" [level=2]
-    - text: Checks in every 30 minutes
+    - text: No check-ins
     - list "Juniper":
       - listitem:
         - button "Stretch break, Juniper, Every 2 hours, next run today 6:20 PM, last today, succeeded": Stretch break Every 2 hours · Next today 6:20 PM · Last today, succeeded
