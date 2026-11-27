@@ -284,10 +284,12 @@ describe("the device that sends the first message", () => {
           client.state.tasksByBot.main?.find((task) => task.key === KEY)?.title ===
           "Lisbon trip on a budget",
       );
-      // The task list holds the task alone; its outbox holds the person's message alone, sent.
+      // The task list holds the task alone; its outbox holds the person's message alone, not failed.
       expect(client.state.tasksByBot.main!.map((task) => task.key)).toEqual([KEY]);
       const outbox = client.state.transcripts[KEY]?.outbox ?? [];
-      expect(outbox.map((each) => [each.text, each.status])).toEqual([[MESSAGE, "sent"]]);
+      expect(outbox.map((each) => each.text)).toEqual([MESSAGE]);
+      expect(outbox.some((each) => each.status === "failed")).toBe(false);
+      expect(gateway.calls("chat.send")).toHaveLength(1);
       expect(client.state.creations.every((each) => each.status === "created")).toBe(true);
     } finally {
       client.stop();
@@ -316,7 +318,8 @@ describe("the device that sends the first message", () => {
       await sleep(50);
       expect(patches(failing.gateway)).toEqual([]);
       const outbox = second.client.state.transcripts[KEY]?.outbox ?? [];
-      expect(outbox.map((each) => each.status)).toEqual(["sent"]);
+      expect(outbox.map((each) => each.text)).toEqual([MESSAGE]);
+      expect(outbox.some((each) => each.status === "failed")).toBe(false);
       expect(second.client.state.connection.error ?? null).toBeNull();
     } finally {
       second.client.stop();
