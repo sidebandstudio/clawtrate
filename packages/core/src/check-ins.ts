@@ -699,6 +699,7 @@ export async function saveCheckIn(
     save: { id: saveId, botId, status: "saving", error: null },
   });
   const gone = "The connection changed before the change was sent. Nothing changed.";
+  const unconfirmed = "The connection changed before Clawtrate could confirm the change.";
   let fresh: Snapshot;
   const latest = ctx.begin();
   try {
@@ -742,7 +743,8 @@ export async function saveCheckIn(
       await loadCheckIns(ctx, undefined, link);
       return;
     }
-    return settle(certainlyNotApplied(error) ? "failed" : "unknown", message(error));
+    if (certainlyNotApplied(error)) return settle("failed", message(error));
+    return settle("unknown", link.alive() ? message(error) : unconfirmed);
   }
   const deadline = ctx.now() + READ_BACK_MS;
   while (link.alive() && ctx.now() < deadline) {
@@ -765,7 +767,7 @@ export async function saveCheckIn(
     "unknown",
     link.alive()
       ? "Clawtrate couldn't confirm the change: the gateway's config and check-in jobs didn't both show it."
-      : "The connection changed before Clawtrate could confirm the change.",
+      : unconfirmed,
   );
   await loadCheckIns(ctx, undefined, link);
 }

@@ -233,7 +233,7 @@ export function titledByGateway(key: string): boolean {
 
 /** Names of a task the gateway's row doesn't carry, which the client knows. */
 export type TaskTitleNames = {
-  /** A name a model wrote for the task. Nothing gives one yet: this is its place in the order. */
+  /** A name a model wrote for the task, when the client has one the row doesn't carry. */
   generated?: string | null;
   /** The title the client made from the task's first message (`firstMessageTitles`). */
   firstMessage?: string | null;
@@ -244,7 +244,8 @@ export type TaskTitleNames = {
  * 1. A name someone chose: the session's `label`, which the app never writes over. A person's
  *    rename and a label given at creation are one; so is a bot's name for a task it started
  *    (`sessions_spawn`): the gateway keeps them in the same field.
- * 2. A generated name (`names.generated`).
+ * 2. A generated name: `names.generated`, else the one a small model wrote, which the row carries
+ *    in `autoLabel` on a task Clawtrate made (`generatedName`, `task-names.ts`, #750).
  * 3. A real title the gateway supplied: its derived title, else its display name, each without
  *    the marker on a message from Clawtrate; never its placeholder (`isPlaceholderName`), which
  *    its derived title then repeats.
@@ -258,6 +259,7 @@ export function taskTitle(row: RawRecord, key: string, names: TaskTitleNames = {
   return (
     str(row.label) ??
     str(names.generated) ??
+    generatedName(row, key) ??
     supplied(row.derivedTitle) ??
     supplied(row.displayName) ??
     (titledByGateway(key) ? str(names.firstMessage) : null) ??
@@ -286,6 +288,16 @@ export function isTaskSession(row: RawRecord): boolean {
 /** Whether a key alone rules a session out, before any row data is known. */
 export function isExcludedSessionKey(key: string): boolean {
   return !isTaskSession({ key });
+}
+
+/**
+ * The name a small model wrote for a task Clawtrate made (`autoLabel`, `task-names.ts`, #750): after
+ * a name the person or the bot gave (`label`), before the gateway's own title. Only on the keys the
+ * gateway gives a task Clawtrate creates (`dashboard:`): elsewhere `autoLabel` is a device's name,
+ * which the gateway already shows below its own title.
+ */
+export function generatedName(row: RawRecord, key: string): string | null {
+  return /^agent:[^:]+:dashboard:/u.test(key) ? str(row.autoLabel) : null;
 }
 
 /** The bot a session row belongs to: its own `agentId`, else the one its key names. */
