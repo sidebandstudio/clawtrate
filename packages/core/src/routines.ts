@@ -164,9 +164,23 @@ export type RoutineRun = {
   totalTokens: number | null;
   /** The session the gateway used for this run, when it reports one. */
   sessionKey: string | null;
-  /** Started with Run now: the gateway gives a forced run the id `manual:<job>:<ms>:<n>`. */
+  /** Started with `cron.run` (Run now and the like), told by the id the gateway gave it: `isManualRunId`. */
   manual: boolean;
 };
+
+const CRON_REQUEST_RUN_ID =
+  /^cron-request\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/**
+ * A run someone started with `cron.run` (Run now, another client, a bot's cron tool) or a plugin
+ * asked for, by the id the gateway gave it, which no caller chooses. OpenClaw 2026.10.6 gives such
+ * a run `manual:<job>:<ms>:<n>`; 2026.11.10 gives it `cron-request.<uuid>`. A scheduled run has no
+ * id on 2026.10.6 and one beginning `cron:` on 2026.11.10, as does a run 2026.11.10 starts when a
+ * watched process exits (`cron:<job>:<ms>:cron-request.<uuid>`); an event's run is `event:<hash>`.
+ */
+function isManualRunId(runId: string | null): boolean {
+  return runId !== null && (runId.startsWith("manual:") || CRON_REQUEST_RUN_ID.test(runId));
+}
 
 /**
  * A run's conversation, as `cron.history` keeps it. `kept` only on positive
@@ -341,7 +355,7 @@ export function parseRun(value: unknown): RoutineRun | null {
     outputTokens: num(usage.output_tokens),
     totalTokens: num(usage.total_tokens),
     sessionKey: str(entry.sessionKey),
-    manual: runId?.startsWith("manual:") === true,
+    manual: isManualRunId(runId),
   };
 }
 
