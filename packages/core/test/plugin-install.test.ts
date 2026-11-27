@@ -420,6 +420,20 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
       expect(g.shape()).toBe("OFF");
     });
 
+    it("row 7e: when the enable is answered 'already running', the read before it is sent again sees the revoked grant", async () => {
+      const g = at(version, "fresh");
+      g.hooks.push({
+        method: "plugins.setEnabled",
+        nth: 1,
+        before: (gw) => (gw.entry = { enabled: false }),
+        refuse: "busy",
+      });
+      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, ARCHIVE, CONFIRM);
+      expect(outcome).toMatchObject({ stop: "listed-off", mayBeRunning: false });
+      expect(g.calls.filter((c) => c.method === "plugins.setEnabled")).toHaveLength(1);
+      expect(g.ran).toEqual([]);
+    });
+
     it("row 7f ⚠: the owner's enabled: false between the last check and the enable is enabled over (3.2)", async () => {
       const g = at(version, "fresh");
       g.hooks.push({

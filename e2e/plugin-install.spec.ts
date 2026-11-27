@@ -290,7 +290,7 @@ test("row 7b: the owner's deny between the last check and the enable is kept", a
   await ownerPatch({ plugins: { deny: [] } }, ["plugins.deny"]);
 });
 
-test("row 7e: the owner's revoked grant before the enable: confirmed, then turned off", async () => {
+test("row 7e: the owner's revoked grant before the enable: never left running", async () => {
   test.setTimeout(240_000);
   let revoked = false;
   const outcome = await engine(async (method, params) => {
@@ -299,7 +299,12 @@ test("row 7e: the owner's revoked grant before the enable: confirmed, then turne
       await ownerPatch({ plugins: { entries: { [ID]: { enabled: false, hooks: null } } } });
     }
   }).turnOn(pin, archive, CONFIRM);
-  expect(outcome).toMatchObject({ stop: "owner-settings" });
+  // Which of two safe ends depends on the gateway's timing. If it takes the enable at once, step
+  // 8 finds the grant gone and turns the plugin off ("owner-settings"). If it answers "already
+  // running" just after the owner's write (it often does), the read before the enable is sent
+  // again sees the grant gone, and nothing is enabled ("listed-off").
+  expect(outcome).toMatchObject({ kind: "stopped", mayBeRunning: false });
+  expect(["owner-settings", "listed-off"]).toContain((outcome as { stop: string }).stop);
   expect(await state()).toMatchObject({ listed: { state: "unloaded" } });
-  expect((await state()).entry).toMatchObject({ enabled: false });
+  expect((await state()).entry).toEqual({ enabled: false });
 });
