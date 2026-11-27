@@ -698,7 +698,8 @@ export async function saveCheckIn(
     ...(ctx.get() ?? emptyState()),
     save: { id: saveId, botId, status: "saving", error: null },
   });
-  const gone = "The connection changed before the change was sent. Nothing changed.";
+  // The dialog adds "Nothing changed." after every failed save's words.
+  const gone = "The connection changed before the change was sent.";
   const unconfirmed = "The connection changed before Clawtrate could confirm the change.";
   let fresh: Snapshot;
   const latest = ctx.begin();

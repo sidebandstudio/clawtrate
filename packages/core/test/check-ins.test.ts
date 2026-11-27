@@ -1077,6 +1077,25 @@ describe("F-201 a save across a connection change", () => {
     });
   });
 
+  it("#848: a save cut off before its patch by a dropped connection or a stopped client says so once; the dialog adds that nothing changed", async () => {
+    for (const cut of ["gateway closed (1006): ", "gateway client stopped"]) {
+      const { gateway, ctx, state } = fakeGateway();
+      await loadCheckIns(ctx);
+      const asked = draft(state(), "marlow", { every: "24h" });
+      gateway.before = (method) => {
+        if (method !== "config.get") return;
+        gateway.linkAlive = false;
+        throw new Error(cut);
+      };
+      await saveCheckIn(ctx, "s1", "marlow", asked);
+      expect(gateway.patches).toEqual([]);
+      expect(state().save, cut).toMatchObject({
+        status: "failed",
+        error: "The connection changed before the change was sent.",
+      });
+    }
+  });
+
   it("F-201: a link that reports itself gone between the read and the patch sends nothing on it", async () => {
     const { gateway, ctx, state } = fakeGateway();
     await loadCheckIns(ctx);

@@ -12,6 +12,10 @@
 // will do. A command's machine, a bot's workspace and its browser settings are
 // read apart; none is inferred from another.
 
+import {
+  GatewayProtocolRequestError,
+  GatewayProtocolRequestTimeoutError,
+} from "@openclaw/gateway-client/browser";
 import { parseModelRef } from "./accounts.ts";
 import { isCertainRefusal } from "./accounts-engine.ts";
 import { asRecord, type RawRecord } from "./mapping.ts";
@@ -603,6 +607,53 @@ export type MachinesContext = {
 const errorText = (error: unknown) =>
   cap(error instanceof Error ? error.message : String(error), MAX_REASON_CHARS);
 
+/** A request that never left this client: nothing changed. */
+const neverSent = (error: unknown) =>
+  (error instanceof GatewayProtocolRequestTimeoutError && !error.requestSent) ||
+  (error instanceof Error && error.name === "NotSentError");
+
+/** How a write is named in what is said of it. */
+type WriteWords = { what: string; whether: string; sent: string };
+
+/** A write read back after its answer was lost: taken, or what the gateway shows (null: unread). */
+type ReadBack = { took: true } | { took: false; found: string | null };
+
+const NAME: WriteWords = { what: "the name", whether: "the name was saved", sent: "the name" };
+const removal = (kind: "machine" | "device"): WriteWords => ({
+  what: "the removal",
+  whether: `the ${kind} was removed`,
+  sent: "the removal",
+});
+
+/** A name read back: `undefined` when the record isn't listed, `null` when it has no name. */
+const readBackName = (
+  name: string | null | undefined,
+  label: string,
+  kind: "machine" | "device",
+): ReadBack =>
+  name === label
+    ? { took: true }
+    : {
+        took: false,
+        found:
+          name === undefined
+            ? `the gateway doesn't list this ${kind}`
+            : name === null
+              ? `the gateway shows this ${kind} with no name`
+              : `the gateway shows the name as "${name}"`,
+      };
+
+/** A removal read back from the whole listing; a listing cut short is no read. */
+const readBackRemoval = (rows: unknown, key: "nodeId" | "deviceId", id: string): ReadBack => {
+  if (!wholeList(rows, key)) throw new Error("The pairing list was not returned whole.");
+  return listsId(rows, key, id)
+    ? {
+        took: false,
+        found: `the gateway still lists this ${key === "nodeId" ? "machine" : "device"}`,
+      }
+    : { took: true };
+};
+
 /** A change the gateway refused or did not read back. Its message is for the person. */
 export class PlacementWriteError extends Error {
   constructor(message: string) {
@@ -909,10 +960,38 @@ export class MachinesEngine {
       );
   }
 
-  /** The gateway's own words for a refusal, for the person. */
-  private refused(what: string, error: unknown): PlacementWriteError {
-    return new PlacementWriteError(
-      `Couldn't save ${what}. The gateway answered: ${errorText(error)}`,
+  /**
+   * What became of a write whose request failed, said for the person, as device approval says it.
+   * Only the gateway's own answer is a refusal, in its words. A request that never left changed
+   * nothing. Any other failure (a dropped connection, a stopped client, a timeout) lost the answer:
+   * the change may have landed, so `readBack` reads it, and a read that shows it taken is the save
+   * an answer would have confirmed (this returns). Otherwise it throws what was found.
+   */
+  private async failedWrite(
+    words: WriteWords,
+    error: unknown,
+    readBack: () => Promise<ReadBack>,
+  ): Promise<void> {
+    if (error instanceof GatewayProtocolRequestError)
+      throw new PlacementWriteError(
+        `Couldn't save ${words.what}. The gateway answered: ${errorText(error)}`,
+      );
+    if (neverSent(error))
+      throw new PlacementWriteError(
+        `Clawtrate isn't connected to the gateway, so ${words.sent} wasn't sent. Nothing changed.`,
+      );
+    const lost = `Clawtrate didn't get the gateway's answer, so it can't say whether ${words.whether}.`;
+    let found: ReadBack;
+    try {
+      found = await readBack();
+    } catch {
+      found = { took: false, found: null };
+    }
+    if (found.took) return;
+    throw new PlacementWriteError(
+      found.found === null
+        ? `${lost} Reading it back failed too. Look again once Clawtrate is connected.`
+        : `${lost} Read back just now, ${found.found}: the change hasn't taken, or not yet. Look again in a moment before trying again.`,
     );
   }
 
@@ -1016,9 +1095,18 @@ export class MachinesEngine {
         this.sharedConfig = null;
       });
     } catch (error) {
+      if (neverSent(error))
+        throw new PlacementWriteError(
+          "Clawtrate isn't connected to the gateway, so the workspace wasn't sent. Nothing changed.",
+        );
       const now = await reported().catch(() => null);
+      // A lost answer whose read shows the path as typed: the change landed.
+      if (!(error instanceof GatewayProtocolRequestError) && now === path)
+        return { workspace: now, asTyped: true };
       throw new PlacementWriteError(
-        `The gateway answered: ${errorText(error).replace(/\.$/, "")}. It may have created the folder or files before answering. ` +
+        (error instanceof GatewayProtocolRequestError
+          ? `The gateway answered: ${errorText(error).replace(/\.$/, "")}. It may have created the folder or files before answering. `
+          : "Clawtrate didn't get the gateway's answer, so it can't say whether the workspace changed. The gateway may have created the folder or files. ") +
           (now === null
             ? "The current workspace could not be confirmed."
             : `The gateway now lists the workspace as ${now}.`),
@@ -1069,7 +1157,18 @@ export class MachinesEngine {
         ...(hash ? { baseHash: hash } : {}),
       });
     } catch (error) {
-      throw this.refused("the machine's approvals", error);
+      await this.failedWrite(
+        {
+          what: "the machine's approvals",
+          whether: "the machine's approvals were saved",
+          sent: "the change",
+        },
+        error,
+        async () =>
+          choiceOf(readApprovalsFile(await get()).defaults) === choice
+            ? { took: true }
+            : { took: false, found: "its approvals file shows other defaults" },
+      );
     }
     const after = readApprovalsFile(await get());
     if (choiceOf(after.defaults) !== choice)
@@ -1092,7 +1191,11 @@ export class MachinesEngine {
     try {
       await this.ctx.request("node.rename", { nodeId, displayName: label });
     } catch (error) {
-      throw this.refused("the name", error);
+      await this.failedWrite(NAME, error, async () => {
+        const rows = list(rec(await this.ctx.request("node.list", {})).nodes);
+        const row = rows.find((each) => rec(each).nodeId === nodeId);
+        return readBackName(row === undefined ? undefined : readNode(row)?.name, label, "machine");
+      });
     }
     // Found by id in the whole list: the shown list's bound must not hide it.
     const rows = list(rec(await this.ctx.request("node.list", {})).nodes);
@@ -1108,7 +1211,9 @@ export class MachinesEngine {
     try {
       await this.ctx.request("node.pair.remove", { nodeId });
     } catch (error) {
-      throw this.refused("the removal", error);
+      await this.failedWrite(removal("machine"), error, async () =>
+        readBackRemoval(rec(await this.ctx.request("node.list", {})).nodes, "nodeId", nodeId),
+      );
     }
     const again = rec(await this.ctx.request("node.list", {}));
     if (!wholeList(again.nodes, "nodeId"))
@@ -1140,7 +1245,17 @@ export class MachinesEngine {
     try {
       await this.ctx.request("device.pair.rename", { deviceId, label });
     } catch (error) {
-      throw this.refused("the name", error);
+      await this.failedWrite(NAME, error, async () => {
+        const rows = list(rec(await this.ctx.listDevices()).paired);
+        const row = rows.find((each) => rec(each).deviceId === deviceId);
+        return readBackName(
+          row === undefined
+            ? undefined
+            : (str(rec(row).operatorLabel) ?? str(rec(row).displayName)),
+          label,
+          "device",
+        );
+      });
     }
     const paired = list(rec(await this.ctx.listDevices()).paired);
     const row = rec(paired.find((each) => rec(each).deviceId === deviceId));
@@ -1158,7 +1273,9 @@ export class MachinesEngine {
     try {
       await this.ctx.request("device.pair.remove", { deviceId });
     } catch (error) {
-      throw this.refused("the removal", error);
+      await this.failedWrite(removal("device"), error, async () =>
+        readBackRemoval(rec(await this.ctx.listDevices()).paired, "deviceId", deviceId),
+      );
     }
     const again = rec(await this.ctx.listDevices());
     if (!wholeList(again.paired, "deviceId"))

@@ -1,7 +1,10 @@
 // Where a bot runs and Settings, Machines (machines.ts) against answers shaped
 // as OpenClaw 2026.10.6 gave them on a development instance (docs/decisions.md,
 // "Where a bot runs and Machines"). Machines and devices have invented names.
-import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
+import {
+  GatewayProtocolRequestError,
+  GatewayProtocolRequestTimeoutError,
+} from "@openclaw/gateway-client/browser";
 import { describe, expect, it } from "vitest";
 import {
   choiceOf,
@@ -18,6 +21,7 @@ import {
   readToolServers,
   type MachinesContext,
 } from "../src/machines.ts";
+import { NotSentError } from "../src/client.ts";
 
 const NODE = "node-media-box";
 const OTHER = "node-other";
@@ -150,9 +154,10 @@ function gateway(start: { config?: Json; nodes?: Json[]; devices?: Json[] } = {}
     "exec.approvals.get": () => snapshot("gateway", true),
     "exec.approvals.set": (params) => {
       if (params.baseHash !== `h${files.gateway!.hash}`)
-        throw new Error(
-          "exec approvals changed since last load; re-run exec.approvals.get and retry",
-        );
+        throw new GatewayProtocolRequestError({
+          code: "INVALID_REQUEST",
+          message: "exec approvals changed since last load; re-run exec.approvals.get and retry",
+        });
       files.gateway = { file: params.file as Json, hash: files.gateway!.hash + 1 };
       return snapshot("gateway", true);
     },
@@ -164,7 +169,10 @@ function gateway(start: { config?: Json; nodes?: Json[]; devices?: Json[] } = {}
     "exec.approvals.node.set": (params) => {
       const id = params.nodeId as string;
       if (params.baseHash !== `h${files[id]!.hash}`)
-        throw new Error("INVALID_REQUEST: exec approvals changed; reload and retry");
+        throw new GatewayProtocolRequestError({
+          code: "INVALID_REQUEST",
+          message: "exec approvals changed; reload and retry",
+        });
       if (!ignore.has("exec.approvals.node.set"))
         files[id] = { file: params.file as Json, hash: files[id]!.hash + 1 };
       return snapshot(id, false);
@@ -178,7 +186,11 @@ function gateway(start: { config?: Json; nodes?: Json[]; devices?: Json[] } = {}
     "device.pair.remove": (params) => {
       // As the gateway: an id it doesn't hold is refused, and nothing else is touched.
       const at = devices.findIndex((each) => each.deviceId === params.deviceId);
-      if (at < 0) throw new Error("unknown deviceId");
+      if (at < 0)
+        throw new GatewayProtocolRequestError({
+          code: "INVALID_REQUEST",
+          message: "unknown deviceId",
+        });
       devices.splice(at, 1);
       return { ok: true };
     },
@@ -188,7 +200,11 @@ function gateway(start: { config?: Json; nodes?: Json[]; devices?: Json[] } = {}
     },
     "node.pair.remove": (params) => {
       const at = nodes.findIndex((n) => n.nodeId === params.nodeId);
-      if (at < 0) throw new Error("unknown nodeId");
+      if (at < 0)
+        throw new GatewayProtocolRequestError({
+          code: "INVALID_REQUEST",
+          message: "unknown nodeId",
+        });
       nodes.splice(at, 1);
       return { ok: true };
     },
@@ -1219,6 +1235,151 @@ describe("Settings, Machines: the engine", () => {
     expect(choiceOf({ security: "deny", ask: "always" })).toBeNull();
     expect(choiceOf({ security: "full", ask: "always" })).toBeNull();
     expect(choiceOf({ security: "allowlist", ask: null })).toBeNull();
+  });
+});
+
+describe("#848: a machine write whose answer was lost is never said as the gateway's answer", () => {
+  /**
+   * The gateway as a lost answer leaves it: `method` applied or not, then the client rejects it
+   * with `error`. After a dropped connection or a stopped client nothing more is sent.
+   */
+  const cutOff = (
+    gw: ReturnType<typeof gateway>,
+    method: string,
+    error: Error,
+    { applied = false, down = false } = {},
+  ): ReturnType<typeof gateway> => {
+    let gone = false;
+    const request = async (asked: string, params: unknown) => {
+      if (gone) throw new NotSentError();
+      if (asked !== method) return gw.request(asked, params);
+      if (applied) await gw.request(asked, params);
+      gone = down;
+      throw error;
+    };
+    return { ...gw, request };
+  };
+  // What the gateway client rejects a request with: its own text, never words for a person.
+  const dropped = () => new Error("gateway closed (1006): ");
+  const stopped = () => new Error("gateway client stopped");
+  const timedOut = (method: string) =>
+    new GatewayProtocolRequestTimeoutError({ method, timeoutMs: 15_000, requestSent: true });
+  const refused = () =>
+    new GatewayProtocolRequestError({ code: "UNAVAILABLE", message: "node busy" });
+
+  const writes = [
+    {
+      name: "a machine's name",
+      method: "node.rename",
+      run: (e: MachinesEngine) => e.renameMachine(NODE, "studio-mac"),
+      what: "the name",
+      whether: "the name was saved",
+      sent: "the name",
+      found: 'the gateway shows the name as "media-box"',
+      took: (gw: ReturnType<typeof gateway>) => gw.nodes[0]!.displayName === "studio-mac",
+    },
+    {
+      name: "a device's name",
+      method: "device.pair.rename",
+      run: (e: MachinesEngine) => e.renameDevice("dev-phone", "Phone"),
+      what: "the name",
+      whether: "the name was saved",
+      sent: "the name",
+      found: 'the gateway shows the name as "Clawtrate on iPhone"',
+      took: (gw: ReturnType<typeof gateway>) => gw.devices[1]!.operatorLabel === "Phone",
+    },
+    {
+      name: "a machine's removal",
+      method: "node.pair.remove",
+      run: (e: MachinesEngine) => e.removeMachine(NODE),
+      what: "the removal",
+      whether: "the machine was removed",
+      sent: "the removal",
+      found: "the gateway still lists this machine",
+      took: (gw: ReturnType<typeof gateway>) => gw.nodes.length === 0,
+    },
+    {
+      name: "a device's removal",
+      method: "device.pair.remove",
+      run: (e: MachinesEngine) => e.removeDevice("dev-phone"),
+      what: "the removal",
+      whether: "the device was removed",
+      sent: "the removal",
+      found: "the gateway still lists this device",
+      took: (gw: ReturnType<typeof gateway>) =>
+        !gw.devices.some((each) => each.deviceId === "dev-phone"),
+    },
+    {
+      name: "a machine's approvals file",
+      method: "exec.approvals.node.set",
+      run: (e: MachinesEngine) => e.setMachineDefaults(NODE, "always", "h1").then(() => {}),
+      what: "the machine's approvals",
+      whether: "the machine's approvals were saved",
+      sent: "the change",
+      found: "its approvals file shows other defaults",
+      took: (gw: ReturnType<typeof gateway>) => gw.files[NODE]!.hash === 2,
+    },
+  ];
+
+  for (const write of writes) {
+    it(`#848: ${write.name}: a dropped connection or a stopped client can't say, a timeout says what reading it back shows, a refusal is the gateway's, an unsent one changed nothing`, async () => {
+      const lost = `Clawtrate didn't get the gateway's answer, so it can't say whether ${write.whether}.`;
+      const said = async (gw: ReturnType<typeof gateway>) =>
+        write.run(engine(gw, { admin: true, pairing: true })).then(
+          () => "saved",
+          (error: Error) => error.message,
+        );
+      for (const cut of [dropped, stopped]) {
+        const gw = gateway();
+        expect(await said(cutOff(gw, write.method, cut(), { down: true })), cut().message).toBe(
+          `${lost} Reading it back failed too. Look again once Clawtrate is connected.`,
+        );
+        expect(write.took(gw)).toBe(false);
+      }
+      expect(await said(cutOff(gateway(), write.method, timedOut(write.method)))).toBe(
+        `${lost} Read back just now, ${write.found}: the change hasn't taken, or not yet. Look again in a moment before trying again.`,
+      );
+      // The gateway applied it and only its answer was lost: the read back shows it, so it is saved.
+      const landed = gateway();
+      expect(
+        await said(cutOff(landed, write.method, timedOut(write.method), { applied: true })),
+      ).toBe("saved");
+      expect(write.took(landed)).toBe(true);
+      expect(await said(cutOff(gateway(), write.method, refused()))).toBe(
+        `Couldn't save ${write.what}. The gateway answered: node busy`,
+      );
+      expect(await said(cutOff(gateway(), write.method, new NotSentError()))).toBe(
+        `Clawtrate isn't connected to the gateway, so ${write.sent} wasn't sent. Nothing changed.`,
+      );
+    });
+  }
+
+  it("#848: a bot's workspace whose answer was lost never says the gateway answered, and still says the folder may have been made", async () => {
+    const said = async (gw: ReturnType<typeof gateway>, path = "/srv/claw/otto-2") =>
+      engine(gw, { admin: true })
+        .setWorkspace("otto", path)
+        .then(
+          (saved) => saved,
+          (error: Error) => error.message,
+        );
+    const lost =
+      "Clawtrate didn't get the gateway's answer, so it can't say whether the workspace changed. The gateway may have created the folder or files.";
+    for (const cut of [dropped, stopped])
+      expect(await said(cutOff(gateway(), "agents.update", cut(), { down: true }))).toBe(
+        `${lost} The current workspace could not be confirmed.`,
+      );
+    expect(await said(cutOff(gateway(), "agents.update", timedOut("agents.update")))).toBe(
+      `${lost} The gateway now lists the workspace as /srv/claw/workspaces/otto.`,
+    );
+    expect(
+      await said(cutOff(gateway(), "agents.update", timedOut("agents.update"), { applied: true })),
+    ).toEqual({ workspace: "/srv/claw/otto-2", asTyped: true });
+    expect(await said(cutOff(gateway(), "agents.update", refused()))).toBe(
+      "The gateway answered: node busy. It may have created the folder or files before answering. The gateway now lists the workspace as /srv/claw/workspaces/otto.",
+    );
+    expect(await said(cutOff(gateway(), "agents.update", new NotSentError()))).toBe(
+      "Clawtrate isn't connected to the gateway, so the workspace wasn't sent. Nothing changed.",
+    );
   });
 });
 
