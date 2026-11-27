@@ -1742,6 +1742,8 @@ export class ClawtrateClient {
    */
   private directAsk: { tier: "interactive" | "admin" | "held" | "full"; pairing: boolean } | null =
     null;
+  /** The connection whose identity `resumeUpgrade` reads before its waiters' access is asked. */
+  private resumeRead: number | null = null;
   /**
    * What the request under way asks for: the interactive tier, admin with it,
    * (`held`) the scopes the connection held when device access was asked for, or (`full`)
@@ -3203,8 +3205,14 @@ export class ClawtrateClient {
       pairing: tier === "pairing" || !!base?.pairing,
     });
     const waiting = this.upgradeWanted ? this.upgradeTier : null;
+    // While the reconnect's identity is read, the waiters' gateway is unknown: the person's ask
+    // goes with its own tier, and theirs joins it once the read names their gateway.
     const { tier: wanted, pairing } = raise(
-      this.upgradeWanted ? { tier: this.upgradeTier, pairing: this.pairingWanted } : null,
+      !this.upgradeWanted
+        ? null
+        : this.resumeRead === this.epoch
+          ? this.directAsk
+          : { tier: this.upgradeTier, pairing: this.pairingWanted },
     );
     if (wanted === "held" && waiting !== "held")
       this.heldBase = ADMIN_SCOPES.filter((scope) => this.state.connection.scopes.includes(scope));
@@ -3572,11 +3580,18 @@ export class ClawtrateClient {
         if (!this.directAsk) return this.dropAsk();
         this.upgradeTier = this.directAsk.tier;
         this.pairingWanted = this.directAsk.pairing;
+        // The hello kept the withdrawn changes' tier, so it didn't take what this one holds.
+        if (this.upgradeTier === "held")
+          this.heldBase = ADMIN_SCOPES.filter((scope) =>
+            this.state.connection.scopes.includes(scope),
+          );
       }
       return this.startUpgrade();
     }
     const epoch = this.epoch;
+    this.resumeRead = epoch;
     void this.readGatewayIdentity().then((id) => {
+      if (this.resumeRead === epoch) this.resumeRead = null;
       if (epoch !== this.epoch || !this.upgradeWanted) return;
       const waiters = this.accessWaiters;
       this.accessWaiters = waiters.filter(
@@ -3585,24 +3600,27 @@ export class ClawtrateClient {
       for (const waiter of waiters)
         if (!this.accessWaiters.includes(waiter))
           waiter.reject(new Error(id === null ? IDENTITY_UNREAD : ANOTHER_GATEWAY));
+      // A device-access ask sent during the read went alone: the changes on this gateway need write.
+      if (this.accessWaiters.length > 0 && this.upgradeTier === "held") {
+        this.upgradeTier = "interactive";
+        this.scopeUpgrade?.cancelScopeUpgrade();
+        this.scopeUpgrade = null;
+      }
       if (this.accessWaiters.length > 0 || (id !== null && granted.has(id)))
         return this.startUpgrade();
       // A request asked for on this connection meanwhile is under way: its answer settles it.
       if (this.scopeUpgrade) return;
-      // Every waiter was withdrawn during the read, none refused: as if none had waited.
-      if (waiters.length === 0 && granted.size === 0) return this.resumeUpgrade();
-      // The person's accept of full control ends as a failure they can try again from Settings,
-      // never quietly; an accept still being saved keeps its place.
-      if (this.upgradeTier === "full") {
+      // Beside changes refused here, the person's accept of full control ends as a failure they
+      // can try again from Settings, never quietly; an accept still being saved keeps its place.
+      if (this.upgradeTier === "full" && (waiters.length > 0 || granted.size > 0)) {
         this.fullAttempt = null;
         this.failAccess(
           new AccessRequestError("error", id === null ? IDENTITY_UNREAD : ANOTHER_GATEWAY),
         );
         return;
       }
-      // shortcut: an ask the person made (Settings') queued beside them is dropped too; keep it
-      // apart from theirs if that ever matters.
-      this.dropAsk();
+      // No waiter is left: as if none had waited.
+      this.resumeUpgrade();
     });
   }
 
