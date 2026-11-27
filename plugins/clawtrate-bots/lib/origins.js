@@ -110,6 +110,15 @@ export function readsOutside(event) {
 
 const str = (v) => (typeof v === "string" && v.length > 0 ? v : null);
 
+/**
+ * What a run had read, for a task it starts: its first source, or `lost` when
+ * the plugin doesn't hold the run (it may have read anything), or null.
+ */
+function readOf(run) {
+  if (!run || run.lost) return { source: "lost", tool: null };
+  return run.readOutside ? { source: run.readOutside.source, tool: run.readOutside.tool } : null;
+}
+
 /** A run's kind from what before_prompt_build saw (4.1's table). */
 export function kindOf(facts) {
   const provenance = facts.provenance;
@@ -271,26 +280,41 @@ export class RunOrigins {
     while (this.tasks.size > this.limits.tasks) this.tasks.delete(this.tasks.keys().next().value);
   }
 
-  /** A call that makes a task (`sessions_spawn`, `sessions_create`) passed: its first run is a task. */
-  sawSpawn(run, bot) {
+  /**
+   * A call that makes a task (`sessions_spawn`, `sessions_create`) passed: its first run is a task.
+   * @param {string | null | undefined} [callId]
+   */
+  sawSpawn(run, bot, callId = null) {
     if (!bot) return;
-    const read = run?.readOutside
-      ? { source: run.readOutside.source, tool: run.readOutside.tool }
-      : null;
     const list = (this.spawning.get(bot) ?? []).slice(-15);
-    list.push({ read, at: this.now() });
+    list.push({ read: readOf(run), at: this.now(), callId: str(callId) });
     this.spawning.set(bot, list);
+  }
+
+  /**
+   * A task-making call's result came back: its wait for a first run is over.
+   * @param {string | null | undefined} callId
+   */
+  dropSpawn(callId) {
+    const id = str(callId);
+    if (!id) return;
+    for (const [bot, list] of this.spawning) {
+      const left = list.filter((w) => w.callId !== id);
+      if (left.length === list.length) continue;
+      if (left.length) this.spawning.set(bot, left);
+      else this.spawning.delete(bot);
+    }
   }
 
   /**
    * The session that call made, from its result: every run in it is a task,
    * those already started included, and carries what the starting run had read.
+   * @param {string | null | undefined} [callId]
    */
-  sawSpawned(run, sessionKey) {
+  sawSpawned(run, sessionKey, callId = null) {
     if (!sessionKey) return;
-    const read = run?.readOutside
-      ? { source: run.readOutside.source, tool: run.readOutside.tool }
-      : null;
+    this.dropSpawn(callId);
+    const read = readOf(run);
     this.rememberTask(sessionKey, read);
     for (const held of this.runs.values()) {
       if (held.sessionKey !== sessionKey) continue;
