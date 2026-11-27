@@ -987,10 +987,48 @@ describe("a read that doesn't hold the whole run proves nothing (#680)", () => {
       return { messages: [input, ...toolRows("gw-29")], hasMore: true };
     };
     const { client } = await openTask({ gateway });
-    await until(() => asked > 0);
-    await sleep(50);
+    // The check's own verdict: a check still pending shows done too.
+    const inner = client as unknown as { quietChecks: QuietChecks; epoch: number };
+    await until(
+      () => asked > 0 && inner.quietChecks.verdict(OTHER, "gw-29", inner.epoch) === "quiet",
+    );
     expect(task(client, OTHER)?.status).toBe("done");
     client.stop();
+  }, 30_000);
+
+  it("an open task: a pair the gateway named stays, whatever its page infers for the same id", async () => {
+    let page: unknown = { messages: [], hasMore: false };
+    const gateway = gatewayWith(
+      [{ key: KEY, agentId: "otto", hasActiveRun: false, updatedAt: T0 }],
+      () => [],
+    );
+    gateway.handlers["chat.history"] = () => page;
+    const { transcript } = await openTask({ gateway });
+    // The gateway names the queued turn's two ids.
+    gateway.emit("sessions.changed", {
+      sessionKey: KEY,
+      runId: "gw-40",
+      clientRunId: "send-40",
+      phase: "model",
+    });
+    await until(() => transcript().queueAliases["gw-40"] === "send-40");
+    // A page whose places would pair the gateway's id with another send.
+    const other = {
+      role: "user",
+      content: "Another message",
+      timestamp: T0 + 2_000,
+      __openclaw: { id: "u-40", seq: 3, idempotencyKey: "other-40:user" },
+    };
+    page = { messages: [other, ...toolRows("gw-40")], hasMore: false };
+    let reads = 0;
+    gateway.handlers["chat.history"] = () => {
+      reads += 1;
+      return page;
+    };
+    gateway.emit("chat", { runId: "send-40", sessionKey: KEY, state: "final", seq: 9 });
+    await until(() => reads > 0 && transcript().status === "ready");
+    await sleep(100);
+    expect(transcript().queueAliases["gw-40"]).toBe("send-40");
   }, 30_000);
 
   it("the rule alone: a run is held whole under either of its ids", () => {

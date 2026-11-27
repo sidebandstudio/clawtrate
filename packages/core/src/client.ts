@@ -11050,7 +11050,11 @@ export class ClawtrateClient {
       if (pairs.length > 0) {
         this.updateActivity(key, (activity) =>
           pairs.reduce(
-            (next, [gateway, client]) => registerRunAlias(next, gateway, client),
+            // A pair already known wins over one the page infers for the same id (#680).
+            (next, [gateway, client]) =>
+              next.queueAliases[gateway] !== undefined
+                ? next
+                : registerRunAlias(next, gateway, client),
             activity,
           ),
         );
