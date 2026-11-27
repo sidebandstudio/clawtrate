@@ -948,9 +948,9 @@ export class RoutinesEngine {
     const action = str(record.action);
     const summary = isJobSummary(record.job);
     for (const update of this.updates) if (update.id === jobId) update.evented = true;
-    if (action === "removed") {
-      for (const update of this.updates) if (update.id === jobId) update.removed = true;
-      if (jobId) this.reads.delete(jobId);
+    if (action === "removed" && jobId) {
+      this.markRemoved(jobId);
+      this.reads.delete(jobId);
     }
     // Any event about a job whose read is out may be newer than that read's answer, a run's too.
     const pending = jobId ? this.reads.get(jobId) : undefined;
@@ -1038,12 +1038,17 @@ export class RoutinesEngine {
         this.reads.delete(id);
         if (notFound(error)) {
           // The gateway says the job is gone: so is its routine, whatever event was lost.
+          this.markRemoved(id);
           if (this.loading) this.invalidated = true;
+          const before = this.ctx.get();
           this.ctx.update((state) => ({
             ...state,
             routines: state.routines.filter((each) => each.id !== id),
             revision: (state.revision + 1) % Number.MAX_SAFE_INTEGER,
           }));
+          // At the retention cap only the list can fill the row it leaves.
+          if (before.omitted > 0 && before.routines.some((each) => each.id === id))
+            void this.load();
           return;
         }
         // Otherwise the routine stays as the events left it, and the list is read again later
@@ -1083,6 +1088,11 @@ export class RoutinesEngine {
       this.scheduleIfRunning();
       return;
     }
+  }
+
+  /** A write still in flight for the job must not put its routine back when it answers. */
+  private markRemoved(id: string): void {
+    for (const update of this.updates) if (update.id === id) update.removed = true;
   }
 
   /** A dropped connection's answers no longer count. */
@@ -1377,7 +1387,8 @@ export class RoutinesEngine {
         if (pending.removed) return { status: "deleted" };
         if (changedSince(error)) {
           const now = await this.readOne(id).catch(() => undefined);
-          if (now === null) return { status: "deleted" };
+          // A read meanwhile may have found it gone, which an older answer here doesn't undo.
+          if (now === null || pending.removed) return { status: "deleted" };
           if (now) return { status: "conflict", current: now };
         }
         return this.failed(error);
@@ -1505,8 +1516,7 @@ export class RoutinesEngine {
     if (blocked) return { status: "not-sent", reason: blocked };
     const epoch = this.epoch;
     const drop = () => {
-      // A write still in flight for it must not put it back when it answers.
-      for (const update of this.updates) if (update.id === id) update.removed = true;
+      this.markRemoved(id);
       // Nor a read out for it, should the gateway's `removed` event be lost.
       if (epoch === this.epoch) this.reads.delete(id);
       if (epoch === this.epoch && this.loading) this.invalidated = true;

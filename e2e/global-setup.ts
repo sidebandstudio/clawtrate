@@ -29,7 +29,14 @@ import {
   processIdentity,
   processState,
 } from "../tools/dev-gateway/src/state-guard.ts";
-import { cleanUp, recoverDeadRuns, saveRecord, TEMP_PREFIX, type RunRecord } from "./run-record.ts";
+import {
+  cleanUp,
+  pruneRunOutputs,
+  recoverDeadRuns,
+  saveRecord,
+  TEMP_PREFIX,
+  type RunRecord,
+} from "./run-record.ts";
 
 const ROOT = join(import.meta.dirname, "..");
 const CLI = join(ROOT, "tools/dev-gateway/src/cli.ts");
@@ -256,6 +263,8 @@ export default async function globalSetup() {
   process.env.CLAWTRATE_E2E_SENTINEL = sentinel;
 
   recoverDeadRuns(RECORDS, resetInstance);
+  // A failed run's output stays for reading (playwright.config.ts); see pruneRunOutputs.
+  pruneRunOutputs(join(ROOT, "test-results"), run);
 
   // Registered before anything is started.
   const record: RunRecord = {
