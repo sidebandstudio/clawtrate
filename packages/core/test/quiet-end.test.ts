@@ -835,6 +835,94 @@ describe("a read that doesn't hold the whole run proves nothing (#680)", () => {
     }
   }, 30_000);
 
+  it("a run followed for a card whose first read is refused isn't read on: it stays failed", async () => {
+    type Foreign = Map<string, { runs: Run[] }>;
+    const foreignRun = (client: unknown) =>
+      (client as { foreign: Foreign }).foreign.get(OTHER)?.runs.find((run) => run.id === "wake-27");
+    const gateway = gatewayWith(
+      [{ key: KEY, agentId: "otto", hasActiveRun: false, updatedAt: T0 }],
+      () => [],
+    );
+    const { client } = await openTask({ gateway });
+    const onwards: unknown[] = [];
+    gateway.handlers["chat.history"] = (params) => {
+      if (keyOf(params) !== OTHER) return { messages: [], hasMore: false };
+      if (limitOf(params) !== QUIET_CHECK_ROWS) throw new Error("history unavailable");
+      onwards.push(limitOf(params));
+      // What a read on would have said: quiet.
+      return whole("wake-27");
+    };
+    gateway.emit("agent", {
+      ...agentEvent("wake-27", 3, "lifecycle", { phase: "start" }, OTHER),
+      ts: T0 + 2_000,
+    });
+    gateway.emit("chat", markedChat("wake-27", OTHER));
+    await until(() => {
+      const run = foreignRun(client);
+      return run !== undefined && run.quietEnd !== "pending" && isTerminal(run.state);
+    });
+    expect(foreignRun(client)?.state).toBe("failed");
+    expect(onwards).toEqual([]);
+    client.stop();
+  }, 30_000);
+
+  it("a queued run's rows under the gateway's id, learnt from the read on's own page, count: one of reasoning only fails it", async () => {
+    // The run is known by the send's id; the page shows its input keyed by that id and then its
+    // rows under the gateway's own id, the last of reasoning only.
+    const input = {
+      role: "user",
+      content: "#think-only",
+      timestamp: T0 + 2_000,
+      __openclaw: { id: "u-9", seq: 3, idempotencyKey: "send-9:user" },
+    };
+    const page = {
+      messages: [input, ...toolRows("gw-9"), thinkingRow("gw-9", 6)],
+      hasMore: true,
+    };
+    const gateway = gatewayWith(
+      [
+        { key: KEY, agentId: "otto", status: "done", hasActiveRun: false, updatedAt: T0 },
+        markedRow("send-9", OTHER),
+      ],
+      () => [],
+    );
+    let asked = 0;
+    gateway.handlers["chat.history"] = (params) => {
+      if (keyOf(params) !== OTHER) return { messages: [], hasMore: false };
+      asked += 1;
+      return page;
+    };
+    const { client } = await openTask({ gateway });
+    await until(() => asked > 0);
+    await sleep(50);
+    expect(task(client, OTHER)?.status).toBe("failed");
+    client.stop();
+  }, 30_000);
+
+  it("an open task: a read on the socket's end cut off settles nothing; the next connection's read does", async () => {
+    let page: unknown = { messages: [], hasMore: false };
+    let onwards = 0;
+    const gateway = gatewayWith(
+      [{ key: KEY, agentId: "otto", hasActiveRun: false, updatedAt: T0 }],
+      () => [],
+    );
+    gateway.handlers["chat.history"] = (params) => {
+      if (limitOf(params) !== QUIET_CHECK_ROWS) return page;
+      onwards += 1;
+      // The first read on is never answered: the connection drops under it.
+      return onwards === 1 ? new Promise(() => {}) : whole("wake-26");
+    };
+    const { client, transcript } = await openTask({ gateway });
+    page = outside("wake-26");
+    wakeAndEndMarked(gateway, "wake-26");
+    await until(() => onwards === 1);
+    page = whole("wake-26");
+    gateway.dropAll();
+    await until(() => runOf(transcript, "wake-26")?.quietEnd === "settled", 10_000);
+    expect(runOf(transcript, "wake-26")?.state).toBe("completed");
+    client.stop();
+  }, 30_000);
+
   it("the rule alone: the transcript's start or the run's input, and nothing left out", () => {
     const page = (rows: Row[], more?: boolean, extra: Row = {}) => ({
       messages: rows,
@@ -996,7 +1084,12 @@ describe("the sidebar and the run this client holds agree (#680)", () => {
       return { messages: [eventRow, ...toolRows("wake-22")], hasMore: false };
     };
     const { client } = await openTask({ gateway });
-    await until(() => checks > 0 && task(client, OTHER)?.status === "done");
+    // The check's own verdict, not only a read begun: the row shows done while it is pending too.
+    const inner = client as unknown as { quietChecks: QuietChecks; epoch: number };
+    await until(
+      () => checks > 0 && inner.quietChecks.verdict(OTHER, "wake-22", inner.epoch) === "quiet",
+    );
+    expect(task(client, OTHER)?.status).toBe("done");
     client.openSession(OTHER);
     await until(() => client.state.transcripts[OTHER]?.status === "ready");
     const run = client.state.transcripts[OTHER]!.runs.find((each) => each.id === "wake-22");

@@ -6119,18 +6119,19 @@ export class ClawtrateClient {
       phase: "end" | "error";
       pairs: ReadonlyArray<readonly [string, string]>;
     } | null = null,
-  ): Promise<void> {
+  ): Promise<boolean> {
+    // True once its read was answered and applied: a read refused, failed or out of date is not.
     // The read carries its own invalidation token: a deletion of this session
     // cancels it, however many deletions of other sessions follow, and nothing
     // else does. Admission stays within the map and per-session caps.
     const token = { cancelled: false };
     let tokens = this.foreignReads.get(sessionKey);
     if (!tokens) {
-      if (this.foreignReads.size >= MAX_FOREIGN_READ_SESSIONS) return;
+      if (this.foreignReads.size >= MAX_FOREIGN_READ_SESSIONS) return false;
       tokens = new Set();
       this.foreignReads.set(sessionKey, tokens);
     }
-    if (tokens.size >= MAX_FOREIGN_READS_PER_SESSION) return;
+    if (tokens.size >= MAX_FOREIGN_READS_PER_SESSION) return false;
     tokens.add(token);
     try {
       // What this read may settle was active before it was asked, so a run whose
@@ -6148,7 +6149,7 @@ export class ClawtrateClient {
       try {
         history = asRecord(await this.request("chat.history", { sessionKey, limit: 40 }));
       } catch {
-        return;
+        return false;
       }
       if (
         generation !== this.generation ||
@@ -6157,7 +6158,7 @@ export class ClawtrateClient {
         // A deletion of this session while the read was on its way supersedes it.
         token.cancelled
       )
-        return;
+        return false;
       const aliases = Object.fromEntries([
         ...(terminal?.pairs ?? []),
         ...historyQueuePairs(history?.messages),
@@ -6224,6 +6225,7 @@ export class ClawtrateClient {
           runs: [...aliased.runs.filter((run) => !ids.has(run.id)), ...settled],
         };
       });
+      return true;
     } finally {
       tokens.delete(token);
       if (tokens.size === 0 && this.foreignReads.get(sessionKey) === tokens)
@@ -6237,12 +6239,13 @@ export class ClawtrateClient {
    * or from an earlier connection) stays the failure it was sent as.
    */
   private async settleForeignQuiet(sessionKey: string, ids: Set<string>): Promise<void> {
-    await this.readRecipientRuns(sessionKey, ids, this.generation);
-    // Those its read didn't hold whole: read on once (`readQuiet`).
+    const read = await this.readRecipientRuns(sessionKey, ids, this.generation);
+    // Those its read didn't hold whole: read on once (`readQuiet`). A read that wasn't answered
+    // isn't read on: each stays the failure it was sent as.
     const held = this.foreign.get(sessionKey);
     const left = quietPending((held?.runs ?? []).filter((run) => ids.has(run.id)));
     const quiet =
-      left.size > 0 && held
+      read && left.size > 0 && held
         ? await this.readQuiet(sessionKey, left, held.queueAliases, (id) => startOf(held.runs, id))
         : null;
     if (!this.foreign.has(sessionKey)) return;
@@ -6277,10 +6280,22 @@ export class ClawtrateClient {
     } catch {
       return null;
     }
-    const { messages } = throughRunAliases(history?.messages, null, aliases);
+    // The page's own pairs too: a queued run's rows can be under the gateway's id for it.
+    const pairs: Readonly<Record<string, string>> = {
+      ...aliases,
+      ...Object.fromEntries(historyQueuePairs(history?.messages)),
+    };
+    const both = (id: string) => [
+      id,
+      ...Object.entries(pairs).flatMap(([gateway, client]) =>
+        gateway === id ? [client] : client === id ? [gateway] : [],
+      ),
+    ];
     return new Set(
       [...ids].filter(
-        (id) => historyCoversRun(history, id, started(id)) && quietInHistory(messages, id),
+        (id) =>
+          historyCoversRun(history, id, started(id)) &&
+          both(id).every((each) => quietInHistory(history?.messages, each)),
       ),
     );
   }
@@ -10910,11 +10925,13 @@ export class ClawtrateClient {
    * each is a quiet answer only if that read shows it, and otherwise the failure it was sent as.
    */
   private async settleQuietLater(key: string, ids: Set<string>, generation: number): Promise<void> {
+    // A read the socket's end cut off says nothing: the next connection's read of the task does.
+    const epoch = this.epoch;
     const held = this.state.transcripts[key];
     const quiet = await this.readQuiet(key, ids, held?.queueAliases ?? {}, (id) =>
       startOf(held?.runs ?? [], id),
     );
-    if (generation !== this.generation) return;
+    if (generation !== this.generation || epoch !== this.epoch) return;
     this.updateActivity(key, (activity) => {
       const runs = settleQuietEnds(settleQuietEnds(activity.runs, quiet ?? new Set()), ids, true);
       return runs === activity.runs ? activity : { ...activity, runs };
