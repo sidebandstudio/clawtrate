@@ -10,7 +10,7 @@
 // found no row of it that answered nothing; until then it shows as the quiet answer it is meant to
 // be, and a read refused, failed or not reaching the run's start leaves the failure.
 
-import { answeredNothing } from "./runs.ts";
+import { answeredNothing, capError, type Run } from "./runs.ts";
 import { rowIdempotencyKey } from "./update-notice.ts";
 
 type RawRecord = Record<string, unknown>;
@@ -37,7 +37,8 @@ export const quietCheckChars = (idChars: number) => 2 * idChars + 80;
 /** `unread`: the read failed, so the failure stands; a later connection reads again. */
 export type QuietVerdict = "pending" | "quiet" | "failed" | "unread";
 
-type Check = { runId: string; connection: number; verdict: QuietVerdict };
+/** `token`: this check's own, so an answer to an earlier check of the same run never settles it. */
+type Check = { runId: string; connection: number; verdict: QuietVerdict; token: number };
 
 /**
  * Whether a history read holds every row of the run, so that no row of it answering nothing can
@@ -122,11 +123,85 @@ export function quietInHistory(messages: unknown, runId: string): boolean {
 }
 
 /**
+ * The text both OpenClaw versions put in place of a row too large for `chat.history`, on a row they
+ * mark `truncated: true`, `reason: "oversized"` (2026.10.6 and 2026.11.10 `chat-history-budget`,
+ * `CHAT_HISTORY_OVERSIZED_PLACEHOLDER`). What the row said can't be read from it: it is no answer.
+ */
+const OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
+
+const hasText = (message: RawRecord): boolean => {
+  const meta = asRecord(message.__openclaw);
+  const replaced = meta?.truncated === true && meta.reason === "oversized";
+  return typeof message.content === "string"
+    ? message.content.trim() !== ""
+    : Array.isArray(message.content) &&
+        message.content.some((part) => {
+          const block = asRecord(part);
+          return (
+            block?.type === "text" &&
+            typeof block.text === "string" &&
+            block.text.trim() !== "" &&
+            !(replaced && block.text === OVERSIZED_PLACEHOLDER)
+          );
+        });
+};
+
+/** Whether no row of the bot's in the run has text: it answered nothing (a step is no answer). */
+const answeredNoText = (messages: unknown, runId: string): boolean =>
+  !(Array.isArray(messages) ? messages : []).some((entry) => {
+    const message = asRecord(entry);
+    return (
+      message?.role === "assistant" &&
+      asRecord(message.__openclaw)?.runId === runId &&
+      hasText(message)
+    );
+  });
+
+/**
+ * The runs a history read rebuilt, the one the task's row says failed with an end the gateway
+ * marked not to show failed too, when none of its rows has text (#766). OpenClaw 2026.11.10 keeps
+ * such a turn (one no person asked for that ended with reasoning only, or said nothing after it) as
+ * rows of reasoning that end `stopReason: "stop"`; its record of the failure is hidden
+ * (`run-failed-before-reply`, `display: false`), and `chat.history` doesn't return it. So the rows
+ * alone rebuild a completed run, and only the row (`lastRunId`, `lastRunError` and the mark) says
+ * otherwise. The row names its latest run alone, so no other run takes its failure; a run with
+ * text in any of its rows answered, and never does, nor does one with no row that answered nothing
+ * (`quietInHistory`), which #680 reads as a quiet answer. Its failure has no message unless the
+ * run's own is keyed (#686).
+ */
+export function failedByRow(
+  runs: Run[],
+  messages: unknown,
+  row: RawRecord | undefined,
+  pairs: Readonly<Record<string, string>>,
+): Run[] {
+  const runId = row?.suppressErrorNotice === true ? row.lastRunId : null;
+  const error = typeof row?.lastRunError === "string" ? row.lastRunError.trim() : "";
+  if (typeof runId !== "string" || !runId || !error) return runs;
+  const ids = new Set(runAliases(runId, pairs));
+  let changed = false;
+  const settled = runs.map((run) => {
+    if (!ids.has(run.id) || run.state !== "completed" || !run.outcomeKnown) return run;
+    // A quiet answer by #680's own reading (no row of it answered nothing) is an answer too.
+    if (!answeredNoText(messages, run.id) || quietInHistory(messages, run.id)) return run;
+    changed = true;
+    return {
+      ...run,
+      state: "failed" as const,
+      error: { message: capError(error), kind: null, quiet: true as const },
+      anchorItemId: run.anchorKeyed ? run.anchorItemId : null,
+    };
+  });
+  return changed ? settled : runs;
+}
+
+/**
  * What the gateway's history said of a task's marked failure, for a task this client does not
  * follow: by the task's key, for the run its row names. A new run of the task replaces it.
  */
 export class QuietChecks {
   private readonly checks = new Map<string, Check>();
+  private tokens = 0;
 
   /**
    * What the task's check said of the run, on this connection (the client's `epoch`). One still on its way
@@ -140,15 +215,17 @@ export class QuietChecks {
   }
 
   /**
-   * A check begun. False when none more can be kept: then the failure stays. None gives way to
-   * another: a task whose check gave way would ask again at the next publish, and that one's
-   * answer would push out the next, reading history over and over (`retain` frees them).
+   * A check begun: its token, which its answer settles it by. Null when none more can be kept:
+   * then the failure stays. None gives way to another: a task whose check gave way would ask again
+   * at the next publish, and that one's answer would push out the next, reading history over and
+   * over (`retain` frees them).
    */
-  begin(key: string, runId: string, connection: number): boolean {
-    if (!this.checks.has(key) && this.checks.size >= MAX_QUIET_CHECKS) return false;
+  begin(key: string, runId: string, connection: number): number | null {
+    if (!this.checks.has(key) && this.checks.size >= MAX_QUIET_CHECKS) return null;
     this.checks.delete(key);
-    this.checks.set(key, { runId, connection, verdict: "pending" });
-    return true;
+    this.tokens += 1;
+    this.checks.set(key, { runId, connection, verdict: "pending", token: this.tokens });
+    return this.tokens;
   }
 
   /** Keep only the checks whose task's row still reports the marked failure of the same run. */
@@ -156,16 +233,13 @@ export class QuietChecks {
     for (const [key, check] of this.checks) if (!marked(key, check.runId)) this.checks.delete(key);
   }
 
-  /** The check's verdict, if it is still the task's check begun on that connection. */
-  settle(
-    key: string,
-    runId: string,
-    connection: number,
-    verdict: Exclude<QuietVerdict, "pending">,
-  ): void {
+  /**
+   * The check's verdict, if it is still the task's check its token names (#770): a check let go
+   * (`retain`) and begun again for the same run on the same connection is another check.
+   */
+  settle(key: string, token: number, verdict: Exclude<QuietVerdict, "pending">): void {
     const check = this.checks.get(key);
-    if (check?.runId === runId && check.connection === connection)
-      this.checks.set(key, { ...check, verdict });
+    if (check?.token === token) this.checks.set(key, { ...check, verdict });
   }
 
   clear(): void {

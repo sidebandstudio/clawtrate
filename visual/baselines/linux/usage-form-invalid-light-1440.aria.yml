@@ -139,8 +139,9 @@
         - radio "Daily"
         - radio "Weekly" [checked]
       - text: Tokens
+      - button "About Tokens"
       - textbox "Tokens" [invalid]: "900"
-      - paragraph: "A whole number of 1,000 or more. Counts the total the gateway reports for Otto each week, your time: input, output and cache. A warning: nothing on the gateway stops a bot at its budget."
+      - paragraph: "A warning only: nothing on the gateway stops a bot at its budget."
       - paragraph: Enter a whole number of 1,000 or more.
       - button "Save budget" [disabled]
       - button "Cancel"

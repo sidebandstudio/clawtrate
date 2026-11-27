@@ -2,14 +2,14 @@
 // whether hostile requests crash it. Prints its port once listening.
 
 import { createStore, initialState, type ClawtrateClient } from "@clawtrate/core";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { HostRuntime } from "../../src/host/runtime.ts";
 import { startWebHost } from "../../src/web-host/server.ts";
 
-const staticDir = mkdtempSync(join(tmpdir(), "clawtrate-stub-static-"));
+// The test makes the folder and removes it: a host it stops leaves nothing behind.
+const staticDir = process.env.STUB_STATIC_DIR!;
 writeFileSync(join(staticDir, "index.html"), "<!doctype html><title>Clawtrate</title>");
 const store = createStore(initialState);
 const runtime: HostRuntime = {

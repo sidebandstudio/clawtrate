@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { mapSessionRow, plainPreview } from "../src/mapping.ts";
 import { readMessageSearch } from "../src/search.ts";
-import { isActive } from "../src/runs.ts";
+import { isActive, runningRunId } from "../src/runs.ts";
 import {
   CLAWTRATE_WORK_CONTEXT,
   goesUnmarked,
@@ -378,6 +378,19 @@ describe("a refusal of the marker", () => {
       client.stop();
     });
 
+    it("F-097: the asking run ends and the steer's own run is acknowledged: Stop, before its first event, aborts that run", async () => {
+      const { client, gateway, transcript, steer } = await heldSteerThenQueued();
+      // OpenClaw answers `started` before it dispatches the run, so no event has come yet.
+      gateway.handlers["chat.send"] = () => ({ runId: steer, status: "started" });
+      gateway.handlers["chat.abort"] = () => ({ ok: true, aborted: true, runIds: [steer] });
+      gateway.emit("agent", agentEvent("run-y", 2, "lifecycle", { phase: "end" }, KEY));
+      await until(() => transcript().outbox.find((m) => m.id === steer)?.status === "sent");
+      expect(runningRunId(transcript(), steer)).toBe(steer);
+      await client.stopRun(KEY, steer);
+      expect(gateway.calls("chat.abort")).toEqual([expect.objectContaining({ runId: steer })]);
+      client.stop();
+    });
+
     it("the asking run ends with the later message typed while it asked: the steer still goes first", async () => {
       const { client, gateway, transcript, steer, later, order } = await heldSteerThenQueued(
         "cancelled",
@@ -652,6 +665,22 @@ describe("a task's title the gateway derived shows a person's words alone", () =
       expect(title, `${length}`).not.toMatch(/ W\w*(?: context)?…?$/);
       expect(words.startsWith(title.replace(/…$/, "")) || title === derived(words)).toBe(true);
     }
+  });
+
+  it("a title cut at a space ends a word: a short word that only starts as the marker does is the person's", () => {
+    // The gateway backed up to a space, so a start of the marker there is a whole word of it.
+    const typed = "Check the status of the accounting export with W…";
+    expect(titleWithoutMarker(typed)).toBe(typed);
+    expect(titleWithoutMarker("Check the photos folder and the backup Working…")).toBe(
+      "Check the photos folder and the backup…",
+    );
+  });
+
+  it("a title of 59 cut right after the marker's first three words shows the words whole", () => {
+    const title = derived(modelCopy("Short one, and some more of these"));
+    expect(title).toBe("Short one, and some more of these Working context captured…");
+    expect(title.length).toBe(59);
+    expect(titleWithoutMarker(title)).toBe("Short one, and some more of these");
   });
 
   it("a model's label on 2026.11.10, which quotes the copy as JSON and is cut at 60", () => {

@@ -9,6 +9,7 @@ import {
   newRun,
   LIVE_UPDATES_NOT_STARTED,
   READ_SCOPES,
+  startQueuedRun,
   type ClawtrateState,
   type ConnectionState,
   type OutgoingMessage,
@@ -263,6 +264,16 @@ describe("the composer during a run", () => {
     expect(sendName(view.mode)).toBe("Request a steer");
   });
 
+  it("F-097: a held steer released as a run of its own is offered Stop before its first event", () => {
+    // The steer was sent into run-y, which asked a question and ended; it waits queued in its place.
+    const held = transcript(
+      [run({ id: "run-y", state: "completed" }), run({ id: "steer-1", state: "queued" })],
+      { steerAliases: { "steer-1": "run-y" } },
+    );
+    const view = composerFor({ ...held, ...startQueuedRun(held, "steer-1", NOW) }, otto);
+    expect(view.stoppable?.id).toBe("steer-1");
+  });
+
   it("F-061: Queue after this turn, once chosen, is what plain Enter does for the rest of the run", () => {
     const view = composerFor(transcript([run()]), { ...otto, chosen: "queue" });
     expect(view).toMatchObject({ mode: "queue", modeWord: "Queue" });
@@ -324,7 +335,7 @@ describe("how a run ends", () => {
   it("F-299: a confirmed stop says how long the run took and that completed steps are not undone", () => {
     expect(
       endingOf(run({ state: "stopped", stopRequestedAt: NOW - 1, endedAt: NOW - 2_000 })),
-    ).toEqual({ kind: "stopped", after: "40s", elsewhere: false, timeouts: null });
+    ).toEqual({ kind: "stopped", after: "40s", elsewhere: false, timeouts: null, followUp: false });
     expect(endingOf(run({ state: "stopped", endedAt: NOW }))).toMatchObject({ elsewhere: true });
     // Only this client's own Stop of the run, which a typed /stop marks on the runs its answer
     // names, makes it local; a handled /stop near the run's time no longer does by itself.
@@ -539,6 +550,7 @@ describe("what a stop also ended (F-298)", () => {
     uncertain: [],
     refused: [],
     unanswered: [],
+    followUps: [],
     omitted: 0,
     recipientsAsked: true,
     ...change,
@@ -564,9 +576,32 @@ describe("what a stop also ended (F-298)", () => {
     ]);
   });
 
+  it("#645: the turn the gateway started on its own after the Stop, which this client stopped too, is named", () => {
+    const stopped = run({
+      state: "stopped",
+      stoppedWith: record({ bots: ["agent:marlow:main"], followUps: ["agent:marlow:main"] }),
+    });
+    expect(stoppedWithLines(stopped, names)).toEqual([
+      "Stopped with it: Marlow's run for this message.",
+      "Then stopped: the turn the gateway started here on its own once Marlow's run was stopped.",
+    ]);
+  });
+
   it("F-298: nothing the gateway did not report is claimed", () => {
     expect(stoppedWithLines(run({ state: "stopped" }), names)).toEqual([]);
     expect(stoppedWithLines(run({ state: "stopped", stoppedWith: record({}) }), names)).toEqual([]);
+  });
+});
+
+describe("the gateway's own turn after a Stop, stopped by this client (#645)", () => {
+  it("#645: its ending says so; any other stop's does not", () => {
+    expect(
+      endingOf(run({ state: "stopped", stopRequestedAt: NOW - 1, stoppedAsFollowUp: true })),
+    ).toMatchObject({ kind: "stopped", followUp: true });
+    expect(endingOf(run({ state: "stopped", stopRequestedAt: NOW - 1 }))).toMatchObject({
+      kind: "stopped",
+      followUp: false,
+    });
   });
 });
 
