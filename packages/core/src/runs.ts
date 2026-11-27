@@ -3328,7 +3328,8 @@ export function runsFromHistory(
     }
     const notRun = beforeReply.get(run.id);
     if (notRun !== undefined && !last) {
-      const message = notRun.trim() || "The run failed.";
+      // A row with no words keeps no reason: none is made up for the gateway.
+      const message = notRun.trim();
       return finishRun(run, "failed", ctx, { message, kind: null, beforeReply: true }, run.endedAt);
     }
     if (stopReason === "error") {

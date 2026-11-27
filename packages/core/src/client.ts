@@ -3,7 +3,12 @@
 
 import { readOpenClawUpdate, type OpenClawUpdate } from "./gateway-update.ts";
 import { OpenClawUpdates } from "./openclaw-update.ts";
-import { DeviceApprovals, pairCode, type DeviceDecision } from "./device-approval.ts";
+import {
+  DeviceApprovals,
+  pairCode,
+  type DeviceDecision,
+  type DeviceListRead,
+} from "./device-approval.ts";
 import { listMemory, readMemory, writeMemory } from "./memory.ts";
 import { startTasksFrom } from "./start-tasks.ts";
 import {
@@ -199,12 +204,14 @@ import {
   isTaskSession,
   mapAgents,
   mapHistory,
+  plainPreview,
   sentSources,
   startedTaskSince,
   mergeSessionRow,
   sessionChangeRow,
   sessionRowKey,
   sessionRowsFromList,
+  titledByGateway,
   type RawRecord,
 } from "./mapping.ts";
 import { holdsUpdateNotice, mainToReadAgain } from "./update-notice.ts";
@@ -323,6 +330,7 @@ import {
   validateGatewayUrl,
 } from "./gateway-url.ts";
 import {
+  cleanLine,
   GATEWAY_NAMES_KEY,
   gatewayNameFor,
   readGatewayNames,
@@ -350,6 +358,7 @@ import {
   MAX_RUN_TEXT_CHARS,
   MAX_STEPS_PER_TASK,
   MAX_TASK_LINE_CHARS,
+  MAX_TITLE_CHARS,
   MAX_TRACKED_TASKS as TRACKED_TASKS,
   MAX_UNROUTED,
   RUN,
@@ -391,7 +400,7 @@ import {
   type CreatedTask,
   type TaskActionContext,
 } from "./task-actions.ts";
-import { fromActivity, WaitingIndex } from "./waiting.ts";
+import { endsRun, fromActivity, WaitingIndex } from "./waiting.ts";
 import {
   coveredRuns,
   historyCoversRun,
@@ -525,6 +534,21 @@ const OTHER_TOOLS_KEY = "show-other-tool-sessions";
 const GATEWAY_BOT_KEY = "show-gateway-bot";
 /** Tasks the client follows at once: open in some viewer, kept for their unsent work, or being created. */
 export const MAX_TRACKED_TASKS = TRACKED_TASKS;
+/** Titles made from tasks' first messages the client keeps (`firstMessageTitles`); the oldest goes past it. */
+export const MAX_FIRST_MESSAGE_TITLES = 200;
+
+/**
+ * A title made from a task's first message, and the outgoing message it was made from while that
+ * message is not yet in the task's history (`from`); null once history holds it.
+ */
+type FirstMessageTitle = { title: string; from: string | null };
+
+/** The text of a transcript's first message from the person, or null when it has none. */
+function firstPersonText(items: readonly TranscriptItem[]): string | null {
+  const first = items.find((item) => item.role === "user");
+  const texts = first?.blocks.flatMap((block) => (block.kind === "text" ? [block.text] : []));
+  return texts?.join("\n") ?? null;
+}
 /**
  * Messages one task's outbox may hold, whatever their state: waiting, being
  * sent, accepted but not yet in history, unconfirmed, failed or cancelled. A
@@ -1749,6 +1773,12 @@ export class ClawtrateClient {
    * from its last history read: what a picture with no copy here is read back by.
    */
   private readonly sentSources = new Map<string, Map<string, string>>();
+  /**
+   * The title each task's first message makes, by task key, oldest first: what a task shows when
+   * nothing stronger names it (`taskTitle`, #741). From the creation that sent the message, then
+   * from what the task's transcript shows (`settleFirstMessage`); gone with the task.
+   */
+  private readonly firstMessageTitles = new Map<string, FirstMessageTitle>();
   /** Pictures read back from the gateway, by `task\0messageKey\0index`, oldest first (`MAX_READ_BACK_PICTURES`). */
   private readonly readBackPictures = new Map<
     string,
@@ -4251,6 +4281,9 @@ export class ClawtrateClient {
       error: runError ? String(runError.message ?? "The run did not start.") : null,
       attachments: [],
     };
+    // Named from its message at once; the task's history settles it (`settleFirstMessage`).
+    if (!this.firstMessageTitles.has(capId(key, MAX_ID_CHARS)))
+      this.keepFirstMessage(capId(key, MAX_ID_CHARS), creation.text, creation.id);
     // A caller holds one interest in the new task; one settled later is kept for its message.
     this.openSession(key, true);
     this.updateActivity(key, (activity, ctx) => {
@@ -6981,9 +7014,9 @@ export class ClawtrateClient {
 
   // Approving a waiting device (`device-approval.ts`, setup-effortless.md §5) ---------------
 
-  /** The gateway's waiting devices, read again. */
-  readDeviceRequests(): Promise<void> {
-    return this.deviceApprovals.refresh();
+  /** The gateway's waiting devices, read again, and whether a list that new was applied. */
+  readDeviceRequests(): Promise<DeviceListRead> {
+    return this.deviceApprovals.readNow();
   }
 
   /** A window takes the one request the host opens by itself: true for the first that asks. */
@@ -9630,6 +9663,7 @@ export class ClawtrateClient {
     this.readBackPictures.clear();
     this.readBackBytes = 0;
     this.sentSources.clear();
+    this.firstMessageTitles.clear();
   }
 
   private invalidateCheckIns(): void {
@@ -10358,6 +10392,50 @@ export class ClawtrateClient {
   }
 
   /**
+   * Keep the title a message makes for its task (the line the sidebar would preview it as, cut to a
+   * title), made from the outgoing message `from` or, with null, from the task's history; true
+   * when what is kept changed.
+   */
+  private keepFirstMessage(id: string, text: string | null, from: string | null): boolean {
+    const title = cleanLine(plainPreview(text) ?? "", MAX_TITLE_CHARS);
+    if (!title) return this.firstMessageTitles.delete(id);
+    const kept = this.firstMessageTitles.get(id);
+    if (kept?.title === title && kept.from === from) return false;
+    if (!kept && this.firstMessageTitles.size >= MAX_FIRST_MESSAGE_TITLES) {
+      const oldest = this.firstMessageTitles.keys().next();
+      if (!oldest.done) this.firstMessageTitles.delete(oldest.value);
+    }
+    this.firstMessageTitles.set(id, { title, from });
+    return true;
+  }
+
+  /**
+   * Bring a task's first-message title in line with what its transcript shows, once that reaches
+   * the task's first row: the first message history holds; with none, the earliest message still
+   * on its way (in the outbox, not cancelled); with neither, no title. A transcript still loading,
+   * or one that doesn't reach the first row, leaves what is kept. True when that changed.
+   */
+  private settleFirstMessage(key: string): boolean {
+    const id = capId(key, MAX_ID_CHARS);
+    if (!titledByGateway(id)) return false;
+    const transcript = this.state.transcripts[key];
+    if (transcript?.status !== "ready" || transcript.hasMore) return false;
+    const held = firstPersonText(transcript.items);
+    if (held !== null) return this.keepFirstMessage(id, held, null);
+    const waiting = transcript.outbox.find(
+      (message) => message.status !== "cancelled" && message.text.trim() !== "",
+    );
+    if (waiting) return this.keepFirstMessage(id, waiting.text, waiting.id);
+    return this.firstMessageTitles.delete(id);
+  }
+
+  /** The title a task's first message makes, as far as this client knows it (`taskTitle`). */
+  private firstMessageTitle(key: string): string | null {
+    this.settleFirstMessage(key);
+    return this.firstMessageTitles.get(capId(key, MAX_ID_CHARS))?.title ?? null;
+  }
+
+  /**
    * `before`: the rows the cap kept before the change being published (`keptKeys`). Without it,
    * those kept when publishing starts, so a row that settles here is still seen to leave.
    */
@@ -10367,6 +10445,7 @@ export class ClawtrateClient {
     const tasksByBot = groupTasks(this.rows.values(), {
       showChannelChats: true,
       showOtherToolSessions: true,
+      firstMessageTitle: (key) => this.firstMessageTitle(key),
     });
     // A check of a row's marked failure lasts while the row reports it for that run (#680).
     this.quietChecks.retain((key, runId) => {
@@ -10561,6 +10640,8 @@ export class ClawtrateClient {
       this.retireForeign(key);
       // Deleted elsewhere: the pictures you sent in it go too. An archived task keeps them.
       this.dropDeletedPictures(({ task }) => task === key);
+      // So does the title its first message made: another task under the key is not this one.
+      this.firstMessageTitles.delete(key);
       if (this.rows.delete(key)) this.publishTasks();
       return;
     }
@@ -10684,7 +10765,10 @@ export class ClawtrateClient {
     const transcript = this.state.transcripts[key];
     // An open task is kept whatever its runs say, so only another's hold can change what is kept.
     const before = this.openSessions.has(key) ? undefined : this.keptKeys();
-    if (transcript && this.waiting.hold(key, fromActivity(transcript))) this.publishTasks(before);
+    // So is the title its first message makes, which follows what the transcript shows.
+    const titled = this.settleFirstMessage(key);
+    if ((transcript && this.waiting.hold(key, fromActivity(transcript))) || titled)
+      this.publishTasks(before);
   }
 
   /**
@@ -11071,7 +11155,9 @@ export class ClawtrateClient {
       }
       case "chat": {
         const payload = asRecord(event.payload);
-        if (payload) {
+        // Only a run's end can change the rail's word, so a streaming delta skips the scan of the
+        // task list.
+        if (payload && endsRun(payload)) {
           const before = this.keptKeys();
           // The gateway's time for it, as its row last gave it: what a later run's start is
           // compared with (`settleFailure`).
@@ -11470,17 +11556,12 @@ export class ClawtrateClient {
     // it rather than send it to whichever gateway answered.
     if (!stamp) return this.actionContext(owner);
     // What the guard would refuse anyway is refused before access is asked, so a gateway the
-    // screen wasn't read on is never asked for it. Only a connected host's identity is its own
-    // connection's: each hello clears the last one's.
+    // screen wasn't read on is never asked for it. A connected host runs the guard itself first:
+    // right after a hello the identity is still being read, and the guard waits for it.
     this.requireSameTarget(stamp);
-    const connection = this.state.connection;
-    if (
-      connection.status === "connected" &&
-      connection.gatewayId !== null &&
-      stamp.gatewayId !== null &&
-      connection.gatewayId !== stamp.gatewayId
-    )
-      throw new Error(ANOTHER_GATEWAY);
+    if (this.state.connection.status === "connected") await this.requireSameGateway(stamp);
+    // A viewer that closed during that wait had no access waiter to withdraw yet.
+    this.checkNotWithdrawn(owner);
     await this.actionContext(owner).ensureWrite();
     const epoch = this.epoch;
     await this.requireSameGateway(stamp);
@@ -11556,8 +11637,10 @@ export class ClawtrateClient {
     options: { owner?: object; stamp?: GatewayStamp } = {},
   ): Promise<void> {
     await deleteTask(await this.settleTaskWrite(options.owner ?? null, options.stamp), key);
-    // Its conversation is gone from the gateway: so are the pictures you sent in it.
+    // Its conversation is gone from the gateway: so are the pictures you sent in it, and the
+    // title its first message made.
     this.dropDeletedPictures(({ task }) => task === key);
+    this.firstMessageTitles.delete(capId(key, MAX_ID_CHARS));
   }
 
   /** A bot's archived tasks, read now and not kept (`operator.read`). */
@@ -11567,6 +11650,7 @@ export class ClawtrateClient {
     return listArchived(this.actionContext(null), botId, {
       showChannelChats: this.showChannelChats,
       showOtherToolSessions: this.showOtherToolSessions,
+      firstMessageTitle: (key) => this.firstMessageTitle(key),
     });
   }
 
