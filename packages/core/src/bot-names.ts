@@ -957,14 +957,16 @@ export class BotNames {
       throw error;
     }
     await this.keepPictureOutOfFile(botId, epoch);
-    // What the gateway lists now, read again on the connection Undo went on. A list that couldn't
-    // be read says nothing of Undo: its claim stays, for the record to settle by the name listed.
-    const generation = this.ctx.generation();
-    const reread = await this.ctx.refreshBots().then(
-      () => true,
-      () => false,
-    );
-    if (!reread || generation !== this.ctx.generation() || !sameStamp(this.ctx.stamp(), stamp)) {
+    // What the gateway lists now, read again on the very connection Undo was sent on (`op`). A
+    // list that couldn't be read there says nothing of Undo: its claim stays, for the record to
+    // settle by the name listed.
+    const reread =
+      this.current(op) &&
+      (await this.ctx.refreshBots().then(
+        () => true,
+        () => false,
+      ));
+    if (!reread || !this.current(op)) {
       restore({ status: "undone", after: null, error: UNCONFIRMED });
       return;
     }
@@ -1045,9 +1047,10 @@ export class BotNames {
           (decline) =>
             decline.bot === each.botId && decline.name === each.name && decline.file === each.file,
         )
-      )
-        this.unrecorded.delete(key);
-      else all = false;
+      ) {
+        // A later Undo of the bot may have taken the key meanwhile: its decline isn't saved yet.
+        if (this.unrecorded.get(key)?.op === each.op) this.unrecorded.delete(key);
+      } else all = false;
     }
     return all;
   }
@@ -1173,7 +1176,8 @@ export class BotNames {
         // Already this change's line; otherwise a refusal or failure it replaces, or now undone.
         const status = shown.line.status;
         if (!undone && (status === "renamed" || status === "undone")) continue;
-        if (undone && status === "undone") continue;
+        // An Undo this device couldn't confirm gives way to the record's.
+        if (undone && status === "undone" && shown.line.error !== UNCONFIRMED) continue;
       } else if (shown && shown.at > (latest.undone ?? latest.done ?? latest.at)) continue;
       this.setLine({
         botId: bot.id,
@@ -1417,13 +1421,14 @@ function withCount(record: NameRecord, bot: string, day: string): NameRecord {
 
 /**
  * Whether `next`, cut to what the gateway keeps, still has what it adds to `before`: every count
- * for `day`, every change it adds, and every claim. A write that would lose one isn't made: the
+ * for `day` or a later day, every change it adds, and every claim. A write that would lose one isn't made: the
  * day's limit would forget a bot's renames, a rename recorded nowhere would have no Undo, and a
  * claim dropped would let another writer in.
  */
 function keepsWhatItAdds(before: NameRecord, next: NameRecord, day: string): boolean {
   const value = fitNameRecord(next);
-  const today = (counts: NameRecord["counts"]) => counts.filter((each) => each.day === day).length;
+  // The write's day and later ones: a device whose clock is past midnight counts those.
+  const today = (counts: NameRecord["counts"]) => counts.filter((each) => each.day >= day).length;
   if (today(value.counts) < today(next.counts)) return false;
   const kept = (list: NameRecordChange[], each: NameRecordChange) =>
     list.some((other) => other.run === each.run && other.bot === each.bot);

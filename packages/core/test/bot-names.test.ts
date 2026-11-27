@@ -19,6 +19,7 @@ import {
   MAX_BOT_NAME_CHARS,
   MAX_RECORD_BYTES,
   MAX_RECORD_CHANGES,
+  MAX_RECORD_COUNTS,
   NAME_RECORD_KEY,
   namesInText,
   parseNameRecord,
@@ -30,6 +31,7 @@ import {
   type RunFacts,
   type RunStepFacts,
 } from "../src/bot-names.ts";
+import { LIVE_UPDATES_NOT_STARTED } from "../src/client.ts";
 import { utf8Length } from "../src/encoding.ts";
 import { ADMIN_SCOPES } from "../src/scopes.ts";
 import type { Bot, GatewayStamp, NameLine, NameRecordChange } from "../src/types.ts";
@@ -1078,25 +1080,40 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
     expect(lost.kept().changes[0]!.undone).toBeUndefined();
     expect(lost.kept().claims).toEqual([]);
 
-    // The bot list can't be read again, or is read on another connection: nothing is confirmed,
-    // nothing declined, and the claim stays for the record to settle by the name listed.
-    for (const how of ["refused", "reconnected"] as const) {
+    // The bot list can't be read again, or not on the connection Undo was sent on (it changed
+    // before the read, or during it): nothing is confirmed, nothing declined, and the claim stays
+    // for the record to settle by the name listed.
+    for (const how of ["refused", "reconnected before", "reconnected during"] as const) {
       const unread = gateway();
       let generation = "1:1";
       const c = device(unread, { generation: () => generation });
       await c.engine.afterRun("pip", KEY, "run-1");
       unread.state.update = "lost";
-      // The client's read returns, applying nothing, when its connection changed meanwhile.
-      unread.state.onUpdate = () =>
-        (c.ctx.refreshBots = async () => {
-          if (how === "refused") throw new Error("no answer");
-          generation = "2:1";
-        });
+      const listed = c.ctx.refreshBots;
+      unread.state.onUpdate = () => {
+        if (how === "reconnected before") generation = "2:1";
+        // The client's read returns, applying nothing, when its connection changed meanwhile.
+        else
+          c.ctx.refreshBots = async () => {
+            if (how === "refused") throw new Error("no answer");
+            generation = "2:1";
+          };
+      };
       await c.engine.undo("pip", runTag("run-1"), "Pip", STAMP);
       expect(c.line()).toMatchObject({ status: "undone", after: null });
       expect(c.line()!.error).toContain("isn't confirmed");
       expect(unread.kept().declined).toEqual([]);
       expect(unread.kept().claims).toHaveLength(1);
+      // The record confirms the Undo later: its line replaces the one this device couldn't confirm.
+      c.ctx.refreshBots = listed;
+      const kept = unread.kept();
+      unread.state.record = {
+        ...kept,
+        changes: kept.changes.map((each) => ({ ...each, undone: NOW })),
+        claims: [],
+      };
+      await c.engine.onPrefsChanged([NAME_RECORD_KEY]);
+      expect(c.line()).toMatchObject({ status: "undone", after: "Pip", error: null });
     }
   });
 
@@ -1140,6 +1157,42 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
     await me.engine.afterRun("pip", KEY, "run-1");
     expect(gw.kept().declined).toHaveLength(8);
     expect([...pending.values()].map((each) => each.botId)).toEqual(["bot-0"]);
+  });
+
+  it("F-552: a decline saved by one Undo doesn't clear a later Undo's pending decline of the same bot", async () => {
+    const gw = gateway();
+    const me = device(gw);
+    const pending = me.engine["unrecorded"];
+    const entry = (name: string, op: string) => ({
+      stamp: STAMP,
+      botId: "otto",
+      name,
+      run: runTag(name),
+      file: FILE_TAG,
+      op: runTag(op),
+    });
+    pending.set("gw-a\notto", entry("Maple", "a"));
+    // A later Undo of Otto takes the key while the first decline's write is answered.
+    gw.state.afterSet = () => pending.set("gw-a\notto", entry("Thistle", "b"));
+    await me.engine.afterRun("pip", KEY, "run-1");
+    expect(gw.kept().declined.map((each) => each.name)).toContain("Maple");
+    expect([...pending.values()].map((each) => each.name)).toEqual(["Thistle"]);
+  });
+
+  it("F-552: a rename that would push out a later day's count, written by a device past midnight, isn't made", async () => {
+    const gw = gateway();
+    const tomorrow = dayOf(NOW + 24 * 60 * 60 * 1000);
+    const counts = Array.from({ length: MAX_RECORD_COUNTS }, (_, n) => ({
+      bot: `bot-${n}`,
+      day: tomorrow,
+      n: 3,
+    }));
+    gw.state.record = record({ counts });
+    const me = device(gw);
+    await me.engine.afterRun("pip", KEY, "run-1");
+    expect(gw.state.updates).toEqual([]);
+    expect(me.line()).toMatchObject({ status: "not-done", reason: "full" });
+    expect(gw.kept().counts).toEqual(counts);
   });
 
   it("F-552: a claim's entry is never the one the record's room drops", () => {
@@ -1269,7 +1322,8 @@ describe("F-552: through the client", () => {
       storage,
       held,
       key: "agent:new-bot:main",
-      client: { nameClaimDelayMs: 0 },
+      // Reads asked again at once: a failing one settles within the test.
+      client: { nameClaimDelayMs: 0, readAgainMs: 1 },
     });
     /** The bot edits its file's name line in the run `id`, as the scripted model does. */
     const edit = (id: string, name: string, seq = 1) => {
@@ -1385,6 +1439,36 @@ describe("F-552: through the client", () => {
       };
       gw.emit("agent", agentEvent(id, 3, "lifecycle", { phase: "end" }, "agent:new-bot:main"));
       await until(() => client.state.botNames?.[0]?.status === "renamed", 10_000);
+      expect(client.state.botNames![0]).toMatchObject({ to: "Johnny", whose: "bot" });
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("F-552: a task without live updates has no history read shown to cover the run's end: the rename is the bot's own", async () => {
+    const { client, gw, edit } = await namingClient();
+    const key = "agent:new-bot:main";
+    try {
+      // A read fails, and Try again can't start the task's live updates: a read at the run's end
+      // then can't be told from a failed one.
+      gw.handlers["sessions.messages.subscribe"] = () => {
+        throw new Error("the gateway was busy");
+      };
+      const history = gw.handlers["chat.history"];
+      gw.handlers["chat.history"] = () => {
+        throw new Error("the gateway was busy");
+      };
+      client.reloadSession(key);
+      await until(() => client.state.transcripts[key]?.status === "error");
+      if (history) gw.handlers["chat.history"] = history;
+      else delete gw.handlers["chat.history"];
+      client.reloadSession(key);
+      await until(() => client.state.transcripts[key]?.error === LIVE_UPDATES_NOT_STARTED);
+      const id = client.sendMessage(key, "call yourself Johnny");
+      await until(() => gw.calls("chat.send").length === 1);
+      edit(id, "Johnny");
+      gw.emit("agent", agentEvent(id, 3, "lifecycle", { phase: "end" }, key));
+      await until(() => client.state.botNames?.[0]?.status === "renamed");
       expect(client.state.botNames![0]).toMatchObject({ to: "Johnny", whose: "bot" });
     } finally {
       client.stop();
