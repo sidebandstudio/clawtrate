@@ -437,8 +437,8 @@ describe("F-560: the note's exact form", () => {
     ]);
   });
 
-  it("more than 16 skills, or a text past its bound, shows as the message it is", () => {
-    const many = Array.from({ length: 17 }, (_, index) => `created \`s${index}\``).join("; ");
+  it("more than 8 skills, or a text past its bound, shows as the message it is", () => {
+    const many = Array.from({ length: 9 }, (_, index) => `created \`s${index}\``).join("; ");
     expect(
       skillNoteChanges(`💾 Learned: ${many}. Say "undo" to revert this skill change.`),
     ).toBeNull();

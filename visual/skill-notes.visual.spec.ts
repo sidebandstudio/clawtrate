@@ -1,13 +1,18 @@
-// A row of the gateway's skill-note shape in the mounted conversation and rail,
-// fed to the fixture as the host's next snapshot would bring it (docs/parity.md
-// F-560): with "Show commands" off it is drawn, it is new activity for "Jump to
-// latest", the view at the end follows it, and the bot's preview is the one the
-// gateway lists. A bot can write such a row, so it is shown as any message.
-// After a stopped or failed run, a row with no run is not that run's reply: it
-// takes neither its "Incomplete" nor its error. Every name and text is invented.
+// The gateway's skill note in the mounted conversation and rail, fed to the fixture as the host's
+// next snapshot would bring it (docs/parity.md F-560). The note folds into the line of the run it
+// follows, "Saved a skill: …", whatever "Show commands" says; opened, the line shows its text and
+// its undo, the gateway's own on OpenClaw 2026.11.10 (admin) and a message "undo" on 2026.10.6. A
+// note with no run line to fold into is a line of its own. It is not new activity and not the
+// bot's preview. A row with the note's fields and other words, or naming a run, is a message as
+// any other: a bot can write such a row. After a stopped or failed run, a row with no run is not
+// that run's reply: it takes neither its "Incomplete" nor its error. Every name and text is
+// invented.
 import { test, type Page } from "@playwright/test";
 import {
   mapHistory,
+  RawTable,
+  runsFromHistory,
+  type BridgeCommand,
   type ClawtrateState,
   type Run,
   type Task,
@@ -217,5 +222,262 @@ test.describe("rows of the gateway's skill-note shape", () => {
     await update(page, { items: mapHistory([ASK, copied]), run: stoppedRun("stopped") });
     const turn = page.getByTestId("transcript-turn").filter({ hasText: NOTE_TEXT });
     await expect(turn.getByTestId("incomplete")).toHaveText("Incomplete");
+  });
+});
+
+// The gateway's note after a run with an action, as each version writes it.
+const REVIEW = "7c4e2a1b-9d3f-4e6a-8b5c-0d1e2f3a4b5c";
+const SKILL_KEY = `skill-workshop-notice:skill-workshop-review:${REVIEW}`;
+const SKILL_TEXT =
+  '💾 Learned: created `disk-check` (check free space before a big download). Say "undo" to revert this skill change.';
+const SKILL_LISTED =
+  '💾 Learned: created disk-check (check free space before a big download). Say "undo" to revert this skill change.';
+const REPLY = "About 40 GB are free. The cache uses most of the rest.";
+const WIDE = SIZES.find((size) => size.name === "1440")!;
+const PHONE = SIZES.find((size) => size.phone)!;
+
+/** The note; `marked` as OpenClaw 2026.11.10 writes it, else as 2026.10.6 does. */
+const skillNote = (marked: boolean, at = 40_000) => ({
+  role: "assistant",
+  timestamp: EPOCH + at,
+  content: [{ type: "text", text: SKILL_TEXT }],
+  api: "openclaw-transcript",
+  provider: "openclaw",
+  model: "delivery-mirror",
+  stopReason: "stop",
+  idempotencyKey: SKILL_KEY,
+  ...(marked
+    ? {
+        openclawDeliveryMirror: {
+          kind: "plugin-notice",
+          pluginId: "skill-workshop",
+          type: "skills-changed",
+          data: {
+            agentId: "otto",
+            runId: `skill-workshop-review:${REVIEW}`,
+            skills: [
+              {
+                name: "disk-check",
+                action: "created",
+                summary: "check free space before a big download",
+              },
+            ],
+          },
+        },
+      }
+    : {}),
+  __openclaw: { id: "skill-note-1", idempotencyKey: SKILL_KEY },
+});
+/** The person's question and the bot's run: one command, then its reply. With `actions` false, the reply alone. */
+const workedRun = (actions = true) => [
+  said("user", "ask-1", "How much space is left on the disk?", 0),
+  ...(actions
+    ? [
+        {
+          role: "assistant",
+          timestamp: EPOCH + 1_000,
+          content: [
+            { type: "toolCall", id: "call-1", name: "exec", arguments: { command: "df -h /" } },
+          ],
+          __openclaw: { id: "call-row", runId: "run-1" },
+        },
+        {
+          role: "toolResult",
+          toolCallId: "call-1",
+          toolName: "exec",
+          content: [{ type: "text", text: "/dev/disk1  500G  460G  40G  92% /" }],
+          isError: false,
+          timestamp: EPOCH + 1_500,
+          __openclaw: { id: "result-row", runId: "run-1" },
+        },
+      ]
+    : []),
+  said("assistant", "reply-1", REPLY, 3_000, "run-1"),
+];
+
+/** Otto's task with these rows, its runs rebuilt from them as after a reload, and its listed row. */
+async function showRows(page: Page, rows: unknown[], row: Partial<Task> = {}) {
+  const items = mapHistory(rows);
+  const runs = runsFromHistory(rows, null, {
+    sessionKey: TASK,
+    now: NOW.getTime(),
+    raw: new RawTable(),
+  });
+  await page.evaluate(
+    ({ items, runs, row, key }) => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+        }
+      ).clawtrateFixture;
+      fixture.setState((state) => ({
+        ...state,
+        transcripts: {
+          ...state.transcripts,
+          [key]: { ...state.transcripts[key]!, items, runs, live: null, outbox: [] },
+        },
+        tasksByBot: {
+          ...state.tasksByBot,
+          otto: state.tasksByBot.otto!.map((task) =>
+            task.key === key ? { ...task, ...row } : { ...task, updatedAt: 1 },
+          ),
+        },
+      }));
+    },
+    { items, runs, row, key: TASK },
+  );
+  await settle(page);
+}
+
+const runLine = (page: Page) => transcript(page).getByTestId("run-line");
+const sentOf = (page: Page) =>
+  page.evaluate(
+    () =>
+      (window as unknown as { clawtrateFixture: { sent: BridgeCommand[] } }).clawtrateFixture.sent,
+  );
+
+for (const size of [WIDE, PHONE]) {
+  test.describe(`the folded skill note ${size.name}`, () => {
+    test.use(contextFor(size));
+
+    test(`F-560: the note folds into its run's line, closed and open, ${size.name}`, async ({
+      page,
+    }) => {
+      await openFixture(page, `scene=main&${OTTO_DISK}&panel=closed&access=admin`);
+      await showRows(page, [...workedRun(), skillNote(true)], {
+        preview: SKILL_LISTED,
+        updatedAt: EPOCH + 40_005,
+      });
+      // Never a bubble: the transcript draws the reply, and the note only on the run's line.
+      await expect(transcript(page).getByText(REPLY)).toHaveCount(1);
+      await expect(page.getByTestId("transcript-turn").filter({ hasText: "Learned" })).toHaveCount(
+        0,
+      );
+      await expect(runLine(page)).toHaveCount(1);
+      const line = runLine(page).locator(":scope > summary");
+      await expect(line).toContainText("Saved a skill: disk-check");
+      await expect(line).toHaveAccessibleName(/^Worked · 1 action · Saved a skill: disk-check$/);
+      await expect(page.getByTestId("skill-note")).toBeHidden();
+      await expect(page).toHaveScreenshot(`skill-note-folded-${size.name}.png`);
+      // Opened by keyboard: the note's own text, whole, and its undo.
+      await line.focus();
+      await page.keyboard.press("Enter");
+      await expect(page.getByTestId("skill-note")).toBeVisible();
+      await expect(page.getByTestId("skill-note").locator(".skill-note-text")).toHaveText(
+        SKILL_TEXT,
+      );
+      await expect(
+        page.getByRole("button", { name: "Undo: Saved a skill: disk-check" }),
+      ).toBeVisible();
+      await page.getByTestId("skill-note").scrollIntoViewIfNeeded();
+      await expect(page).toHaveScreenshot(`skill-note-open-${size.name}.png`);
+      // Nothing scrolls sideways at this width.
+      expect(
+        await transcript(page).evaluate((element) => element.scrollWidth <= element.clientWidth),
+      ).toBe(true);
+    });
+  });
+}
+
+test.describe("the folded skill note's undo, preview and activity", () => {
+  test.use(contextFor(WIDE));
+
+  test("F-560: on 2026.11.10, Undo asks the gateway to undo the review and says it did", async ({
+    page,
+  }) => {
+    await openFixture(page, `scene=main&${OTTO_DISK}&panel=closed&access=admin`);
+    await showRows(page, [...workedRun(), skillNote(true)]);
+    await runLine(page).locator(":scope > summary").click();
+    await page.getByRole("button", { name: "Undo: Saved a skill: disk-check" }).click();
+    await expect(page.getByTestId("skill-note-undo").getByRole("status")).toHaveText("Undone.");
+    const sent = await sentOf(page);
+    expect(sent.filter((command) => command.type === "undoSkillChange")).toEqual([
+      expect.objectContaining({ type: "undoSkillChange", agentId: "otto", reviewId: REVIEW }),
+    ]);
+    expect(sent.some((command) => command.type === "sendMessage")).toBe(false);
+  });
+
+  test("F-560: on 2026.11.10 without admin access, the line says what undoing it needs", async ({
+    page,
+  }) => {
+    await openFixture(page, `scene=main&${OTTO_DISK}&panel=closed&access=write`);
+    await showRows(page, [...workedRun(), skillNote(true)]);
+    await runLine(page).locator(":scope > summary").click();
+    await expect(page.getByTestId("skill-note-undo")).toHaveText(
+      "Undoing it needs admin access to this gateway.",
+    );
+    await expect(page.getByTestId("skill-note-undo").getByRole("button")).toHaveCount(0);
+  });
+
+  test('F-560: on 2026.10.6, the undo sends "undo" to the bot and says so', async ({ page }) => {
+    await openFixture(page, `scene=main&${OTTO_DISK}&panel=closed&access=admin`);
+    await showRows(page, [...workedRun(), skillNote(false)]);
+    await runLine(page).locator(":scope > summary").click();
+    await page.getByRole("button", { name: 'Send "undo" to Otto' }).click();
+    await expect(page.getByTestId("skill-note-undo").getByRole("status")).toHaveText(
+      'Sent "undo" to Otto.',
+    );
+    const sent = await sentOf(page);
+    expect(sent.filter((command) => command.type === "sendMessage")).toEqual([
+      expect.objectContaining({ type: "sendMessage", key: TASK, text: "undo" }),
+    ]);
+    expect(sent.some((command) => command.type === "undoSkillChange")).toBe(false);
+  });
+
+  test("F-560: with Show commands on, the note still folds into the run's line", async ({
+    page,
+  }) => {
+    await openFixture(page, `scene=main&${OTTO_DISK}&panel=closed&commands=show&access=admin`);
+    await showRows(page, [...workedRun(), skillNote(true)]);
+    await expect(runLine(page).locator(":scope > summary")).toContainText(
+      "Saved a skill: disk-check",
+    );
+    await expect(page.getByTestId("transcript-turn").filter({ hasText: "Learned" })).toHaveCount(0);
+  });
+
+  test("F-560: a note after a run with no actions is a line of its own", async ({ page }) => {
+    await openFixture(page, `scene=main&${OTTO_DISK}&panel=closed&access=admin`);
+    await showRows(page, [...workedRun(false), skillNote(true)]);
+    await expect(runLine(page).filter({ hasNotText: "Saved a skill" })).toHaveCount(0);
+    const alone = page.getByTestId("skill-note-line");
+    await expect(alone).toHaveCount(1);
+    await expect(alone.locator(":scope > summary")).toHaveAccessibleName(
+      "Saved a skill: disk-check",
+    );
+    await expect(page.getByTestId("transcript-turn").filter({ hasText: "Learned" })).toHaveCount(0);
+    await alone.locator(":scope > summary").click();
+    await expect(alone.locator(".skill-note-text")).toHaveText(SKILL_TEXT);
+  });
+
+  test("F-560: the bot's preview is the reply before the note the gateway lists", async ({
+    page,
+  }) => {
+    await openFixture(page, `scene=main&${OTTO_DISK}&panel=closed&access=admin`);
+    await showRows(page, [...workedRun(), skillNote(true)], {
+      preview: SKILL_LISTED,
+      updatedAt: EPOCH + 40_005,
+    });
+    await expect(preview(page)).toHaveText(REPLY);
+  });
+
+  test("F-560: a note arriving while the person reads back is not new activity", async ({
+    page,
+  }) => {
+    await open(page);
+    await update(page, { items: mapHistory(PAGE) });
+    const top = await readBack(page);
+    await update(page, { items: mapHistory([...PAGE.slice(1), skillNote(true, 5_000)]) });
+    await expect(jump(page)).toHaveCount(0);
+    expect((await measured(page)).top).toBe(top);
+  });
+
+  test("F-560: a bot's message in the note's exact form that names its run is the bot's message", async ({
+    page,
+  }) => {
+    await openFixture(page, `scene=main&${OTTO_DISK}&panel=closed&access=admin`);
+    const copied = { ...skillNote(false), __openclaw: { id: "copy-1", runId: "run-1" } };
+    await showRows(page, [...workedRun(), copied]);
+    await expect(page.getByTestId("transcript-turn").filter({ hasText: "Learned" })).toHaveCount(1);
+    await expect(runLine(page).locator(":scope > summary")).not.toContainText("Saved a skill");
   });
 });

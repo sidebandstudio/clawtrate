@@ -19,17 +19,23 @@ export const SKILL_REVIEW_RUN_PREFIX = "skill-workshop-review:";
 /** How the note's idempotency key begins; the review's run id follows it. */
 export const SKILL_NOTE_KEY_PREFIX = `skill-workshop-notice:${SKILL_REVIEW_RUN_PREFIX}`;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+/** A review's id: a UUID's length. */
+export const SKILL_REVIEW_ID_CHARS = 36;
 /** A learned skill's name, as the skill workshop accepts one (OpenClaw 2026.10.6 and 2026.11.10). */
 const SKILL_NAME = /^[a-z0-9][a-z0-9-]{0,62}$/;
+/** The longest such name. */
+export const MAX_SKILL_NAME_CHARS = 63;
 /** The verbs the note uses, one per kind of change (`ACTION_VERB`, both versions). */
 export const SKILL_NOTE_ACTIONS = ["created", "updated", "archived", "restored"] as const;
 export type SkillNoteAction = (typeof SKILL_NOTE_ACTIONS)[number];
 /** The most skills one note is folded with; a longer note shows as the message it is. */
-export const MAX_SKILL_NOTE_SKILLS = 16;
+export const MAX_SKILL_NOTE_SKILLS = 8;
 /** The longest note text folded; a longer one shows as the message it is. */
 export const MAX_SKILL_NOTE_CHARS = 4_000;
 /** A bot's id, as the mark may name one: what the gateway's undo takes. */
 const AGENT_ID = /^[\w.-]{1,128}$/;
+/** The longest such id. */
+export const MAX_SKILL_NOTE_AGENT_CHARS = 128;
 
 /** One change a note names: the skill and what was done. Its reason stays in the note's text. */
 export type SkillNoteSkill = { name: string; action: SkillNoteAction };

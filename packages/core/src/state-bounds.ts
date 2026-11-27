@@ -21,7 +21,14 @@ import {
   type DeviceRequestsState,
 } from "./device-approval.ts";
 import { MAX_UPDATED_RUNS, type UpdatedRun } from "./update-notice.ts";
-import { MAX_SKILL_NOTE_SKILLS, type SkillNote, type SkillNoteSkill } from "./skill-notes.ts";
+import {
+  MAX_SKILL_NAME_CHARS,
+  MAX_SKILL_NOTE_AGENT_CHARS,
+  MAX_SKILL_NOTE_SKILLS,
+  SKILL_REVIEW_ID_CHARS,
+  type SkillNote,
+  type SkillNoteSkill,
+} from "./skill-notes.ts";
 import {
   MAX_ACCOUNTS,
   MAX_CATALOG_MODELS,
@@ -648,11 +655,11 @@ const sentAttachment = object<SentAttachment>()({
   mimeType: NAME,
   sizeBytes: NUMBER,
 });
-const skillNoteSkill = object<SkillNoteSkill>()({ name: NAME, action: ENUM });
+const skillNoteSkill = object<SkillNoteSkill>()({ name: id(MAX_SKILL_NAME_CHARS), action: ENUM });
 const skillNote = object<SkillNote>()({
-  reviewId: ID,
+  reviewId: id(SKILL_REVIEW_ID_CHARS),
   skills: list(MAX_SKILL_NOTE_SKILLS, skillNoteSkill),
-  agentId: NAME,
+  agentId: id(MAX_SKILL_NOTE_AGENT_CHARS),
   after: NUMBER,
 });
 const item = flagged<TranscriptItem>()({
