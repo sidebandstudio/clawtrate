@@ -679,6 +679,22 @@ describe("the rules underneath", () => {
     expect(index.failedAt(KEY)).toBe(2_000);
   });
 
+  for (const state of ["final", "aborted", "error"])
+    it(`an older run's late chat ${state} doesn't clear a newer run's failure`, () => {
+      const index = new WaitingIndex();
+      for (const [runId, ts] of [
+        ["r1", 1_000],
+        ["r2", 1_500],
+      ] as const)
+        index.onAgent(
+          { sessionKey: KEY, runId, stream: "lifecycle", ts, data: { phase: "start" } },
+          ts,
+        );
+      index.onChat({ sessionKey: KEY, runId: "r2", state: "error" }, 2_000);
+      expect(index.onChat({ sessionKey: KEY, runId: "r1", state }, 3_000)).toBe(false);
+      expect(index.failedAt(KEY)).toBe(1_500);
+    });
+
   it("an older run's late chat end says nothing while a newer run of the task is going", () => {
     const index = new WaitingIndex();
     index.onAgent(

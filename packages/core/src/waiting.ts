@@ -277,9 +277,9 @@ export class WaitingIndex {
     // Another run of the task is going: this is an older run's late end, and the newer one's own
     // end will say how the task stands.
     if (latest && latest.runId !== runId && latest.active) return false;
-    // Another run of the task ended well and no new message was admitted since: the error is an
-    // older message's, arriving late. The newest run decides the mark, not the order of arrival.
-    if (latest && latest.runId !== runId && !latest.failed && !latest.inputSince) return false;
+    // Another run of the task ended and no new message was admitted since: this end is an older
+    // message's, arriving late. The newest run decides the mark, not the order of arrival.
+    if (latest && latest.runId !== runId && !latest.inputSince) return false;
     // An end the gateway marked not to show is a quiet one, not a failure (#680, 2026.11.10).
     const failed = payload.state === "error" && payload.suppressErrorNotice !== true;
     if (latest?.runId === runId && latest.failed === failed) {
