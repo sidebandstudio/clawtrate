@@ -382,7 +382,12 @@ export const HAND_OFF_HIDDEN_HERE = { label: "Where is this, hidden", task: "#he
 /** What `#hand-off-hidden-hand-off` starts: a hidden task of its own whose brief hands off to the partner. */
 export const HAND_OFF_HIDDEN_ONWARD = {
   label: "Pass this on, hidden",
-  task: "#hand-off-to-partner",
+  task: "#hand-off-onward",
+} as const;
+/** What `#hand-off-onward` starts under the partner: a label no other directive uses. */
+export const HAND_OFF_ONWARD = {
+  label: "Carry the route on",
+  task: "Carry on with the Saturday route. Reply in plain text.",
 } as const;
 export const HAND_OFF_HIDDEN = {
   label: "Check the forecast",
@@ -1252,10 +1257,20 @@ export const SCENARIOS: Scenario[] = [
     name: "hand-off-hidden-hand-off",
     phrase: "pass this on from a hidden task",
     bots: "Marlow or Pip, with clawtrate-bots",
-    summary: `Starts a hidden helper of the bot's own labelled "${HAND_OFF_HIDDEN_ONWARD.label}", whose brief is \`#hand-off-to-partner\`: a hand-off from a task.`,
+    summary: `Starts a hidden helper of the bot's own labelled "${HAND_OFF_HIDDEN_ONWARD.label}", whose brief is \`#hand-off-onward\`: a hand-off from a task.`,
     steps: () => [
       spawn(HAND_OFF_HIDDEN_ONWARD),
       afterSpawn(() => `I started ${HAND_OFF_HIDDEN_ONWARD.label}.`),
+    ],
+  },
+  {
+    name: "hand-off-onward",
+    phrase: "pass this on to your partner",
+    bots: "Marlow or Pip",
+    summary: `Starts a task under the other bot of the pair with \`sessions_spawn\` (\`visible: true\`, \`agentId\`), labelled "${HAND_OFF_ONWARD.label}": \`#hand-off-to-partner\` under a label of its own.`,
+    steps: () => [
+      spawn(HAND_OFF_ONWARD, { visible: true, partner: true }),
+      afterSpawn(() => `I started ${HAND_OFF_ONWARD.label}.`),
     ],
   },
   {

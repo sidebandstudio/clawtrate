@@ -156,23 +156,29 @@ export function heldFile(raw, caller, workspaces = {}) {
 }
 
 /**
- * The bot a message or a hand-off reaches, read as the tool reads it:
- * `agentId`, else a session key's bot; a label alone, `main`, `current` or
- * nothing is the caller's own. Null when it can't be told (a bare session id,
- * or a chat conversation), which counts as another bot.
+ * The bot a message or a hand-off reaches, read as the tool reads it. A
+ * hand-off goes to `agentId`, else the caller. A message (`sessions_send`,
+ * the scheduler's `wake`) goes to its session key first (2026.10.6
+ * dist/sessions-spawn-tool-CMHR26Kp.mjs:1719-1735, cron-tool-B3cH3Sr5.mjs:1582-1592;
+ * the same in 2026.11.10), then to a label, then to `agentId`'s main
+ * conversation, else the caller's own. Null when it can't be told, which
+ * counts as another bot: a bare session id, a chat conversation, a label
+ * with no `agentId` (the gateway looks it up among every bot's sessions), or
+ * a call whose `agentId` names another bot than its session key does.
  */
 export function targetBot(event, caller) {
   const p = event?.params;
   const name = String(event?.toolName ?? "").toLowerCase();
   if (name === "conversations_send" || name === "conversations_turn") return null;
-  const agent = readParam(p, "agentId");
-  if (agent) return agent.toLowerCase();
-  if (HAND_OFF_TOOLS.has(name)) return caller;
-  const key = readParam(p, "sessionKey") ?? "";
-  const bot = botOfKey(key);
-  if (bot) return bot;
-  if (!key || key === "main" || key === "current") return caller;
-  return null;
+  const agent = readParam(p, "agentId")?.toLowerCase();
+  if (HAND_OFF_TOOLS.has(name)) return agent ?? caller;
+  const key = readParam(p, "sessionKey");
+  if (key) {
+    const target = botOfKey(key) ?? (key === "main" || key === "current" ? caller : null);
+    return agent && agent !== target ? null : target;
+  }
+  if (readParam(p, "label")) return agent ?? null;
+  return agent ?? caller;
 }
 
 /** The reason for a refusal, by why the call isn't the person's ask. */

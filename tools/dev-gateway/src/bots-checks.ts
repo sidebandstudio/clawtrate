@@ -684,7 +684,7 @@ export const BOTS_CHECKS: BotsCheck[] = [
   },
   {
     name: "fix round D3: after reading a page, the bot's own hidden task can't hand off to another bot",
-    covers: ["#hand-off-hidden-hand-off"],
+    covers: ["#hand-off-hidden-hand-off", "#hand-off-onward"],
     async run(ctx, world) {
       const t = await turn(
         ctx,

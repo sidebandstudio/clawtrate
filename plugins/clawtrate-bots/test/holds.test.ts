@@ -267,8 +267,11 @@ describe("messages and hand-offs to other bots", () => {
     expect(targetBot(call("sessions_send", { sessionKey: "agent:marlow:main" }), "pip")).toBe(
       "marlow",
     );
-    expect(targetBot(call("sessions_send", { label: "Compare trail maps" }), "pip")).toBe("pip");
+    expect(
+      targetBot(call("sessions_send", { agentId: "pip", label: "Compare trail maps" }), "pip"),
+    ).toBe("pip");
     expect(targetBot(call("sessions_send", { sessionKey: "main" }), "pip")).toBe("pip");
+    expect(targetBot(call("sessions_send", { message: "m" }), "pip")).toBe("pip");
     // A bare session id may be another bot's: it can't be told, so it counts as another bot.
     expect(targetBot(call("sessions_send", { sessionKey: "9b2c" }), "pip")).toBeNull();
     expect(targetBot(call("conversations_send", { conversationId: "x" }), "pip")).toBeNull();
@@ -363,6 +366,33 @@ describe("fix round: reading a call as the tool reads it", () => {
         B: "done",
       });
     }
+  });
+
+  it("D1: a send is its own only when no key names another target, as the tool takes them", () => {
+    // The tool takes the session key over agentId, and looks a label alone up among every bot's sessions.
+    for (const params of [
+      { agentId: "pip", sessionKey: "agent:marlow:main" },
+      { agent_id: "pip", session_key: "agent:marlow:main" },
+      { agentId: "marlow", sessionKey: "main" },
+      { label: "Review the route" },
+    ]) {
+      const event = call("sessions_send", { ...params, message: "m" });
+      expect(holdOf(event, "pip")).toBe("message");
+      expect(outcomes(event, { reach: ["marlow"] })).toMatchObject({
+        B: "not done",
+        Bread: "not done",
+        C: "not done",
+      });
+    }
+    expect(
+      holdOf(call("sessions_send", { agentId: "pip", sessionKey: "agent:pip:main" }), "pip"),
+    ).toBeNull();
+    expect(
+      holdOf(
+        call("automations", { action: "wake", agentId: "pip", sessionKey: "agent:marlow:main" }),
+        "pip",
+      ),
+    ).toBe("message");
   });
 
   it("D1: two spellings that name different things are refused", () => {
