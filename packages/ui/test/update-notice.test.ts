@@ -1,6 +1,6 @@
 // F-590: the gateway's own "OpenClaw updated" notice, drawn as Clawtrate's quiet line for an update
 // this device saw succeed: the line, its disclosure with the gateway's sentence as text, and no
-// bot's message parts; and in the rail, the bot's last words before it. The mounted conversation
+// bot's message parts; and in the rail, no unread for the notice alone. The mounted conversation
 // is checked in visual/update-notice.visual.spec.ts. The row is the shape recorded from real
 // update runs; no update runs here.
 
@@ -8,7 +8,6 @@ import {
   emptyActivity,
   mapHistory,
   seenThroughUpdateNotice,
-  tasksWithoutUpdateNotices,
   updateNoticeLine,
   type Task,
   type Transcript,
@@ -123,20 +122,12 @@ describe("F-590: the update line", () => {
 });
 
 describe("F-590: the rail", () => {
-  it("F-590: the bot's preview is its last words before the line, and the notice alone doesn't make the task unread for a viewer who read it", () => {
+  it("F-590: the notice alone doesn't make the task unread for a viewer who read it", () => {
     const transcript = history([reply("The trail is open.", T + 2_000), notice()]);
-    const quiet = tasksWithoutUpdateNotices({ pip: [listed] }, { [KEY]: transcript }, SCOPE);
-    expect(summarize(quiet.pip!, {}, null).latest?.preview).toBe("The trail is open.");
     // Read at 2,050, after the bot's reply and before the notice moved the row's time.
     const seen = { [KEY]: seenThroughUpdateNotice(listed, T + 2_050, transcript, SCOPE)! };
-    expect(summarize(quiet.pip!, seen, null, seen).unread).toBe(false);
-    // Without this device's record of the run, it is the bot's message, preview and all.
-    const plain = tasksWithoutUpdateNotices(
-      { pip: [listed] },
-      { [KEY]: transcript },
-      { ...SCOPE, updated: [] },
-    );
-    expect(summarize(plain.pip!, {}, null).latest?.preview).toBe(listed.preview);
+    expect(summarize([listed], seen, null, seen).unread).toBe(false);
+    // Without this device's record of the run, it is the bot's message.
     expect(seenThroughUpdateNotice(listed, T + 2_050, transcript, { ...SCOPE, updated: [] })).toBe(
       T + 2_050,
     );

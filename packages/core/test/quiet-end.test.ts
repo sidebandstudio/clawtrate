@@ -13,6 +13,7 @@ import {
   answeredNothing,
   isTerminal,
   quietPending,
+  quietToRead,
   RawTable,
   runsFromHistory,
   settleQuietEnds,
@@ -590,6 +591,32 @@ describe("a task not open: its row's marked failure is read once against its his
     release();
     await sleep(50);
     expect(task(client, OTHER)?.status).toBe("failed");
+    client.stop();
+  }, 30_000);
+
+  it("a channel chat the list hides starts no check, so it holds none of their places (#780)", async () => {
+    const DISCORD = "agent:otto:discord:channel:1234567890";
+    const hidden = {
+      ...markedRow("wake-41", DISCORD),
+      channel: "discord",
+      classification: "channel",
+      displayName: "discord:g-1234567890",
+    };
+    const gateway = gatewayWith(rowsOf(hidden), () => [eventRow]);
+    const asked: string[] = [];
+    const read = gateway.handlers["chat.history"]!;
+    gateway.handlers["chat.history"] = (params) => {
+      asked.push((params as { sessionKey: string }).sessionKey);
+      return read(params);
+    };
+    const { client } = await openTask({ gateway });
+    await sleep(100);
+    expect(task(client, DISCORD)).toBeUndefined();
+    expect(asked).not.toContain(DISCORD);
+    // Shown, it is checked as any row is.
+    await client.setShowChannelChats(true);
+    await until(() => asked.includes(DISCORD));
+    await until(() => task(client, DISCORD)?.status === "done");
     client.stop();
   }, 30_000);
 
@@ -1358,6 +1385,62 @@ describe("a sender's card follows a recipient open beside it (#680)", () => {
   }, 30_000);
 });
 
+describe("a marked end whose history read failed is settled by a later read (#767)", () => {
+  for (const [history, state, status] of [
+    [[eventRow], "completed", "done"],
+    [[eventRow, thinkingRow("wake-40", 4)], "failed", "failed"],
+  ] as const) {
+    it(`an open task: the failure until then; the next connection's read shows it ${state}`, async () => {
+      let page: unknown[] | Error = [];
+      const rows: Row[] = [{ key: KEY, agentId: "otto", hasActiveRun: false, updatedAt: T0 }];
+      const gateway = gatewayWith(rows, () => page);
+      const { client, transcript } = await openTask({ gateway, client: { readAgainMs: 1 } });
+      page = new Error("history unavailable");
+      wakeAndEndMarked(gateway, "wake-40");
+      // The list the next connection reads has the row the end left.
+      rows[0] = markedRow("wake-40");
+      await until(() => runOf(transcript, "wake-40")?.quietEnd === "unread", 8_000);
+      expect(runOf(transcript, "wake-40")).toMatchObject({
+        state: "failed",
+        error: { message: QUIET },
+      });
+      await until(() => task(client)?.status === "failed");
+      page = [...history];
+      gateway.dropAll();
+      await until(() => runOf(transcript, "wake-40")?.quietEnd !== "unread", 10_000);
+      expect(runOf(transcript, "wake-40")?.state).toBe(state);
+      await until(() => task(client)?.status === status);
+      client.stop();
+    }, 30_000);
+  }
+  it("an open task: one the next connection's page doesn't hold whole is read on once, and settled by that", async () => {
+    let phase: "before" | "unread" | "after" = "before";
+    let onwards = 0;
+    const rows: Row[] = [{ key: KEY, agentId: "otto", hasActiveRun: false, updatedAt: T0 }];
+    const gateway = gatewayWith(rows, () => []);
+    gateway.handlers["chat.history"] = (params) => {
+      if (phase === "before") return { messages: [], hasMore: false };
+      if (phase === "unread") throw new Error("history unavailable");
+      if ((params as { limit?: number }).limit !== QUIET_CHECK_ROWS)
+        return { messages: toolRows("wake-42"), hasMore: true };
+      onwards += 1;
+      return { messages: [eventRow, ...toolRows("wake-42")], hasMore: false };
+    };
+    const { client, transcript } = await openTask({ gateway, client: { readAgainMs: 1 } });
+    phase = "unread";
+    wakeAndEndMarked(gateway, "wake-42");
+    rows[0] = markedRow("wake-42");
+    await until(() => runOf(transcript, "wake-42")?.quietEnd === "unread", 8_000);
+    phase = "after";
+    gateway.dropAll();
+    await until(() => runOf(transcript, "wake-42")?.quietEnd === "settled", 10_000);
+    expect(runOf(transcript, "wake-42")?.state).toBe("completed");
+    expect(onwards).toBe(1);
+    await until(() => task(client)?.status === "done");
+    client.stop();
+  }, 30_000);
+});
+
 describe("the rules, alone", () => {
   const run = (over: Partial<Run>): Run =>
     ({
@@ -1423,12 +1506,45 @@ describe("the rules, alone", () => {
       state: "failed",
       error: { message: QUIET },
     });
-    expect(settleQuietEnds([run({})], new Set(["r"]), true)[0]).toMatchObject({ state: "failed" });
-    expect(settleQuietEnds([run({})], new Set(), true)[0]!.quietEnd).toBe("pending");
+    expect(settleQuietEnds([run({})], new Set(["r"]), "unread")[0]).toMatchObject({
+      state: "failed",
+      quietEnd: "unread",
+    });
+    expect(settleQuietEnds([run({})], new Set(["r"]), "failed")[0]).toMatchObject({
+      state: "failed",
+      error: { message: QUIET },
+    });
+    expect(settleQuietEnds([run({})], new Set(["r"]), "failed")[0]!.quietEnd).toBeUndefined();
+    expect(settleQuietEnds([run({})], new Set(), "unread")[0]!.quietEnd).toBe("pending");
     const { quietError: _kept, ...base } = run({ quietEnd: "settled" });
     const settled = [base as Run];
-    expect(settleQuietEnds(settled, new Set(["r"]), true)).toBe(settled);
+    expect(settleQuietEnds(settled, new Set(["r"]), "unread")).toBe(settled);
     expect([...quietPending([run({}), run({ id: "s", quietEnd: "settled" })])]).toEqual(["r"]);
+  });
+
+  it("an end a read failed for is the failure until a later read looks, which settles it as a pending one (#767)", () => {
+    const unread = run({
+      state: "failed",
+      error: { message: QUIET, kind: null },
+      quietEnd: "unread",
+    });
+    expect(settleQuietEnds([unread], new Set(["r"]))[0]).toMatchObject({
+      state: "completed",
+      error: null,
+      quietEnd: "settled",
+    });
+    const answered = settleQuietEnds([{ ...unread, unansweredInHistory: true }], new Set())[0]!;
+    expect(answered).toMatchObject({ state: "failed", error: { message: QUIET } });
+    expect(answered.quietEnd).toBeUndefined();
+    expect(settleQuietEnds([unread], new Set(["r"]), "failed")[0]!.quietEnd).toBeUndefined();
+    const same = [unread];
+    expect(settleQuietEnds(same, new Set(["r"]), "unread")).toBe(same);
+    expect(settleQuietEnds(same, new Set())).toBe(same);
+    // A task's own read takes it up again; a card's (`quietPending`) doesn't.
+    expect([
+      ...quietToRead([unread, run({ id: "s" }), run({ id: "t", quietEnd: "settled" })]),
+    ]).toEqual(["r", "s"]);
+    expect([...quietPending([unread])]).toEqual([]);
   });
 
   it("a row that reports its run state whole without the mark has none (as for `status`, #664)", () => {
@@ -1443,38 +1559,41 @@ describe("the rules, alone", () => {
 
   it("the checks keep at most their bound, none giving way, and last while their row reports the run", () => {
     const checks = new QuietChecks();
-    for (let i = 0; i < MAX_QUIET_CHECKS; i += 1) expect(checks.begin(`k${i}`, "r", 1)).toBe(true);
-    expect(checks.begin("over", "r", 1)).toBe(false);
+    const tokens = new Map<string, number>();
+    for (let i = 0; i < MAX_QUIET_CHECKS; i += 1) {
+      const token = checks.begin(`k${i}`, "r", 1);
+      expect(token).not.toBeNull();
+      tokens.set(`k${i}`, token!);
+    }
+    expect(checks.begin("over", "r", 1)).toBeNull();
     // A settled one doesn't give way either: the task it held would be read again at once.
-    checks.settle("k3", "r", 1, "quiet");
-    expect(checks.begin("over", "r", 1)).toBe(false);
+    checks.settle("k3", tokens.get("k3")!, "quiet");
+    expect(checks.begin("over", "r", 1)).toBeNull();
     expect(checks.verdict("k3", "r", 1)).toBe("quiet");
     // A task already kept takes its own place again.
-    expect(checks.begin("k3", "s", 1)).toBe(true);
+    expect(checks.begin("k3", "s", 1)).not.toBeNull();
     // One whose row no longer reports that run's marked failure is let go, and frees its place.
     checks.retain((key, runId) => key !== "k4" && runId === "r");
     expect(checks.verdict("k3", "s", 1)).toBeUndefined();
     expect(checks.verdict("k4", "r", 1)).toBeUndefined();
     expect(checks.verdict("k5", "r", 1)).toBe("pending");
-    expect(checks.begin("over", "r", 1)).toBe(true);
+    const over = checks.begin("over", "r", 1)!;
+    expect(over).not.toBeNull();
     expect(checks.verdict("over", "r", 1)).toBe("pending");
     // A later run's check replaces the task's; an earlier run's verdict is not taken for it.
-    checks.settle("over", "r", 1, "failed");
+    checks.settle("over", over, "failed");
     expect(checks.verdict("over", "s", 1)).toBeUndefined();
     checks.begin("over", "s", 1);
-    checks.settle("over", "r", 1, "quiet");
+    checks.settle("over", over, "quiet");
     expect(checks.verdict("over", "s", 1)).toBe("pending");
   });
 
   it("a check on its way or unread on an earlier connection says nothing on the next; a settled one does", () => {
     const checks = new QuietChecks();
-    checks.begin("a", "r", 1);
-    checks.begin("b", "r", 1);
-    checks.settle("b", "r", 1, "unread");
-    checks.begin("c", "r", 1);
-    checks.settle("c", "r", 1, "failed");
-    checks.begin("d", "r", 1);
-    checks.settle("d", "r", 1, "quiet");
+    const a = checks.begin("a", "r", 1)!;
+    checks.settle("b", checks.begin("b", "r", 1)!, "unread");
+    checks.settle("c", checks.begin("c", "r", 1)!, "failed");
+    checks.settle("d", checks.begin("d", "r", 1)!, "quiet");
     expect(["a", "b", "c", "d"].map((key) => checks.verdict(key, "r", 2))).toEqual([
       undefined,
       undefined,
@@ -1483,7 +1602,18 @@ describe("the rules, alone", () => {
     ]);
     // An earlier connection's read never settles the check begun again on this one.
     checks.begin("a", "r", 2);
-    checks.settle("a", "r", 1, "quiet");
+    checks.settle("a", a, "quiet");
     expect(checks.verdict("a", "r", 2)).toBe("pending");
+  });
+
+  it("a check let go and begun again for the same run on the same connection isn't settled by the first one's answer (#770)", () => {
+    const checks = new QuietChecks();
+    const first = checks.begin("k", "r", 1)!;
+    // The row loses the mark while the first read is on its way, then gets it back.
+    checks.retain(() => false);
+    const second = checks.begin("k", "r", 1)!;
+    checks.settle("k", second, "quiet");
+    checks.settle("k", first, "unread");
+    expect(checks.verdict("k", "r", 1)).toBe("quiet");
   });
 });

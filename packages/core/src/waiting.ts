@@ -311,8 +311,11 @@ export class WaitingIndex {
     // After a failure, a run not known to be older counts: on 2026.11.10 a second message's
     // dispatch error can come before the debounced row that admits it.
     if (latest && latest.runId !== runId && !latest.failed && !latest.inputSince) return false;
-    // An end the gateway marked not to show is a quiet one, not a failure (#680, 2026.11.10).
-    const failed = payload.state === "error" && payload.suppressErrorNotice !== true;
+    const failed =
+      // An end the gateway marked not to show is a quiet one, not a failure (#680, 2026.11.10).
+      (payload.state === "error" && payload.suppressErrorNotice !== true) ||
+      // Stopping a run that failed leaves it failed (#783).
+      (payload.state === "aborted" && latest?.runId === runId && latest.failed);
     if (latest?.runId === runId && latest.failed === failed) {
       // Its terminal: the run is no longer going, even if its lifecycle end never arrives.
       if (latest.active) this.runs.set(key, { ...latest, active: false });
