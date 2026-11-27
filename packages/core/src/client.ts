@@ -3450,9 +3450,11 @@ export class ClawtrateClient {
           waiter.reject(new Error(id === null ? IDENTITY_UNREAD : ANOTHER_GATEWAY));
       if (this.accessWaiters.length > 0) return this.startUpgrade();
       // shortcut: an ask with no waiter (Settings' own) queued beside them is dropped too; keep
-      // asks apart from their waiters if that ever matters.
+      // asks apart from their waiters if that ever matters. A dropped accept of full control
+      // is released, so it can be made again.
       this.upgradeWanted = false;
       this.pairingWanted = false;
+      this.fullAttempt = null;
       this.setUpgrade(initialScopeUpgrade);
     });
   }

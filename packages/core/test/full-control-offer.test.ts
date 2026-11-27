@@ -589,4 +589,28 @@ describe("the one-time offer of full control (F-500)", () => {
     await until(() => !storage.data.has(tokenKey(dotted)));
     client.stop();
   });
+
+  it("F-549: an accept whose request a reconnect to another gateway drops can be made again there (#782)", async () => {
+    const storage = pairedAt();
+    const { gateway } = gatewayFor();
+    const client = await connected(clientOn(gateway, storage));
+    await accept(client);
+    await until(() => gateway.calls("device.scopes.requestUpgrade").length === 1);
+    // A task change waits on the same request, for this gateway.
+    const renaming = client
+      .renameTask("agent:main:main", "Weekly", { stamp: gatewayStamp(client.state.connection) })
+      .then(
+        () => "done",
+        (error: Error) => error.message,
+      );
+    await until(() => client.pendingAccessWaiters === 1);
+    // Another gateway answers the reconnect at the same address.
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway-b" });
+    gateway.dropAll();
+    expect(await renaming).toBe("This change was made for another gateway, so nothing was sent.");
+    await until(() => client.state.connection.gatewayId === "gateway-b");
+    await accept(client);
+    await until(() => gateway.calls("device.scopes.requestUpgrade").length === 2);
+    client.stop();
+  });
 });
