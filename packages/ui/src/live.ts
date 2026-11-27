@@ -502,6 +502,24 @@ export function failedTurnTitle(bot: string, earlier: boolean): string {
 }
 
 /**
+ * The person's message that comes after a run's anchor, under which the run's ending is drawn: by
+ * where the anchor stands in the transcript, since the anchor may be another session's message,
+ * an assistant row (#645). An anchor the transcript doesn't show keeps the earlier rule (the user
+ * message after it among the person's own). Null: the ending goes last.
+ */
+export function userMessageAfter(
+  items: ReadonlyArray<{ id: string; role: string }>,
+  anchor: string,
+): string | null {
+  const at = items.findIndex((item) => item.id === anchor);
+  if (at < 0) {
+    const users = items.filter((item) => item.role === "user").map((item) => item.id);
+    return users[users.indexOf(anchor) + 1] ?? null;
+  }
+  return items.slice(at + 1).find((item) => item.role === "user")?.id ?? null;
+}
+
+/**
  * How a finished run ended, when the transcript says more than its text. A stop is this
  * client's only when its own Stop of that run stands (`stopRequestedAt`, cleared when the gateway
  * refused it; a typed `/stop` marks the exact runs its answer names).

@@ -204,12 +204,13 @@ export function stoppedWithLines(run: Run, nameOf: (sessionKey: string) => strin
 }
 
 /**
- * The person's message a run is known to have started from: its keyed anchor only (#686). A
- * position decides where a run is drawn, never what Try again sends.
+ * The person's message a run is known to have started from: its keyed anchor only (#686), and
+ * only a message of theirs: another session's message that started it (#645) is not sent again
+ * as theirs. A position decides where a run is drawn, never what Try again sends.
  */
 function keyedAnchor(run: Run, transcript: Transcript) {
   return run.anchorKeyed
-    ? transcript.items.find((item) => item.id === run.anchorItemId)
+    ? transcript.items.find((item) => item.id === run.anchorItemId && item.role === "user")
     : undefined;
 }
 
