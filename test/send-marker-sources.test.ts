@@ -70,7 +70,8 @@ describe("what isn't a person's message never carries the mark", () => {
       "packages/core/src/send-size.ts: marker": 2,
       "packages/core/src/send-size.ts: workContext": 1,
     });
-  });
+    // It parses every source file under packages/ and apps/: seconds on a busy machine (#916).
+  }, 30_000);
 
   it("counts each site, in nested folders too", () => {
     const dir = mkdtempSync(join(tmpdir(), "send-marker-sources-"));
