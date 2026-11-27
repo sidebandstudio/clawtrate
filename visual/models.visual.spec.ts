@@ -28,22 +28,22 @@ async function changed(page: Page) {
 }
 
 const SCENES: Scene[] = [
-  { name: "settings-models", query: ADMIN, ready: models },
-  { name: "settings-models-changed", query: ADMIN, ready: changed },
-  { name: "settings-models-since", query: `${ADMIN}&models=since`, ready: models },
+  { name: "settings-openclaw", query: ADMIN, ready: models },
+  { name: "settings-openclaw-changed", query: ADMIN, ready: changed },
+  { name: "settings-openclaw-since", query: `${ADMIN}&models=since`, ready: models },
   // OpenClaw 2026.10.6 restarts by itself after a change with reload off.
-  { name: "settings-models-held", query: `${ADMIN}&models=held`, ready: models },
+  { name: "settings-openclaw-held", query: `${ADMIN}&models=held`, ready: models },
   // OpenClaw 2026.11.10 saves it and applies it at its next start.
   {
-    name: "settings-models-held-next-start",
+    name: "settings-openclaw-held-next-start",
     query: `${ADMIN}&models=held&version=2026.11.10`,
     ready: models,
   },
-  { name: "settings-models-read", query: `scene=main&${OTTO_DISK}&access=read`, ready: models },
+  { name: "settings-openclaw-read", query: `scene=main&${OTTO_DISK}&access=read`, ready: models },
 ];
 
 /** Light too, for the section and a change: the others differ from dark only in colour. */
-const LIGHT = new Set(["settings-models", "settings-models-changed"]);
+const LIGHT = new Set(["settings-openclaw", "settings-openclaw-changed"]);
 
 for (const size of SIZES.filter((each) => each.name === "1440" || each.phone)) {
   for (const theme of ["dark", "light"] as const) {
