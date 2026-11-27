@@ -7,10 +7,13 @@
 // to see what the engine says meanwhile, and its answers can be held or left
 // unanswered until the request's own timeout.
 
-import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
+import {
+  GatewayProtocolRequestError,
+  GatewayProtocolRequestTimeoutError,
+} from "@openclaw/gateway-client/browser";
 import { describe, expect, it } from "vitest";
 import { enforce } from "../src/bounds.ts";
-import { ClawtrateClient } from "../src/client.ts";
+import { ClawtrateClient, NotSentError } from "../src/client.ts";
 import { ADMIN_SCOPES, INTERACTIVE_SCOPES } from "../src/scopes.ts";
 import { FAST, grantingGateway, stampOn, URL_A } from "./client-harness.ts";
 import { GatewayError, memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
@@ -842,6 +845,100 @@ describe("F-201 F-366 saving", () => {
     await loadCheckIns(lost.ctx);
     await saveCheckIn(lost.ctx, "s2", "marlow", draft(lost.state(), "marlow", { every: "24h" }));
     expect(lost.state().save).toMatchObject({ status: "unknown" });
+  });
+
+  // What the gateway client rejects a request with when its connection drops or it is stopped
+  // (a suspend stops it): its own text, never words for a person (#788).
+  const CUT = ["gateway closed (1006): ", "gateway client stopped"];
+
+  it("#788: a patch cut off by a dropped connection or a stopped client says so in Clawtrate's words", async () => {
+    for (const cut of CUT) {
+      for (const stillAlive of [true, false]) {
+        const { gateway, ctx, state } = fakeGateway();
+        await loadCheckIns(ctx);
+        gateway.before = (method) => {
+          if (method !== "config.patch") return;
+          gateway.linkAlive = stillAlive;
+          throw new Error(cut);
+        };
+        await saveCheckIn(ctx, "s1", "marlow", draft(state(), "marlow", { every: "24h" }));
+        expect(state().save, `${cut}, link alive: ${stillAlive}`).toMatchObject({
+          status: "unknown",
+          error: "The connection changed before Clawtrate could confirm the change.",
+        });
+      }
+    }
+  });
+
+  it("#788: a patch the gateway didn't answer in time, or that was never sent, says so in Clawtrate's words", async () => {
+    const late = fakeGateway({
+      patch: () => {
+        throw new GatewayProtocolRequestTimeoutError({
+          method: "config.patch",
+          timeoutMs: 15_000,
+          requestSent: true,
+        });
+      },
+    });
+    await loadCheckIns(late.ctx);
+    await saveCheckIn(late.ctx, "s1", "marlow", draft(late.state(), "marlow", { every: "24h" }));
+    expect(late.state().save).toMatchObject({
+      status: "unknown",
+      error: "The gateway didn't answer in time.",
+    });
+    const unsent = fakeGateway({
+      patch: () => {
+        throw new NotSentError();
+      },
+    });
+    await loadCheckIns(unsent.ctx);
+    await saveCheckIn(
+      unsent.ctx,
+      "s1",
+      "marlow",
+      draft(unsent.state(), "marlow", { every: "24h" }),
+    );
+    expect(unsent.state().save).toMatchObject({
+      status: "failed",
+      error: "The connection changed before the change was sent.",
+    });
+  });
+
+  it("#788: a save whose first read is cut off by a dropped connection or a stopped client says so in Clawtrate's words, as does the list's read", async () => {
+    for (const cut of CUT) {
+      const { gateway, ctx, state } = fakeGateway();
+      await loadCheckIns(ctx);
+      const asked = draft(state(), "marlow", { every: "24h" });
+      gateway.before = (method) => {
+        if (method === "config.get") throw new Error(cut);
+      };
+      await saveCheckIn(ctx, "s1", "marlow", asked);
+      expect(gateway.attempts).toEqual([]);
+      expect(state().save, cut).toMatchObject({
+        status: "failed",
+        error: "The connection changed before the gateway answered.",
+      });
+      // The list's read goes on without the config, not without the jobs.
+      gateway.before = (method) => {
+        if (method === "cron.list") throw new Error(cut);
+      };
+      await loadCheckIns(ctx);
+      expect(state(), cut).toMatchObject({
+        status: "error",
+        error: "The connection changed before the gateway answered.",
+      });
+    }
+    const { gateway, ctx, state } = fakeGateway();
+    gateway.before = (method) => {
+      if (method === "cron.list")
+        throw new GatewayProtocolRequestTimeoutError({
+          method,
+          timeoutMs: 15_000,
+          requestSent: true,
+        });
+    };
+    await loadCheckIns(ctx);
+    expect(state()).toMatchObject({ status: "error", error: "The gateway didn't answer in time." });
   });
 
   it("a config changed between the read and the patch is a conflict: the patch carried the hash read, and the save settles before the list is read again", async () => {
