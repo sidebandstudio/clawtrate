@@ -554,10 +554,14 @@ export type Run = {
    * run `completed` with nothing to show, as 2026.10.6 ends one, unless the gateway's history
    * holds a row of it that answered nothing (`unansweredInHistory`): then it is the failure the
    * gateway sent. `pending` until a history read asked after the end has looked, `settled` once
-   * one found no such row (#680).
+   * one found no such row (#680); `unread` while it is the failure because that read failed, until
+   * a later read of the task's history looks (#767).
    */
-  quietEnd?: "pending" | "settled";
-  /** While `quietEnd` is `pending`: the end as the gateway sent it, the run's error if it failed. */
+  quietEnd?: "pending" | "settled" | "unread";
+  /**
+   * While `quietEnd` is `pending` or `unread`: the end as the gateway sent it, the run's error if
+   * it failed.
+   */
   quietError?: RunError;
   /**
    * History holds an assistant row of this run that answered nothing: no text and no tool call (a
@@ -1335,23 +1339,36 @@ export function answeredNothing(message: RawRecord): boolean {
 /**
  * Settle the quiet ends a history read has looked at (#680). A run whose history says it answered
  * nothing fails as the gateway sent it, whenever that row was read. Any other run whose marked end
- * was `pending` before the read was asked (`pendingBefore`) is a quiet answer, unless the read
- * failed or could not be made (`unread`): then, with nothing to say otherwise, it is the failure.
+ * waited for that read (`pendingBefore`) is a quiet answer when the read was made (`read`); the
+ * failure the gateway sent when it was made and didn't show the run whole (`failed`); and the
+ * failure, still to be read (`quietEnd: "unread"`), when it failed or couldn't be made
+ * (`unread`). A later read that looks settles an unread end as it would a pending one (#767).
  */
 export function settleQuietEnds(
   runs: Run[],
   pendingBefore: ReadonlySet<string>,
-  unread = false,
+  outcome: "read" | "unread" | "failed" = "read",
 ): Run[] {
   let changed = false;
   const settled = runs.map((run) => {
-    if (run.quietEnd !== "pending") return run;
-    const failed = run.unansweredInHistory === true || (unread && pendingBefore.has(run.id));
-    if (!failed && !pendingBefore.has(run.id)) return run;
+    if (run.quietEnd !== "pending" && run.quietEnd !== "unread") return run;
+    const unanswered = run.unansweredInHistory === true;
+    if (!unanswered && !pendingBefore.has(run.id)) return run;
+    if (!unanswered && outcome === "unread") {
+      if (run.quietEnd === "unread") return run;
+      changed = true;
+      return {
+        ...run,
+        state: "failed" as const,
+        error: run.quietError ?? null,
+        quietEnd: "unread" as const,
+      };
+    }
     changed = true;
-    const { quietEnd: _pending, quietError, ...rest } = run;
-    if (!failed) return { ...rest, quietEnd: "settled" as const };
-    return { ...rest, state: "failed" as const, error: quietError ?? null };
+    const { quietEnd: _waiting, quietError, ...rest } = run;
+    if (unanswered || outcome === "failed")
+      return { ...rest, state: "failed" as const, error: quietError ?? null };
+    return { ...rest, state: "completed" as const, error: null, quietEnd: "settled" as const };
   });
   return changed ? settled : runs;
 }
@@ -1359,6 +1376,18 @@ export function settleQuietEnds(
 /** The runs of a task whose quiet end waits for a history read (#680). */
 export function quietPending(runs: readonly Run[]): Set<string> {
   return new Set(runs.filter((run) => run.quietEnd === "pending").map((run) => run.id));
+}
+
+/**
+ * The runs of a task a read of its own history may settle: those whose quiet end waits for one,
+ * and those a read failed for, which stay the failure until one is made (#767).
+ */
+export function quietToRead(runs: readonly Run[]): Set<string> {
+  return new Set(
+    runs
+      .filter((run) => run.quietEnd === "pending" || run.quietEnd === "unread")
+      .map((run) => run.id),
+  );
 }
 
 /**

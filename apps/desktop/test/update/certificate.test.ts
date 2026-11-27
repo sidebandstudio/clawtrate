@@ -59,8 +59,11 @@ beforeAll(async () => {
 
 afterAll(async () => {
   server.closeAllConnections();
-  await new Promise<void>((resolve) => server.close(() => resolve()));
-  dir.remove();
+  try {
+    dir.remove();
+  } finally {
+    await new Promise<void>((resolve) => server.close(() => resolve()));
+  }
 });
 
 const engine = () =>
