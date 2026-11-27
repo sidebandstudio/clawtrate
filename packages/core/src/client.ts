@@ -10220,6 +10220,11 @@ export class ClawtrateClient {
       showChannelChats: true,
       showOtherToolSessions: true,
     });
+    // A check of a row's marked failure lasts while the row reports it for that run (#680).
+    this.quietChecks.retain((key, runId) => {
+      const row = this.rows.get(key);
+      return row?.suppressErrorNotice === true && row.lastRunId === runId;
+    });
     // What waits for the person, and whose latest run was stopped (`waiting.ts`): a task the
     // engine follows by its runs, any other by the gateway's events.
     for (const [botId, tasks] of Object.entries(tasksByBot)) {

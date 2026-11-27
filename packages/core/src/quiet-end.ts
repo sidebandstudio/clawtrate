@@ -19,7 +19,7 @@ const asRecord = (value: unknown): RawRecord | null =>
     ? (value as RawRecord)
     : null;
 
-/** Tasks not followed whose row reports a marked failure: one check each, the oldest giving way. */
+/** Tasks not followed whose row reports a marked failure: one check each, none giving way. */
 export const MAX_QUIET_CHECKS = 200;
 /** History rows a check reads: the run that just ended is at their end. */
 export const QUIET_CHECK_ROWS = 40;
@@ -59,16 +59,21 @@ export class QuietChecks {
     return settled || check.connection === connection ? check.verdict : undefined;
   }
 
-  /** A check begun. False when none can be kept: every one kept is still on its way. */
+  /**
+   * A check begun. False when none more can be kept: then the failure stays. None gives way to
+   * another: a task whose check gave way would ask again at the next publish, and that one's
+   * answer would push out the next, reading history over and over (`retain` frees them).
+   */
   begin(key: string, runId: string, connection: number): boolean {
+    if (!this.checks.has(key) && this.checks.size >= MAX_QUIET_CHECKS) return false;
     this.checks.delete(key);
-    if (this.checks.size >= MAX_QUIET_CHECKS) {
-      const settled = [...this.checks].find(([, check]) => check.verdict !== "pending");
-      if (!settled) return false;
-      this.checks.delete(settled[0]);
-    }
     this.checks.set(key, { runId, connection, verdict: "pending" });
     return true;
+  }
+
+  /** Keep only the checks whose task's row still reports the marked failure of the same run. */
+  retain(marked: (key: string, runId: string) => boolean): void {
+    for (const [key, check] of this.checks) if (!marked(key, check.runId)) this.checks.delete(key);
   }
 
   /** The check's verdict, if it is still the task's check begun on that connection. */
@@ -81,10 +86,6 @@ export class QuietChecks {
     const check = this.checks.get(key);
     if (check?.runId === runId && check.connection === connection)
       this.checks.set(key, { ...check, verdict });
-  }
-
-  forget(key: string): void {
-    this.checks.delete(key);
   }
 
   clear(): void {

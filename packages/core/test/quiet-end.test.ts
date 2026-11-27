@@ -268,6 +268,42 @@ describe("a quiet answer to a turn no person asked for is no failure (#680)", ()
     client.stop();
   });
 
+  it("2026.11.10: with its start arriving after its end, it is still settled by its history alone", async () => {
+    // The start a late event shows (#686) is kept, and changes nothing: no row of the run is a
+    // quiet answer, a row of reasoning only the failure, and neither is one the gateway couldn't run.
+    for (const [history, state, status] of [
+      [[eventRow], "completed", "done"],
+      [[eventRow, thinkingRow("wake-16", 4)], "failed", "failed"],
+    ] as const) {
+      let rows: unknown[] = [];
+      const gateway = gatewayWith(
+        [{ key: KEY, agentId: "otto", hasActiveRun: false, updatedAt: T0 }],
+        () => rows,
+      );
+      const { client, transcript } = await openTask({ gateway });
+      rows = [...history];
+      gateway.emit("chat", markedChat("wake-16"));
+      gateway.emit("agent", {
+        ...agentEvent("wake-16", 3, "lifecycle", { phase: "start" }),
+        ts: T0 + 2_000,
+      });
+      gateway.emit("agent", agentEvent("wake-16", 15, "lifecycle", MARKED_END));
+      changed(gateway, markedRow("wake-16"));
+      await until(() => {
+        const run = runOf(transcript, "wake-16");
+        return run?.quietEnd === "settled" || run?.state === "failed";
+      });
+      const run = runOf(transcript, "wake-16")!;
+      expect(run.state).toBe(state);
+      expect(run.startSaid === true || run.reportedStartAt !== null).toBe(true);
+      expect(neverRan(run)).toBe(false);
+      await until(() => task(client)?.status === status);
+      await sleep(50);
+      expect(task(client)?.status).toBe(status);
+      client.stop();
+    }
+  }, 30_000);
+
   it("while history has not been read since the end, it shows nothing, and is no failure", async () => {
     let release: () => void = () => {};
     const held = new Promise<void>((resolve) => (release = resolve));
@@ -388,6 +424,27 @@ describe("a real failure is never hidden as a quiet answer (#680)", () => {
     client.stop();
   }, 30_000);
 
+  it("the run this client holds decides its row: a later read finding nothing doesn't make it quiet", async () => {
+    // Its history can't be read after the end; then every read finds no row of the run. The run
+    // failed when its history couldn't be read, and the task stays failed: no read of its row
+    // against history is made over the run this client holds.
+    let fail = false;
+    const gateway = gatewayWith(
+      [{ key: KEY, agentId: "otto", hasActiveRun: false, updatedAt: T0 }],
+      () => (fail ? new Error("history unavailable") : [eventRow]),
+    );
+    const { client, transcript } = await openTask({ gateway, client: { readAgainMs: 1 } });
+    fail = true;
+    wakeAndEndMarked(gateway, "wake-15");
+    await until(() => runOf(transcript, "wake-15")?.state === "failed", 8_000);
+    fail = false;
+    changed(gateway, { ...markedRow("wake-15"), updatedAt: T0 + 9_000 });
+    await sleep(200);
+    expect(runOf(transcript, "wake-15")?.state).toBe("failed");
+    expect(task(client)?.status).toBe("failed");
+    client.stop();
+  }, 30_000);
+
   it("the same words unmarked (a person's message on 2026.11.10, or a mark not `true`) are a failure", async () => {
     for (const mark of [undefined, false, "true", 1]) {
       const gateway = gatewayWith(
@@ -502,6 +559,77 @@ describe("a task not open: its row's marked failure is read once against its his
     release();
     await sleep(50);
     expect(task(client, OTHER)?.status).toBe("failed");
+    client.stop();
+  }, 30_000);
+
+  it("with every place for a check taken, a new marked failure isn't read and stays a failure", async () => {
+    const others = Array.from({ length: MAX_QUIET_CHECKS + 1 }, (_, i) =>
+      markedRow(`wake-n${i}`, `agent:otto:quiet-${i}`),
+    );
+    const gateway = gatewayWith(
+      [
+        { key: KEY, agentId: "otto", status: "done", hasActiveRun: false, updatedAt: T0 },
+        ...others,
+      ],
+      () => [eventRow],
+    );
+    const read = gateway.handlers["chat.history"]!;
+    let checks = 0;
+    const held: Array<() => void> = [];
+    gateway.handlers["chat.history"] = (params) => {
+      if ((params as { sessionKey: string }).sessionKey === KEY) return read(params);
+      checks += 1;
+      // Not answered while the check runs.
+      return new Promise((resolve) => held.push(() => resolve({ messages: [], hasMore: false })));
+    };
+    const { client } = await openTask({ gateway });
+    await until(() => checks === MAX_QUIET_CHECKS);
+    await sleep(50);
+    const statuses = others.map((row) => task(client, row.key as string)?.status);
+    expect(statuses.filter((status) => status === "done")).toHaveLength(MAX_QUIET_CHECKS);
+    expect(statuses.filter((status) => status === "failed")).toHaveLength(1);
+    expect(checks).toBe(MAX_QUIET_CHECKS);
+    client.stop();
+    for (const answer of held) answer();
+  }, 30_000);
+
+  it("checks that failed don't make way for others: history isn't read again and again", async () => {
+    const others = Array.from({ length: MAX_QUIET_CHECKS + 1 }, (_, i) =>
+      markedRow(`wake-n${i}`, `agent:otto:quiet-${i}`),
+    );
+    const gateway = gatewayWith(
+      [
+        { key: KEY, agentId: "otto", status: "done", hasActiveRun: false, updatedAt: T0 },
+        ...others,
+      ],
+      () => [eventRow],
+    );
+    const read = gateway.handlers["chat.history"]!;
+    const checked: string[] = [];
+    gateway.handlers["chat.history"] = (params) => {
+      const key = (params as { sessionKey: string }).sessionKey;
+      if (key === KEY) return read(params);
+      checked.push(key);
+      throw new Error("history unavailable");
+    };
+    const { client } = await openTask({ gateway });
+    await until(() => checked.length === MAX_QUIET_CHECKS);
+    await sleep(200);
+    expect(checked).toHaveLength(MAX_QUIET_CHECKS);
+    const statuses = others.map((row) => task(client, row.key as string)?.status);
+    expect(statuses.every((status) => status === "failed")).toBe(true);
+    // A row that no longer reports its marked failure lets its check go: the one left out is read.
+    const left = others.map((row) => row.key as string).find((key) => !checked.includes(key))!;
+    changed(gateway, {
+      ...markedRow("wake-n0", "agent:otto:quiet-0"),
+      status: "done",
+      suppressErrorNotice: false,
+      lastRunError: null,
+      updatedAt: T0 + 9_000,
+    });
+    await until(() => checked.includes(left));
+    await sleep(100);
+    expect(checked).toHaveLength(MAX_QUIET_CHECKS + 1);
     client.stop();
   }, 30_000);
 
@@ -633,13 +761,22 @@ describe("the rules, alone", () => {
     });
   });
 
-  it("the checks keep at most their bound, a settled one giving way, and refuse when all are on their way", () => {
+  it("the checks keep at most their bound, none giving way, and last while their row reports the run", () => {
     const checks = new QuietChecks();
     for (let i = 0; i < MAX_QUIET_CHECKS; i += 1) expect(checks.begin(`k${i}`, "r", 1)).toBe(true);
     expect(checks.begin("over", "r", 1)).toBe(false);
+    // A settled one doesn't give way either: the task it held would be read again at once.
     checks.settle("k3", "r", 1, "quiet");
+    expect(checks.begin("over", "r", 1)).toBe(false);
+    expect(checks.verdict("k3", "r", 1)).toBe("quiet");
+    // A task already kept takes its own place again.
+    expect(checks.begin("k3", "s", 1)).toBe(true);
+    // One whose row no longer reports that run's marked failure is let go, and frees its place.
+    checks.retain((key, runId) => key !== "k4" && runId === "r");
+    expect(checks.verdict("k3", "s", 1)).toBeUndefined();
+    expect(checks.verdict("k4", "r", 1)).toBeUndefined();
+    expect(checks.verdict("k5", "r", 1)).toBe("pending");
     expect(checks.begin("over", "r", 1)).toBe(true);
-    expect(checks.verdict("k3", "r", 1)).toBeUndefined();
     expect(checks.verdict("over", "r", 1)).toBe("pending");
     // A later run's check replaces the task's; an earlier run's verdict is not taken for it.
     checks.settle("over", "r", 1, "failed");
