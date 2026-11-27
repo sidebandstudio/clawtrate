@@ -482,10 +482,12 @@ export const RUN: Bound = flagged<Run>()({
     uncertain: list(MAX_STOPPED_NAMED, ID),
     refused: list(MAX_STOPPED_NAMED, ID),
     unanswered: list(MAX_STOPPED_NAMED, ID),
+    followUps: list(MAX_STOPPED_NAMED, ID),
     omitted: NUMBER,
     recipientsAsked: FLAG,
   }),
   stoppedForTimeouts: NUMBER,
+  stoppedAsFollowUp: FLAG,
   turnLimit: NUMBER,
   retry: object<NonNullable<Run["retry"]>>()({ attempt: NUMBER, of: NUMBER, reason: NAME }),
 });
