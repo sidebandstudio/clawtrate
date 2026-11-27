@@ -13,7 +13,6 @@ import { createElement, type ReactNode } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { BridgeProvider } from "../src/bridge.tsx";
-import { SETTINGS_SECTIONS } from "../src/Settings.tsx";
 import {
   changeLine,
   modelWords,
