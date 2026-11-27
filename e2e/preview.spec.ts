@@ -2005,7 +2005,7 @@ test("F-099: a run stuck on a tool call that never returns reaches stopped withi
   await expect.poll(() => gatewayIdle(key), { timeout: 30_000 }).toBe(true);
 });
 
-test("F-296 F-298: Stop also stops the exact run of the bot this run messaged, and the note names it", async ({
+test("F-296 F-298: Stop also stops the exact run of the bot this run messaged, and the turn the gateway then starts by itself, and the notes name them", async ({
   page,
 }) => {
   await openShell(page);
@@ -2059,6 +2059,24 @@ test("F-296 F-298: Stop also stops the exact run of the bot this run messaged, a
     { runId: peer.runId, timeoutMs: 10_000 },
   );
   expect(ended).toMatchObject({ runId: peer.runId, stopReason: "rpc" });
+  // Marlow's run ended without a reply, so the gateway starts a turn of Pip's by itself, sent as
+  // Marlow's: the note that the message failed, which a bot may retry (#645). The scripted bot
+  // works on it for twenty seconds; Clawtrate stops it at once, by its id, and both notes say so.
+  const followUp = page
+    .getByTestId("stop-note")
+    .filter({ hasText: "The gateway started this turn on its own after your Stop" });
+  await expect(followUp).toHaveCount(1, { timeout: 30_000 });
+  await expect(note.getByTestId("stopped-with")).toContainText(
+    "Then stopped: the turn the gateway started here on its own once Marlow's run was stopped.",
+  );
+  const followUpRun = await followUp.getAttribute("data-run");
+  expect(followUpRun).not.toBe(runId);
+  expect(
+    await gatewayCall<{ runId?: string; stopReason?: string }>("agent.wait", {
+      runId: followUpRun,
+      timeoutMs: 10_000,
+    }),
+  ).toMatchObject({ runId: followUpRun, stopReason: "rpc" });
   await expect.poll(() => gatewayIdle(peer.sessionKey), { timeout: 10_000 }).toBe(true);
   await expect.poll(() => gatewayIdle(key), { timeout: 30_000 }).toBe(true);
 });
