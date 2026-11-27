@@ -1,0 +1,18 @@
+{
+  "openclaw": ["2026.10.6", "2026.11.10"],
+  "plugins": {
+    "clawtrate-voice": {
+      "version": "0.1.0",
+      "digest": "sha256-a/bAKZ908LZve+4zOjfSDkDuq+bZf0dzp517pyOpXGU=",
+      "grants": {
+        "hooks": {
+          "allowConversationAccess": true
+        }
+      },
+      "sourceDigests": {
+        "2026.10.6": "99dfd0ed8aedfd66ca983024dc0bd56510358a3236b8530d1943eb722556c760",
+        "2026.11.10": "99dfd0ed8aedfd66ca983024dc0bd56510358a3236b8530d1943eb722556c760"
+      }
+    }
+  }
+}
