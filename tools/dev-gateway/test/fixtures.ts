@@ -5,13 +5,11 @@ import { createHash } from "node:crypto";
 import {
   lstatSync,
   mkdirSync,
-  mkdtempSync,
   readdirSync,
   readFileSync,
   readlinkSync,
   writeFileSync,
 } from "node:fs";
-import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openInstance } from "../src/cli.ts";
 import { stateDirFor } from "../src/instance.ts";
@@ -26,7 +24,7 @@ import {
 export const CHECKOUT = "/test/this-checkout";
 export const OTHER_CHECKOUT = "/test/other-checkout";
 
-export const tempDir = (prefix: string) => mkdtempSync(join(tmpdir(), prefix));
+export { tempDir } from "../../../test/temp-dir.ts";
 
 /** Every entry under a folder with its type, mode, mtime and content hash, without following links. */
 export function snapshot(root: string): Record<string, string> {

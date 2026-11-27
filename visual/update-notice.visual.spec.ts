@@ -24,7 +24,7 @@ import {
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
 const PHONE = SIZES.find((size) => size.phone)!;
-/** The main bot's (Juniper's) main conversation, where the gateway writes its notice. */
+/** The main conversation of the gateway's own bot (`main`), where the gateway writes its notice. */
 const MAIN = "agent:main:main";
 /** Another bot's task. */
 const OTHER = "agent:otto:disk-space";
@@ -123,7 +123,7 @@ async function update(page: Page, seen: boolean, where: Where = "main") {
           },
           tasksByBot: {
             ...state.tasksByBot,
-            // This task is the bot's latest, so its preview is the bot's.
+            // This task is the bot's latest.
             [botId]: [
               row,
               ...tasks
@@ -163,13 +163,11 @@ const open = (page: Page, theme: (typeof THEMES)[number], where: Where = "main")
   openFixture(
     page,
     where === "main"
-      ? `scene=main&bot=main&task=${MAIN}&panel=closed`
+      ? `scene=main&bot=main&task=${MAIN}&panel=closed&gatewaybot=on`
       : `scene=main&${OTTO_DISK}&panel=closed`,
     theme,
   );
 const line = (page: Page) => page.getByTestId("update-line");
-const preview = (page: Page, bot: string) =>
-  page.locator(`[data-testid="bot"][data-bot="${bot}"] .bot-preview`);
 const asMessage = (page: Page) =>
   page.getByTestId("transcript").locator(".msg").filter({ hasText: "OpenClaw updated." });
 
@@ -220,8 +218,6 @@ test.describe("update notice behaviour", () => {
     await expect(line(page).locator(".update-line-text")).toHaveText(
       "✅ OpenClaw updated. For details, open Settings → Updates in the OpenClaw app or run `openclaw update status` in your terminal.",
     );
-    // The rail's preview is the bot's last words before it.
-    await expect(preview(page, "main")).toHaveText(REPLY);
   });
 
   test("F-590: without this device's record of the run, the same row is the bot's message, as before", async ({
@@ -231,7 +227,6 @@ test.describe("update notice behaviour", () => {
     await update(page, false);
     await expect(line(page)).toHaveCount(0);
     await expect(asMessage(page)).toHaveCount(1);
-    await expect(preview(page, "main")).toHaveText(LISTED);
   });
 
   test("F-590: in another bot's conversation, a row with a known run's key is the bot's message", async ({
@@ -241,6 +236,5 @@ test.describe("update notice behaviour", () => {
     await update(page, true, "other");
     await expect(line(page)).toHaveCount(0);
     await expect(asMessage(page)).toHaveCount(1);
-    await expect(preview(page, "otto")).toHaveText(LISTED);
   });
 });

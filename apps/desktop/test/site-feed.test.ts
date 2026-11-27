@@ -26,6 +26,7 @@ import {
   makeLatestMac,
   releaseFolder,
 } from "../packaging/beta-files.ts";
+import { artifactName } from "../packaging/feed.ts";
 import {
   assembleSite,
   betaNotes,
@@ -38,6 +39,7 @@ import {
   type Get,
   type ReleaseRow,
 } from "../packaging/site-feed.ts";
+import { parseFeed } from "../src/main/update/feed.ts";
 import { MAX_WHATS_NEW_BYTES, parseWhatsNew } from "../src/main/update/whats-new.ts";
 import { engineFor, feedServer, json, type FeedServer } from "./update/harness.ts";
 
@@ -363,6 +365,54 @@ describe("writing the site's feed", () => {
     });
     await expect(writeSiteFeed(site, get, "made-up-token")).rejects.toThrow("does not match");
     expect(existsSync(join(site, "updates"))).toBe(false);
+  });
+
+  // #308, interim: the site serves Mac betas only. The owner's signed trial
+  // (docs/development/releases.md) keeps the Windows tracks closed until it
+  // passes, and checkBetaFiles takes a feed that names the two Mac zips and
+  // nothing else. Opening a Windows Beta after that trial replaces this test.
+  it("#308 interim: refuses a beta whose feed also names a Windows installer, downloading nothing and writing neither feed folder", async () => {
+    const version = "0.1.1-beta.20261120.2";
+    const { tag, latest } = files(version);
+    const installer = artifactName(version, "win-x64");
+    const url = `${releaseFolder(tag)}${installer}`;
+    // A made-up installer: the 100 bytes its feed entry and GitHub's row both describe.
+    const exe = "w".repeat(100);
+    const withWindows = JSON.parse(files(version).feed);
+    withWindows.files["win-x64"] = {
+      url,
+      size: 100,
+      sha512: createHash("sha512").update(exe).digest("base64"),
+    };
+    const feed = JSON.stringify(withWindows);
+    // Otherwise a good feed: the app reads it, and a Windows copy would find its installer there.
+    const read = parseFeed(feed, new URL(BETA_FEED_URL), "win-x64", undefined, "nightly");
+    expect(read.ok && read.feed.file?.url.href).toBe(url);
+    const beta = row(version, {}, { feed });
+    beta.assets.push({
+      name: installer,
+      size: 100,
+      digest: `sha256:${sha256(exe)}`,
+      state: "uploaded",
+      browser_download_url: url,
+    });
+    const { get, asked } = github([beta], {
+      [`${releaseFolder(tag)}feed.json`]: feed,
+      [`${releaseFolder(tag)}latest-mac.json`]: latest,
+      [url]: exe,
+    });
+    // Refused for the Windows entry, not for a digest, a size or a name.
+    await expect(writeSiteFeed(site, get, "made-up-token")).rejects.toThrow(
+      `The feed of ${tag} names mac-arm64,mac-x64,win-x64.`,
+    );
+    // Refused on the two JSON files alone: neither zip nor the installer is downloaded.
+    expect(asked).toEqual([
+      "https://api.github.com/repos/sidebandstudio/clawtrate/releases?per_page=100&page=1",
+      `${releaseFolder(tag)}feed.json`,
+      `${releaseFolder(tag)}latest-mac.json`,
+    ]);
+    for (const folder of [BETA_FOLDER, LEGACY_BETA_FOLDER])
+      expect(existsSync(join(site, folder))).toBe(false);
   });
 
   it.each<[string, (row: ReleaseRow) => void]>([

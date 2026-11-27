@@ -15,32 +15,21 @@
     - button "Close settings"
     - heading "Conversation" [level=3]
     - text: Turn time limit
-    - spinbutton "Turn time limit": "50"
-    - paragraph: Minutes. 50 by default. At the limit Clawtrate asks the gateway to stop the turn so it does not hang, and once the gateway confirms, the turn ends with a note naming the limit. Send a message to pick up where it left off. It applies to turns this device starts.
-    - text: Bot voice On, as the gateway reads it, by default.
+    - button "About Turn time limit"
+    - spinbutton "Turn time limit minutes": "50"
+    - text: Bot voice
+    - button "About Bot voice"
+    - text: On, as the gateway reads it, by default.
     - switch "Bot voice" [checked]
-    - paragraph: While it's on, a voice guide is added to a bot's system prompt each time the gateway runs the plugin's hook, if its config permits the hook. The guide asks the bots to talk plainly and kindly, with no em dashes. Turned off, each bot talks the way its own instructions say.
     - term: Prompt hook permitted
     - definition: "Yes"
     - link "Where the guide doesn't reach":
       - /url: https://github.com/sidebandstudio/clawtrate/blob/main/plugins/clawtrate-voice/README.md#where-the-guide-doesnt-reach
     - group: What the guide asks the bots to do
-    - text: Bots know how Clawtrate works On
-    - switch "Bots know how Clawtrate works" [checked]
-    - paragraph:
-      - text: Clawtrate keeps a short section at the top of the
-      - code: AGENTS.md
-      - text: of each bot on this gateway that tells it how to talk to you and what a task is in Clawtrate.
-    - group: Read it
-    - list "Bots know how Clawtrate works":
-      - listitem:
-        - text: Marlow Its section isn't at the top, where Clawtrate put it, so Clawtrate leaves it as it is. Move it back to the top, or remove it yourself.
-        - button "Show"
-      - listitem:
-        - text: Otto Its markers aren't as Clawtrate wrote them, so Clawtrate can't tell where its section ends. Edit the file, or remove the section's text yourself.
-        - button "Show"
-      - listitem: Pip Pip's AGENTS.md isn't plain UTF-8 text, so Clawtrate can't change it. Save it as UTF-8 and Clawtrate can add, update or remove its section again.
-      - listitem: Quartermaster of the Family Calendar and Errands Couldn't read its instructions file. The gateway did not answer.
+    - paragraph: Clawtrate can't tell where its section is in Marlow's instructions, so it leaves them as they are.
+    - paragraph: Pip's instructions aren't plain UTF-8 text, so Clawtrate leaves them as they are.
+    - paragraph: "Quartermaster of the Family Calendar and Errands's instructions are too long for Clawtrate's section: the gateway would leave part of them out."
+    - paragraph: Clawtrate couldn't update Otto's instructions yet. It tries again the next time it connects.
   - status
 - navigation "Bots":
   - button "Routines"
@@ -49,10 +38,7 @@
   - button "New"
   - list:
     - listitem:
-      - button "Otto, working, 14 tasks, unread, home server operations" [expanded]:
-        - text: Otto home server operations
-        - time: now
-        - text: Rotating logs on rack-2
+      - button "Otto, working, 14 tasks, unread, home server operations" [expanded]: Otto home server operations
       - list "Otto's tasks":
         - listitem:
           - button "Rotate the logs on every machine in the rack before the disks fill up again, working": Rotate the logs on every machine in the rack before the disks fill up again
@@ -73,25 +59,13 @@
         - listitem:
           - button "Archived"
     - listitem:
-      - button "Juniper, 3 tasks, unread, research, primary bot":
-        - text: Juniper research
-        - time: 5:24 PM
-        - text: Ask these five, and get the answers in writing.
+      - button "Juniper, 3 tasks, unread, research": Juniper research
     - listitem:
-      - button "Marlow, 1 task, editing":
-        - text: Marlow editing
-        - time: 4:58 PM
-        - text: Tightened the intro and cut about 80 words.
+      - button "Marlow, 1 task, editing": Marlow editing
     - listitem:
-      - button "Pip, a run failed, 4 tasks, unread, planning":
-        - text: Pip planning
-        - time: 3:10 PM
-        - text: Here is the week, with Thursday kept clear.
+      - button "Pip, a run failed, 4 tasks, unread, planning": Pip planning
     - listitem:
-      - button "Quartermaster of the Family Calendar and Errands, 2 tasks, household logistics":
-        - text: Quartermaster of the Family Calendar and Errands household logistics
-        - time: Sat
-        - text: Both are on Saturday's route, pharmacy first because it closes at noon.
+      - button "Quartermaster of the Family Calendar and Errands, 2 tasks, household logistics": Quartermaster of the Family Calendar and Errands household logistics
   - status
   - button "127.0.0.1:18789, connected. Open the gateway menu."
   - button "Settings"

@@ -711,7 +711,7 @@ test("F-424: archiving or deleting a bot's last task creates and selects a new M
   page,
 }) => {
   // Juniper has no main session in the fixture: three tasks of its own.
-  await openFixture(page, "scene=rail-write&bot=main", "light");
+  await openFixture(page, "scene=rail-write&bot=clawtrate-main-bot", "light");
   for (const title of ["Heat pump", "Library e-book"]) {
     await taskMenu(page, title);
     await page.getByRole("menuitem", { name: "Archive" }).click();
@@ -804,7 +804,7 @@ test("F-014 F-016: Pin and Move to change the gateway's arrangement; sections ar
   await expect(page.getByRole("list", { name: "Pinned bots" }).locator(".pin")).toHaveCount(1);
   await expect(bot(page, "Juniper")).toBeFocused();
   expect(await sent(page, "changeSidebar")).toEqual([
-    expect.objectContaining({ change: { op: "pin", botId: "main", pinned: true } }),
+    expect.objectContaining({ change: { op: "pin", botId: "clawtrate-main-bot", pinned: true } }),
   ]);
 
   // Move to a new section: the dialog names it.
@@ -847,27 +847,27 @@ test("F-014: a task's Pin puts it first under its bot with a pin, and Unpin puts
   await expect(tasksOf(page, "Otto").first()).not.toHaveAccessibleName(/^Router firmware/);
 });
 
-test("F-021 F-057: a waiting bot says what it waits for in the warning colour, its avatar shows the waiting badge, and a stopped or queued task its own mark", async ({
+test("F-021 F-057: a waiting bot's avatar shows the waiting badge in the warning colour with no words on its row, its waiting task says it needs you, and a stopped or queued task its own mark", async ({
   page,
 }) => {
   await openFixture(page, `scene=rail-waiting&${OTTO}`, "light");
   const marlow = bot(page, "Marlow");
-  await expect(marlow.locator(".bot-preview")).toHaveText("Waiting for you: approve a command");
   await expect(marlow).toHaveAccessibleName(/^Marlow, waiting for you/);
+  await expect(marlow.locator(".bot-line")).not.toContainText("Waiting");
   await expect(marlow.locator(".presence")).toHaveAttribute("data-state", "waiting");
   await expect(marlow.locator(".presence > .glyph")).toHaveAttribute("data-state", "waiting");
   const warn = await page.evaluate(() => {
     const probe = document.createElement("span");
-    probe.style.color = "var(--warn)";
+    probe.style.backgroundColor = "var(--warn)";
     document.body.append(probe);
-    return getComputedStyle(probe).color;
+    return getComputedStyle(probe).backgroundColor;
   });
-  expect(await marlow.locator(".bot-preview").evaluate((el) => getComputedStyle(el).color)).toBe(
-    warn,
-  );
-  // Since it began waiting, not its latest activity.
-  await expect(marlow.locator(".bot-time")).toHaveText("5:34 PM");
-  await expect(bot(page, "Pip").locator(".bot-preview")).toHaveText("Waiting for you: a question");
+  expect(
+    await marlow
+      .locator(".presence > .glyph")
+      .evaluate((el) => getComputedStyle(el).backgroundColor),
+  ).toBe(warn);
+  await expect(bot(page, "Pip")).toHaveAccessibleName(/^Pip, waiting for you/);
 
   await bot(page, "Pip").focus();
   await page.keyboard.press("ArrowRight");
@@ -916,7 +916,7 @@ test("F-021 F-057: a waiting bot says what it waits for in the warning colour, i
       };
     });
   });
-  await expect(marlow.locator(".bot-preview")).not.toContainText("Waiting for you");
+  await expect(marlow).not.toHaveAccessibleName(/waiting for you/);
   await expect(marlow.locator(".presence")).toHaveAttribute("data-state", "idle");
 });
 

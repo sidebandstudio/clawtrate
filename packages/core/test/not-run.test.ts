@@ -456,7 +456,8 @@ describe("a task's mark is its latest run's outcome (#664)", () => {
 
 describe("an end the gateway marks not to show is no failure (#680)", () => {
   // 2026.11.10 ends a turn it started itself, which the bot answered quietly, with this error,
-  // marked `suppressErrorNotice`; 2026.10.6 sends no such mark.
+  // marked `suppressErrorNotice`; 2026.10.6 sends no such mark. How such an end is drawn, and when
+  // it is a failure after all, is `quiet-end.test.ts`.
   const QUIET = "No answer was returned. Ask again if you still need one.";
 
   it("its chat error neither fails the message as one the gateway couldn't run nor marks the task", async () => {
@@ -478,13 +479,20 @@ describe("an end the gateway marks not to show is no failure (#680)", () => {
       suppressErrorNotice: true,
     });
     await until(() =>
-      transcript().runs.some((run) => run.id === "wake-1" && run.state === "failed"),
+      transcript().runs.some((run) => run.id === "wake-1" && run.quietEnd === "settled"),
     );
     const run = transcript().runs.find((each) => each.id === "wake-1")!;
-    expect(run.error?.quiet).toBe(true);
+    expect(run.state).toBe("completed");
     expect(neverRan(run)).toBe(false);
-    // Even with no start of its own seen, the mark keeps it from being one the gateway couldn't run.
-    expect(neverRan({ ...run, reportedStartAt: null })).toBe(false);
+    // Failed after all (its history said it answered nothing), the mark keeps it from being one the
+    // gateway couldn't run, even with no start of its own seen.
+    const failed = {
+      ...run,
+      state: "failed" as const,
+      error: { message: QUIET, kind: null, quiet: true as const },
+    };
+    expect(neverRan(failed)).toBe(false);
+    expect(neverRan({ ...failed, reportedStartAt: null })).toBe(false);
     await sleep(50);
     expect(task(client)?.status).not.toBe("failed");
     client.stop();
@@ -753,6 +761,23 @@ describe("the rules underneath", () => {
     index.noteInput(KEY);
     expect(index.onChat({ sessionKey: KEY, runId: "r3", state: "error" }, 3_000)).toBe(true);
     expect(index.failedAt(KEY)).toBe(3_000);
+  });
+
+  it("a new message stopped before its run starts clears an earlier failure's mark (#783)", () => {
+    const index = new WaitingIndex();
+    index.onChat({ sessionKey: KEY, runId: "r1", state: "error" }, 1_000);
+    expect(index.failedAt(KEY)).toBe(1_000);
+    // The next message is admitted, then stopped before its run starts: its row brings no start.
+    index.noteInput(KEY);
+    index.onChat({ sessionKey: KEY, runId: "r2", state: "aborted" }, 1_500);
+    expect(index.failedAt(KEY)).toBeNull();
+  });
+
+  it("a run's chat abort after its own chat error keeps the task marked failed (#783)", () => {
+    const index = new WaitingIndex();
+    index.onChat({ sessionKey: KEY, runId: "r1", state: "error" }, 1_000);
+    expect(index.onChat({ sessionKey: KEY, runId: "r1", state: "aborted" }, 1_500)).toBe(false);
+    expect(index.failedAt(KEY)).toBe(1_000);
   });
 
   it("an older run's late chat end says nothing while a newer run of the task is going", () => {

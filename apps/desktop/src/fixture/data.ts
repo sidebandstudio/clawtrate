@@ -48,16 +48,30 @@ function pictureAvatar(): string {
   return canvas.toDataURL("image/png");
 }
 
+/** The Main Bot, the bot Clawtrate made (`docs/design/main-bot-onboarding.md` section 4). */
+export const MAIN_BOT = "clawtrate-main-bot";
+
 export function fixtureBots(): Bot[] {
   return [
+    // The gateway's own bot, as OpenClaw lists it: its default, unnamed and with no picture.
+    // While another bot exists it stays out of view (F-562).
     {
       id: "main",
+      name: "main",
+      emoji: null,
+      avatarUrl: null,
+      theme: null,
+      model: "scripted/dev-1",
+      isDefault: true,
+    },
+    {
+      id: MAIN_BOT,
       name: "Juniper",
       emoji: null,
       avatarUrl: pictureAvatar(),
       theme: "research",
       model: "scripted/dev-1",
-      isDefault: true,
+      isDefault: false,
     },
     {
       id: "marlow",
@@ -110,7 +124,18 @@ type TaskSpec = {
 };
 
 const SPECS: Record<string, TaskSpec[]> = {
+  // The gateway's own bot: its main conversation, fed by a channel message that named no bot.
   main: [
+    {
+      slug: "main",
+      title: "Main",
+      ago: 9 * 60,
+      preview: "Yes. The porch light turns on at sunset and off at 11 PM.",
+      ask: "Is the porch light on a timer?",
+      unread: true,
+    },
+  ],
+  [MAIN_BOT]: [
     {
       slug: "heat-pump",
       title: "Heat pump vs. gas furnace",
@@ -371,8 +396,8 @@ function weekTranscript(now: number): TranscriptItem[] {
  * only task is blocked; Pip keeps its failed task.
  */
 export const TASK_STATES: Record<string, Task["status"]> = {
-  "agent:main:heat-pump": "waiting",
-  "agent:main:ebook-apps": "running",
+  "agent:clawtrate-main-bot:heat-pump": "waiting",
+  "agent:clawtrate-main-bot:ebook-apps": "running",
   "agent:otto:backup-check": "done-with-failures",
   "agent:marlow:main": "blocked",
 };
@@ -530,7 +555,7 @@ function diskTranscript(now: number): TranscriptItem[] {
 }
 
 /** Juniper's e-book answer: inline markdown (bold, emphasis, a link, inline code) inside sentences. */
-export const MARKDOWN_TASK = "agent:main:ebook-apps";
+export const MARKDOWN_TASK = "agent:clawtrate-main-bot:ebook-apps";
 
 function ebookTranscript(spec: TaskSpec, at: number): TranscriptItem[] {
   return [

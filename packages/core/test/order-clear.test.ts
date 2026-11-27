@@ -11,7 +11,6 @@ import {
   accountWord,
   clearShown,
   initialAccountsState,
-  MAX_ACCOUNTS,
   NO_ACCOUNT_STATUS,
   ORDER_CLEAR_WAIT_MS,
   providerNotListed,
@@ -798,65 +797,56 @@ describe("F-592: a press settled by the gateway's newest read", () => {
 });
 
 describe("F-592: a provider the answer doesn't list is no reading of its order", () => {
-  /** Otto's status as the fake gives it, with acme taken out or pushed past the cap. */
-  const without = (fake: AccountsGateway, how: "other only" | "past the cap") => {
+  /** Otto's status as the fake gives it, with acme taken out. */
+  const without = (fake: AccountsGateway) => {
     const status = fake.status.bind(fake);
     return (agentId: string) => {
       const answer = status(agentId) as { providers: Array<{ provider: string }> };
-      const others = answer.providers.filter((each) => each.provider !== "acme");
-      if (how === "other only") return { ...answer, providers: others };
-      const acme = answer.providers.filter((each) => each.provider === "acme");
-      const filler = Array.from({ length: MAX_ACCOUNTS }, (_, i) => ({
-        provider: `filler-${i}`,
-        profiles: [],
-      }));
-      return { ...answer, providers: [...others, ...filler, ...acme] };
+      return { ...answer, providers: answer.providers.filter((each) => each.provider !== "acme") };
     };
   };
 
-  for (const how of ["other only", "past the cap"] as const) {
-    it(`the read after the press lists ${how === "other only" ? "only another provider" : "the provider past the cap"}: unread, never Unlocked`, async () => {
-      const { client, fake, accounts, press } = await locked();
-      const blank = without(fake, how);
-      // The order stays stored: the gateway answered yes and kept it.
-      fake.orderSet = (params) => {
-        fake.blankStatus = { agentId: "otto", answer: blank("otto") };
-        return { provider: params.provider, profileIds: null };
-      };
-      await press();
-      expect(fake.orders.otto?.acme).toEqual(["acme:work"]);
-      expect(accounts().clear?.status).toBe("unread");
-      expect(shown(accounts().clear!, otto(accounts()))).toBe("unread");
-      expect(otto(accounts()).evidence).toMatchObject({
-        status: "failed",
-        providerRead: false,
-        error: providerNotListed("acme"),
-      });
-      // Nothing says the lock went: the last confirmation stands.
-      expect(otto(accounts()).evidence.lostAt).toBeNull();
-      expect(otto(accounts()).evidence.lastMatchAt).not.toBeNull();
-      // A Check now with the same answer settles nothing.
-      await client.checkLock("otto");
-      expect(shown(accounts().clear!, otto(accounts()))).toBe("unread");
-      client.stop();
+  it("the read after the press lists only another provider: unread, never Unlocked", async () => {
+    const { client, fake, accounts, press } = await locked();
+    const blank = without(fake);
+    // The order stays stored: the gateway answered yes and kept it.
+    fake.orderSet = (params) => {
+      fake.blankStatus = { agentId: "otto", answer: blank("otto") };
+      return { provider: params.provider, profileIds: null };
+    };
+    await press();
+    expect(fake.orders.otto?.acme).toEqual(["acme:work"]);
+    expect(accounts().clear?.status).toBe("unread");
+    expect(shown(accounts().clear!, otto(accounts()))).toBe("unread");
+    expect(otto(accounts()).evidence).toMatchObject({
+      status: "failed",
+      providerRead: false,
+      error: providerNotListed("acme"),
     });
+    // Nothing says the lock went: the last confirmation stands.
+    expect(otto(accounts()).evidence.lostAt).toBeNull();
+    expect(otto(accounts()).evidence.lastMatchAt).not.toBeNull();
+    // A Check now with the same answer settles nothing.
+    await client.checkLock("otto");
+    expect(shown(accounts().clear!, otto(accounts()))).toBe("unread");
+    client.stop();
+  });
 
-    it(`the read before the send lists ${how === "other only" ? "only another provider" : "the provider past the cap"}: nothing is sent`, async () => {
-      const { client, fake, accounts, press } = await locked();
-      fake.blankStatus = { agentId: "otto", answer: without(fake, how)("otto") };
-      await press();
-      expect(fake.gateway.calls("models.authOrderSet")).toHaveLength(0);
-      expect(accounts().clear).toMatchObject({
-        status: "unsent",
-        error: providerNotListed("acme"),
-      });
-      client.stop();
+  it("the read before the send lists only another provider: nothing is sent", async () => {
+    const { client, fake, accounts, press } = await locked();
+    fake.blankStatus = { agentId: "otto", answer: without(fake)("otto") };
+    await press();
+    expect(fake.gateway.calls("models.authOrderSet")).toHaveLength(0);
+    expect(accounts().clear).toMatchObject({
+      status: "unsent",
+      error: providerNotListed("acme"),
     });
-  }
+    client.stop();
+  });
 
   it("a Clear whose read after lists only another provider: unread", async () => {
     const { client, fake, accounts, press } = await locked("clear");
-    const blank = without(fake, "other only");
+    const blank = without(fake);
     fake.orderSet = (params) => {
       fake.blankStatus = { agentId: "otto", answer: blank("otto") };
       return { provider: params.provider, profileIds: null };

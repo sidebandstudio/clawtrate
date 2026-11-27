@@ -1,6 +1,7 @@
 // "Bot voice" in Settings, Conversation, in the fixture mode (checklist row F-527):
 // the setting as the gateway's voice plugin reads it back, a change reaching
-// the host, and what it says when the plugin or its permission is missing.
+// the host, what it says when the plugin's permission is missing, and nothing at
+// all when the plugin isn't on the gateway (#796: no link out to set it up).
 // The gateway's half is e2e/bot-voice.spec.ts.
 import { readFileSync } from "node:fs";
 import { test, type Page } from "@playwright/test";
@@ -37,7 +38,6 @@ const reads = (page: Page) =>
   );
 const README =
   "https://github.com/sidebandstudio/clawtrate/blob/main/plugins/clawtrate-voice/README.md";
-const SETUP = `${README}#turning-it-on-for-a-gateway`;
 const LIMITS = `${README}#where-the-guide-doesnt-reach`;
 type FixtureState = { connection: { target?: number }; voiceChanges?: number };
 type FixtureWindow = {
@@ -273,10 +273,15 @@ test.describe("bot voice", () => {
     await expect(voice).not.toBeChecked();
   });
 
-  test("F-527: a missing plugin or a refusal read before a disconnect is not shown as current", async ({
+  test("F-527: a refusal read before a disconnect is not shown as current, and a missing plugin stays unshown", async ({
     page,
   }) => {
-    for (const voice of ["missing", "refused"]) {
+    const missing = await openPane(page, "&voice=missing");
+    await expect(missing.getByTestId("bot-voice")).toHaveCount(0);
+    await disconnect(page);
+    await expect(missing.getByTestId("turn-limit")).toBeVisible();
+    await expect(missing.getByTestId("bot-voice")).toHaveCount(0);
+    for (const voice of ["refused"]) {
       const settings = await openPane(page, `&voice=${voice}`);
       await expect(settings.getByTestId("bot-voice")).toHaveAttribute("data-confirmed", "true");
       await expect(settings.getByTestId("bot-voice-freshness")).toHaveCount(0);
@@ -291,7 +296,7 @@ test.describe("bot voice", () => {
   test("F-527: a read that fails after a reconnect keeps its error and its retry", async ({
     page,
   }) => {
-    for (const voice of ["on", "missing", "refused"]) {
+    for (const voice of ["on", "refused"]) {
       const settings = await openPane(page, `&voice=${voice}`);
       await expect(settings.getByTestId("bot-voice")).toHaveAttribute("data-confirmed", "true");
       await disconnect(page);
@@ -558,19 +563,17 @@ test.describe("bot voice", () => {
     await expect(voice).toHaveAccessibleDescription(/Changing it needs write access\./);
   });
 
-  test("F-527: says when the gateway lacks the plugin, or hasn't let its hook run", async ({
+  test("F-527: shows nothing when the gateway lacks the plugin, and says when it hasn't let its hook run", async ({
     page,
   }) => {
+    // Every bot gets the same voice guide from Clawtrate's section in its instructions, and
+    // there is nothing to do from here: no control, no line, no link out.
     let settings = await openPane(page, "&voice=missing");
-    await expect(settings.getByTestId("bot-voice")).toContainText(
-      "Bot voice needs Clawtrate's voice plugin, clawtrate-voice, on the gateway.",
-    );
+    await expect(settings.getByTestId("turn-limit")).toBeVisible();
+    await expect(settings.getByTestId("bot-voice")).toHaveCount(0);
     await expect(settings.getByRole("switch", { name: "Bot voice" })).toHaveCount(0);
-    // The owner has somewhere to go: the plugin's setup steps.
-    await expect(settings.getByRole("link", { name: "How to set it up" })).toHaveAttribute(
-      "href",
-      SETUP,
-    );
+    await expect(settings.getByText(/voice plugin/)).toHaveCount(0);
+    await expect(settings.getByRole("link")).toHaveCount(0);
     settings = await openPane(page, "&voice=blocked");
     const blocked = settings.getByTestId("bot-voice-blocked");
     // Both settings are named, and the one that blocks it says so.
@@ -581,13 +584,15 @@ test.describe("bot voice", () => {
     await expect(blocked.getByTestId("bot-voice-allowPromptInjection")).toHaveText(
       "allowPromptInjection must not be false. It does.",
     );
+    await expect(blocked).toContainText(
+      "The gateway's config doesn't permit the voice plugin's prompt hook, so the plugin adds its guide to no bot's system prompt.",
+    );
     await expect(blocked).toContainText("Clawtrate doesn't change the gateway's config.");
     // The preference and whether the hook is permitted are separate facts.
     await expect(settings.getByRole("switch", { name: "Bot voice" })).toBeChecked();
     await expect(settings.getByTestId("bot-voice-hook")).toHaveText("No");
-    await expect(
-      settings.getByTestId("bot-voice-blocked").getByRole("link", { name: "How to set it up" }),
-    ).toHaveAttribute("href", SETUP);
+    // No link out to set it up (#796).
+    await expect(settings.getByTestId("bot-voice-blocked").getByRole("link")).toHaveCount(0);
     settings = await openPane(page, "&voice=bothoff");
     const both = settings.getByTestId("bot-voice-blocked");
     await expect(both.getByTestId("bot-voice-allowConversationAccess")).toContainText(
@@ -610,14 +615,13 @@ test.describe("bot voice", () => {
     await expect(settings.getByTestId("bot-voice")).not.toContainText(
       "needs Clawtrate's voice plugin",
     );
+    await expect(settings.getByTestId("bot-voice").getByRole("link")).toHaveCount(0);
+    await expect(settings.getByRole("link", { name: "How to set it up" })).toHaveCount(0);
+    // A refusal from a gateway that lists no methods is how one without the plugin answers:
+    // nothing is shown, as for a missing plugin.
     settings = await openPane(page, "&voice=unclear");
-    await expect(settings.getByTestId("bot-voice-refused")).toContainText(
-      "Clawtrate can't tell whether the gateway has its voice plugin.",
-    );
-    await expect(settings.getByRole("link", { name: "How to set it up" })).toHaveAttribute(
-      "href",
-      SETUP,
-    );
+    await expect(settings.getByTestId("turn-limit")).toBeVisible();
+    await expect(settings.getByTestId("bot-voice")).toHaveCount(0);
   });
 });
 

@@ -1,0 +1,5 @@
+# The files the desktop app packs into its plugin tarballs are checked out with LF line endings
+# on every computer, whatever core.autocrlf says, so each packs the digest
+# apps/desktop/packaging/carried-plugins.json records (docs/development/packaging.md). A binary
+# file added under plugins/ needs a line of its own marking it -text.
+/plugins/** text eol=lf

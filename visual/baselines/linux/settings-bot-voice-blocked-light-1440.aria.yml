@@ -15,17 +15,18 @@
     - button "Close settings"
     - heading "Conversation" [level=3]
     - text: Turn time limit
-    - spinbutton "Turn time limit": "50"
-    - paragraph: Minutes. 50 by default. At the limit Clawtrate asks the gateway to stop the turn so it does not hang, and once the gateway confirms, the turn ends with a note naming the limit. Send a message to pick up where it left off. It applies to turns this device starts.
-    - text: Bot voice On, as the gateway reads it, by default.
+    - button "About Turn time limit"
+    - spinbutton "Turn time limit minutes": "50"
+    - text: Bot voice
+    - button "About Bot voice"
+    - text: On, as the gateway reads it, by default.
     - switch "Bot voice" [checked]
-    - paragraph: While it's on, a voice guide is added to a bot's system prompt each time the gateway runs the plugin's hook, if its config permits the hook. The guide asks the bots to talk plainly and kindly, with no em dashes. Turned off, each bot talks the way its own instructions say.
     - term: Prompt hook permitted
     - definition: "No"
     - link "Where the guide doesn't reach":
       - /url: https://github.com/sidebandstudio/clawtrate/blob/main/plugins/clawtrate-voice/README.md#where-the-guide-doesnt-reach
     - paragraph:
-      - text: The gateway's config doesn't permit the voice plugin's prompt hook, so no bot gets the guide. Under
+      - text: The gateway's config doesn't permit the voice plugin's prompt hook, so the plugin adds its guide to no bot's system prompt. Under
       - code: plugins.entries.clawtrate-voice.hooks
       - text: "both of these must permit it:"
     - list:
@@ -36,16 +37,7 @@
         - code: allowPromptInjection
         - text: must not be false. It does.
     - paragraph: Then restart the gateway. Clawtrate doesn't change the gateway's config.
-    - link "How to set it up":
-      - /url: https://github.com/sidebandstudio/clawtrate/blob/main/plugins/clawtrate-voice/README.md#turning-it-on-for-a-gateway
     - group: What the guide asks the bots to do
-    - text: Bots know how Clawtrate works On
-    - switch "Bots know how Clawtrate works" [checked] [disabled]
-    - paragraph:
-      - text: Clawtrate keeps a short section at the top of the
-      - code: AGENTS.md
-      - text: of each bot on this gateway that tells it how to talk to you and what a task is in Clawtrate. This connection doesn't have admin access, so Clawtrate can't add or remove it from here.
-    - group: Read it
   - status
 - navigation "Bots":
   - button "Routines"
@@ -54,10 +46,7 @@
   - button "New"
   - list:
     - listitem:
-      - button "Otto, working, 14 tasks, unread, home server operations" [expanded]:
-        - text: Otto home server operations
-        - time: now
-        - text: Rotating logs on rack-2
+      - button "Otto, working, 14 tasks, unread, home server operations" [expanded]: Otto home server operations
       - list "Otto's tasks":
         - listitem:
           - button "Rotate the logs on every machine in the rack before the disks fill up again, working": Rotate the logs on every machine in the rack before the disks fill up again
@@ -78,25 +67,13 @@
         - listitem:
           - button "Archived"
     - listitem:
-      - button "Juniper, 3 tasks, unread, research, primary bot":
-        - text: Juniper research
-        - time: 5:24 PM
-        - text: Ask these five, and get the answers in writing.
+      - button "Juniper, 3 tasks, unread, research": Juniper research
     - listitem:
-      - button "Marlow, 1 task, editing":
-        - text: Marlow editing
-        - time: 4:58 PM
-        - text: Tightened the intro and cut about 80 words.
+      - button "Marlow, 1 task, editing": Marlow editing
     - listitem:
-      - button "Pip, a run failed, 4 tasks, unread, planning":
-        - text: Pip planning
-        - time: 3:10 PM
-        - text: Here is the week, with Thursday kept clear.
+      - button "Pip, a run failed, 4 tasks, unread, planning": Pip planning
     - listitem:
-      - button "Quartermaster of the Family Calendar and Errands, 2 tasks, household logistics":
-        - text: Quartermaster of the Family Calendar and Errands household logistics
-        - time: Sat
-        - text: Both are on Saturday's route, pharmacy first because it closes at noon.
+      - button "Quartermaster of the Family Calendar and Errands, 2 tasks, household logistics": Quartermaster of the Family Calendar and Errands household logistics
   - status
   - button "127.0.0.1:18789, connected. Open the gateway menu."
   - button "Settings"

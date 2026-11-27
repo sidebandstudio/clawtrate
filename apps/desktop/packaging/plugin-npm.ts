@@ -25,7 +25,6 @@ import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
   appendFileSync,
-  cpSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -231,19 +230,21 @@ export function listedFiles(dir: string, entries: string[]): string[] {
 
 const scratch = () => mkdtempSync(join(tmpdir(), "clawtrate-plugin-npm-"));
 
+export type PackageFiles = {
+  /** The published package.json, as `publishedManifest` makes it. */
+  manifest: Manifest;
+  pluginId: string;
+  /** Every file of the package by its path in it, package.json and LICENSE included. */
+  files: Map<string, Buffer>;
+};
+
 /**
- * Packs the plugin in `pluginDir` into `out`, from a clean folder holding only
- * the files its `files` list names, its README, the published package.json
- * and the repository's LICENSE. Fails unless its manifest's id is the
- * folder's name, the list holds the manifest and every file OpenClaw runs,
- * and the tarball holds exactly those files.
+ * What the plugin in `pluginDir` packs to: the files its `files` list names,
+ * its README, the published package.json and the repository's LICENSE. Fails
+ * unless its manifest's id is the folder's name and the list holds the
+ * manifest and every file OpenClaw runs.
  */
-export function packPlugin(
-  pluginDir: string,
-  out: string,
-  license: string,
-  npm: Npm = runNpm,
-): Packed {
+export function packageFiles(pluginDir: string, license: string): PackageFiles {
   const folder = basename(resolve(pluginDir));
   const manifest = publishedManifest(readJson(join(pluginDir, "package.json")), folder);
   const pluginId = readJson(join(pluginDir, "openclaw.plugin.json")).id;
@@ -260,17 +261,33 @@ export function packPlugin(
   const extras = ["README.md"].filter((path) =>
     lstatSync(join(pluginDir, path), { throwIfNoEntry: false })?.isFile(),
   );
+  const files = new Map<string, Buffer>();
+  for (const path of [...listed, ...extras]) files.set(path, readFileSync(join(pluginDir, path)));
+  files.set("LICENSE", readFileSync(license));
+  files.set("package.json", Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`));
+  return { manifest, pluginId, files };
+}
+
+/**
+ * Packs the plugin in `pluginDir` into `out` with npm, from a clean folder
+ * holding only `packageFiles`'s files, and fails unless the tarball holds
+ * exactly those.
+ */
+export function packPlugin(
+  pluginDir: string,
+  out: string,
+  license: string,
+  npm: Npm = runNpm,
+): Packed {
+  const { manifest, pluginId, files } = packageFiles(pluginDir, license);
   const stage = scratch();
   try {
-    for (const path of [...listed, ...extras]) {
+    for (const [path, bytes] of files) {
       mkdirSync(dirname(join(stage, path)), { recursive: true });
-      cpSync(join(pluginDir, path), join(stage, path));
+      writeFileSync(join(stage, path), bytes);
     }
-    cpSync(license, join(stage, "LICENSE"));
-    writeFileSync(join(stage, "package.json"), `${JSON.stringify(manifest, null, 2)}\n`);
     mkdirSync(out, { recursive: true });
-    const expected = [...listed, ...extras, "LICENSE", "package.json"];
-    const packed = npmPack(stage, resolve(out), expected, npm);
+    const packed = npmPack(stage, resolve(out), [...files.keys()], npm);
     return {
       name: manifest.name as string,
       version: manifest.version as string,

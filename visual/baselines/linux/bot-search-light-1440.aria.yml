@@ -6,15 +6,9 @@
     - button "Close search"
   - list:
     - listitem:
-      - button "Juniper, 3 tasks, unread, research, primary bot":
-        - text: Juniper research
-        - time: 5:24 PM
-        - text: Ask these five, and get the answers in writing.
+      - button "Juniper, 3 tasks, unread, research": Juniper research
     - listitem:
-      - button "Pip, a run failed, 4 tasks, unread, planning":
-        - text: Pip planning
-        - time: 3:10 PM
-        - text: Here is the week, with Thursday kept clear.
+      - button "Pip, a run failed, 4 tasks, unread, planning": Pip planning
   - status
   - button "127.0.0.1:18789, connected. Open the gateway menu."
   - button "Settings"

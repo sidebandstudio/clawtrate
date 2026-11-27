@@ -3,9 +3,6 @@ import {
   listedTasks as listedTasksOf,
   mapSessionRow,
   NOT_OPEN_IN_VIEW,
-  tasksWithFilePreviews,
-  tasksWithoutUpdateNotices,
-  updateNoticeScope,
   type BridgeCommand,
   type ClawtrateState,
   type HostInfo,
@@ -353,20 +350,6 @@ export function Shell({
   }, [togglePanel, drawerKeys, setPanel, deletingOpen]);
 
   const [commandsShown] = useShowCommands();
-  const { tasksByBot, transcripts } = state;
-  const { updated, mainKey } = updateNoticeScope(state);
-  const gatewayId = state.connection.gatewayId;
-  // The rail's preview of a task whose history ends with a bot's message that is only files reads
-  // as their names (F-115); one whose history ends with the gateway's update line shows what came
-  // before it (F-590).
-  const listedTasks = useMemo(
-    () =>
-      tasksWithFilePreviews(
-        tasksWithoutUpdateNotices(tasksByBot, transcripts, { updated, gatewayId, mainKey }),
-        transcripts,
-      ),
-    [tasksByBot, transcripts, updated, gatewayId, mainKey],
-  );
 
   // The dock or taskbar badge counts unread tasks, other than the one on screen.
   // Only tasks of the bots the sidebar lists (F-562): a count always has something to open.
@@ -901,7 +884,7 @@ export function Shell({
       >
         <Rail
           bots={selection.listed}
-          tasksByBot={listedTasks}
+          tasksByBot={state.tasksByBot}
           discovery={state.discovery}
           connection={state.connection}
           catchingUp={catchingUp}

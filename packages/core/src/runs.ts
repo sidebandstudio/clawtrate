@@ -286,6 +286,25 @@ export function timeoutsInARow(run: Run): number {
   return count;
 }
 
+/** The run is being stopped as the gateway's follow-up to a Stop of this client's (#645). */
+export function markStoppedAsFollowUp(activity: TaskActivity, runId: string): TaskActivity {
+  return updateRun(activity, runId, (run) => ({ ...run, stoppedAsFollowUp: true }));
+}
+
+/**
+ * That stop was refused or given up: the turn goes on as it was, with nothing said about it. It
+ * was this client's own doing, never the person's Stop, so no error is shown for it (#645).
+ */
+export function unmarkStoppedAsFollowUp(activity: TaskActivity, runId: string): TaskActivity {
+  // Only a run still marked: one rebuilt since (the task closed and opened again) may be stopping
+  // for the person's own Stop, which a late answer to this client's abort must not undo.
+  if (!findRun(activity, runId)?.stoppedAsFollowUp) return activity;
+  return updateRun(revertStop(activity, runId, ""), runId, ({ stoppedAsFollowUp: _, ...run }) => ({
+    ...run,
+    stopError: null,
+  }));
+}
+
 /** The run is being stopped because its tool calls kept timing out. */
 export function markStoppedForTimeouts(
   activity: TaskActivity,
@@ -321,6 +340,11 @@ export type StoppedWith = {
   refused: string[];
   /** Session keys of recipients' runs whose stop got no answer: they may still be going. */
   unanswered: string[];
+  /**
+   * Session keys whose recipient's stopped run then made the gateway start a turn of its own in
+   * this task (its note that the delivery failed), which this client stopped as well (#645).
+   */
+  followUps: string[];
   /** Names not kept past `MAX_STOPPED_NAMED` of a kind; every one of them was still asked. */
   omitted: number;
   /** The recipients have been asked to stop (once per run). */
@@ -334,6 +358,7 @@ const noCompanions = (): StoppedWith => ({
   uncertain: [],
   refused: [],
   unanswered: [],
+  followUps: [],
   omitted: 0,
   recipientsAsked: false,
 });
@@ -359,6 +384,7 @@ export function noteStoppedWith(
         uncertain: keep(next.uncertain),
         refused: keep(next.refused),
         unanswered: keep(next.unanswered),
+        followUps: keep(next.followUps),
         omitted,
         recipientsAsked: next.recipientsAsked,
       },
@@ -400,7 +426,8 @@ export type RunError = {
   beforeReply?: true;
   /**
    * The gateway marked the end as one not to show (`suppressErrorNotice`, OpenClaw 2026.11.10),
-   * as it does for a turn it started itself that the bot answered quietly (#680).
+   * as it does for a turn no person asked for that ended with no answer (#680). Such a run fails
+   * only when its history says it answered nothing (`Run.quietEnd`).
    */
   quiet?: true;
 };
@@ -522,6 +549,26 @@ export type Run = {
    */
   startSaid?: true;
   /**
+   * The gateway ended the run with an end it marked not to show (`suppressErrorNotice`, OpenClaw
+   * 2026.11.10): a turn no person asked for that ended with no answer. It is a quiet answer, the
+   * run `completed` with nothing to show, as 2026.10.6 ends one, unless the gateway's history
+   * holds a row of it that answered nothing (`unansweredInHistory`): then it is the failure the
+   * gateway sent. `pending` until a history read asked after the end has looked, `settled` once
+   * one found no such row (#680); `unread` while it is the failure because that read failed, until
+   * a later read of the task's history looks (#767).
+   */
+  quietEnd?: "pending" | "settled" | "unread";
+  /**
+   * While `quietEnd` is `pending` or `unread`: the end as the gateway sent it, the run's error if
+   * it failed.
+   */
+  quietError?: RunError;
+  /**
+   * History holds an assistant row of this run that answered nothing: no text and no tool call (a
+   * turn that ended with reasoning only, or empty), or one that failed. Kept through every merge.
+   */
+  unansweredInHistory?: true;
+  /**
    * The anchor the run's next reasoning block is numbered from: `t.<toolCallId>`
    * of the latest tool call, `c` when a history window began inside the run
    * so its start is not visible, or null for the run's start.
@@ -559,6 +606,13 @@ export type Run = {
    * Absent otherwise.
    */
   stoppedForTimeouts?: number;
+  /**
+   * This client stopped the run on its own because it is the turn the gateway starts in a task
+   * once a recipient's run that this client stopped for a Stop in the task has ended (#645): the
+   * gateway's note that the delivery failed, which may resend the stopped message. Absent
+   * otherwise.
+   */
+  stoppedAsFollowUp?: boolean;
   /**
    * The run passed the "Turn time limit" (F-100), in minutes, and this client asked the gateway
    * to stop it, as any Stop: it is `stopping` until the gateway confirms. 0 when the limit was
@@ -1250,6 +1304,93 @@ export function finishRun(
 }
 
 /**
+ * An end the gateway marked not to show (`suppressErrorNotice`, #680): a quiet answer, ended with
+ * nothing to show and `pending` until history has been read, unless what history already holds of
+ * the run says it answered nothing. Then it is the failure the gateway sent.
+ */
+function endMarkedQuiet(run: Run, ctx: EngineContext, error: RunError, at: number | null): Run {
+  if (run.unansweredInHistory === true) return finishRun(run, "failed", ctx, error, at);
+  const ended = finishRun(run, "completed", ctx, null, at);
+  return ended === run ? run : { ...ended, quietEnd: "pending", quietError: capRunError(error)! };
+}
+
+/**
+ * An assistant row that answered nothing: no text and no tool call (reasoning only, or empty), or
+ * one that failed. OpenClaw 2026.11.10's history leaves out a row whose answer was its silent
+ * token (`NO_REPLY`), reasoning or not, and keeps every other (`shouldDropAssistantHistoryMessage`).
+ */
+export function answeredNothing(message: RawRecord): boolean {
+  if (message.role !== "assistant") return false;
+  const stopReason = str(message.stopReason);
+  if (stopReason === "aborted" || asRecord(message.openclawAbort)) return false;
+  if (stopReason === "error") return true;
+  // A row 2026.11.10's history replaced for its size: what it answered can't be told.
+  const shown = meta(message);
+  if (shown.truncated === true && shown.reason === "oversized") return true;
+  if (typeof message.content === "string") return !message.content.trim();
+  const content = Array.isArray(message.content) ? message.content : [];
+  return !content.some((part) => {
+    const block = asRecord(part);
+    if (block?.type === "toolCall" || block?.type === "tool_use") return true;
+    return block?.type === "text" && typeof block.text === "string" && block.text.trim() !== "";
+  });
+}
+
+/**
+ * Settle the quiet ends a history read has looked at (#680). A run whose history says it answered
+ * nothing fails as the gateway sent it, whenever that row was read. Any other run whose marked end
+ * waited for that read (`pendingBefore`) is a quiet answer when the read was made (`read`); the
+ * failure the gateway sent when it was made and didn't show the run whole (`failed`); and the
+ * failure, still to be read (`quietEnd: "unread"`), when it failed or couldn't be made
+ * (`unread`). A later read that looks settles an unread end as it would a pending one (#767).
+ */
+export function settleQuietEnds(
+  runs: Run[],
+  pendingBefore: ReadonlySet<string>,
+  outcome: "read" | "unread" | "failed" = "read",
+): Run[] {
+  let changed = false;
+  const settled = runs.map((run) => {
+    if (run.quietEnd !== "pending" && run.quietEnd !== "unread") return run;
+    const unanswered = run.unansweredInHistory === true;
+    if (!unanswered && !pendingBefore.has(run.id)) return run;
+    if (!unanswered && outcome === "unread") {
+      if (run.quietEnd === "unread") return run;
+      changed = true;
+      return {
+        ...run,
+        state: "failed" as const,
+        error: run.quietError ?? null,
+        quietEnd: "unread" as const,
+      };
+    }
+    changed = true;
+    const { quietEnd: _waiting, quietError, ...rest } = run;
+    if (unanswered || outcome === "failed")
+      return { ...rest, state: "failed" as const, error: quietError ?? null };
+    return { ...rest, state: "completed" as const, error: null, quietEnd: "settled" as const };
+  });
+  return changed ? settled : runs;
+}
+
+/** The runs of a task whose quiet end waits for a history read (#680). */
+export function quietPending(runs: readonly Run[]): Set<string> {
+  return new Set(runs.filter((run) => run.quietEnd === "pending").map((run) => run.id));
+}
+
+/**
+ * The runs of a task a read of its own history may settle: those whose quiet end waits for one,
+ * and those a read failed for, which stay the failure until one is made (#767).
+ */
+export function quietToRead(runs: readonly Run[]): Set<string> {
+  return new Set(
+    runs
+      .filter((run) => run.quietEnd === "pending" || run.quietEnd === "unread")
+      .map((run) => run.id),
+  );
+}
+
+/**
  * A run whose end this client inferred (`outcomeKnown: false`: nothing showed how it ended),
  * taken back to where it stood before that inference, so that the end the gateway sends or
  * stores settles it as it really ended: `stopping` if a Stop was asked, otherwise
@@ -1404,13 +1545,17 @@ export function requeueLocalRun(
 
 /**
  * A queued run that is about to be sent goes from `queued` to `running`: the queued one with
- * that id, beside an earlier run of the same message the gateway named.
+ * that id, beside an earlier run of the same message the gateway named. A held steer released
+ * this way is a run of its own from here, so its alias to the run it was sent into goes: Stop
+ * and the composer then find this run before its first event.
  */
 export function startQueuedRun(activity: TaskActivity, runId: string, now: number): TaskActivity {
   const queued = activity.runs.find((run) => run.id === runId && run.state === "queued");
   if (!queued) return activity;
+  const { [runId]: _joined, ...steerAliases } = activity.steerAliases;
   return {
     ...activity,
+    steerAliases,
     runs: activity.runs.map((run) =>
       run === queued ? { ...run, state: "running", startedAt: now } : run,
     ),
@@ -2228,13 +2373,18 @@ export function applyChatEvent(
       }
       case "aborted":
         return finishRun({ ...run, ending: endingOf(payload, run.ending) }, "stopped", ctx);
-      case "error":
-        return finishRun({ ...run, ending: endingOf(payload, run.ending) }, "failed", ctx, {
+      case "error": {
+        const ended = { ...run, ending: endingOf(payload, run.ending) };
+        const error: RunError = {
           message: str(payload.errorMessage) ?? "The run failed.",
           kind: str(payload.errorKind),
           raw: rawEvent(ctx, run.id, "chat-event", payload),
           ...(payload.suppressErrorNotice === true ? { quiet: true as const } : {}),
-        });
+        };
+        return error.quiet
+          ? endMarkedQuiet(ended, ctx, error, ctx.now)
+          : finishRun(ended, "failed", ctx, error);
+      }
       default:
         return run;
     }
@@ -2520,19 +2670,17 @@ function terminalFromLifecycle(
       );
     case "blocked":
     case "abandoned":
-    case "failed":
-      return finishRun(
-        run,
-        "failed",
-        ctx,
-        {
-          message: message ?? "The run failed.",
-          kind: reason,
-          raw: rawEvent(ctx, run.id, "lifecycle-data", data),
-          ...(data.suppressErrorNotice === true ? { quiet: true as const } : {}),
-        },
-        at,
-      );
+    case "failed": {
+      const error: RunError = {
+        message: message ?? "The run failed.",
+        kind: reason,
+        raw: rawEvent(ctx, run.id, "lifecycle-data", data),
+        ...(data.suppressErrorNotice === true ? { quiet: true as const } : {}),
+      };
+      return error.quiet
+        ? endMarkedQuiet(run, ctx, error, at)
+        : finishRun(run, "failed", ctx, error, at);
+    }
   }
 }
 
@@ -3058,6 +3206,8 @@ export function runsFromHistory(
     if (message.role === "assistant") {
       lastAssistant.set(runId, message);
       run = { ...run, model: str(message.model) ?? run.model, endedAt: at ?? run.endedAt };
+      // What tells a quiet answer from a turn that ended with none (#680).
+      if (answeredNothing(message)) run = { ...run, unansweredInHistory: true };
       const content = Array.isArray(message.content) ? message.content : [];
       if (typeof message.content === "string" && message.content.trim())
         trailingThinking.set(runId, false);
@@ -3177,8 +3327,12 @@ export function runsFromHistory(
               state: "running",
               origin: "history",
               bound: true,
-              anchorItemId: keyedBy.get(inFlightRunId) ?? anchor,
-              ...(keyedBy.has(inFlightRunId) ? { anchorKeyed: true as const } : {}),
+              // As for a run with rows: the message from another session that started it, or
+              // the person's keyed row (#645).
+              anchorItemId: startedBy.get(inFlightRunId) ?? keyedBy.get(inFlightRunId) ?? anchor,
+              ...(startedBy.has(inFlightRunId) || keyedBy.has(inFlightRunId)
+                ? { anchorKeyed: true as const }
+                : {}),
               reportedStartAt: num(snapshot?.startedAt),
             },
             num(snapshot?.startedAt),
@@ -3505,6 +3659,10 @@ export function mergeHistoryRuns(
       reasoningRevision: current.reasoningRevision + (reasoningIdsChanged(current, steps) ? 1 : 0),
       // A row of the run in history is the gateway's word that it ran: kept once seen.
       ...(fromRun.ranInHistory || current.ranInHistory ? { ranInHistory: true as const } : {}),
+      // So is a row of it that answered nothing (#680).
+      ...(fromRun.unansweredInHistory || current.unansweredInHistory
+        ? { unansweredInHistory: true as const }
+        : {}),
       // History's word that the gateway failed it before running it stays with the live error.
       ...(fromRun.error?.beforeReply && current.error && !current.error.beforeReply
         ? { error: { ...current.error, beforeReply: true as const } }
@@ -3914,9 +4072,11 @@ export function parkAfterStop(
   after: TaskActivity,
   now: number,
 ): TaskActivity {
+  // A turn this client stopped on its own as the gateway's follow-up to a Stop (#645) parks
+  // nothing: what the person sent after their Stop is theirs to send.
   const stopped = after.runs.some((run) => {
     const was = findRun(before, run.id)?.state;
-    return run.state === "stopped" && was !== undefined && isActive(was);
+    return run.state === "stopped" && was !== undefined && isActive(was) && !run.stoppedAsFollowUp;
   });
   if (!stopped) return after;
   const parked = after.outbox.filter(notLeft);

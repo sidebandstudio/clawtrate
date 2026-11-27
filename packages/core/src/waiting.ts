@@ -45,8 +45,8 @@ export const MAX_OLDER_RUNS = 4;
  * time, mark and flags.
  */
 export const WAITING_RUN_CHARS = (2 + MAX_OLDER_RUNS) * MAX_WAITING_ID_CHARS + 160;
-/** JSON characters one held task can take: its key, a waiting kind and three times. */
-export const WAITING_HELD_CHARS = MAX_WAITING_ID_CHARS + 128;
+/** JSON characters one held task can take: its key, a waiting kind, three times and a flag. */
+export const WAITING_HELD_CHARS = MAX_WAITING_ID_CHARS + 160;
 
 export type WaitingKind = "approval" | "question";
 
@@ -61,6 +61,8 @@ export type HeldTask = {
   waiting: Waiting | null;
   stoppedAt: number | null;
   failedAt: number | null;
+  /** The latest run ended with a quiet answer (#680): its row's marked failure is none. */
+  quietEnd: boolean;
 };
 
 const str = (value: unknown): string | null =>
@@ -107,7 +109,8 @@ export function fromActivity(
     !active && latest && neverRan(latest) && !supersededByOrder(latest, runs, activity.items)
       ? (latest.endedAt ?? latest.startedAt ?? 0)
       : null;
-  return { waiting, stoppedAt, failedAt };
+  const quietEnd = !active && latest?.state === "completed" && latest.quietEnd !== undefined;
+  return { waiting, stoppedAt, failedAt, quietEnd };
 }
 
 /**
@@ -136,6 +139,7 @@ const sameHeld = (a: HeldTask | undefined, b: HeldTask): boolean =>
   a !== undefined &&
   a.stoppedAt === b.stoppedAt &&
   a.failedAt === b.failedAt &&
+  a.quietEnd === b.quietEnd &&
   a.waiting?.kind === b.waiting?.kind &&
   a.waiting?.since === b.waiting?.since;
 
@@ -307,8 +311,11 @@ export class WaitingIndex {
     // After a failure, a run not known to be older counts: on 2026.11.10 a second message's
     // dispatch error can come before the debounced row that admits it.
     if (latest && latest.runId !== runId && !latest.failed && !latest.inputSince) return false;
-    // An end the gateway marked not to show is a quiet one, not a failure (#680, 2026.11.10).
-    const failed = payload.state === "error" && payload.suppressErrorNotice !== true;
+    const failed =
+      // An end the gateway marked not to show is a quiet one, not a failure (#680, 2026.11.10).
+      (payload.state === "error" && payload.suppressErrorNotice !== true) ||
+      // Stopping a run that failed leaves it failed (#783).
+      (payload.state === "aborted" && latest?.runId === runId && latest.failed);
     if (latest?.runId === runId && latest.failed === failed) {
       // Its terminal: the run is no longer going, even if its lifecycle end never arrives.
       if (latest.active) this.runs.set(key, { ...latest, active: false });

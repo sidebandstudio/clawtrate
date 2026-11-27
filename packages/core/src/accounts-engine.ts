@@ -195,6 +195,10 @@ export type CreateBotInput = {
 const MODELS_GATEWAY_CHANGED = "The gateway changed while its models were looked for.";
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
+const entryOf = (config: RawRecord | null, botId: string) =>
+  asRecord(asRecord(asRecord(asRecord(config?.config)?.agents)?.entries)?.[botId]);
+const providerOf = (entry: RawRecord | null) =>
+  parseModelRef(readModelConfig(entry?.model).primary)?.provider ?? null;
 
 /** The longest picture New bot sends. */
 export const MAX_CREATE_AVATAR_CHARS = MAX_PICTURE_CHARS;
@@ -364,6 +368,7 @@ export class AccountsEngine {
             bots.map((bot) => bot.id),
             failed,
             sent,
+            configRead,
             arrived,
           ),
         ),
@@ -659,6 +664,7 @@ export class AccountsEngine {
     botIds: string[],
     failed: BotReadFailure[] = [],
     sent: Map<string, number> = new Map(),
+    config: Promise<RawRecord | null>,
     arrived: (botId: string, view: BotView, seq: number) => Promise<void>,
   ): Promise<Map<string, BotView>> {
     const views = new Map<string, BotView>();
@@ -673,7 +679,8 @@ export class AccountsEngine {
             this.ctx
               .request("models.authStatus", { agentId, refresh: true })
               .then(async (answer) => {
-                const view = readBotView(answer);
+                // The bot's own provider first, so its account stays within the caps (#823).
+                const view = readBotView(answer, providerOf(entryOf(await config, agentId)));
                 if (!view.unavailable) await arrived(agentId, view, seq);
                 return view;
               }),
@@ -949,7 +956,7 @@ export class AccountsEngine {
     try {
       let answer: unknown;
       [answer, config] = await out;
-      view = readBotView(answer);
+      view = readBotView(answer, providerOf(entryOf(config, botId)));
     } catch (error) {
       this.readFailed(ctx, botId, seq, "failed", this.scrub(errorText(error)));
       throw error;
@@ -958,7 +965,7 @@ export class AccountsEngine {
       this.readFailed(ctx, botId, seq, "unavailable", view.unavailable);
       return null;
     }
-    const entry = asRecord(asRecord(asRecord(asRecord(config?.config)?.agents)?.entries)?.[botId]);
+    const entry = entryOf(config, botId);
     const gateway = answeredBy(on, ctx.readStamp());
     let applied = false;
     ctx.update((a) => {
@@ -1625,7 +1632,7 @@ export class AccountsEngine {
       const read = (agentId: string, asked: Promise<unknown>) =>
         asked
           .then((answer) => {
-            const view = readBotView(answer);
+            const view = readBotView(answer, signIn.provider);
             if (view.unavailable)
               this.readFailed(ctx, agentId, seq, "unavailable", view.unavailable);
             return view;

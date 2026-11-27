@@ -125,6 +125,7 @@ import {
   type InstancePorts,
 } from "./registry.ts";
 import { CODING_AGENT_SERVER } from "./coding-agent-mcp.ts";
+import { CODING_AGENT_IDLE_MS, childrenReport, readProcessTable } from "./children.ts";
 import { IMAGE_API_KEY, IMAGE_MODEL_REF, IMAGE_PROVIDER_ID } from "./scripted-images.ts";
 import { contractProblems, matching, optional, type Contract } from "./contract.ts";
 import { accountStoreProblems } from "./account-stores.ts";
@@ -151,7 +152,7 @@ import {
   type DevPlugin,
   type PluginRule,
 } from "./dev-plugins.ts";
-import { SEED_CAPS, SEED_SCOPES, seedExample, verifyExample } from "./examples.ts";
+import { SEED_ANSWER_MS, SEED_CAPS, SEED_SCOPES, seedExample, verifyExample } from "./examples.ts";
 import { OperatorSession } from "./operator.ts";
 import {
   MESSAGING_PAIR,
@@ -596,6 +597,11 @@ export function devConfig(
     // The stand-in coding agent: a local command server, no network, run in
     // the instance's own folder.
     mcp: {
+      // The gateway starts the server for each task's first turn, since every bot may call
+      // it, and by default keeps it until the task is deleted or the gateway stops: one
+      // server for each task, three processes and about 270 MB each (#845). It ends a
+      // server once its task has been idle this long, checking once a minute.
+      sessionIdleTtlMs: CODING_AGENT_IDLE_MS,
       servers: {
         [CODING_AGENT_SERVER]: {
           transport: "stdio",
@@ -785,7 +791,11 @@ export function devConfigContract(
   const entries = (contract.agents!.entries as Record<string, Record<string, unknown>>) ?? {};
   for (const bot of SEED_BOTS) {
     // `agents set-identity` during the seed.
-    entries[bot.id]!.identity = optional({ name: bot.name, emoji: bot.emoji, theme: bot.theme });
+    entries[bot.id]!.identity = optional({
+      name: bot.name,
+      ...(bot.emoji === undefined ? {} : { emoji: bot.emoji }),
+      ...(bot.theme === undefined ? {} : { theme: bot.theme }),
+    });
   }
   // The CLI stamps the version that last wrote the config, and the migrations
   // it considers applied, whenever it writes it.
@@ -1812,6 +1822,9 @@ async function stopLocked(inst: DevInstance): Promise<void> {
     const target = { role, pid: pid!, identity: identity!, ...(port ? { port } : {}) };
     (verdict.state === "alive" ? targets : exited).push(target);
   }
+  // What the gateway holds at the end of its use, before it and its children go.
+  const gateway = targets.find((target) => target.role === "gateway");
+  if (gateway) reportChildren(gateway.pid, (line) => console.log(`  gateway ${line}`));
   let confirmed = true;
   const openPorts: string[] = [];
   // Stopped means its PID is gone and so is its listener: a reset checks the port next.
@@ -1890,6 +1903,13 @@ export async function reset(inst: DevInstance, options: { runId?: string } = {})
   });
 }
 
+/** The gateway's children, and a warning when its coding-agent servers last too long (#845). */
+function reportChildren(gatewayPid: number, log: (line: string) => void): void {
+  const { line, warning } = childrenReport(readProcessTable(), gatewayPid);
+  log(`${"children".padEnd(12)}${line}`);
+  if (warning) log(`${"warning".padEnd(12)}${warning}`);
+}
+
 /** Report what is running. OpenClaw is asked only when the guard allows it. */
 export async function status(
   inst: DevInstance,
@@ -1917,6 +1937,7 @@ export async function status(
             ? "being started"
             : "stopped";
     log(`${role.padEnd(12)}${shown}`);
+    if (role === "gateway" && state === "alive") reportChildren(pid!, log);
   }
   const inUse = inUseRefusal(
     runner.stateDir,
@@ -1966,8 +1987,12 @@ export async function callGateway<T>(
 export function isTransportFailure(error: unknown): boolean {
   const text = error instanceof Error ? error.message : String(error);
   // The gateway client's own error, or the CLI's for a gateway it couldn't reach: commands
-  // other than `gateway call`, such as `approvals get`, report that as a `cli_error`.
-  return /"type":\s*"gateway_transport_error"|Gateway not reachable at /.test(text);
+  // other than `gateway call`, such as `approvals get`, report that as a `cli_error`. They word
+  // a connect the gateway didn't finish within the CLI's fixed 15 s as "gateway closed (4000):
+  // connect timeout" (#883); `gateway call` reports the same as a transport error.
+  return /"type":\s*"gateway_transport_error"|Gateway not reachable at |gateway closed \(4000\): connect timeout/.test(
+    text,
+  );
 }
 
 /**
@@ -2274,8 +2299,9 @@ async function configureBot(
     ]);
   }
   mkdirSync(workspace, { recursive: true });
-  writeFileSync(join(workspace, "AGENTS.md"), bot.instructions);
-  // One command per bot, not one `config.patch` for all four: after that patch, two of four
+  // The gateway's own bot keeps OpenClaw's starting files.
+  if (bot.instructions !== undefined) writeFileSync(join(workspace, "AGENTS.md"), bot.instructions);
+  // One command per bot, not one `config.patch` for all of them: after that patch, two of four
   // iPhone jobs on GitHub's runner timed out on the next gateway call (#571).
   await must(inst, [
     "agents",
@@ -2284,10 +2310,8 @@ async function configureBot(
     bot.id,
     "--name",
     bot.name,
-    "--emoji",
-    bot.emoji,
-    "--theme",
-    bot.theme,
+    ...(bot.emoji === undefined ? [] : ["--emoji", bot.emoji]),
+    ...(bot.theme === undefined ? [] : ["--theme", bot.theme]),
     "--json",
   ]);
 }
@@ -2399,7 +2423,8 @@ async function seedConversations(
     const alreadySeeded = existing.has(key);
     // Made as Clawtrate makes a task, by an operator (`createdVia: "operator"`), so the sample
     // conversations count as the person's own; the turns then run in it as the gateway's owner.
-    if (!alreadySeeded) {
+    // A main conversation is the gateway's: its first message makes it.
+    if (!alreadySeeded && !task.main) {
       const session = { key, agentId: bot.id, label: task.label };
       await createSeedSession({
         session,
@@ -2462,17 +2487,67 @@ async function seedConversations(
   }
 }
 
-export async function seed(inst: DevInstance): Promise<void> {
+/**
+ * The seed's health check. After each probe that fails it looks again: a gateway the tool's guard
+ * refuses, or whose port is closed, is gone, and the seed stops at once. One whose port is open but
+ * whose health call doesn't answer within its 3 s is asked again after the seed's waits: on a
+ * loaded Mac a gateway the start had just found healthy missed one such call (#883).
+ */
+export async function seedHealth(
+  inst: DevInstance,
+  options: {
+    delays?: readonly number[];
+    sleep?: (ms: number) => Promise<unknown>;
+    log?: (line: string) => void;
+    now?: () => number;
+  } = {},
+): Promise<void> {
+  const delays = options.delays ?? SEED_RETRY_DELAYS_MS;
+  const wait = options.sleep ?? sleep;
+  const log = options.log ?? console.log;
+  const now = options.now ?? Date.now;
+  const started = now();
+  /** Stops the seed when the gateway is gone. */
+  const stopIfGone = async () => {
+    // The guard refuses when the gateway's process has exited, or the state isn't the one this
+    // checkout last started. Neither clears by waiting: the tool starts the gateway itself, and
+    // nothing restarts it as the same process.
+    const refusal = inst.runner.refusal();
+    if (refusal)
+      throw new Error(`the development gateway is gone, so waiting won't help: ${refusal}`);
+    if (!(await inst.listening(inst.runner.gatewayPort()))) {
+      throw new Error(
+        `the development gateway is not running. Run \`pnpm dev-gateway start${instanceFlag(inst)}\` first.`,
+      );
+    }
+  };
+  let health = await gatewayHealth(inst);
+  let tries = 1;
+  for (;;) {
+    if (health.healthy) return;
+    await stopIfGone();
+    const delay = delays[tries - 1];
+    if (delay === undefined) break;
+    log(`  the gateway didn't answer its health check; trying again in ${delay / 1000} s`);
+    await wait(delay);
+    health = await gatewayHealth(inst);
+    tries += 1;
+  }
+  throw new Error(
+    `the development gateway's port was open on the last look, but it didn't answer its health check in ${Math.round((now() - started) / 1000)} s (${tries} tries); last: ${health.seen}`,
+  );
+}
+
+export async function seed(
+  inst: DevInstance,
+  options: Parameters<typeof seedHealth>[1] = {},
+): Promise<void> {
   const refusal = inst.runner.refusal();
   if (refusal) throw new Error(refusal);
   await withLogTails(inst, "the seed", async () => {
     // Inside the diagnostics: a gateway that no longer answers its health call is one whose log
     // says why.
-    if (!(await gatewayHealthy(inst))) {
-      throw new Error(
-        `the development gateway is not running. Run \`pnpm dev-gateway start${instanceFlag(inst)}\` first.`,
-      );
-    }
+    await seedHealth(inst, options);
     await seedBotsAndTasks(inst);
   });
 }
@@ -2512,13 +2587,16 @@ export function instancePorts(inst: DevInstance): InstancePorts {
 
 /**
  * Connect a paired operator client to the instance: a new device key, its
- * pairing request approved by id through the guarded runner.
+ * pairing request approved by id through the guarded runner. `timeoutMs` is
+ * the whole connect's limit, the approval's CLI call included, and each
+ * request's after it (60 s by default).
  */
 export async function openOperator(
   inst: DevInstance,
   displayName: string,
   scopes: string[],
   caps: string[],
+  timeoutMs?: number,
 ): Promise<OperatorSession> {
   const connection = readDevConnection(inst.connectionFile);
   if (!connection) throw new Error(`${label(inst)} has no connection file; start it first`);
@@ -2531,6 +2609,7 @@ export async function openOperator(
     approvePairing: async (requestId) => {
       await must(inst, ["devices", "approve", requestId]);
     },
+    ...(timeoutMs === undefined ? {} : { timeoutMs, requestTimeoutMs: timeoutMs }),
   });
 }
 
@@ -2546,7 +2625,9 @@ async function seedScenarioExamples(
   console.log(
     `Seeding live examples as the user, through a paired client "${SEED_CLIENT}" (scopes ${SEED_SCOPES.join(", ")})`,
   );
-  const op = await openOperator(inst, SEED_CLIENT, SEED_SCOPES, SEED_CAPS);
+  // On a loaded hosted runner this connect took about 40 s of its 60, most of it the approval's
+  // CLI call; on a loaded Mac one `sessions.patch` took the gateway 55 s (#883).
+  const op = await openOperator(inst, SEED_CLIENT, SEED_SCOPES, SEED_CAPS, SEED_ANSWER_MS);
   try {
     for (const example of SCENARIO_EXAMPLES) {
       const key = sessionKeyFor(example.botId, example.slug);
