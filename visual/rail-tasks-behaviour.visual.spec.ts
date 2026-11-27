@@ -711,7 +711,7 @@ test("F-424: archiving a bot's last task makes its main conversation and opens i
   page,
 }) => {
   // Juniper has no main session in the fixture: three tasks of its own.
-  await openFixture(page, "scene=rail-write&bot=main", "light");
+  await openFixture(page, "scene=rail-write&bot=clawtrate-main-bot", "light");
   for (const title of ["Heat pump", "Library e-book"]) {
     await taskMenu(page, title);
     await page.getByRole("menuitem", { name: "Archive" }).click();
@@ -806,7 +806,7 @@ test("F-014 F-016: Pin and Move to change the gateway's arrangement; sections ar
   await expect(page.getByRole("list", { name: "Pinned bots" }).locator(".pin")).toHaveCount(1);
   await expect(bot(page, "Juniper")).toBeFocused();
   expect(await sent(page, "changeSidebar")).toEqual([
-    expect.objectContaining({ change: { op: "pin", botId: "main", pinned: true } }),
+    expect.objectContaining({ change: { op: "pin", botId: "clawtrate-main-bot", pinned: true } }),
   ]);
 
   // Move to a new section: the dialog names it.

@@ -143,7 +143,7 @@ test.describe("the rail", () => {
     await expect(
       page.getByRole("list", { name: "Juniper's tasks" }).getByTestId("task"),
     ).toHaveCount(3);
-    await expect(page.locator('[data-testid="task"][data-key="agent:main:main"]')).toHaveCount(0);
+    await expect(page.locator('[data-testid="task"][data-key="agent:clawtrate-main-bot:main"]')).toHaveCount(0);
   });
 
   test("arrow keys move through the rail, Right unfolds and Left folds", async ({ page }) => {

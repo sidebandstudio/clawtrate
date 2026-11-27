@@ -838,7 +838,7 @@ test.describe("Messaged cards' actions on a real gateway", () => {
 test.describe("tool-server calls on a real gateway", () => {
   /** A call from Juniper to the stand-in coding agent, sent by a test client. */
   const called = async (slug: string, directive: string) => {
-    const t = await clientTask("main", slug);
+    const t = await clientTask("clawtrate-main-bot", slug);
     const run = await clients.plain.send(t.key, directive);
     return { ...t, runId: String(run.runId) };
   };

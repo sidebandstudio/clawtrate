@@ -580,6 +580,29 @@ test("F-015 F-017 F-019 F-031 F-425: the rail lists the gateway's bots by recent
   page,
 }) => {
   await openShell(page);
+  // The gateway's own bot, which carries the star, is out of view by default (F-562): shown for
+  // this check, and out of view again afterwards, as the other checks on this host expect.
+  await showGatewayBot(page, true);
+  try {
+    await railOfEveryBot(page);
+  } finally {
+    await showGatewayBot(page, false);
+  }
+});
+
+async function showGatewayBot(page: Page, on: boolean): Promise<void> {
+  await page.keyboard.press("ControlOrMeta+,");
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("button", { name: "Advanced", exact: true }).click();
+  const toggle = settings.getByRole("switch", { name: "Show the gateway's own bot" });
+  if ((await toggle.getAttribute("aria-checked")) !== String(on)) await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-checked", String(on));
+  await page.keyboard.press("Escape");
+  await expect(settings).toHaveCount(0);
+  await expect(page.getByTestId("bot")).toHaveCount(on ? 5 : 4);
+}
+
+async function railOfEveryBot(page: Page): Promise<void> {
   const [{ sessions }, agents] = await Promise.all([
     gatewayCall<{ sessions: SessionRow[] }>("sessions.list", SESSION_LIST),
     gatewayCall<{ defaultId: string; agents: AgentRow[] }>("agents.list", {}),
@@ -607,8 +630,10 @@ test("F-015 F-017 F-019 F-031 F-425: the rail lists the gateway's bots by recent
     await expect(row.getByTestId("primary-star")).toHaveCount(
       agent.id === agents.defaultId ? 1 : 0,
     );
-    // F-019: the label is the agent's identity theme.
-    await expect(row.locator(".bot-label")).toHaveText(agent.identity!.theme!);
+    // F-019: the label is the agent's identity theme; the gateway's own bot has none.
+    if (agent.identity?.theme)
+      await expect(row.locator(".bot-label")).toHaveText(agent.identity.theme);
+    else await expect(row.locator(".bot-label")).toHaveCount(0);
     // F-017: a preview of the latest message and the time of the latest activity.
     const newest = sessions
       .filter((s) => s.agentId === agent.id && !s.archived)
@@ -638,9 +663,10 @@ test("F-015 F-017 F-019 F-031 F-425: the rail lists the gateway's bots by recent
   await botRow(page, "Pip").focus();
   await page.keyboard.press("ArrowRight");
   await page.reload();
-  await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 20_000 });
+  // The gateway's own bot is still shown: the switch is kept on this device.
+  await expect(page.getByTestId("bot")).toHaveCount(5, { timeout: 20_000 });
   await expect(botRow(page, "Pip")).toHaveAttribute("aria-expanded", "true");
-});
+}
 
 test("F-013 F-027 F-266: this device keeps its pins and hidden bots under the gateway's own identity", async ({
   page,
