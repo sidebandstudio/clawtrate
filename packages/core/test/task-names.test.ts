@@ -333,6 +333,54 @@ describe("the device that sends the first message", () => {
     }
   });
 
+  it("names a task only once the gateway accepts its first message, and once after a retry", async () => {
+    // Refused by the gateway, or no answer at all: the words go to no model. A retry the gateway
+    // takes names the task, once. For a task created with its message and for an empty one.
+    for (const empty of [false, true]) {
+      for (const failure of [
+        new GatewayError({ code: "UNAVAILABLE", message: "the bot is busy" }),
+        new Error("closed"),
+      ]) {
+        const { gateway } = creatingGateway(["Garden plan"]);
+        const { client } = await openTask({ gateway });
+        try {
+          const accept = gateway.handlers["chat.send"]!;
+          let refuse = true;
+          gateway.handlers["chat.send"] = (params) => {
+            if (refuse) throw failure;
+            return accept(params);
+          };
+          let key = KEY;
+          if (empty) {
+            key = await client.newTask("main");
+            client.openSession(key);
+            await until(() => client.state.transcripts[key]?.status === "ready");
+            client.sendMessage(key, MESSAGE);
+          } else {
+            await client.createTask("main", MESSAGE);
+          }
+          const failed = () =>
+            client.state.transcripts[key]?.outbox.find(
+              (each) => each.status === "failed" || each.status === "unconfirmed",
+            );
+          // Refused: failed at once; no answer: unconfirmed once history doesn't hold it.
+          await until(() => failed() !== undefined);
+          await sleep(50);
+          expect(titleCalls(gateway)).toEqual([]);
+          refuse = false;
+          client.retryMessage(key, failed()!.id);
+          await until(() => patches(gateway).length === 1);
+          expect(titleCalls(gateway)).toEqual([{ agentId: "main", message: MESSAGE }]);
+          client.sendMessage(key, "and a day in Sintra");
+          await sleep(50);
+          expect(titleCalls(gateway)).toHaveLength(1);
+        } finally {
+          client.stop();
+        }
+      }
+    }
+  });
+
   it("names nothing it was given a name for, and nothing when every call fails", async () => {
     const named = creatingGateway();
     const first = await openTask({ gateway: named.gateway });

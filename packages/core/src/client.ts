@@ -527,14 +527,19 @@ function sessionOf(value: unknown): string | null {
 }
 
 /**
- * A task this client names (`taskNames`): `waiting` for the first message with text of an empty task
- * it made, with the ids of the messages it sent there with no text (a picture or a file alone), or
- * `naming` while its name is made. With the session the task was created as, when known.
+ * A task this client names (`taskNames`): `waiting` for the gateway to accept the message it is
+ * named from (`first`: the creation's message, or an empty task's first with text), with the ids of
+ * the messages it sent there before with no text (a picture or a file alone), or `naming` while its
+ * name is made. With the session the task was created as, when known.
  */
 type TaskNaming = {
   stage: "waiting" | "naming";
   sessionId: string | null;
   textless: string[];
+  /** The message it is named from, once the gateway accepts its `chat.send`; null until chosen. */
+  first: string | null;
+  /** Created with that message (`createTask`): no other message can come before it. */
+  withMessage: boolean;
 };
 /**
  * Messages one task's outbox may hold, whatever their state: waiting, being
@@ -3921,6 +3926,9 @@ export class ClawtrateClient {
     // abort: it goes again under a new key, in its place on the shelf, with its files.
     if (message.steer === "withdrawn") {
       const id = this.randomId();
+      // The message a task waits to be named from goes under its new key.
+      const naming = this.taskNames.get(key);
+      if (naming?.first === messageId) naming.first = id;
       const kept = this.attachmentContent.get(messageId);
       if (kept) {
         this.attachmentContent.delete(messageId);
@@ -4262,9 +4270,17 @@ export class ClawtrateClient {
       error: runError ? String(runError.message ?? "The run did not start.") : null,
       attachments: [],
     };
-    // A task created with its first message is named from it, unless the person named it.
+    // A task created with its first message is named from it once the gateway accepts it (here or
+    // on a retry), unless the person named it.
     if (!creation.label) {
-      this.startNaming(key, creation.botId, creation.text, sessionOf(result?.sessionId));
+      const sessionId = sessionOf(result?.sessionId);
+      this.keepTaskName(key, {
+        stage: "waiting",
+        sessionId,
+        textless: [],
+        first: id,
+        withMessage: true,
+      });
     }
     // A caller holds one interest in the new task; one settled later is kept for its message.
     this.openSession(key, true);
@@ -4716,6 +4732,8 @@ export class ClawtrateClient {
     }
     // Accepted is not confirmed: the files stay until history holds the message or the user deletes it.
     if (command) this.dropAttachments(messageId);
+    // Accepted: the message a task waits to be named from may be shown to a model now.
+    else this.nameAccepted(key, messageId, message.text);
     this.scheduleHistory(key);
   }
 
@@ -11308,7 +11326,13 @@ export class ClawtrateClient {
     // named it.
     if (!options.label?.trim()) {
       const sessionId = sessionOf(created.row.sessionId);
-      this.keepTaskName(key, { stage: "waiting", sessionId, textless: [] });
+      this.keepTaskName(key, {
+        stage: "waiting",
+        sessionId,
+        textless: [],
+        first: null,
+        withMessage: false,
+      });
     }
     return key;
   }
@@ -11324,18 +11348,37 @@ export class ClawtrateClient {
    */
   private noteFirstSend(key: string, message: OutgoingMessage): void {
     const kept = this.taskNames.get(key);
-    if (kept?.stage !== "waiting") return;
+    // Its message is chosen already: only that one, once accepted, names the task.
+    if (kept?.stage !== "waiting" || kept.first !== null) return;
     const row = this.rows.get(capId(key, MAX_ID_CHARS));
-    const bot = this.taskBot(key);
-    if (!bot || (kept.textless.length === 0 && row?.lastMessagePreview)) {
+    if (!this.taskBot(key) || (kept.textless.length === 0 && row?.lastMessagePreview)) {
       this.taskNames.delete(key);
     } else if (message.text) {
-      this.startNaming(key, bot, message.text, kept.sessionId, [...kept.textless, message.id]);
+      // Named once the gateway accepts it (`nameAccepted`), never before: a message refused, held
+      // or never sent goes to no model.
+      kept.first = message.id;
     } else if (kept.textless.length < MAX_TEXTLESS_SENDS) {
       kept.textless.push(message.id);
     } else {
       this.taskNames.delete(key);
     }
+  }
+
+  /**
+   * The gateway accepted a message's `chat.send`: the one a task this client names waits for starts
+   * its name, once. For an empty task it is checked again against the task's history as the gateway
+   * has it then (`onlyOwnRows`), which this client's copy can be behind.
+   */
+  private nameAccepted(key: string, messageId: string, text: string): void {
+    const kept = this.taskNames.get(key);
+    if (kept?.stage !== "waiting" || kept.first !== messageId) return;
+    const bot = this.taskBot(key);
+    if (!bot || !text) {
+      this.taskNames.delete(key);
+      return;
+    }
+    const ownSends = kept.withMessage ? undefined : [...kept.textless, messageId];
+    this.startNaming(key, bot, text, kept.sessionId, ownSends);
   }
 
   /** Note a task this client names; the oldest goes past `MAX_NAMED_TASKS`. */
@@ -11362,7 +11405,13 @@ export class ClawtrateClient {
     sessionId: string | null,
     ownSends?: string[],
   ): void {
-    this.keepTaskName(key, { stage: "naming", sessionId, textless: [] });
+    this.keepTaskName(key, {
+      stage: "naming",
+      sessionId,
+      textless: [],
+      first: null,
+      withMessage: false,
+    });
     const ctx = this.actionContext(null, this.epoch);
     const botModel = this.state.bots.find((bot) => bot.id === botId)?.model ?? null;
     void nameTask(
