@@ -23,6 +23,8 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/bot-names.ts:PLACEHOLDERS": "static, the template's two name placeholders",
   "packages/core/src/send-marker.ts:ABORT_WORDS": "static, the gateway's 43 stop words",
   "packages/core/src/send-marker.ts:MARKER_SENTENCES": "static, the marker's two sentences",
+  "packages/core/src/task-names.ts:NAMING_MODELS":
+    "static, the providers that name a task and their small models",
   "packages/core/src/openclaw-update.ts:UPDATE_PHASES": "static, the gateway's eight update phases",
   "packages/core/src/openclaw-update.ts:RUN_STATUSES": "static, the gateway's five run statuses",
   "packages/core/src/openclaw-update.ts:UPDATE_ASK_WAITS_MS":

@@ -7,6 +7,7 @@ import {
   defaultApprovalInstructions,
   type ApprovalInstructions,
   type BridgePolicy,
+  type ClientOptions,
   type HostInfo,
 } from "@clawtrate/core";
 import { createNodeHost, type SecretBox } from "@clawtrate/core/node";
@@ -136,6 +137,11 @@ export async function startHostRuntime(options: {
    */
   secretBox?: SecretBox;
   /**
+   * Local connect's proved sockets for a gateway saved with a route
+   * (`ClientOptions.localConnect`, `provedRouteFor`): a person's packaged Mac app's only.
+   */
+  localConnect?: ClientOptions["localConnect"];
+  /**
    * Reopen the gateway the data folder remembers (the default). A development
    * build, an automated run and the web host's setup look pass false: they
    * never resume a saved gateway, whatever its address.
@@ -179,6 +185,7 @@ export async function startHostRuntime(options: {
       return !options.devOnly;
     },
     ...(options.readOnly ? { readOnly: true } : {}),
+    ...(options.localConnect ? { localConnect: options.localConnect } : {}),
   });
   const devOnly = options.devOnly ? dev : null;
   if (devOnly) {

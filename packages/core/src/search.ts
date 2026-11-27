@@ -10,6 +10,7 @@ import { establishFolder } from "./files.ts";
 import {
   asRecord,
   botIdFromSessionKey,
+  generatedName,
   isPlaceholderName,
   mapSessionRow,
   type RawRecord,
@@ -263,8 +264,9 @@ export function readMessageSearch(reply: RawRecord | null, query = ""): MessageS
     // A title the gateway made from the first message loses the marker, as the task list's does.
     // The gateway's placeholder name is no title: the task's own fallback stands for it (#741).
     const named = str(row?.displayName);
+    // A small model's name for the task (#750) is placed as the task list places it.
     const title =
-      row && key && isPlaceholderName(row, key)
+      row && key && (isPlaceholderName(row, key) || generatedName(row, key))
         ? (mapSessionRow({ ...row, archived: false })?.title ?? null)
         : (str(row?.label) ?? (named === null ? null : str(titleWithoutMarker(named))));
     if (key && title && hits.some((hit) => hit.sessionKey === key))

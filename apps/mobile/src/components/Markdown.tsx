@@ -3,41 +3,43 @@
 // code on the code fill, code blocks on the stage, tables with row rules, and
 // links in the accent that open in the system browser.
 
+import * as Clipboard from "expo-clipboard";
 import { Fragment, useMemo } from "react";
-import { Alert, Linking, ScrollView, View } from "react-native";
+import { ActionSheetIOS, Linking, ScrollView, View } from "react-native";
 import {
+  besideShown,
+  carriesCredential,
   columnWidths,
-  inlineText,
   LINK_WORDS,
   parseMarkdown,
   type Block,
   type Inline,
 } from "../markdown.ts";
-import { REDACTED } from "../host/secrets.ts";
 import { useRuntime } from "../runtime.ts";
 import { FONTS, S, TOUCH, useTheme } from "../theme/index.ts";
 import { Txt } from "./ui.tsx";
 
 /**
- * Leave the app for a link. One whose visible text is its address opens; any
- * other asks first, showing the address it goes to.
+ * Leave the app for a link, at once: where it goes is beside its text, and opening a page
+ * changes nothing of the person's.
  */
-function openLink(url: string, plain: boolean) {
-  const open = () => void Linking.openURL(url).catch(() => {});
-  if (plain) return open();
-  Alert.alert(LINK_WORDS.ask, url, [
-    { text: LINK_WORDS.cancel, style: "cancel" },
-    { text: LINK_WORDS.open, onPress: open },
-  ]);
+function openLink(url: string) {
+  void Linking.openURL(url).catch(() => {});
 }
 
-/** The address as written and decoded where it decodes: a scrubbed credential shows in either. */
-function decoded(url: string): string {
-  try {
-    return decodeURI(url);
-  } catch {
-    return url;
-  }
+/** A long press shows the full address with Copy, and never opens the link. */
+function showAddress(url: string) {
+  ActionSheetIOS.showActionSheetWithOptions(
+    {
+      title: LINK_WORDS.outside,
+      message: url,
+      options: [LINK_WORDS.copy, LINK_WORDS.close],
+      cancelButtonIndex: 1,
+    },
+    (chosen) => {
+      if (chosen === 0) void Clipboard.setStringAsync(url);
+    },
+  );
 }
 
 function Inlines({ nodes }: { nodes: Inline[] }) {
@@ -82,30 +84,32 @@ function Inlines({ nodes }: { nodes: Inline[] }) {
           case "link": {
             // An address that carries a known credential, or one already scrubbed, is
             // never handed to the system: the link is its text.
-            const shown = decoded(node.url);
-            if (
-              redact(node.url) !== node.url ||
-              redact(shown) !== shown ||
-              node.url.includes(REDACTED) ||
-              shown.includes(REDACTED)
-            )
+            if (carriesCredential(node.url, redact))
               return <Inlines key={index} nodes={node.children} />;
+            // What is beside the text is part of the link, so VoiceOver reads it in the link's
+            // name: iOS names a link inside text by its own words, not by a label.
+            const beside = besideShown(node);
             return (
-              <Fragment key={index}>
-                <Txt
-                  size={TOUCH.bodyText}
-                  color="accent"
-                  accessibilityRole="link"
-                  accessibilityLabel={LINK_WORDS.spoken(inlineText(node.children), node.host)}
-                  style={{ textDecorationLine: "underline" }}
-                  onPress={() => openLink(node.url, node.plain)}
-                >
-                  <Inlines nodes={node.children} />
-                </Txt>
-                {!node.plain && (
-                  <Txt size={TOUCH.bodyText} color="text-muted">{` (${node.host})`}</Txt>
+              <Txt
+                key={index}
+                size={TOUCH.bodyText}
+                color="accent"
+                accessibilityRole="link"
+                style={{ textDecorationLine: "underline" }}
+                onPress={() => openLink(node.url)}
+                onLongPress={() => showAddress(node.url)}
+              >
+                <Inlines nodes={node.children} />
+                {beside !== null && (
+                  <Txt
+                    size={TOUCH.bodyText}
+                    color="text-muted"
+                    style={{ textDecorationLine: "none" }}
+                  >
+                    {beside}
+                  </Txt>
                 )}
-              </Fragment>
+              </Txt>
             );
           }
         }
