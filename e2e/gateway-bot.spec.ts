@@ -433,34 +433,36 @@ test("F-562: the gateway's own bot stays out while untouched, and shows once the
       ).files
         .filter((file) => !file.missing)
         .map((file) => file.name);
+    // A just-started gateway may answer that its session storage isn't ready yet: asked again.
+    const whenReady = async <T>(call: () => Promise<T>): Promise<T> => {
+      for (let tries = 0; ; tries += 1) {
+        try {
+          return await call();
+        } catch (error) {
+          if (tries >= 60 || !/retry after session storage is ready/.test(String(error)))
+            throw error;
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
+      }
+    };
     const turn = async (message: string) => {
       const replies = async () =>
         (
-          await admin.request<{ messages: Array<{ role: string }> }>("chat.history", {
-            sessionKey: key,
-            limit: 50,
-          })
+          await whenReady(() =>
+            admin.request<{ messages: Array<{ role: string }> }>("chat.history", {
+              sessionKey: key,
+              limit: 50,
+            }),
+          )
         ).messages.filter((row) => row.role === "assistant").length;
       const before = await replies();
-      // A just-started gateway may answer that its session storage isn't ready yet: sent again.
-      await expect
-        .poll(
-          async () => {
-            try {
-              await admin.request("chat.send", {
-                sessionKey: key,
-                message,
-                idempotencyKey: `gwused-${STAMP}-${before}`,
-              });
-              return "sent";
-            } catch (error) {
-              if (/retry after session storage is ready/.test(String(error))) return "not ready";
-              throw error;
-            }
-          },
-          { timeout: 60_000, intervals: [1000] },
-        )
-        .toBe("sent");
+      await whenReady(() =>
+        admin.request("chat.send", {
+          sessionKey: key,
+          message,
+          idempotencyKey: `gwused-${STAMP}-${before}`,
+        }),
+      );
       await expect.poll(replies, { timeout: 120_000 }).toBeGreaterThan(before);
     };
 
