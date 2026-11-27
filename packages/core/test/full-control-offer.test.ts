@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 import { ClawtrateClient, FULL_PAIRING_LIMIT, type ProvedRoute } from "../src/client.ts";
 import { endpointSpellings, gatewayEndpoint, validateGatewayUrl } from "../src/gateway-url.ts";
 import type { KeyValueStore } from "../src/host.ts";
-import { FULL_SCOPES, READ_SCOPES } from "../src/scopes.ts";
+import { FULL_SCOPES, INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
 import { gatewayStamp } from "../src/types.ts";
 import {
   deferred,
@@ -610,6 +610,31 @@ describe("the one-time offer of full control (F-500)", () => {
     expect(await renaming).toBe("This change was made for another gateway, so nothing was sent.");
     await until(() => client.state.connection.gatewayId === "gateway-b");
     await accept(client);
+    await until(() => gateway.calls("device.scopes.requestUpgrade").length === 2);
+    client.stop();
+  });
+
+  it("F-549: an accept still asks after the same gateway's reconnect settles a change that waited beside it (#782)", async () => {
+    const storage = pairedAt(
+      URL,
+      JSON.stringify({
+        token: "token-A",
+        grantedScopes: INTERACTIVE_SCOPES,
+        heldScopes: INTERACTIVE_SCOPES,
+      }),
+    );
+    const { gateway } = gatewayFor();
+    const client = await connected(clientOn(gateway, storage));
+    const stamp = gatewayStamp(client.state.connection);
+    await accept(client);
+    await until(() => gateway.calls("device.scopes.requestUpgrade").length === 1);
+    gateway.dropAll();
+    // Made while reconnecting, the change waits for the hello, which brings it write access.
+    const renaming = client.renameTask("agent:main:main", "Weekly", { stamp }).catch(() => {});
+    await until(() => client.pendingAccessWaiters === 1);
+    await until(() => client.state.connection.status === "connected");
+    await renaming;
+    // The same gateway answered: the accept's request is asked again there.
     await until(() => gateway.calls("device.scopes.requestUpgrade").length === 2);
     client.stop();
   });

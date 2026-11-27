@@ -3469,7 +3469,10 @@ export class ClawtrateClient {
    * isn't is refused, rather than asking a gateway that answered the reconnect at the same address.
    */
   private resumeUpgrade(): void {
-    if (this.accessWaiters.every((waiter) => waiter.gatewayId === null)) return this.startUpgrade();
+    // Noted before this hello settles any of them: a waiter it grants still named its gateway.
+    const named = new Set(this.accessWaiters.map((waiter) => waiter.gatewayId));
+    named.delete(null);
+    if (named.size === 0) return this.startUpgrade();
     const epoch = this.epoch;
     void this.readGatewayIdentity().then((id) => {
       if (epoch !== this.epoch || !this.upgradeWanted) return;
@@ -3480,7 +3483,8 @@ export class ClawtrateClient {
       for (const waiter of waiters)
         if (!this.accessWaiters.includes(waiter))
           waiter.reject(new Error(id === null ? IDENTITY_UNREAD : ANOTHER_GATEWAY));
-      if (this.accessWaiters.length > 0) return this.startUpgrade();
+      if (this.accessWaiters.length > 0 || (id !== null && named.has(id)))
+        return this.startUpgrade();
       // shortcut: an ask with no waiter (Settings' own) queued beside them is dropped too; keep
       // asks apart from their waiters if that ever matters. A dropped accept of full control
       // is released, so it can be made again.
