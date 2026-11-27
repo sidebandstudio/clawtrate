@@ -13,6 +13,13 @@ import {
   type UpdateRunView,
 } from "./openclaw-update.ts";
 import { MAX_GATEWAY_URL_CHARS } from "./gateway-url.ts";
+import {
+  MAX_DEVICE_REQUESTS,
+  MAX_REPORTED_JSON_CHARS,
+  PAIR_CODE_CHOICES,
+  type DeviceRequest,
+  type DeviceRequestsState,
+} from "./device-approval.ts";
 import { MAX_UPDATED_RUNS, type UpdatedRun } from "./update-notice.ts";
 import {
   MAX_ACCOUNTS,
@@ -25,6 +32,7 @@ import {
   MAX_SIGNIN_METHODS,
   type AccountsState,
   type AccountWrite,
+  type OrderClear,
   type BotBinding,
   type BotCreationState,
   type CatalogModel,
@@ -69,6 +77,7 @@ import {
   json,
   list,
   map,
+  MAX_CUT_PATHS,
   object,
   scalar,
   text,
@@ -267,6 +276,16 @@ export const MAX_HISTORY_FILES = 40;
 /** Files a person's message names (`SentAttachment`), and across a task's history page. */
 export const MAX_ATTACHMENTS_PER_ITEM = 20;
 export const MAX_HISTORY_ATTACHMENTS = 40;
+
+/**
+ * History's list of the files a person's message carried may have been cut to its bound (the
+ * newest messages keep theirs first): then whether the message had files isn't known (#686). A
+ * full list of cut paths may have let that one go.
+ */
+export function attachmentsCut(item: { cut?: string[] }): boolean {
+  const cut = item.cut ?? [];
+  return cut.length >= MAX_CUT_PATHS || cut.some((path) => path.startsWith("attachments"));
+}
 /** Inter-session messages kept per task, newest. */
 export const MAX_INTER_SESSION = 64;
 /** Outgoing messages per task (also `MAX_OUTBOX_PER_TASK`). */
@@ -377,6 +396,8 @@ const runError = object<RunError>()({
   message: text(MAX_ERROR_JSON_CHARS),
   kind: NAME,
   raw: object<RunErrorRaw>()({ holds: ENUM, chars: NUMBER }),
+  beforeReply: FLAG,
+  quiet: FLAG,
 });
 const runEnding = object<RunEnding>()({
   stopReason: NAME,
@@ -386,6 +407,7 @@ const runEnding = object<RunEnding>()({
 });
 const preamble = object<Preamble>()({
   id: ID,
+  item: ID,
   text: text(MAX_BLOCK_CHARS),
   ended: FLAG,
   beforeCall: ID,
@@ -402,6 +424,7 @@ export const RUN: Bound = flagged<Run>()({
   text: text(MAX_RUN_TEXT_CHARS),
   textSource: ENUM,
   textItemId: ID,
+  textEarlier: FLAG,
   textComplete: FLAG,
   steps: list(MAX_STEPS_PER_TASK, STEP, { pool: "steps" }),
   pendingCards: list(MAX_PENDING_CARDS, pendingCard),
@@ -422,6 +445,9 @@ export const RUN: Bound = flagged<Run>()({
   omittedTools: NUMBER,
   omittedToolsAtEnd: NUMBER,
   endFromRows: FLAG,
+  ranInHistory: FLAG,
+  startSaid: FLAG,
+  anchorKeyed: FLAG,
   preambles: list(MAX_PREAMBLES_PER_RUN, preamble),
   reasoningAnchor: ID,
   nextReasoning: NUMBER,
@@ -458,6 +484,7 @@ export const OUTGOING: Bound = object<OutgoingMessage>()({
   attachments: list(MAX_FILES_PER_MESSAGE, attachmentInfo),
   replyToId: ID,
   steer: ENUM,
+  unmarked: FLAG,
 });
 const questionOption = object<QuestionOption>()({
   index: NUMBER,
@@ -717,6 +744,7 @@ const pairing = object<PairingRequest>()({
   approveCommand: text(MAX_MESSAGE_LINE_CHARS),
   approveNote: text(MAX_MESSAGE_LINE_CHARS),
   requestedScopes: list(MAX_SCOPES, NAME),
+  code: ENUM,
 });
 const connectionError = object<ConnectionError>()({
   code: NAME,
@@ -816,6 +844,35 @@ const openclawUpdating = object<OpenClawUpdateState>()({
   looking: FLAG,
   lookFailed: FLAG,
   held: object<NonNullable<OpenClawUpdateState["held"]>>()({ gatewayId: ID, to: NAME }),
+});
+/** Waiting devices (`device-approval.ts`). */
+const reported = text(MAX_REPORTED_JSON_CHARS);
+export const DEVICE_REQUESTS: Bound = object<DeviceRequestsState>()({
+  access: ENUM,
+  requests: list(
+    MAX_DEVICE_REQUESTS,
+    object<DeviceRequest>()({
+      requestId: ID,
+      deviceId: ID,
+      publicKey: ID,
+      name: reported,
+      platform: reported,
+      app: reported,
+      remoteIp: reported,
+      origin: reported,
+      roles: list(8, reported),
+      scopes: list(16, reported),
+      at: NUMBER,
+      blocked: ENUM,
+      choices: list(PAIR_CODE_CHOICES, ENUM),
+      spent: FLAG,
+    }),
+  ),
+  omitted: NUMBER,
+  noticed: NUMBER,
+  prompt: ID,
+  error: text(MAX_MESSAGE_LINE_CHARS),
+  listedOn: NUMBER,
 });
 const task = flagged<Task>()({
   key: ID,
@@ -983,6 +1040,7 @@ const SESSION_ROW_FIELDS = [
   "sessionId",
   "sessionKey",
   "spawnedBy",
+  "startedAt",
   "status",
   "subject",
   "totalTokens",
@@ -1143,6 +1201,11 @@ const lockEvidence = object<LockEvidence>()({
   checkedAt: NUMBER,
   lastMatchAt: NUMBER,
   lostAt: NUMBER,
+  readSeq: NUMBER,
+  attemptSeq: NUMBER,
+  startedSeq: NUMBER,
+  readGateway: ID,
+  providerRead: FLAG,
   error: text(MAX_MESSAGE_LINE_CHARS),
 });
 const binding = object<BotBinding>()({
@@ -1214,6 +1277,20 @@ const accountWrite = object<AccountWrite>()({
   error: text(MAX_MESSAGE_LINE_CHARS),
   at: NUMBER,
 });
+const orderClear = object<OrderClear>()({
+  id: ID,
+  gatewayId: ID,
+  botId: ID,
+  provider: ID,
+  kind: ENUM,
+  account: ID,
+  status: ENUM,
+  error: text(MAX_MESSAGE_LINE_CHARS),
+  at: NUMBER,
+  sentSeq: NUMBER,
+  checkedSeq: NUMBER,
+  checkedAt: NUMBER,
+});
 export const ACCOUNTS: Bound = object<AccountsState>()({
   status: ENUM,
   error: text(MAX_MESSAGE_LINE_CHARS),
@@ -1232,6 +1309,7 @@ export const ACCOUNTS: Bound = object<AccountsState>()({
   signIn,
   creation: botCreation,
   write: accountWrite,
+  clear: orderClear,
 });
 
 /** Setting up on the host's computer (`setup.ts`): fixed facts and a few short names. */
@@ -1372,6 +1450,7 @@ export const STATE: Bound = flagged<ClawtrateState>()({
   usage: USAGE,
   botNames: list(MAX_BOTS, nameProposal),
   openclawUpdating,
+  deviceRequests: DEVICE_REQUESTS,
 });
 /** The listed-tasks pool, applied over the whole state. */
 const STATE_POOLS = { tasks: MAX_LISTED_TASKS };

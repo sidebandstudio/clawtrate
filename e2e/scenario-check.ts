@@ -26,12 +26,15 @@ import {
   instancePorts,
   lockMode,
   lockOrder,
+  readDevConnection,
   openInstance,
   openOperator,
   orderBesideGateway,
 } from "../tools/dev-gateway/src/cli.ts";
 import { ACCOUNT_CLIENTS, runAccountChecks } from "../tools/dev-gateway/src/account-checks.ts";
 import { runGuideChecks } from "../tools/dev-gateway/src/guide-checks.ts";
+import { runPairingChecks } from "../tools/dev-gateway/src/pairing-checks.ts";
+import { FULL_SCOPES } from "../packages/core/src/scopes.ts";
 import {
   COMPUTER_CLIENTS,
   runComputerChecks,
@@ -129,6 +132,9 @@ async function main(): Promise<number> {
       }
     }
     const inst = openInstance(name);
+    // What a pending request's id binds, and who may decide it (pairing-checks.ts).
+    const pairingFailed = await pairingChecks(inst);
+    if (PAIRING_ONLY) return pairingFailed === 0 ? 0 : 1;
     const providerUrl = `http://127.0.0.1:${instancePorts(inst).providerPort}`;
     const clients = await openCheckClients((label, scopes, caps) =>
       openOperator(inst, label, scopes, caps),
@@ -139,6 +145,7 @@ async function main(): Promise<number> {
         ownerAgent: (botId, key, message) => ownerAgent(inst, botId, key, message),
         providerUrl,
         only: (check) => !MESSAGE_TOOL_CHECKS.includes(check.name),
+        gatewayLog: join(inst.runDir, "gateway.log"),
       });
       for (const row of FAMILY_ROWS) console.log(`family ${JSON.stringify(row)}`);
       for (const note of notes) console.log(`note  ${note}`);
@@ -176,16 +183,19 @@ async function main(): Promise<number> {
       console.log(
         `Account checks: lock and unlock ${mode === "live" ? "run the command beside the running gateway" : "stop the gateway, run the command and start it again"}`,
       );
-      const accounts = await runAccountChecks({
-        admin,
-        reader,
-        providerUrl,
-        stateDir: inst.stateDir,
-        lock: (bot, provider, profileId) => lockOrder(inst, { bot, provider, profileId }),
-        lockMode: mode,
-        orderBeside: (bot, provider, profileId) =>
-          orderBesideGateway(inst, { bot, provider, profileId }),
-      });
+      const accounts = await runAccountChecks(
+        {
+          admin,
+          reader,
+          providerUrl,
+          stateDir: inst.stateDir,
+          lock: (bot, provider, profileId) => lockOrder(inst, { bot, provider, profileId }),
+          lockMode: mode,
+          orderBeside: (bot, provider, profileId) =>
+            orderBesideGateway(inst, { bot, provider, profileId }),
+        },
+        { gatewayLog: join(inst.runDir, "gateway.log") },
+      );
       for (const note of accounts.notes) console.log(`note  ${note}`);
       for (const line of accounts.differences) console.log(`differs from the design  ${line}`);
       console.log(
@@ -203,9 +213,15 @@ async function main(): Promise<number> {
     const computer = await computerChecks(computerName, computerRunId, startInstance);
     const rules = await rulesChecks(rulesName, rulesRunId, startInstance);
     const images = await imageChecks(imagesName, imagesRunId, startInstance);
-    return [scenariosFailed, accountsFailed, guidesFailed, computer, rules, images].every(
-      (n) => n === 0,
-    )
+    return [
+      pairingFailed,
+      scenariosFailed,
+      accountsFailed,
+      guidesFailed,
+      computer,
+      rules,
+      images,
+    ].every((n) => n === 0)
       ? 0
       : 1;
   } finally {
@@ -214,6 +230,31 @@ async function main(): Promise<number> {
       console.error(problems.join("\n"));
       process.exitCode = 1;
     }
+  }
+}
+
+/** `pnpm scenarios --pairing`: the pairing checks alone, on the first instance. */
+const PAIRING_ONLY = process.argv.includes("--pairing");
+
+/** The pairing checks, with an approver holding Clawtrate's six; how many failed. */
+async function pairingChecks(inst: ReturnType<typeof openInstance>): Promise<number> {
+  const connection = readDevConnection(inst.connectionFile);
+  if (!connection) throw new Error("the instance has no connection file");
+  const open = (label: string, scopes: string[]) => openOperator(inst, label, scopes, []);
+  const admin = await open("Clawtrate pairing check (admin)", [...FULL_SCOPES]);
+  try {
+    const { passed, failed } = await runPairingChecks({
+      admin,
+      open,
+      url: connection.url,
+      token: connection.token,
+    });
+    console.log(
+      `${passed} of ${passed + failed} pairing checks passed on OpenClaw ${admin.serverVersion}`,
+    );
+    return failed;
+  } finally {
+    await admin.close();
   }
 }
 
@@ -288,6 +329,7 @@ async function imageChecks(
       only: (check) => MESSAGE_TOOL_CHECKS.includes(check.name),
       images: true,
       messageTool: true,
+      gatewayLog: join(inst.runDir, "gateway.log"),
     });
     console.log(`${passed} of ${passed + failed} image checks passed`);
     return failed;

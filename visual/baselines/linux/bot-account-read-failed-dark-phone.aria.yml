@@ -92,7 +92,7 @@
     - paragraph: Couldn't read the gateway's order for Otto. Last confirmed locked at 5:28 PM.
     - button "Try again"
     - button "Check now"
-    - group: Unlock
+    - button "Unlock…"
     - group: What a lock doesn't cover
     - button "Change account"
   - status

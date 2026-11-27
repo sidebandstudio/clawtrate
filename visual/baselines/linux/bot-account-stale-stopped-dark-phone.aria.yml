@@ -114,7 +114,7 @@
     - paragraph: Clawtrate reads the lock from the gateway when it is back.
     - status: Checked with the gateway at 5:40 PM.
     - button "Check now"
-    - group: Unlock
+    - button "Unlock…"
     - group: What a lock doesn't cover
     - button "Change account"
   - status

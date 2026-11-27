@@ -190,6 +190,40 @@ test("a turn the gateway runs from its queue under an id of its own is one run, 
   }
 });
 
+test("F-088: text the bot writes beside an action is beside that action from the moment it starts, never its reply", async () => {
+  const { client, close } = await engine("text beside a call check");
+  const beside = "I will look first, then answer that message.";
+  let key = "";
+  // Each state the engine published once the run held its call: the text placed before that call.
+  const seen: string[][] = [];
+  const stop = client.store.subscribe((state) => {
+    for (const run of state.transcripts[key]?.runs ?? []) {
+      const call = run.steps.find((step) => step.kind === "tool" && step.toolName === "ls");
+      if (!call) continue;
+      seen.push(
+        (run.preambles ?? [])
+          .filter((p) => p.beforeCall === call.toolCallId)
+          .map((p) => p.text.trim()),
+      );
+    }
+  });
+  try {
+    key = await openNewTask(client, "beside");
+    // The scripted model writes text and lists a folder in one message, then answers. 2026.10.6
+    // sends the text as a `preamble` item; 2026.11.10 as an `assistant` item of its own only.
+    client.sendMessage(key, "#reply-to");
+    await expect.poll(() => runs(client, key)[0]?.state, { timeout: 60_000 }).toBe("completed");
+    await expect.poll(() => gatewayIdle(op, key), { timeout: 15_000 }).toBe(true);
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.filter((texts) => texts.join() !== beside)).toEqual([]);
+    const run = runs(client, key)[0]!;
+    expect(run.text.trim()).toBe("This answers no message: none was named.");
+  } finally {
+    stop();
+    await close();
+  }
+});
+
 test("F-097: a run stopped during a connection gap ends on the gateway's word, and Stop is offered on the current run", async () => {
   const { client, close } = await engine("missed end check");
   try {

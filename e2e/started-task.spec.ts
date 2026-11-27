@@ -3,18 +3,22 @@
 // own; the interface lists it under Juniper by its label, opens it, says who started it and
 // from where, shows the first message as Juniper's brief, and the person writes there and gets
 // an answer. Then Otto, asked in the conversation, starts one, and the conversation shows it as a
-// card (F-587) that reaches Done, opens that task, and says Otto reported back. The scenario check
+// card (F-587) that reaches Done, opens that task, and says Otto reported back, and keeps that
+// report as the task's later runs bring reports of their own. The brief is checked on both
+// OpenClaw versions: 2026.11.10 also marks it as sent from the task it came from. The scenario check
 // starts its `#hand-off` tasks under Pip and Marlow, and a label is unique among a bot's tasks, so
 // this spec uses Juniper and Otto.
 import { expect, test, type Browser, type Page } from "@playwright/test";
 import type { ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { openInstance, openOperator } from "../tools/dev-gateway/src/cli.ts";
 import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
+import { programVersion } from "../tools/dev-gateway/src/pinned.ts";
 import { HAND_OFF } from "../tools/dev-gateway/src/scenarios.ts";
+import { PINNED_OPENCLAW, shapeOf } from "../tools/dev-gateway/src/versions.ts";
 import { devGateway, startHost, stopChild } from "./global-setup.ts";
 import { leaveIdle } from "./teardown.ts";
 
@@ -27,6 +31,12 @@ const PARENT_TITLE = "Plan the Saturday walk";
 const ASKED = `agent:otto:e2e-card-${STAMP}`;
 const ASKED_TITLE = "Saturday walk maps";
 const PLAIN_REPLY = "Here is a plain reply, streamed in small pieces with no reasoning first.";
+/** The forms of the run's gateway: `OPENCLAW_BIN`'s version, else the pin. */
+const SHAPE = shapeOf(
+  process.env.OPENCLAW_BIN
+    ? (programVersion(resolve(process.env.OPENCLAW_BIN)) ?? "")
+    : PINNED_OPENCLAW,
+);
 
 type Host = { child: ChildProcess; url: string; data: string };
 let host: Host | null = null;
@@ -171,7 +181,7 @@ test("F-565: a task a bot started opens under the bot with its label, says who s
 });
 
 test("F-587: a task a bot starts shows as a card where it was asked, reaches Done, opens that task, and says the bot reported back", async () => {
-  test.setTimeout(180_000);
+  test.setTimeout(300_000);
   // A conversation of Otto's, opened in the app, where the person asks for a task.
   const first = (await sender.send(ASKED, "#text")) as { runId: string };
   await sender.terminal(first.runId, 60_000);
@@ -217,6 +227,41 @@ test("F-587: a task a bot starts shows as a card where it was asked, reaches Don
     timeout: 60_000,
   });
   await expect(card.locator(".state")).toHaveText("Done");
-  await card.getByRole("button", { name: `Show Otto's report on ${HAND_OFF.label}` }).click();
+  const show = card.getByRole("button", { name: `Show Otto's report on ${HAND_OFF.label}` });
+  await show.click();
   await expect(page.locator(":focus")).toContainText(`${HAND_OFF.label} finished.`);
+  const reports = page
+    .getByTestId("transcript-turn")
+    .filter({ hasText: `${HAND_OFF.label} finished.` });
+  await expect(reports).toHaveCount(1);
+  const own = await reports.first().getAttribute("data-item");
+
+  // The person writes in the started task, and the bot sends it a follow-up. Each later run of
+  // that task may bring a report of its own (2026.11.10 sends one after the person's run, 2026.10.6
+  // after the follow-up's): each shows as Otto's turn, and the card keeps its own start's report.
+  await card.getByRole("button", { name: `Open ${HAND_OFF.label}` }).click();
+  await expect(page.locator(".task-line")).toHaveText(HAND_OFF.label);
+  await page.getByTestId("composer-input").fill("#text");
+  await page.getByTestId("composer-input").press("Enter");
+  await expect(page.getByTestId("transcript").getByText(PLAIN_REPLY)).toHaveCount(2, {
+    timeout: 60_000,
+  });
+  await page.getByRole("button", { name: `Open ${ASKED_TITLE}` }).click();
+  await expect(page.locator(".task-line")).toHaveText(ASKED_TITLE);
+  const afterPerson = 1 + (SHAPE.reportsPersonsRun ? 1 : 0);
+  await expect(reports).toHaveCount(afterPerson, { timeout: 60_000 });
+  await page.getByTestId("composer-input").fill("#follow-up");
+  await page.getByTestId("composer-input").press("Enter");
+  const follow = page.getByTestId("messaged-card");
+  await expect(follow.locator(".messaged-verb")).toHaveText("Sent to", { timeout: 60_000 });
+  // The follow-up's run in the task has ended.
+  await expect(follow).toHaveAttribute("data-state", "no-reply", { timeout: 60_000 });
+  await expect(reports).toHaveCount(afterPerson + (SHAPE.reportsFollowUpRun ? 1 : 0), {
+    timeout: 60_000,
+  });
+  // The gateway's completion rows (2026.11.10) draw no turn of their own.
+  await expect(page.getByTestId("transcript-turn").filter({ hasText: /^\s*$/ })).toHaveCount(0);
+  await expect(card.getByTestId("started-task-reported")).toHaveText("Otto reported back.");
+  await show.click();
+  await expect(page.locator(":focus")).toHaveAttribute("data-item", own!);
 });

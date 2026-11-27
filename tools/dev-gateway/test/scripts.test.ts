@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { chunkText } from "../src/fake-provider.ts";
-import { effectivePrompt, normalizePrompt, planReply, type ChatMessage } from "../src/scripts.ts";
+import {
+  effectivePrompt,
+  lastUserText,
+  normalizePrompt,
+  planReply,
+  WORK_CONTEXT_LINE,
+  type ChatMessage,
+} from "../src/scripts.ts";
 import { SEED_BOTS } from "../src/seed-data.ts";
 import { LEARNED_REASON, LEARNED_SKILL, SKILL_REVIEW_PROMPT } from "../src/scenarios.ts";
 
@@ -13,12 +20,46 @@ describe("normalizePrompt", () => {
     ).toBe("hello");
     expect(normalizePrompt("  plain  ")).toBe("plain");
   });
+
+  it("strips the working context Clawtrate's sends carry (#666), as both versions place it", () => {
+    // The first turn: the words, the working context, then the runtime suffix.
+    const first = `[Thu 2026-11-26 02:12 EST] Conversation info: ⟦openclaw:ctx⟧\n\`\`\`json\n{"sender":{"id":"gateway-owner","name":"Pat"}}\n\`\`\`\n\nDo you know where you are?\n\n${WORK_CONTEXT_LINE}\n{"page":"Clawtrate"}\n\nRuntime: name=Juniper | agent=clawtrate-main-bot | channel=webchat`;
+    expect(normalizePrompt(first)).toBe("Do you know where you are?");
+    // A later turn: no runtime suffix.
+    expect(normalizePrompt(`[Mon 09:00] #text\n\n${WORK_CONTEXT_LINE}\n{"page":"Clawtrate"}`)).toBe(
+      "#text",
+    );
+  });
+});
+
+describe("lastUserText", () => {
+  it("is the model's copy of the latest user message, the gateway's asides aside", () => {
+    const words = `[Mon 09:00] hello\n\n${WORK_CONTEXT_LINE}\n{"page":"Clawtrate"}`;
+    expect(
+      lastUserText([
+        { role: "system", content: "x" },
+        { role: "user", content: words },
+        { role: "user", content: "OpenClaw runtime context:\nCurrent turn instructions" },
+      ]),
+    ).toBe(words);
+    expect(lastUserText([{ role: "system", content: "x" }])).toBeNull();
+  });
 });
 
 describe("planReply", () => {
   const otto = SEED_BOTS.find((bot) => bot.id === "otto")!;
   const turn = otto.tasks[0]!.turns[0]!;
   const user: ChatMessage = { role: "user", content: `[Mon 09:00] ${turn.prompt}` };
+
+  it("plays a turn the same with Clawtrate's working context after the words (#666)", () => {
+    const marked: ChatMessage = {
+      role: "user",
+      content: `[Mon 09:00] ${turn.prompt}\n\n${WORK_CONTEXT_LINE}\n{"page":"Clawtrate"}`,
+    };
+    expect(planReply([{ role: "system", content: "x" }, marked], ALL_TOOLS)).toEqual(
+      planReply([{ role: "system", content: "x" }, user], ALL_TOOLS),
+    );
+  });
 
   it("plays the scripted rounds in order as tool results come back", () => {
     const first = planReply([{ role: "system", content: "x" }, user], ALL_TOOLS);

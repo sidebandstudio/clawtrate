@@ -659,6 +659,25 @@ describe("reconciling sent messages with history (F-075, F-107)", () => {
     expect(next.runs[0]!.anchorItemId).toBeNull();
   });
 
+  it("#686: a run anchored to its own sent message is keyed, so Try again may send it", () => {
+    const activity: TaskActivity = startLocalRun(
+      { ...emptyActivity, outbox: [message("m1", { status: "sent" })] },
+      message("m1", { status: "sent" }),
+      3_000,
+    );
+    const rows = [
+      {
+        role: "user",
+        content: "hi",
+        timestamp: 3_100,
+        __openclaw: { id: "u1", seq: 1, idempotencyKey: "m1:user" },
+      },
+    ];
+    const next = reconcileOutbox(activity, rows);
+    expect(next.outbox).toEqual([]);
+    expect(next.runs[0]).toMatchObject({ anchorItemId: "u1:0", anchorKeyed: true });
+  });
+
   it("matches by the idempotency key, on the row or under its metadata, and by the returned seq", () => {
     const activity: TaskActivity = {
       ...emptyActivity,

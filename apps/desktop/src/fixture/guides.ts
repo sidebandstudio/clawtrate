@@ -1,17 +1,21 @@
-// "How bots work in Clawtrate": the bots' guides as the gateway's files hold them (core guides.ts).
+// "Bots know how Clawtrate works": the bots' guides as the gateway's files hold them (core guides.ts).
 //
-//   (none)         no bot has the section, and this device answered before (the rail card stays hidden)
-//   guides=offer   no bot has it, and this device has no answer: the rail card is offered
-//   guides=added   every bot has this version
-//   guides=mixed   Juniper current, Marlow older, Otto changed outside Clawtrate, Pip removed
-//                  outside Clawtrate, Quartermaster not added
-//   guides=moved   as mixed, but Otto's intact section isn't at the top of its file
-//   guides=odd     as another device sees it: Marlow older, which this device didn't add;
-//                  Otto's markers out of shape; Quartermaster's instructions long
-//   guides=voice   Juniper added, the rest not, and the voice plugin adds its own guide
-//   guides=voicenone  none added, no answer yet, and the voice plugin adds its own guide
-//   guides=utf8    Otto has the section in a file that isn't plain UTF-8; Marlow's file isn't
-//                  either, with no section
+//   (none)         the switch on, as by default, and every bot has the section
+//   guides=off     the switch off, and no bot has it
+//   guides=inherited  as off, but only because the switch was turned off for another gateway on
+//                  this device: this gateway has no choice of its own yet
+//   guides=offleft the switch off, and Otto's section couldn't be taken out; Marlow's was changed
+//                  outside Clawtrate
+//   guides=mixed   the switch on: the gateway's own bot and Juniper current, Marlow older with long instructions, Otto
+//                  changed outside Clawtrate, Pip removed outside Clawtrate, Quartermaster's
+//                  instructions too long to add it by itself
+//   guides=odd     the switch on: Otto's markers out of shape, Marlow's section moved from the
+//                  top, Pip's file not plain UTF-8, Quartermaster's file unreadable
+//   guides=new     the switch on: Pip's AGENTS.md doesn't exist yet, and the gateway refused
+//                  Clawtrate's write of Otto's; the rest have it
+//   guides=unreadable  this device's record can't be read: Otto's file still has a changed
+//                  section, the rest have it
+//   guides=voice   every bot has it, and the voice plugin adds its own guide
 //   guides=fail    the read fails
 //   guidesave=fail a change writes nothing: every file kept changing while it was written
 //   guidesave=race a change writes nothing and reports nothing: the files changed meanwhile
@@ -42,60 +46,92 @@ export function guidesCommands(
   stampNow: () => GatewayStamp,
 ) {
   const save = /\+save(fail|race)$/.exec(given ?? "")?.[1] ?? null;
-  const saveFails = save === "fail";
   const param = save ? given!.slice(0, -`+save${save}`.length) || null : given;
-  const mixed: Record<string, GuideState> = {
-    main: "none",
-    "clawtrate-main-bot": "current",
-    marlow: "older",
-    otto: "changed",
-    pip: "removed",
-    quartermaster: "none",
+  const start: Record<string, Record<string, GuideState | null>> = {
+    off: {},
+    inherited: {},
+    offleft: { otto: "current", marlow: "changed" },
+    mixed: {
+      main: "current",
+      "clawtrate-main-bot": "current",
+      marlow: "older",
+      otto: "changed",
+      pip: "removed",
+      quartermaster: "none",
+    },
+    odd: {
+      main: "current",
+      "clawtrate-main-bot": "current",
+      marlow: "changed",
+      otto: "changed",
+      pip: "none",
+      quartermaster: null,
+    },
+    new: {
+      main: "current",
+      "clawtrate-main-bot": "current",
+      marlow: "current",
+      otto: "none",
+      pip: "none",
+      quartermaster: "current",
+    },
+    unreadable: {
+      main: "current",
+      "clawtrate-main-bot": "current",
+      marlow: "current",
+      otto: "changed",
+      pip: "current",
+      quartermaster: "current",
+    },
   };
-  const states = new Map<string, GuideState>(
+  const states = new Map<string, GuideState | null>(
     BOTS.map((bot) => [
       bot,
-      param === "added"
-        ? "current"
-        : param === "mixed" || param === "odd" || param === "moved"
-          ? mixed[bot]!
-          : (param === "voice" && bot === "clawtrate-main-bot") ||
-              (param === "utf8" && bot === "otto")
-            ? "current"
-            : "none",
+      param !== null && param in start
+        ? bot in start[param]!
+          ? (start[param]![bot] ?? null)
+          : "none"
+        : "current",
     ]),
   );
-  // Another device's view: Pip's section isn't on this device's record, so it reads not added.
-  if (param === "odd") states.set("pip", "none");
-  let record: GuidesRecord | null =
-    param === "offer" || param === "voice" || param === "voicenone"
-      ? null
-      : param === "added"
-        ? { bots: BOTS, newBots: true }
-        : param === "mixed" || param === "moved"
-          ? { bots: ["clawtrate-main-bot", "marlow", "otto", "pip"], newBots: true }
-          : param === "odd"
-            ? { bots: ["clawtrate-main-bot"], newBots: false }
-            : { bots: [], newBots: false };
-  const voicePlugin = param === "voice" || param === "voicenone";
-  const notUtf8 = (bot: string) => param === "utf8" && (bot === "otto" || bot === "marlow");
+  let record: GuidesRecord =
+    param === "off" || param === "offleft" || param === "inherited"
+      ? { on: false, bots: [] }
+      : {
+          on: true,
+          bots: param === "mixed" ? ["main", "clawtrate-main-bot", "marlow", "otto", "pip"] : BOTS,
+        };
+  const voicePlugin = param === "voice";
+  const unreadable = param === "unreadable";
+  // Off only by the device's default until a switch command saves this gateway's own choice.
+  let inherited = param === "inherited";
+  const missing = new Set(param === "new" ? ["pip"] : []);
+  const refused = new Map(
+    param === "new" ? [["otto", "Workspace document exceeds its write bound"]] : [],
+  );
+  const notUtf8 = (bot: string) => param === "odd" && bot === "pip";
+  const long = (bot: string) => param === "mixed" && (bot === "quartermaster" || bot === "marlow");
   const folders = (): GuideFolder[] =>
     BOTS.map((bot) => ({
       bots: [bot],
       state: states.get(bot)!,
-      replaceable: states.get(bot) === "changed" && param !== "odd" && param !== "moved",
-      moved: states.get(bot) === "changed" && param === "moved",
-      long: param === "odd" && bot === "quartermaster",
+      replaceable: states.get(bot) === "changed" && param !== "odd",
+      moved: states.get(bot) === "changed" && param === "odd" && bot === "marlow",
+      long: long(bot),
       utf8: !notUtf8(bot),
+      missing: states.get(bot) === "none" && missing.has(bot),
+      refused: states.get(bot) === "none" ? (refused.get(bot) ?? null) : null,
       changedText:
         states.get(bot) === "changed"
           ? GUIDES_SECTION.replace("Lead with the answer", "Lead with a short joke")
           : null,
-      error: null,
+      error: states.get(bot) === null ? "The gateway did not answer." : null,
     }));
   const answer = (errors: string[] = []): BotGuidesAnswer => ({
     folders: folders(),
-    record,
+    record: unreadable ? null : record,
+    unreadable,
+    inherited,
     voicePlugin,
     errors,
     stamp: stampNow(),
@@ -106,42 +142,44 @@ export function guidesCommands(
     if (param === "fail") throw new Error("The gateway did not answer.");
     if (command.type === "readBotGuides") return answer();
     const { change } = command;
-    if (change.action === "decline") {
-      record ??= { bots: [], newBots: false };
-      return answer();
-    }
-    // "New bots too" is this device's alone: nothing in the files changes. Taking it back needs
-    // no admin access; saying yes does.
-    if (change.action === "newBots" && !change.on) {
-      record = { bots: record?.bots ?? [], newBots: false };
-      return answer();
-    }
     if (!canAdmin()) throw new Error("Changing the bots' instructions needs admin access.");
-    if (change.action === "newBots") {
-      record = { bots: record?.bots ?? [], newBots: true };
-      return answer();
-    }
-    if (saveFails)
+    if (unreadable) return answer(["Couldn't read this on this device, so nothing was changed."]);
+    // Off is saved first, whatever the files do after.
+    if (change.action === "switch") inherited = false;
+    if (change.action === "switch" && !change.on) record = { on: false, bots: [] };
+    if (save === "fail")
       return answer([
         "otto: AGENTS.md kept changing while Clawtrate wrote it, so it was left as it is.",
       ]);
     // The files changed between the read and the press: nothing to write, nothing to report.
     if (save === "race") return answer();
-    if (change.action === "add") {
-      for (const bot of change.bots)
-        if (!notUtf8(bot) && ["none", "removed", "older"].includes(states.get(bot)!))
+    const ours = (bot: string) => ["current", "older"].includes(states.get(bot) ?? "");
+    if (change.action === "switch" && !change.on) {
+      for (const bot of BOTS) if (ours(bot) && !notUtf8(bot)) states.set(bot, "none");
+    } else if (change.action === "switch") {
+      for (const bot of BOTS)
+        if (
+          !notUtf8(bot) &&
+          !long(bot) &&
+          !missing.has(bot) &&
+          ["none", "older"].includes(states.get(bot) ?? "")
+        )
           states.set(bot, "current");
-      record = {
-        bots: [...new Set([...(record?.bots ?? []), ...change.bots])],
-        newBots: change.newBots,
-      };
+      refused.clear();
+      record = { on: true, bots: BOTS.filter((bot) => states.get(bot) !== "none") };
+    } else if (change.action === "remove") {
+      for (const bot of change.bots) if (ours(bot) && !notUtf8(bot)) states.set(bot, "none");
+    } else if (change.action === "add") {
+      for (const bot of change.bots) {
+        if (!notUtf8(bot) && ["none", "removed", "older"].includes(states.get(bot) ?? ""))
+          states.set(bot, "current");
+        missing.delete(bot);
+        refused.delete(bot);
+      }
+      record = { on: true, bots: [...new Set([...record.bots, ...change.bots])] };
     } else if (change.action === "replace") {
       if (states.get(change.bot) === "changed" && param !== "odd")
         states.set(change.bot, "current");
-    } else if (change.action === "remove") {
-      for (const bot of BOTS)
-        if (states.get(bot) === "current" || states.get(bot) === "older") states.set(bot, "none");
-      record = { bots: [], newBots: false };
     }
     return answer();
   };

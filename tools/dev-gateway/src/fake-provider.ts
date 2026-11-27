@@ -10,6 +10,7 @@ import { ScriptedAccounts, type FailureStatus, type ScriptedFailure } from "./sc
 import { IMAGES_PATH, imagesAnswer } from "./scripted-images.ts";
 import {
   effectivePrompt,
+  lastUserText,
   messageText,
   gatewayTurnPrompt,
   planReply,
@@ -279,6 +280,9 @@ export function startFakeProvider(options: FakeProviderOptions) {
   // The system text of the latest model request in each session, as evidence
   // of what the gateway really tells a bot (a plugin's prompt additions).
   const systems = new Map<string, string>();
+  // The model's copy of the latest user message in each session, as evidence of what the
+  // gateway adds to a person's words (Clawtrate's marker, #666).
+  const users = new Map<string, string>();
   // Gateway-started turns answered with the silent reply, which leave no trace
   // in the gateway's history, counted per session.
   const quiet = new Map<string, string[]>();
@@ -311,7 +315,11 @@ export function startFakeProvider(options: FakeProviderOptions) {
       }
       if (req.method === "GET" && url.pathname === SYSTEM_PROMPT_PATH) {
         const session = url.searchParams.get("session") ?? "";
-        sendJson(res, 200, { session, system: systems.get(session) ?? null });
+        sendJson(res, 200, {
+          session,
+          system: systems.get(session) ?? null,
+          user: users.get(session) ?? null,
+        });
         return;
       }
       if (req.method === "GET" && url.pathname === QUIET_TURNS_PATH) {
@@ -376,6 +384,8 @@ export function startFakeProvider(options: FakeProviderOptions) {
         if (session) {
           // As the model has it now: 2026.11.10 sends changes to it as messages of their own.
           systems.set(session, effectivePrompt(messages));
+          const user = lastUserText(messages);
+          if (user !== null) users.set(session, user);
         }
         const steps = planReply(messages, new Set(toolNames), {
           pagesOrigin: options.pagesOrigin ?? null,
