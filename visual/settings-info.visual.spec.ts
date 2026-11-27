@@ -67,9 +67,9 @@ test.describe("the explanation behind an i", () => {
     // Nothing of it shows until the "i" is opened.
     await expect(settings.getByText(WORDS.channels)).toBeHidden();
     settings = await section(page, "Conversation");
-    await expect(settings.getByLabel("Turn time limit")).toHaveAccessibleDescription(
-      WORDS.turnLimit,
-    );
+    await expect(
+      settings.getByRole("spinbutton", { name: "Turn time limit" }),
+    ).toHaveAccessibleDescription(WORDS.turnLimit);
     await expect(settings.getByRole("switch", { name: "Bot voice" })).toHaveAccessibleDescription(
       WORDS.voice,
     );
@@ -106,14 +106,18 @@ test.describe("the explanation behind an i", () => {
     await page.keyboard.press("Enter");
     await expect(card(settings, "turn-limit-note")).toBeVisible();
     await page.keyboard.press("Tab");
-    await expect(settings.getByLabel("Turn time limit")).toBeFocused();
+    await expect(settings.getByRole("spinbutton", { name: "Turn time limit" })).toBeFocused();
     await expect(card(settings, "turn-limit-note")).toBeHidden();
   });
 
   test("it never covers the control it explains", async ({ page }) => {
     let settings = await section(page, "Conversation");
     for (const [about, id, control] of [
-      ["Turn time limit", "turn-limit-note", settings.getByLabel("Turn time limit")],
+      [
+        "Turn time limit",
+        "turn-limit-note",
+        settings.getByRole("spinbutton", { name: "Turn time limit" }),
+      ],
       ["Bot voice", "bot-voice-note", settings.getByRole("switch", { name: "Bot voice" })],
     ] as const) {
       await info(settings, about).click();
@@ -183,7 +187,9 @@ test.describe("at phone width", () => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBeLessThanOrEqual(
       PHONE.width,
     );
-    expect(await overlap(shown, settings.getByLabel("Turn time limit"))).toBe(false);
+    expect(
+      await overlap(shown, settings.getByRole("spinbutton", { name: "Turn time limit" })),
+    ).toBe(false);
     await i.tap();
     await expect(shown).toBeHidden();
     await i.tap();

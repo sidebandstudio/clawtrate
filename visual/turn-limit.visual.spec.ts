@@ -27,7 +27,7 @@ test.describe("the turn time limit", () => {
     page,
   }) => {
     const settings = await openPane(page);
-    const limit = settings.getByLabel("Turn time limit");
+    const limit = settings.getByRole("spinbutton", { name: "Turn time limit" });
     await expect(limit).toHaveValue("50");
     await expect(limit).toHaveAccessibleDescription(/50 by default/);
     // A stop at the limit is asked of the gateway, and the note names the limit once it confirms.
@@ -58,7 +58,9 @@ test.describe("the turn time limit", () => {
     await page.keyboard.press("Escape");
     await page.keyboard.press("ControlOrMeta+,");
     await expect(
-      page.getByRole("dialog", { name: "Settings" }).getByLabel("Turn time limit"),
+      page
+        .getByRole("dialog", { name: "Settings" })
+        .getByRole("spinbutton", { name: "Turn time limit" }),
     ).toHaveValue("20");
   });
 
