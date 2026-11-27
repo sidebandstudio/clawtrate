@@ -78,10 +78,30 @@ test.describe("the gateway's own bot", () => {
     await palette.getByRole("combobox", { name: "Search" }).fill("Heat pump");
     await expect(palette.getByTestId("search-group-tasks").getByRole("option")).toHaveCount(0);
     // Nor its workspace's files: the others' are searched, and its notes/heat-pumps.md is not.
-    const files = palette.getByTestId("search-group-files");
-    await expect(files).toContainText("No file names returned from Otto");
-    await expect(files).not.toContainText("Juniper");
-    await expect(files).not.toContainText("heat-pumps");
+    await expect(palette.getByTestId("search-announcer")).not.toHaveText("");
+    await expect(palette.getByRole("option").filter({ hasText: "heat-pumps" })).toHaveCount(0);
+    // The bots' ids from the fixture's own state, so the check holds whatever id each one has.
+    const { asked, otto, juniper } = await page.evaluate(() => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: {
+            sent: Array<{ type: string; query?: string; botId?: string }>;
+            getState(): { bots: Array<{ id: string; name: string }> };
+          };
+        }
+      ).clawtrateFixture;
+      const id = (name: string) => fixture.getState().bots.find((bot) => bot.name === name)?.id;
+      return {
+        asked: fixture.sent
+          .filter((each) => each.type === "searchFiles" && each.query === "Heat pump")
+          .map((each) => each.botId),
+        otto: id("Otto"),
+        juniper: id("Juniper"),
+      };
+    });
+    expect(asked).toContain(otto);
+    expect(juniper).toBeTruthy();
+    expect(asked).not.toContain(juniper);
   });
 
   test("F-562: the dock badge counts no unread task of the gateway's own bot while it is out of view", async ({

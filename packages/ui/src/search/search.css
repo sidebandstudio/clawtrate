@@ -111,38 +111,6 @@
   color: var(--text-faint);
 }
 
-/* Before anything is typed, and what found nothing: what each source covers. */
-.s-idle,
-.s-nomatch {
-  padding: 8px 8px 4px;
-}
-.s-idle h2 {
-  margin: 0;
-}
-:is(.s-idle, .s-nomatch) dl {
-  margin: 8px 0 0;
-  display: grid;
-  gap: 8px;
-}
-:is(.s-idle, .s-nomatch) dl > div {
-  display: grid;
-  grid-template-columns: 84px 1fr;
-  gap: 12px;
-}
-:is(.s-idle, .s-nomatch) dt {
-  font-size: var(--text-sm);
-  font-weight: var(--weight-medium);
-  color: var(--text);
-}
-:is(.s-idle, .s-nomatch) dd {
-  margin: 0;
-  font-size: var(--text-sm);
-  color: var(--text-muted);
-}
-.s-nomatch {
-  margin-top: 6px;
-}
-
 /* A group: its name and count, and the coverage line under it. */
 .s-group + .s-group {
   margin-top: 6px;
@@ -187,21 +155,14 @@
   color: var(--danger);
 }
 
-.s-skeleton {
-  display: grid;
-  gap: 8px;
-  padding: 4px 8px 8px;
-}
-.s-skeleton span {
-  height: 14px;
-  border-radius: 7px;
-  background: var(--bg-bubble);
-}
-.s-skeleton span:first-child {
-  width: 62%;
-}
-.s-skeleton span:last-child {
-  width: 40%;
+/* The one quiet line under the results: still searching, nothing found, or offline. */
+.s-status {
+  margin: 0;
+  padding: 10px 8px 4px;
+  font-size: var(--text-sm);
+  line-height: 1.4;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
 }
 
 /* A row: 44 px for one line, 60 for two; the active one takes the selected fill. */
@@ -416,9 +377,5 @@
   .s-action {
     min-height: 44px;
     padding-left: 54px;
-  }
-  :is(.s-idle, .s-nomatch) dl > div {
-    grid-template-columns: 1fr;
-    gap: 2px;
   }
 }

@@ -1,6 +1,6 @@
 // The search palette's behaviour in the fixture (docs/design/search.md): how it
-// opens and closes, what each group says it searched, opening a result where
-// it lives, and the partial, failed and offline states. The fixture's
+// opens and closes, which groups it draws, opening a result where it lives,
+// nothing found, and the partial, failed and offline states. The fixture's
 // messages, files and routines are made up (apps/desktop/src/fixture/search.ts);
 // the gateway's part is checked against a development gateway in e2e/search.spec.ts.
 import type { ClawtrateState } from "../packages/core/src/index.ts";
@@ -111,24 +111,10 @@ test("F-033: Cmd/Ctrl+K opens the palette from anywhere, the rail's Search butto
     "placeholder",
     "Search bots, tasks, messages, files, links, routines and settings",
   );
-  // Before anything is typed: what each source covers, in the words the groups use.
-  const idle = palette(page).getByTestId("search-idle");
-  await expect(idle.locator("dt")).toHaveText([
-    "Bots",
-    "Tasks",
-    "Messages",
-    "Files",
-    "Links",
-    "Routines",
-    "Settings",
-  ]);
-  await expect(idle).toContainText("Every bot this connection can see, by name.");
-  await expect(idle).toContainText(
-    "Titles in this device's task list, which keeps up to 500 tasks.",
-  );
-  await expect(idle).toContainText("Excludes routine runs, subagent tasks and archived tasks.");
-  await expect(idle).toContainText("Links in the conversations loaded on this device:");
-  await expect(palette(page)).toContainText("↑↓ Move · ↵ Open · Esc Close");
+  // Before anything is typed: the field and the footer of keys, and no panel explaining search.
+  await expect(palette(page).locator(".s-body")).toHaveCount(0);
+  await expect(palette(page)).not.toContainText("What search looks in");
+  await expect(palette(page).locator(".s-foot")).toHaveText("↑↓ Move · ↵ Open · Esc Close");
   // Everything behind it is out of reach, and its keys stay with it: ⌘K selects the text.
   await page.keyboard.type("disk");
   await page.keyboard.press("ControlOrMeta+K");
@@ -160,21 +146,21 @@ test("F-033: Cmd/Ctrl+K opens the palette from anywhere, the rail's Search butto
   await expect(palette(page)).toHaveCount(0);
 });
 
-test("F-033: one query searches bots, tasks, messages, files, links, routines and settings, each group saying what it searched", async ({
+test("F-033: one query searches bots, tasks, messages, files, links, routines and settings, and only the groups that found something are drawn", async ({
   page,
 }) => {
-  // "e" reaches every source but files, which ask for two characters.
+  // "e" reaches every source but files, which ask for two characters, so Files isn't drawn.
   await search(page, "e", `${BASE}&src=truncated`);
   const names = await palette(page).locator(".s-group .s-group-name").allTextContents();
-  expect(names.map((name) => name.replace(/ · \d+$/, ""))).toEqual([
-    "Bots",
-    "Tasks",
-    "Messages",
-    "Files",
-    "Links",
-    "Routines",
-    "Settings",
+  expect(names).toEqual([
+    expect.stringMatching(/^Bots · \d+$/),
+    expect.stringMatching(/^Tasks · \d+$/),
+    expect.stringMatching(/^Messages · \d+$/),
+    expect.stringMatching(/^Links · \d+$/),
+    expect.stringMatching(/^Routines · \d+$/),
+    expect.stringMatching(/^Settings · \d+$/),
   ]);
+  await expect(group(page, "files")).toHaveCount(0);
   await expect(options(page, "bots").first()).toHaveAccessibleName("Bot Juniper, research");
   // The device's own matches mark what it found; a snippet carries no marks.
   await expect(options(page, "bots").first().locator("b")).toHaveText("e");
@@ -185,9 +171,6 @@ test("F-033: one query searches bots, tasks, messages, files, links, routines an
     "Showing the 25 matches the gateway returned, newest first. More indexed messages match.",
   );
   await expect(group(page, "messages").locator(".s-second b")).toHaveCount(0);
-  await expect(group(page, "files")).toContainText(
-    "Type 2 or more characters to search file names.",
-  );
   await expect(group(page, "links")).toContainText(
     /Only from the \d+ conversations this device has loaded/,
   );
@@ -209,11 +192,34 @@ test("F-033: one query searches bots, tasks, messages, files, links, routines an
   expect(await sent(page, "searchFiles")).toEqual([]);
 
   await field(page).fill("acc");
-  await expect(group(page, "settings")).toBeVisible();
   await expect(options(page, "settings").first()).toHaveAccessibleName("Setting Accounts");
-  await expect(group(page, "files")).toContainText("Some folders may be skipped.");
-  // A source that finished over all it covers and found nothing is named at the end.
-  await expect(palette(page).getByTestId("search-no-matches")).toContainText(/^No matches in /);
+  await expect(announcer(page)).toHaveText("1 result: 1 setting.");
+  // Only Settings found something: no other group is drawn, and nothing lists what found nothing.
+  await expect(palette(page).locator(".s-group")).toHaveCount(1);
+  await expect(palette(page)).not.toContainText("No matches in");
+  await expect(palette(page).getByTestId("search-status")).toHaveCount(0);
+});
+
+test("F-033: a search that finds nothing says so in one line, after one quiet line while the gateway answers", async ({
+  page,
+}) => {
+  await openFixture(page, BASE, "light");
+  await page.evaluate(() =>
+    (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.hold(),
+  );
+  await page.keyboard.press("ControlOrMeta+K");
+  await page.keyboard.type("zzqx");
+  const status = palette(page).getByTestId("search-status");
+  await expect(status).toHaveText("Searching…");
+  await expect(palette(page).locator(".s-group")).toHaveCount(0);
+  await expect(announcer(page)).toHaveText("");
+  await page.evaluate(() =>
+    (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.release(),
+  );
+  await expect(status).toHaveText("No results for “zzqx”.");
+  await expect(palette(page).locator(".s-group")).toHaveCount(0);
+  await expect(palette(page).getByRole("option")).toHaveCount(0);
+  await expect(announcer(page)).toHaveText("No results for “zzqx”.");
 });
 
 test("F-033: Enter opens a bot, a task, a routine and a setting where it lives, and closes the palette", async ({
@@ -628,9 +634,8 @@ test("F-033: asked before the bots load, Files searches once they come", async (
   });
   await page.keyboard.press("ControlOrMeta+K");
   await page.keyboard.type("md");
-  await expect(group(page, "files")).toContainText(
-    "Not searched: the gateway's bots haven't loaded yet.",
-  );
+  await expect(announcer(page)).not.toHaveText("");
+  await expect(group(page, "files")).toHaveCount(0);
   await page.evaluate(() => {
     const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
     const bots = (window as unknown as { keptBots: ClawtrateState["bots"] }).keptBots;
@@ -747,7 +752,8 @@ test("F-033: a failed source says so with Try again and leaves the others alone;
     "Pip · couldn't search: the search index is busy",
   );
   await expect(group(page, "messages")).toContainText("Otto · all 2 matches");
-  await expect(group(page, "messages")).toContainText("Marlow · no matches");
+  // A bot whose own search found nothing has no line.
+  await expect(group(page, "messages")).not.toContainText("Marlow ·");
   expect((await sent(page, "searchMessages")).map((each) => each.botId)).toEqual([
     null,
     null,
@@ -758,7 +764,8 @@ test("F-033: a failed source says so with Try again and leaves the others alone;
     "quartermaster",
   ]);
   await options(page, "messages").filter({ hasText: "Try again for Pip" }).click();
-  await expect(group(page, "messages")).toContainText("Pip · no matches");
+  await expect(group(page, "messages")).toContainText("5 of 5 bots answered.");
+  await expect(group(page, "messages")).not.toContainText("Pip ·");
 });
 
 test("F-033: past 24 bots, Search the next bots adds the next batch and keeps the earlier one's rows and retries", async ({
@@ -792,7 +799,7 @@ test("F-033: past 24 bots, Search the next bots adds the next batch and keeps th
   await expect(group(page, "messages")).toContainText("29 of 30 bots answered.");
   await expect(group(page, "messages")).not.toContainText("Not asked");
   await expect(group(page, "messages")).toContainText("Otto · all 2 matches");
-  await expect(group(page, "messages")).toContainText("Extra 25 · no matches");
+  await expect(group(page, "messages")).not.toContainText("Extra 25 ·");
   await expect(options(page, "messages").filter({ hasText: "Try again for Pip" })).toBeVisible();
   expect((await sent(page, "searchMessages")).filter((each) => each.botId)).toHaveLength(30);
   await options(page, "messages").filter({ hasText: "Try again for Pip" }).click();
@@ -854,14 +861,14 @@ test("F-033: files are searched per bot, names only, with each bot's coverage, a
   await expect(options(page, "files").filter({ hasText: "mountain-weekend.md" })).toBeVisible();
 });
 
-test("F-033: offline, the gateway's groups say they were not searched and the device's own still filter", async ({
+test("F-033: offline, one line says the gateway's sources were not searched and the device's own still filter", async ({
   page,
 }) => {
   await search(page, "otto", `scene=offline&${OTTO_DISK}&search=on`);
-  for (const id of ["messages", "files", "routines"])
-    await expect(group(page, id)).toContainText(
-      "Not searched: 127.0.0.1:18789 isn't connected. Search runs again when it reconnects.",
-    );
+  const offline = "Messages, files and routines weren't searched: 127.0.0.1:18789 isn't connected.";
+  await expect(palette(page).getByTestId("search-status")).toHaveText(offline);
+  for (const id of ["messages", "files", "routines"]) await expect(group(page, id)).toHaveCount(0);
+  await expect(announcer(page)).toContainText(offline);
   await expect(options(page, "bots").first()).toHaveAccessibleName(/^Bot Otto/);
   expect(await sent(page, "searchMessages")).toEqual([]);
 });
