@@ -168,9 +168,9 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // connection check; kept while its run is stopping, and never past the bound.
   deferredStops: { max: MAX_DEFERRED_STOPS, each: 2 * ID + 1, row: "bookkeeping" },
   // The turn the gateway owes a task after a Stop of this client's stopped a recipient (#645):
-  // task, recipient session and run, the stopped run, when the wait ends and the run found to be
-  // that turn; gone once the wait ends.
-  followUps: { max: MAX_FOLLOW_UPS, each: 5 * ID + 2 + N, row: "bookkeeping" },
+  // task, recipient session and run, the stopped run, when the wait ends, the run found to be
+  // that turn, whether its stop was asked and the connection target; gone once the wait ends.
+  followUps: { max: MAX_FOLLOW_UPS, each: 5 * ID + 3 + 2 * N, row: "bookkeeping" },
   // One per task and list kind (three approval kinds and questions).
   listRequested: { max: T * 4, each: ID + SHORT + N, row: "bookkeeping" },
   listApplied: { max: T * 4, each: ID + SHORT + N, row: "bookkeeping" },

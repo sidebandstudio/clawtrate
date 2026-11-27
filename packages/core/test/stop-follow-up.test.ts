@@ -8,8 +8,16 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { FOLLOW_UP_WAIT_MS } from "../src/client.ts";
-import { agentEvent, KEY, openTask } from "./client-harness.ts";
-import { sleep, until, type FakeGateway } from "./fake-gateway.ts";
+import { INTERACTIVE_SCOPES } from "../src/scopes.ts";
+import { agentEvent, KEY, openTask, URL_A, URL_B } from "./client-harness.ts";
+import {
+  GatewayError,
+  memoryStorage,
+  sleep,
+  tokenKey,
+  until,
+  type FakeGateway,
+} from "./fake-gateway.ts";
 
 const PEER = "agent:marlow:main";
 const NOTE =
@@ -460,6 +468,195 @@ describe("the gateway's own turn after a Stop that stopped a recipient (#645)", 
     await until(() => run(opened, "run-f") !== undefined);
     await sleep(50);
     expect(abortsOf(gateway).some((each) => each.runId === "run-f")).toBe(false);
+    client.stop();
+  });
+});
+
+describe("the automatic stop of the gateway's own turn keeps to what the person wants (#645)", () => {
+  /** Aborts of the task's own runs answer at once; `run-f`'s end comes only when `ended` is called. */
+  function holdingFollowUp(gateway: FakeGateway) {
+    aborting(gateway);
+    const answer = gateway.handlers["chat.abort"]!;
+    gateway.handlers["chat.abort"] = (params) => {
+      const { sessionKey, runId } = params as Abort;
+      if (sessionKey === KEY && runId === "run-f")
+        return { ok: true, aborted: true, runIds: [runId] };
+      return answer(params);
+    };
+    return () =>
+      gateway.emit(
+        "agent",
+        agentEvent("run-f", 90, "lifecycle", { phase: "end", status: "cancelled", aborted: true }),
+      );
+  }
+
+  it("#645: a wait made on one gateway never acts on another: after a switch to a gateway with the same keys, the matching turn there runs", async () => {
+    // Both gateways have this device paired with write access, and the same task and bot keys.
+    const paired = JSON.stringify({
+      token: "device-token",
+      grantedScopes: INTERACTIVE_SCOPES,
+      heldScopes: INTERACTIVE_SCOPES,
+    });
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL_A, token: null }),
+      [tokenKey(URL_A)]: paired,
+      [tokenKey(URL_B)]: paired,
+    });
+    const opened = await openTask({ storage });
+    const { client, gateway } = opened;
+    aborting(gateway);
+    await stopTheExchange(opened);
+    await client.connect({ url: URL_B });
+    await until(() => client.state.discovery.status === "ready");
+    client.openSession(KEY);
+    await until(() => client.state.transcripts[KEY]?.status === "ready");
+    expect(client.state.connection.canWrite).toBe(true);
+    const before = abortsOf(gateway).length;
+    await turnStarts(gateway, "run-f", [startedRow("run-f", fromPeer)]);
+    await until(() => run(opened, "run-f") !== undefined);
+    await sleep(50);
+    expect(abortsOf(gateway).length).toBe(before);
+    expect(run(opened, "run-f")!.state).toBe("running");
+    client.stop();
+  });
+
+  it("#645: a message the person types while the gateway's turn is being stopped is sent, in order, never parked", async () => {
+    const opened = await openTask();
+    const { client, gateway } = opened;
+    const end = holdingFollowUp(gateway);
+    await stopTheExchange(opened);
+    await turnStarts(gateway, "run-f", [startedRow("run-f", fromPeer)]);
+    await until(() => run(opened, "run-f")?.state === "stopping");
+    const sends = gateway.calls("chat.send").length;
+    const first = client.sendMessage(KEY, "Use the other folder.");
+    const second = client.sendMessage(KEY, "And keep the logs.");
+    await sleep(30);
+    end();
+    await until(() => run(opened, "run-f")?.state === "stopped");
+    // The first goes as soon as the turn has stopped; the second, queued, after the first's run.
+    await until(() => gateway.calls("chat.send").length === sends + 1);
+    const firstRun = opened.transcript().outbox.find((each) => each.id === first)?.runId;
+    gateway.emit(
+      "agent",
+      agentEvent(firstRun!, 9, "lifecycle", { phase: "end", status: "completed" }),
+    );
+    await until(() => gateway.calls("chat.send").length === sends + 2);
+    const sent = (gateway.calls("chat.send") as Array<{ message: string }>)
+      .slice(sends)
+      .map((each) => each.message);
+    expect(sent).toEqual(["Use the other folder.", "And keep the logs."]);
+    const outbox = opened.transcript().outbox;
+    for (const id of [first, second])
+      expect(outbox.find((each) => each.id === id)?.status).not.toBe("not-sent");
+    expect(run(opened, "run-f")!.stoppedAsFollowUp).toBe(true);
+    client.stop();
+  });
+
+  it("#645: a steer the person sent into the gateway's turn before it was identified is not withdrawn by its automatic stop", async () => {
+    const opened = await openTask();
+    const { client, gateway } = opened;
+    aborting(gateway);
+    await stopTheExchange(opened);
+    gateway.emit("agent", {
+      ...agentEvent("run-f", 1, "lifecycle", { phase: "start" }),
+      ts: 1_500,
+    });
+    await until(() => run(opened, "run-f")?.state === "running");
+    gateway.handlers["chat.send"] = () => ({ runId: "run-f", status: "in_flight" });
+    const steer = client.sendMessage(KEY, "Also check the photos.", { mode: "auto" });
+    await until(() => gateway.calls("chat.send").length > 0);
+    await sleep(20);
+    await turnStarts(gateway, "run-f", [startedRow("run-f", fromPeer)]);
+    await until(() => abortsOf(gateway).some((each) => each.runId === "run-f"));
+    await sleep(30);
+    expect(abortsOf(gateway).some((each) => each.runId === steer)).toBe(false);
+    const message = opened.transcript().outbox.find((each) => each.id === steer);
+    expect(message?.mode).toBe("steer");
+    expect(message?.steer).not.toBe("withdrawn");
+    expect(message?.status).not.toBe("not-sent");
+    client.stop();
+  });
+
+  it("#645: Pip to Marlow, Marlow to Pip on its own, Pip to Marlow again, Stop: the first send's real reply is not stopped", async () => {
+    const opened = await openTask();
+    const { client, gateway, transcript } = opened;
+    aborting(gateway);
+    // Pip's first message to Marlow; Marlow's run for it finishes well, and its reply is owed.
+    messaged(gateway, [pending("run-r1")], "run-s1", 100);
+    gateway.emit("agent", {
+      ...agentEvent("run-s1", 9, "lifecycle", { phase: "end", status: "completed" }),
+      ts: 150,
+    });
+    gateway.emit("agent", agentEvent("run-r1", 1, "lifecycle", { phase: "start" }, PEER));
+    gateway.emit(
+      "agent",
+      agentEvent("run-r1", 5, "lifecycle", { phase: "end", status: "completed" }, PEER),
+    );
+    await until(() => transcript().linkedRuns["run-r1"]?.state === "completed");
+    // Later, by this client's clock too.
+    await sleep(20);
+    // Marlow messages Pip on its own: a turn of the same form as the reply.
+    const own = startedRow("run-m", fromPeer, "One more thing about the plan.");
+    await turnStarts(gateway, "run-m", [own], 300);
+    gateway.emit("agent", {
+      ...agentEvent("run-m", 9, "lifecycle", { phase: "end", status: "completed" }),
+      ts: 400,
+    });
+    await until(() => run(opened, "run-m")?.state === "completed");
+    // Pip messages Marlow again, and the person stops that exchange.
+    await stopTheExchange(opened);
+    // The gateway's relay of Marlow's reply to the first message: left to run.
+    await turnStarts(gateway, "run-reply", [
+      own,
+      startedRow("run-reply", fromPeer, "Here is the plan."),
+    ]);
+    await until(() => run(opened, "run-reply") !== undefined);
+    await sleep(50);
+    expect(abortsOf(gateway).some((each) => each.runId === "run-reply")).toBe(false);
+    client.stop();
+  });
+
+  it('#645: a refused abort of the gateway\'s turn leaves it going, with no "Then stopped" and no error of its own', async () => {
+    const opened = await openTask();
+    const { client, gateway } = opened;
+    aborting(gateway);
+    const answer = gateway.handlers["chat.abort"]!;
+    gateway.handlers["chat.abort"] = (params) => {
+      const { sessionKey, runId } = params as Abort;
+      if (sessionKey === KEY && runId === "run-f")
+        throw new GatewayError({ code: "INVALID_REQUEST", message: "not allowed" });
+      return answer(params);
+    };
+    await stopTheExchange(opened);
+    await turnStarts(gateway, "run-f", [startedRow("run-f", fromPeer)]);
+    await until(() => abortsOf(gateway).some((each) => each.runId === "run-f"));
+    await until(() => run(opened, "run-f")?.state === "running");
+    expect(run(opened, "run-s")!.stoppedWith?.followUps).toEqual([]);
+    expect(run(opened, "run-f")!.stoppedAsFollowUp).toBeUndefined();
+    expect(run(opened, "run-f")!.stopError ?? null).toBeNull();
+    client.stop();
+  });
+
+  it("#645: the gateway's turn found while its stop had to wait (another run still active) is stopped once it can be", async () => {
+    const opened = await openTask();
+    const { client, gateway } = opened;
+    aborting(gateway);
+    await stopTheExchange(opened);
+    // A run of the task the client still holds as active, with no end seen yet.
+    gateway.emit("agent", {
+      ...agentEvent("run-stale", 1, "lifecycle", { phase: "start" }),
+      ts: 1_200,
+    });
+    await until(() => run(opened, "run-stale")?.state === "running");
+    await turnStarts(gateway, "run-f", [startedRow("run-f", fromPeer)]);
+    await sleep(50);
+    expect(abortsOf(gateway).some((each) => each.runId === "run-f")).toBe(false);
+    gateway.emit("agent", {
+      ...agentEvent("run-stale", 9, "lifecycle", { phase: "end", status: "completed" }),
+      ts: 1_300,
+    });
+    await until(() => abortsOf(gateway).some((each) => each.runId === "run-f"));
+    expect(abortsOf(gateway).filter((each) => each.runId === "run-f")).toHaveLength(1);
     client.stop();
   });
 });

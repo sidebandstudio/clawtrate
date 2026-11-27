@@ -291,6 +291,17 @@ export function markStoppedAsFollowUp(activity: TaskActivity, runId: string): Ta
   return updateRun(activity, runId, (run) => ({ ...run, stoppedAsFollowUp: true }));
 }
 
+/**
+ * That stop was refused or given up: the turn goes on as it was, with nothing said about it. It
+ * was this client's own doing, never the person's Stop, so no error is shown for it (#645).
+ */
+export function unmarkStoppedAsFollowUp(activity: TaskActivity, runId: string): TaskActivity {
+  return updateRun(revertStop(activity, runId, ""), runId, ({ stoppedAsFollowUp: _, ...run }) => ({
+    ...run,
+    stopError: null,
+  }));
+}
+
 /** The run is being stopped because its tool calls kept timing out. */
 export function markStoppedForTimeouts(
   activity: TaskActivity,
@@ -3937,9 +3948,11 @@ export function parkAfterStop(
   after: TaskActivity,
   now: number,
 ): TaskActivity {
+  // A turn this client stopped on its own as the gateway's follow-up to a Stop (#645) parks
+  // nothing: what the person sent after their Stop is theirs to send.
   const stopped = after.runs.some((run) => {
     const was = findRun(before, run.id)?.state;
-    return run.state === "stopped" && was !== undefined && isActive(was);
+    return run.state === "stopped" && was !== undefined && isActive(was) && !run.stoppedAsFollowUp;
   });
   if (!stopped) return after;
   const parked = after.outbox.filter(notLeft);
