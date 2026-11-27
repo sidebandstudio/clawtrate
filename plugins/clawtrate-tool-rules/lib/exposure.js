@@ -151,7 +151,11 @@ const GROUPS = {
 };
 /** The core catalog's tools; any other is a plugin's or a tool server's (`<server>__<tool>`). */
 const CORE_TOOLS = new Set(Object.values(GROUPS).flat());
-/** Deny entries that cover every tool outside the core catalog, as the gateway reads them. */
+/**
+ * Deny entries read as covering every tool outside the core catalog. 2026.11.10 applies
+ * `bundle-mcp` only to the tools its bundled tool servers own, but the hook is not told a
+ * tool's owner, so the plugin reads it wide: it refuses more, never less.
+ */
 const PLUGIN_GROUPS = new Set(["group:plugins", "bundle-mcp"]);
 /**
  * The names a deny or allow entry is read as, in both versions: their tool-name aliases
