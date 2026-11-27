@@ -803,9 +803,9 @@ export function createToolRules(api, options = {}) {
    * Who started a run, failing toward a bot: its note, where that is a bot's;
    * else a bot's message waiting in its task (the run under way may have taken
    * it, and the plugin may have forgotten that run was under way), or a task
-   * whose bot's mark was forgotten; else its note, a person's; else, with no
-   * model call seen, a person, or, once the plugin lost track of a bot's mark,
-   * a person only where a person's message names the run.
+   * whose bot's mark was forgotten; else a person (its note, or no model call
+   * seen), but once the plugin lost track of a bot's mark only where a
+   * person's message names the run.
    */
   const startedBy = (runId, sessionKey) => {
     const note = runId ? noteOf(origins.runs, runId) : undefined;
@@ -815,7 +815,8 @@ export function createToolRules(api, options = {}) {
     if (mark) return { bot: mark.bot };
     const lost = sessionKey ? forgotten.get(sessionKey) : undefined;
     if (lost) return lost;
-    if (note === null) return null;
+    // Once track is lost, a note from before (a routine's, say) is no proof a person started
+    // the run: only a run a person's message names, a person's own hand-off included, is.
     return origins.lostTrack && !(runId && origins.people.has(runId)) ? UNSURE : null;
   };
 

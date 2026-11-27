@@ -959,6 +959,32 @@ describe("a run another bot's message started or reached (#606)", () => {
     asks(h, "run-p");
   });
 
+  it("once it lost track, a person's note from before is no proof: a routine's run noted earlier is refused, a person's message's run and a person's hand-off still ask", async () => {
+    const h = host();
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    // Noted before track is lost: a run no message named (a routine's), a person's, a hand-off.
+    h.modelCall("run-routine", PIP);
+    personRun(h, "run-person", "agent:pip:p");
+    const SUB = "agent:pip:subagent:s1";
+    personRun(h, "run-s", SUB);
+    h.write(PIP, fromBot("run-back", SUB, "subagent_announce"));
+    h.modelCall("run-back", PIP);
+    asks(h, "run-routine");
+    // Bots' messages waiting in another task push marks out of the forgotten ones; no run
+    // starts, so the runs' notes from before are all still held.
+    for (let i = 0; i < MEMORY_LIMIT + PENDING_LIMIT + 1; i += 1) {
+      h.write("agent:pip:other", fromMarlow(`run-w${i}`));
+    }
+    const { origins } = h.handle.shared;
+    expect(origins.lostTrack).toBe(true);
+    expect(origins.runs.has("run-routine")).toBe(true);
+    expect(read(h, "run-routine")?.blockReason).toContain(
+      "the plugin can no longer tell who started this run",
+    );
+    asks(h, "run-person", "agent:pip:p");
+    asks(h, "run-back");
+  });
+
   it("a waiting bot's message is read before a person's note: a busy run whose task the plugin no longer holds as under way still loses its cards", async () => {
     const h = host();
     await h.save("pip", [{ action: "ask", tools: ["read"] }]);
