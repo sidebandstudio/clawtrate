@@ -60,7 +60,10 @@ export type SheetEnd =
   | { end: "failed" }
   /** Cancelled before it was presented: nothing was shown. */
   | { end: "not-presented" }
-  /** There was no screen to present it on, or iOS refused to present it. */
+  /**
+   * There was no screen to present it on, or iOS let the sheet go without ever showing it. Never
+   * said while the sheet may still come on screen: the file goes only once it has settled.
+   */
   | { end: "no-screen" };
 
 /** What sharing needs of the system: folders in the app's cache, and the share sheet. */

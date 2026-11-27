@@ -6,13 +6,19 @@ import UIKit
 /// `dismissed`, `failed`, `not-presented` or `no-screen` (`SheetEnd` in share.ts):
 ///
 /// - Cancelled before it was presented (`cancel`, the row left the screen): `not-presented`.
-/// - No view controller in a window to present from, or iOS refused the present: `no-screen`.
+/// - No view controller in a window to present from: `no-screen`, at once.
 /// - An activity finished: `completed`. It failed: `failed`. The sheet closed with no activity
 ///   chosen: `dismissed`. Each from `completionWithItemsHandler`.
 /// - An activity chosen and then cancelled (Save to Files with its picker cancelled): the handler
 ///   says so, and the sheet either stays up to choose another, when the handler comes again as it
 ///   closes, or is closed or closing: `dismissed` once it is off the screen (`viewDidDisappear`).
-/// - Anything else: when the sheet is freed, nothing more can come, so `dismissed` then.
+/// - Anything else, including a present iOS refused: when the sheet is freed, since nothing more
+///   can come then. `no-screen` when it was never on screen (its present never completed),
+///   `dismissed` otherwise. iOS holds a sheet it is presenting, or will present once a transition
+///   ends, so it is never freed while it can still be on screen. No check made straight after
+///   `present` decides anything: an animated present can attach later than that.
+///
+/// The file it offers is deleted only once it has settled, so never while the sheet may need it.
 ///
 /// React Native's `Share` gives no answer at all after a cancelled activity, so its caller waited
 /// for good and the file was never deleted. Everything here runs on the main queue.
@@ -41,6 +47,8 @@ public final class ClawtrateShareModule: Module {
       let sheet = ClosingActivityViewController(activityItems: [url], applicationActivities: nil)
       /// An activity was chosen and then cancelled: the sheet's leaving ends it.
       var activityCancelled: String?
+      /// Its present completed: it has been on screen.
+      var shown = false
       sheet.completionWithItemsHandler = { [weak sheet] activityType, completed, _, error in
         let type = activityType?.rawValue
         if error != nil { return settle("failed", type) }
@@ -52,14 +60,11 @@ public final class ClawtrateShareModule: Module {
         if sheet?.presentingViewController == nil { settle("dismissed", type) }
       }
       sheet.onLeft = { if let type = activityCancelled { settle("dismissed", type) } }
-      sheet.onFreed = { settle("dismissed", activityCancelled) }
+      sheet.onFreed = { settle(shown ? "dismissed" : "no-screen", activityCancelled) }
       // An iPad anchors the sheet to a view; an iPhone ignores this.
       sheet.popoverPresentationController?.sourceView = presenter.view
       self.presented.insert(id)
-      presenter.present(sheet, animated: true)
-      // UIKit refuses a present it can't make (a presenter mid-transition) without calling
-      // anything: then the sheet has no presenter at once.
-      if sheet.presentingViewController == nil { settle("no-screen", nil) }
+      presenter.present(sheet, animated: true) { shown = true }
     }.runOnQueue(.main)
 
     /// The row left the screen: a sheet not presented yet is presented nothing.
