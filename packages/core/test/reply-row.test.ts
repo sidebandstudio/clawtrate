@@ -4,7 +4,14 @@
 
 import { describe, expect, it } from "vitest";
 import { mapHistory } from "../src/mapping.ts";
-import { applyAgentEvent, emptyActivity, RawTable, replyRow, type Run } from "../src/runs.ts";
+import {
+  applyAgentEvent,
+  emptyActivity,
+  RawTable,
+  replyRow,
+  runsFromHistory,
+  type Run,
+} from "../src/runs.ts";
 import { agentEvent, openTask, questionRecord } from "./client-harness.ts";
 import { until } from "./fake-gateway.ts";
 
@@ -170,6 +177,29 @@ describe("replyRow: the row is the reply's only where nothing else can stand", (
     ]);
     expect(run.followed).toEqual({ call: "c1", items: 2 });
     expect(run.textAfter).toBeUndefined();
+  });
+
+  it("a run rebuilt from history's in-flight events is not followed: this connection did not see them come", () => {
+    const events = [start, ...tool("c1"), said("s:1", "Clean.")].map(([stream, data], i) => ({
+      runId: RUN,
+      seq: i + 1,
+      stream,
+      ts: 1_000 + i,
+      sessionKey: KEY_,
+      data,
+    }));
+    const [run] = runsFromHistory(
+      [user],
+      { runId: RUN, startedAt: 1_000, events },
+      {
+        sessionKey: KEY_,
+        now: 5_000,
+        raw: new RawTable(),
+      },
+    );
+    expect(run!.text).toBe("Clean.");
+    expect(run!.followed).toBeUndefined();
+    expect(run!.textAfter).toBeUndefined();
   });
 
   it("an item that was not the first since the call: none", () => {

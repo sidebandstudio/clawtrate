@@ -481,6 +481,26 @@ describe("#872: a reply history already holds is drawn once while its run goes o
     expect(html).toContain('data-testid="live-turn"');
   });
 
+  it("a history row that belongs to no run the transcript knows is drawn as it is", () => {
+    // A page that starts with a bot's row: no person's row before it, no call of a known run.
+    const html = draw(
+      transcriptOf(
+        [...start, ...call("c1"), ...said("m:1", "All clean.")],
+        [
+          {
+            role: "assistant",
+            content: [text("An older note.")],
+            __openclaw: { id: "a0", seq: 1 },
+          },
+          user,
+          row("a1", 2, [toolCall("c1")]),
+        ],
+      ),
+    );
+    expect(count(html, "An older note.")).toBe(1);
+    expect(count(html, "All clean.")).toBe(1);
+  });
+
   it("#738: text in a message before a steer, its action in the next message with no text, is drawn once", () => {
     const note = "The logs are clean.";
     const steer = {

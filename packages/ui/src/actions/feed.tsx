@@ -746,6 +746,7 @@ export function ActionScope({
         run && drawn && !fromEngine
           ? engineRecord(run, inRows, drawn, lastItem.get(run.id) === item.id, tally)
           : null;
+      const reply = replies.get(item.id);
       const entries = itemEntries(
         item,
         run,
@@ -755,7 +756,7 @@ export function ActionScope({
         tally,
         fromEngine,
         record,
-        replies.get(item.id)?.run === run?.id ? replies.get(item.id)!.block : -1,
+        reply && reply.run === run?.id ? reply.block : -1,
       );
       const placed = { pictures: placePictures(item, entries), files: placeFiles(item, entries) };
       built.push({ id: item.id, entries, revision: run?.reasoningRevision ?? 0, placed });

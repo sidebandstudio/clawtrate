@@ -3429,7 +3429,8 @@ export function runsFromHistory(
       if (event)
         activity = applyAgentEvent(activity, { ...event, runId: inFlightRunId }, ctx).activity;
     }
-    let run = activity.runs[0]!;
+    // The snapshot's events were not followed as they came on this connection (`Run.followed`).
+    let run = unfollowed(activity.runs[0]!);
     // A thinking block that is still the run's last activity may be the
     // segment streaming now: it stays open, as the live view has it, so the
     // next cumulative frame continues it rather than starting another.
