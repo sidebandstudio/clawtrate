@@ -421,6 +421,66 @@ describe("the device that sends the first message", () => {
     }
   });
 
+  it("names a task from the next message when its refused first message is deleted", async () => {
+    // A refused, A deleted, B sent and accepted: named from B. For a task created with A and for
+    // an empty one.
+    for (const empty of [false, true]) {
+      const { gateway } = creatingGateway(["Garden plan"]);
+      const { client } = await openTask({ gateway });
+      try {
+        const accept = gateway.handlers["chat.send"]!;
+        let refuse = true;
+        gateway.handlers["chat.send"] = (params) => {
+          if (refuse) throw new GatewayError({ code: "UNAVAILABLE", message: "the bot is busy" });
+          return accept(params);
+        };
+        let key = KEY;
+        if (empty) {
+          key = await client.newTask("main");
+          client.openSession(key);
+          await until(() => client.state.transcripts[key]?.status === "ready");
+          client.sendMessage(key, "Plan the spring beds");
+        } else {
+          await client.createTask("main", "Plan the spring beds");
+        }
+        const failed = () =>
+          client.state.transcripts[key]?.outbox.find((each) => each.status === "failed");
+        await until(() => failed() !== undefined);
+        client.deleteMessage(key, failed()!.id);
+        refuse = false;
+        client.sendMessage(key, MESSAGE);
+        await until(() => patches(gateway).length === 1);
+        expect(titleCalls(gateway)).toEqual([{ agentId: "main", message: MESSAGE }]);
+      } finally {
+        client.stop();
+      }
+    }
+  });
+
+  it("doesn't name a task it created when another device sent in it first", async () => {
+    // Between `sessions.create` and this client's `chat.send`, another device's message reached
+    // the new task: the gateway's history holds it before this client's.
+    const { gateway } = creatingGateway();
+    const fromB = {
+      role: "user",
+      content: "Plan the spring beds",
+      timestamp: 1,
+      __openclaw: { id: "row-b", idempotencyKey: "device-b:user" },
+    };
+    gateway.handlers["chat.history"] = () => ({ messages: [fromB], hasMore: false });
+    const { client } = await openTask({ gateway });
+    try {
+      const reads = gateway.calls("chat.history").length;
+      await client.createTask("main", MESSAGE);
+      await until(() => gateway.calls("chat.history").length > reads);
+      await sleep(50);
+      expect(titleCalls(gateway)).toEqual([]);
+      expect(patches(gateway)).toEqual([]);
+    } finally {
+      client.stop();
+    }
+  });
+
   it("names nothing it was given a name for, and nothing when every call fails", async () => {
     const named = creatingGateway();
     const first = await openTask({ gateway: named.gateway });

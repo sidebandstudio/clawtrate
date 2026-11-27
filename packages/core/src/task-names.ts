@@ -134,7 +134,7 @@ export async function nameTask(
     sessionId: string | null;
     botId: string;
     text: string;
-    /** For an empty task named from a later send: this client's sends there (`onlyOwnRows`). */
+    /** This client's sends in the task, checked against its history first (`onlyOwnRows`). */
     ownSends?: readonly string[];
   },
 ): Promise<string | null> {
