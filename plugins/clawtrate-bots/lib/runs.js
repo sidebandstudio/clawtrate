@@ -31,6 +31,25 @@ export function madeSession(result) {
   return null;
 }
 
+/**
+ * Whether a task-making call's result says it made no task: both versions report
+ * a refusal or a failure as a result whose status is `error` or `forbidden`
+ * (2026.10.6 dist/sessions-spawn-tool-CMHR26Kp.mjs; the same in 2026.11.10).
+ */
+export function spawnFailed(result) {
+  const statusOf = (v) => (isObject(v) && typeof v.status === "string" ? v.status : null);
+  let status = statusOf(result?.details);
+  for (const block of Array.isArray(result?.content) ? result.content : []) {
+    if (status) break;
+    try {
+      status = statusOf(JSON.parse(String(block?.text ?? "")));
+    } catch {
+      // not JSON
+    }
+  }
+  return status === "error" || status === "forbidden";
+}
+
 export const READ_TOOLS = Object.freeze(["clawtrate_here", "clawtrate_tasks", "clawtrate_bots"]);
 const NONE = { type: "object", additionalProperties: false, properties: {} };
 const PARAMETERS = {
@@ -173,16 +192,37 @@ export function createRuns(api, options = {}) {
     }) ??
     [];
 
+  /**
+   * Whether conversation access is on, noting a change since the last look.
+   * A config write replaces the gateway's runtime snapshot; across one (it may
+   * have turned access off and on again unseen) or an access change, no record
+   * held is one the plugin can vouch for.
+   */
+  function observe() {
+    const cfg = config();
+    const access = conversationAccess(cfg);
+    const seen = origins.seenConfig;
+    if (seen && (seen.cfg !== cfg || seen.access !== access)) origins.invalidate();
+    origins.seenConfig = { cfg, access };
+    return access;
+  }
+
   // What fills the store. Each handler only records; none decides a call.
-  api.on("before_model_resolve", (event, ctx) => origins.sawAttachments(ctx, event));
+  api.on("before_model_resolve", (event, ctx) => {
+    observe();
+    origins.sawAttachments(ctx, event);
+  });
   api.on("before_prompt_build", (_event, ctx) => {
+    observe();
     origins.sawPrompt(ctx);
   });
   api.on("before_message_write", (event, ctx) => {
+    observe();
     origins.sawMessage(event, ctx);
   });
   api.on("agent_end", (_event, ctx) => origins.sawEnd(ctx));
   api.on("after_tool_call", (event, ctx) => {
+    observe();
     const runId = event?.runId ?? ctx?.runId;
     const run =
       typeof runId === "string" && runId
@@ -193,29 +233,28 @@ export function createRuns(api, options = {}) {
           });
     if (MAKES_TASK.has(String(event?.toolName))) {
       const callId = event?.toolCallId ?? ctx?.toolCallId;
-      // A failed call made no task: its wait for one is over.
-      if (event?.error) origins.dropSpawn(callId);
-      else origins.sawSpawned(run, madeSession(event?.result), callId);
+      // A failed call made no task: its wait for one is over. The tools report
+      // most failures as a result, not an error.
+      if (event?.error || spawnFailed(event?.result)) origins.dropSpawn(callId, ctx?.sessionKey);
+      else origins.sawSpawned(run, madeSession(event?.result), callId, ctx?.sessionKey);
     }
     if (readsOutside(event) && run && !run.lost)
       origins.markRead(run, sourceOf(event.toolName), event.toolName);
   });
 
   /**
-   * The call's run and origin, recorded before any hold decides it; the run
-   * is marked read from outside for every call but those 4.3 leaves out, at
-   * the call, so a later call in the same Code Mode cell already sees it.
-   */
-  /**
    * A call's origin. With conversation access off the plugin no longer sees a
    * run's prompts or the messages that join it, so a record it kept from before
    * may be missing what the run read: every run is C, with something read.
    */
   const vouched = (origin) =>
-    conversationAccess(config())
-      ? origin
-      : { origin: "C", read: "lost", kind: "unknown", why: "access" };
+    observe() ? origin : { origin: "C", read: "lost", kind: "unknown", why: "access" };
 
+  /**
+   * The call's run and origin, recorded before any hold decides it; the run
+   * is marked read from outside for every call but those 4.3 leaves out, at
+   * the call, so a later call in the same Code Mode cell already sees it.
+   */
   function sawCall(event, ctx) {
     const run = origins.sawCall(event, ctx);
     const origin = vouched(originOf(run, ctx?.requester, { versionKnown: known }));
@@ -235,6 +274,7 @@ export function createRuns(api, options = {}) {
         run,
         (bot ?? ctx?.agentId ?? run?.agentId ?? "").toLowerCase() || null,
         event?.toolCallId ?? ctx?.toolCallId,
+        ctx?.sessionKey,
       );
     }
     if (run && !run.lost && readsOutside(event))
@@ -355,6 +395,8 @@ export function createRuns(api, options = {}) {
       const byKey = !opts.params?.runId && sessionKey ? origins.latestIn(sessionKey) : null;
       const runId =
         byKey?.runId ?? (typeof opts.params?.runId === "string" ? opts.params.runId : "");
+      // With conversation access off no record is vouched for (C, something lost).
+      if (!observe()) return opts.respond(true, { runId, known: false, why: "access" });
       const run = runId ? origins.lookup(runId) : null;
       opts.respond(true, {
         runId,

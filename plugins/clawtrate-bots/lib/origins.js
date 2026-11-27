@@ -209,8 +209,35 @@ export class RunOrigins {
     this.attached = new Set();
     /** session key -> what the run that made it had read: a task's session */
     this.tasks = new Map();
-    /** bot -> spawns whose session isn't known yet: { read, at } */
+    /** bot -> spawns whose session isn't known yet: { read, at, callId, from } */
     this.spawning = new Map();
+    /**
+     * When the lost set last forgot a run to make room. For a day after that,
+     * a run the store hasn't seen can't be told from one it forgot, so a new run
+     * is admitted as having read something it lost track of.
+     */
+    this.lostForgotAt = null;
+  }
+
+  /** Whether the store may have forgotten a lost run, so a new one can't be vouched for. */
+  forgetting() {
+    return this.lostForgotAt !== null && this.now() - this.lostForgotAt < this.limits.runMs;
+  }
+
+  /**
+   * Every record held is no longer one the plugin can vouch for: conversation
+   * access changed, or the config was written while runs were under way (an
+   * access change may be among the writes). Each held run, each task session and
+   * each spawn waiting for its first run counts as having lost track of what it read.
+   */
+  invalidate() {
+    const lost = { source: "lost", tool: null };
+    for (const run of this.runs.values()) {
+      run.lost = true;
+      run.readOutside = { ...lost, at: this.now() };
+    }
+    for (const key of this.tasks.keys()) this.tasks.set(key, lost);
+    for (const list of this.spawning.values()) for (const w of list) w.read = lost;
   }
 
   /** before_prompt_build: a run starts (its first model request) or goes on. */
@@ -228,11 +255,18 @@ export class RunOrigins {
     const facts = factsFrom(ctx);
     const parent = this.taskOf(facts);
     facts.task = parent !== undefined;
+    // No positive evidence that this is the run's start while a lost run may
+    // have been forgotten: it may be that run, back, with nothing it read.
+    const unsure = this.forgetting() ? { source: "lost", tool: null } : null;
     const run = {
       runId,
       ...facts,
       kind: kindOf(facts),
-      readOutside: parent ? { ...parent, at: this.now() } : null,
+      readOutside: parent
+        ? { ...parent, at: this.now() }
+        : unsure
+          ? { ...unsure, at: this.now() }
+          : null,
       attachments: false,
       steers: 0,
       ended: false,
@@ -283,23 +317,28 @@ export class RunOrigins {
   /**
    * A call that makes a task (`sessions_spawn`, `sessions_create`) passed: its first run is a task.
    * @param {string | null | undefined} [callId]
+   * @param {string | null | undefined} [from] the session the call was made in
    */
-  sawSpawn(run, bot, callId = null) {
+  sawSpawn(run, bot, callId = null, from = null) {
     if (!bot) return;
     const list = (this.spawning.get(bot) ?? []).slice(-15);
-    list.push({ read: readOf(run), at: this.now(), callId: str(callId) });
+    list.push({ read: readOf(run), at: this.now(), callId: str(callId), from: str(from) });
     this.spawning.set(bot, list);
   }
 
   /**
    * A task-making call's result came back: its wait for a first run is over.
+   * A call id is the model's and may repeat across sessions, so the wait ended
+   * is the one that call made from that session.
    * @param {string | null | undefined} callId
+   * @param {string | null | undefined} [from] the session the call was made in
    */
-  dropSpawn(callId) {
+  dropSpawn(callId, from = null) {
     const id = str(callId);
     if (!id) return;
+    const session = str(from);
     for (const [bot, list] of this.spawning) {
-      const left = list.filter((w) => w.callId !== id);
+      const left = list.filter((w) => w.callId !== id || w.from !== session);
       if (left.length === list.length) continue;
       if (left.length) this.spawning.set(bot, left);
       else this.spawning.delete(bot);
@@ -310,10 +349,11 @@ export class RunOrigins {
    * The session that call made, from its result: every run in it is a task,
    * those already started included, and carries what the starting run had read.
    * @param {string | null | undefined} [callId]
+   * @param {string | null | undefined} [from] the session the call was made in
    */
-  sawSpawned(run, sessionKey, callId = null) {
+  sawSpawned(run, sessionKey, callId = null, from = null) {
     if (!sessionKey) return;
-    this.dropSpawn(callId);
+    this.dropSpawn(callId, from);
     const read = readOf(run);
     this.rememberTask(sessionKey, read);
     for (const held of this.runs.values()) {
@@ -353,7 +393,10 @@ export class RunOrigins {
 
   remember(set, value, max) {
     set.add(value);
-    while (set.size > max) set.delete(set.values().next().value);
+    while (set.size > max) {
+      set.delete(set.values().next().value);
+      if (set === this.lost) this.lostForgotAt = this.now();
+    }
   }
 
   /** before_model_resolve: a message that came with files. */

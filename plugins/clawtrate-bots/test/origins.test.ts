@@ -592,4 +592,33 @@ describe("tasks and what their starter read", () => {
     store.dropSpawn("c2");
     expect(store.sawPrompt(prompt("r-own2", "agent:pip:dashboard:10"))!.kind).toBe("typed");
   });
+
+  it("a spawn's wait ends only for the session that made the call, whatever the call id", () => {
+    const store = new RunOrigins();
+    const pip = store.sawPrompt(prompt("r1", "agent:pip:main"))!;
+    store.sawSpawn(pip, "marlow", "call_1", "agent:pip:main");
+    store.sawSpawn(pip, "marlow", "call_1", "agent:otto:main");
+    store.dropSpawn("call_1", "agent:pip:main");
+    // The other session's spawn under the same id still waits for its task.
+    const first = store.sawPrompt({
+      ...prompt("r-m", "agent:marlow:dashboard:1"),
+      agentId: "marlow",
+    })!;
+    expect(first.kind).toBe("task");
+    const second = store.sawPrompt({
+      ...prompt("r-m2", "agent:marlow:dashboard:2"),
+      agentId: "marlow",
+    })!;
+    expect(second.kind).toBe("typed");
+  });
+
+  it("for a day after the lost set forgot a run, a run the store hasn't seen counts as having lost track of what it read", () => {
+    let t = 1_000_000;
+    const store = new RunOrigins({ now: () => t, limits: { ...LIMITS, lost: 2 } });
+    for (const id of ["a", "b", "c"]) store.seen(id); // the third forgets "a"
+    const back = store.sawPrompt(prompt("a", "agent:pip:main"))!;
+    expect(back.readOutside).toMatchObject({ source: "lost" });
+    t += LIMITS.runMs + 1;
+    expect(store.sawPrompt(prompt("fresh", "agent:pip:dashboard:3"))!.readOutside).toBeNull();
+  });
 });
