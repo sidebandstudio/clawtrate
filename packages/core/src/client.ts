@@ -1841,9 +1841,10 @@ export class ClawtrateClient {
    * The turn the gateway will start in a task because a Stop of this client's stopped a
    * recipient's run whose send left the reply to come later (#645), by
    * `task\u0000recipient session\u0000recipient run`: the stopped run of the task, when the wait
-   * for that turn ends, the run found to be it, whether its stop was asked, and the connection
-   * target (`target`) it was made on: a wait never acts on another gateway. Gone once the wait
-   * ends, and all of them when the host is pointed at another gateway. At most `MAX_FOLLOW_UPS`.
+   * for that turn ends, the run found to be it, whether its stop was asked, and the connection it
+   * was made on (`target` and `epoch`): a wait never acts on another gateway or connection. Gone
+   * once the wait ends or the connection changes, and all of them when the host is pointed at
+   * another gateway. At most `MAX_FOLLOW_UPS`.
    */
   private readonly followUps = new Map<string, FollowUp>();
   /** Task creations not yet settled, oldest first (`MAX_CREATIONS`). */
@@ -5124,6 +5125,10 @@ export class ClawtrateClient {
         noteStoppedWith(activity, runId, (now) => ({ ...now, [kind]: [...now[kind], sessionKey] })),
       );
     const rawOf = (step: Run["steps"][number]) => step.raw ?? this.raw.get(key, step.id);
+    // The connection the run ended on: the wait for the gateway's own turn is recorded only on it
+    // (#645). (A retry after a switch to another gateway is given up by `ensureScope`.)
+    const target = this.target;
+    const epoch = this.epoch;
     const recipients = recipientLinks([run], rawOf).map(async (link) => {
       if (!link.sessionKey) return;
       const known = link.runId ? transcript.linkedRuns[link.runId] : undefined;
@@ -5137,7 +5142,8 @@ export class ClawtrateClient {
           if (stopped?.aborted === true) {
             note("bots", link.sessionKey);
             // Its reply was to come later: the gateway now starts a turn here by itself (#645).
-            if (link.deliveryPending) this.expectFollowUp(key, link.sessionKey, link.runId, runId);
+            if (link.deliveryPending && this.target === target && this.epoch === epoch)
+              this.expectFollowUp(key, link.sessionKey, link.runId, runId);
           }
           return;
         } catch (error) {
@@ -5180,6 +5186,7 @@ export class ClawtrateClient {
       claimedBy: null,
       asked: false,
       target: this.target,
+      epoch: this.epoch,
     });
     // It may be shown already.
     this.afterActivity(key);
@@ -5198,7 +5205,8 @@ export class ClawtrateClient {
    * recipient's run is known to have finished well (the abort came too late: this is its reply),
    * or when another send of this task to that session could be the one answered (`mayBeAnswer`).
    * A claimed turn whose stop was withheld (no write access yet, or not yet the task's current
-   * run) is looked at again on later passes; its stop is asked once.
+   * run) is looked at again on later passes; its stop is asked once. A turn the person has
+   * steered is theirs, and runs (`steeredByPerson`).
    */
   private stopFollowUps(key: string, transcript: Transcript): void {
     if (this.followUps.size === 0) return;
@@ -5209,7 +5217,11 @@ export class ClawtrateClient {
     for (const [held, expected] of [...this.followUps]) {
       const [task, sessionKey, recipientRunId] = held.split("\u0000") as [string, string, string];
       if (task !== key) continue;
-      if (expected.until <= now || expected.target !== this.target) {
+      if (
+        expected.until <= now ||
+        expected.target !== this.target ||
+        expected.epoch !== this.epoch
+      ) {
         this.followUps.delete(held);
         continue;
       }
@@ -5232,11 +5244,12 @@ export class ClawtrateClient {
       if (!run || !isActive(run.state) || run.state === "stopping" || run.stopRequestedAt !== null)
         continue;
       if (transcript.linkedRuns[recipientRunId]?.state === "completed") continue;
+      if (steeredByPerson(transcript, run)) continue;
       if (this.mayBeAnswer(transcript, key, sessionKey, recipientRunId, run)) continue;
       if (!this.state.connection.canWrite || this.options.readOnly) continue;
       if (runningRunId(transcript, run.id) !== run.id || !run.bound) continue;
       this.followUps.set(held, { ...this.followUps.get(held)!, asked: true });
-      void this.stopFollowUp(key, run.id, expected.stopped, sessionKey, expected.target);
+      void this.stopFollowUp(key, run.id, expected.stopped, sessionKey, expected);
       // One per pass: the change runs this again with the task as it is now.
       return;
     }
@@ -5245,51 +5258,42 @@ export class ClawtrateClient {
   /**
    * The Stop of a turn the gateway started by itself (#645), apart from the person's own Stop:
    * it withdraws no steer and parks no message (`parkAfterStop` leaves a run stopped as a
-   * follow-up alone), since what the person sends meanwhile is theirs. It acts only on the
-   * gateway its wait was made on (`target`), checked before the abort and before each retry. The
-   * stopped run's note names it only once the gateway confirms the abort (`aborted: true`); a
-   * refused abort lets the turn go on, with nothing said.
+   * follow-up alone), since what the person sends meanwhile is theirs. One abort, sent only on
+   * the connection its wait was made on (`target` and `epoch`): it is never retried, so it never
+   * reaches another connection. The stopped run's note names the turn only once the gateway
+   * confirms the abort (`aborted: true`). Anything else (refused, no answer, `aborted: false`)
+   * takes the marker back, with nothing said: what ends the turn then is not this stop.
    */
   private async stopFollowUp(
     key: string,
     runId: string,
     stoppedRunId: string,
     sessionKey: string,
-    target: number,
+    connection: { target: number; epoch: number },
   ): Promise<void> {
+    const giveUp = () =>
+      this.updateActivity(key, (activity) => unmarkStoppedAsFollowUp(activity, runId));
+    if (this.target !== connection.target || this.epoch !== connection.epoch) return;
     this.updateActivity(key, (activity) =>
       requestStop(markStoppedAsFollowUp(activity, runId), runId, this.now()),
     );
-    const giveUp = () =>
-      this.updateActivity(key, (activity) => unmarkStoppedAsFollowUp(activity, runId));
-    for (;;) {
-      if (this.target !== target) return giveUp();
-      try {
-        const result = asRecord(await this.request("chat.abort", { sessionKey: key, runId }));
-        if (result?.aborted === true)
-          this.updateActivity(key, (activity) =>
-            noteStoppedWith(activity, stoppedRunId, (now) => ({
-              ...now,
-              followUps: [...now.followUps, sessionKey],
-            })),
-          );
-        // Nothing was aborted: the turn ended already. Its terminal event or history settles it.
-        else if (result?.aborted === false) this.scheduleHistory(key);
+    try {
+      const result = asRecord(await this.request("chat.abort", { sessionKey: key, runId }));
+      if (result?.aborted === true) {
+        this.updateActivity(key, (activity) =>
+          noteStoppedWith(activity, stoppedRunId, (now) => ({
+            ...now,
+            followUps: [...now.followUps, sessionKey],
+          })),
+        );
         return;
-      } catch (error) {
-        this.noteMissingScope(error);
-        if (error instanceof GatewayProtocolRequestError) return giveUp();
-        // Let the connection's own handling of a drop run first, so a lost connection is seen as one.
-        await new Promise<void>((resolve) => setTimeout(resolve, 0));
-        if (!this.protocol) return;
-        try {
-          await this.ensureScope(WRITE_SCOPE);
-        } catch {
-          return giveUp();
-        }
-        const run = this.state.transcripts[key] && findRun(this.state.transcripts[key], runId);
-        if (run?.state !== "stopping") return;
       }
+      giveUp();
+      // Nothing was aborted: the turn ended already. Its terminal event or history settles it.
+      if (result?.aborted === false) this.scheduleHistory(key);
+    } catch (error) {
+      this.noteMissingScope(error);
+      giveUp();
     }
   }
 
@@ -5299,9 +5303,10 @@ export class ClawtrateClient {
    * the delivery failed, once that send's recipient's run has ended, and nothing in that turn
    * names the send it answers. So any such send counts while its recipient's run is not known to
    * be still going, however many turns of that form came since: one of them may have been the
-   * other bot's own message, and the answer still to come. A send doesn't count when `run` made
-   * it (a turn doesn't answer its own message), or when what the gateway starts for it is itself
-   * awaited as the follow-up of a Stop.
+   * other bot's own message, and the answer still to come. A send whose recipient's run finished
+   * well always counts, awaited or not: its reply is owed. Otherwise a send doesn't count when
+   * `run` made it (a turn doesn't answer its own message), or when what the gateway starts for it
+   * is itself awaited as the follow-up of a Stop.
    */
   private mayBeAnswer(
     transcript: Transcript,
@@ -5316,10 +5321,13 @@ export class ClawtrateClient {
         sender.id !== run.id &&
         recipientLinks([sender], rawOf).some((link) => {
           if (link.sessionKey !== sessionKey || !link.deliveryPending || !link.runId) return false;
+          const linked = transcript.linkedRuns[link.runId];
+          // Its recipient finished well, its abort too late or never sent: its real reply is owed,
+          // and could be this turn, whatever else awaits it.
+          if (linked?.state === "completed") return true;
           // The send whose stopped recipient this turn answers, or another that a Stop awaits too.
           if (link.runId === recipientRunId) return false;
           if (this.followUps.has(`${key}\u0000${sessionKey}\u0000${link.runId}`)) return false;
-          const linked = transcript.linkedRuns[link.runId];
           // Still running: what the gateway starts for it comes only after it ends.
           return !(linked && isActive(linked.state));
         }),
@@ -12786,7 +12794,22 @@ type FollowUp = {
   asked: boolean;
   /** The connection target the wait was made on (`ClawtrateClient.target`). */
   target: number;
+  /** The connection the wait was made on (`ClawtrateClient.epoch`): a reconnect lets it go. */
+  epoch: number;
 };
+
+/**
+ * The person has steered `run`: a steer of theirs went into it from this device (its key's alias,
+ * kept from when its frame left while the gateway holds it or once it joined), or a message of
+ * theirs shows in the task after the message that started it (a steer from anywhere, or a message
+ * queued behind it). A steer the gateway took in is part of the run, so the run is theirs, and no
+ * automatic stop takes it (#645).
+ */
+function steeredByPerson(transcript: Transcript, run: Run): boolean {
+  if (Object.values(transcript.steerAliases).includes(run.id)) return true;
+  const at = transcript.items.findIndex((item) => item.id === run.anchorItemId);
+  return at >= 0 && transcript.items.slice(at + 1).some((item) => item.role === "user");
+}
 
 /**
  * `run` started after `stopped`, by the gateway's own start times (one task's turns run one after
