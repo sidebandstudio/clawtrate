@@ -1,22 +1,11 @@
-// "Bots know how Clawtrate works" (#532, #544, #628): Clawtrate's guides as a marked section at
-// the top of each bot's AGENTS.md (core guides.ts). On by default: the client adds it by itself,
-// with nothing asked. Settings, Conversation has one switch that turns it off (taking it out of
-// every bot) and on again, Read it, and a row for each bot whose file isn't simply as Clawtrate
-// keeps it, as the gateway's files read now, with its single action. Nothing here is announced
-// that wasn't read back.
+// "Bots know how Clawtrate works" (#532, #544, #628, #795): always on, with no switch. Clawtrate
+// keeps its section at the top of each bot's AGENTS.md current by itself (core guides.ts).
+// Settings, Conversation says nothing about it while that holds, and one quiet line for the bots
+// whose file Clawtrate can't keep, as the gateway's files read now.
 
-import {
-  GUIDES_SECTION,
-  guidesOn,
-  type Bot,
-  type BotGuidesAnswer,
-  type GatewayStamp,
-  type GuideFolder,
-  type GuidesChange,
-} from "@clawtrate/core";
-import { useEffect, useRef, useState } from "react";
+import type { Bot, BotGuidesAnswer, GatewayStamp, GuideFolder } from "@clawtrate/core";
+import { useEffect, useState } from "react";
 import { useBridge, useClawtrateState } from "./bridge.tsx";
-import { ChevronIcon } from "./icons.tsx";
 
 const names = (bots: readonly Bot[], ids: string[]) =>
   ids.map((id) => bots.find((bot) => bot.id === id)?.name ?? id);
@@ -24,128 +13,70 @@ const list = (items: string[]) =>
   items.length <= 1 ? (items[0] ?? "") : `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`;
 
 /**
- * A folder's row: what its state says, and its one action, if any, or null when the folder is
- * simply as Clawtrate keeps it and gets no row. `on` is the switch; `admin`, whether this
- * connection can write.
+ * The lines for the folders whose file Clawtrate can't keep as it writes it, one per reason, in
+ * the order a person can act on; none while every file is current, or will be once the gateway
+ * makes a missing one. `label` names a folder's bots; `canWrite`, whether this device writes the
+ * bots' files at all (admin access, not a read-only viewer).
  */
-export function guideRow(
-  folder: GuideFolder,
-  label: string,
-  on: boolean,
-  admin: boolean,
-): { words: string; action: "add" | "update" | "replace" | "remove" | "show" | null } | null {
-  const can = (action: "add" | "update" | "replace" | "remove") => (admin ? action : null);
-  // A file that isn't plain UTF-8 is never written: it says so, and offers nothing that writes.
-  const notUtf8 = `${label}'s AGENTS.md isn't plain UTF-8 text, so Clawtrate can't change it. Save it as UTF-8 and Clawtrate can add, update or remove its section again.`;
-  const long = `Its instructions are long: with this section, the gateway may leave part of them out of ${label}'s prompt, so Clawtrate doesn't add it by itself.`;
-  switch (folder.state) {
-    case null:
-      return {
-        words: `Couldn't read its instructions file. ${folder.error ?? ""}`.trim(),
-        action: null,
-      };
-    case "current":
-      if (on) return null;
-      return folder.utf8
-        ? { words: "Still has Clawtrate's section.", action: can("remove") }
-        : { words: notUtf8, action: null };
-    case "older":
-      if (!folder.utf8) return { words: notUtf8, action: null };
-      if (!on)
-        return {
-          words: "Still has an older version of Clawtrate's section.",
-          action: can("remove"),
-        };
-      return {
-        words: folder.long
-          ? "An older version. Its instructions are long, so Clawtrate doesn't update it by itself."
-          : "An older version.",
-        action: can("update"),
-      };
-    case "changed":
-      return {
-        words: folder.moved
-          ? "Its section isn't at the top, where Clawtrate put it, so Clawtrate leaves it as it is. Move it back to the top, or remove it yourself."
-          : folder.replaceable
-            ? "Changed outside Clawtrate, so Clawtrate leaves it as it is."
-            : "Its markers aren't as Clawtrate wrote them, so Clawtrate can't tell where its section ends. Edit the file, or remove the section's text yourself.",
-        action: on && folder.replaceable && folder.utf8 && admin ? "replace" : "show",
-      };
-    case "removed":
-      if (!on) return null;
-      return {
-        words: "Removed outside Clawtrate, so Clawtrate doesn't add it again by itself.",
-        action: folder.utf8 ? can("add") : null,
-      };
-    case "none":
-      if (!on) return null;
-      if (!folder.utf8) return { words: notUtf8, action: null };
-      // The gateway writes its own instructions into a missing file on the bot's next run, and
-      // only while it is missing: Clawtrate waits for that.
-      if (folder.missing)
-        return {
-          words: `${label}'s AGENTS.md doesn't exist yet. The gateway makes it on ${label}'s next run, and Clawtrate adds the section after that.`,
-          action: can("add"),
-        };
-      if (folder.refused !== null)
-        return {
-          words: `The gateway refused Clawtrate's change to ${label}'s AGENTS.md, so Clawtrate doesn't try again by itself. The gateway said: ${folder.refused}`,
-          action: can("add"),
-        };
-      return { words: folder.long ? long : "Not added yet.", action: can("add") };
+export function guidesLines(
+  folders: readonly GuideFolder[],
+  label: (ids: string[]) => string,
+  canWrite: boolean,
+): string[] {
+  const named = (each: readonly GuideFolder[]) => list(each.map((f) => label(f.bots)));
+  const lines: string[] = [];
+  for (const folder of folders)
+    if (folder.state === null)
+      lines.push(
+        `Couldn't read ${label(folder.bots)}'s instructions. ${folder.error ?? ""}`.trim(),
+      );
+  const notKept = folders.filter(
+    (f) => f.state === "unclear" || (f.state === "behind" && !f.missing),
+  );
+  if (notKept.length === 0) return lines;
+  if (!canWrite) {
+    lines.push(
+      `Clawtrate can't keep its section in ${named(notKept)}'s instructions current: this device doesn't have admin access to the gateway.`,
+    );
+    return lines;
   }
+  const unclear = notKept.filter((f) => f.state === "unclear");
+  const behind = notKept.filter((f) => f.state === "behind");
+  const notText = behind.filter((f) => !f.utf8);
+  const long = behind.filter((f) => f.utf8 && f.long);
+  const later = behind.filter((f) => f.utf8 && !f.long);
+  if (unclear.length > 0)
+    lines.push(
+      `Clawtrate can't tell where its section is in ${named(unclear)}'s instructions, so it leaves them as they are.`,
+    );
+  if (notText.length > 0)
+    lines.push(
+      `${named(notText)}'s instructions aren't plain UTF-8 text, so Clawtrate leaves them as they are.`,
+    );
+  if (long.length > 0)
+    lines.push(
+      `${named(long)}'s instructions are too long for Clawtrate's section: the gateway would leave part of them out.`,
+    );
+  if (later.length > 0)
+    lines.push(
+      `Clawtrate couldn't update ${named(later)}'s instructions yet. It tries again the next time it connects.`,
+    );
+  return lines;
 }
 
 /** Whether an answer is the connected gateway's own (`GatewayStamp`): only that one is shown. */
-/**
- * Whether a row's Remove is confirmed by what was read back: no error, and the bot's file read
- * with no section in it, or no longer on the list. A section there in any shape, or a file that
- * couldn't be read, isn't confirmed.
- */
-export const removalConfirmed = (read: BotGuidesAnswer, bot: string): boolean =>
-  read.errors.length === 0 &&
-  read.folders
-    .filter((f) => f.bots.includes(bot))
-    .every((f) => f.state === "none" || f.state === "removed");
-
 export const forConnection = (
   stamp: GatewayStamp | undefined,
   connection: { gatewayId: string | null; target: number },
 ) => stamp?.gatewayId === connection.gatewayId && stamp.target === connection.target;
 
-/**
- * What a change's answer does to the pane: shown when it is the connected gateway's; when the
- * connection moved while the change ran, it is the earlier gateway's, so the pane reads the
- * gateway now on screen again instead, and the change says nothing here.
- */
-export const afterChange = (
-  read: BotGuidesAnswer,
-  connection: { gatewayId: string | null; target: number },
-): { show: BotGuidesAnswer } | { readAgain: true } =>
-  forConnection(read.stamp, connection) ? { show: read } : { readAgain: true };
-
-/** The guides as the connected gateway reads them now, and a way to change them. */
-function useGuides() {
+/** Settings, Conversation: nothing while Clawtrate keeps every bot's section, else its lines. */
+export function BotGuidesPane({ canWrite }: { canWrite: boolean }) {
   const bridge = useBridge();
-  const { connection } = useClawtrateState();
+  const { connection, bots } = useClawtrateState();
   const connected = connection.status === "connected";
   const [answer, setAnswer] = useState<BotGuidesAnswer | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [reads, setReads] = useState(0);
-  const mounted = useRef(true);
-  useEffect(() => {
-    // Set again on each setup: development builds run an effect's cleanup and setup twice.
-    mounted.current = true;
-    return () => {
-      mounted.current = false;
-    };
-  }, []);
-  // The connection as it is when a change finishes, not as it was when it was sent.
-  const now = useRef(connection);
-  useEffect(() => {
-    now.current = connection;
-  });
   useEffect(() => {
     if (!connected) return;
     let live = true;
@@ -161,253 +92,23 @@ function useGuides() {
     return () => {
       live = false;
     };
-  }, [bridge, connected, reads, connection.connectedAt, connection.gatewayId, connection.target]);
+  }, [bridge, connected, connection.connectedAt, connection.gatewayId, connection.target]);
   // Only the connected gateway's own answer is shown (`GatewayStamp`).
   const shown = answer && forConnection(answer.stamp, connection) ? answer : null;
-  const change = (next: GuidesChange) => {
-    if (!shown) return Promise.resolve(null);
-    setBusy(true);
-    setError(null);
-    return bridge.invoke({ type: "changeBotGuides", change: next, stamp: shown.stamp }).then(
-      (read) => {
-        if (!mounted.current) return null;
-        setBusy(false);
-        const next = afterChange(read, now.current);
-        if ("readAgain" in next) {
-          setReads((n) => n + 1);
-          return null;
-        }
-        setAnswer(next.show);
-        return next.show;
-      },
-      (failure: unknown) => {
-        if (!mounted.current) return null;
-        setBusy(false);
-        setError(failure instanceof Error ? failure.message : String(failure));
-        setReads((n) => n + 1);
-        return null;
-      },
-    );
-  };
-  return { shown, error, busy, change, retry: () => setReads((n) => n + 1), connected };
-}
-
-/** Settings, Conversation: the switch, Read it, and the bots that need a look. */
-export function BotGuidesPane({ announce }: { announce: (text: string) => void }) {
-  const { connection, bots } = useClawtrateState();
-  const guides = useGuides();
-  const admin = connection.canAdmin;
-  const [showing, setShowing] = useState<string | null>(null);
-  const { shown } = guides;
-  if (!shown)
-    return (
-      <div className="bot-guides" data-testid="bot-guides">
-        {guides.error ? (
-          <div className="b-note" data-tone="danger" role="alert">
-            <div>
-              <p>Couldn't read the bots' instructions. {guides.error}</p>
-              <div className="b-actions">
-                <button type="button" className="button" onClick={guides.retry}>
-                  Try again
-                </button>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <p className="b-hint">
-            {guides.connected
-              ? "Reading the bots' instructions from the gateway…"
-              : "The bots' instructions are read once Clawtrate is connected."}
-          </p>
-        )}
-      </div>
-    );
-  const folders = shown.folders;
-  // This device's record couldn't be read: whether the switch is on isn't known, so it isn't
-  // shown as either, and nothing can be changed until it can be read.
-  const unreadable = shown.unreadable;
-  const on = !unreadable && guidesOn(shown.record);
-  /** Whether each of these bots' folders reads this version now, as read back. */
-  const allCurrent = (read: BotGuidesAnswer, ids: string[]) =>
-    ids.length > 0 &&
-    ids.every((id) => read.folders.find((f) => f.bots.includes(id))?.state === "current");
-  const turn = (next: boolean) =>
-    void guides.change({ action: "switch", on: next }).then((read) => {
-      // Announced only when the files, read back, hold what was asked.
-      if (!read || read.errors.length > 0 || guidesOn(read.record) !== next) return;
-      announce(`"Bots know how Clawtrate works" is ${next ? "on" : "off"}`);
-    });
-  const rows = folders
-    // Unreadable: only the rows whose words hold whether it is on or off (a changed, moved or
-    // unparseable section, a file that isn't UTF-8 or can't be read), none that writes.
-    .filter(
-      (folder) =>
-        !unreadable ||
-        folder.state === "changed" ||
-        folder.state === null ||
-        (!folder.utf8 && (folder.state === "current" || folder.state === "older")),
-    )
-    .flatMap((folder) => {
-      const label = list(names(bots, folder.bots));
-      const row = guideRow(folder, label, on, admin && !unreadable);
-      return row ? [{ folder, label, ...row }] : [];
-    });
+  const lines =
+    connected && error !== null
+      ? [`Couldn't read the bots' instructions. ${error}`]
+      : shown
+        ? guidesLines(shown.folders, (ids) => list(names(bots, ids)), canWrite)
+        : [];
+  if (lines.length === 0) return null;
   return (
     <div className="bot-guides" data-testid="bot-guides">
-      <div className="facts">
-        <div className="b-row">
-          <span className="b-row-main">
-            <span id="bot-guides-label">Bots know how Clawtrate works</span>
-            <small data-testid="bot-guides-state" id="bot-guides-state">
-              {unreadable
-                ? "Not known: this device couldn't read whether it's on or off for this gateway."
-                : on
-                  ? "On"
-                  : "Off"}
-            </small>
-          </span>
-          {/* Unreadable: no switch at all, neither on nor off, and nothing to press. */}
-          {!unreadable && (
-            <button
-              type="button"
-              className="b-switch"
-              role="switch"
-              aria-checked={on}
-              aria-labelledby="bot-guides-label"
-              aria-describedby="bot-guides-note"
-              aria-busy={guides.busy || undefined}
-              aria-disabled={guides.busy || undefined}
-              disabled={!admin}
-              data-testid="bot-guides-switch"
-              onClick={() => {
-                if (!guides.busy) turn(!on);
-              }}
-            />
-          )}
-        </div>
-      </div>
-      <p className="b-hint" id="bot-guides-note">
-        Clawtrate keeps a short section at the top of the <code>AGENTS.md</code> of each bot on this
-        gateway that tells it how to talk to you and what a task is in Clawtrate.
-        {unreadable &&
-          " Clawtrate changes nothing in the bots' files until this device can read it again."}
-        {!unreadable &&
-          shown.inherited &&
-          " It's off here because you turned it off for another gateway on this device. Turning it on here changes this gateway only."}
-        {!admin &&
-          " This connection doesn't have admin access, so Clawtrate can't add or remove it from here."}
-      </p>
-      <details className="b-disclosure" data-testid="bot-guides-text">
-        <summary>
-          <ChevronIcon />
-          Read it
-        </summary>
-        <div className="b-disclosure-body">
-          <pre className="bot-guides-text">{GUIDES_SECTION}</pre>
-        </div>
-      </details>
-      {rows.length > 0 && (
-        <ul className="bot-guides-list" aria-labelledby="bot-guides-label">
-          {rows.map(({ folder, label, words, action }) => {
-            const key = folder.bots.join(",");
-            // Each button says which bot it is for, to a screen reader too.
-            const named = `bot-guide-name-${folder.bots[0]}`;
-            return (
-              <li key={key} data-testid={`bot-guide-${folder.bots[0]}`} data-state={folder.state}>
-                <span className="bot-guides-row">
-                  <span id={named}>
-                    {label}
-                    {folder.bots.length > 1 && " (one shared folder)"}
-                  </span>
-                  <small>{words}</small>
-                </span>
-                {action && (
-                  <div className="b-actions">
-                    {action === "show" || action === "replace" ? (
-                      <button
-                        type="button"
-                        className="button"
-                        data-size="sm"
-                        aria-expanded={showing === key}
-                        aria-describedby={named}
-                        onClick={() => setShowing(showing === key ? null : key)}
-                      >
-                        {showing === key ? "Hide" : "Show"}
-                      </button>
-                    ) : null}
-                    {action !== "show" && (
-                      <button
-                        type="button"
-                        className="button"
-                        data-size="sm"
-                        aria-describedby={named}
-                        disabled={guides.busy}
-                        onClick={() => {
-                          if (action === "remove")
-                            return void guides
-                              .change({ action: "remove", bots: folder.bots })
-                              .then(
-                                (read) =>
-                                  read &&
-                                  removalConfirmed(read, folder.bots[0]!) &&
-                                  announce(`Taken out of ${label}`),
-                              );
-                          void guides
-                            .change(
-                              action === "replace"
-                                ? {
-                                    action: "replace",
-                                    bot: folder.bots[0]!,
-                                    shown: folder.changedText ?? "",
-                                  }
-                                : { action: "add", bots: folder.bots },
-                            )
-                            .then(
-                              (read) =>
-                                read &&
-                                read.errors.length === 0 &&
-                                allCurrent(read, folder.bots) &&
-                                announce(`Added to ${label}`),
-                            );
-                        }}
-                      >
-                        {action === "add"
-                          ? "Add"
-                          : action === "update"
-                            ? "Update"
-                            : action === "replace"
-                              ? "Replace"
-                              : "Remove"}
-                      </button>
-                    )}
-                  </div>
-                )}
-                {showing === key && folder.changedText !== null && (
-                  <pre className="bot-guides-text" data-testid="bot-guide-changed">
-                    {folder.changedText}
-                  </pre>
-                )}
-              </li>
-            );
-          })}
-        </ul>
-      )}
-      {on &&
-        shown.voicePlugin &&
-        folders.some(
-          (f) => f.state === "current" || f.state === "older" || f.state === "changed",
-        ) && (
-          <p className="b-hint" data-testid="bot-guides-voice">
-            The voice plugin also adds the voice guide to every bot, so a bot with this section gets
-            it twice. You can turn the plugin's guide off with the Bot voice switch above. Bots
-            without this section then get no voice guide.
-          </p>
-        )}
-      {(guides.error ?? (shown.errors.length > 0 ? shown.errors.join(" ") : null)) && (
-        <div className="form-error" role="alert" data-testid="bot-guides-error">
-          {guides.error ?? shown.errors.join(" ")}
-        </div>
-      )}
+      {lines.map((line) => (
+        <p key={line} className="b-hint" data-testid="bot-guides-line">
+          {line}
+        </p>
+      ))}
     </div>
   );
 }
