@@ -30,6 +30,7 @@ import { GatewayError, memoryStorage, sleep, testHost, tokenKey, until } from ".
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { ClawtrateClient, CONNECTION_CHANGED, ROUTE_IDENTITY_CHANGED } from "../src/client.ts";
 import { PUBLISHED_SECTIONS } from "./guides-published.ts";
+import { V2_SECTION, v2Pass } from "./guides-build-v2.ts";
 import { FAST, URL_A } from "./client-harness.ts";
 
 const hash = (text: string) => sha256Hex(utf8Bytes(text));
@@ -376,6 +377,39 @@ describe("keeping the section current", () => {
     const older = fakeFiles({ pip: olderSection() + BOT_FILE });
     for (let pass = 0; pass < 3; pass += 1) await keepGuidesCurrent(older.request);
     expect(older.sets).toHaveLength(1);
+  });
+
+  it("version 2's build and this one, taking turns on one file, write at most twice and then leave it", async () => {
+    // The released version 2 build's own parser and rule (guides-build-v2.ts), as it shipped.
+    const v2 = PUBLISHED_SECTIONS.find((each) => each.version === 2)!.section;
+    expect(V2_SECTION).toBe(v2);
+    const starts = {
+      "no section": BOT_FILE,
+      "version 2's": `${v2}\n${BOT_FILE}`,
+      "version 2's, edited": `${v2.replace("Be warm", "Be bold")}\n${BOT_FILE}`,
+      "this version's": withSection(BOT_FILE),
+      "this version's, edited": edited(),
+    };
+    for (const [name, start] of Object.entries(starts)) {
+      const files = fakeFiles({ pip: start });
+      let v2Writes = 0;
+      for (let round = 0; round < 4; round += 1) {
+        // The older build's device, then this build's, on the same file.
+        const written = v2Pass(files.store.get("pip")!);
+        if (written !== null) {
+          files.store.set("pip", written);
+          v2Writes += 1;
+        }
+        await keepGuidesCurrent(files.request);
+      }
+      expect(v2Writes + files.sets.length, name).toBeLessThanOrEqual(2);
+      // Settled: this version, and neither build writes it again.
+      expect(files.store.get("pip"), name).toBe(withSection(BOT_FILE));
+      expect(v2Pass(files.store.get("pip")!), name).toBeNull();
+      const before = files.sets.length;
+      await keepGuidesCurrent(files.request);
+      expect(files.sets, name).toHaveLength(before);
+    }
   });
 
   it("one writer at a time: a write held to a hash another device changed reads again, once", async () => {
