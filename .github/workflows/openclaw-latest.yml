@@ -76,6 +76,9 @@ jobs:
       # The computer checks start the Chromium that Playwright installs.
       - run: pnpm exec playwright install --with-deps chromium
       - run: pnpm scenarios
+      # The routine editor's croner must be the one this OpenClaw runs (test/croner-gateway.test.ts).
+      - if: ${{ !cancelled() }}
+        run: OPENCLAW_PACKAGE_DIR="$(npm root --global)/openclaw" pnpm exec vitest run test/croner-gateway.test.ts
 
   # The same three runners and lists as ci.yml's e2e job.
   e2e:
