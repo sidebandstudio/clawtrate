@@ -8,13 +8,13 @@ import { Fragment, useMemo } from "react";
 import { ActionSheetIOS, Linking, ScrollView, View } from "react-native";
 import {
   besideShown,
+  carriesCredential,
   columnWidths,
   LINK_WORDS,
   parseMarkdown,
   type Block,
   type Inline,
 } from "../markdown.ts";
-import { REDACTED } from "../host/secrets.ts";
 import { useRuntime } from "../runtime.ts";
 import { FONTS, S, TOUCH, useTheme } from "../theme/index.ts";
 import { Txt } from "./ui.tsx";
@@ -40,15 +40,6 @@ function showAddress(url: string) {
       if (chosen === 0) void Clipboard.setStringAsync(url);
     },
   );
-}
-
-/** The address as written and decoded where it decodes: a scrubbed credential shows in either. */
-function decoded(url: string): string {
-  try {
-    return decodeURI(url);
-  } catch {
-    return url;
-  }
 }
 
 function Inlines({ nodes }: { nodes: Inline[] }) {
@@ -93,13 +84,7 @@ function Inlines({ nodes }: { nodes: Inline[] }) {
           case "link": {
             // An address that carries a known credential, or one already scrubbed, is
             // never handed to the system: the link is its text.
-            const shown = decoded(node.url);
-            if (
-              redact(node.url) !== node.url ||
-              redact(shown) !== shown ||
-              node.url.includes(REDACTED) ||
-              shown.includes(REDACTED)
-            )
+            if (carriesCredential(node.url, redact))
               return <Inlines key={index} nodes={node.children} />;
             // What is beside the text is part of the link, so VoiceOver reads it in the link's
             // name: iOS names a link inside text by its own words, not by a label.

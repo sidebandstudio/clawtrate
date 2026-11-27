@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
+import { createSecrets } from "../src/host/secrets.ts";
 import {
   besideLink,
   besideShown,
+  carriesCredential,
   columnWidths,
   COLUMN_WIDTH,
   linkPlace,
@@ -276,6 +278,22 @@ describe("the bot's markdown on iOS", () => {
       { t: "text", text: "Open " },
     ]);
     expect(besideShown(links("See https://example.test/.")[0]!)).toBeNull();
+  });
+
+  it("knows a credential in an address however it is encoded", () => {
+    const secrets = createSecrets();
+    secrets.learn("connection", JSON.stringify({ token: "demo@token/x:y" }));
+    const carries = (url: string) => carriesCredential(url, secrets.redact);
+    expect(carries("https://example.test/?token=demo@token/x:y")).toBe(true);
+    // decodeURI leaves reserved characters encoded; decodeURIComponent doesn't.
+    expect(carries("https://example.test/?token=demo%40token%2Fx%3Ay")).toBe(true);
+    expect(carries("https://example.test/?token=%64emo%40token/x:y")).toBe(true);
+    // One already scrubbed.
+    expect(carries("https://example.test/?token=%E2%80%A2%E2%80%A2%E2%80%A2")).toBe(true);
+    expect(carries("https://example.test/notes")).toBe(false);
+    // An address that doesn't decode is judged as written.
+    expect(carries("https://example.test/%E0%A4%A")).toBe(false);
+    expect(carries("https://example.test/%E0%A4%A?token=demo@token/x:y")).toBe(true);
   });
 
   it("shows raw HTML as text", () => {

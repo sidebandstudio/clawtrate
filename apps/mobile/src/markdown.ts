@@ -13,6 +13,7 @@ import type { Nodes, PhrasingContent, RootContent } from "mdast";
 import { fromMarkdown } from "mdast-util-from-markdown";
 import { gfmFromMarkdown } from "mdast-util-gfm";
 import { gfm } from "micromark-extension-gfm";
+import { REDACTED } from "./host/secrets.ts";
 import { isLocalAddress } from "./local-network.ts";
 
 export type Inline =
@@ -279,4 +280,21 @@ export function besideLink(link: Extract<Inline, { t: "link" }>): string | null 
 export function besideShown(link: Extract<Inline, { t: "link" }>): string | null {
   const beside = besideLink(link);
   return beside === null ? null : ` \u2066(${beside})\u2069`;
+}
+
+/**
+ * Whether an address carries a credential this device holds, or one already scrubbed, as written
+ * or decoded: by `decodeURI`, and by `decodeURIComponent`, which also decodes `%40`, `%2F`, `%3A`
+ * and the other reserved characters. Such a link is never handed to the system.
+ */
+export function carriesCredential(url: string, redact: (text: string) => string): boolean {
+  const forms = [url];
+  for (const decode of [decodeURI, decodeURIComponent]) {
+    try {
+      forms.push(decode(url));
+    } catch {
+      // An address that doesn't decode is judged as written.
+    }
+  }
+  return forms.some((form) => redact(form) !== form || form.includes(REDACTED));
 }
