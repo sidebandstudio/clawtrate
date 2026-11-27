@@ -1366,7 +1366,8 @@ export class RoutinesEngine {
         if (pending.removed) return { status: "deleted" };
         if (changedSince(error)) {
           const now = await this.readOne(id).catch(() => undefined);
-          if (now === null) return { status: "deleted" };
+          // A read meanwhile may have found it gone, which an older answer here doesn't undo.
+          if (now === null || pending.removed) return { status: "deleted" };
           if (now) return { status: "conflict", current: now };
         }
         return this.failed(error);
