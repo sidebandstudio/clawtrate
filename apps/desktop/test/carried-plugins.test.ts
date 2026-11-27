@@ -199,6 +199,35 @@ describe("the plugins the app carries", () => {
     expect(voice!.grants).toEqual({ hooks: { allowConversationAccess: true } });
   });
 
+  it("pins the grant of every hook the plugin's code registers", async () => {
+    // A plugin that isn't a bundle can't declare its hooks: OpenClaw reads no `hooks` from its
+    // manifest and reports `declared.hooks: []` for it (docs/design/plugins-install.md,
+    // section 1). So what its code registers is held here instead, by registering it with a
+    // stand-in host: each hook must be in this table, and its grant in the pin's `grants`.
+    // OpenClaw registers a prompt hook of a plugin it didn't bundle only with
+    // `allowConversationAccess: true` (plugins/clawtrate-voice/README.md).
+    const HOOK_GRANTS: Record<string, Record<string, unknown>> = {
+      before_prompt_build: { hooks: { allowConversationAccess: true } },
+    };
+    const registered: string[] = [];
+    const plugin = (await import(join(VOICE, "index.js"))) as {
+      default: { register(api: unknown): void };
+    };
+    plugin.default.register({
+      config: {},
+      on: (name: string) => registered.push(name),
+      registerGatewayMethod: () => {},
+      registerService: () => {},
+      runtime: { state: { openKeyedStore: () => ({ lookup: async () => undefined }) } },
+    });
+    expect(registered).toEqual(["before_prompt_build"]);
+    const [voice] = packCarried(temp()).plugins;
+    for (const hook of registered) {
+      expect(HOOK_GRANTS[hook], `${hook} has a grant in this table`).toBeDefined();
+      expect(voice!.grants).toMatchObject(HOOK_GRANTS[hook]!);
+    }
+  });
+
   it("carries a source digest for each OpenClaw version the development gateway runs", () => {
     // Versions the development gateway runs, the pin among them; a version added to versions.ts
     // later gets no install until its digest is recorded (the engine's step 0), and fails nothing.
