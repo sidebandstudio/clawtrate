@@ -324,10 +324,6 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/avatar.ts:LANTERN_HEADPHONES.box.left": "static, one headphone cup's centre",
   "packages/core/src/avatar.ts:LANTERN_HEADPHONES.box.right": "static, one headphone cup's centre",
   "packages/core/src/avatar.ts:wornAt>placed": "per call, at most three shapes for one pose",
-  "packages/core/src/guides.ts:keepGuidesCurrent>errors":
-    "one call; one sentence per instructions file it read, returned to the caller",
-  "packages/core/src/guides.ts:keepGuidesCurrent>missing":
-    "one call; the bot ids of the one agents.list it read, returned to the caller",
   "packages/core/src/guides.ts:readGuidesLimits>shown":
     "one call; the bot ids of the one agents.list its caller read, held by the limit function that call returns",
 };
