@@ -117,6 +117,8 @@ export type NamingContext = {
   request: (method: string, params: unknown) => Promise<unknown>;
   /** The task's row as the client has it now, or null. */
   row: () => RawRecord | null;
+  /** The bot's model as the client has it now: it can change while the name is made. */
+  botModel: () => string | null;
 };
 
 /**
@@ -128,23 +130,21 @@ export async function nameTask(
   ctx: NamingContext,
   task: {
     key: string;
-    /** The session the task was created as, from the creation's answer, else its row's. */
+    /** The session the task was created as, from the creation's answer. */
     sessionId: string | null;
     botId: string;
-    botModel: string | null;
     text: string;
     /** For an empty task named from a later send: this client's sends there (`onlyOwnRows`). */
     ownSends?: readonly string[];
   },
 ): Promise<string | null> {
   const message = namingSource(task.text);
-  const before = ctx.row();
-  if (!message || hasName(before)) return null;
-  // Bound to the task's own session, known before anything is awaited: a reset or a delete and
-  // recreate meanwhile gives the key another session, which this name is not for. The gateway
-  // refuses the patch for a task deleted meanwhile, which a patch by key alone would make again.
-  const sessionId =
-    task.sessionId ?? (typeof before?.sessionId === "string" ? before.sessionId : null);
+  if (!message || hasName(ctx.row())) return null;
+  // Bound to the session the task was created as: a reset or a delete and recreate since gives
+  // the key another session, which this name is not for, and the row read now could already be
+  // that one. The gateway refuses the patch for a task deleted meanwhile, which a patch by key
+  // alone would make again.
+  const sessionId = task.sessionId;
   if (!sessionId) return null;
   if (task.ownSends) {
     try {
@@ -161,13 +161,15 @@ export async function nameTask(
   let catalogue: CatalogModel[] = [];
   try {
     // Only a bot whose provider may be named across needs the person's other providers.
-    if (namesAcross(task.botModel))
+    if (namesAcross(ctx.botModel()))
       catalogue = readCatalog(await ctx.request("models.list", { agentId: task.botId }));
   } catch {
     // Without the list, the bot's own provider still names it.
   }
-  for (const model of namingCalls(task.botModel, catalogue)) {
+  for (const model of namingCalls(ctx.botModel(), catalogue)) {
     if (hasName(ctx.row())) return null;
+    // The bot moved meanwhile to a provider whose tasks no other provider names.
+    if (model && !namesAcross(ctx.botModel())) continue;
     let title: string | null = null;
     try {
       const answer = asRecord(

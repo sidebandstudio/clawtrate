@@ -105,10 +105,14 @@ describe("which model writes a name", () => {
 /** A gateway for `nameTask`: answers each title call in turn, records every request. */
 function namingGateway(answers: Array<unknown | Error>, row: Record<string, unknown> = {}) {
   const asked: Array<{ method: string; params: Record<string, unknown> }> = [];
-  const state = { row: { key: KEY, ...row } as Record<string, unknown> };
+  const state = {
+    row: { key: KEY, ...row } as Record<string, unknown>,
+    botModel: "anthropic/claude-sonnet-5-5" as string | null,
+  };
   let call = 0;
   const ctx = {
     row: () => state.row,
+    botModel: () => state.botModel,
     request: async (method: string, params: unknown) => {
       asked.push({ method, params: params as Record<string, unknown> });
       if (method === "models.list")
@@ -131,7 +135,6 @@ const TASK = {
   key: KEY,
   sessionId: SESSION,
   botId: "main",
-  botModel: "anthropic/claude-sonnet-5-5",
   text: MESSAGE,
 };
 
@@ -147,38 +150,53 @@ describe("making a name", () => {
     ]);
   });
 
-  it("is bound to the task's session: from its row when the creation gave none, else not kept", async () => {
+  it("is bound to the session the creation gave; without one, nothing is asked or kept", async () => {
     // A patch by key alone made a deleted task again (2026.10.6); with the session the
-    // gateway refuses it ("changed before patch").
-    const fromRow = namingGateway([{ title: "Lisbon" }], { sessionId: "row-session" });
-    expect(await nameTask(fromRow.ctx, { ...TASK, sessionId: null })).toBe("Lisbon");
-    expect(fromRow.patches()).toEqual([
-      { key: KEY, autoLabel: "Lisbon", expectedSessionId: "row-session" },
-    ]);
-    const gone = namingGateway([{ title: "Lisbon" }]);
-    gone.state.row = null as unknown as Record<string, unknown>;
-    expect(await nameTask(gone.ctx, { ...TASK, sessionId: null })).toBeNull();
-    expect(gone.patches()).toEqual([]);
+    // gateway refuses it ("changed before patch"). The row's session isn't taken instead: by the
+    // time the name is made, the row can be a task made again under the same key.
+    const g = namingGateway([{ title: "Lisbon" }], { sessionId: "replacing-session" });
+    expect(await nameTask(g.ctx, { ...TASK, sessionId: null })).toBeNull();
+    expect(g.titleCalls()).toEqual([]);
+    expect(g.patches()).toEqual([]);
   });
 
-  it("keeps no name for a task whose session changed while the name was made", async () => {
-    // A reset, or a delete and a new task under the same key, during the title call: the key's
-    // new session S2 is not the task the first message was sent to (S1). Whether S1 came from the
-    // creation's answer or from the row before the call.
-    for (const sessionId of [null, "s1"]) {
-      const g = namingGateway([{ title: "Lisbon" }], { sessionId: "s1" });
+  it("names no other provider once the bot has moved to one outside the list", async () => {
+    // To Ollama while the person's models are read (from Anthropic: OpenAI is no longer asked),
+    // or during the bot's own call that gave no title (from OpenAI: Anthropic is not asked next).
+    for (const [from, during, answers] of [
+      ["anthropic/claude-sonnet-5-5", "models.list", [{ title: "Lisbon" }]],
+      ["openai/gpt-6-sol", "sessions.title.prepare", [{ title: null }, { title: "Lisbon" }]],
+    ] as const) {
+      const g = namingGateway([...answers]);
+      g.state.botModel = from;
       const ctx = {
         ...g.ctx,
         request: async (method: string, params: unknown) => {
           const answer = await g.ctx.request(method, params);
-          if (method === "sessions.title.prepare") g.state.row = { key: KEY, sessionId: "s2" };
+          if (method === during) g.state.botModel = "ollama/llama-4";
           return answer;
         },
       };
-      expect(await nameTask(ctx, { ...TASK, sessionId })).toBeNull();
-      expect(g.titleCalls()).toHaveLength(1);
-      expect(g.patches()).toEqual([]);
+      await nameTask(ctx, TASK);
+      expect(g.titleCalls()).toEqual([{ agentId: "main", message: MESSAGE }]);
     }
+  });
+
+  it("keeps no name for a task whose session changed while the name was made", async () => {
+    // A reset, or a delete and a new task under the same key, during the title call: the key's
+    // new session S2 is not the task the first message was sent to (S1).
+    const g = namingGateway([{ title: "Lisbon" }], { sessionId: "s1" });
+    const ctx = {
+      ...g.ctx,
+      request: async (method: string, params: unknown) => {
+        const answer = await g.ctx.request(method, params);
+        if (method === "sessions.title.prepare") g.state.row = { key: KEY, sessionId: "s2" };
+        return answer;
+      },
+    };
+    expect(await nameTask(ctx, { ...TASK, sessionId: "s1" })).toBeNull();
+    expect(g.titleCalls()).toHaveLength(1);
+    expect(g.patches()).toEqual([]);
   });
 
   it("goes on past a refusal, an empty answer or a timeout, to the bot's own provider", async () => {
@@ -200,7 +218,8 @@ describe("making a name", () => {
     // OpenAI and Anthropic are both connected (`models.list` would list them): no call names either.
     for (const botModel of ["ollama/llama-4", null]) {
       const g = namingGateway([{ title: null }, { title: "z" }]);
-      expect(await nameTask(g.ctx, { ...TASK, botModel })).toBeNull();
+      g.state.botModel = botModel;
+      expect(await nameTask(g.ctx, TASK)).toBeNull();
       expect(g.titleCalls()).toEqual([{ agentId: "main", message: MESSAGE }]);
       expect(g.asked.some((each) => each.method === "models.list")).toBe(false);
     }

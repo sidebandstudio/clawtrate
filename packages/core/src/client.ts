@@ -11618,10 +11618,13 @@ export class ClawtrateClient {
       withMessage: false,
     });
     const ctx = this.actionContext(null, this.epoch);
-    const botModel = this.state.bots.find((bot) => bot.id === botId)?.model ?? null;
     void nameTask(
-      { request: ctx.request, row: () => this.rows.get(capId(key, MAX_ID_CHARS)) ?? null },
-      { key, sessionId, botId, botModel, text, ...(ownSends ? { ownSends } : {}) },
+      {
+        request: ctx.request,
+        row: () => this.rows.get(capId(key, MAX_ID_CHARS)) ?? null,
+        botModel: () => this.state.bots.find((bot) => bot.id === botId)?.model ?? null,
+      },
+      { key, sessionId, botId, text, ...(ownSends ? { ownSends } : {}) },
     )
       .catch(() => null)
       .finally(() => {
