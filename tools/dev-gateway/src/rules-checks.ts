@@ -620,7 +620,7 @@ async function askedThePerson(
   runId: string,
   what: string,
 ): Promise<void> {
-  const { record: asked } = await readIn(ctx, runId);
+  const { record: asked, text } = await readIn(ctx, runId);
   // The record is found as soon as the card is raised; its answer comes with the denial.
   const record = await eventually(
     `the answer to ${what}'s card`,
@@ -630,7 +630,11 @@ async function askedThePerson(
       ),
     LONG_RUN_MS,
   );
-  same([record.decision, record.answer], ["ask", "deny"], `${what}'s read`);
+  same(
+    [record.decision, record.answer],
+    ["ask", "deny"],
+    `${what}'s read (its result: ${text.slice(0, 300)})`,
+  );
   const seen = cardsSeen(ctx, since, runId);
   expect(
     seen.includes("interactive"),

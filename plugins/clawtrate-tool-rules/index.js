@@ -124,7 +124,8 @@ function sharedState(dir, options) {
        * { bot } for another bot. `pending` holds, per task, the bots' messages waiting,
        * `{ bot, run }` with the run each names (`next` for one kept only for the next run);
        * `current` each task's latest run; `times` when a task's person last wrote and its
-       * latest run was noted, on `clock`; `forgotten` the runs and tasks whose bot's mark
+       * latest run was noted, on `clock`; `steered` the bots' messages a send's result said
+       * were steered before they were written, by task and run; `forgotten` the runs and tasks whose bot's mark
        * was let go past a bound, which count as a bot's.
        */
       origins: {
@@ -133,6 +134,7 @@ function sharedState(dir, options) {
         current: new Map(),
         pending: new Map(),
         times: new Map(),
+        steered: new Map(),
         clock: 0,
         forgotten: new Map(),
       },
@@ -506,6 +508,21 @@ export function createToolRules(api, options = {}) {
     for (const mark of theirs) forget(oldest, mark);
   };
 
+  const steerKey = (sessionKey, run) => `${sessionKey}\n${run}`;
+
+  /**
+   * A task's waiting marks once a bot's message was steered into a run under
+   * way: if a person wrote there after its latest run was noted, that run may
+   * not be noted yet, so the next run noted is the bot's too.
+   */
+  const afterSteer = (sessionKey, bot, waiting) => {
+    const times = origins.times.get(sessionKey);
+    if (times && times.person <= times.noted) return waiting;
+    const kept = waiting.length >= PENDING_LIMIT ? waiting.slice(1) : waiting;
+    if (kept !== waiting) forget(sessionKey, waiting[0]);
+    return [...kept, { bot, run: null, next: true }];
+  };
+
   /** When a task's person last wrote and its latest run was noted, on one clock. */
   const stamp = (sessionKey, what) => {
     origins.clock += 1;
@@ -532,6 +549,12 @@ export function createToolRules(api, options = {}) {
       }
       const named = /^(.{1,200}):user$/s.exec(text(message.idempotencyKey) ?? "")?.[1] ?? null;
       const waiting = [...(origins.pending.get(sessionKey) ?? [])];
+      // Its send's result came first (2026.10.6 answers a steer before the run takes it in):
+      // it starts no run of its own, so it waits only as a steer's does.
+      if (named && origins.steered.delete(steerKey(sessionKey, named))) {
+        keepWaiting(sessionKey, afterSteer(sessionKey, origin.bot, waiting));
+        return undefined;
+      }
       if (waiting.length >= PENDING_LIMIT) forget(sessionKey, waiting.shift());
       keepWaiting(sessionKey, [...waiting, { bot: origin.bot, run: named }]);
     } catch {
@@ -585,6 +608,7 @@ export function createToolRules(api, options = {}) {
    * starts no run, so its mark is let go. A person's message written since the
    * task's latest run was noted may have started a run not noted yet, into
    * which the gateway steered it: then the next run noted is the bot's too.
+   * A steer answered before its message is written is kept until it is.
    */
   function noteSent(event) {
     try {
@@ -596,13 +620,12 @@ export function createToolRules(api, options = {}) {
       if (!sessionKey || !run || !(steered || details.status === "ok")) return undefined;
       const waiting = origins.pending.get(sessionKey) ?? [];
       const mark = waiting.find((m) => m.run === run);
-      if (!mark) return undefined;
-      const rest = waiting.filter((m) => m !== mark);
-      const times = origins.times.get(sessionKey);
-      if (steered && (!times || times.person > times.noted)) {
-        rest.push({ bot: mark.bot, run: null, next: true });
+      if (!mark) {
+        if (steered) remember(origins.steered, steerKey(sessionKey, run), true);
+        return undefined;
       }
-      keepWaiting(sessionKey, rest);
+      const rest = waiting.filter((m) => m !== mark);
+      keepWaiting(sessionKey, steered ? afterSteer(sessionKey, mark.bot, rest) : rest);
     } catch {
       // Noting where a message went is never a reason to fail a call.
     }

@@ -691,6 +691,30 @@ describe("a run another bot's message started or reached (#606)", () => {
     asks(h, "run-q2");
   });
 
+  it("a steer whose send's result comes before its message is written: the run taking it in is the bot's, and nothing is left waiting", async () => {
+    // The order 2026.10.6 answers a steer in: the result first, the write when the run takes it.
+    const h = host();
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    personRun(h, "run-q1");
+    h.sent(MARLOW, {
+      status: "accepted",
+      runId: "run-s",
+      sessionKey: PIP,
+      targetDisposition: "steered",
+    });
+    // Only a steer is kept for later: a queued or answered one says nothing yet.
+    h.sent(MARLOW, { status: "accepted", runId: "run-x", sessionKey: PIP });
+    asks(h, "run-q1");
+    h.write(PIP, fromMarlow("run-s"));
+    refusedFor(h, "run-q1");
+    expect(pending(h)).toEqual([]);
+    personRun(h, "run-q2");
+    asks(h, "run-q2");
+    // A later message naming another run waits as any does.
+    h.write(PIP, fromMarlow("run-x"));
+    expect(pending(h)).toEqual([{ bot: "marlow", run: "run-x" }]);
+  });
+
   it("a steer into a run not noted yet: the next run noted is the bot's, then the mark is gone", async () => {
     const h = host();
     await h.save("pip", [{ action: "ask", tools: ["read"] }]);
