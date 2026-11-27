@@ -2550,3 +2550,61 @@ test("F-480: Change model settled as the person moves to another bot leaves focu
   await expect(pip).toBeFocused();
   await expect(model).not.toBeFocused();
 });
+
+type Reply = { clawtrateFixture: ClawtrateBridge; releaseReply: () => void };
+/** The fixture's answer to the next `type` command waits until `releaseReply`. */
+const holdReply = (page: Page, type: string) =>
+  page.evaluate((type) => {
+    const w = window as unknown as Reply;
+    const invoke = w.clawtrateFixture.invoke.bind(w.clawtrateFixture);
+    w.clawtrateFixture.invoke = ((command: { type: string }) =>
+      command.type !== type
+        ? invoke(command as never)
+        : new Promise<void>((resolve) => (w.releaseReply = resolve)).then(() =>
+            invoke(command as never),
+          )) as ClawtrateBridge["invoke"];
+  }, type);
+const releaseReply = (page: Page) =>
+  page.evaluate(() => (window as unknown as Reply).releaseReply());
+
+test("F-473: a Change account saved as the person moves to another bot leaves that bot's page on its first view", async ({
+  page,
+}) => {
+  await openFixture(page, `${SETTINGS_TAB}&lock=bound`, "light");
+  await page.getByRole("button", { name: /^Account: / }).click();
+  await page.getByRole("button", { name: "Change account" }).click();
+  await page.getByRole("radio", { name: /^OpenAI · Home/ }).click();
+  await holdReply(page, "changeBotAccount");
+  await page.getByRole("button", { name: "Save" }).click();
+  const pip = page.getByTestId("bot-list").getByRole("button", { name: /^Pip\b/ });
+  await pip.click();
+  await expect(page.getByTestId("bot-settings")).toContainText("Pip");
+  await releaseReply(page);
+  await expect(page.getByTestId("work-announcer")).toHaveText("Otto now runs on OpenAI · Home");
+  await settle(page);
+  await expect(page.getByTestId("model-select")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Account", level: 3 })).toHaveCount(0);
+  await expect(pip).toBeFocused();
+});
+
+test("F-474: an account connected with a label as the person moves to another bot leaves that bot's page on its first view", async ({
+  page,
+}) => {
+  await openFixture(page, `${SETTINGS_TAB}&lock=bound&kept=1&signin=connected`, "light");
+  await page.getByRole("button", { name: /^Account: / }).click();
+  await page.getByRole("button", { name: "Change account" }).click();
+  await page.getByRole("button", { name: /^Connect an account/ }).click();
+  await page.getByRole("button", { name: /^xAI · / }).click();
+  await page.getByRole("textbox", { name: "Label" }).fill("Side");
+  await holdReply(page, "setAccountLabel");
+  await page.getByRole("button", { name: "Done" }).click();
+  const pip = page.getByTestId("bot-list").getByRole("button", { name: /^Pip\b/ });
+  await pip.click();
+  await expect(page.getByTestId("bot-settings")).toContainText("Pip");
+  await releaseReply(page);
+  await expect(page.getByTestId("work-announcer")).toHaveText("Label saved");
+  await settle(page);
+  await expect(page.getByTestId("model-select")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Change account", level: 3 })).toHaveCount(0);
+  await expect(pip).toBeFocused();
+});

@@ -256,13 +256,17 @@ export function BotSettings({
     setPickEffort(null);
     setChoicesRead(accounts.readOn ?? shownStamp(connection));
   }
-  const go = (next: View, focus: string = "[data-bs-focus]") => {
+  const go = (next: View, focus: string = "[data-bs-focus]", pick: string | null = null) => {
+    // From an answer, `bot` is the bot it was asked for (#781): once another is drawn, its page stays.
+    if (drawnBot.current !== bot.id) return;
     setView(next);
     setError(null);
     if (next === "account" && view !== "account") setPressed(null);
     if (next === "change" && view !== "change")
       setChoicesRead(accounts.readOn ?? shownStamp(connection));
-    if (next !== "change") setPick(null);
+    setPick(pick);
+    setPickModel(null);
+    setPickEffort(null);
     focusIn(focus);
   };
 
@@ -614,14 +618,8 @@ export function BotSettings({
           connection={connection}
           info={info}
           announce={announce}
-          onDone={(added) => {
-            // Back to the choice, with the new account chosen; Save takes it once it is listed.
-            setPick(added);
-            setPickModel(null);
-            setPickEffort(null);
-            setView("change");
-            focusIn("[data-bs-focus]");
-          }}
+          // Back to the choice, with the new account chosen; Save takes it once it is listed.
+          onDone={(added) => go("change", "[data-bs-focus]", added)}
           onLeave={() => go("change", "[data-bs='connect']")}
         >
           {(page) => (
@@ -700,9 +698,6 @@ export function BotSettings({
             ? `${name} now has no fixed account`
             : `${name} now runs on ${target ? accountName(target, accounts) : chosen}`,
         );
-        setPick(null);
-        setPickModel(null);
-        setPickEffort(null);
         go("account");
       } catch (failure) {
         setError(failure instanceof Error ? failure.message : String(failure));
