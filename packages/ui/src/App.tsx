@@ -8,6 +8,7 @@ import { restartWaitingMessages } from "./update-restart.ts";
 import { Settings, type SettingsSection } from "./Settings.tsx";
 import { useDesktopUpdateSnapshot } from "./update-reading.ts";
 import { Shell } from "./Shell.tsx";
+import { ThisComputerStage } from "./this-computer.ts";
 import { OpenOpenClawUpdates } from "./bots/UpdateOpenClaw.tsx";
 import { Brand, TitleBar, UpdateAnnouncer, UpdateButton } from "./TitleBar.tsx";
 
@@ -110,7 +111,11 @@ export function App({
   else if (mismatch && (status === "connected" || status === "idle" || status === "pairing")) {
     setMismatch(null);
   }
-  const screen = mismatch || setupHolds(info, state.setup) ? "connect" : screenFor(state);
+  // A look on this computer staged from a refused reconnect (`this-computer.ts`): the connection
+  // screen shows it, bots or not, until it is let go or its Connect connected.
+  const [staged, setStaged] = useState(false);
+  if (staged && state.setup?.phase === "done" && status === "connected") setStaged(false);
+  const screen = mismatch || setupHolds(info, state.setup) || staged ? "connect" : screenFor(state);
   // When one screen replaces another and takes focus with it, focus the first
   // control of the new one. Not on launch: nothing had focus to lose.
   const shown = useRef(screen);
@@ -136,67 +141,71 @@ export function App({
   // A newer OpenClaw's line, in a bot's settings or near the Model menu, links here (#590).
   const openOpenClawUpdates = useCallback(() => openSettings("updates", true), [openSettings]);
   return (
-    <div className="app" data-connection={lost ? "lost" : undefined}>
-      {screen === "shell" && (
-        <TitleBar
-          reading={updated}
-          waitingMessages={waitingMessages}
-          onOpenUpdates={openUpdates}
-          inert={settingsOpen}
-        />
-      )}
-      <UpdateAnnouncer reading={updated} />
-      {settingsOpen && (
-        <Settings
-          connection={state.connection}
-          info={info}
-          accounts={state.accounts}
-          checkIns={state.checkIns}
-          bots={state.bots}
-          waitingMessages={waitingMessages}
-          updateReading={updated}
-          initialSection={openSection}
-          atOpenClaw={atOpenClaw}
-          onClose={closeSettings}
-          onOpenRoutines={screen === "shell" ? openRoutines : null}
-        />
-      )}
-      {screen === "shell" ? (
-        <OpenOpenClawUpdates.Provider value={openOpenClawUpdates}>
-          <Shell
-            state={state}
-            info={info}
-            theme={theme}
-            onTheme={setTheme}
-            bubbles={bubbles}
-            onBubbles={setBubbles}
-            onUnreadCount={onUnreadCount}
-            railTop={
-              <>
-                <Brand reading={updated} />
-                <UpdateButton
-                  reading={updated}
-                  waitingMessages={waitingMessages}
-                  onOpenUpdates={openUpdates}
-                  round
-                />
-              </>
-            }
-            onOpenSettings={openSettings}
+    <ThisComputerStage.Provider value={setStaged}>
+      <div className="app" data-connection={lost ? "lost" : undefined}>
+        {screen === "shell" && (
+          <TitleBar
+            reading={updated}
+            waitingMessages={waitingMessages}
+            onOpenUpdates={openUpdates}
             inert={settingsOpen}
-            routinesLinkRef={routinesLink}
           />
-        </OpenOpenClawUpdates.Provider>
-      ) : (
-        <ConnectScreen
-          connection={state.connection}
-          discovery={state.discovery}
-          info={info}
-          setup={state.setup}
-          mismatch={mismatch}
-          inert={settingsOpen}
-        />
-      )}
-    </div>
+        )}
+        <UpdateAnnouncer reading={updated} />
+        {settingsOpen && (
+          <Settings
+            connection={state.connection}
+            info={info}
+            accounts={state.accounts}
+            checkIns={state.checkIns}
+            bots={state.bots}
+            waitingMessages={waitingMessages}
+            updateReading={updated}
+            initialSection={openSection}
+            atOpenClaw={atOpenClaw}
+            onClose={closeSettings}
+            onOpenRoutines={screen === "shell" ? openRoutines : null}
+          />
+        )}
+        {screen === "shell" ? (
+          <OpenOpenClawUpdates.Provider value={openOpenClawUpdates}>
+            <Shell
+              state={state}
+              info={info}
+              theme={theme}
+              onTheme={setTheme}
+              bubbles={bubbles}
+              onBubbles={setBubbles}
+              onUnreadCount={onUnreadCount}
+              railTop={
+                <>
+                  <Brand reading={updated} />
+                  <UpdateButton
+                    reading={updated}
+                    waitingMessages={waitingMessages}
+                    onOpenUpdates={openUpdates}
+                    round
+                  />
+                </>
+              }
+              onOpenSettings={openSettings}
+              inert={settingsOpen}
+              routinesLinkRef={routinesLink}
+            />
+          </OpenOpenClawUpdates.Provider>
+        ) : (
+          <ConnectScreen
+            connection={state.connection}
+            discovery={state.discovery}
+            info={info}
+            setup={state.setup}
+            mismatch={mismatch}
+            inert={settingsOpen}
+            staged={staged}
+            onStage={setStaged}
+          />
+        )}
+      </div>
+    </ThisComputerStage.Provider>
   );
 }
