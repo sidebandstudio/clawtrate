@@ -188,8 +188,13 @@ const marks = (ctx: RulesContext) =>
     number
   >;
 
-async function start(ctx: RulesContext, key: string, message: string): Promise<string> {
-  const sent = await ctx.clients.interactive.send(key, message);
+async function start(
+  ctx: RulesContext,
+  key: string,
+  message: string,
+  extra: JsonRecord = {},
+): Promise<string> {
+  const sent = await ctx.clients.interactive.send(key, message, extra);
   return String(sent.runId);
 }
 
@@ -489,6 +494,148 @@ async function logged(ctx: RulesContext, text: string, from: number): Promise<vo
     expect(Date.now() < deadline, `the gateway's log never said, after the change: ${text}`);
     await sleep(250);
   }
+}
+
+/** Pip's main task, where the other bot's messages arrive, subscribed to by every client. */
+const PIP_MAIN = "agent:pip:main";
+/** How long a run in the bot-to-bot checks may take on a loaded machine. */
+const LONG_RUN_MS = 300_000;
+
+async function pipMain(ctx: RulesContext, world: World): Promise<void> {
+  world.keys.add(PIP_MAIN);
+  for (const op of Object.values(ctx.clients)) {
+    await op.request("sessions.messages.subscribe", { key: PIP_MAIN }).catch(() => {});
+  }
+}
+
+/** Until the returned stop, every card that reaches admin is denied as it comes. */
+function denyAsTheyCome(
+  ctx: RulesContext,
+  since: Record<RulesClient, number>,
+): () => Promise<void> {
+  let stopped = false;
+  const done = new Set<string>();
+  const loop = (async () => {
+    while (!stopped) {
+      for (const e of ctx.clients.admin.events) {
+        if (e.seq <= since.admin || e.event !== REQUESTED) continue;
+        const id = String(rec(e.payload).id);
+        if (done.has(id)) continue;
+        done.add(id);
+        await call(ctx.clients.admin, "plugin.approval.resolve", { id, decision: "deny" }).catch(
+          () => undefined,
+        );
+      }
+      await sleep(250);
+    }
+  })();
+  return async () => {
+    stopped = true;
+    await loop;
+  };
+}
+
+/** Wait until a run of the interactive device's starts a tool call (`name`, or any). */
+async function toolStarted(
+  ctx: RulesContext,
+  runId: string,
+  since: Record<RulesClient, number>,
+  name?: string,
+): Promise<void> {
+  await ctx.clients.interactive.waitFor(
+    `run ${runId}'s ${name ?? "tool"} call`,
+    (e) =>
+      e.event === "agent" &&
+      rec(e.payload).runId === runId &&
+      rec(e.payload).stream === "tool" &&
+      rec(rec(e.payload).data).phase === "start" &&
+      (name === undefined || rec(rec(e.payload).data).name === name),
+    LONG_RUN_MS,
+    since.interactive,
+  );
+}
+
+/** The run in Pip's task that Marlow's send started, as the send's own result names it. */
+async function sentRun(ctx: RulesContext, marlowRun: string): Promise<string> {
+  const send = (await finish(ctx, marlowRun, LONG_RUN_MS)).calls[0];
+  const runId = send?.details.runId;
+  expect(
+    ranOk(send) && typeof runId === "string" && runId.length > 0,
+    `Marlow's send named no run: ${show(send)}`,
+  );
+  return runId;
+}
+
+/** A run's read in a task of Pip's: its decision record and its result, once both are there. */
+async function readIn(
+  ctx: RulesContext,
+  runId: string,
+  sessionKey = PIP_MAIN,
+): Promise<{ record: Decision; text: string }> {
+  const record = await eventually(
+    `the read of run ${runId}`,
+    async () =>
+      (await decisionsOf(ctx, { agentId: "pip", runId, limit: 5 })).find((r) => r.tool === "read"),
+    LONG_RUN_MS,
+  );
+  const text = await eventually(
+    `the read result of run ${runId}`,
+    async () => {
+      const history = answered(
+        await call(ctx.clients.admin, "chat.history", { sessionKey, limit: 80 }),
+        "Pip's task",
+      );
+      const mine = ((history.messages ?? []) as JsonRecord[]).find(
+        (m) => m.role === "toolResult" && isResultOfCall(m, record.callId),
+      );
+      return mine ? JSON.stringify(mine.content ?? "") : undefined;
+    },
+    LONG_RUN_MS,
+  );
+  return { record, text };
+}
+
+/** A run's read was refused before any card, naming Marlow, and no client received a card for it. */
+async function refusedForMarlow(
+  ctx: RulesContext,
+  since: Record<RulesClient, number>,
+  runId: string,
+  what: string,
+): Promise<{ record: Decision; text: string }> {
+  const read = await readIn(ctx, runId);
+  same(cardsSeen(ctx, since, runId), [], `who received a card for ${what}`);
+  same([read.record.decision, read.record.answer], ["ask", "cancelled"], `${what}'s read`);
+  expect(
+    read.text.includes(BOT_RUN_REFUSAL) &&
+      read.text.includes("started by a message from bot marlow."),
+    `${what}'s read result: ${read.text.slice(0, 300)}`,
+  );
+  return read;
+}
+
+/** A run's read raised the plugin's card on the person's device (the check denied it). */
+async function askedThePerson(
+  ctx: RulesContext,
+  since: Record<RulesClient, number>,
+  runId: string,
+  what: string,
+): Promise<void> {
+  const { record: asked } = await readIn(ctx, runId);
+  // The record is found as soon as the card is raised; its answer comes with the denial.
+  const record = await eventually(
+    `the answer to ${what}'s card`,
+    async () =>
+      (await decisionsOf(ctx, { agentId: "pip", runId, limit: 5 })).find(
+        (r) => r.id === asked.id && r.answer != null,
+      ),
+    LONG_RUN_MS,
+  );
+  same([record.decision, record.answer], ["ask", "deny"], `${what}'s read`);
+  const seen = cardsSeen(ctx, since, runId);
+  expect(
+    seen.includes("interactive"),
+    `${what}'s card reached ${show(seen)}, not the person's device`,
+  );
 }
 
 /** Turn approval forwarding on with no destination, so nothing is delivered anywhere. */
@@ -1314,93 +1461,212 @@ export const RULES_CHECKS: RulesCheck[] = [
     },
   },
   {
-    name: "a bot's message waiting behind a person's run, with a person's message after it, still starts a run that asks no one",
+    name: "a bot's message waiting behind a person's run, then a person's message steered into that run: neither run asks anyone",
     covers: ["#slow-tool", "#message-read", "#read"],
     async run(ctx, world) {
-      // The gateway writes a waiting message when it is queued, not when its run starts, so the
-      // run Marlow's message starts is not the latest message's: the plugin hands it Marlow's.
+      // The first review's sequence. The person's message steers into the busy run, which
+      // Marlow's message reached first: that run counts as Marlow's from then on.
       await save(ctx, "pip", [{ action: "ask", tools: ["read"] }]);
-      const PIP_MAIN = "agent:pip:main";
-      world.keys.add(PIP_MAIN);
-      for (const op of Object.values(ctx.clients)) {
-        await op.request("sessions.messages.subscribe", { key: PIP_MAIN }).catch(() => {});
-      }
+      await pipMain(ctx, world);
       const since = marks(ctx);
-      const toolStart = (runId: string, name?: string) => (e: GatewayEvent) =>
-        e.event === "agent" &&
-        rec(e.payload).runId === runId &&
-        rec(e.payload).stream === "tool" &&
-        rec(rec(e.payload).data).phase === "start" &&
-        (name === undefined || rec(rec(e.payload).data).name === name);
-      // A person's run keeps Pip busy.
-      const busy = await start(ctx, PIP_MAIN, "#slow-tool 20");
-      await ctx.clients.interactive.waitFor(
-        "Pip's slow tool",
-        toolStart(busy),
-        60_000,
-        since.interactive,
-      );
-      // Marlow's message to Pip waits behind it; a person's message to Pip waits after that.
-      const marlowKey = await task(ctx, world, "marlow", "queued-read");
-      const marlowRun = await start(ctx, marlowKey, "#message-read");
-      await ctx.clients.interactive.waitFor(
-        "Marlow's send",
-        toolStart(marlowRun, "sessions_send"),
-        60_000,
-        since.interactive,
-      );
-      await sleep(3000);
-      await start(ctx, PIP_MAIN, "#read");
-      // The person's later message is the person's: its read asks the person's device, which
-      // denies it as it comes. (A card for a run a bot's message started never reaches that
-      // device; Marlow's send waits for Pip's reply, so the card is answered meanwhile.)
-      const personCard = ctx.clients.interactive
-        .waitFor(
-          "the card of the person's later message",
-          (e) => e.event === REQUESTED && rec(rec(e.payload).request).sessionKey === PIP_MAIN,
-          180_000,
-          since.interactive,
-        )
-        .then(async (card) => {
-          await resolve(ctx, String(rec(card.payload).id), "deny");
-          return rec(rec(card.payload).request);
-        });
-      // Its failure is reported where it is awaited, not as an unhandled rejection meanwhile.
-      personCard.catch(() => undefined);
-      const send = (await finish(ctx, marlowRun, 180_000)).calls[0];
-      const recipientRunId = send?.details.runId;
-      expect(
-        ranOk(send) && typeof recipientRunId === "string" && recipientRunId.length > 0,
-        `Marlow's send named no run: ${show(send)}`,
-      );
-      expect(
-        (await personCard).runId !== recipientRunId,
-        "the person's device received a card for the run Marlow's message started",
-      );
-      const record = await eventually(
-        "the decision record of Marlow's run in Pip's task",
-        async () =>
-          (await decisionsOf(ctx, { agentId: "pip", runId: recipientRunId, limit: 5 })).find(
-            (r) => r.tool === "read",
-          ),
-      );
-      same(cardsSeen(ctx, since, recipientRunId), [], "who received a card for Marlow's run");
-      same([record.decision, record.answer], ["ask", "cancelled"], "Marlow's run's read");
-      const text = await eventually("the read result of Marlow's run", async () => {
-        const history = answered(
-          await call(ctx.clients.admin, "chat.history", { sessionKey: PIP_MAIN, limit: 40 }),
-          "Pip's main task",
+      const stopDenying = denyAsTheyCome(ctx, since);
+      try {
+        const busy = await start(ctx, PIP_MAIN, "#slow-tool 20");
+        await toolStarted(ctx, busy, since);
+        const marlowRun = await start(
+          ctx,
+          await task(ctx, world, "marlow", "queued"),
+          "#message-read",
         );
-        const mine = ((history.messages ?? []) as JsonRecord[]).find(
-          (m) => m.role === "toolResult" && isResultOfCall(m, record.callId),
+        await toolStarted(ctx, marlowRun, since, "sessions_send");
+        await sleep(3000);
+        await start(ctx, PIP_MAIN, "#read");
+        const recipient = await sentRun(ctx, marlowRun);
+        await finish(ctx, busy, LONG_RUN_MS);
+        await refusedForMarlow(ctx, since, recipient, "Marlow's run in Pip's task");
+        await refusedForMarlow(
+          ctx,
+          since,
+          busy,
+          "the person's busy run, which Marlow's message reached",
         );
-        return mine ? JSON.stringify(mine.content ?? "") : undefined;
-      });
-      expect(
-        text.includes(BOT_RUN_REFUSAL) && text.includes("started by a message from bot marlow."),
-        `the read result of Marlow's run: ${text.slice(0, 300)}`,
-      );
-      await finish(ctx, busy);
+        same(cardsSeen(ctx, since), [], "who received a card");
+      } finally {
+        await stopDenying();
+      }
+    },
+  },
+  {
+    name: "a person's messages queued around a bot's: the busy run, the bot's run and every run starting before it ask no one; the person's run after it asks",
+    covers: ["#slow-tool", "#message-read", "#read"],
+    async run(ctx, world) {
+      // The confirming review's sequence: the person queues behind their own busy run,
+      // Marlow's message arrives, the person queues again ("Queue after this turn").
+      await save(ctx, "pip", [{ action: "ask", tools: ["read"] }]);
+      const startedAt = Date.now();
+      await pipMain(ctx, world);
+      const since = marks(ctx);
+      const stopDenying = denyAsTheyCome(ctx, since);
+      try {
+        const busy = await start(ctx, PIP_MAIN, "#slow-tool 15 #read");
+        await toolStarted(ctx, busy, since);
+        await start(ctx, PIP_MAIN, "#read", { queueMode: "followup" });
+        await sleep(1000);
+        const marlowRun = await start(
+          ctx,
+          await task(ctx, world, "marlow", "queued"),
+          "#message-read",
+        );
+        await toolStarted(ctx, marlowRun, since, "sessions_send");
+        await sleep(1500);
+        await start(ctx, PIP_MAIN, "#read", { queueMode: "followup" });
+        const recipient = await sentRun(ctx, marlowRun);
+        await finish(ctx, busy, LONG_RUN_MS);
+        // The busy run's read comes after Marlow's message reached it.
+        await refusedForMarlow(
+          ctx,
+          since,
+          busy,
+          "the person's busy run, which Marlow's message reached",
+        );
+        const marlows = await refusedForMarlow(ctx, since, recipient, "Marlow's run in Pip's task");
+        // The person's two queued messages: the gateway gives a queued run an id of its own
+        // on 2026.10.6, so they are told apart by when their reads came. 2026.11.10 runs the
+        // person's first one before Marlow's, while Marlow's message waits: it asks no one.
+        // 2026.10.6 runs Marlow's first: both of the person's then ask.
+        const reads = (await decisionsOf(ctx, { agentId: "pip", sessionKey: PIP_MAIN, limit: 20 }))
+          .filter(
+            (r) =>
+              r.tool === "read" &&
+              Number(r.at) >= startedAt &&
+              r.runId !== busy &&
+              r.runId !== recipient,
+          )
+          .sort((x, y) => Number(x.at) - Number(y.at));
+        same(reads.length, 2, "the reads of the person's queued messages");
+        const [first, last] = reads as [Decision, Decision];
+        if (Number(first.at) < Number(marlows.record.at)) {
+          await refusedForMarlow(
+            ctx,
+            since,
+            String(first.runId),
+            "the person's run before Marlow's",
+          );
+        } else {
+          await askedThePerson(ctx, since, String(first.runId), "the person's first queued run");
+        }
+        await askedThePerson(ctx, since, String(last.runId), "the person's run after Marlow's");
+      } finally {
+        await stopDenying();
+      }
+    },
+  },
+  {
+    name: "a bot's message steered into a person's run: that run asks no one, and the person's next run asks",
+    covers: ["#slow-tool", "#message-steer-read", "#read"],
+    async run(ctx, world) {
+      await save(ctx, "pip", [{ action: "ask", tools: ["read"] }]);
+      await pipMain(ctx, world);
+      const since = marks(ctx);
+      const stopDenying = denyAsTheyCome(ctx, since);
+      try {
+        const busy = await start(ctx, PIP_MAIN, "#slow-tool 30");
+        await toolStarted(ctx, busy, since);
+        const marlowRun = await start(
+          ctx,
+          await task(ctx, world, "marlow", "steer"),
+          "#message-steer-read",
+        );
+        const send = (await finish(ctx, marlowRun, LONG_RUN_MS)).calls[0];
+        same(
+          [send?.details.status, send?.details.targetDisposition],
+          ["accepted", "steered"],
+          `the gateway's answer to Marlow's steer: ${show(send?.details)}`,
+        );
+        await finish(ctx, busy, LONG_RUN_MS);
+        // The busy run makes the read Marlow's message asked for.
+        await refusedForMarlow(ctx, since, busy, "the person's run Marlow's message steered into");
+        // The send's result let Marlow's mark go: the person's next run is the person's.
+        const next = await start(ctx, PIP_MAIN, "#read");
+        await finish(ctx, next, LONG_RUN_MS);
+        await askedThePerson(ctx, since, next, "the person's next run");
+      } finally {
+        await stopDenying();
+      }
+    },
+  },
+  {
+    name: "two bots' messages waiting behind a person's run: the busy run and each bot's run ask no one; the person's run after asks",
+    covers: ["#slow-tool", "#message-read", "#read"],
+    async run(ctx, world) {
+      await save(ctx, "pip", [{ action: "ask", tools: ["read"] }]);
+      await pipMain(ctx, world);
+      const since = marks(ctx);
+      const stopDenying = denyAsTheyCome(ctx, since);
+      try {
+        const busy = await start(ctx, PIP_MAIN, "#slow-tool 15 #read");
+        await toolStarted(ctx, busy, since);
+        const senders: string[] = [];
+        for (const tag of ["first", "second"]) {
+          const run = await start(ctx, await task(ctx, world, "marlow", tag), "#message-read");
+          await toolStarted(ctx, run, since, "sessions_send");
+          senders.push(run);
+        }
+        const recipients = [];
+        for (const run of senders) recipients.push(await sentRun(ctx, run));
+        await finish(ctx, busy, LONG_RUN_MS);
+        await refusedForMarlow(ctx, since, busy, "the person's busy run");
+        for (const [i, run] of recipients.entries()) {
+          await refusedForMarlow(ctx, since, run, `the run of Marlow's message ${i + 1}`);
+        }
+        const next = await start(ctx, PIP_MAIN, "#read");
+        await finish(ctx, next, LONG_RUN_MS);
+        await askedThePerson(ctx, since, next, "the person's run after both");
+      } finally {
+        await stopDenying();
+      }
+    },
+  },
+  {
+    name: "a task a person's run handed off: its message is this bot's own, not another bot's, so its run's read is asked about",
+    covers: ["#hand-off-read"],
+    async run(ctx, world) {
+      await save(ctx, "pip", [{ action: "ask", tools: ["read"] }]);
+      const since = marks(ctx);
+      const stopDenying = denyAsTheyCome(ctx, since);
+      try {
+        const parent = await start(
+          ctx,
+          await task(ctx, world, "pip", "hand-off"),
+          "#hand-off-read",
+        );
+        const spawned = (await finish(ctx, parent, LONG_RUN_MS)).calls[0];
+        const child = String(spawned?.details.childSessionKey ?? "");
+        expect(ranOk(spawned) && child.startsWith("agent:pip:"), `the hand-off: ${show(spawned)}`);
+        world.keys.add(child);
+        const record = await eventually(
+          "the read of the handed-off task",
+          async () =>
+            (await decisionsOf(ctx, { agentId: "pip", sessionKey: child, limit: 5 })).find(
+              (r) => r.tool === "read",
+            ),
+          LONG_RUN_MS,
+        );
+        const { text } = await readIn(ctx, String(record.runId), child);
+        // The plugin asks: 2026.11.10 raises the card (to admin, as the run has no device),
+        // which the check denies; 2026.10.6 cannot raise a card for a run no device started.
+        same(record.decision, "ask", "the handed-off task's read");
+        expect(
+          !text.includes(BOT_RUN_REFUSAL),
+          `the handed-off read was refused as a bot's: ${text.slice(0, 300)}`,
+        );
+        expect(
+          text.includes(shape().version === "2026.10.6" ? GATEWAY_UNAVAILABLE : DENIED),
+          `the handed-off read's result: ${text.slice(0, 300)}`,
+        );
+      } finally {
+        await stopDenying();
+      }
     },
   },
   {

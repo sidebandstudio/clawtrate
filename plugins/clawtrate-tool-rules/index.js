@@ -9,13 +9,15 @@
 //                      a Never blocks with the rule named, an Ask and "Ask when
 //                      nothing else decides" ask through the gateway's own
 //                      approval card, Allow once or Deny, and refuse in a run
-//                      another bot's message started; it never rewrites a call
+//                      another bot's message started or reached; it never
+//                      rewrites a call
 //   before_tool_call   after Allow once, refuses the call if its rule changed
 //                      while the card waited (where there is no trusted policy,
 //                      it decides instead)
-//   before_message_write, model_call_started
-//                      note which bot's message started a run (the message's
-//                      role and the gateway's mark on it, never its text)
+//   before_message_write, model_call_started, after_tool_call
+//                      note which bot's message started or reached a run (the
+//                      message's role, the gateway's marks on it and on a bot's
+//                      sessions_send result, never a message's text)
 //   gateway methods    clawtrate-tool-rules.status, .get, .decisions.list
 //                      (operator.read); .set (operator.admin)
 //   event              plugin.clawtrate-tool-rules.changed, empty (operator.read)
@@ -83,7 +85,10 @@ export const POLICY_ID = "rules";
  * what was shown, each; the oldest is forgotten first.
  */
 export const MEMORY_LIMIT = 1000;
-/** How many bots' messages one task holds waiting for a run; the oldest is let go first. */
+/**
+ * How many bots' messages one task holds waiting for their runs; past it the
+ * oldest is let go, and its task and run are kept among the forgotten.
+ */
 export const PENDING_LIMIT = 16;
 /** A bot's id as the gateway writes it in a task's key; anything else is not named. */
 const BOT_ID = /^[a-z0-9][a-z0-9_-]{0,63}$/;
@@ -116,15 +121,19 @@ function sharedState(dir, options) {
       active: new Map(),
       /**
        * Who started each run, and who wrote each task's latest message: null for a person,
-       * { bot } for another bot. `pending` holds, per task, the bots' messages no run has
-       * started from yet; `current` each task's latest run; `forgotten` the runs and tasks
-       * whose bot's mark was let go past the limit, which count as a bot's.
+       * { bot } for another bot. `pending` holds, per task, the bots' messages waiting,
+       * `{ bot, run }` with the run each names (`next` for one kept only for the next run);
+       * `current` each task's latest run; `times` when a task's person last wrote and its
+       * latest run was noted, on `clock`; `forgotten` the runs and tasks whose bot's mark
+       * was let go past a bound, which count as a bot's.
        */
       origins: {
         sessions: new Map(),
         runs: new Map(),
         current: new Map(),
         pending: new Map(),
+        times: new Map(),
+        clock: 0,
         forgotten: new Map(),
       },
       /** The cards answered Allow once, by run and call, with the source each card showed. */
@@ -438,12 +447,25 @@ export function createToolRules(api, options = {}) {
   // ---- who started a run ----
 
   // The gateway marks a task's user message that came from another task
-  // (`provenance.kind: "inter_session"`, with that task's key). The plugin
-  // reads only that mark and the message's role, never its text, and keeps
-  // only the sending bot's id. A message waits in its task until a run starts
-  // (the gateway writes a queued message when it is queued), so a bot's
-  // message is handed to the next run that starts in that task, whatever was
-  // written after it; a run is noted at its first model call.
+  // (`provenance.kind: "inter_session"`, with that task's key), and names the
+  // run each user message is to start (`idempotencyKey` `<run id>:user`). The
+  // plugin reads only those, the message's role and, after a bot's
+  // `sessions_send`, the gateway's account of where the message went; never a
+  // message's text. It keeps the sending bot's id and that run id.
+  //
+  // A bot's message in a task:
+  //   - makes the run under way there that bot's (the gateway may steer the
+  //     message into it, and the plugin cannot tell a steer from a message
+  //     that waits);
+  //   - waits until the run it names starts, which is that bot's;
+  //   - meanwhile, every other run that starts in the task counts as that
+  //     bot's too;
+  //   - is let go when its run starts, or when the sending bot's
+  //     `sessions_send` result says the gateway steered it into a run under way
+  //     or its run has answered.
+  // A run is noted at its first model call. Past a bound, a mark is let go only
+  // after its task and its run are kept among the forgotten, which count as a
+  // bot's.
   const { origins, approved, seen } = shared;
   const { forgotten } = origins;
 
@@ -467,6 +489,30 @@ export function createToolRules(api, options = {}) {
     return from === undefined ? { bot: origin.bot } : from;
   }
 
+  /** A bot's mark let go past a bound: its task and its run still count as that bot's. */
+  const forget = (sessionKey, mark) => {
+    remember(forgotten, sessionKey, { bot: mark.bot });
+    if (mark.run) remember(forgotten, mark.run, { bot: mark.bot });
+  };
+
+  /** Keep a task's waiting marks; past MEMORY_LIMIT tasks, the oldest task's are forgotten. */
+  const keepWaiting = (sessionKey, marks) => {
+    origins.pending.delete(sessionKey);
+    if (marks.length === 0) return;
+    origins.pending.set(sessionKey, marks);
+    if (origins.pending.size <= MEMORY_LIMIT) return;
+    const [oldest, theirs] = origins.pending.entries().next().value;
+    origins.pending.delete(oldest);
+    for (const mark of theirs) forget(oldest, mark);
+  };
+
+  /** When a task's person last wrote and its latest run was noted, on one clock. */
+  const stamp = (sessionKey, what) => {
+    origins.clock += 1;
+    const times = origins.times.get(sessionKey) ?? { person: 0, noted: 0 };
+    remember(origins.times, sessionKey, { ...times, [what]: origins.clock });
+  };
+
   function noteMessage(event, ctx) {
     try {
       const message = event?.message;
@@ -475,53 +521,102 @@ export function createToolRules(api, options = {}) {
       if (!sessionKey) return undefined;
       const origin = originOf(message, sessionKey);
       remember(origins.sessions, sessionKey, origin, forgotten);
-      if (origin) {
-        const waiting = origins.pending.get(sessionKey) ?? [];
-        // A task's queue is bounded too; a mark let go makes the task count as a bot's.
-        if (waiting.length >= PENDING_LIMIT) waiting.shift();
-        remember(origins.pending, sessionKey, [...waiting, origin], forgotten);
+      if (!origin) {
+        stamp(sessionKey, "person");
+        return undefined;
       }
+      // The run under way may take it: from now on that run is this bot's.
+      const running = origins.current.get(sessionKey);
+      if (running !== undefined && !noteOf(origins.runs, running)) {
+        remember(origins.runs, running, origin, forgotten);
+      }
+      const named = /^(.{1,200}):user$/s.exec(text(message.idempotencyKey) ?? "")?.[1] ?? null;
+      const waiting = [...(origins.pending.get(sessionKey) ?? [])];
+      if (waiting.length >= PENDING_LIMIT) forget(sessionKey, waiting.shift());
+      keepWaiting(sessionKey, [...waiting, { bot: origin.bot, run: named }]);
     } catch {
       // Noting who wrote is never a reason to stop a write.
     }
     return undefined;
   }
 
-  /** The bot's message a run starts from, taken from its task's queue, or undefined. */
-  const takePending = (sessionKey) => {
-    const waiting = origins.pending.get(sessionKey);
-    if (!waiting || waiting.length === 0) {
-      // A task whose bot's mark was let go: its next run counts as a bot's, once.
-      const lost = forgotten.get(sessionKey);
-      if (lost) forgotten.delete(sessionKey);
-      return lost;
+  /**
+   * Who a run that starts now stands for: the bot whose message names it;
+   * else, while a bot's message waits in its task, that bot (a mark kept only
+   * for the next run is used up); else a task whose mark was forgotten, once;
+   * else a person.
+   */
+  function originAtStart(sessionKey, runId) {
+    const waiting = origins.pending.get(sessionKey) ?? [];
+    const own = waiting.find((mark) => mark.run === runId);
+    if (own) {
+      keepWaiting(
+        sessionKey,
+        waiting.filter((mark) => mark !== own),
+      );
+      return { bot: own.bot };
     }
-    const [first, ...rest] = waiting;
-    if (rest.length > 0) origins.pending.set(sessionKey, rest);
-    else origins.pending.delete(sessionKey);
-    return first;
-  };
+    if (waiting.length > 0) {
+      keepWaiting(
+        sessionKey,
+        waiting.filter((mark) => !mark.next),
+      );
+      return { bot: waiting[0].bot };
+    }
+    const lost = forgotten.get(sessionKey);
+    if (lost) forgotten.delete(sessionKey);
+    return lost ?? null;
+  }
 
   function noteRun(event, ctx) {
     const runId = text(ctx?.runId) ?? text(event?.runId);
     const sessionKey = text(ctx?.sessionKey) ?? text(event?.sessionKey);
-    if (!runId || !sessionKey || origins.runs.has(runId) || forgotten.has(runId)) return;
-    const origin = takePending(sessionKey) ?? origins.sessions.get(sessionKey) ?? null;
-    remember(origins.runs, runId, origin, forgotten);
+    if (!runId || !sessionKey || origins.runs.has(runId)) return;
     remember(origins.current, sessionKey, runId);
+    stamp(sessionKey, "noted");
+    // A bot's run let go past the limit stays among the forgotten.
+    if (forgotten.has(runId)) return;
+    remember(origins.runs, runId, originAtStart(sessionKey, runId), forgotten);
   }
 
-  /** Who started a run: its note, else its task's waiting bot's message, else its latest. */
+  /**
+   * A bot's `sessions_send` result: where the gateway put the message. Steered
+   * into a run under way (which its write made the bot's), or answered, it
+   * starts no run, so its mark is let go. A person's message written since the
+   * task's latest run was noted may have started a run not noted yet, into
+   * which the gateway steered it: then the next run noted is the bot's too.
+   */
+  function noteSent(event) {
+    try {
+      if (event?.toolName !== "sessions_send" || !isPlainObject(event.result)) return undefined;
+      const details = isPlainObject(event.result.details) ? event.result.details : {};
+      const sessionKey = text(details.sessionKey);
+      const run = text(details.runId);
+      const steered = details.status === "accepted" && details.targetDisposition === "steered";
+      if (!sessionKey || !run || !(steered || details.status === "ok")) return undefined;
+      const waiting = origins.pending.get(sessionKey) ?? [];
+      const mark = waiting.find((m) => m.run === run);
+      if (!mark) return undefined;
+      const rest = waiting.filter((m) => m !== mark);
+      const times = origins.times.get(sessionKey);
+      if (steered && (!times || times.person > times.noted)) {
+        rest.push({ bot: mark.bot, run: null, next: true });
+      }
+      keepWaiting(sessionKey, rest);
+    } catch {
+      // Noting where a message went is never a reason to fail a call.
+    }
+    return undefined;
+  }
+
+  /** Who started a run: its note, else (no model call seen) as if it started now. */
   const startedBy = (runId, sessionKey) => {
     const note = runId ? noteOf(origins.runs, runId) : undefined;
     if (note !== undefined) return note;
     if (!sessionKey) return null;
-    return (
-      origins.pending.get(sessionKey)?.[0] ??
-      forgotten.get(sessionKey) ??
-      origins.sessions.get(sessionKey) ??
-      null
-    );
+    const waiting = origins.pending.get(sessionKey) ?? [];
+    const mark = waiting.find((m) => m.run === runId) ?? waiting[0];
+    return mark ? { bot: mark.bot } : (forgotten.get(sessionKey) ?? null);
   };
 
   const approvalKey = (runId, toolCallId) =>
@@ -642,9 +737,10 @@ export function createToolRules(api, options = {}) {
   /**
    * The ordinary hook: after the policy's card was answered Allow once, the
    * rules are looked at again; a call the policy decided is left alone; any
-   * other call, one the policy never saw (a gateway that did not take it, as
-   * both versions do silently for a plugin not explicitly enabled), the hook
-   * decides itself.
+   * other call, one the policy never saw (the gateway has no trusted policies,
+   * or did not take this one; for a plugin not explicitly enabled both
+   * versions log a diagnostic, yet still ran the policy on a development
+   * gateway, so `decidedBy` said `policy`), the hook decides itself.
    */
   function afterPolicy(event, ctx) {
     const { base, toolCallId } = callOf(event, ctx);
@@ -663,8 +759,8 @@ export function createToolRules(api, options = {}) {
   // a card is answered, and decides what the policy did not see. None of it
   // needs conversation access.
   let hookRegistered = false;
-  // A gateway that does not take the policy says so in its own log and does not
-  // throw; the hook then decides every call (`status.hook.decidedBy: "hook"`).
+  // A gateway that does not take the policy does not throw; where the policy
+  // never runs, the hook decides every call (`status.hook.decidedBy: "hook"`).
   if (typeof api.registerTrustedToolPolicy === "function") {
     api.registerTrustedToolPolicy({
       id: POLICY_ID,
@@ -677,6 +773,7 @@ export function createToolRules(api, options = {}) {
     api.on("before_tool_call", afterPolicy);
     api.on("before_message_write", noteMessage);
     api.on("model_call_started", noteRun);
+    api.on("after_tool_call", noteSent);
     hookRegistered = true;
   }
 

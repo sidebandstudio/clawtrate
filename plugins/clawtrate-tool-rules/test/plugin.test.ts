@@ -12,6 +12,7 @@ import plugin, {
   APPROVAL_TIMEOUT_MS,
   DESCRIPTION_MAX,
   MEMORY_LIMIT,
+  PENDING_LIMIT,
   PLUGIN_VERSION,
   TITLE_MAX,
   TURNED_OFF_REASON,
@@ -66,11 +67,13 @@ describe("registration", () => {
       readFileSync(join(import.meta.dirname, "..", "openclaw.plugin.json"), "utf8"),
     );
     expect(manifest.contracts).toEqual({ trustedToolPolicies: ["rules"] });
-    // None of these is a hook the gateway holds back without conversation access.
+    // None of these is a hook the gateway holds back without conversation access (both
+    // versions hold back agent_end, which is why the plugin does not use it).
     expect(h.hooks.map((hook) => [hook.name, hook.opts])).toEqual([
       ["before_tool_call", {}],
       ["before_message_write", {}],
       ["model_call_started", {}],
+      ["after_tool_call", {}],
     ]);
   });
 
@@ -541,30 +544,44 @@ describe("the hook", () => {
   });
 });
 
-describe("a run another bot's message started (#606)", () => {
+describe("a run another bot's message started or reached (#606)", () => {
   const PIP = "agent:pip:main";
-  const fromMarlow = {
+  const MARLOW = "agent:marlow:main";
+  /** A message from another task, naming the run it is to start, as the gateway writes it. */
+  const fromBot = (run: string, source = MARLOW, sourceTool = "sessions_send") => ({
     role: "user",
     content: "read your notes",
-    provenance: {
-      kind: "inter_session",
-      sourceSessionKey: "agent:marlow:main",
-      sourceTool: "sessions_send",
-    },
+    idempotencyKey: `${run}:user`,
+    provenance: { kind: "inter_session", sourceSessionKey: source, sourceTool },
+  });
+  const fromMarlow = (run: string) => fromBot(run);
+  const fromPerson = (run: string) => ({
+    role: "user",
+    content: "hello",
+    idempotencyKey: `${run}:user`,
+    provenance: { kind: "external_user" },
+  });
+  const read = (h: ReturnType<typeof load>, runId: string, sessionKey = PIP) =>
+    h.before("pip", "read", { path: "AGENTS.md" }, { runId, sessionKey, toolCallId: `${runId}-c` });
+  /** A person's message that starts its run at once. */
+  const personRun = (h: ReturnType<typeof load>, run: string, key = PIP) => {
+    h.write(key, fromPerson(run));
+    h.modelCall(run, key);
   };
-  const fromPerson = { role: "user", content: "hello", provenance: { kind: "external_user" } };
-  const read = (h: ReturnType<typeof load>, runId: string) =>
-    h.before(
-      "pip",
-      "read",
-      { path: "AGENTS.md" },
-      { runId, sessionKey: PIP, toolCallId: `${runId}-c` },
-    );
+  const asks = (h: ReturnType<typeof load>, run: string, key = PIP) =>
+    expect(read(h, run, key)?.requireApproval).toBeDefined();
+  const refusedFor = (h: ReturnType<typeof load>, run: string, bot = "marlow", key = PIP) => {
+    const result = read(h, run, key);
+    expect(result?.requireApproval).toBeUndefined();
+    expect(result?.blockReason).toContain(`started by a message from bot ${bot}.`);
+  };
+  const pending = (h: ReturnType<typeof load>, key = PIP) =>
+    h.handle.shared.origins.pending.get(key) ?? [];
 
   it("refuses an Ask without a card, naming the bot, and records the ask as cancelled", async () => {
     const h = host();
     await h.save("pip", [{ action: "ask", tools: ["read"] }]);
-    h.write(PIP, fromMarlow);
+    h.write(PIP, fromMarlow("run-b"));
     h.modelCall("run-b", PIP);
     const result = read(h, "run-b");
     expect(result?.requireApproval).toBeUndefined();
@@ -581,7 +598,7 @@ describe("a run another bot's message started (#606)", () => {
   it("refuses the fallback's ask and the lost rules' ask the same way, and still blocks a Never as a Never", async () => {
     const h = host();
     await h.save("pip", [{ action: "never", tools: ["write"] }], true);
-    h.write(PIP, fromMarlow);
+    h.write(PIP, fromMarlow("run-b"));
     h.modelCall("run-b", PIP);
     expect(read(h, "run-b")?.blockReason).toMatch(
       /"Ask when nothing else decides" is on for pip, and this run was started by a message from bot marlow/,
@@ -590,81 +607,205 @@ describe("a run another bot's message started (#606)", () => {
     expect(never?.blockReason).toMatch(/^Blocked by Clawtrate's rules plugin: pip's rule/);
     writeFileSync(rulesFile(h.stateDir), "{ broken");
     const lost = open({ stateDir: h.stateDir });
-    lost.write(PIP, fromMarlow);
+    lost.write(PIP, fromMarlow("run-l"));
     lost.modelCall("run-l", PIP);
     expect(read(lost, "run-l")?.blockReason).toMatch(
       /its rules could not be read, so it asks before every call, and this run was started by a message from bot marlow/,
     );
   });
 
-  it("asks in a run a person's message started, also after a bot's run in the same task", async () => {
+  it("asks in a person's run once the bot's message has started its own run", async () => {
     const h = host();
     await h.save("pip", [{ action: "ask", tools: ["read"] }]);
-    h.write(PIP, fromMarlow);
+    h.write(PIP, fromMarlow("run-b"));
     h.modelCall("run-b", PIP);
-    h.write(PIP, fromPerson);
-    h.modelCall("run-p", PIP);
-    expect(read(h, "run-p")?.requireApproval).toBeDefined();
+    expect(pending(h)).toEqual([]);
+    personRun(h, "run-p");
+    asks(h, "run-p");
     // The bot's run stays a bot's run.
-    expect(read(h, "run-b")?.block).toBe(true);
+    refusedFor(h, "run-b");
   });
 
-  it("hands a bot's message waiting behind a person's run to the next run, not to a later person's message", async () => {
+  it("a bot's message queued behind a person's: the run under way, every run starting before the bot's own, and the bot's own count as the bot's; a run after it asks", async () => {
+    // The order 2026.11.10 runs a queue in: the person's, the bot's, the person's.
     const h = host();
     await h.save("pip", [{ action: "ask", tools: ["read"] }]);
-    // A person's run is busy; Marlow's message waits, then a person's message waits after it.
-    h.write(PIP, fromPerson);
-    h.modelCall("run-p1", PIP);
-    h.write(PIP, fromMarlow);
-    h.write(PIP, fromPerson);
-    // The person's busy run keeps its cards: the waiting message did not start it.
-    expect(read(h, "run-p1")?.requireApproval).toBeDefined();
-    // The next run is Marlow's message's, whatever was written after it.
-    h.modelCall("run-m", PIP);
-    expect(read(h, "run-m")?.blockReason).toMatch(/from bot marlow\./);
-    // The one after is the person's.
+    personRun(h, "run-p1");
+    asks(h, "run-p1");
+    h.write(PIP, fromPerson("run-p2"));
+    h.write(PIP, fromMarlow("run-m"));
+    h.write(PIP, fromPerson("run-p3"));
+    // The busy run may have taken Marlow's message (the gateway can steer it in).
+    refusedFor(h, "run-p1");
     h.modelCall("run-p2", PIP);
-    expect(read(h, "run-p2")?.requireApproval).toBeDefined();
+    refusedFor(h, "run-p2");
+    // Held across that run: it still waits for its own.
+    expect(pending(h)).toEqual([{ bot: "marlow", run: "run-m" }]);
+    h.modelCall("run-m", PIP);
+    refusedFor(h, "run-m");
+    expect(pending(h)).toEqual([]);
+    h.modelCall("run-p3", PIP);
+    asks(h, "run-p3");
+  });
+
+  it("a bot's queued message whose run starts first lets the person's queued runs ask", async () => {
+    // The order 2026.10.6 runs the same queue in: the bot's first.
+    const h = host();
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    personRun(h, "run-p1");
+    h.write(PIP, fromPerson("run-p2"));
+    h.write(PIP, fromMarlow("run-m"));
+    h.write(PIP, fromPerson("run-p3"));
+    h.modelCall("run-m", PIP);
+    refusedFor(h, "run-m");
+    h.modelCall("run-p2", PIP);
+    asks(h, "run-p2");
+    h.modelCall("run-p3", PIP);
+    asks(h, "run-p3");
+  });
+
+  it("a bot's message steered into a person's run makes that run the bot's, and is let go when the send says so", async () => {
+    const h = host();
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    personRun(h, "run-q1");
+    // Marlow steers: the message names a run of its own that never starts.
+    h.write(PIP, fromMarlow("run-s"));
+    refusedFor(h, "run-q1");
+    // Its send's result says where the gateway put it: a queued one keeps its mark.
+    h.sent(MARLOW, {
+      status: "accepted",
+      runId: "run-s",
+      sessionKey: PIP,
+      targetDisposition: "queued",
+    });
+    expect(pending(h)).toHaveLength(1);
+    h.sent(MARLOW, {
+      status: "accepted",
+      runId: "run-s",
+      sessionKey: PIP,
+      targetDisposition: "steered",
+    });
+    expect(pending(h)).toEqual([]);
+    refusedFor(h, "run-q1");
+    personRun(h, "run-q2");
+    asks(h, "run-q2");
+  });
+
+  it("a steer into a run not noted yet: the next run noted is the bot's, then the mark is gone", async () => {
+    const h = host();
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    personRun(h, "run-r1");
+    // A person's message is written; its run has not made a model call when Marlow steers.
+    h.write(PIP, fromPerson("run-r2"));
+    h.write(PIP, fromMarlow("run-s"));
+    h.sent(MARLOW, {
+      status: "accepted",
+      runId: "run-s",
+      sessionKey: PIP,
+      targetDisposition: "steered",
+    });
+    h.modelCall("run-r2", PIP);
+    refusedFor(h, "run-r2");
+    personRun(h, "run-r3");
+    asks(h, "run-r3");
+  });
+
+  it("a mark whose run never starts and whose send's result never comes keeps every run in the task the bot's", async () => {
+    const h = host();
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    personRun(h, "run-q1");
+    h.write(PIP, fromMarlow("run-s"));
+    for (const run of ["run-q2", "run-q3", "run-q4"]) {
+      personRun(h, run);
+      refusedFor(h, run);
+    }
+    // An answer from the bot's send lets it go: its run has ended.
+    h.sent(MARLOW, { status: "ok", runId: "run-s", sessionKey: PIP, reply: "done" });
+    personRun(h, "run-q5");
+    asks(h, "run-q5");
+  });
+
+  it("lets go only the mark a send's result names, in the task it names", async () => {
+    const h = host();
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    personRun(h, "run-q1");
+    h.write(PIP, fromMarlow("run-s"));
+    for (const details of [
+      { status: "accepted", runId: "run-other", sessionKey: PIP, targetDisposition: "steered" },
+      {
+        status: "accepted",
+        runId: "run-s",
+        sessionKey: "agent:pip:other",
+        targetDisposition: "steered",
+      },
+      { status: "timeout", runId: "run-s", sessionKey: PIP },
+      { status: "error", runId: "run-s", sessionKey: PIP, sentBeforeError: true },
+    ]) {
+      h.sent(MARLOW, details);
+      expect(pending(h)).toEqual([{ bot: "marlow", run: "run-s" }]);
+    }
+    // Another tool's result is not read.
+    h.hooks
+      .find((x) => x.name === "after_tool_call")!
+      .fn(
+        {
+          toolName: "message",
+          params: {},
+          result: { details: { status: "ok", runId: "run-s", sessionKey: PIP } },
+        },
+        { sessionKey: MARLOW },
+      );
+    expect(pending(h)).toHaveLength(1);
+  });
+
+  it("two bots' messages waiting: each bot's own run is its own, and any other run counts as the first's", async () => {
+    const h = host();
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    personRun(h, "run-p1");
+    h.write(PIP, fromMarlow("run-m"));
+    h.write(PIP, fromPerson("run-p2"));
+    h.write(PIP, fromBot("run-o", "agent:otto:main"));
+    h.modelCall("run-o", PIP);
+    refusedFor(h, "run-o", "otto");
+    h.modelCall("run-p2", PIP);
+    refusedFor(h, "run-p2", "marlow");
+    h.modelCall("run-m", PIP);
+    refusedFor(h, "run-m", "marlow");
+    personRun(h, "run-p3");
+    asks(h, "run-p3");
   });
 
   it("takes a run of this bot's own task's message as that task's run stands, and an unknown one as a bot's", async () => {
     const h = host();
     await h.save("pip", [{ action: "ask", tools: ["read"] }]);
     const SUB = "agent:pip:subagent:s1";
-    const back = (source: string) => ({
-      role: "user",
-      provenance: {
-        kind: "inter_session",
-        sourceSessionKey: source,
-        sourceTool: "subagent_announce",
-      },
-    });
+    const back = (source: string, run: string) => fromBot(run, source, "subagent_announce");
     // A person's hand-off: its report back starts a person's run.
-    h.write(SUB, fromPerson);
-    h.modelCall("run-s", SUB);
-    h.write(PIP, back(SUB));
+    personRun(h, "run-s", SUB);
+    h.write(PIP, back(SUB, "run-back"));
     h.modelCall("run-back", PIP);
-    expect(read(h, "run-back")?.requireApproval).toBeDefined();
+    asks(h, "run-back");
+    expect(pending(h)).toEqual([]);
     // A hand-off Marlow's message started stays Marlow's.
     const SUB2 = "agent:pip:subagent:s2";
-    h.write(SUB2, fromMarlow);
+    h.write(SUB2, fromMarlow("run-s2"));
     h.modelCall("run-s2", SUB2);
-    h.write(PIP, back(SUB2));
+    h.write(PIP, back(SUB2, "run-back2"));
     h.modelCall("run-back2", PIP);
-    expect(read(h, "run-back2")?.blockReason).toMatch(/from bot marlow\./);
+    refusedFor(h, "run-back2");
     // A task of its own the plugin knows nothing of counts as a bot's: this one.
-    h.write(PIP, back("agent:pip:subagent:unknown"));
+    h.write(PIP, back("agent:pip:subagent:unknown", "run-back3"));
     h.modelCall("run-back3", PIP);
-    expect(read(h, "run-back3")?.blockReason).toMatch(/from bot pip\./);
+    refusedFor(h, "run-back3", "pip");
   });
 
-  it("with no model call seen, a waiting bot's message decides before the latest message", async () => {
+  it("with no model call seen, a waiting bot's message decides, and nothing once its run started", async () => {
     const h = host();
     await h.save("pip", [{ action: "ask", tools: ["read"] }]);
-    h.write(PIP, fromMarlow);
-    h.write(PIP, fromPerson);
+    h.write(PIP, fromMarlow("run-m"));
+    h.write(PIP, fromPerson("run-p"));
     expect(read(h, "run-x")?.block).toBe(true);
-    // Once a run took it, the latest message decides.
+    expect(read(h, "run-m")?.block).toBe(true);
     h.modelCall("run-m", PIP);
     expect(read(h, "run-y")?.requireApproval).toBeDefined();
   });
@@ -678,23 +819,51 @@ describe("a run another bot's message started (#606)", () => {
       [`agent:${"m".repeat(65)}:main`, "another bot"],
       ["agent:otto-2:task", "bot otto-2"],
     ] as const) {
-      h.write(PIP, { ...fromMarlow, provenance: { kind: "inter_session", sourceSessionKey: key } });
-      h.modelCall(`run-${key.length}`, PIP);
-      expect(read(h, `run-${key.length}`)?.blockReason).toContain(
-        `started by a message from ${words}.`,
-      );
+      const run = `run-${key.length}`;
+      h.write(PIP, fromBot(run, key));
+      h.modelCall(run, PIP);
+      expect(read(h, run)?.blockReason).toContain(`started by a message from ${words}.`);
     }
+  });
+
+  it("past PENDING_LIMIT a mark let go still counts as a bot's, its run and its task", async () => {
+    const h = host();
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    personRun(h, "run-p1");
+    const runs = Array.from({ length: PENDING_LIMIT + 1 }, (_, i) => `run-m${i}`);
+    for (const run of runs) h.write(PIP, fromMarlow(run));
+    expect(pending(h)).toHaveLength(PENDING_LIMIT);
+    // The first mark was let go: its run and its task are kept among the forgotten.
+    expect(h.handle.shared.origins.forgotten.get("run-m0")).toEqual({ bot: "marlow" });
+    for (const run of runs) {
+      h.modelCall(run, PIP);
+      refusedFor(h, run);
+    }
+    // Every mark is used up; the forgotten task counts as a bot's for one more run.
+    personRun(h, "run-p2");
+    refusedFor(h, "run-p2");
+    personRun(h, "run-p3");
+    asks(h, "run-p3");
+  });
+
+  it("past MEMORY_LIMIT tasks waiting, the oldest task's marks are forgotten, not dropped", async () => {
+    const h = host();
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    h.write(PIP, fromMarlow("run-first"));
+    for (let i = 0; i < MEMORY_LIMIT; i += 1) h.write(`agent:pip:t${i}`, fromMarlow(`run-t${i}`));
+    const { origins } = h.handle.shared;
+    expect(origins.pending.size).toBe(MEMORY_LIMIT);
+    expect(origins.pending.has(PIP)).toBe(false);
+    h.modelCall("run-first", PIP);
+    refusedFor(h, "run-first");
   });
 
   it("past MEMORY_LIMIT lets a person's entries go first, and a bot's run it let go still counts as a bot's", async () => {
     const h = host();
     await h.save("pip", [{ action: "ask", tools: ["read"] }]);
-    h.write(PIP, fromMarlow);
+    h.write(PIP, fromMarlow("run-b"));
     h.modelCall("run-b", PIP);
-    for (let i = 0; i < MEMORY_LIMIT; i += 1) {
-      h.write(`agent:pip:t${i}`, fromPerson);
-      h.modelCall(`run-${i}`, `agent:pip:t${i}`);
-    }
+    for (let i = 0; i < MEMORY_LIMIT; i += 1) personRun(h, `run-${i}`, `agent:pip:t${i}`);
     const origins = h.handle.shared.origins;
     expect([origins.sessions.size, origins.runs.size, origins.current.size]).toEqual([
       MEMORY_LIMIT,
@@ -703,18 +872,18 @@ describe("a run another bot's message started (#606)", () => {
     ]);
     // Marlow's run outlived a thousand people's, and a person's message since does not change it.
     expect(origins.runs.get("run-b")).toEqual({ bot: "marlow" });
-    h.write(PIP, fromPerson);
+    h.write(PIP, fromPerson("run-p"));
     h.modelCall("run-b", PIP);
-    expect(read(h, "run-b")?.blockReason).toMatch(/from bot marlow\./);
+    refusedFor(h, "run-b");
     // With only bots' runs left, the oldest is let go and kept among the forgotten.
     for (let i = 0; i < MEMORY_LIMIT; i += 1) {
-      h.write(`agent:pip:b${i}`, fromMarlow);
+      h.write(`agent:pip:b${i}`, fromMarlow(`run-bot-${i}`));
       h.modelCall(`run-bot-${i}`, `agent:pip:b${i}`);
     }
     expect(origins.runs.has("run-b")).toBe(false);
     expect(origins.forgotten.size).toBeLessThanOrEqual(MEMORY_LIMIT);
     h.modelCall("run-b", PIP);
-    expect(read(h, "run-b")?.blockReason).toMatch(/from bot marlow\./);
+    refusedFor(h, "run-b");
   });
 });
 

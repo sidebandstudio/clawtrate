@@ -198,6 +198,20 @@ export function load(
     hook("model_call_started").fn({ runId, sessionKey }, { runId, sessionKey });
   }
 
+  /** A bot's sessions_send returned: its result's details, as the gateway tells after_tool_call. */
+  function sent(fromKey: string, details: Json): void {
+    hook("after_tool_call").fn(
+      {
+        toolName: "sessions_send",
+        params: {},
+        runId: "sender-run",
+        toolCallId: "sender-call",
+        result: { content: [{ type: "text", text: JSON.stringify(details) }], details },
+      },
+      { toolName: "sessions_send", sessionKey: fromKey, runId: "sender-run" },
+    );
+  }
+
   /** Save a scope's rules as an admin would, reading its version first. */
   async function save(scope: string, rules: Json[], fallback = false): Promise<Answer> {
     const got = await call("get", { scope });
@@ -221,6 +235,7 @@ export function load(
     answer,
     write,
     modelCall,
+    sent,
     save,
     stop: () => {
       services.forEach((service) => service.stop());
