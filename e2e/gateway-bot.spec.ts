@@ -1,9 +1,10 @@
 // The gateway's own bot (F-562) against this run's development gateways, through preview hosts
 // of this spec's own that start with "Show the gateway's own bot" at its default, off. On the
-// seeded instance Juniper is the gateway's own bot (`agents.list` `defaultId`) beside Otto, Marlow
-// and Pip. Every development instance declares all four bots, and the gateway removes a bot only
-// with `agents.delete`, so the check of a gateway whose only bot is its own starts an unseeded
-// instance of its own and deletes the other three there. That instance is recorded in a run
+// seeded instance the gateway's own bot (`agents.list` `defaultId`) is `main`, named "main", beside
+// Juniper, the Main Bot Clawtrate made, and Otto, Marlow and Pip. Every development instance
+// declares all five bots, and the gateway removes a bot only with `agents.delete`, so the check of
+// a gateway whose only bot is its own starts an unseeded instance of its own and deletes the other
+// four there. That instance is recorded in a run
 // record of this file's own before it starts, as e2e/setup.spec.ts does, so a run killed outright
 // is cleaned up by the next `pnpm e2e`. On the run's shared instances only what the app shows
 // changes: the checks put back the arrangement, the config and every task they made.
@@ -173,36 +174,38 @@ test("F-562: with other bots, the gateway's own bot is absent from the sidebar, 
   const own = mapAgents(await gatewayCall(INSTANCE, "agents.list", {})).find(
     (bot) => bot.id === defaultId,
   )!;
-  expect(own.name, "the seeded gateway's own bot").toBe("Juniper");
+  expect(own.name, "the seeded gateway's own bot").toBe("main");
   const page = await pairedPage(browser, INSTANCE);
   seeded = page;
 
   // Off, the default: the other bots, and no bot starred.
-  for (const name of ["Otto", "Marlow", "Pip"]) await expect(botRow(page, name)).toBeVisible();
-  await expect(botRow(page, "Juniper")).toHaveCount(0);
+  for (const name of ["Juniper", "Otto", "Marlow", "Pip"])
+    await expect(botRow(page, name)).toBeVisible();
+  await expect(botRow(page, "main")).toHaveCount(0);
   await expect(rail(page).getByTestId("primary-star")).toHaveCount(0);
   // Not in the rail's search.
   await page.keyboard.press("ControlOrMeta+Shift+F");
-  await page.getByRole("textbox", { name: "Search bots" }).fill("i");
-  await expect(botRow(page, "Pip")).toBeVisible();
-  await expect(botRow(page, "Juniper")).toHaveCount(0);
+  await page.getByRole("textbox", { name: "Search bots" }).fill("a");
+  await expect(botRow(page, "Marlow")).toBeVisible();
+  await expect(botRow(page, "main")).toHaveCount(0);
   await page.keyboard.press("Escape");
   // Not among the search palette's bots.
   await page.keyboard.press("ControlOrMeta+K");
   const palette = page.getByTestId("search-palette");
-  await palette.getByRole("combobox", { name: "Search" }).fill("i");
+  await palette.getByRole("combobox", { name: "Search" }).fill("a");
   const paletteBots = palette.getByTestId("search-group-bots").getByRole("option");
-  await expect(paletteBots.filter({ hasText: "Pip" })).toHaveCount(1);
-  await expect(paletteBots.filter({ hasText: "Juniper" })).toHaveCount(0);
+  // Of the seeded bots, only Marlow and the gateway's own `main` have an "a".
+  await expect(paletteBots.filter({ hasText: "Marlow" })).toHaveCount(1);
+  await expect(paletteBots).toHaveCount(1);
   await page.keyboard.press("Escape");
 
   // On: an ordinary bot again, starred as the gateway's default.
   await setShown(page, true);
-  await expect(botRow(page, "Juniper")).toHaveAccessibleName(/, primary bot/);
-  await expect(botRow(page, "Juniper").getByTestId("primary-star")).toHaveCount(1);
+  await expect(botRow(page, "main")).toHaveAccessibleName(/, primary bot/);
+  await expect(botRow(page, "main").getByTestId("primary-star")).toHaveCount(1);
 
   // Hidden by the person, it is under Hidden bots only while the switch is on.
-  await menu(page, "Juniper", "Hide from sidebar");
+  await menu(page, "main", "Hide from sidebar");
   await menu(page, "Marlow", "Hide from sidebar");
   const hiddenToggle = page.getByRole("button", { name: /^Hidden bots/ });
   if ((await hiddenToggle.getAttribute("aria-expanded")) !== "true") await hiddenToggle.click();
@@ -211,10 +214,10 @@ test("F-562: with other bots, the gateway's own bot is absent from the sidebar, 
   await setShown(page, false);
   await expect(hidden.getByTestId("bot")).toHaveCount(1);
   await expect(hidden.getByRole("button", { name: /^Marlow\b/ })).toBeVisible();
-  await expect(rail(page).getByRole("button", { name: /^Juniper\b/ })).toHaveCount(0);
+  await expect(rail(page).getByRole("button", { name: /^main\b/ })).toHaveCount(0);
   // Put back as found.
   await setShown(page, true);
-  for (const name of ["Juniper", "Marlow"]) {
+  for (const name of ["main", "Marlow"]) {
     await hidden.getByRole("button", { name: new RegExp(`^${name}\\b`) }).click({
       button: "right",
     });
@@ -222,7 +225,7 @@ test("F-562: with other bots, the gateway's own bot is absent from the sidebar, 
   }
   await expect(page.getByRole("button", { name: /^Hidden bots/ })).toHaveCount(0);
   await setShown(page, false);
-  await expect(botRow(page, "Juniper")).toHaveCount(0);
+  await expect(botRow(page, "main")).toHaveCount(0);
 
   // A question from one of its runs brings it into the sidebar until it is answered. A
   // read-only connection is not sent questions, so this device asks for interactive access first,
@@ -234,7 +237,7 @@ test("F-562: with other bots, the gateway's own bot is absent from the sidebar, 
     .poll(() => devGateway(INSTANCE, "approve"), { timeout: 30_000, intervals: [1000] })
     .toMatch(/^Approved /m);
   await expect(page.getByTestId("composer-input")).toBeVisible({ timeout: 30_000 });
-  await expect(botRow(page, "Juniper")).toHaveCount(0);
+  await expect(botRow(page, "main")).toHaveCount(0);
   // A task of its own, with a question asked in it. The gateway asks a run's question of the
   // client that started the run, so this page starts it: with the switch on for that moment,
   // in the task opened from the sidebar, then another bot opened and the switch off again.
@@ -250,8 +253,8 @@ test("F-562: with other bots, the gateway's own bot is absent from the sidebar, 
     );
   try {
     await setShown(page, true);
-    const juniper = botRow(page, "Juniper").first();
-    if ((await juniper.getAttribute("aria-expanded")) !== "true") await juniper.click();
+    const own = botRow(page, "main").first();
+    if ((await own.getAttribute("aria-expanded")) !== "true") await own.click();
     const task = page.getByTestId("task").filter({ hasText: title }).first();
     await expect(task).toBeVisible({ timeout: 30_000 });
     await task.click();
@@ -262,13 +265,13 @@ test("F-562: with other bots, the gateway's own bot is absent from the sidebar, 
       .toBe(true);
     await botRow(page, "Pip").first().click();
     await setShown(page, false);
-    await expect(botRow(page, "Juniper")).toHaveAccessibleName(/^Juniper, waiting for you/, {
+    await expect(botRow(page, "main")).toHaveAccessibleName(/^main, waiting for you/, {
       timeout: 60_000,
     });
-    await expect(botRow(page, "Juniper").getByTestId("primary-star")).toHaveCount(1);
+    await expect(botRow(page, "main").getByTestId("primary-star")).toHaveCount(1);
     // Answered (dismissed) on the gateway by another client: nothing waits, and it leaves.
     await gatewayCall(INSTANCE, "question.resolve", { id: (await asked())!.id, cancel: true });
-    await expect(botRow(page, "Juniper")).toHaveCount(0, { timeout: 60_000 });
+    await expect(botRow(page, "main")).toHaveCount(0, { timeout: 60_000 });
   } finally {
     await gatewayCall(INSTANCE, "chat.abort", { sessionKey: key }).catch(() => {});
     await gatewayCall(INSTANCE, "sessions.delete", { key, deleteTranscript: true }).catch(() => {});
@@ -319,7 +322,7 @@ test("F-562: on a gateway that names no owner (selectionRequired), the bot named
   const patch = (raw: unknown) => patchConfig(admin, raw);
   const roster = () => admin.request<Roster>("agents.list", {});
   expect((await roster()).selectionRequired).toBe(false);
-  await expect(botRow(page, "Juniper")).toHaveCount(0);
+  await expect(botRow(page, "main")).toHaveCount(0);
   try {
     // The development gateway's explicit roster names its owner in `agents.defaults.systemAgent`.
     // Without it the gateway still answers a `defaultId`: its first configured bot.
@@ -331,14 +334,15 @@ test("F-562: on a gateway that names no owner (selectionRequired), the bot named
     expect(first.ownerless).toBe(true);
     await rereadBots(page);
     await expect(botRow(page, first.name)).toBeVisible({ timeout: 30_000 });
-    for (const name of ["Otto", "Marlow", "Pip"]) await expect(botRow(page, name)).toBeVisible();
+    for (const name of ["Juniper", "Otto", "Marlow", "Pip"])
+      await expect(botRow(page, name)).toBeVisible();
   } finally {
     await patch({ agents: { defaults: { systemAgent: { agentId: "main" } } } });
     await expect.poll(async () => (await roster()).selectionRequired).toBe(false);
     await admin.close();
   }
   await rereadBots(page);
-  await expect(botRow(page, "Juniper")).toHaveCount(0, { timeout: 30_000 });
+  await expect(botRow(page, "main")).toHaveCount(0, { timeout: 30_000 });
 });
 
 test("F-562: the gateway's own bot shows when it is the only bot, and leaves once another bot exists", async ({

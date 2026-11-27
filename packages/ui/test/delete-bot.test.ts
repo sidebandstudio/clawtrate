@@ -231,7 +231,7 @@ describe("Delete bot…: the result", () => {
   it("F-050: “deleted” is said only on the gateway's answer; a bot merely no longer listed is said to be that", () => {
     const lost = resultView("Pip", {
       kind: "unconfirmed",
-      message: "request timed out",
+      message: "it didn't answer in time",
       deleteFiles: false,
       listed: false,
     })!;
@@ -246,13 +246,13 @@ describe("Delete bot…: the result", () => {
   it("F-050: a lost answer offers Check again, which only reads; nothing offers to send again", () => {
     const lost = resultView("Pip", {
       kind: "unconfirmed",
-      message: "request timed out",
+      message: "it didn't answer in time",
       deleteFiles: true,
       listed: true,
     })!;
     expect(lost).toMatchObject({ title: "The gateway didn't confirm the delete", check: true });
     expect(lost.lines[0]).toEqual({
-      text: "The gateway didn't confirm the delete: request timed out",
+      text: "The gateway didn't confirm the delete: it didn't answer in time",
       tone: "warn",
     });
     expect(Object.keys(lost).sort()).toEqual(["check", "lines", "title", "tone"]);
@@ -366,7 +366,7 @@ describe("Delete bot…: the result", () => {
     expect(refused.lines[0]!.text).toBe("The gateway didn't confirm the delete: agent is busy");
     const gone = resultView("Pip", {
       kind: "unconfirmed",
-      message: "request timed out",
+      message: "it didn't answer in time",
       deleteFiles: true,
       listed: false,
     })!;
