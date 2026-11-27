@@ -59,6 +59,7 @@ describe("Stop and what the run started (F-296, F-298)", () => {
       uncertain: [],
       refused: [],
       unanswered: [],
+      followUps: [],
       omitted: 0,
       recipientsAsked: true,
     });
