@@ -1326,6 +1326,109 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
     expect(gw.state.updates).toEqual(["Juniper"]);
   });
 
+  it("F-552: room for a rename counts the day after too when its claim may be confirmed past midnight", async () => {
+    const gw = gateway();
+    // Both claims are taken a minute before midnight; either may be confirmed after it.
+    const beforeMidnight = Date.parse(`${dayOf(NOW)}T23:59:00Z`);
+    const dayA = dayOf(beforeMidnight);
+    const counts = Array.from({ length: MAX_RECORD_COUNTS - 1 }, (_, n) => ({
+      bot: n === 0 ? "pip" : `bot-${n}`,
+      day: dayA,
+      n: 1,
+    }));
+    gw.state.record = record({ counts });
+    gw.state.now = beforeMidnight;
+    const held = deferred<void>();
+    gw.state.hold = held.promise;
+    const first = device(gw);
+    const pip = first.engine.afterRun("pip", KEY, "run-1");
+    await until(() => gw.kept().claims.length === 1);
+    gw.state.file = "- **Name:** Maple\n";
+    const second = device(gw);
+    await second.engine.afterRun("otto", KEY, "run-2");
+    expect(second.lines()).toEqual([
+      expect.objectContaining({ botId: "otto", status: "not-done", reason: "full" }),
+    ]);
+    // Pip's rename is confirmed past midnight, and its count kept with day A's.
+    gw.state.now = beforeMidnight + 90_000;
+    held.resolve();
+    await pip;
+    expect(gw.state.updates).toEqual(["Juniper"]);
+    expect(gw.kept().counts).toContainEqual({ bot: "pip", day: dayOf(gw.state.now), n: 1 });
+    expect(gw.kept().counts).toHaveLength(MAX_RECORD_COUNTS);
+  });
+
+  it("F-552: near midnight a rename needs room on the day after for itself, and for a rename under way that may land then", async () => {
+    const beforeMidnight = Date.parse(`${dayOf(NOW)}T23:59:00Z`);
+    const dayA = dayOf(beforeMidnight);
+    const onA = (bots: string[]) => bots.map((bot) => ({ bot, day: dayA, n: 1 }));
+    const filler = (n: number) => Array.from({ length: n }, (_, i) => `bot-${i}`);
+
+    // Its own count: a full day A, Pip's among it, has no place for Pip's count on day B.
+    const own = gateway();
+    own.state.record = record({ counts: onA(["pip", ...filler(MAX_RECORD_COUNTS - 1)]) });
+    own.state.now = beforeMidnight;
+    const me = device(own);
+    await me.engine.afterRun("pip", KEY, "run-1");
+    expect(own.state.updates).toEqual([]);
+    expect(me.line()).toMatchObject({ status: "not-done", reason: "full" });
+    // At noon the same rename has its place.
+    const noon = gateway();
+    noon.state.record = record({ counts: onA(["pip", ...filler(MAX_RECORD_COUNTS - 1)]) });
+    noon.state.now = Date.parse(`${dayA}T12:00:00Z`);
+    await device(noon).engine.afterRun("pip", KEY, "run-1");
+    expect(noon.state.updates).toEqual(["Juniper"]);
+
+    // Another's: 31 places on day A, Pip's and Otto's among them. Pip's claim takes a place on
+    // day B; Otto's then needs one for itself and one for Pip's rename, which may land then.
+    const other = gateway();
+    other.state.record = record({ counts: onA(["pip", "otto", ...filler(MAX_RECORD_COUNTS - 3)]) });
+    other.state.now = beforeMidnight - 30_000;
+    const held = deferred<void>();
+    other.state.hold = held.promise;
+    const pip = device(other).engine.afterRun("pip", KEY, "run-1");
+    await until(() => other.kept().claims.length === 1);
+    // One place is left for two: Otto's is refused.
+    other.state.now = beforeMidnight + 30_000;
+    other.state.file = "- **Name:** Maple\n";
+    const second = device(other);
+    await second.engine.afterRun("otto", KEY, "run-2");
+    expect(second.lines()).toEqual([
+      expect.objectContaining({ botId: "otto", status: "not-done", reason: "full" }),
+    ]);
+    held.resolve();
+    await pip;
+  });
+
+  it("F-552: past midnight a rename still needs room on the day before for a rename under way that was claimed then", async () => {
+    const beforeMidnight = Date.parse(`${dayOf(NOW)}T23:59:30Z`);
+    const dayA = dayOf(beforeMidnight);
+    const gw = gateway();
+    // 30 places on day A, none of them Pip's or Otto's.
+    gw.state.record = record({
+      counts: Array.from({ length: MAX_RECORD_COUNTS - 2 }, (_, n) => ({
+        bot: `bot-${n}`,
+        day: dayA,
+        n: 1,
+      })),
+    });
+    gw.state.now = beforeMidnight;
+    const held = deferred<void>();
+    gw.state.hold = held.promise;
+    const pip = device(gw).engine.afterRun("pip", KEY, "run-1");
+    await until(() => gw.kept().claims.length === 1);
+    // Past midnight, Otto's rename needs a place on day B, and Pip's may still land on day A.
+    gw.state.now = beforeMidnight + 40_000;
+    gw.state.file = "- **Name:** Maple\n";
+    const second = device(gw);
+    await second.engine.afterRun("otto", KEY, "run-2");
+    expect(second.lines()).toEqual([
+      expect.objectContaining({ botId: "otto", status: "not-done", reason: "full" }),
+    ]);
+    held.resolve();
+    await pip;
+  });
+
   it("F-552: a rename whose confirmation couldn't be saved says so in its line", async () => {
     const gw = gateway();
     const me = device(gw);

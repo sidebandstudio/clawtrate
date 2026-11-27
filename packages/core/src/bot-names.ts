@@ -801,17 +801,20 @@ export class BotNames {
             changes: [...record.changes.filter((each) => each !== same), change],
             claims: [...record.claims.filter((each) => each.op !== opId), { ...claim, at: now }],
           };
-          // Room now for what confirming it writes too: the day's count, kept with today's others,
-          // and the count each other rename still under way will write when it is confirmed, on
-          // this device's day or on the day its own device took the claim, whichever it lands on.
+          // Room now for what confirming it writes too: the count of this rename and of each other
+          // one still under way, on each day it may be confirmed: this device's, the day its claim
+          // was taken, and the day that claim expires on, past midnight perhaps.
+          const confirmable = (at: number) => [dayOf(at), dayOf(at + CLAIM_EXPIRY_MS)];
           let counted: NameRecord = withCount(next, botId, day);
+          for (const on of new Set(confirmable(now)))
+            if (on !== day) counted = { ...counted, counts: reserved(counted.counts, botId, on) };
           for (const other of next.claims) {
             if (other.undo || other.op === opId) continue;
             const pending = next.changes.find(
               (each) => each.run === other.run && each.bot === other.bot,
             );
             if (pending && pending.done === undefined && pending.undone === undefined)
-              for (const on of new Set([day, dayOf(other.at)]))
+              for (const on of new Set([day, ...confirmable(other.at)]))
                 counted = { ...counted, counts: reserved(counted.counts, other.bot, on) };
           }
           if (!keepsWhatItAdds(record, counted, day)) return "full";
