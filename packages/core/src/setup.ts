@@ -180,6 +180,11 @@ export type SetupState = {
   step: number;
   /** Set after 8 s of looking (§4). */
   slow: boolean;
+  /**
+   * A look the host started by itself, before the person chose anything: with local connect,
+   * at start (setup-effortless.md §3). The interface shows it on the first screen.
+   */
+  unasked: boolean;
   look: SetupLook | null;
   failure: SetupFailure | null;
 };
@@ -188,6 +193,7 @@ export const initialSetupState: SetupState = {
   phase: "idle",
   step: 0,
   slow: false,
+  unasked: false,
   look: null,
   failure: null,
 };

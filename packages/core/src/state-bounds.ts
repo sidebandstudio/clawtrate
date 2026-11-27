@@ -1343,6 +1343,7 @@ const setup = object<SetupState>()({
   phase: ENUM,
   step: NUMBER,
   slow: FLAG,
+  unasked: FLAG,
   look: setupLook,
   failure: object<SetupFailure>()({ kind: ENUM, exitCode: NUMBER, port: NUMBER, reason: ENUM }),
 });

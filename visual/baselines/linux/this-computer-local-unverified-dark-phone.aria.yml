@@ -1,0 +1,9 @@
+- status
+- main:
+  - button "Back"
+  - heading "On this computer" [level=2]
+  - heading "OpenClaw settings found" [level=3]
+  - paragraph: Clawtrate couldn't match what is listening at port 18789 to this account's OpenClaw profile. Clawtrate doesn't connect to it by itself. Use Advanced, or look again.
+  - button "Use Advanced"
+  - button "Look again"
+  - paragraph: On this computer
