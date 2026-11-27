@@ -62,8 +62,8 @@
     - heading "New routine" [level=2]
     - button "Close"
     - alert:
-      - strong: The gateway didn't answer.
-      - text: This may or may not have saved (gateway request timed out). Check what the gateway has before saving again.
+      - strong: Not confirmed.
+      - text: The gateway didn't answer in time. This may or may not have saved. Check what the gateway has before saving again.
     - button "Check now"
     - group:
       - text: Bot
