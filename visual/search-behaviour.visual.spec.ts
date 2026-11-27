@@ -196,8 +196,13 @@ test("F-033: one query searches bots, tasks, messages, files, links, routines an
   await field(page).fill("acc");
   await expect(options(page, "settings").first()).toHaveAccessibleName("Setting Accounts");
   await expect(announcer(page)).toHaveText("1 result: 1 setting.");
-  // Only Settings found something: no other group is drawn, and nothing lists what found nothing.
-  await expect(palette(page).locator(".s-group")).toHaveCount(1);
+  // Only Settings found something. The message reply was cut short (`src=truncated`), so Messages
+  // is its heading, with no count, and the action that searches further; nothing else is drawn.
+  await expect(palette(page).locator(".s-group .s-group-name")).toHaveText([
+    "Messages",
+    "Settings · 1",
+  ]);
+  await expect(options(page, "messages")).toHaveText(["Search each bot for more"]);
   await expect(palette(page)).not.toContainText("No matches in");
   await expect(palette(page).getByTestId("search-status")).toHaveCount(0);
 });
@@ -285,6 +290,9 @@ test("F-033: while the gateway is still indexing, a search that finds no message
     "Some messages are still being indexed.",
   );
   await expect(palette(page).getByTestId("search-status")).toHaveCount(0);
+  await expect(announcer(page)).toHaveText(
+    "3 results: 3 messages. Some messages are still being indexed.",
+  );
   // No message found while indexing, but a task was: Messages is its heading and its action only,
   // so the line stands with the search's own lines.
   await search(page, "weekly", `${BASE}&src=indexing`);
@@ -830,6 +838,8 @@ test("F-033: a failed source says so with Try again and leaves the others alone;
   ]);
   await expect(group(page, "messages")).not.toContainText("bots answered");
   await expect(group(page, "messages")).not.toContainText("all 2 matches");
+  // The live region names the bot that couldn't be searched, as the screen does.
+  await expect(announcer(page)).toContainText("Pip · couldn't search: the search index is busy");
   await expect(options(page, "messages").filter({ hasText: "· Otto" })).not.toHaveCount(0);
   expect((await sent(page, "searchMessages")).map((each) => each.botId)).toEqual([
     null,
@@ -988,4 +998,43 @@ test("F-033: Up, Down, Page Up and Page Down move the active row across groups, 
   // Focus never leaves the field, and Tab stays in the palette.
   await page.keyboard.press("Tab");
   await expect(field(page)).toBeFocused();
+});
+
+test("F-033: a bot's file search that failed keeps its line and Try again when no file matched, and is announced", async ({
+  page,
+}) => {
+  await search(page, "kayak", `${BASE}&src=filesfail`);
+  await expect(palette(page).getByTestId("search-status").locator(".s-status")).toHaveText([
+    "No results for “kayak”.",
+  ]);
+  await expect(group(page, "files").locator(".s-group-name")).toHaveText("Files");
+  await expect(group(page, "files").locator(".s-group-lines")).toHaveText(
+    "Pip: the gateway refused the search: permission denied.",
+  );
+  await expect(options(page, "files")).toHaveText(["Try again for Pip"]);
+  await expect(announcer(page)).toHaveText(
+    "Pip: the gateway refused the search: permission denied. No results for “kayak”.",
+  );
+  // Asked again and answered with nothing, Pip's line and its retry go, and so does Files.
+  await options(page, "files").filter({ hasText: "Try again for Pip" }).click();
+  await expect(group(page, "files")).toHaveCount(0);
+});
+
+test("F-033: after Search each bot for more, a bot still indexing keeps its line under Messages even with no match of its own", async ({
+  page,
+}) => {
+  await search(page, "backup", `${BASE}&src=truncated,indexing`);
+  await options(page, "messages").filter({ hasText: "Search each bot for more" }).click();
+  await expect(palette(page).getByTestId("search-status")).toHaveCount(0);
+  const indexing = "Some messages are still being indexed.";
+  // Every bot asked but Marlow says it is still indexing (the fixture's Marlow isn't); Otto has
+  // matches, the others none, and each still has its line.
+  await expect(group(page, "messages").locator(".s-sub")).toHaveText([
+    `Juniper · ${indexing}`,
+    `Otto · ${indexing}`,
+    `Pip · ${indexing}`,
+    `Quartermaster of the Family Calendar and Errands · ${indexing}`,
+  ]);
+  await expect(group(page, "messages")).not.toContainText("Marlow");
+  await expect(announcer(page)).toContainText(`Pip · ${indexing}`);
 });

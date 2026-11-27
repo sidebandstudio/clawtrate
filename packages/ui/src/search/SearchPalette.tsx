@@ -995,10 +995,13 @@ export function SearchPalette({
               },
             ];
           const r = bot.reply!;
-          if (r.hits.length === 0) return [];
+          const flags = replyFlags(r);
+          // A bot that found nothing isn't named, unless its reply says what it left out: then it
+          // has its line and no rows, since its matches may be among what was left out.
+          if (r.hits.length === 0 && flags.length === 0) return [];
           return [
             {
-              line: replyFlags(r).length ? `${name} · ${replyFlags(r).join(" ")}` : null,
+              line: flags.length ? `${name} · ${flags.join(" ")}` : null,
               rows: messageRows(r.hits, r, messages.listed),
             },
           ];
@@ -1038,7 +1041,8 @@ export function SearchPalette({
         ...base,
         count: reply.hits.length,
         // "No results" or a short list can be untrue while the gateway is still indexing.
-        lines: replyFlags(reply),
+        // With no match these are the search's own status lines instead (`unshown` below).
+        lines: reply.hits.length ? replyFlags(reply) : [],
         sections: [{ line: null, rows: messageRows(reply.hits, reply, messages.listed) }],
         actions: eachAction,
         searching: false,
@@ -1237,28 +1241,25 @@ export function SearchPalette({
 
   // Only a group that found something is drawn, or one that failed or has more to search on
   // request. Without a result it shows no lines: it is there for its error or its action.
-  const drawn = groups
-    .filter((group) => group.count > 0 || group.tone === "danger" || group.actions.length > 0)
-    .map((group) => (group.count > 0 || group.tone === "danger" ? group : { ...group, lines: [] }));
+  // A group drawn without results carries only failures and what a reply left out: a bot's file
+  // search that failed, with its retry; a bot whose own message search is still indexing.
+  const drawn = groups.filter(
+    (group) =>
+      group.count > 0 ||
+      group.tone === "danger" ||
+      group.actions.length > 0 ||
+      group.sections.some((section) => section.line !== null),
+  );
   const pending = groups.some((group) => group.searching);
   const found = groups.reduce((sum, group) => sum + group.count, 0);
   // The quiet lines of the search itself: a source still answering, nothing found, what the
   // message search left out when it found nothing (beside matches they are Messages' own lines),
   // or offline. A group still searching isn't drawn until it finds something.
+  // After "Search each bot for more" each bot's own line says it, under Messages.
   const unshown =
-    messages.status !== "done" || (groups.find((group) => group.id === "messages")?.count ?? 0) > 0
-      ? []
-      : replyFlags(
-          messages.each === null
-            ? messages.reply
-            : {
-                indexing: messages.each.bots.some((bot) => bot.reply?.indexing === true),
-                archivedExcluded: messages.each.bots.reduce(
-                  (sum, bot) => sum + (bot.reply?.archivedExcluded ?? 0),
-                  0,
-                ),
-              },
-        );
+    messages.status === "done" && messages.each === null && messages.reply.hits.length === 0
+      ? replyFlags(messages.reply)
+      : [];
   const status = !query
     ? []
     : [
@@ -1613,18 +1614,25 @@ function Option({
   );
 }
 
-/** The live region's words, drawn from the same groups and line as the list (search.md §12). */
+/** The live region's words, drawn from the same groups and lines as the list (search.md §12). */
 function announcement(drawn: Group[], status: string[]): string {
   const found = drawn.filter((group) => group.count > 0);
   const total = found.reduce((sum, group) => sum + group.count, 0);
   const counts = found.map((group) =>
     plural(group.count, GROUP_WORD[group.id][0], GROUP_WORD[group.id][1]),
   );
+  // Then each drawn group's own lines, as the screen shows them: a source that failed, a bot
+  // that failed (Files' lines, Messages' per-bot lines), and what a reply left out.
   return [
     total > 0 ? `${plural(total, "result")}: ${counts.join(", ")}.` : "",
-    ...drawn
-      .filter((group) => group.tone === "danger")
-      .map((group) => `${group.name} couldn't be searched.`),
+    ...drawn.flatMap((group) =>
+      group.tone === "danger"
+        ? [`${group.name} couldn't be searched.`]
+        : [
+            ...group.lines,
+            ...group.sections.flatMap((section) => (section.line ? [section.line] : [])),
+          ],
+    ),
     ...status,
   ]
     .filter(Boolean)
