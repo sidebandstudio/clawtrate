@@ -47,6 +47,9 @@
 //   allowlist=1               the gateway's config names the models bots may use
 //   version=<version>         the OpenClaw version the gateway runs (default 2026.10.6), such as
 //                             2026.11.10, which changes a bot's account order only while stopped
+//   models=<state>            Settings › Models (gateway-settings.md section 4.1): held (a change
+//                             that waits for Save and restart, with the gateway's reload off) or
+//                             since (the read-back found another device's value)
 //   clear=<status>            how Unlock or Clear order ends (default cleared): refused, unanswered,
 //                             kept, unread, moved (the order is Home's alone), unsent, or hold
 //                             (sending until releaseClear(), then cleared)
@@ -116,6 +119,8 @@ export type AccountParams = {
   version: string | null;
   /** How Unlock or Clear order ends, when the address names it. */
   clear: string | null;
+  /** Settings › Models' last change, when the address names one: held or since. */
+  models: "held" | "since" | null;
 };
 
 export function accountParams(params: URLSearchParams): AccountParams {
@@ -166,6 +171,10 @@ export function accountParams(params: URLSearchParams): AccountParams {
       ? params.get("version")
       : null,
     clear: params.get("clear"),
+    models:
+      params.get("models") === "held" || params.get("models") === "since"
+        ? (params.get("models") as "held" | "since")
+        : null,
   };
 }
 
@@ -194,6 +203,7 @@ export const NO_ACCOUNT_PARAMS: AccountParams = {
   openclawRun: null,
   version: null,
   clear: null,
+  models: null,
 };
 
 /** The fixture's endings of an Unlock or Clear that keep the order, with the words each carries. */
@@ -347,8 +357,22 @@ export function fixtureAccounts(now: number, params: AccountParams): AccountsSta
       primary: params.defacct ? "openai/gpt-5.5@openai:work" : "openai/gpt-5.5",
       fallbacks: ["openai/gpt-5.5-mini@openai:home"],
       thinking: null,
-      reloadOff: false,
+      reloadOff: params.models === "held",
     },
+    defaultsChange:
+      params.models === null
+        ? null
+        : {
+            status: params.models === "held" ? "held" : "changedSince",
+            before: { primary: "openai/gpt-5.5" },
+            after: { primary: "openai/gpt-5.5-mini@openai:home" },
+            current: params.models === "since" ? { primary: "openai/gpt-5.5@openai:work" } : null,
+            restart: params.models === "held",
+            putBack: false,
+            error: null,
+            at: now,
+            gatewayId: null,
+          },
     modelAllowlist: params.allowlist
       ? { whole: [], wildcards: false, prefixWildcards: false }
       : null,
