@@ -776,6 +776,16 @@
   display: none;
 }
 
+/* Back from a section leads to the list on its own. */
+.gs[data-narrow="1"] .gs-settings[data-list="1"] .gs-nav {
+  display: flex;
+  background: var(--bg);
+}
+
+.gs[data-narrow="1"] .gs-settings[data-list="1"] .gs-section {
+  display: none;
+}
+
 .gs[data-narrow="1"] .gs-back {
   display: inline-grid;
   place-items: center;

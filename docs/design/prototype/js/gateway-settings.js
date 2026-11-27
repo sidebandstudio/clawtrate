@@ -8,6 +8,8 @@
 //   error    1: a value the form refuses before anything is written (all)
 //   restart  1: OpenClaw restarting to apply a change; the banner above Settings
 //   access   read: a connection without full control
+//   connected telegram: Telegram connected, after the read-back of who may write (chat)
+//   version  1006 | unknown: the restart words for 2026.10.6 or an unknown version (2026.11.10 otherwise)
 //   q        the search in All settings (default "network")
 //
 // Every name, model, account, handle and value is made up. No token is drawn:
@@ -31,8 +33,16 @@
     tip: null,
     model: p.get("done") === "1" ? "acme/swift-2" : "acme/swift-1",
     undoModel: "acme/swift-1",
-    plugins: { voice: true, rules: true, bots: true, search: false },
-    telegramTile: true,
+    // The done line for plugins says Web search is on, so the fixture starts with it on.
+    plugins: {
+      voice: true,
+      rules: true,
+      bots: true,
+      search: p.get("screen") === "plugins" && p.get("done") === "1",
+    },
+    // Set only after "That's me" and the read-back that only that sender may write.
+    telegram: p.get("connected") === "telegram",
+    version: p.get("version") || "1110",
   };
 
   const esc = (s) =>
@@ -119,7 +129,7 @@
       return `<div class="gs-row"><div class="gs-row-main"><span class="gs-row-title">${b.name}</span><span class="gs-row-sub">${sub}</span></div><div class="gs-row-end">${btn("Change", `data-size="sm" aria-label="Change ${b.name}'s model"`, "quiet")}</div></div>`;
     }).join("");
     const done = state.done
-      ? `<div class="gs-done" role="status">${ICON.check}<span class="gs-done-text">Default model is now ${esc(m.name)}, on Work.</span><button type="button" class="gs-link" data-action="undo-model">Undo</button></div>`
+      ? `<div class="gs-done" role="status">${ICON.check}<span class="gs-done-text">Default model is now ${esc(m.name)}, on ${esc(m.account)}.</span><button type="button" class="gs-link" data-action="undo-model">Undo</button></div>`
       : "";
     const body =
       readOnlyNote() +
@@ -135,7 +145,8 @@
 
   function chatSection() {
     // A connected app is listed above, not offered again.
-    const tiles = APPS.filter(([id]) => id !== "whatsapp").map(
+    const connected = ["whatsapp", ...(state.telegram ? ["telegram"] : [])];
+    const tiles = APPS.filter(([id]) => !connected.includes(id)).map(
       ([id, label, color, letter]) =>
         `<button type="button" class="gs-tile" data-app="${id}"${state.admin ? "" : " disabled"}><span class="gs-mark" style="--mark:${color}" aria-hidden="true">${letter}</span>${label}</button>`,
     ).join("");
@@ -143,7 +154,10 @@
       readOnlyNote() +
       `<div class="gs-group">Connected</div><div class="gs-card">` +
       `<div class="gs-row"><span class="gs-mark" style="--mark:#25a35a" aria-hidden="true">W</span><div class="gs-row-main"><span class="gs-row-title">WhatsApp</span><span class="gs-row-sub">Juniper answers · only you can message it</span></div><div class="gs-row-end"><span class="gs-tag" data-tone="ok">Connected</span>${btn("Open", 'data-size="sm"', "quiet")}</div></div>` +
-      `</div><div class="gs-group">Connect a chat app</div><div class="gs-tiles">${tiles}</div>`;
+      (state.telegram
+        ? `<div class="gs-row"><span class="gs-mark" style="--mark:#2a9fd6" aria-hidden="true">T</span><div class="gs-row-main"><span class="gs-row-title">Telegram</span><span class="gs-row-sub">Juniper answers · only you can message it</span></div><div class="gs-row-end"><span class="gs-tag" data-tone="ok">Connected</span>${btn("Open", 'data-size="sm"', "quiet")}</div></div>`
+        : "") +
+      `</div>${state.telegram && state.done ? `<div class="gs-done" role="status">${ICON.check}<span class="gs-done-text">Telegram is connected. Only you can message Juniper there.</span><button type="button" class="gs-link">Undo</button></div>` : ""}<div class="gs-group">Connect a chat app</div><div class="gs-tiles">${tiles}</div>`;
     return { title: "Chat apps", body };
   }
 
@@ -172,7 +186,7 @@
       `<p style="margin:0 0 10px;font-size:var(--text-md)">Telegram is connected. Now send your bot any message from Telegram, so it knows it's you.</p>` +
       `<div class="gs-actions" style="margin:0 0 6px">${btn("Open @juniper_sample_bot in Telegram", 'data-size="sm"')}</div>` +
       `<div class="gs-group">A message arrived</div><div class="gs-card"><div class="gs-row"><div class="gs-row-main"><span class="gs-row-title">@sample_handle</span><span class="gs-row-sub">“hi” · just now</span></div><div class="gs-row-end">${btn("That's me", 'data-action="its-me" data-size="sm"', "primary")}${btn("Not me", 'data-size="sm"', "quiet")}</div></div></div>` +
-      `<p class="gs-note">Only you can message the bot. Anyone else gets no answer until you let them in, here.</p>`;
+      `<p class="gs-note">Until you confirm, nobody gets an answer here.</p>`;
     return { title: "Connect Telegram", back: "chat", body };
   }
 
@@ -238,7 +252,7 @@
       }),
     ];
     const tray = state.pending
-      ? `<div class="gs-tray" role="status"><span class="gs-tray-text"><strong>2 changes</strong> · saving restarts OpenClaw once. Running tasks pause and pick up again.</span>${btn("Discard", 'data-size="sm"', "quiet")}${btn("Save and restart", 'data-size="sm"', "primary")}</div>`
+      ? `<div class="gs-tray" role="status"><span class="gs-tray-text"><strong>2 changes</strong> · ${restartWords()}</span>${btn("Discard", 'data-size="sm"', "quiet")}${btn("Save and restart", 'data-size="sm"', "primary")}</div>`
       : "";
     const body =
       readOnlyNote() +
@@ -247,6 +261,14 @@
       `<p class="gs-note">Settings Clawtrate shows elsewhere open there: <button type="button" class="gs-link" data-nav="models">Models</button>, <button type="button" class="gs-link" data-nav="chat">Chat apps</button>, <button type="button" class="gs-link" data-nav="plugins">Plugins</button>.</p>`;
     return { title: "All OpenClaw settings", body, foot: tray };
   }
+
+  // What running work does during a restart, by version (gateway-settings.md section 7).
+  const restartWords = () =>
+    ({
+      1006: "Saving restarts OpenClaw once its bots finish what they're doing, which can take up to 5 minutes.",
+      unknown: "Saving restarts OpenClaw. Work running now may be interrupted.",
+    })[state.version] ||
+    "Saving restarts OpenClaw. Conversations pick up where they left off; tasks a bot started stop and may need starting again.";
 
   // ---- the conversation: a bot changing a setting when asked ---------------------
 
@@ -258,8 +280,9 @@
       `<div class="gs-msg-you">And let my laptop reach you over Tailscale</div>` +
       `<div class="gs-ask" role="group" aria-labelledby="ask-title"><h4 id="ask-title">Change who can reach OpenClaw?</h4>` +
       `<p class="gs-change">This computer only → Your private network (Tailscale)</p>` +
-      `<p>Devices on your Tailscale network could then connect, with a token or an approved device. OpenClaw restarts; running tasks pause and pick up again.</p>` +
-      `<div class="gs-actions">${btn("Change", 'data-size="sm"', "primary")}${btn("Keep", 'data-size="sm"', "quiet")}</div></div>`;
+      `<p>Devices on your Tailscale network could then connect, with a token or an approved device.</p>` +
+      `<p>${restartWords()}</p>` +
+      `<div class="gs-actions">${btn("Change and restart", 'data-size="sm"', "primary")}${btn("Keep", 'data-size="sm"', "quiet")}</div></div>`;
     root.innerHTML =
       banner() +
       `<div class="gs-chat"><div class="gs-chat-head"><span class="gs-avatar" aria-hidden="true">J</span>Juniper</div>` +
@@ -269,7 +292,7 @@
 
   function banner() {
     return state.restart
-      ? `<div class="gs-banner" role="status"><span class="gs-spin" aria-hidden="true"></span><span>OpenClaw is restarting to apply <strong>Who can reach OpenClaw</strong>. Running tasks pick up where they left off.</span></div>`
+      ? `<div class="gs-banner" role="status"><span class="gs-spin" aria-hidden="true"></span><span>OpenClaw is restarting to apply <strong>Who can reach OpenClaw</strong>. ${restartWords().replace(/^Saving restarts OpenClaw\.? ?/, "")}</span></div>`
       : "";
   }
 
@@ -279,28 +302,31 @@
     const narrow = root.getBoundingClientRect().width < 640;
     root.dataset.narrow = narrow ? "1" : "0";
     if (state.screen === "bot") return botView();
+    // The section list on its own: what Back leads to at phone width.
+    if (state.screen === "list" && !narrow) state.screen = "models";
     const views = { models: modelsSection, chat: chatSection, telegram: telegramSection, pair: pairSection, plugins: pluginsSection, all: allSection };
-    const view = (views[state.screen] || modelsSection)();
+    const list = state.screen === "list";
+    const view = list ? { title: "", body: "" } : (views[state.screen] || modelsSection)();
     const current = navFor(state.screen);
     const nav =
-      `<nav class="gs-nav" aria-label="Settings"><h2>Settings</h2>` +
+      `<nav class="gs-nav" aria-label="Settings"><h2 tabindex="-1">Settings</h2>` +
       NAV.map(([id, label]) => `<button type="button" class="gs-nav-item" data-nav="${id}"${id === current ? ' aria-current="page"' : ""}>${label}</button>`).join("") +
       `</nav>`;
     const backTo = view.back || "list";
     root.innerHTML =
       banner() +
-      `<div class="gs-settings">${nav}<section class="gs-section" aria-labelledby="gs-title">` +
+      `<div class="gs-settings"${list ? ' data-list="1"' : ""}>${nav}<section class="gs-section" aria-labelledby="gs-title">` +
       `<header class="gs-head"><button type="button" class="gs-back" aria-label="Back" data-nav="${backTo}">${ICON.back}</button><h3 id="gs-title" tabindex="-1">${view.title}</h3></header>` +
       `<div class="gs-body">${view.body}</div>${view.foot ? `<footer class="gs-foot">${view.foot}</footer>` : ""}</section></div>`;
   }
 
   function go(screen) {
-    if (!screen || screen === "list") return;
+    if (!screen) return;
     state.screen = screen;
     state.done = false;
     state.tip = null;
     render();
-    root.querySelector("#gs-title")?.focus();
+    (state.screen === "list" ? root.querySelector(".gs-nav h2") : root.querySelector("#gs-title"))?.focus();
   }
 
   root.addEventListener("click", (e) => {
@@ -316,7 +342,11 @@
     if (t.dataset.app === "telegram") return go("telegram");
     if (t.dataset.action === "to-pair") return go("pair");
     if (t.dataset.action === "its-me") {
+      // The stand-in read-back: pairing on and only that sender let in, so "only you" is true.
+      state.telegram = true;
       go("chat");
+      state.done = true;
+      render();
       say("Telegram is connected. Only you can message Juniper there.");
       return;
     }

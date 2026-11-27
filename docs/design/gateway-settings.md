@@ -33,24 +33,27 @@ A change in a form applies at once and leaves one quiet line, "Default model is 
 
 ### What a bot does when asked
 
-"Make Swift 2 the default for everyone" is done at once in the conversation, with the same line and Undo. "Let my laptop reach you over Tailscale" asks first, in the conversation, with the change written out and what it means ([picture](gateway-settings/bot-desktop.png), [phone](gateway-settings/bot-phone.png)). A bot never sets a secret, never widens what bots may do, and never touches Clawtrate's own plugins (section 8.4).
+**Almost nothing a bot is asked applies at once** (section 8): only the default model, the backup models and thinking, when the person's own words name the value. "Make Swift 2 the default for everyone" is done at once in the conversation, with the same line and Undo. "Let my laptop reach you over Tailscale" asks once, in the conversation, with the change written out, what it means and what the restart does ([picture](gateway-settings/bot-desktop.png), [phone](gateway-settings/bot-phone.png)). Connecting a chat app or turning on a plugin is refused with a pointer to its section. Section 8 opens with the common asks in one table.
 
 ![A bot changing the default model at once, and asking before it changes who can reach OpenClaw](gateway-settings/bot-desktop.png)
 
 ### The decisions, one line each
 
 1. **Forms:** Models, Chat apps and Plugins get forms of their own; Accounts stays as #797 makes it. Each form writes through the one engine that already owns its settings (section 2).
-2. **Chat apps:** Clawtrate drives OpenClaw's own channel set-up over the connection (`wizard.start {flow: "channels"}`) and draws each step in its own form; the only thing opened outside Clawtrate is the chat app itself, where the chat app makes its bot or shows its pairing code.
+2. **Chat apps:** Clawtrate drives OpenClaw's own channel set-up over the connection (`wizard.start {flow: "channels"}`) and draws each step in its own form; the only thing opened outside Clawtrate is the chat app itself. Built last, once a stand-in channel of the project's own has established the set-up's frames (section 10).
 3. **All OpenClaw settings:** a searchable, structured view drawn from the gateway's own schema and labels, not a file. Secrets are write-only. A value is checked against the schema before it is sent, and the gateway's own refusal is shown under the field.
-4. **Undo:** each change is a journal entry on the gateway (the bots plugin's, section 6), Undo for 7 days or until the same setting changes again; a secret's old value is never kept, and its field says so before the change.
-5. **Restart:** the gateway restarts by itself when a change needs it; Clawtrate gathers restart-needing edits into one save, says what running tasks will do, and confirms the change applied after it reconnects.
-6. **A bot's change:** one new tool, `clawtrate_settings`, in the bots plugin, applying through Clawtrate with the person's access; done at once for A, not done for B and C, and asks first for anything that changes who can reach or control OpenClaw.
-7. **Without full control, on another device, on an unknown version:** read-only forms with one line, the same journal on every device, and forms drawn from the gateway's schema so an unknown version gets the editor and the forms whose settings it has.
-8. **Ships first:** Models (default model with its account, fallbacks, thinking), with the core that every later form uses.
+4. **Undo:** a journal entry on the gateway with each leaf's authored state and a chain of hashes; Undo only when the chain shows nothing was written since, otherwise withheld; a secret's old value is never kept, and its field says so first.
+5. **Restart:** the gateway restarts by itself; any change that restarts, or might, waits for one "Save and restart"; the words for running work and the wait follow the version, and a lost contact is said as unconfirmed.
+6. **A bot's change:** one new tool, `clawtrate_settings`. At once only on a structured match to the exact change on three reviewed Models settings; otherwise the person's ask gets one card bound to the shown diff, and everything else is refused. Secrets are refused before anything is recorded. The plugin denies OpenClaw's native mutating routes by default, and that is tested before release.
+7. **Without full control, on another device, on an unknown version:** read-only forms with one line; a bot's at-once change only from the device that sent it, with its own current grant; forms drawn from the gateway's schema, so an unknown version gets the editor and the forms whose settings it has.
+8. **Ships first:** Models (default model with its account, backups, thinking), with the core that every later form uses.
 
-### Least sure of
+### Decided since the first version
 
-Section 13 opens with the three decisions this design is least sure of, each with its alternative: drawing OpenClaw's own chat-app set-up, the words of a bot's change line, and holding restart changes for one save.
+- **The line after a bot's change** says what happened, and Recent changes says "Juniper, in your conversation", not "at your request" (section 8.7).
+- **Restart-bound changes wait for one "Save and restart"** (section 7).
+- **Chat apps are built last**, after the gateway's set-up frames are established with a stand-in channel (section 10).
+- **The bot rules were tightened after an independent security read** (sections 6 to 9): provenance by structured match, classification by effective leaf, secrets refused before recording, Undo by hash chain, restart-bound changes held, native routes denied and tested, and scopes kept to the originating device.
 
 ---
 
@@ -93,7 +96,7 @@ The same scopes on 2026.11.10 (`<1110>/dist/core-method-policy-DeU1xgVA.mjs`), w
 
 **How a bad value is refused.** The gateway validates the whole merged config before it writes anything, and answers `INVALID_REQUEST` with `details.issues[]`, each with `path`, `message` and, for a choice, `allowedValues`. Run on both: `gateway.bind: "everywhere"` gave "invalid config: gateway.bind: Invalid input (allowed: "auto", "lan", "loopback", "custom", "tailnet")"; an unknown key gave "invalid config: session: Unrecognized key: "nonsenseKey"". Nothing was written either time. The gateway also refuses a patch that would empty an array without `replacePaths` (`:736`) and checks that every secret reference still resolves (`:466-480`).
 
-**Secrets.** `config.get` redacts every path the schema marks `sensitive` (218 such paths on 2026.10.6, 223 on 2026.11.10: `gateway.auth.token`, `models.providers.*.apiKey`, `hooks.token`, channel tokens, TLS keys, header values and more). A patch that sends the sentinel back keeps the stored secret: `restoreRedactedValues` (`:731`). Run on both: patching `models.providers.scripted.apiKey` with the sentinel answered `noop: true, changedPaths: []`. So a form can send a whole object it read and never lose a secret, and a secret can only be replaced, never read.
+**Secrets.** `config.get` redacts every path the schema marks `sensitive` (218 such paths on 2026.10.6, 223 on 2026.11.10: `gateway.auth.token`, `models.providers.*.apiKey`, `hooks.token`, channel tokens, TLS keys, header values and more), and also any path whose key name looks like a secret and any URL that can carry one (section 8.5 has the rules, per version). `raw` came back `null` in these runs but can be redacted text (`<1006>/dist/redact-snapshot-UvoXgo0H.mjs:190-232`); Clawtrate never reads it. A patch that sends the sentinel back keeps the stored secret: `restoreRedactedValues` (`:731`). Run on both: patching `models.providers.scripted.apiKey` with the sentinel answered `noop: true, changedPaths: []`. So a form can send a whole object it read and never lose a secret, and a secret can only be replaced, never read. Restoring the marker keeps a value; it authorizes nothing (section 8.5).
 
 **Restart or reload.** Every changed path is planned as `restart`, `hot` or `none` (`<1006>/docs/gateway/configuration/hot-reload.md`, "What hot-applies vs what needs a restart"; the same table in `<1110>`). Models, agents, auth profiles, tools, plugins' entries and most of `channels.*` apply hot; `gateway.port`, `gateway.bind`, the auth mode, Tailscale, TLS, the Control UI's path and wide-area discovery restart. A path no rule matches restarts. The write's answer carries `sentinel.payload.stats.requiresRestart`. Run on both: `messages.ackReaction` answered `requiresRestart: false` and applied before the answer; `gateway.controlUi.basePath` answered `requiresRestart: true`, then the gateway restarted in-process by itself.
 
@@ -207,8 +210,8 @@ What a person sees ([picture](gateway-settings/chat-desktop.png)): the chat apps
 Connecting one, step by step, with no outside page for instructions:
 
 1. **Connect** ([picture](gateway-settings/telegram-desktop.png), [phone](gateway-settings/telegram-phone.png)). Clawtrate starts the gateway's own set-up for that chat app (`wizard.start {flow: "channels", channel}`) and draws each step in its own form: a `text` step as a field, a `sensitive` one as a password field, a `select` as a picker, a `progress` step as a waiting line, a `note` as one line. Where a step needs the chat app itself (Telegram's @BotFather), Clawtrate says the three things to do there in its own words and offers one button that opens the chat app at that place ("Open BotFather in Telegram"); a step's `externalUrl` to a documentation page is never shown. For a QR chat app, the QR picture from `web.login.start` is shown in the form, with "Open WhatsApp › Linked devices › Link a device", and the step ends on `web.login.wait`. **Who answers there** is a picker of the person's bots, the Main Bot first; it writes the chat app's binding.
-2. **Say hello** ([picture](gateway-settings/pair-desktop.png)). "Now send your bot any message from Telegram, so it knows it's you." Clawtrate waits on `channels.pairing.list` and shows the sender's handle and first words, with **That's me** and **Not me**. **That's me** approves that sender (`channels.pairing.approve`) and adds them to the owner list (`commands.ownerAllowFrom`), so OpenClaw treats them as its owner there (`bots-in-clawtrate.md` §3.3). **Not me** dismisses the request. The line under it: "Only you can message the bot. Anyone else gets no answer until you let them in, here."
-3. Done: "Telegram is connected. Only you can message Juniper there · Undo". Undo disconnects it (`channels.logout`, then the patch that removes what step 1 wrote).
+2. **Say hello** ([picture](gateway-settings/pair-desktop.png)). "Now send your bot any message from Telegram, so it knows it's you." Clawtrate waits on `channels.pairing.list` and shows the sender's handle and first words, with **That's me** and **Not me**. **That's me** approves that sender (`channels.pairing.approve`, its pairing scope) and adds them to the owner list (`commands.ownerAllowFrom`, which needs full control as well: section 9), so OpenClaw treats them as its owner there (`bots-in-clawtrate.md` §3.3). **Not me** dismisses the request. The line under it, true before anyone is let in: "Until you confirm, nobody gets an answer here."
+3. Done, after a read-back: Clawtrate reads the chat app's `dmPolicy`, `allowFrom` and the owner list again, and claims only what it read. With pairing on and only that sender let in: "Telegram is connected. Only you can message Juniper there · Undo". Anything else is said as it is ("Telegram is connected. Anyone you've let in can message Juniper there."). Undo disconnects it (`channels.logout`, then the patch that removes what step 1 wrote).
 
 **Why the gateway's own set-up and not Clawtrate's own form per chat app:** OpenClaw knows each chat app's fields, checks and accounts on each version, and every plugin chat app brings its own; a Clawtrate form per app would be wrong the day OpenClaw changes one. Clawtrate's part is drawing it in its own look and doing the owner step. A chat app whose set-up can't be done without a desktop page of the chat app's own (a developer portal) shows that one button with its steps in Clawtrate, and is marked "Needs a few steps in <app>" on its tile.
 
@@ -243,7 +246,7 @@ What a person sees ([picture](gateway-settings/plugins-desktop.png)): **Clawtrat
 
 **A bad value is refused before it reaches the gateway**: checked against its node as the person types, the error under the field in plain words ("Use a number from 1 to 65535. Nothing was changed."), the save not offered. What the gateway still refuses (a rule its schema node doesn't carry, a secret reference that no longer resolves) is shown the same way, from `details.issues[].message`, under the field its `path` names, and nothing changes.
 
-**Applying.** A change to a `hot` or `none` setting applies when its control commits (a switch at once, a field on Enter or leaving it), with the quiet line and Undo. A change to a `restart` setting waits in the section's foot: "2 changes · saving restarts OpenClaw once. Running tasks pause and pick up again. **Discard** · **Save and restart**". The press is the request: no confirmation follows, unless the change is one that asks (section 8.3 lists them; for the person's own change they ask only where the change could lock this device out, below).
+**Applying.** A change to a `hot` or `none` setting applies when its control commits (a switch at once, a field on Enter or leaving it), with the quiet line and Undo. A change to a `restart` setting waits in the section's foot: "2 changes · Saving restarts OpenClaw once." with the version's sentence for running work (section 7), **Discard** · **Save and restart**. A change whose `reloadKind` can't be read waits there too. The press is the request: no confirmation follows, unless the change is one that asks (section 8.3 lists them; for the person's own change they ask only where the change could lock this device out, below).
 
 **Getting back from a mistake:** Undo on the line, and **Recent changes** at the top of the section, each with Undo for 7 days (section 6).
 
@@ -251,30 +254,56 @@ What a person sees ([picture](gateway-settings/plugins-desktop.png)): **Clawtrat
 
 ## 6. Undo
 
-**Proposed.** What `doing-not-asking.md` §1 says Undo is, holds here.
+**Proposed.** What `doing-not-asking.md` §1 says Undo is holds here, with one rule stricter than a value check: **Undo is offered only when Clawtrate can show that nothing was written to OpenClaw's config since the change; otherwise it is withheld.** A value check is not enough: Clawtrate changes X to Y, another device writes Z and then Y again, and a check that the value is still Y would put X back over two changes it never saw. The gateway keeps no history of writes (its receipt is process-local, `<1110>/docs/gateway/protocol/rpc-talk-config-and-agents.md:145-150`), so the evidence is a chain of authored hashes that Clawtrate keeps itself.
 
-- **What is kept:** one journal entry per change, in the `clawtrate-bots` plugin's journal on the gateway (`bots-in-clawtrate.md` §5.4), written through its admin method: the paths Clawtrate sent, each one's value before and after (non-secret paths only), the `hash` the write left, who made it (this device, or a bot with its run and origin), the time. **Only the paths Clawtrate sent**, never the extra paths a gateway migration added to `changedPaths` (section 1.2). Up to 64 KiB per entry; a larger change (a long list replaced) keeps the paths and says "Can't be undone: too large to keep" in its line before it is made.
-- **Until the plugin is on the gateway:** the entry is kept on the device that made the change, in the host's storage, for the same 7 days, and Undo is offered there only. Bounded: 200 entries per gateway, registered in `owners.ts` and the documented totals.
-- **Where Undo is offered:** in the change's own line, and in **Recent changes** in All OpenClaw settings and in the section the change belongs to, on every device connected to that gateway.
-- **For how long:** 7 days, or until the same path changes again. The journal keeps the entry for 90 days without Undo.
-- **What Undo does:** reads `config.get`; if every path still holds the value the change wrote, writes the values before with that read's `baseHash`; otherwise writes nothing and says "Changed since: Default model is now Deep 1 · Open". Undo of a restart change restarts again, and says so in its button ("Undo and restart").
+- **What is kept**, one journal entry per change, in the `clawtrate-bots` plugin's journal on the gateway (`bots-in-clawtrate.md` §5.4), written through its admin method:
+  - the **intended leaves**: each leaf Clawtrate meant to change, from the effective leaf diff of section 8.3 (not the patch's shape), with its **authored state before and after**, read from `sourceConfig`: present with its exact value, or absent. Never the runtime default that `config` fills in for an absent key;
+  - `hashBefore` (the `baseHash` the write used) and `hashAfter` (the `hash` its answer returned);
+  - who made it (this device, or a bot with its run and origin) and when.
+  - **Not kept:** a secret leaf's value (none is readable), and the extra paths a gateway migration added to `changedPaths` (section 1.2), which are not Clawtrate's to invert.
+- **The evidence that nothing came between.** The current `config.get` `hash` equals the entry's `hashAfter`, or is reached from it through journal entries each of whose `hashBefore` is the previous one's `hashAfter`, none of which touched this entry's leaves or a container of them. Any gap withholds Undo: a write from the command line, OpenClaw's own web page, a bot's own tool, a hand edit of the file, or a client without the journal. The line then says "Changed outside Clawtrate since · Open". This is conservative on purpose: an unrelated write elsewhere also withholds it.
+- **What Undo writes:** only the confirmed intended leaves, back to their authored state. A value is written back. A leaf that was absent is deleted with `null`. An array Clawtrate changed is written whole as it was, with its path in `replacePaths`. An id-keyed list (such as `agents.entries`, which the gateway merges by id) is restored entry by entry, so a merge never keeps an entry Undo meant to remove. The write carries the current `hash` as `baseHash`; if anything slips in between, it is refused and Undo withdraws itself the same way.
+- **The 2026.11.10 migration.** A migration the gateway applied inside the change's own write is part of `hashAfter`, so it doesn't break the chain, and Undo doesn't revert it. If the migration moved one of the intended leaves (its path is no longer in the schema), Undo leaves that leaf and says what it put back and what it couldn't.
+- **Until the plugin is on the gateway:** the entry is kept on the device that made the change, in the host's storage (at most 200 per gateway, registered in `owners.ts` and the documented totals). The chain then has only that device's writes, so a write from any other device withholds Undo.
+- **Where, and for how long:** in the change's own line, and in **Recent changes** in All OpenClaw settings and in the section the change belongs to, on every device, for 7 days. The journal keeps the entry for 90 days without Undo.
+- **A restart change's Undo** restarts again, and its button says so: "Undo and restart".
 - **What can't be undone, said before the change:** a secret replaced or set (its old value was never readable); a chat app disconnected (its token goes); a plugin removed (`bots-in-clawtrate.md` §6.6). Each says so where it is made, in the line under the field or in its one confirmation.
 
 ## 7. Restart
 
 **Proposed, on the facts of section 1.1.**
 
-- **When:** the gateway decides, from the paths saved. Clawtrate knows beforehand from `config.schema.lookup`'s `reloadKind` for each path, to put "Restarts OpenClaw" beside it; the write's `requiresRestart` is what it trusts afterwards.
-- **Who triggers it:** the gateway, by itself, in both reload modes. Clawtrate never sends a restart and never calls `update.run`.
-- **Several changes share one restart:** restart settings wait together in the foot and go in one `config.patch`; the gateway also coalesces restarts and keeps a 30-second cooldown. A form's hot change made while restart changes wait is applied on its own and doesn't flush them.
-- **What running bots and tasks experience, by version** (the gateway sends nothing that says which, so this is the one place this design tells by version, with `openClawAtLeast` from `packages/core/src/gateway-version.ts`):
-  - **2026.10.6:** the gateway stops taking new work and waits for running turns to finish, up to 5 minutes, then restarts (`<1006>/docs/gateway/restart-recovery.md:152-166`). The foot says "Saving restarts OpenClaw once its bots finish what they're doing."
-  - **2026.11.10:** running work stops promptly; at the next start each interrupted conversation gets one input to pick up where it left off, and a task a bot started stops and its requester is told (`<1110>/docs/gateway/restart-recovery.md:11-21, 162-169`). The foot says "Running tasks pause and pick up again."
-  - **An unknown version** gets the 2026.11.10 sentence, the cautious one.
-- **What the person sees:** the line above Settings and above the shell, "OpenClaw is restarting to apply Who can reach OpenClaw. Running tasks pick up where they left off." in place of the connection banner's "Reconnecting". Conversations show their own state as they do for any reconnect.
-- **How Clawtrate comes back:** the client's usual reconnect; then `config.get` until saved and applied revisions are equal, at most 2 minutes on 2026.10.6 (the drain) and 60 seconds otherwise. Then the line "Who can reach OpenClaw is now Your private network · Undo and restart". If the gateway doesn't come back in that time, the line says "OpenClaw hasn't come back after the restart" with what Clawtrate last read, and nothing is retried. If it comes back with the revisions unequal, "Saved, but OpenClaw hasn't applied it yet", as `machines.ts:987` already handles that answer.
+- **When.** The gateway decides, from the paths saved. Before a change, Clawtrate reads `config.schema.lookup`'s `reloadKind` for every leaf in it. **If any leaf restarts, or its `reloadKind` can't be read (the lookup fails, no rule matches the path, an unknown version), the whole change is held for one "Save and restart"**: no `hot` leaf in it is applied ahead. For a bot's change this is the card of section 8.3, with **Change and restart**; it never applies at once (section 8.2). After the write, its `requiresRestart` is what Clawtrate trusts.
+- **Who triggers it.** The gateway, by itself, in both reload modes. Clawtrate never sends a restart and never calls `update.run`.
+- **Several changes share one restart.** Restart-bound edits wait together in the section's foot and go in one `config.patch`; the gateway also coalesces restarts, with a 30-second cooldown. A hot change made in another form while restart edits wait is applied on its own and doesn't flush them.
+- **What running work experiences, by version.** The gateway sends nothing that says which, so this is the one place this design tells by version, with `openClawAtLeast` from `packages/core/src/gateway-version.ts`. The same sentence is used in the foot, in a bot's card and in the line above the shell:
+  - **2026.10.6:** the gateway stops taking new work and waits for running turns and background tasks to finish, up to its drain budget (5 minutes by default), then restarts (`<1006>/docs/gateway/restart-recovery.md:162-166`). "Saving restarts OpenClaw once its bots finish what they're doing, which can take up to 5 minutes."
+  - **2026.11.10:** running work stops at once. At the next start, each interrupted main conversation gets one input to pick up where it left off; a task a bot started stops, and the bot that started it is told (`<1110>/docs/gateway/restart-recovery.md:11-21, 162-169`). "Saving restarts OpenClaw. Conversations pick up where they left off; tasks a bot started stop and may need starting again."
+  - **A version Clawtrate doesn't know:** neutral words. "Saving restarts OpenClaw. Work running now may be interrupted."
+- **What the person sees while it restarts.** The line above Settings and above the shell, in place of the connection banner's "Reconnecting": "OpenClaw is restarting to apply Who can reach OpenClaw." followed by the version's sentence ([picture](gateway-settings/restart-desktop.png)). Conversations show their own state, as they do for any reconnect.
+- **How Clawtrate comes back.** The client's usual reconnect, then `config.get` until the saved and applied revisions are equal. How long it waits before saying anything is wrong:
+  - **2026.10.6:** the drain budget plus a minute for start-up, so 6 minutes by default.
+  - **2026.11.10 and an unknown version:** 60 seconds from when the gateway went away.
+  - **On success:** "Who can reach OpenClaw is now Your private network · Undo and restart".
+  - **Back, but the revisions differ:** "Saved, but OpenClaw hasn't applied it yet", as `machines.ts:987` already handles that answer.
+  - **Contact lost past the wait:** "Clawtrate lost contact with OpenClaw during the restart, so it can't confirm the change applied." with what Clawtrate last read. Nothing is retried, and nothing is written again.
 
 ## 8. A bot changing a setting when asked
+
+### What a person experiences under these rules
+
+**Finding: under these rules almost nothing a bot is asked applies at once.** Only the three Models settings do (the default model, the backup models, thinking), and only when the person's own words name the value. Everything else asks once in the conversation, or is refused with a pointer to the place in Settings. That is the price of the provenance and classification rules below (8.2, 8.3). It still gives the owner the common ask, "make X the default", with no card, and every other ask costs one press or a trip to the right section.
+
+| The person types                                       | What happens                                        | What the person sees, or what the bot says                                                                                                                                                                                                                                                                        |
+| ------------------------------------------------------ | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| "Make Swift 2 the default for everyone"                | At once                                             | "Default model is now Swift 2, on Work · Undo"                                                                                                                                                                                                                                                                    |
+| "Add Globex One as a backup"                           | At once                                             | "Backup models: Globex One · Undo"                                                                                                                                                                                                                                                                                |
+| "Use the cheapest model by default"                    | Asks once: the bot chose the value                  | "Make Swift 1 the default model? Swift 2 → Swift 1, on Work. **Change** · **Keep**"                                                                                                                                                                                                                               |
+| "Turn on web search"                                   | Refused: enabling a plugin runs its code            | The bot: "I can't turn plugins on. You can, in Settings › Plugins." Under it, Clawtrate's own line: "Open Plugins"                                                                                                                                                                                                |
+| "Connect my Telegram"                                  | Refused: it needs a token that only you should type | The bot: "Connecting a chat app needs a token only you should type. It takes a minute in Settings › Chat apps." Under it: "Open Chat apps"                                                                                                                                                                        |
+| "Let my laptop reach you over Tailscale"               | Asks once, then restarts                            | "Change who can reach OpenClaw? This computer only → Your private network (Tailscale). Devices on your Tailscale network could then connect, with a token or an approved device." and the version's restart sentence (section 7). **Change and restart** · **Keep** ([picture](gateway-settings/bot-desktop.png)) |
+| "Change your port to 18800"                            | Asks once, then restarts                            | The same card: "Change OpenClaw's port? 18790 → 18800." with the lock-out sentence when this device would lose it (section 5)                                                                                                                                                                                     |
+| Any of these after the bot read a web page in that run | Refused                                             | "Juniper tried to change the default model after reading a web page. Nothing was changed."                                                                                                                                                                                                                        |
 
 ### 8.1 The tool
 
@@ -282,75 +311,158 @@ What a person sees ([picture](gateway-settings/plugins-desktop.png)): **Clawtrat
 
 ```
 clawtrate_settings {
-  find?: string,                      // words to look for, up to 80 characters
-  set?: [{ setting: string, value: JSON | null }]   // 1 to 5 settings, by key
+  find?: string,                                   // words to look for, up to 80 characters
+  set?: [{ setting: string, value: JSON | null }]  // 1 to 5 settings
 }
 ```
 
-- **`find`** returns up to 10 settings whose label, help or key match: key, Clawtrate's label, kind of value, its choices, whether it restarts, whether it asks first, and **the current value only when it is a boolean, a number or one of a closed set of choices**. Free text, secrets, lists and maps are returned as "has a value" or "not set". **Why:** a value someone else wrote (a bot's earlier text, a channel's name) would be outside content, and returning it would make the rest of the run B (`bots-in-clawtrate.md` §4.3); these kinds can't carry instructions.
-- **`set`** asks for the change; Clawtrate applies it (`bots-in-clawtrate.md` §5.2) with the person's own access, routed by section 2's owners. All the settings in one call are one change, one journal entry and one Undo, and share one restart.
-- Description (240 characters at most): "Find and change OpenClaw's settings when your person asks, like the default model or a chat app's options. It applies at once with Undo; changing who can reach OpenClaw asks your person first."
-- What it returns uses `bots-in-clawtrate.md` §7.3's words, and for a refusal by a bound: "That setting isn't one Clawtrate knows.", "A bot can't set a secret. Ask your person to type it in Settings › Chat apps."
+- **`setting`** is one of Clawtrate's own names for the at-once list (`default-model`, `backup-models`, `thinking`), or an OpenClaw key for anything else, which always asks or is refused (8.3).
+- **A model is passed as the person named it** ("Swift 2"). The device resolves it against the gateway's catalog, to exactly one model on a signed-in account, or the call is refused ("I couldn't tell which model you meant: Swift 2 is on Work and on Home."). The model never sees the catalog's names before the change.
+- **`find`** answers only from Clawtrate's own built-in table, in Clawtrate's own words: the setting's name, what kind of value it takes, whether it applies at once, asks or is refused, and whether it restarts. It returns no text from the gateway: no schema label or help (a plugin writes those), no catalog name, no current value. So nothing it returns is outside content, and it can't make the run B.
+- **`set`** asks for the change. Clawtrate applies it with the person's own access, through section 2's owners (`bots-in-clawtrate.md` §5.2). All the settings in one call are one change: one card or none, one journal entry, one Undo, one restart.
+- **Description** (240 characters at most): "Change OpenClaw's default model, backup models or thinking when your person names them; it applies at once with Undo. Other OpenClaw settings ask your person first, and some only they can change in Settings."
+- **What it returns** uses `bots-in-clawtrate.md` §7.3's words, plus these refusals: "That setting isn't one Clawtrate knows." and "A bot can't change that: it holds a secret. Your person can, in Settings."
 
-### 8.2 When a request counts as the person's
+### 8.2 When a change applies at once
 
-The rule of `bots-in-clawtrate.md` §4.3, unchanged. A call is **A** when the plugin says its run was typed here, the device that applies it sent that run in that conversation, and the run read nothing from outside before the call. Then:
+**The turn being the person's is not enough.** The silent check of `bots-in-clawtrate.md` §4.3 shows that a turn was typed by the person; it doesn't show that this setting and this value are what they asked for. Something read earlier can still be in the bot's context (that design's §4.6). So **a change applies at once only on a trusted, structured match to the exact change**, and all of these must hold:
 
-| Origin | What happens                                                                                                                                                                                              |
-| ------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| A      | Done at once with Undo; the ones in 8.3 ask first                                                                                                                                                         |
-| B      | Not done, said plainly: "Juniper tried to change the default model after reading a web page. Nothing was changed." The person's settings are what §3 of the bots design keeps from anything but their ask |
-| C      | Not done (another bot, a routine's or check-in's run, a chat-app message, the gateway's own page, a started task)                                                                                         |
+1. **Origin A**, with "read from outside" tracked where content actually reaches the run:
+   - **Tool results, including nested ones.** On both versions a call made through tool search runs in its own executor and is recorded as nested tool activity (`<1006>/dist/builtin-openclaw-CcrkVuBH.mjs:9115-9200`; `<1110>/dist/attempt-D0eWH9Mj.mjs`, `attempt-tool-search-executor.ts`), not through the session's ordinary tool-result path. Until a run on each version shows the plugin sees every nested result, **a run that used tool search or Code Mode counts as having read outside content** (section 13).
+   - **Context injected into the run**: a plugin's or hook's added context, a check-in's notes, an attachment, a message steered in that no Clawtrate device sent.
+   - **`find`'s answers**, which carry none (8.1).
+2. **The setting is on the at-once list**, an exact, reviewed set of leaves: `agents.defaults.model.primary`; `agents.defaults.model.fallbacks`, adding or removing one entry; `agents.defaults.thinkingDefault`. Each addition to this list is its own reviewed change, with its own test.
+3. **The value is constrained**: a model the device resolved to exactly one catalog entry on a signed-in account, or a thinking level from the fixed list.
+4. **The person's own words name it.** The device's own copy of the person's messages in that run (`bots-in-clawtrate.md` §4.2) contains both:
+   - the value, as the catalog names it or as its reference, with spaces collapsed and case ignored;
+   - the setting, by one of its fixed words ("default", "backup" or "fallback", "thinking").
 
-A request in a chat app from OpenClaw's owner (O) through Clawtrate's tool is not done either: Clawtrate can show it was the owner's ask only in Clawtrate. The owner keeps OpenClaw's own route there (8.5).
+   "Make Swift 2 the default" matches; "use the cheapest one" doesn't. The match is made by the device, never by the model.
 
-### 8.3 What always asks first
+5. **The change is exactly that leaf**, by the effective diff of 8.3, and nothing in it restarts (section 7).
+6. **The device that sent the run applies it**, with its own current admin grant (section 9).
 
-Even for A, a change to any of these asks in the conversation ([picture](gateway-settings/bot-desktop.png)), in one card: the setting in Clawtrate's words, the old and the new value, one sentence of what it means and whether it restarts, **Change** and **Keep**. The card waits 24 hours, then ends.
+Otherwise:
 
-- **Who can reach OpenClaw:** `gateway.bind`, `gateway.port`, `gateway.mode`, `gateway.customBindHost`, `gateway.tailscale.*`, `gateway.tls.*`, `gateway.remote.*`, `gateway.publicOrigin`, `gateway.trustedProxies`, `gateway.allowRealIpFallback`, `gateway.http.endpoints`, `gateway.controlUi.*`, `discovery.*`, `hooks.enabled`, `hooks.path`, `gateway.openclawId.*`.
-- **Who can control it:** `gateway.auth.*` (other than a secret, below), `gateway.roles`, `gateway.nodes.pairing.*`, `commands.ownerAllowFrom`, `accessGroups`.
-- **Who can write to the bots:** each chat app's `dmPolicy`, `allowFrom`, `groupPolicy`, `groups`, and approving a pairing request.
-- **Anything that turns approvals off or widens them:** `approvals.*`, `security.*`.
-- **A setting the classifier doesn't know** (not in this build's lists and not under a prefix it knows): asks. An unknown version's new paths therefore ask until a build classifies them.
+| Origin | What happens                                                                                                                                                            |
+| ------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| A      | At once when 1 to 6 hold; otherwise **asks once**, with the card of 8.3; refused when 8.4 or 8.5 refuse it                                                              |
+| B      | Refused, said plainly: "Juniper tried to change the default model after reading a web page. Nothing was changed."                                                       |
+| C      | Refused (another bot, a routine's or a check-in's run, a chat-app message, OpenClaw's own page, a started task)                                                         |
+| O      | Refused through Clawtrate's tool: Clawtrate can show the owner's ask only in Clawtrate. The owner keeps OpenClaw's own route there, with its exact human approval (8.6) |
+
+### 8.3 Classifying the change, and the card
+
+**The effective leaf diff.** Clawtrate reads `config.get` and applies the proposed change to the authored config (`sourceConfig`) on the device, exactly as the gateway's merge does: objects merge, `null` deletes, arrays replace, and id-keyed lists merge by id unless replaced. It lists every leaf added, changed or removed, including:
+
+- each leaf under a deleted or replaced container;
+- each array element;
+- for a write routed to another engine (section 2), the leaves that engine will write.
+
+**Each leaf is classified by exact pattern, never by prefix.** A leaf under a known prefix that the table doesn't name exactly is unknown. The whole change takes the strictest class of any leaf:
+
+1. **Refused** anywhere (8.4, 8.5): the whole change is refused.
+2. Else **asks** anywhere: the whole change asks.
+3. Else **at once**, only when every leaf is on the at-once list and 8.2 holds.
+
+**What asks** (for A):
+
+- **Who can reach OpenClaw:** `gateway.bind`, `gateway.port`, `gateway.mode`, `gateway.customBindHost`, `gateway.tailscale.*`, `gateway.tls.*`, `gateway.remote.*`, `gateway.publicOrigin`, `gateway.trustedProxies`, `gateway.allowRealIpFallback`, `gateway.controlUi.*`, `discovery.*`, `gateway.openclawId.*`.
+- **Who can control it:** `gateway.auth.mode` (other than `"none"`, refused), `gateway.roles`, `gateway.nodes.pairing.*`, `accessGroups`.
+- **Who can write to the bots, and where messages go:** each chat app's `dmPolicy`, `allowFrom`, `groupPolicy`, `groups`; `bindings`; approving a pairing request.
+- **Approvals:** `approvals.*`, `security.*` (tightening and loosening alike; loosening also has the warning line "Commands would run without asking").
+- **Everything else** not on the at-once list and not refused: `session.*`, `messages.*`, `cron.*`, a bot's own entry outside its model. **Unknown leaves ask**, so an unknown version's new paths ask until a build classifies them.
+
+**The card** ([picture](gateway-settings/bot-desktop.png), [phone](gateway-settings/bot-phone.png)) shows the whole diff, each leaf in Clawtrate's words, old → new, and one sentence of what it means. When the change restarts, the card adds the version's restart sentence (section 7) and its button is **Change and restart**; otherwise it is **Change**, and **Keep** in both cases.
+
+- **Bound to what was shown.** The card is bound to that diff and to the `hash` it was computed from. **Change** writes exactly that diff, with that `hash` as `baseHash`.
+- **Drift invalidates it.** If the config changed in between, the write is refused and nothing is written. The card says "OpenClaw's settings changed since you saw this. Ask Juniper again." It never recomputes and applies.
+- **Lifetime.** It waits 24 hours, then ends. Only a device with full control can press **Change** (section 9).
 
 ### 8.4 What a bot can never change
 
-Refused with the reason, whatever the origin; the person can make each in Settings:
+Refused with the reason, whatever the origin; the person can make each change in Settings:
 
-- **A secret's value** (every `sensitive` path, and `env.*`, `secrets.*`). A secret should be typed into a write-only field, not pass through a model and its transcript.
-- **Anything that lets bots do more:** `tools.*` and `agents.*.tools.*` where the change widens (an allow added, a deny removed, a profile, exec `security` or `ask` loosened, elevated mode), `tools.openclaw.autoApproveChanges: true`, `tools.gatewayPolicy`, `agents.*.sandbox`. Tightening is done for A, as `clawtrate_change`'s rules are (`bots-in-clawtrate.md` §3.1).
-- **Clawtrate's own plugins** (`plugins.entries.clawtrate-*`, their `hooks`, `plugins.allow`, `plugins.deny`, `plugins.load`, `plugins.installs`), and installing, enabling or removing any plugin.
-- **`gateway.auth.mode: "none"`.**
-- **`update.*`** and OpenClaw's version: updates keep OpenClaw's own approval (`bots-in-clawtrate.md` §3.3).
-- **Settings another engine owns** that the bots design gives a tool of its own (a bot's account, its check-ins) are routed to that tool's rule.
+- **Secrets and their containers** (8.5).
+- **What reaches a host or runs code:**
+  - model providers: `models.providers.*`, which carries base URLs, headers, request authentication and local services;
+  - tool servers: `mcp.*` and `nodeHost.mcp.*`, whose server entries take a `command`, `args`, `env` and `url` (`<1006>/dist/zod-schema.root-support-BJp8SNHR.mjs:27-31`);
+  - `hooks.*`, `gateway.http.*`, `browser.executablePath`, `browser.cdpUrl`, `tools.web.fetch.*`;
+  - `commands.*`, which includes `ownerAllowFrom`: who counts as the owner.
+- **Anything that lets bots do more:**
+  - `tools.*`, and `agents.*.tools.*` where the change widens: an allow added, a deny removed, a profile, exec `security` or `ask` loosened, elevated mode;
+  - `tools.openclaw.autoApproveChanges`, `tools.gatewayPolicy`, `agents.*.sandbox`.
 
-### 8.5 OpenClaw's own route, held
+  Tightening one of a bot's own tool rules goes through `clawtrate_change` (`bots-in-clawtrate.md` §3.1).
 
-**Proposed change to `bots-in-clawtrate.md` §3.3's `openclaw` row:** in a run that is A, the plugin's `before_tool_call` refuses the `openclaw` tool's config-writing operations with the reason "Use clawtrate_settings: it applies the change with Undo", so the bot makes the change through Clawtrate and it is journaled. **Why not OpenClaw's approval, as that row says now:** for a change the person just asked for, an approval card is a prompt the rule forbids. In every other origin the row stands: O keeps OpenClaw's own approval in the chat it came from; B and C are not done.
+- **Delegation:** `agents.*.subagents.*` goes to the reach rule of `bots-in-clawtrate.md` §3.1, never this tool.
+- **Plugins:** any of them, installing, enabling, disabling, configuring or removing; and `plugins.allow`, `plugins.deny`, `plugins.load`, `plugins.installs`.
+- **`gateway.auth.mode: "none"`**, and **`update.*`** and OpenClaw's version: updates keep OpenClaw's own approval.
 
-### 8.6 How it is attributed
+### 8.5 Secrets, refused before anything is recorded
 
-- **In the conversation:** "Default model is now Swift 2, on Work · Undo", from the journal entry. **Not** "changed by Juniper at your request": an A line states what happened and never says the person asked, because A shows only that the change could be their ask (`doing-not-asking.md` §1).
-- **In Recent changes:** "Default model · Swift 1 → Swift 2 · Juniper, in your conversation · 9:14 · Undo", where "your conversation" opens it. A change the person made in Settings reads "You, on this Mac".
+The plugin refuses the call **before it is written into its ledger**, so no secret reaches the journal, a log or the device, when any leaf or value of the change:
 
-### 8.7 What the security review has to look at
+- **contains the redaction marker** `__OPENCLAW_REDACTED__`. Sending it back keeps an existing value at the gateway (section 1.1), but it authorizes nothing: a bot that sends one is refused, not treated as a no-op;
+- **has a secret reference's shape** (`{source, provider, id}`) or is an environment placeholder (`${…}`);
+- **is sensitive by that version's own rules**, all three of:
+  - the schema's `sensitive` hint;
+  - the key-name patterns `token$`, `password`, `secret`, `api.?key`, `encrypt.?key`, `private.?key`, `serviceaccount`, apart from the names OpenClaw exempts, such as `maxTokens` (`<1006>/dist/sensitive-paths-CieLU95K.mjs:8-38`; `<1110>/dist/sensitive-paths-BrVSmum7.mjs`);
+  - the URL rules: `*.baseUrl`, `*.httpUrl`, `*.cdpUrl`, `*.request.proxy.url`, `mcp.servers.*.url`, and any setting whose hint is tagged as a sensitive URL (`<1006>/dist/redact-sensitive-url-C4n2JwGL.mjs:83-89`; `<1110>/dist/redact-sensitive-url-Byg68d6v.mjs`).
 
-1. **The classifier of 8.3 and 8.4**: that every path that changes who can reach or control OpenClaw, or widens a bot, is in it on both versions, with a test over both versions' schemas that fails for a path under `gateway.*`, `channels.*.dmPolicy`, `approvals.*` or any `sensitive` path that neither asks nor is refused; and that unknown paths ask.
-2. **The hold of 8.5**: that the `openclaw` tool's write operations are recognised from its typed operation names on both versions, including in Code Mode and through tool search (`bots-in-clawtrate.md` §12, first item).
-3. **`find`'s answers**: that nothing it returns can carry text a bot or a chat app wrote.
-4. **Lock-out**: the reachability check of section 5 and the card of 8.3 for this device and for the person's other devices.
-5. **Undo of a tightening**: a bot tightens a setting with A, the person's Undo re-opens it; Undo is the person's press, but a bot has no Undo tool, and the review confirms none is added.
-6. **Rate:** at most 10 `set` calls an hour per bot and 3 asks waiting at a time, inside the gateway's 30 writes a minute.
-7. **Lost answers**: a write whose answer is lost is never replayed (section 1.1); its line says "Couldn't confirm" with what Clawtrate now reads.
+  Clawtrate carries each version's rules as a table, tested against that version's package; an unknown version gets the union of the known ones;
+
+- **is a free-form credential carrier**: `*.headers.*`, `*.env.*`, `*.request.auth.*`, `env.vars.*`;
+- **edits or deletes a container that holds any such leaf** (deleting `models.providers.acme` deletes its key).
+
+Clawtrate never reads `config.get`'s `raw`. On both versions it can come back as redacted text, not only `null` (`<1006>/dist/redact-snapshot-UvoXgo0H.mjs:190-232`), and nothing here needs it.
+
+### 8.6 OpenClaw's own routes
+
+- **What stays open today, said plainly.** Without the bots plugin, a bot whose runs are Full Access changes OpenClaw's settings with its own `openclaw` tool, with no prompt, no journal and no Undo (section 1.5). A bot that runs commands freely can also edit the config file itself. Nothing in this design closes the command route; that is `doing-not-asking.md` §3 and #675.
+- **With the plugin**, its `before_tool_call` refuses the native mutating routes by default, for every bot it serves and every origin but O:
+  - every mutating operation of the `openclaw` tool, by any of its names;
+  - on 2026.11.10, the `gateway` tool's `restart`.
+
+  In an A run the refusal says "Use clawtrate_settings: it applies the change with Undo, or asks your person." O, the owner in a chat app, keeps OpenClaw's own exact human approval in the chat it came from (`bots-in-clawtrate.md` §3.3). Bots Clawtrate makes also have `openclaw` and `gateway` denied on their own entry (that design's §3.3).
+
+- **The new tool adds no route a bot lacked.** What `clawtrate_settings` writes at once is only the at-once list; everything else is the person's own press on a card, from a device with full control. A bot whose `openclaw` or `gateway` tool was denied by someone other than Clawtrate (the journal says who wrote each deny) is refused `clawtrate_settings`'s `set` too: "Your settings don't let you change OpenClaw." It keeps `find`.
+- **The release gate.** Step 7 of section 10 doesn't ship until tests on both versions show, with the plugin installed:
+  - each mutating operation is refused by default, for each of its names, called directly, from Code Mode and through tool search, together with the 2026.11.10 `gateway` restart;
+  - O still reaches OpenClaw's own approval.
+
+  Each test fails with its hold removed.
+
+### 8.7 How it is attributed
+
+- **In the conversation:** "Default model is now Swift 2, on Work · Undo", drawn from the journal entry. Not "changed by Juniper at your request": an A line says what happened and never that the person asked (`doing-not-asking.md` §1).
+- **In Recent changes:** "Default model · Swift 1 → Swift 2 · Juniper, in your conversation · 9:14 · Undo", where "your conversation" opens it. A change made in Settings reads "You, on this Mac". A change from a card reads "Juniper, in your conversation · you pressed Change".
+
+### 8.8 What the security review has to look at
+
+1. **Provenance (8.2).** The structured match is made on the device, from the device's copy of what the person typed. Outside content is tracked through nested tool-search and Code Mode calls, injected context and steered messages. `find` returns no gateway text.
+2. **Classification (8.3, 8.4).** It works on the effective leaf diff, including deletions, arrays, id-keyed lists and routed writes. It matches exact leaves, never prefixes, and the strictest leaf wins. Two tests run over both versions' schemas: one fails for any reach, control, approval, code or credential leaf that neither asks nor is refused; one shows that unknown leaves ask.
+3. **The card's binding.** The diff and `hash` shown are what is written, and drift refuses the write.
+4. **Secrets (8.5).** Refused before the ledger, by each version's own rules, including the URL rules and containers; `raw` is never read.
+5. **Undo (section 6).** The hash chain, authored presence, and inverting only the intended leaves.
+6. **Restart (section 7).** A restart-bound or uncertain change never applies at once.
+7. **Native routes (8.6).** The release gate's tests.
+8. **Scopes (section 9).** Only the originating device's current admin grant, and no hand-off.
+9. **Lock-out.** Section 5's reachability check, for this device and the person's others.
+10. **Rate.** At most 10 `set` calls an hour per bot and 3 cards waiting at a time, inside the gateway's 30 writes a minute.
+11. **Lost answers.** A write is never replayed (section 1.1); its line says "Couldn't confirm" with what Clawtrate now reads.
 
 ## 9. Two devices, another computer, no full control, an unknown version, the iPhone
 
-- **Two devices.** Each reads the config when a section opens and after any write; a write refused for a stale `baseHash` keeps the person's edit, reads again and says "Changed on another device just now. Your change is still here to save." The journal is on the gateway, so Recent changes and Undo are the same on both. A restart from one device shows its line on the other from the disconnect and the unequal revisions.
-- **A gateway on another computer.** The same forms and editor. A restart there takes longer to come back over a tunnel; the 60- and 120-second waits hold. The lock-out check reads the address this device dialled, so changing the bind of a gateway reached over the network asks.
-- **A connection without full control** ([picture](gateway-settings/all-readonly-desktop.png)). Every section reads; controls are read-only; one line at the top, "This device can see OpenClaw's settings but not change them." with **Ask for full control**, setup's existing request. A bot's `set` on such a device's request waits for a device with full control, as `bots-in-clawtrate.md` §5.3 says.
-- **A version the forms don't know.** Each form checks its paths with `config.schema.lookup` when it opens, never the version: a field whose path isn't in the schema isn't drawn, and a form with none of its paths says "This OpenClaw keeps these elsewhere" and links to All OpenClaw settings, which draws whatever the schema has. 2026.11.10's retired `agents.defaults.heartbeat` is the case this rule already handles in `check-ins.ts`.
-- **The iPhone app** (`apps/mobile`, another thread's; nothing there changes here): it would need the same core module to show these sections, and a phone-width layout, which the prototype draws ([phone](gateway-settings/models-phone.png)). Until then the phone shows none of them; a bot's change asked for on the phone is applied by a desktop as B (not done), per `bots-in-clawtrate.md` §9.
+- **Two devices.** Each reads the config when a section opens and after any write. A write refused for a stale `baseHash` keeps the person's edit, reads again, and says "Changed on another device just now. Your change is still here to save." Recent changes is the same on both. Undo is offered only by section 6's evidence: once the other device writes anything, the chain through its entry must be in the journal. A restart started from one device shows its line on the other, from the disconnect and the unequal revisions.
+- **Scopes for a bot's change.**
+  - **At-once writes stay on the originating device.** An at-once write is made only by the device that sent the run, with that device's own current, confirmed admin grant. The grant is read from this connection's `hello-ok` scopes when the change applies, never remembered. No other device applies it on its behalf: the hand-off of `bots-in-clawtrate.md` §5.3 to "any connected Clawtrate with full control" does not apply to `clawtrate_settings`.
+  - **Without the grant, the change becomes the card**, never an automatic write. Pressing **Change** on a device without full control opens the existing consent flow ("Ask for full control", setup's request). Once full control is granted, the person presses **Change** again. A card can also be pressed on another of the person's devices that has full control; that is the person's own press there.
+  - **Pairing.** Approving a chat app's sender keeps its own pairing scope (`channels.pairing.approve`). Making that sender the owner (`commands.ownerAllowFrom`, section 4.3) needs full control as well, so a device without it can approve a sender but can't do the owner step.
+- **A gateway on another computer.** The same forms and editor. A restart there may take longer to come back over a tunnel; section 7's waits hold. The lock-out check reads the address this device dialled, so changing the bind of a gateway reached over the network asks.
+- **A connection without full control** ([picture](gateway-settings/all-readonly-desktop.png)). Every section reads; controls are read-only and secrets show "Set" with no Replace. One line at the top: "This device can see OpenClaw's settings but not change them." with **Ask for full control**.
+- **A version the forms don't know.** Each form checks its paths with `config.schema.lookup` when it opens, never the version. A field whose path isn't in the schema isn't drawn. A form with none of its paths says "This OpenClaw keeps these elsewhere" and links to All OpenClaw settings, which draws whatever the schema has. 2026.11.10's retired `agents.defaults.heartbeat` is a case this rule already handles in `check-ins.ts`. A bot's change on an unknown version asks for every leaf the classifier doesn't know (8.3), and restart words are neutral (section 7).
+- **The iPhone app** (`apps/mobile`, another thread's; nothing there changes here). It would need the same core module to show these sections, and a phone-width layout, which the prototype draws ([phone](gateway-settings/models-phone.png)). Until then the phone shows none of them. A bot's change asked for on the phone isn't applied at once by a desktop (above): it waits as a card for a device with full control.
 
 ## 10. The order of pull requests
 
@@ -361,9 +473,9 @@ Each is releasable alone and checked on development gateways of both versions.
 3. **All OpenClaw settings, without secrets.** Search, groups, controls by node, the JSON field, client checks and the gateway's issues under the field, owned paths read-only, the lock-out check. Tested: the controls against both versions' schemas (every node kind drawn or given the JSON field), a refused value per kind, the lock-out ask.
 4. **Secrets, write-only,** and the words before a change that can't be undone. Tested: a secret never in any answer Clawtrate keeps or logs; Replace sends one path; the sentinel kept on an unrelated write.
 5. **Plugins.** The list, switches and each plugin's settings form; Clawtrate's own from #796. Tested on each version with a development plugin.
-6. **Chat apps.** The channel set-up drawn from the gateway's wizard, QR sign-in, Say hello with That's me, a connected app's page, Disconnect. Tested with a stand-in channel plugin on the development gateway (no real chat app), both versions.
-7. **The journal on the gateway.** Entries written through the bots plugin, Undo and Recent changes on every device. Needs `bots-in-clawtrate.md` step 3.
-8. **`clawtrate_settings`,** its classifier, the cards of 8.3 and the hold of 8.5, with the security review of 8.7. Needs 7 and `bots-in-clawtrate.md` step 2. Tested: one scenario per origin (A done, A asks, B not done, C not done), one per hold, each failing with its rule undone.
+6. **The journal on the gateway.** Entries with authored state and the hash chain, written through the bots plugin; Undo and Recent changes on every device. Needs `bots-in-clawtrate.md` step 3. Tested: Undo withheld after an unjournaled write, after X → Y → Z → Y, and after another device's write without the journal; a deleted leaf and an id-keyed list restored; the 2026.11.10 migration left alone.
+7. **`clawtrate_settings`,** its structured match, the effective-diff classifier, the card bound to its diff and hash, secrets refused before the ledger, and the plugin's holds on the native routes, with the security review of 8.8. Needs 6 and `bots-in-clawtrate.md` step 2. Tested: one scenario per origin (A at once, A asks, B, C and O refused), a run that used tool search counted as outside, a drifted card refused, each secret rule per version, the scope rule, and **the release gate of 8.6**; each fails with its rule undone.
+8. **Chat apps, last.** First the gateway's set-up frames, established on both versions with a stand-in channel plugin of the project's own on the development gateway (no real chat app); then the set-up drawn from them, QR sign-in, Say hello with That's me and its read-back, a connected app's page, Disconnect.
 
 ## 11. Proposed checklist rows
 
@@ -376,7 +488,7 @@ No ids are held for this design; they are proposed here and numbered by the pull
 | Settings | both     | Settings › All OpenClaw settings finds and changes any setting with its own control; secrets are write-only; a bad value is refused before it is sent. | better: no file, no key unless asked                   | `config.schema`, `config.schema.lookup`                 |
 | Settings | desktop  | Settings › Chat apps connects a chat app inside Clawtrate and makes the person its only sender.                                                        | better: no outside instructions                        | `wizard.start {flow: "channels"}`, `channels.pairing.*` |
 | Settings | both     | Settings › Plugins lists what is installed, Clawtrate's first, with a switch and settings for each.                                                    | same                                                   | `plugins.list`, `config.patch`                          |
-| Bots     | both     | Asked to, a bot changes an OpenClaw setting at once with Undo, and asks first before changing who can reach or control OpenClaw.                       | better: never sets a secret or widens what bots may do | `clawtrate-bots`, `config.patch`                        |
+| Bots     | both     | Asked to, a bot changes the default model, backups or thinking at once with Undo when the person names them; other settings ask once or are refused.   | better: never sets a secret or widens what bots may do | `clawtrate-bots`, `config.patch`                        |
 
 ## 12. Not doing, and why
 
@@ -391,11 +503,11 @@ No ids are held for this design; they are proposed here and numbered by the pull
 
 ## 13. Not established, and what would establish it
 
-The three this design is least sure of first, each with the alternative:
+The three decisions the first version was least sure of are decided (the page to decide from, "Decided since the first version"). What remains least sure:
 
-1. **Drawing the gateway's own channel set-up (`wizard.start {flow: "channels"}`) in Clawtrate's look.** Read in both versions' schemas, not run: the development gateway has no channel. Its steps may lean on `externalUrl` and a documentation-shaped `note` so much that Clawtrate's rewording of each chat app becomes the real work. **Alternative:** Clawtrate's own short form for the two most used chat apps (a token field for Telegram, the QR for WhatsApp), writing `channels.<app>` with `config.patch`, and the wizard for the rest. A run with a stand-in channel plugin, step 6, settles it.
-2. **The line for a bot's change says what happened, not "at your request".** The brief for this design asked for "changed by Juniper at your request"; this design follows `doing-not-asking.md` §1, which keeps A from being presented as proof of the person's ask, and shows "Juniper, in your conversation" in Recent changes. **Alternative:** the brief's wording in Recent changes only, where the conversation is one press away.
-3. **Restart settings wait in the foot for one Save, while every other change applies at once.** Two behaviours in one section. **Alternative:** every change applies at once, and a second restart change within the 30-second cooldown simply joins the gateway's coalesced restart; simpler, but a person changing port then bind would see two restarts if they are slower than the cooldown.
+1. **Whether the plugin sees every nested tool-search and Code Mode result.** Until a run on each version shows it, a run that used them counts as having read outside content (8.2), which makes most at-once changes in long conversations into cards.
+2. **The structured match's words (8.2, item 4).** The fixed setting words may miss how people ask ("put everyone on Swift 2"); a miss becomes a card, never a wrong write. Real conversations, once built, decide whether to add words.
+3. **The drain budget's setting name on 2026.10.6.** Section 7 waits 5 minutes plus one by default; the setting that changes the budget wasn't traced, so a gateway with a longer budget would see "lost contact" too early.
 
 Also:
 
@@ -403,27 +515,28 @@ Also:
 - **`channels.pairing.approve`'s `expectedOwnerId`**, and whether approving a sender and adding them to `commands.ownerAllowFrom` is one step or two on each version: read, not run.
 - **Where `config.patch` writes a value whose section lives in an `$include`d file:** not read.
 - **Whether `before_tool_call` sees the `openclaw` tool's operation name** in a form the hold of 8.5 can match on both versions: not run.
-- **The 2-minute wait on 2026.10.6:** the drain budget is 5 minutes by default; whether most restarts finish within 2 was not measured with a running turn.
+- **How long a restart with a running turn takes** on each version: not measured.
 - **Whether a config write is rate-limited per device and IP** for Clawtrate's connector exactly as the docs say: read, not run.
 - **Which chat apps each version can connect without installing a plugin**: `channels.status` on a development gateway lists none configured; the bundled list was not established.
 
 ## 14. The prototype's states
 
-`docs/design/prototype/gateway-settings.html`, on local fixtures; every name, model, account and handle is made up, and no token appears. `?screen=` picks a section: `models` (the default), `chat`, `telegram`, `pair`, `plugins`, `all`, `bot`. With it: `done=1` the quiet line with Undo (models, plugins); `pending=1` two restart changes waiting (all); `error=1` a refused value (all); `restart=1` the line while OpenClaw restarts; `access=read` a connection without full control; `q=` the search. The prototype bar's theme, width and motion apply.
+`docs/design/prototype/gateway-settings.html`, on local fixtures; every name, model, account and handle is made up, and no token appears. `?screen=` picks a section: `models` (the default), `chat`, `telegram`, `pair`, `plugins`, `all`, `bot`. With it: `done=1` the quiet line with Undo (models, plugins); `pending=1` two restart changes waiting (all); `error=1` a refused value (all); `restart=1` the line while OpenClaw restarts; `access=read` a connection without full control; `connected=telegram` Telegram connected after the read-back (chat); `version=1006` or `version=unknown` the restart words for that version (2026.11.10's otherwise); `q=` the search. At phone width, Back from a section shows the section list. The prototype bar's theme, width and motion apply.
 
-| Picture                                                                                                 | State                        |
-| ------------------------------------------------------------------------------------------------------- | ---------------------------- |
-| [models-done-desktop](gateway-settings/models-done-desktop.png)                                         | `screen=models&done=1`, dark |
-| [models-done-light-desktop](gateway-settings/models-done-light-desktop.png)                             | the same, light              |
-| [models-phone](gateway-settings/models-phone.png)                                                       | `screen=models`, phone       |
-| [chat-desktop](gateway-settings/chat-desktop.png)                                                       | `screen=chat`                |
-| [telegram-desktop](gateway-settings/telegram-desktop.png), [phone](gateway-settings/telegram-phone.png) | `screen=telegram`            |
-| [pair-desktop](gateway-settings/pair-desktop.png)                                                       | `screen=pair`                |
-| [plugins-desktop](gateway-settings/plugins-desktop.png)                                                 | `screen=plugins`             |
-| [all-pending-desktop](gateway-settings/all-pending-desktop.png)                                         | `screen=all&pending=1`       |
-| [all-error-phone](gateway-settings/all-error-phone.png)                                                 | `screen=all&error=1`, phone  |
-| [all-readonly-desktop](gateway-settings/all-readonly-desktop.png)                                       | `screen=all&access=read`     |
-| [restart-desktop](gateway-settings/restart-desktop.png)                                                 | `screen=all&restart=1`       |
-| [bot-desktop](gateway-settings/bot-desktop.png), [phone](gateway-settings/bot-phone.png)                | `screen=bot`                 |
+| Picture                                                                                                 | State                                   |
+| ------------------------------------------------------------------------------------------------------- | --------------------------------------- |
+| [models-done-desktop](gateway-settings/models-done-desktop.png)                                         | `screen=models&done=1`, dark            |
+| [models-done-light-desktop](gateway-settings/models-done-light-desktop.png)                             | the same, light                         |
+| [models-phone](gateway-settings/models-phone.png)                                                       | `screen=models`, phone                  |
+| [chat-desktop](gateway-settings/chat-desktop.png)                                                       | `screen=chat`                           |
+| [telegram-desktop](gateway-settings/telegram-desktop.png), [phone](gateway-settings/telegram-phone.png) | `screen=telegram`                       |
+| [pair-desktop](gateway-settings/pair-desktop.png)                                                       | `screen=pair`                           |
+| [chat-connected-desktop](gateway-settings/chat-connected-desktop.png)                                   | `screen=chat&connected=telegram&done=1` |
+| [plugins-desktop](gateway-settings/plugins-desktop.png)                                                 | `screen=plugins`                        |
+| [all-pending-desktop](gateway-settings/all-pending-desktop.png)                                         | `screen=all&pending=1`                  |
+| [all-error-phone](gateway-settings/all-error-phone.png)                                                 | `screen=all&error=1`, phone             |
+| [all-readonly-desktop](gateway-settings/all-readonly-desktop.png)                                       | `screen=all&access=read`                |
+| [restart-desktop](gateway-settings/restart-desktop.png)                                                 | `screen=all&restart=1`                  |
+| [bot-desktop](gateway-settings/bot-desktop.png), [phone](gateway-settings/bot-phone.png)                | `screen=bot`                            |
 
 Pictures are taken at 1100 × 720 and 390 × 844 with `chrome=0&motion=reduce`, with the design's fonts loaded.
