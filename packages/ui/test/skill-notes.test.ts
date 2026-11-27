@@ -137,6 +137,44 @@ describe("F-560: the skill note in the rail", () => {
     );
   });
 
+  it("on a read-only connection, a run of an update line and a skill note after the read, in either order, doesn't make the task unread", () => {
+    const main = { ...listed, isMain: true };
+    const state = (rows: unknown[], preview: string) =>
+      ({
+        bots: [
+          {
+            id: "pip",
+            name: "Pip",
+            emoji: null,
+            avatarUrl: null,
+            theme: null,
+            model: null,
+            isDefault: true,
+          },
+        ],
+        tasksByBot: { pip: [{ ...main, preview, updatedAt: T + 70_000 }] },
+        transcripts: { [KEY]: history(rows) },
+        connection: { gatewayId: "gw-a" },
+        openclawUpdating: { updated: UPDATED.updated },
+      }) as unknown as Parameters<typeof unreadSeenOf>[2];
+    const reply = replyRow("The trail is open.", T + 2_000);
+    const seen = { [KEY]: T + 2_000 };
+    expect(
+      unreadSeenOf(
+        seen,
+        false,
+        state([reply, updateNotice(T + 50_100), note(TEXT, T + 60_000)], LISTED),
+      ),
+    ).toEqual({ [KEY]: T + 70_000 });
+    expect(
+      unreadSeenOf(
+        seen,
+        false,
+        state([reply, note(TEXT, T + 40_000), updateNotice(T + 50_100)], UPDATE_TEXT),
+      ),
+    ).toEqual({ [KEY]: T + 70_000 });
+  });
+
   it("on a read-only connection the viewer's own memory goes past the note; on one that writes, unread is the gateway's", () => {
     const transcript = history([replyRow("The trail is open.", T + 2_000), note()]);
     const seen = { [KEY]: T + 2_050 };

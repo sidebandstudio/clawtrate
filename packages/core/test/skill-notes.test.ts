@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import {
   mapHistory,
   seenThroughSkillNote,
+  seenThroughUpdateNotice,
   skillNoteChanges,
   skillNoteOf,
   skillNoteWords,
@@ -512,14 +513,22 @@ describe("F-560: the note is not the bot's preview, and doesn't mark the task un
   it("a read-only viewer that read the reply has read the task through the note", () => {
     const at = NOTE_1006.timestamp + 5;
     const seen = realNote[0]!.timestamp;
-    expect(seenThroughSkillNote(task(LISTED_NOTE, at), seen, loaded(realNote))).toBe(at);
+    expect(seenThroughSkillNote(task(LISTED_NOTE, at), seen, loaded(realNote), NO_UPDATES)).toBe(
+      at,
+    );
     // One that read before the reply hasn't.
-    expect(seenThroughSkillNote(task(LISTED_NOTE, at), seen - 1, loaded(realNote))).toBe(seen - 1);
+    expect(
+      seenThroughSkillNote(task(LISTED_NOTE, at), seen - 1, loaded(realNote), NO_UPDATES),
+    ).toBe(seen - 1);
     // Nor when the listed row has something newer than the note.
-    expect(seenThroughSkillNote(task("Newer", at), seen, loaded(realNote))).toBe(seen);
+    expect(seenThroughSkillNote(task("Newer", at), seen, loaded(realNote), NO_UPDATES)).toBe(seen);
     // A note alone on a page that isn't the whole history proves nothing.
-    expect(seenThroughSkillNote(task(LISTED_NOTE, at), seen, loaded([NOTE_1006], true))).toBe(seen);
-    expect(seenThroughSkillNote(task(LISTED_NOTE, at), seen, loaded([NOTE_1006]))).toBe(at);
+    expect(
+      seenThroughSkillNote(task(LISTED_NOTE, at), seen, loaded([NOTE_1006], true), NO_UPDATES),
+    ).toBe(seen);
+    expect(seenThroughSkillNote(task(LISTED_NOTE, at), seen, loaded([NOTE_1006]), NO_UPDATES)).toBe(
+      at,
+    );
   });
 });
 
@@ -582,5 +591,74 @@ describe("F-560: a folded note's words are never cut", () => {
     const { item, kept: inState } = kept(sized(MAX_BLOCK_CHARS + 1));
     expect(item.skillNote).toBeUndefined();
     expect(inState.cut).toBeDefined();
+  });
+});
+
+describe("F-560 F-590: a read-only viewer's read goes past any run of quiet lines", () => {
+  // The task is the main bot's main conversation, where an update this device followed wrote its
+  // notice: a reply, then the update line and the skill note, in either order.
+  const KEY = "agent:main:t";
+  const RUN = "3f2b8c1d-4e5a-4b6c-8d7e-9f0a1b2c3d4e";
+  const T = 1_795_000_000_000;
+  const UPDATED = {
+    updated: [{ gatewayId: "gw-a", runId: RUN, to: "2026.11.10", at: 1, succeededAt: T + 190 }],
+    gatewayId: "gw-a",
+    mainKey: KEY,
+  };
+  const UPDATE_TEXT = "✅ OpenClaw updated.";
+  const update = (at: number) => ({
+    role: "assistant",
+    content: [{ type: "text", text: UPDATE_TEXT }],
+    api: "openclaw-transcript",
+    provider: "openclaw",
+    model: "delivery-mirror",
+    stopReason: "stop",
+    timestamp: at,
+    idempotencyKey: `update-run-finished:${RUN}`,
+    __openclaw: { id: "u1", idempotencyKey: `update-run-finished:${RUN}` },
+  });
+  const reply = { ...realNote[0]!, timestamp: T + 100 };
+  const note = (at: number) => ({ ...NOTE_1006, timestamp: at });
+  /** As `unreadSeenOf` reads it: past skill notes, then past update lines. */
+  const seenThrough = (
+    rows: unknown[],
+    preview: string,
+    seenAt: number,
+    scope: typeof UPDATED | typeof NO_UPDATES = UPDATED,
+  ) => {
+    const listed = task(preview, T + 400);
+    const transcript = loaded(rows);
+    return seenThroughUpdateNotice(
+      listed,
+      seenThroughSkillNote(listed, seenAt, transcript, scope),
+      transcript,
+      scope,
+    );
+  };
+
+  it("reply, update line, skill note: read through", () => {
+    expect(seenThrough([reply, update(T + 200), note(T + 300)], LISTED_NOTE, T + 100)).toBe(
+      T + 400,
+    );
+  });
+
+  it("reply, skill note, update line: read through", () => {
+    expect(seenThrough([reply, note(T + 200), update(T + 300)], UPDATE_TEXT, T + 100)).toBe(
+      T + 400,
+    );
+  });
+
+  it("read before the reply, or an update line this device didn't follow: still unread", () => {
+    expect(seenThrough([reply, update(T + 200), note(T + 300)], LISTED_NOTE, T + 99)).toBe(T + 99);
+    expect(
+      seenThrough([reply, update(T + 200), note(T + 300)], LISTED_NOTE, T + 100, NO_UPDATES),
+    ).toBe(T + 100);
+  });
+
+  it("a bot's message in the note's shape between them counts as words", () => {
+    const words = { ...channelCopy, timestamp: T + 250 };
+    expect(seenThrough([reply, update(T + 200), words, note(T + 300)], LISTED_NOTE, T + 100)).toBe(
+      T + 100,
+    );
   });
 });
