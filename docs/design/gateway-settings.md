@@ -140,7 +140,7 @@ Read everything above that is `operator.read`: the redacted config, the schema, 
 
 - **The `gateway` tool reads only.** "`gateway` reads config with `config.schema.lookup` / `config.get` … It has no config-write … action" (`<1006>/docs/gateway/security/tool-permissions.md:15`). On 2026.11.10 it also has `restart` and `update.cleanup` (`<1110>/…:15`). It is owner-only: "non-owner senders cannot use the `cron` or `gateway` tools" (`<1006>/docs/gateway/security/hardened-baseline.md:38`).
 - **The `openclaw` tool writes, through typed operations** ("write config, `config set`, `config unset`, … change the default model, start/stop/restart the Gateway, create agents, and install plugins"). For a bot's delegated request: **Full Access applies the change with no prompt**, "including when Full Access comes from the configured default"; a restricted run asks in the chat it came from, where only the owner can approve (`<1006>/docs/cli/openclaw.md:118-135`). 2026.11.10 is the same, and adds `tools.openclaw.autoApproveChanges` to force approval even in Full Access, or to grant it standing (`<1110>/docs/cli/openclaw.md:118-150`).
-- **So today, with nothing set, a bot whose runs are Full Access can change OpenClaw's settings when asked, with no prompt, no journal and no Undo.** `bots-in-clawtrate.md` §3.3 already holds the `openclaw` tool behind OpenClaw's own approval once the bots plugin is installed; section 8.5 changes what that hold does in a Clawtrate conversation.
+- **So today, with nothing set, a bot whose runs are Full Access can change OpenClaw's settings when asked, with no prompt, no journal and no Undo.** `bots-in-clawtrate.md` §3.3 already holds the `openclaw` tool behind OpenClaw's own approval once the bots plugin is installed; section 8.6 changes what that hold does, and says what stays open.
 - Neither version has a precondition that binds a bot's change to what the person saw, and a plugin's gateway call acts as its run's connection (`bots-in-clawtrate.md` §5.1).
 
 ## 2. What Clawtrate already writes, and one writer for each setting
@@ -246,7 +246,7 @@ What a person sees ([picture](gateway-settings/plugins-desktop.png)): **Clawtrat
 
 **A bad value is refused before it reaches the gateway**: checked against its node as the person types, the error under the field in plain words ("Use a number from 1 to 65535. Nothing was changed."), the save not offered. What the gateway still refuses (a rule its schema node doesn't carry, a secret reference that no longer resolves) is shown the same way, from `details.issues[].message`, under the field its `path` names, and nothing changes.
 
-**Applying.** A change to a `hot` or `none` setting applies when its control commits (a switch at once, a field on Enter or leaving it), with the quiet line and Undo. A change to a `restart` setting waits in the section's foot: "2 changes · Saving restarts OpenClaw once." with the version's sentence for running work (section 7), **Discard** · **Save and restart**. A change whose `reloadKind` can't be read waits there too. The press is the request: no confirmation follows, unless the change is one that asks (section 8.3 lists them; for the person's own change they ask only where the change could lock this device out, below).
+**Applying.** A change to a `hot` or `none` setting applies when its control commits (a switch at once, a field on Enter or leaving it), with the quiet line and Undo. A change to a `restart` setting waits in the section's foot: "2 changes · Saving restarts OpenClaw once." with the version's sentence for running work (section 7), **Discard** · **Save and restart**. A change whose `reloadKind` can't be read waits there too. The press is the request: no confirmation follows, unless the change is one that asks (the asks of section 8.3 are a bot's; the person's own change asks only where it could lock this device out, below).
 
 **Getting back from a mistake:** Undo on the line, and **Recent changes** at the top of the section, each with Undo for 7 days (section 6).
 
@@ -514,7 +514,7 @@ Also:
 - **A whole set-up through `wizard.start {flow: "channels"}` and `web.login.*`** on either version: not run.
 - **`channels.pairing.approve`'s `expectedOwnerId`**, and whether approving a sender and adding them to `commands.ownerAllowFrom` is one step or two on each version: read, not run.
 - **Where `config.patch` writes a value whose section lives in an `$include`d file:** not read.
-- **Whether `before_tool_call` sees the `openclaw` tool's operation name** in a form the hold of 8.5 can match on both versions: not run.
+- **Whether `before_tool_call` sees the `openclaw` tool's operation name** in a form the hold of 8.6 can match on both versions, by each of its names, from Code Mode and through tool search: not run. It is the release gate of 8.6.
 - **How long a restart with a running turn takes** on each version: not measured.
 - **Whether a config write is rate-limited per device and IP** for Clawtrate's connector exactly as the docs say: read, not run.
 - **Which chat apps each version can connect without installing a plugin**: `channels.status` on a development gateway lists none configured; the bundled list was not established.
