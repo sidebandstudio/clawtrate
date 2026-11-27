@@ -123,6 +123,15 @@ export function useConnect({
   const [saving, setSaving] = useState(false);
   const keyRef = useRef<HTMLInputElement>(null);
   const pasteRef = useRef<HTMLInputElement>(null);
+  // A label save that answers after Connect has gone with its bot finishes nothing: the sign-in it
+  // would dismiss may be another bot's by then (#781).
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
   const [confirmDrop, setConfirmDrop] = useState<string | null>(null);
   // Why the last Disconnect of a sign-in's account was refused, said under it.
   const [dropError, setDropError] = useState<string | null>(null);
@@ -507,7 +516,7 @@ export function useConnect({
       try {
         await bridge.invoke({ type: "setAccountLabel", profileId: where.account, label: typed });
         announce("Label saved");
-        finish(where.account);
+        if (mounted.current) finish(where.account);
       } catch (error) {
         setLabelError(error instanceof Error ? error.message : String(error));
       } finally {

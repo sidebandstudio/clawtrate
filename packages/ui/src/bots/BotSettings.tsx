@@ -220,6 +220,9 @@ export function BotSettings({
     setPick(null);
     setAsk(null);
     setPressed(null);
+    // Another bot's save may still be out: its error and its wait are that bot's, not this one's.
+    setError(null);
+    setSaving(false);
   }
 
   // Every connect clears the gateway's id until its identity read answers, the reconnect that
@@ -700,9 +703,10 @@ export function BotSettings({
         );
         go("account");
       } catch (failure) {
-        setError(failure instanceof Error ? failure.message : String(failure));
+        if (drawnBot.current === bot.id)
+          setError(failure instanceof Error ? failure.message : String(failure));
       } finally {
-        setSaving(false);
+        if (drawnBot.current === bot.id) setSaving(false);
       }
     };
     const was = account;
