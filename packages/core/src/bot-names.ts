@@ -861,29 +861,26 @@ export class BotNames {
       }
       if (!sent) throw new Error(NOTHING_SENT);
       await this.keepPictureOutOfFile(botId, epoch);
-      await this.ctx.refreshBots().catch(() => {});
-      if (epoch !== this.epoch) throw new Error(CONNECTION_CHANGED_AFTER_SEND);
+      // Read back and confirmed only on the connection the rename was sent on (`op`): after a
+      // reconnect its claim stays, for the record to settle by the name the gateway lists.
+      if (this.current(op)) await this.ctx.refreshBots().catch(() => {});
+      if (epoch !== this.epoch || !this.current(op)) throw new Error(CONNECTION_CHANGED_AFTER_SEND);
       if (this.ctx.bots().find((each) => each.id === botId)?.name !== name)
         throw new Error(`Rename was sent, but the gateway's bot list doesn't show ${name} yet.`);
       // Confirmed by the bot list: marked done and counted, and the claim let go.
       // Settling the record does this for a claim whose rename the bot list shows; counted once.
       const done = this.ctx.now();
-      const recorded = await this.writeRecord(
-        { stamp, generation: this.ctx.generation() },
-        (record) => {
-          const entry = record.changes.find(
-            (each) => each.run === origin.run && each.bot === botId,
-          );
-          const claims = record.claims.filter((each) => each.op !== opId);
-          if (entry?.done !== undefined) return { ...record, claims };
-          // An entry another device settled away while the rename was on its way is written again:
-          // the rename landed, so it has its record, its Undo and its count.
-          const changes = entry
-            ? record.changes.map((each) => (each === entry ? { ...each, done } : each))
-            : [...record.changes, { ...change, done }];
-          return withCount({ ...record, changes, claims }, botId, dayOf(done));
-        },
-      ).catch((error: unknown) => {
+      const recorded = await this.writeRecord(op, (record) => {
+        const entry = record.changes.find((each) => each.run === origin.run && each.bot === botId);
+        const claims = record.claims.filter((each) => each.op !== opId);
+        if (entry?.done !== undefined) return { ...record, claims };
+        // An entry another device settled away while the rename was on its way is written again:
+        // the rename landed, so it has its record, its Undo and its count.
+        const changes = entry
+          ? record.changes.map((each) => (each === entry ? { ...each, done } : each))
+          : [...record.changes, { ...change, done }];
+        return withCount({ ...record, changes, claims }, botId, dayOf(done));
+      }).catch((error: unknown) => {
         this.ctx.log(`could not mark ${botId}'s rename done: ${errorText(error)}`);
         return "unavailable" as const;
       });

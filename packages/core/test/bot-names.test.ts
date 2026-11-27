@@ -1275,6 +1275,23 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
     expect(gw.kept().counts).toContainEqual({ bot: "pip", day: dayOf(NOW), n: 1 });
   });
 
+  it("F-552: a rename whose connection changed after its update is neither read back nor confirmed on the new one", async () => {
+    const gw = gateway();
+    let generation = "1:1";
+    const me = device(gw, { generation: () => generation });
+    // Connected again just after the update was sent.
+    gw.state.onUpdate = () => void (generation = "2:1");
+    const sets = () => gw.state.sets;
+    await me.engine.afterRun("pip", KEY, "run-1");
+    expect(gw.state.updates).toEqual(["Juniper"]);
+    // The claim and its entry stay, unconfirmed, for the record to settle by the name listed.
+    expect(gw.kept().claims).toHaveLength(1);
+    expect(gw.kept().changes[0]!.done).toBeUndefined();
+    expect(gw.kept().counts).toEqual([]);
+    expect(sets()).toBe(1);
+    expect(me.line()).toMatchObject({ status: "failed" });
+  });
+
   it("F-552: a rename whose confirmation couldn't be saved says so in its line", async () => {
     const gw = gateway();
     const me = device(gw);
