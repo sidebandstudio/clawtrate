@@ -99,6 +99,8 @@ export type AccountsContext = {
   readAgain<T>(read: () => Promise<T>, current: () => boolean): Promise<T>;
   /** How long a Refresh may take from the press, whole: `REFRESH_MODELS_MS` unless a test sets it. */
   refreshMs?: number;
+  /** The monotonic clock a Refresh's deadline is measured on: `performance.now()` unless a test sets it. */
+  clock?: () => number;
   get(): AccountsState;
   update(change: (accounts: AccountsState) => AccountsState): void;
   /** The bots the client lists: ids, names, which is the default, and their pictures. */
@@ -506,8 +508,14 @@ export class AccountsEngine {
     const cutBefore = pressed.modelsCut.find((c) => c.provider === provider)?.total ?? null;
     // One deadline for the whole press: the wait for an account read, the config read and the
     // gateway's look share it, and nothing is asked once it has passed.
-    const deadline = Date.now() + (ctx.refreshMs ?? REFRESH_MODELS_MS);
-    const left = () => deadline - Date.now();
+    // Measured on a monotonic clock, so a corrected wall clock (a time sync or a manual change)
+    // can't stretch or cut it. That clock keeps counting while the device sleeps, so a refresh
+    // that sleeps past its time is late on wake.
+    // Every host has `performance.now()`, though React Native's types don't declare it.
+    const clock =
+      ctx.clock ?? (() => (globalThis as { performance?: { now(): number } }).performance!.now());
+    const deadline = clock() + (ctx.refreshMs ?? REFRESH_MODELS_MS);
+    const left = () => deadline - clock();
     const late: ModelRefresh = { status: "error", error: "The gateway didn't answer in time." };
     // An account read under way finishes first: the gateway refuses the picker beside it.
     const loading = this.loading;
@@ -552,7 +560,7 @@ export class AccountsEngine {
       let ms = left();
       if (ms <= 0) return late;
       // A config read given up on was given the time left, so the deadline has passed, though
-      // the wall clock may read a millisecond or more earlier than the request's timer.
+      // the clock may read a millisecond or more earlier than the request's timer.
       let timedOut = false;
       config = await ctx.request("config.get", {}, { timeoutMs: ms }).then(asRecord, (error) => {
         timedOut = error instanceof GatewayProtocolRequestTimeoutError;

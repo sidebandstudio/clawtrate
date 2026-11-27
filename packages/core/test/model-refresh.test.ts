@@ -716,9 +716,10 @@ describe("F-588: Refresh in the Model menu", () => {
 describe("F-588: Refresh, the engine alone", () => {
   /**
    * The engine on the fake gateway with a connection the test moves: its stamp, and whether a
-   * refresh's `models.list` answer is held until the test lets it through.
+   * refresh's `models.list` answer is held until the test lets it through. `clock` stands in for
+   * the monotonic clock a refresh's deadline is measured on.
    */
-  function engineOn(fake: AccountsGateway, refreshMs?: number) {
+  function engineOn(fake: AccountsGateway, refreshMs?: number, clock?: () => number) {
     let state: AccountsState = initialAccountsState;
     // Requests here go straight to the handlers, so the refresh's is noted as it is asked.
     const list = fake.gateway.handlers["models.list"]!;
@@ -755,6 +756,7 @@ describe("F-588: Refresh, the engine alone", () => {
         ]).finally(() => clearTimeout(timer));
       },
       ...(refreshMs === undefined ? {} : { refreshMs }),
+      ...(clock === undefined ? {} : { clock }),
       get: () => state,
       update: (change) => {
         state = change(state);
@@ -830,10 +832,11 @@ describe("F-588: Refresh, the engine alone", () => {
   it("F-588: a config read the deadline ended ends the refresh, though the clock reads time left", async () => {
     const fake = new AccountsGateway();
     refreshAsked = false;
-    const on = engineOn(fake, 150);
+    // The clock never moves, so it reads time left throughout.
+    const on = engineOn(fake, 150, () => 0);
     await on.engine.load();
-    // The request's timer and the wall clock can disagree by a millisecond or more: the read is
-    // given up on as timed out while Date.now() still reads time before the deadline.
+    // The request's timer and the clock can disagree by a millisecond or more: the read is given
+    // up on as timed out while the clock still reads time before the deadline.
     fake.gateway.handlers["config.get"] = () => {
       throw new GatewayProtocolRequestTimeoutError({
         method: "config.get",
@@ -851,13 +854,13 @@ describe("F-588: Refresh, the engine alone", () => {
   it("F-588: an answer handled after the deadline, before its own timer fires, ends the refresh and changes nothing", async () => {
     const fake = new AccountsGateway();
     refreshAsked = false;
-    const on = engineOn(fake, 150);
-    await on.engine.load();
-    const late = { status: "error", error: "The gateway didn't answer in time." };
-    fake.refreshed = { acme: [row("dev-1"), row("dev-9")] };
     // The clock moves only when the gateway takes the press's whole time to answer. The request's
     // own timer, also 150 ms, never fires, as when a reply is handled just before it would.
     let clock = 1_000;
+    const on = engineOn(fake, 150, () => clock);
+    await on.engine.load();
+    const late = { status: "error", error: "The gateway didn't answer in time." };
+    fake.refreshed = { acme: [row("dev-1"), row("dev-9")] };
     let slow = true;
     let fails = false;
     const list = fake.gateway.handlers["models.list"]!;
@@ -868,24 +871,87 @@ describe("F-588: Refresh, the engine alone", () => {
       }
       return list(params);
     };
-    const now = vi.spyOn(Date, "now").mockImplementation(() => clock);
-    try {
-      const before = on.state();
-      expect(await on.engine.refreshModels("acme", press)).toEqual(late);
-      expect(on.asked()).toBe(true);
-      expect(on.state()).toBe(before);
-      // A failure handled after the deadline is late too, not the gateway's reason.
-      fails = true;
-      expect(await on.engine.refreshModels("acme", press)).toEqual(late);
-      expect(on.state()).toBe(before);
-      // The same answer in time is given.
-      slow = false;
-      expect(await on.engine.refreshModels("acme", press)).toMatchObject({ status: "done" });
-      expect(on.state().models.some((m) => m.id === "dev-9")).toBe(true);
-    } finally {
-      now.mockRestore();
-    }
+    const before = on.state();
+    expect(await on.engine.refreshModels("acme", press)).toEqual(late);
+    expect(on.asked()).toBe(true);
+    expect(on.state()).toBe(before);
+    // A failure handled after the deadline is late too, not the gateway's reason.
+    fails = true;
+    expect(await on.engine.refreshModels("acme", press)).toEqual(late);
+    expect(on.state()).toBe(before);
+    // The same answer in time is given.
+    slow = false;
+    expect(await on.engine.refreshModels("acme", press)).toMatchObject({ status: "done" });
+    expect(on.state().models.some((m) => m.id === "dev-9")).toBe(true);
   });
+
+  // Once with the clock the test gives the engine, and once with none, so the clock a refresh
+  // uses in the app, `performance.now()`, is the one under test.
+  for (const given of [true, false]) {
+    const which = given ? "the clock it is given" : "performance.now(), given no clock";
+    it(`F-588: the wall clock corrected forward or back during a refresh doesn't move its deadline, on ${which}`, async () => {
+      const fake = new AccountsGateway();
+      refreshAsked = false;
+      const hour = 3_600_000;
+      // The refresh's clock moves only by what each request takes. Meanwhile the wall clock is
+      // corrected by an hour, as a time sync or a manual change can do.
+      let clock = 1_000;
+      let wall = 1_000_000_000;
+      let steps = { config: { ms: 40, wall: hour }, list: { ms: 30, wall: 0 } };
+      const on = engineOn(fake, 150, given ? () => clock : undefined);
+      await on.engine.load();
+      fake.refreshed = { acme: [row("dev-1"), row("dev-9")] };
+      const config = fake.gateway.handlers["config.get"]!;
+      fake.gateway.handlers["config.get"] = (params) => {
+        clock += steps.config.ms;
+        wall += steps.config.wall;
+        return config(params);
+      };
+      const list = fake.gateway.handlers["models.list"]!;
+      fake.gateway.handlers["models.list"] = (params) => {
+        if ((params as Json).refresh === true) {
+          clock += steps.list.ms;
+          wall += steps.list.wall;
+        }
+        return list(params);
+      };
+      const perf = (globalThis as unknown as { performance: { now(): number } }).performance;
+      const realNow = perf.now;
+      const now = vi.spyOn(Date, "now").mockImplementation(() => wall);
+      // Other readers of `performance.now()` meanwhile, such as the test runner, read the same
+      // still clock, and it is put back before the test ends, pass or fail.
+      const monotonic = given ? null : vi.spyOn(perf, "now").mockImplementation(() => clock);
+      try {
+        // Forward an hour during the config read: 70 ms of the press's 150 have passed, so the
+        // answer is in time, and the gateway's look is given the 110 ms left.
+        on.sent.length = 0;
+        expect(await on.engine.refreshModels("acme", press)).toMatchObject({ status: "done" });
+        expect(on.sent).toEqual([
+          { method: "config.get", timeoutMs: 150 },
+          { method: "models.list", timeoutMs: 110 },
+        ]);
+        expect(on.state().models.some((m) => m.id === "dev-9")).toBe(true);
+        // Back an hour while the gateway looks, which takes the press's whole time: it is late.
+        steps = { config: { ms: 40, wall: 0 }, list: { ms: 110, wall: -hour } };
+        fake.refreshed = { acme: [row("dev-1")] };
+        on.sent.length = 0;
+        const before = on.state();
+        expect(await on.engine.refreshModels("acme", press)).toEqual({
+          status: "error",
+          error: "The gateway didn't answer in time.",
+        });
+        expect(on.sent).toEqual([
+          { method: "config.get", timeoutMs: 150 },
+          { method: "models.list", timeoutMs: 110 },
+        ]);
+        expect(on.state()).toBe(before);
+      } finally {
+        now.mockRestore();
+        monotonic?.mockRestore();
+      }
+      expect(perf.now).toBe(realNow);
+    });
+  }
 
   it("F-588: no request is sent with no time left: the time left is read once, to decide and as the timeout", async () => {
     const late = { status: "error", error: "The gateway didn't answer in time." };
@@ -894,18 +960,13 @@ describe("F-588: Refresh, the engine alone", () => {
     for (let refreshMs = 1; refreshMs <= 20; refreshMs += 1) {
       const fake = new AccountsGateway();
       refreshAsked = false;
-      const on = engineOn(fake, refreshMs);
-      await on.engine.load();
-      on.sent.length = 0;
       // The clock moves a millisecond each time it is read, so the deadline can pass between
       // two readings made one after the other.
       let clock = 1_000;
-      const now = vi.spyOn(Date, "now").mockImplementation(() => clock++);
-      try {
-        outcomes.push(await on.engine.refreshModels("acme", press));
-      } finally {
-        now.mockRestore();
-      }
+      const on = engineOn(fake, refreshMs, () => clock++);
+      await on.engine.load();
+      on.sent.length = 0;
+      outcomes.push(await on.engine.refreshModels("acme", press));
       for (const { method, timeoutMs } of on.sent)
         expect(timeoutMs, `${method} in a ${refreshMs} ms press`).toBeGreaterThan(0);
     }
