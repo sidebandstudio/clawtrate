@@ -199,3 +199,44 @@ describe("an operator connection the gateway drops", () => {
     expect(gateway.calls).toEqual([]);
   });
 });
+
+describe("a request's limit when it names none", () => {
+  /** The `timeoutMs` the client was given for one `config.get` on `on`. */
+  async function limitOf(on: OperatorSession): Promise<number | undefined> {
+    let sent: number | undefined;
+    const original = GatewayClient.prototype.request;
+    const spy = vi.spyOn(GatewayClient.prototype, "request").mockImplementation(function (
+      this: GatewayClient,
+      ...args: Parameters<GatewayClient["request"]>
+    ) {
+      sent = args[2]?.timeoutMs ?? undefined;
+      return original.apply(this, args);
+    });
+    try {
+      await on.request("config.get");
+    } finally {
+      spy.mockRestore();
+    }
+    return sent;
+  }
+
+  it("is 60 s, or the one the session was opened with (the seed's 180 s, #883)", async () => {
+    expect(await limitOf(session)).toBeGreaterThan(59_000);
+    expect(await limitOf(session)).toBeLessThanOrEqual(60_000);
+    const seedLike = await OperatorSession.open({
+      url: gateway.url,
+      token: "test-token",
+      scopes: ["operator.admin"],
+      caps: [],
+      displayName: "Clawtrate operator test (seed)",
+      approvePairing: () => Promise.reject(new Error("no pairing in this test")),
+      requestTimeoutMs: 180_000,
+    });
+    try {
+      expect(await limitOf(seedLike)).toBeGreaterThan(179_000);
+      expect(await limitOf(seedLike)).toBeLessThanOrEqual(180_000);
+    } finally {
+      await seedLike.close();
+    }
+  });
+});
