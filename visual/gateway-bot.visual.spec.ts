@@ -190,7 +190,9 @@ test.describe("the gateway's own bot", () => {
     await setState(page, heatPump("done"));
     await expect(railBot(page, "Juniper")).toHaveCount(0);
     await expect(files.getByRole("option").filter({ hasText: "heat-pumps.md" })).toHaveCount(0);
-    await expect(files).not.toContainText("Juniper");
+    // With no other bot's file found, Files isn't drawn at all, so nothing names Juniper.
+    await expect(files).toHaveCount(0);
+    await expect(palette).not.toContainText("Juniper");
   });
 
   test("F-562: Search each bot for more keeps a message already found in a task of the gateway's own bot", async ({

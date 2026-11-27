@@ -333,7 +333,9 @@ test("F-033: a message whose history comes as the connection's access changes do
     // The search the change starts again stays pending, so its state can be seen.
     fixture.hold();
   });
-  await expect(group(page, "messages")).toContainText("Searching…");
+  // Asked again, Messages has found nothing yet: it isn't drawn, and the status line says so.
+  await expect(palette(page).getByTestId("search-status")).toHaveText("Searching…");
+  await expect(group(page, "messages")).toHaveCount(0);
   await expect(palette(page)).toBeVisible();
   await expect(page.locator(".title-pill-task")).not.toHaveText(
     "Disk almost full on the media box",

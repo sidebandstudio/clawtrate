@@ -1,13 +1,13 @@
 // The search palette (docs/design/search.md) against approved baselines, in
 // light and dark at 1440, 1100 and 800 px and at phone width: before anything
-// is typed, with results, and with nothing found. The fixture's messages,
-// files and routines are made up (apps/desktop/src/fixture/search.ts).
+// is typed, with results in two groups, and with nothing found. The fixture's
+// messages, files and routines are made up (apps/desktop/src/fixture/search.ts).
 import { test } from "@playwright/test";
 import { contextFor, expect, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
 
 const SCENES = [
   { name: "idle", text: "" },
-  { name: "results", text: "transcode" },
+  { name: "results", text: "router" },
   { name: "none", text: "kayak" },
 ];
 
