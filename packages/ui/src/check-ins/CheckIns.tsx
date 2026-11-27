@@ -15,7 +15,7 @@
 // "routines") has no setting here to read or change: each block says so and
 // leads to the bot's routines, and nothing opens the dialog.
 
-import { InfoTip } from "../InfoTip.tsx";
+import { InfoCard, InfoTip } from "../InfoTip.tsx";
 import {
   cannotKeep,
   CHECKIN_BOT_DELETED,
@@ -441,14 +441,10 @@ function CheckInsDialog({
           )}
           <details className="ci-prompt" open={Boolean(base.was.prompt || prompt) || undefined}>
             <summary>What to check</summary>
-            <div className="info-row">
+            <div>
               <span className="ci-label">
                 <label htmlFor="ci-prompt-field">Prompt</label>
-                <InfoTip id="ci-prompt-hint" about="Prompt">
-                  {inheritedPrompt !== null
-                    ? "Empty uses the prompt the gateway sets for every bot."
-                    : "Empty uses the gateway's built-in prompt, which asks the bot to reply NO_REPLY when nothing needs attention."}
-                </InfoTip>
+                <InfoTip id="ci-prompt-hint" about="Prompt" />
               </span>
               <textarea
                 id="ci-prompt-field"
@@ -469,6 +465,12 @@ function CheckInsDialog({
                   change({ prompt: event.target.value, touched: { ...touched, prompt: true } })
                 }
               />
+              <InfoCard id="ci-prompt-hint">
+                {inheritedPrompt !== null
+                  ? "Empty uses the prompt the gateway sets for every bot."
+                  : "Empty uses the gateway's built-in prompt, which asks the bot to reply NO_REPLY when nothing needs attention."}{" "}
+                Up to {MAX_CHECKIN_PROMPT_CHARS.toLocaleString("en-US")} characters.
+              </InfoCard>
               {typed && (
                 <p className="ci-hint" id="ci-prompt-note" data-testid="prompt-note">
                   {promptKind(null, checkIns.defaults) === "builtin"

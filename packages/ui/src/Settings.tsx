@@ -29,7 +29,7 @@ import { flushSync } from "react-dom";
 import type { useDesktopUpdateSnapshot } from "./update-reading.ts";
 import { Updates } from "./Updates.tsx";
 import { BotGuidesPane } from "./BotGuides.tsx";
-import { InfoTip } from "./InfoTip.tsx";
+import { InfoCard, InfoTip } from "./InfoTip.tsx";
 import { useBridge, useClawtrateState, useCommand } from "./bridge.tsx";
 import { useAccountsSection } from "./bots/AccountsSection.tsx";
 import { useCheckInsSection } from "./check-ins/CheckIns.tsx";
@@ -181,12 +181,10 @@ function DeviceSwitch({
 }) {
   return (
     <div className="b-field device-switch">
-      <span className="device-switch-row info-row">
+      <span className="device-switch-row">
         <span>
           <span id={`${id}-label`}>{label}</span>
-          <InfoTip id={`${id}-note`} about={label}>
-            {note}
-          </InfoTip>
+          <InfoTip id={`${id}-note`} about={label} />
         </span>
         <button
           type="button"
@@ -202,6 +200,7 @@ function DeviceSwitch({
           }}
         />
       </span>
+      <InfoCard id={`${id}-note`}>{note}</InfoCard>
     </div>
   );
 }
@@ -256,15 +255,10 @@ function AdvancedPane({ announce }: { announce: (text: string) => void }) {
         value={thinking}
         announce={announce}
       />
-      <div className="b-field channel-chats-field info-row">
+      <div className="b-field channel-chats-field">
         <span>
           <span id="channel-chats-label">Show external channel chats</span>
-          <InfoTip id="channel-chats-note" about="Show external channel chats">
-            Chats that reach a bot through Discord, Telegram, Slack, iMessage, WhatsApp, Signal or
-            another channel. While it&apos;s off they stay out of the task list, its previews and
-            its unread marks. A bot&apos;s main conversation always shows, with any channel messages
-            the gateway puts in it.
-          </InfoTip>
+          <InfoTip id="channel-chats-note" about="Show external channel chats" />
         </span>
         <button
           type="button"
@@ -277,20 +271,21 @@ function AdvancedPane({ announce }: { announce: (text: string) => void }) {
           onClick={toggleChannelChats}
         />
       </div>
+      <InfoCard id="channel-chats-note">
+        Chats that reach a bot through Discord, Telegram, Slack, iMessage, WhatsApp, Signal or
+        another channel. While it&apos;s off they stay out of the task list, its previews and its
+        unread marks. A bot&apos;s main conversation always shows, with any channel messages the
+        gateway puts in it.
+      </InfoCard>
       {channelError && (
         <div className="form-error" role="alert">
           {channelError}
         </div>
       )}
-      <div className="b-field channel-chats-field info-row">
+      <div className="b-field channel-chats-field">
         <span>
           <span id="other-tools-label">Show sessions from other tools</span>
-          <InfoTip id="other-tools-note" about="Show sessions from other tools">
-            Sessions an API client, a scheduled routine or another tool started with a bot. While
-            it&apos;s off they stay out of the task list, its previews and its unread marks. A
-            routine&apos;s runs open from Routines, and one waiting for your approval or answer
-            always shows.
-          </InfoTip>
+          <InfoTip id="other-tools-note" about="Show sessions from other tools" />
         </span>
         <button
           type="button"
@@ -303,6 +298,12 @@ function AdvancedPane({ announce }: { announce: (text: string) => void }) {
           onClick={toggleOtherTools}
         />
       </div>
+      <InfoCard id="other-tools-note">
+        Sessions an API client, a scheduled routine or another tool started with a bot. While
+        it&apos;s off they stay out of the task list, its previews and its unread marks. A
+        routine&apos;s runs open from Routines, and one waiting for your approval or answer always
+        shows.
+      </InfoCard>
       {otherToolsError && (
         <div className="form-error" role="alert">
           {otherToolsError}
@@ -328,14 +329,10 @@ function GatewayBotSwitch({ announce }: { announce: (text: string) => void }) {
   };
   return (
     <>
-      <div className="b-field channel-chats-field info-row">
+      <div className="b-field channel-chats-field">
         <span>
           <span id="gateway-bot-label">Show the gateway&apos;s own bot</span>
-          <InfoTip id="gateway-bot-note" about="Show the gateway's own bot">
-            Every gateway has a default bot: channel messages, other tools&apos; calls and scheduled
-            runs that name no bot land on it. While it&apos;s off and you have another bot, it stays
-            out of the sidebar unless it is waiting on you.
-          </InfoTip>
+          <InfoTip id="gateway-bot-note" about="Show the gateway's own bot" />
         </span>
         <button
           type="button"
@@ -348,6 +345,11 @@ function GatewayBotSwitch({ announce }: { announce: (text: string) => void }) {
           onClick={toggle}
         />
       </div>
+      <InfoCard id="gateway-bot-note">
+        Every gateway has a default bot: channel messages, other tools&apos; calls and scheduled
+        runs that name no bot land on it. While it&apos;s off and you have another bot, it stays out
+        of the sidebar unless it is waiting on you.
+      </InfoCard>
       {error && (
         <div className="form-error" role="alert">
           {error}
@@ -393,14 +395,12 @@ function ConversationPane({
   };
   return (
     <>
-      <div className="b-field info-row">
+      <div className="b-field">
         <span>
-          <label htmlFor="turn-limit-input">Turn time limit</label>
-          <InfoTip id="turn-limit-note" about="Turn time limit">
-            At the limit Clawtrate asks the gateway to stop the turn, so it doesn&apos;t hang, and
-            the turn ends with a note naming the limit. Send a message to pick up where it left off.
-            It applies to turns this device starts.
-          </InfoTip>
+          <label htmlFor="turn-limit-input" id="turn-limit-label">
+            Turn time limit
+          </label>
+          <InfoTip id="turn-limit-note" about="Turn time limit" />
         </span>
         <span className="turn-limit-field">
           <input
@@ -413,6 +413,8 @@ function ConversationPane({
             step={1}
             value={draft ?? String(minutes)}
             data-testid="turn-limit"
+            // Its unit is part of its name: "minutes" beside it is hidden from a screen reader.
+            aria-labelledby="turn-limit-label turn-limit-unit"
             aria-describedby="turn-limit-note"
             aria-invalid={error ? true : undefined}
             onChange={(event) => setDraft(event.target.value)}
@@ -421,9 +423,16 @@ function ConversationPane({
               if (event.key === "Enter") commit();
             }}
           />
-          <span aria-hidden="true">minutes</span>
+          <span aria-hidden="true" id="turn-limit-unit">
+            minutes
+          </span>
         </span>
       </div>
+      <InfoCard id="turn-limit-note">
+        At the limit Clawtrate asks the gateway to stop the turn, so it doesn&apos;t hang. Once the
+        gateway confirms, the turn ends with a note naming the limit. Send a message to pick up
+        where it left off. It applies to turns this device starts.
+      </InfoCard>
       {error && (
         <div className="form-error" role="alert">
           {error}
@@ -690,15 +699,11 @@ function BotVoicePane({
   return (
     <div className="bot-voice" data-testid="bot-voice" data-confirmed={confirmed}>
       <div className="facts">
-        <div className="b-row info-row">
+        <div className="b-row">
           <span className="b-row-main">
             <span>
               <span id="bot-voice-label">Bot voice</span>
-              <InfoTip id="bot-voice-note" about="Bot voice">
-                While it&apos;s on, a voice guide is added to a bot&apos;s system prompt each time
-                the gateway runs the plugin&apos;s hook, if its config permits the hook. The guide
-                asks the bots to talk plainly and kindly, with no em dashes.
-              </InfoTip>
+              <InfoTip id="bot-voice-note" about="Bot voice" />
             </span>
             <small data-testid="bot-voice-state">
               {confirmed
@@ -726,6 +731,11 @@ function BotVoicePane({
           />
         </div>
       </div>
+      <InfoCard id="bot-voice-note">
+        While it&apos;s on, a voice guide is added to a bot&apos;s system prompt each time the
+        gateway runs the plugin&apos;s hook, if its config permits the hook. The guide asks the bots
+        to talk plainly and kindly, with no em dashes.
+      </InfoCard>
       {/* Why the switch can't be pressed: status, so it stays in view. */}
       {!canWrite && (
         <p className="b-hint" id="bot-voice-write">

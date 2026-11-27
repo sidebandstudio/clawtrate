@@ -2,7 +2,7 @@
 // state, and the form that sets it. A budget is a warning, everywhere: it is
 // marked "Shown only", and nothing here says it stops a run or a send.
 
-import { InfoTip } from "../InfoTip.tsx";
+import { InfoCard, InfoTip } from "../InfoTip.tsx";
 import {
   BUDGET_UNCONFIRMED,
   budgetPercent,
@@ -135,14 +135,10 @@ export function BudgetForm({
         options={PERIOD_OPTIONS}
         onChange={setPeriod}
       />
-      <div className="c-field info-row">
+      <div className="c-field">
         <span className="c-field-label">
           <label htmlFor={`${ids}-tokens`}>Tokens</label>
-          <InfoTip id={`${ids}-help`} about="Tokens">
-            A whole number of 1,000 or more: the total the gateway reports for {name}{" "}
-            {period === "daily" ? "each day" : "each week"}, {zoneWords(zone)}, input, output and
-            cache together.
-          </InfoTip>
+          <InfoTip id={`${ids}-help`} about="Tokens" />
         </span>
         <input
           id={`${ids}-tokens`}
@@ -159,6 +155,11 @@ export function BudgetForm({
           }}
         />
       </div>
+      <InfoCard id={`${ids}-help`}>
+        A whole number of 1,000 or more: the total the gateway reports for {name}{" "}
+        {period === "daily" ? "each day" : "each week"}, {zoneWords(zone)}, input, output and cache
+        together.
+      </InfoCard>
       {/* A warning to read before setting one: it stays in view. */}
       <p className="b-hint" id={`${ids}-warning`} style={{ margin: 0 }}>
         A warning only: nothing on the gateway stops a bot at its budget.

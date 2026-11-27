@@ -1322,10 +1322,11 @@ Every task Clawtrate makes ends up with a name a model wrote: a few words that s
 
 A setting shows its name and its control; what it does is one press away, behind a small "i" beside its name (#798, `packages/ui/src/InfoTip.tsx`).
 
-- **Opens on hover, keyboard focus and tap.** Escape, a second press, a tap elsewhere, and the pointer or focus leaving put it away; Escape closes only the card, never the dialog or form around it.
-- **Below the setting's whole row** (the nearest `.info-row`), as wide as the row: it never covers the control it explains, and fits a phone's screen with no sideways scroll.
-- **Nothing lost for someone who can't see it.** The text is always in the page, hidden while closed; the control's `aria-describedby` names it, so a screen reader reads it as the control's description, and the "i" is a button named "About <setting>".
-- **Shortened first.** Each explanation says only what a person needs to choose: not the default the control already shows, not the mechanism behind it.
+- **Opens on hover, keyboard focus and tap.** Escape, a second press, a tap elsewhere, and the pointer or focus leaving put it away. While a card is open, Escape closes only the card, wherever focus is (the field it explains included), never the dialog or form around it, and the card stays away until focus leaves its "i" or the pointer comes back to it.
+- **One at a time.** Opening one card puts away any other.
+- **In the flow, right after the setting's row** (`InfoCard`), as wide as the row: an open card pushes what follows down, so it covers nothing, not the control it explains, not another, and not a line that stays in view; it fits a phone's screen with no sideways scroll.
+- **Nothing lost for someone who can't see it.** The text is always in the page, hidden while closed; the control's `aria-describedby` names it, so a screen reader reads it as the control's description, and the "i" is a button named "About <setting>" with the same description. A field whose unit sits beside it as text has that unit in its name ("Turn time limit minutes").
+- **Shortened first.** Each explanation says only what a person needs to choose: not the default the control already shows, not the mechanism behind it. What the control doesn't say by itself stays: a turn ends at the limit once the gateway confirms the stop; a check-in prompt takes up to 4,000 characters.
 - **What stays in view.** A warning a person must read before acting (a budget is a warning only; Off for check-ins stops only the schedule; a typed check-in prompt replaces the gateway's own; a model a provider may not let an account use; a change to the gateway's own settings), and status: why a control can't be used, what the gateway reported, a read that failed, the lines Clawtrate says when it can't keep a bot's instructions.
 
 ## Not done yet

@@ -32,7 +32,7 @@ test.describe("the turn time limit", () => {
     await expect(limit).toHaveValue("50");
     // A stop at the limit is asked of the gateway, and the turn ends with a note naming the limit.
     await expect(limit).toHaveAccessibleDescription(
-      "At the limit Clawtrate asks the gateway to stop the turn, so it doesn't hang, and the turn ends with a note naming the limit. Send a message to pick up where it left off. It applies to turns this device starts.",
+      "At the limit Clawtrate asks the gateway to stop the turn, so it doesn't hang. Once the gateway confirms, the turn ends with a note naming the limit. Send a message to pick up where it left off. It applies to turns this device starts.",
     );
     await expect(limit).not.toHaveAccessibleDescription(/is stopped so it does not hang/);
     await limit.fill("0");
