@@ -12,7 +12,7 @@ import { saveBotFile } from "../bot-files.ts";
 import { BOT_FILE_WORDS as W, botFileView, type BotFilePhase } from "../presentation/bot-files.ts";
 import { fileSize } from "../presentation/sent-files.ts";
 import { useRuntime } from "../runtime.ts";
-import { S, useTheme } from "../theme/index.ts";
+import { S, TOUCH, useTheme } from "../theme/index.ts";
 import type { ShownStamp } from "../../../../packages/ui/src/stamp.ts";
 import { FileIcon } from "./icons.tsx";
 import { Button, Txt } from "./ui.tsx";
@@ -115,7 +115,8 @@ function BotFile({
             busy={view.busy}
             onPress={save}
             testID={view.action === "save" ? "bot-file-save" : "bot-file-retry"}
-            style={{ backgroundColor: c.bg, marginLeft: "auto" }}
+            // 44 points, the least a touch target takes, rather than the pill's 40.
+            style={{ backgroundColor: c.bg, marginLeft: "auto", minHeight: TOUCH.taskRow }}
           />
         )}
       </View>
