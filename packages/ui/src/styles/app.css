@@ -2755,7 +2755,7 @@ textarea {
   margin-top: var(--space-6);
 }
 
-/* Conversation: "Bots know how Clawtrate works" (BotGuides.tsx), below Bot voice. */
+/* Conversation: the bots whose instructions Clawtrate can't keep current (BotGuides.tsx). */
 .bot-guides {
   margin-top: var(--space-6);
 }
@@ -2785,8 +2785,7 @@ textarea {
   padding-left: 1.25em;
 }
 
-.bot-voice-guide,
-.bot-guides-text {
+.bot-voice-guide {
   margin: 0;
   padding: 10px 14px;
   border-radius: var(--radius-md);

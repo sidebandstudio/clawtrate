@@ -25,13 +25,7 @@
     - link "Where the guide doesn't reach":
       - /url: https://github.com/sidebandstudio/clawtrate/blob/main/plugins/clawtrate-voice/README.md#where-the-guide-doesnt-reach
     - group: What the guide asks the bots to do
-    - text: Bots know how Clawtrate works Off
-    - switch "Bots know how Clawtrate works"
-    - paragraph:
-      - text: Clawtrate keeps a short section at the top of the
-      - code: AGENTS.md
-      - text: of each bot on this gateway that tells it how to talk to you and what a task is in Clawtrate.
-    - group: Read it
+    - paragraph: "Clawtrate can't keep its section in Marlow, Otto, Pip and Quartermaster of the Family Calendar and Errands's instructions current: this device doesn't have admin access to the gateway."
   - status
 - navigation "Bots":
   - button "Routines"

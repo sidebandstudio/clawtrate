@@ -24,10 +24,7 @@
       - heading "OpenClaw on 127.0.0.1:18789" [level=4]
       - paragraph: Applies to the gateway, for every device connected to it.
       - paragraph: "The update failed. The gateway couldn't start the updater. The gateway says: “The updater could not start: spawn EAGAIN. (managed-service-handoff-failed)”."
-      - paragraph: You can try again, or update OpenClaw on the gateway's machine with its update instructions.
-      - paragraph:
-        - link "OpenClaw's update instructions":
-          - /url: https://docs.openclaw.ai/install/updating
+      - paragraph: Dismiss this, and Update is offered again.
       - button "Dismiss"
       - status: The update failed. The gateway couldn't start the updater.
 - navigation "Bots":

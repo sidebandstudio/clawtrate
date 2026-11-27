@@ -22,6 +22,7 @@ import {
   deferred,
   FakeGateway,
   guidesOff,
+  guidesOptions,
   helloOk,
   memoryStorage,
   sleep,
@@ -67,7 +68,7 @@ async function twoGateways() {
     ...testHost(a.gateway, storage),
     createWebSocket: (url: string) => (url === URL_B ? b : a).gateway.createWebSocket(url),
   };
-  const client = new ClawtrateClient(host, FAST);
+  const client = new ClawtrateClient(host, { ...FAST, ...guidesOptions(storage) });
   await client.start();
   await until(() => ready(client, URL_A));
   await client.refreshAccounts();
@@ -302,7 +303,7 @@ describe("the host's target", () => {
     const stamp = gatewayStamp(first.state.connection);
     first.stop();
     // The same storage and gateways, as the web host has them after a restart; its pages stay.
-    const second = new ClawtrateClient(host, FAST);
+    const second = new ClawtrateClient(host, { ...FAST, keepGuides: false });
     await second.start();
     await until(() => ready(second, URL_A));
     await second.connect({ url: URL_B });
@@ -690,7 +691,7 @@ describe("a removal, a task, a bot's model and account, a routine's switch from 
     await listed(first);
     const stamp = gatewayStamp(first.state.connection);
     first.stop();
-    const second = new ClawtrateClient(host, FAST);
+    const second = new ClawtrateClient(host, { ...FAST, keepGuides: false });
     await second.start();
     await until(() => ready(second, URL_A));
     await second.connect({ url: URL_B });
