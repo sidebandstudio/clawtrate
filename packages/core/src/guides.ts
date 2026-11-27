@@ -492,14 +492,15 @@ const refusalReason = (error: unknown) =>
  * or with `byItself` (Clawtrate's own changes) it is left without a word. With `byItself`, a
  * missing file is left too: the gateway writes its own template into it only while it is missing.
  * A write refused because the file changed meanwhile reads it again and tries once more; one the
- * gateway refuses for good fails as `GuideRefusedError` (`refusedForGood`). Answers whether anything was
- * written, what the file held, and whether it was missing.
+ * gateway refuses for good fails as `GuideRefusedError` (`refusedForGood`). `stillSo`, asked after
+ * the read and before the write, leaves the file when it answers false. Answers whether anything
+ * was written, what the file held, and whether it was missing.
  */
 export async function changeGuideFile(
   request: Request,
   agentId: string,
   next: (file: string, found: FoundSection) => string | null,
-  options: { byItself?: boolean } = {},
+  options: { byItself?: boolean; stillSo?: () => Promise<boolean> } = {},
 ): Promise<{ written: boolean; found: FoundSection; missing: boolean }> {
   for (let attempt = 0; ; attempt += 1) {
     const { content, held, utf8, missing } = await readFile(request, agentId);
@@ -511,6 +512,7 @@ export async function changeGuideFile(
       );
     const wanted = next(content, found);
     if (wanted === null || wanted === content) return { written: false, found, missing };
+    if (options.stillSo && !(await options.stillSo())) return { written: false, found, missing };
     try {
       const result = rec(
         await request("agents.files.set", {
@@ -778,7 +780,16 @@ export async function applyGuidesChange(
     byItself = false,
   ): Promise<{ ours: boolean; marked: boolean }> => {
     try {
-      const result = await changeGuideFile(request, bots[0]!, next, { byItself });
+      const result = await changeGuideFile(request, bots[0]!, next, {
+        byItself,
+        // Another device records a removal before it makes it: a history read again after this
+        // file read and unchanged since the change began means none was recorded before the read.
+        // Only Clawtrate's own change gives up; the person's asked for the section.
+        ...(change.action === "auto" && {
+          stillSo: async () =>
+            JSON.stringify(await readGuidesHistory(request)) === JSON.stringify(history),
+        }),
+      });
       if (result.missing && byItself) missing.push(bots);
       if (result.written) wrote = true;
       const ours = result.written || (result.found.kind === "ours" && result.found.current);

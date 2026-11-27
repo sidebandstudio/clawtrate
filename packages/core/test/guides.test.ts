@@ -672,6 +672,33 @@ describe("the switch and the rows' changes", () => {
     expect(files.prefs.entries.get(GUIDES_HISTORY_KEY)).toEqual({ v: 1, bots: ["pip"] });
   });
 
+  it("by itself, adds nothing back when another device records a removal after this pass read the history", async () => {
+    for (const change of [{ action: "auto" }, { action: "add", bots: ["pip"] }] as GuidesChange[]) {
+      // Pip's section predates the history, so only device A's own record knows it.
+      const files = fakeFiles({ pip: withSection(BOT_FILE) });
+      // Device B's pass has read the history; device A turns the switch off before B's file read.
+      let once = true;
+      const b: typeof files.request = async (method, params) => {
+        if (method === "agents.files.get" && once) {
+          once = false;
+          await applyGuidesChange(
+            files.request,
+            { on: true, bots: ["pip"] },
+            { action: "switch", on: false },
+          );
+          expect(files.prefs.entries.get(GUIDES_HISTORY_KEY)).toEqual({ v: 1, bots: ["pip"] });
+          expect(files.store.get("pip")).toBe(BOT_FILE);
+        }
+        return files.request(method, params);
+      };
+      await applyGuidesChange(b, null, change);
+      // The person's Add is theirs to make; Clawtrate's own pass leaves the removal standing.
+      expect(files.store.get("pip"), change.action).toBe(
+        change.action === "add" ? withSection(BOT_FILE) : BOT_FILE,
+      );
+    }
+  });
+
   it("turning it on keeps a bot another device recorded meanwhile, when its save tries again", async () => {
     const files = fakeFiles({ pip: BOT_FILE });
     // Another device records Otto (not on this change's list) just before this change saves.
