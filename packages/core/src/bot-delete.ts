@@ -15,6 +15,10 @@
 // Nothing here is kept in the state: each read and each delete answers the
 // dialog that asked.
 
+import {
+  GatewayProtocolRequestError,
+  GatewayProtocolRequestTimeoutError,
+} from "@openclaw/gateway-client/browser";
 import { AdminNeededError } from "./accounts-engine.ts";
 import { sha256Hex, utf8Bytes } from "./bytes.ts";
 import { asRecord, mapAgents, type RawRecord } from "./mapping.ts";
@@ -189,6 +193,23 @@ const text = (value: unknown, max: number): string | null =>
   typeof value === "string" && value.length > 0 ? cap(value, max) : null;
 const errorText = (error: unknown) =>
   cap(error instanceof Error ? error.message : String(error), MAX_REASON_CHARS);
+
+/** A request that never left this client. */
+const neverSent = (error: unknown) =>
+  (error instanceof GatewayProtocolRequestTimeoutError && !error.requestSent) ||
+  (error instanceof Error && error.name === "NotSentError");
+
+/**
+ * Why a request failed, in a person's words: the gateway's own answer as it gave it; for anything
+ * the client made itself ("gateway client stopped", "gateway closed (1006): ", its timeout), never
+ * its text. `late` and `cut` are the words for a timeout and for anything else.
+ */
+const failureWords = (error: unknown, late: string, cut: string) =>
+  error instanceof GatewayProtocolRequestError
+    ? errorText(error)
+    : error instanceof GatewayProtocolRequestTimeoutError
+      ? late
+      : cut;
 
 /**
  * A folder path compared loosely: either slash, no trailing one, any case. A case alias on a
@@ -439,9 +460,21 @@ export async function deleteBot(
     if (!ctx.admin()) throw new AdminNeededError("Deleting a bot");
     if (!sameStamp(request.stamp, ctx.stamp))
       throw new Error("This delete was asked for another gateway, so nothing was sent.");
-    before = await ctx.readBots();
   } catch (error) {
     return { kind: "not-sent", message: errorText(error) };
+  }
+  try {
+    before = await ctx.readBots();
+  } catch (error) {
+    // The read before the delete failed: nothing was sent, whatever the reason.
+    return {
+      kind: "not-sent",
+      message: neverSent(error)
+        ? "Clawtrate isn't connected to the gateway, so nothing was sent."
+        : error instanceof GatewayProtocolRequestError
+          ? `The gateway didn't list its bots (${errorText(error).replace(/\.$/, "")}), so nothing was sent.`
+          : `${failureWords(error, "The gateway didn't list its bots in time", "The connection changed before Clawtrate could read the bot list")}, so nothing was sent.`,
+    };
   }
   let read: BotDeleteRead;
   try {
@@ -484,6 +517,12 @@ export async function deleteBot(
   } catch (error) {
     failure = error;
   }
+  // The client never sent it: the connection had gone. Certain, so nothing to read back.
+  if (neverSent(failure))
+    return {
+      kind: "not-sent",
+      message: "The connection changed before the delete was sent, so nothing was sent.",
+    };
   // Only `ok: true` for the bot asked about says the gateway deleted it.
   const confirmed = failure === null && rec(answer).ok === true && rec(answer).agentId === botId;
   if (confirmed) ctx.deleted(botId);
@@ -492,7 +531,16 @@ export async function deleteBot(
   // Whatever failed once the request left, only reading the list follows: an error doesn't
   // establish what the gateway did.
   if (failure !== null)
-    return { kind: "unconfirmed", message: errorText(failure), deleteFiles, ...after };
+    return {
+      kind: "unconfirmed",
+      message: failureWords(
+        failure,
+        "it didn't answer in time",
+        "the connection changed before it answered",
+      ),
+      deleteFiles,
+      ...after,
+    };
   if (!confirmed)
     return {
       kind: "unconfirmed",

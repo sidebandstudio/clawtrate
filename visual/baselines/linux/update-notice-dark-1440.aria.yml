@@ -6,24 +6,20 @@
   - button "Search"
   - list:
     - listitem:
-      - button "Juniper, 4 tasks, unread, research, primary bot" [expanded]:
-        - text: Juniper research
+      - button "main, 1 task, primary bot":
+        - text: main
         - time: 5:39 PM
         - text: About 40 GB are free. The cache uses most of the rest.
-      - list "Juniper's tasks":
-        - listitem:
-          - button "Main"
-        - listitem:
-          - button "Heat pump vs. gas furnace"
-        - listitem:
-          - button "Library e-book apps compared, unread": Library e-book apps compared
-        - listitem:
-          - button "Caffeine cutoff time"
     - listitem:
       - button "Otto, working, 14 tasks, unread, home server operations":
         - text: Otto home server operations
         - time: now
         - text: Rotating logs on rack-2
+    - listitem:
+      - button "Juniper, 3 tasks, unread, research":
+        - text: Juniper research
+        - time: 5:24 PM
+        - text: Ask these five, and get the answers in writing.
     - listitem:
       - button "Marlow, 1 task, editing":
         - text: Marlow editing
@@ -43,11 +39,11 @@
   - button "127.0.0.1:18789, connected. Open the gateway menu."
   - button "Settings"
 - region "Conversation":
-  - button "Juniper, Main. Show details.": Juniper ·Main
+  - button "main, Main. Show details.": main ·Main
   - button "Show work panel"
   - region "Transcript":
     - heading "Main" [level=1]
-    - paragraph: "Context: 5,425 of 128,000 tokens"
+    - paragraph: "Context: 3,388 of 128,000 tokens"
     - text: Today 5:38 PM
     - paragraph: How much space is left on the disk?
     - toolbar "Message actions":
@@ -59,7 +55,7 @@
     - group: Message text
     - status
   - region "Access":
-    - text: Read-only. You can follow Juniper's work here. Approvals and questions aren't shown on this connection.
+    - text: Read-only. You can follow main's work here. Approvals and questions aren't shown on this connection.
     - button "Request access"
   - status
 - status
