@@ -2249,6 +2249,8 @@ describe("the iOS app", () => {
         },
         waitGone("Save to Files", 30_000),
         see(save),
+        // Cancelled is not saved: the row says nothing, so a wrong "Saved to Files." fails here.
+        notSee({ id: "bot-file-note" }),
       ]);
       await until("the second shared file deleted", async () => !sharedFolders().includes(again!));
       expect(containerHits([inPdf])).toEqual([0]);
