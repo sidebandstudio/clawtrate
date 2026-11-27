@@ -1088,4 +1088,26 @@ describe("an archive or a delete bound to the connection it began on", () => {
       client.stop();
     });
   }
+
+  it("a task change whose viewer closes while it waits for the gateway's name asks nothing for it", async () => {
+    const { client, gateway, stamp } = await granted("gateway-a");
+    const naming = deferred<{ deviceId: string }>();
+    gateway.handlers["gateway.identity.get"] = () => naming.promise;
+    const asked = gateway.calls("gateway.identity.get").length;
+    gateway.dropAll();
+    await until(
+      () =>
+        client.state.connection.status === "connected" &&
+        gateway.calls("gateway.identity.get").length > asked,
+      6_000,
+    );
+    const viewer = {};
+    const acting = outcome(client.archiveTask("agent:pip:main", { owner: viewer, stamp }));
+    client.withdraw(viewer);
+    naming.resolve({ deviceId: "gateway-a" });
+    expect(await acting).toBe("The request was withdrawn.");
+    expect(gateway.calls("device.scopes.requestUpgrade")).toEqual([]);
+    expect(gateway.calls("sessions.patch")).toEqual([]);
+    client.stop();
+  });
 });

@@ -11300,6 +11300,8 @@ export class ClawtrateClient {
     // right after a hello the identity is still being read, and the guard waits for it.
     this.requireSameTarget(stamp);
     if (this.state.connection.status === "connected") await this.requireSameGateway(stamp);
+    // A viewer that closed during that wait had no access waiter to withdraw yet.
+    this.checkNotWithdrawn(owner);
     await this.actionContext(owner).ensureWrite();
     const epoch = this.epoch;
     await this.requireSameGateway(stamp);
