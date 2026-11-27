@@ -3,8 +3,11 @@
 // returns"), and the client applying the `cron` event it sends.
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ClawtrateClient } from "../src/client.ts";
-import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
+import { ClawtrateClient, NotSentError } from "../src/client.ts";
+import {
+  GatewayProtocolRequestError,
+  GatewayProtocolRequestTimeoutError,
+} from "@openclaw/gateway-client/browser";
 import * as protocol from "@openclaw/gateway-protocol";
 import {
   applyCronEvent,
@@ -2271,6 +2274,180 @@ describe("F-189: changing a routine", () => {
     release();
     expect(await pending).toMatchObject({ status: "saved" });
     expect(state().routines).toEqual([]);
+  });
+});
+
+describe("#848: a routine write whose answer was lost is never said in the client's words", () => {
+  // What the gateway client rejects a request with: its own text, never words for a person.
+  const dropped = () => new Error("gateway closed (1006): ");
+  const stopped = () => new Error("gateway client stopped");
+  const timedOut = (method: string) => () =>
+    new GatewayProtocolRequestTimeoutError({ method, timeoutMs: 15_000, requestSent: true });
+  const busy = () => new GatewayProtocolRequestError({ code: "UNAVAILABLE", message: "cron busy" });
+  const CUT = "The connection changed before the gateway answered.";
+  const LATE = "The gateway didn't answer in time.";
+  /**
+   * The gateway as a lost answer leaves it: `method` is rejected with `error`, and after a dropped
+   * connection or a stopped client (`down`) nothing more is sent. `cron.get` reads `read`.
+   */
+  const lost = (
+    method: string,
+    error: () => Error,
+    { down = false, read = job() as unknown }: { down?: boolean; read?: unknown } = {},
+  ) => {
+    let gone = false;
+    return engine(
+      {
+        [method]: () => {
+          gone = down;
+          throw error();
+        },
+        "cron.get": () => {
+          if (gone) throw new NotSentError();
+          return read;
+        },
+      },
+      initialRoutinesState,
+      ADMIN,
+    );
+  };
+  const expected = parseRoutine(job())!;
+  const fields = fieldsOf(expected);
+  const saves = [
+    {
+      name: "a new routine's save",
+      method: "cron.add",
+      run: (r: RoutinesEngine) => r.create({ ...fields, botId: "marlow" }, "k1"),
+    },
+    {
+      name: "an edit's save",
+      method: "cron.update",
+      run: (r: RoutinesEngine) => r.update(JOB, fields, { ...fields, name: "New" }, expected),
+    },
+  ];
+
+  for (const save of saves)
+    it(`#848: ${save.name} cut off by a dropped connection, a stopped client or a timeout is unknown in Clawtrate's words; a refusal is the gateway's`, async () => {
+      for (const cut of [dropped, stopped])
+        expect(await save.run(lost(save.method, cut, { down: true }).routines)).toEqual({
+          status: "unknown",
+          error: CUT,
+        });
+      expect(await save.run(lost(save.method, timedOut(save.method)).routines)).toEqual({
+        status: "unknown",
+        error: LATE,
+      });
+      expect(await save.run(lost(save.method, busy).routines)).toEqual({
+        status: "refused",
+        error: "cron busy",
+      });
+    });
+
+  it("#848: a pause whose answer was lost reads the routine back and says what it found; a refusal is the gateway's", async () => {
+    for (const cut of [dropped, stopped])
+      expect(
+        await lost("cron.update", cut, { down: true }).routines.setEnabled(JOB, false),
+      ).toEqual({
+        status: "unknown",
+        error: `${CUT} Clawtrate couldn't read the routine back, so whether it was paused isn't known.`,
+      });
+    expect(
+      await lost("cron.update", timedOut("cron.update")).routines.setEnabled(JOB, false),
+    ).toEqual({
+      status: "unknown",
+      error: `${LATE} Read back just now, it is still not paused: the change hasn't taken, or not yet.`,
+    });
+    // The gateway applied it and only its answer was lost: the read back shows it, so it is saved.
+    expect(
+      await lost("cron.update", timedOut("cron.update"), {
+        read: job({ enabled: false }, { nextRunAtMs: undefined }),
+      }).routines.setEnabled(JOB, false),
+    ).toMatchObject({ status: "saved", routine: { enabled: false } });
+    expect(
+      await lost("cron.update", timedOut("cron.update"), {
+        read: job({ enabled: false }, { nextRunAtMs: undefined }),
+      }).routines.setEnabled(JOB, true),
+    ).toEqual({
+      status: "unknown",
+      error: `${LATE} Read back just now, it is still paused: the change hasn't taken, or not yet.`,
+    });
+    expect(await lost("cron.update", busy).routines.setEnabled(JOB, false)).toEqual({
+      status: "refused",
+      error: "cron busy",
+    });
+  });
+
+  it("#848: a pause whose answer was lost never keeps a read-back that a cron event for the routine since the write was sent may postdate", async () => {
+    /** The pause's answer is lost; while the read back is out, `event` arrives; the read answers `read`. */
+    const pause = async (event: Record<string, unknown>, read: Record<string, unknown>) => {
+      const holder: { routines?: RoutinesEngine } = {};
+      const made = engine(
+        {
+          "cron.list": () => ({ jobs: [job()], hasMore: false }),
+          "cron.status": () => ({ enabled: true }),
+          "cron.update": () => {
+            throw timedOut("cron.update")();
+          },
+          "cron.get": () => {
+            holder.routines!.onEvent({ action: "updated", jobId: JOB, job: event });
+            return read;
+          },
+        },
+        initialRoutinesState,
+        ADMIN,
+      );
+      holder.routines = made.routines;
+      await made.routines.load();
+      const outcome = await made.routines.setEnabled(JOB, false);
+      return { outcome, shown: made.state().routines.find((each) => each.id === JOB) };
+    };
+    // Paused, then resumed elsewhere: the event says running, the older read says paused.
+    const resumed = await pause(job(), job({ enabled: false }, { nextRunAtMs: undefined }));
+    expect(resumed.outcome).toEqual({
+      status: "unknown",
+      error: `${LATE} As the gateway last reported it, it is still not paused: the change hasn't taken, or not yet.`,
+    });
+    expect(resumed.shown?.enabled).toBe(true);
+    // The pause's own event arrives and a read from before it says running: the event decides.
+    const paused = await pause(job({ enabled: false }, { nextRunAtMs: undefined }), job());
+    expect(paused.outcome).toMatchObject({ status: "saved", routine: { enabled: false } });
+    expect(paused.shown?.enabled).toBe(false);
+  });
+
+  it("#848: a Run now whose answer was lost never says a run hasn't started when it may have finished before the read", async () => {
+    // The run started and finished before `cron.get` answered: no run under way, a last run now.
+    expect(
+      await lost("cron.run", timedOut("cron.run"), {
+        read: job({}, { lastRunAtMs: 1_795_093_200_000, lastRunStatus: "ok" }),
+      }).routines.runNow(JOB),
+    ).toEqual({
+      status: "unknown",
+      error: `${LATE} Read back just now, no run is under way: this one may still start, or may already have finished.`,
+    });
+  });
+
+  it("#848: a Run now whose answer was lost reads the routine back and says what it found, never that a run started; a refusal is the gateway's", async () => {
+    for (const cut of [dropped, stopped])
+      expect(await lost("cron.run", cut, { down: true }).routines.runNow(JOB)).toEqual({
+        status: "unknown",
+        error: `${CUT} Clawtrate couldn't read the routine back, so whether a run started isn't known.`,
+      });
+    expect(await lost("cron.run", timedOut("cron.run")).routines.runNow(JOB)).toEqual({
+      status: "unknown",
+      error: `${LATE} Read back just now, no run is under way: this one may still start, or may already have finished.`,
+    });
+    expect(
+      await lost("cron.run", timedOut("cron.run"), {
+        read: job({}, { runningAtMs: 1_795_093_200_000 }),
+      }).routines.runNow(JOB),
+    ).toEqual({
+      status: "unknown",
+      error: `${LATE} Read back just now, a run is under way, which may be this one.`,
+    });
+    expect(await lost("cron.run", busy).routines.runNow(JOB)).toEqual({
+      status: "refused",
+      error: "cron busy",
+    });
   });
 });
 
