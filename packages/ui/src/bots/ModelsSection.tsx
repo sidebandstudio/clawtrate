@@ -17,6 +17,7 @@ import {
 } from "@clawtrate/core";
 import { useState, type ReactNode } from "react";
 import { useBridge } from "../bridge.tsx";
+import { InfoCard, InfoTip } from "../InfoTip.tsx";
 import { screenStamp, shownStamp } from "../stamp.ts";
 import { AdminBar, GrantedBar, useGranted } from "./parts.tsx";
 import { accountName, providerName } from "./words.ts";
@@ -259,10 +260,15 @@ export function useModelsSection({
       ) : (
         <>
           <h4 className="b-group">For every bot</h4>
-          <label className="b-field">
-            <span>Default model</span>
+          <div className="b-field">
+            <span>
+              <span id="models-default-label">Default model</span>
+              <InfoTip id="models-default-note" about="Default model" />
+            </span>
             <select
               className="input"
+              aria-labelledby="models-default-label"
+              aria-describedby="models-default-note"
               value={defaults.primary ?? ""}
               disabled={disabled}
               onChange={(event) => void set({ primary: event.target.value })}
@@ -270,8 +276,10 @@ export function useModelsSection({
               {defaults.primary === null && <option value="">None</option>}
               {options(defaults.primary)}
             </select>
-            <span className="b-hint">What a bot uses unless it has a model of its own.</span>
-          </label>
+            <InfoCard id="models-default-note">
+              What a bot uses unless it has a model of its own.
+            </InfoCard>
+          </div>
           <div className="b-field">
             <span id="b-models-backups">If it can't answer</span>
             <ul className="b-models-backups" aria-labelledby="b-models-backups">

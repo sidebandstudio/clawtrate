@@ -127,6 +127,20 @@ describe("Settings › Models", () => {
     expect(html).toContain("The default: Swift 1, on Acme · Work");
   });
 
+  it("puts Default model's explanation behind its i, and the picker is described by it", () => {
+    const html = render(accounts);
+    expect(html).toContain('<span id="models-default-label">Default model</span>');
+    expect(html).toContain('aria-label="About Default model"');
+    expect(html).toContain(
+      'aria-labelledby="models-default-label" aria-describedby="models-default-note"',
+    );
+    expect(html).toContain(
+      '<p class="info-tip-card" id="models-default-note" role="note" hidden="">What a bot uses unless it has a model of its own.</p>',
+    );
+    // No paragraph under the control any more.
+    expect(html).not.toContain('<span class="b-hint">What a bot uses');
+  });
+
   it("after a change: one line, and Put back with the earlier value", () => {
     const html = render({ ...accounts, defaultsChange: change({}) });
     expect(html).toContain("Default model is now Swift 2, on Acme · Work.");
