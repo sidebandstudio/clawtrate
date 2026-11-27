@@ -330,10 +330,10 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
     opaque: "counted in `taskNames`",
   },
   // The title each task's first message makes, by task key, with the outgoing message it was
-  // made from until history holds it.
+  // made from until history holds it, and the session it was made in.
   firstMessageTitles: {
     max: MAX_FIRST_MESSAGE_TITLES,
-    each: 2 * ID + 2 * MAX_TITLE_CHARS + N,
+    each: 3 * ID + 2 * MAX_TITLE_CHARS + N,
     row: "bookkeeping",
   },
   // The store's listeners: a host's windows and web viewers.

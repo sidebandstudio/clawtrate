@@ -555,9 +555,10 @@ export const MAX_FIRST_MESSAGE_TITLES = 200;
 
 /**
  * A title made from a task's first message, and the outgoing message it was made from while that
- * message is not yet in the task's history (`from`); null once history holds it.
+ * message is not yet in the task's history (`from`); null once history holds it. With the session
+ * the task had then, when known: a task made again under the same key is another one.
  */
-type FirstMessageTitle = { title: string; from: string | null };
+type FirstMessageTitle = { title: string; from: string | null; session: string | null };
 
 /** The text of a transcript's first message from the person, or null when it has none. */
 function firstPersonText(items: readonly TranscriptItem[]): string | null {
@@ -1801,6 +1802,8 @@ export class ClawtrateClient {
    * from what the task's transcript shows (`settleFirstMessage`); gone with the task.
    */
   private readonly firstMessageTitles = new Map<string, FirstMessageTitle>();
+  /** The gateway identity `firstMessageTitles` were made on, once one is confirmed. */
+  private firstMessageGateway: string | null = null;
   /** Pictures read back from the gateway, by `task\0messageKey\0index`, oldest first (`MAX_READ_BACK_PICTURES`). */
   private readonly readBackPictures = new Map<
     string,
@@ -4354,13 +4357,13 @@ export class ClawtrateClient {
       error: runError ? String(runError.message ?? "The run did not start.") : null,
       attachments: [],
     };
+    const sessionId = sessionOf(result?.sessionId);
     // Named from its message at once; the task's history settles it (`settleFirstMessage`).
     if (!this.firstMessageTitles.has(capId(key, MAX_ID_CHARS)))
-      this.keepFirstMessage(capId(key, MAX_ID_CHARS), creation.text, creation.id);
+      this.keepFirstMessage(capId(key, MAX_ID_CHARS), creation.text, creation.id, sessionId);
     // A task created with its first message is named from it once the gateway accepts it (here or
     // on a retry), unless the person named it.
     if (!creation.label) {
-      const sessionId = sessionOf(result?.sessionId);
       this.keepTaskName(key, {
         stage: "waiting",
         sessionId,
@@ -9685,6 +9688,7 @@ export class ClawtrateClient {
     this.sentSources.clear();
     this.taskNames.clear();
     this.firstMessageTitles.clear();
+    this.firstMessageGateway = null;
   }
 
   private invalidateCheckIns(): void {
@@ -10054,6 +10058,11 @@ export class ClawtrateClient {
     this.accounts.onGateway(id);
     // Clearing another gateway's creation can notify a host that stops the connection.
     if (current() && this.state.connection.gatewayId !== id) this.setConnection({ gatewayId: id });
+    // Another gateway at the same address: its tasks under the same keys are not the ones titled.
+    if (current() && this.firstMessageGateway !== id) {
+      if (this.firstMessageGateway !== null) this.firstMessageTitles.clear();
+      this.firstMessageGateway = id;
+    }
     if (current()) this.settleReadStamps(id);
     // The guide change after this connection's connect found it unnamed: once, now it is named.
     const unnamed = this.guidesUnnamed;
@@ -10424,19 +10433,24 @@ export class ClawtrateClient {
 
   /**
    * Keep the title a message makes for its task (the line the sidebar would preview it as, cut to a
-   * title), made from the outgoing message `from` or, with null, from the task's history; true
-   * when what is kept changed.
+   * title), made from the outgoing message `from` or, with null, from the task's history, in the
+   * task's session `session` when known; true when what is kept changed.
    */
-  private keepFirstMessage(id: string, text: string | null, from: string | null): boolean {
+  private keepFirstMessage(
+    id: string,
+    text: string | null,
+    from: string | null,
+    session: string | null,
+  ): boolean {
     const title = cleanLine(plainPreview(text) ?? "", MAX_TITLE_CHARS);
     if (!title) return this.firstMessageTitles.delete(id);
     const kept = this.firstMessageTitles.get(id);
-    if (kept?.title === title && kept.from === from) return false;
+    if (kept?.title === title && kept.from === from && kept.session === session) return false;
     if (!kept && this.firstMessageTitles.size >= MAX_FIRST_MESSAGE_TITLES) {
       const oldest = this.firstMessageTitles.keys().next();
       if (!oldest.done) this.firstMessageTitles.delete(oldest.value);
     }
-    this.firstMessageTitles.set(id, { title, from });
+    this.firstMessageTitles.set(id, { title, from, session });
     return true;
   }
 
@@ -10451,19 +10465,26 @@ export class ClawtrateClient {
     if (!titledByGateway(id)) return false;
     const transcript = this.state.transcripts[key];
     if (transcript?.status !== "ready" || transcript.hasMore) return false;
+    const session =
+      sessionOf(this.rows.get(id)?.sessionId) ?? this.firstMessageTitles.get(id)?.session ?? null;
     const held = firstPersonText(transcript.items);
-    if (held !== null) return this.keepFirstMessage(id, held, null);
+    if (held !== null) return this.keepFirstMessage(id, held, null, session);
     const waiting = transcript.outbox.find(
       (message) => message.status !== "cancelled" && message.text.trim() !== "",
     );
-    if (waiting) return this.keepFirstMessage(id, waiting.text, waiting.id);
+    if (waiting) return this.keepFirstMessage(id, waiting.text, waiting.id, session);
     return this.firstMessageTitles.delete(id);
   }
 
   /** The title a task's first message makes, as far as this client knows it (`taskTitle`). */
   private firstMessageTitle(key: string): string | null {
+    const id = capId(key, MAX_ID_CHARS);
+    const made = this.firstMessageTitles.get(id)?.session;
+    const now = sessionOf(this.rows.get(id)?.sessionId);
+    // The task was deleted and made again under its key while this client didn't see it.
+    if (made && now && made !== now) this.firstMessageTitles.delete(id);
     this.settleFirstMessage(key);
-    return this.firstMessageTitles.get(capId(key, MAX_ID_CHARS))?.title ?? null;
+    return this.firstMessageTitles.get(id)?.title ?? null;
   }
 
   /**

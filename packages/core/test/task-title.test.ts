@@ -45,6 +45,14 @@ const shownIn = (client: {
   state: { tasksByBot: Record<string, { key: string; title: string }[]> };
 }) => client.state.tasksByBot.main?.find((task) => task.key === KEY)?.title;
 
+/** Note a first-message title as the client does (`keepFirstMessage`). */
+const keep = (client: object, key: string, text: string, session: string | null) =>
+  (
+    client as {
+      keepFirstMessage(key: string, text: string, from: string | null, s: string | null): boolean;
+    }
+  ).keepFirstMessage(key, text, null, session);
+
 const title = (row: Record<string, unknown>, first: string | null = null) =>
   mapSessionRow(row, { firstMessage: first })?.title;
 
@@ -419,6 +427,101 @@ describe("a task titled from its first message", () => {
       gateway.emit("sessions.changed", { sessionKey: KEY, reason: "delete" });
       await until(() => !kept.has(KEY));
       expect(shownIn(client)).toBeUndefined();
+    } finally {
+      client.stop();
+    }
+  });
+
+  /** The key's task deleted and made again while this client didn't see it: another session. */
+  const madeAgain = (gateway: { emit(event: string, payload: unknown): void }) => {
+    const again = { ...ROW_1110, sessionId: "7e6d5c4b-3a29-4180-9f7e-6d5c4b3a2918" };
+    gateway.emit("sessions.changed", {
+      sessionKey: KEY,
+      reason: "chat.title",
+      ...again,
+      session: again,
+    });
+  };
+
+  it("is the session's it was made in: made at creation, a task made again under its key has none", async () => {
+    const gateway = grantingGateway();
+    let created = false;
+    gateway.handlers["sessions.create"] = () => {
+      created = true;
+      return { key: KEY, sessionId: ROW_1110.sessionId, runId: "run-create" };
+    };
+    gateway.handlers["sessions.list"] = () => ({
+      sessions: created ? [ROW_1110] : [],
+      hasMore: false,
+    });
+    const { client } = await openTask({ gateway });
+    // Its history unread, so only the creation knows the session.
+    gateway.handlers["chat.history"] = () => {
+      throw new GatewayError({ code: "UNAVAILABLE", message: "not now" });
+    };
+    try {
+      await client.createTask("main", "Plan the garden");
+      placeholderLands(gateway);
+      await until(() => shownIn(client) === "Plan the garden");
+      madeAgain(gateway);
+      await until(() => shownIn(client) === "New task");
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("is the session's it was made in: made from history, a task made again under its key has none", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["sessions.subscribe"] = () => ({
+      subscribed: true,
+      list: { sessions: [ROW_1006], hasMore: false },
+    });
+    gateway.handlers["chat.history"] = (params) =>
+      (params as { sessionKey: string }).sessionKey === KEY
+        ? {
+            messages: [
+              { role: "user", content: [{ type: "text", text: "Sort the photos" }], timestamp: 1 },
+            ],
+            hasMore: false,
+          }
+        : { messages: [], hasMore: false };
+    const { client } = await openTask({ gateway });
+    try {
+      client.openSession(KEY);
+      await until(() => shownIn(client) === "Sort the photos");
+      client.closeSession(KEY);
+      madeAgain(gateway);
+      await until(() => shownIn(client) === "New task");
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("is the gateway's it was made on: another answering at the same address has none", async () => {
+    const gateway = grantingGateway();
+    let identity = "gateway-a";
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: identity });
+    gateway.handlers["sessions.subscribe"] = () => ({
+      subscribed: true,
+      list: { sessions: [ROW_1110], hasMore: false },
+    });
+    const { client } = await openTask({ gateway });
+    try {
+      await until(() => client.state.connection.gatewayId === "gateway-a");
+      keep(client, KEY, "Plan the garden", ROW_1110.sessionId);
+      placeholderLands(gateway);
+      await until(() => shownIn(client) === "Plan the garden");
+      const was = client.state.connection.connectedAt;
+      identity = "gateway-b";
+      gateway.dropAll();
+      await until(
+        () =>
+          client.state.connection.connectedAt !== was &&
+          client.state.connection.gatewayId === "gateway-b" &&
+          client.state.discovery.status === "ready",
+      );
+      await sleep(20);
+      expect(shownIn(client)).toBe("New task");
     } finally {
       client.stop();
     }
