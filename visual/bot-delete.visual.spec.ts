@@ -154,9 +154,14 @@ test.describe("behaviour", () => {
   test.use(contextFor(SIZES[0]!, "light"));
 
   test("F-050: the Main Bot's settings offer no Delete and say why", async ({ page }) => {
-    await openFixture(page, "scene=main&bot=main&panel=open&tab=settings&access=admin", "light");
+    // The gateway's own bot, which the app still calls the Main Bot, shown by the switch.
+    await openFixture(
+      page,
+      "scene=main&bot=main&panel=open&tab=settings&access=admin&gatewaybot=on",
+      "light",
+    );
     await expect(page.getByTestId("delete-main-note")).toHaveText(
-      "Juniper is your Main Bot, so it can't be deleted.",
+      "main is your Main Bot, so it can't be deleted.",
     );
     await expect(page.getByRole("button", { name: "Delete bot…" })).toHaveCount(0);
   });
@@ -183,7 +188,7 @@ test.describe("behaviour", () => {
     // The Main Bot's task is the one open.
     await expect(page.locator('[data-testid="task"][aria-current="true"]')).toHaveAttribute(
       "data-key",
-      /^agent:main:/,
+      /^agent:clawtrate-main-bot:/,
     );
     const sent = await page.evaluate(() =>
       (
@@ -368,7 +373,7 @@ test.describe("behaviour", () => {
         }
       ).clawtrateFixture.setState((state) => ({
         ...state,
-        tasksByBot: { ...state.tasksByBot, main: [] },
+        tasksByBot: { ...state.tasksByBot, "clawtrate-main-bot": [] },
       })),
     );
     await dialog.getByTestId("delete-type").fill("Pip");

@@ -29,7 +29,7 @@ import {
   type GuideState,
 } from "@clawtrate/core";
 
-const BOTS = ["main", "marlow", "otto", "pip", "quartermaster"];
+const BOTS = ["main", "clawtrate-main-bot", "marlow", "otto", "pip", "quartermaster"];
 
 export const guidesParam = (params: URLSearchParams) =>
   params.get("guidesave") === "fail" || params.get("guidesave") === "race"
@@ -45,7 +45,8 @@ export function guidesCommands(
   const saveFails = save === "fail";
   const param = save ? given!.slice(0, -`+save${save}`.length) || null : given;
   const mixed: Record<string, GuideState> = {
-    main: "current",
+    main: "none",
+    "clawtrate-main-bot": "current",
     marlow: "older",
     otto: "changed",
     pip: "removed",
@@ -58,7 +59,8 @@ export function guidesCommands(
         ? "current"
         : param === "mixed" || param === "odd" || param === "moved"
           ? mixed[bot]!
-          : (param === "voice" && bot === "main") || (param === "utf8" && bot === "otto")
+          : (param === "voice" && bot === "clawtrate-main-bot") ||
+              (param === "utf8" && bot === "otto")
             ? "current"
             : "none",
     ]),
@@ -71,9 +73,9 @@ export function guidesCommands(
       : param === "added"
         ? { bots: BOTS, newBots: true }
         : param === "mixed" || param === "moved"
-          ? { bots: ["main", "marlow", "otto", "pip"], newBots: true }
+          ? { bots: ["clawtrate-main-bot", "marlow", "otto", "pip"], newBots: true }
           : param === "odd"
-            ? { bots: ["main"], newBots: false }
+            ? { bots: ["clawtrate-main-bot"], newBots: false }
             : { bots: [], newBots: false };
   const voicePlugin = param === "voice" || param === "voicenone";
   const notUtf8 = (bot: string) => param === "utf8" && (bot === "otto" || bot === "marlow");

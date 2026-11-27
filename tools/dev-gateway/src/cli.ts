@@ -785,7 +785,11 @@ export function devConfigContract(
   const entries = (contract.agents!.entries as Record<string, Record<string, unknown>>) ?? {};
   for (const bot of SEED_BOTS) {
     // `agents set-identity` during the seed.
-    entries[bot.id]!.identity = optional({ name: bot.name, emoji: bot.emoji, theme: bot.theme });
+    entries[bot.id]!.identity = optional({
+      name: bot.name,
+      ...(bot.emoji === undefined ? {} : { emoji: bot.emoji }),
+      ...(bot.theme === undefined ? {} : { theme: bot.theme }),
+    });
   }
   // The CLI stamps the version that last wrote the config, and the migrations
   // it considers applied, whenever it writes it.
@@ -2157,8 +2161,9 @@ async function configureBot(
     ]);
   }
   mkdirSync(workspace, { recursive: true });
-  writeFileSync(join(workspace, "AGENTS.md"), bot.instructions);
-  // One command per bot, not one `config.patch` for all four: after that patch, two of four
+  // The gateway's own bot keeps OpenClaw's starting files.
+  if (bot.instructions !== undefined) writeFileSync(join(workspace, "AGENTS.md"), bot.instructions);
+  // One command per bot, not one `config.patch` for all of them: after that patch, two of four
   // iPhone jobs on GitHub's runner timed out on the next gateway call (#571).
   await must(inst, [
     "agents",
@@ -2167,10 +2172,8 @@ async function configureBot(
     bot.id,
     "--name",
     bot.name,
-    "--emoji",
-    bot.emoji,
-    "--theme",
-    bot.theme,
+    ...(bot.emoji === undefined ? [] : ["--emoji", bot.emoji]),
+    ...(bot.theme === undefined ? [] : ["--theme", bot.theme]),
     "--json",
   ]);
 }
@@ -2282,7 +2285,8 @@ async function seedConversations(
     const alreadySeeded = existing.has(key);
     // Made as Clawtrate makes a task, by an operator (`createdVia: "operator"`), so the sample
     // conversations count as the person's own; the turns then run in it as the gateway's owner.
-    if (!alreadySeeded) {
+    // A main conversation is the gateway's: its first message makes it.
+    if (!alreadySeeded && !task.main) {
       // Answered with the same task when it comes again, so safe to try again.
       const params = { key, agentId: bot.id, label: task.label };
       await retryOnTransport(() => callGateway(inst, "sessions.create", params), {

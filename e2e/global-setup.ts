@@ -154,9 +154,10 @@ function showGatewayBot(dataDir: string): void {
  * recorded. A test that quits and restarts a client starts its own with this,
  * on its own copy of the host's data, and stops it by its process.
  *
- * Unless `gatewayBot: "default"`, a host with no choice of its own starts with "Show the
- * gateway's own bot" on (F-562): the checks of other flows work on Juniper, the development
- * gateway's own bot. `e2e/gateway-bot.spec.ts` checks the default.
+ * A host with no choice of its own starts with "Show the gateway's own bot" at its default, off
+ * (F-562), as a person starts: the development gateway's own bot `main` is out of view beside
+ * Juniper, the Main Bot, and the other bots. `gatewayBot: "shown"` turns it on.
+ * `e2e/gateway-bot.spec.ts` checks the default.
  */
 export function startHost(
   instance: string,
@@ -168,7 +169,7 @@ export function startHost(
     gatewayBot?: "shown" | "default";
   } = {},
 ) {
-  if (options.gatewayBot !== "default") showGatewayBot(dataDir);
+  if (options.gatewayBot === "shown") showGatewayBot(dataDir);
   const gated: Gated = gatedSpawn(
     spawn,
     process.execPath,

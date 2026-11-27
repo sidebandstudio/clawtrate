@@ -78,7 +78,7 @@ function seedPreferences() {
   // The Computer scenes: the one-time note before the first watch was seen, unless asked for,
   // then unseen even when an earlier scene in this browser saw it.
   if (params.has("computer")) {
-    for (const bot of ["main", "otto", "marlow", "pip"]) {
+    for (const bot of ["clawtrate-main-bot", "otto", "marlow", "pip"]) {
       if (params.get("firstwatch") !== "1") write(`computerNote.${bot}`, "1");
       else
         try {
@@ -122,7 +122,7 @@ const bridge = createFixtureBridge(isScene(sceneName) ? sceneName : "main", {
   guides: guidesParam(params),
   fullPairing: params.get("full") === "1",
   gatewayName: params.get("gatewayName"),
-  showGatewayBot: params.get("gatewaybot") !== "off",
+  showGatewayBot: params.get("gatewaybot") === "on",
 });
 if (params.has("hold")) bridge.hold();
 // "Show sessions from other tools" on, for checks of what it lists (F-563, F-193).

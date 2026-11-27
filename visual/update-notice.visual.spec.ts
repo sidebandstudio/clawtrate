@@ -24,7 +24,7 @@ import {
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
 const PHONE = SIZES.find((size) => size.phone)!;
-/** The main bot's (Juniper's) main conversation, where the gateway writes its notice. */
+/** The main conversation of the gateway's own bot (`main`), where the gateway writes its notice. */
 const MAIN = "agent:main:main";
 /** Another bot's task. */
 const OTHER = "agent:otto:disk-space";

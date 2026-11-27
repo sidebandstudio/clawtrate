@@ -60,7 +60,11 @@ test.describe("how bots work in Clawtrate", () => {
     await expect(pane.getByTestId("bot-guide-otto")).toHaveAttribute("data-state", "current");
     await expect(pane.getByTestId("bot-guide-pip")).toHaveAttribute("data-state", "none");
     expect(await changes(page)).toEqual([
-      { action: "add", bots: ["main", "marlow", "otto", "quartermaster"], newBots: true },
+      {
+        action: "add",
+        bots: ["clawtrate-main-bot", "marlow", "otto", "quartermaster"],
+        newBots: true,
+      },
     ]);
     // What the files hold now is what the gateway answered: Pip still isn't told.
     await expect(pane.getByTestId("bot-guides-summary")).toHaveText(
@@ -145,7 +149,7 @@ test.describe("how bots work in Clawtrate", () => {
       { action: "newBots", on: false },
       { action: "newBots", on: true },
     ]);
-    for (const bot of ["main", "marlow", "otto", "pip", "quartermaster"])
+    for (const bot of ["clawtrate-main-bot", "marlow", "otto", "pip", "quartermaster"])
       await expect(pane.getByTestId(`bot-guide-${bot}`)).toHaveAttribute("data-state", "current");
   });
 
