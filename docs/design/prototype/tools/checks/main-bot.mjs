@@ -703,6 +703,32 @@ await check("MB-27 #799: the Main Bot's model added to the allowlist, with Undo"
   await has(page, '[data-testid="allow-line"]', "Removed GPT-5.5 from the models this gateway allows");
 });
 
+await check(
+  "MB-28 with no Main Bot the composer still sends; the phone's list opens the bot chosen; Set up keeps the account step",
+  async ({ page, open, width }) => {
+    await open("offer=1");
+    await send(page, "Hello there");
+    await page.getByText("Happy to help. What would you like to do?").waitFor();
+    if (width === "phone") {
+      await open("gateway=brought&at=greeted&pane=list");
+      await page.locator('.mb-row[data-bot="main"]').click();
+      assert.equal(await title(page), "Juniper");
+      assert.equal(await page.getByTestId("skip").count(), 0, "no tour in Juniper's conversation");
+      await send(page, "Morning");
+      await page.getByText("Happy to help. What would you like to do?").waitFor();
+      await page.getByRole("button", { name: "Back to bots" }).click();
+      await page.getByTestId("main-tile").click();
+      assert.equal(await title(page), "Clawtrate Main Bot");
+      await page.getByTestId("skip").waitFor();
+      return;
+    }
+    await open("offer=1&account=none");
+    await page.getByRole("button", { name: "Set up", exact: true }).click();
+    await page.getByTestId("account-step").waitFor();
+    assert.equal(await page.getByTestId("brief-line").count(), 0, "no opening before the account");
+  },
+);
+
 if (pictures) {
   mkdirSync(pictures, { recursive: true });
   const shoot = async (name, query, phone, act) => {

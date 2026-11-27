@@ -51,6 +51,7 @@
     hidden: false,
     tips: new Set(p.get("info") === "1" ? ["quiet"] : []),
     allowlist: p.get("allowlist") === "1",
+    openId: null,
     list: p.get("pane") === "list",
     at: p.get("at"),
     account: p.get("account") === "none" ? "none" : "ok",
@@ -181,7 +182,12 @@
   const botById = (id) => gateway.bots.find((b) => b.id === id);
   const mainBot = () => botById(MAIN);
   // The bot whose conversation is open: the Main Bot, or, with none, Juniper.
-  const openBot = () => mainBot() || botById("main");
+  // On a phone the person can open another bot from the list (`state.openId`).
+  const homeBot = () => mainBot() || botById("main");
+  const openBot = () => (state.openId && botById(state.openId)) || homeBot();
+  // Each other bot's conversation, as the person writes to it here.
+  const chats = {};
+  const chatFor = (bot) => (bot === homeBot() ? items : (chats[bot.id] ??= []));
   // F-562 leaves out only an untouched gateway's own bot, and only beside another.
   const shown = () => {
     const others = gateway.bots.filter((b) => !b.own || b.used);
@@ -395,7 +401,7 @@
       phone() && task?.open
         ? taskView()
         : `<section class="mb-conv" aria-label="Conversation">${header()}` +
-      `<div class="mb-transcript" data-testid="transcript"><div class="mb-transcript-inner">${items.map(item).join("")}</div></div>${skip}` +
+      `<div class="mb-transcript" data-testid="transcript"><div class="mb-transcript-inner">${chatFor(openBot()).map(item).join("")}</div></div>${openBot() === homeBot() ? skip : ""}` +
       (state.limited
         ? `<p class="mb-line mb-limited" data-testid="limited-line">You can write to your Main Bot here once it's set up.</p></section>`
         : `<form class="mb-composer" data-testid="composer"><label class="visually-hidden" for="mb-input">Message</label>` +
@@ -416,7 +422,7 @@
   // The words are chosen when they are posted (text may be a function), so a
   // change during the wait, such as an Undo, is reflected.
   async function botSays(text, ms = 700) {
-    const writing = { kind: "status", text: `${mainBot().name} is writing…` };
+    const writing = { kind: "status", text: `${openBot().name} is writing…` };
     items.push(writing);
     render();
     await wait(ms);
@@ -653,9 +659,10 @@
   // ---- events ---------------------------------------------------------------
 
   root.addEventListener("click", async (event) => {
-    // On a phone's bot list, a row or the tile opens its conversation.
+    // On a phone's bot list, a row or the tile opens that bot's conversation.
     const row = event.target.closest(".mb-row, .mb-tile");
     if (row && phone() && state.list) {
+      state.openId = row.dataset.bot || null;
       state.list = false;
       return render();
     }
@@ -681,8 +688,8 @@
       seedBots();
       render();
       say("Setting up your Main Bot");
-      await opening();
-      return;
+      // The same first run as anyone's: the account step first when there is no account.
+      return play();
     }
     if (act === "hide-offer") {
       // Kept in the person's users.prefs: no device of theirs offers it again.
@@ -826,7 +833,15 @@
     const text = composer.value.trim();
     if (!text) return;
     composer.value = "";
-    await answer(text);
+    const bot = openBot();
+    if (bot !== homeBot()) {
+      // Another bot opened from the phone's list: an ordinary conversation.
+      chatFor(bot).push({ kind: "user", text });
+      render();
+      await wait(500);
+      chatFor(bot).push({ kind: "bot", text: "Happy to help. What would you like to do?" });
+      render();
+    } else await answer(text);
     root.querySelector("#mb-input")?.focus();
   });
   root.addEventListener("input", (event) => {
