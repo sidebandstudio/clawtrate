@@ -1468,11 +1468,19 @@ describe("the iOS app", () => {
     ]);
     // Disconnected keeps the pairing: the gateway still has the device, and Reconnect connects it.
     expect((await devices()).paired.some((d) => d.deviceId === deviceId)).toBe(true);
+    // A hosted runner can take more than a minute to connect again (#611), so the wait is three.
     await steps("reconnect", [
       tap({ id: "status-strip-action", text: "Reconnect" }),
-      waitFor({ id: "connection-dot-connected" }, 60_000),
-      waitGone({ id: "status-strip" }, 60_000),
+      waitFor({ id: "connection-dot-connected" }, 180_000),
     ]);
+    // Then it settles: it catches up, says Synced and the strip goes, still connected, and no
+    // other socket is opened meanwhile, so nothing dropped and reconnected.
+    const sockets = proxy.requests.filter((request) => request.upgrade).length;
+    await steps("reconnect-settles", [
+      waitGone({ id: "status-strip" }, 120_000),
+      see({ id: "connection-dot-connected" }),
+    ]);
+    expect(proxy.requests.filter((request) => request.upgrade).length).toBe(sockets);
 
     // Deleted and installed again, the app does not walk back into the gateway:
     // it offers it, and the same device reconnects when asked.
