@@ -9531,8 +9531,16 @@ export class ClawtrateClient {
         // forgotten, unless the gateway is waiting for its owner to approve this device.
         const setup = this.tokenGate?.generation === generation;
         if (setup && this.state.connection.status !== "pairing") this.setupCode = null;
+        // A first pairing over a proved route that nothing answered ends there (onClose's
+        // UNREACHABLE): its retry would race setup's cleanup and dial again behind a failed screen.
+        const unanswered =
+          this.replacing?.url === settings.url &&
+          settings.route !== undefined &&
+          !this.attemptGreeted &&
+          !this.state.connection.error &&
+          this.state.connection.status !== "pairing";
         return {
-          retry: !(setup && this.setupCode === null),
+          retry: !(setup && this.setupCode === null) && !unanswered,
           notify: true,
           ...(context.connectFailure?.reconnectDelayMs !== undefined
             ? { reconnectDelayMs: context.connectFailure.reconnectDelayMs }
