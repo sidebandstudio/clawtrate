@@ -661,12 +661,15 @@ describe("a task titled from its first message", () => {
     }
   });
 
-  /** A task whose history read is held while its row moves on (`move`), then answered. */
-  const readAcrossAMove = async (from: Record<string, unknown>, to: Record<string, unknown>) => {
+  /** A task whose history read is held while its row moves on, or first appears, then answered. */
+  const readAcrossAMove = async (
+    from: Record<string, unknown> | null,
+    to: Record<string, unknown>,
+  ) => {
     const gateway = grantingGateway();
     gateway.handlers["sessions.subscribe"] = () => ({
       subscribed: true,
-      list: { sessions: [from], hasMore: false },
+      list: { sessions: from ? [from] : [], hasMore: false },
     });
     const answer = deferred<void>();
     const answered = historyOf("Plan the garden");
@@ -682,7 +685,13 @@ describe("a task titled from its first message", () => {
     const { client } = await openTask({ gateway });
     client.openSession(KEY);
     await until(() => asked);
-    changed(gateway, to);
+    if (from) changed(gateway, to);
+    else {
+      // The row appears while the read waits, as a new task's does.
+      gateway.handlers["sessions.list"] = () => ({ sessions: [to], hasMore: false });
+      gateway.emit("sessions.changed", { sessionKey: KEY, reason: "create", ...to, session: to });
+      await until(() => shownIn(client) !== undefined);
+    }
     await sleep(20);
     answer.resolve();
     await until(() => client.state.transcripts[KEY]?.status === "ready");
@@ -695,6 +704,15 @@ describe("a task titled from its first message", () => {
       ...ROW_1110,
       sessionId: "7e6d5c4b-3a29-4180-9f7e-6d5c4b3a2918",
     });
+    try {
+      expect(shownIn(client)).toBe("New task");
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("is not made from a read asked before the task had a row, when neither says whose it is", async () => {
+    const client = await readAcrossAMove(null, ROW_1110);
     try {
       expect(shownIn(client)).toBe("New task");
     } finally {

@@ -11108,10 +11108,15 @@ export class ClawtrateClient {
       // since is another session's, and takes no title from this read); with that row's revision
       // when the reply names the same id without one.
       const read = sessionOfRow(asRecord(history?.sessionInfo)) ?? sessionOfRow(history);
-      this.historyReads.set(key, {
-        session: read === null || asked?.startsWith(`${read}\u0000`) ? asked : read,
-        epoch: this.epoch,
-      });
+      // Nothing says whose it is (no row when asked, no session in the reply) while the row names
+      // one by now: it may be another session's, and titles nothing.
+      if (read === null && asked === null && this.rows.get(capId(key, MAX_ID_CHARS))?.sessionId)
+        this.historyReads.delete(key);
+      else
+        this.historyReads.set(key, {
+          session: read === null || asked?.startsWith(`${read}\u0000`) ? asked : read,
+          epoch: this.epoch,
+        });
       const rebuilt: Transcript = {
         ...current,
         ...retainActivity(
