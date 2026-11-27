@@ -70,7 +70,7 @@ const VERSION = "1.0.0";
 /** What the gateway answers for a call whose approval it could not take (OpenClaw 2026.10.6). */
 const GATEWAY_UNAVAILABLE = "Plugin approval required (gateway unavailable)";
 const DENIED = "Denied by user. The tool call did not run.";
-/** Juniper, whose id is the gateway's built-in `main`. */
+/** The gateway's own bot, its built-in `main`. */
 const BOT = "main";
 
 type Answer =
@@ -1104,7 +1104,7 @@ export const RULES_CHECKS: RulesCheck[] = [
           `after a config change: ${show(run.calls)}`,
         );
       }
-      same(await botEntry(ctx, BOT), original, "Juniper's settings once the deny is removed again");
+      same(await botEntry(ctx, BOT), original, "the bot's settings once the deny is removed again");
       await pluginRunning(ctx);
     },
   },

@@ -147,7 +147,8 @@ export function ClearOutcome({
     case "unanswered":
       return line(
         "warn",
-        `The gateway didn't answer${clear.error ? ` (${clear.error})` : ""}, so Clawtrate can't tell yet whether ${name}'s order was cleared. Check now reads it again.`,
+        // Never the client's own text ("gateway client stopped", its timeout) in the sentence.
+        `The gateway didn't answer, so Clawtrate can't tell yet whether ${name}'s order was cleared. Check now reads it again.`,
         true,
         true,
       );

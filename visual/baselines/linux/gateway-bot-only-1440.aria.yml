@@ -6,32 +6,25 @@
   - button "Search"
   - list:
     - listitem:
-      - button "Juniper, 3 tasks, unread, research, primary bot" [expanded]:
-        - text: Juniper research
-        - time: 5:24 PM
-        - text: Ask these five, and get the answers in writing.
-      - list "Juniper's tasks":
-        - listitem:
-          - button "Heat pump vs. gas furnace"
-        - listitem:
-          - button "Library e-book apps compared, unread": Library e-book apps compared
-        - listitem:
-          - button "Caffeine cutoff time"
+      - button "main, 1 task, primary bot":
+        - text: main
+        - time: 8:40 AM
+        - text: Yes. The porch light turns on at sunset and off at 11 PM.
   - status
   - button "127.0.0.1:18789, connected. Open the gateway menu."
   - button "Settings"
 - region "Conversation":
-  - button "Juniper, Heat pump vs. gas furnace. Show details.": Juniper ·Heat pump vs. gas furnace
+  - button "main, Main. Show details.": main ·Main
   - button "Show work panel"
   - region "Transcript":
-    - heading "Heat pump vs. gas furnace" [level=1]
-    - paragraph: "Context: 5,425 of 128,000 tokens"
-    - text: Today 5:22 PM
-    - paragraph: What should I ask an installer before signing anything?
-    - paragraph: Ask these five, and get the answers in writing.
+    - heading "Main" [level=1]
+    - paragraph: "Context: 3,388 of 128,000 tokens"
+    - text: Today 8:38 AM
+    - paragraph: Is the porch light on a timer?
+    - paragraph: Yes. The porch light turns on at sunset and off at 11 PM.
     - status
   - region "Access":
-    - text: Read-only. You can follow Juniper's work here. Approvals and questions aren't shown on this connection.
+    - text: Read-only. You can follow main's work here. Approvals and questions aren't shown on this connection.
     - button "Request access"
   - status
 - status

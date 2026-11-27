@@ -1,6 +1,6 @@
 // The search palette's behaviour in the fixture (docs/design/search.md): how it
-// opens and closes, what each group says it searched, opening a result where
-// it lives, and the partial, failed and offline states. The fixture's
+// opens and closes, which groups it draws, opening a result where it lives,
+// nothing found, and the partial, failed and offline states. The fixture's
 // messages, files and routines are made up (apps/desktop/src/fixture/search.ts);
 // the gateway's part is checked against a development gateway in e2e/search.spec.ts.
 import type { ClawtrateState } from "../packages/core/src/index.ts";
@@ -111,24 +111,10 @@ test("F-033: Cmd/Ctrl+K opens the palette from anywhere, the rail's Search butto
     "placeholder",
     "Search bots, tasks, messages, files, links, routines and settings",
   );
-  // Before anything is typed: what each source covers, in the words the groups use.
-  const idle = palette(page).getByTestId("search-idle");
-  await expect(idle.locator("dt")).toHaveText([
-    "Bots",
-    "Tasks",
-    "Messages",
-    "Files",
-    "Links",
-    "Routines",
-    "Settings",
-  ]);
-  await expect(idle).toContainText("Every bot this connection can see, by name.");
-  await expect(idle).toContainText(
-    "Titles in this device's task list, which keeps up to 500 tasks.",
-  );
-  await expect(idle).toContainText("Excludes routine runs, subagent tasks and archived tasks.");
-  await expect(idle).toContainText("Links in the conversations loaded on this device:");
-  await expect(palette(page)).toContainText("↑↓ Move · ↵ Open · Esc Close");
+  // Before anything is typed: the field and the footer of keys, and no panel explaining search.
+  await expect(palette(page).locator(".s-body")).toHaveCount(0);
+  await expect(palette(page)).not.toContainText("What search looks in");
+  await expect(palette(page).locator(".s-foot")).toHaveText("↑↓ Move · ↵ Open · Esc Close");
   // Everything behind it is out of reach, and its keys stay with it: ⌘K selects the text.
   await page.keyboard.type("disk");
   await page.keyboard.press("ControlOrMeta+K");
@@ -160,40 +146,39 @@ test("F-033: Cmd/Ctrl+K opens the palette from anywhere, the rail's Search butto
   await expect(palette(page)).toHaveCount(0);
 });
 
-test("F-033: one query searches bots, tasks, messages, files, links, routines and settings, each group saying what it searched", async ({
+test("F-033: one query searches bots, tasks, messages, files, links, routines and settings, and only the groups that found something are drawn", async ({
   page,
 }) => {
-  // "e" reaches every source but files, which ask for two characters.
+  // "e" reaches every source but files, which ask for two characters, so Files isn't drawn.
   await search(page, "e", `${BASE}&src=truncated`);
   const names = await palette(page).locator(".s-group .s-group-name").allTextContents();
-  expect(names.map((name) => name.replace(/ · \d+$/, ""))).toEqual([
-    "Bots",
-    "Tasks",
-    "Messages",
-    "Files",
-    "Links",
-    "Routines",
-    "Settings",
+  expect(names).toEqual([
+    expect.stringMatching(/^Bots · \d+$/),
+    expect.stringMatching(/^Tasks · \d+$/),
+    expect.stringMatching(/^Messages · \d+$/),
+    expect.stringMatching(/^Links · \d+$/),
+    expect.stringMatching(/^Routines · \d+$/),
+    expect.stringMatching(/^Settings · \d+$/),
   ]);
+  await expect(group(page, "files")).toHaveCount(0);
   await expect(options(page, "bots").first()).toHaveAccessibleName("Bot Juniper, research");
   // The device's own matches mark what it found; a snippet carries no marks.
   await expect(options(page, "bots").first().locator("b")).toHaveText("e");
-  await expect(group(page, "tasks")).toContainText(
-    "Titles in this device's task list, which keeps up to 500 tasks",
-  );
-  await expect(group(page, "messages")).toContainText(
-    "Showing the 25 matches the gateway returned, newest first. More indexed messages match.",
-  );
   await expect(group(page, "messages").locator(".s-second b")).toHaveCount(0);
-  await expect(group(page, "files")).toContainText(
-    "Type 2 or more characters to search file names.",
-  );
-  await expect(group(page, "links")).toContainText(
-    /Only from the \d+ conversations this device has loaded/,
-  );
-  await expect(group(page, "routines")).toContainText(
+  // A group is its heading and its results: no line says how search works.
+  await expect(palette(page).locator(".s-group-lines")).toHaveCount(0);
+  for (const words of [
+    "Titles in this device's task list, which keeps up to 500 tasks",
+    "Showing the 25 matches the gateway returned, newest first. More indexed messages match.",
+    "Only from the",
+    "this device has loaded",
     "Matches routine names, descriptions and bot details",
-  );
+  ])
+    await expect(palette(page)).not.toContainText(words);
+  // "More indexed messages match" is now the action that searches further.
+  await expect(
+    options(page, "messages").filter({ hasText: "Search each bot for more" }),
+  ).toHaveCount(1);
   // Five rows, then Show all, which shows the rest in place.
   await expect(group(page, "tasks").locator('[role="option"]:not(.s-action)')).toHaveCount(5);
   const all = options(page, "tasks").filter({ hasText: /^Show all \d+ tasks$/ });
@@ -209,11 +194,115 @@ test("F-033: one query searches bots, tasks, messages, files, links, routines an
   expect(await sent(page, "searchFiles")).toEqual([]);
 
   await field(page).fill("acc");
-  await expect(group(page, "settings")).toBeVisible();
   await expect(options(page, "settings").first()).toHaveAccessibleName("Setting Accounts");
-  await expect(group(page, "files")).toContainText("Some folders may be skipped.");
-  // A source that finished over all it covers and found nothing is named at the end.
-  await expect(palette(page).getByTestId("search-no-matches")).toContainText(/^No matches in /);
+  await expect(announcer(page)).toHaveText("1 result: 1 setting.");
+  // Only Settings found something. The message reply was cut short (`src=truncated`), so Messages
+  // is its heading, with no count, and the action that searches further; nothing else is drawn.
+  await expect(palette(page).locator(".s-group .s-group-name")).toHaveText([
+    "Messages",
+    "Settings · 1",
+  ]);
+  await expect(options(page, "messages")).toHaveText(["Search each bot for more"]);
+  await expect(palette(page)).not.toContainText("No matches in");
+  await expect(palette(page).getByTestId("search-status")).toHaveCount(0);
+});
+
+test("F-033: a search that finds nothing says so in one line, after one quiet line while the gateway answers", async ({
+  page,
+}) => {
+  await openFixture(page, BASE, "light");
+  await page.evaluate(() =>
+    (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.hold(),
+  );
+  await page.keyboard.press("ControlOrMeta+K");
+  await page.keyboard.type("zzqx");
+  const status = palette(page).getByTestId("search-status");
+  await expect(status).toHaveText("Searching…");
+  await expect(palette(page).locator(".s-group")).toHaveCount(0);
+  await expect(announcer(page)).toHaveText("");
+  await page.evaluate(() =>
+    (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture.release(),
+  );
+  await expect(status).toHaveText("No results for “zzqx”.");
+  await expect(palette(page).locator(".s-group")).toHaveCount(0);
+  await expect(palette(page).getByRole("option")).toHaveCount(0);
+  await expect(announcer(page)).toHaveText("No results for “zzqx”.");
+});
+
+test("F-033: a message search the gateway left incomplete offers Search each bot for more with no match too, and says what it left out", async ({
+  page,
+}) => {
+  const lines = () => palette(page).getByTestId("search-status").locator(".s-status");
+  const each = () => options(page, "messages").filter({ hasText: "Search each bot for more" });
+  for (const [src, said] of [
+    ["truncated", []],
+    ["indexing", ["Some messages are still being indexed."]],
+    ["archive", ["Older messages in 4 tasks weren't searched."]],
+  ] as const) {
+    await search(page, "kayak", `${BASE}&src=${src}`);
+    // Nothing found, said first; then Messages as its heading and the action, with no count.
+    await expect(lines()).toHaveText(["No results for “kayak”.", ...said]);
+    await expect(announcer(page)).toHaveText(["No results for “kayak”.", ...said].join(" "));
+    await expect(group(page, "messages").locator(".s-group-name")).toHaveText("Messages");
+    await expect(group(page, "messages").locator(".s-group-lines")).toHaveCount(0);
+    await expect(options(page, "messages")).toHaveText(["Search each bot for more"]);
+    await expect(palette(page).locator(".s-group")).toHaveCount(1);
+  }
+  // A complete reply with nothing found: no Messages group, no action.
+  await search(page, "kayak");
+  await expect(lines()).toHaveText(["No results for “kayak”."]);
+  await expect(group(page, "messages")).toHaveCount(0);
+  // Beside matches the archive line is Messages' own, with the action.
+  await search(page, "transcode", `${BASE}&src=archive`);
+  await expect(group(page, "messages").locator(".s-group-lines")).toHaveText(
+    "Older messages in 4 tasks weren't searched.",
+  );
+  await expect(each()).toHaveCount(1);
+  await expect(palette(page).getByTestId("search-status")).toHaveCount(0);
+  // The action asks each bot, and the first reply's left-out lines give way to theirs.
+  await search(page, "kayak", `${BASE}&src=archive`);
+  await each().click();
+  await expect(each()).toHaveCount(0);
+  await expect(lines()).toHaveText(["No results for “kayak”."]);
+  expect((await sent(page, "searchMessages")).filter((one) => one.botId).length).toBeGreaterThan(0);
+});
+
+test("F-033: while the gateway is still indexing, a search that finds no message says so beside No results, and beside matches", async ({
+  page,
+}) => {
+  const lines = () => palette(page).getByTestId("search-status").locator(".s-status");
+  // Nothing found, the gateway's reply saying `indexing`: both lines, said in that order.
+  await search(page, "kayak", `${BASE}&src=indexing`);
+  await expect(lines()).toHaveText([
+    "No results for “kayak”.",
+    "Some messages are still being indexed.",
+  ]);
+  await expect(announcer(page)).toHaveText(
+    "No results for “kayak”. Some messages are still being indexed.",
+  );
+  // Nothing found with indexing done: the one line.
+  await search(page, "kayak");
+  await expect(lines()).toHaveText(["No results for “kayak”."]);
+  await expect(announcer(page)).toHaveText("No results for “kayak”.");
+  // Matches while indexing: Messages says it under its heading, and no status line repeats it.
+  await search(page, "transcode", `${BASE}&src=indexing`);
+  await expect(group(page, "messages").locator(".s-group-lines")).toHaveText(
+    "Some messages are still being indexed.",
+  );
+  await expect(palette(page).getByTestId("search-status")).toHaveCount(0);
+  await expect(announcer(page)).toHaveText(
+    "3 results: 3 messages. Some messages are still being indexed.",
+  );
+  // No message found while indexing, but a task was: Messages is its heading and its action only,
+  // so the line stands with the search's own lines.
+  await search(page, "weekly", `${BASE}&src=indexing`);
+  await expect(group(page, "tasks")).toBeVisible();
+  await expect(group(page, "messages").locator(".s-group-name")).toHaveText("Messages");
+  await expect(options(page, "messages")).toHaveText(["Search each bot for more"]);
+  await expect(lines()).toHaveText(["Some messages are still being indexed."]);
+  await expect(announcer(page)).toHaveText(
+    "1 result: 1 task. Some messages are still being indexed.",
+  );
 });
 
 test("F-033: Enter opens a bot, a task, a routine and a setting where it lives, and closes the palette", async ({
@@ -327,7 +416,9 @@ test("F-033: a message whose history comes as the connection's access changes do
     // The search the change starts again stays pending, so its state can be seen.
     fixture.hold();
   });
-  await expect(group(page, "messages")).toContainText("Searching…");
+  // Asked again, Messages has found nothing yet: it isn't drawn, and the status line says so.
+  await expect(palette(page).getByTestId("search-status")).toHaveText("Searching…");
+  await expect(group(page, "messages")).toHaveCount(0);
   await expect(palette(page)).toBeVisible();
   await expect(page.locator(".title-pill-task")).not.toHaveText(
     "Disk almost full on the media box",
@@ -628,15 +719,14 @@ test("F-033: asked before the bots load, Files searches once they come", async (
   });
   await page.keyboard.press("ControlOrMeta+K");
   await page.keyboard.type("md");
-  await expect(group(page, "files")).toContainText(
-    "Not searched: the gateway's bots haven't loaded yet.",
-  );
+  await expect(announcer(page)).not.toHaveText("");
+  await expect(group(page, "files")).toHaveCount(0);
   await page.evaluate(() => {
     const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
     const bots = (window as unknown as { keptBots: ClawtrateState["bots"] }).keptBots;
     fixture.setState((state) => ({ ...state, bots }));
   });
-  await expect(group(page, "files")).toContainText("Names the gateway returned");
+  await expect(options(page, "files").first()).toBeVisible();
   expect((await sent(page, "searchMessages")).length).toBe(1);
 });
 
@@ -740,25 +830,29 @@ test("F-033: a failed source says so with Try again and leaves the others alone;
   await expect(options(page, "tasks").first()).toContainText("Weekly backup check");
   await expect(announcer(page)).toContainText("Messages couldn't be searched.");
   await options(page, "messages").filter({ hasText: "Try again" }).click();
-  await expect(group(page, "messages")).toContainText("More indexed messages match.");
   await options(page, "messages").filter({ hasText: "Search each bot for more" }).click();
-  await expect(group(page, "messages")).toContainText("4 of 5 bots answered. 2 messages returned.");
-  await expect(group(page, "messages")).toContainText(
+  await expect(options(page, "messages").filter({ hasText: "Try again for Pip" })).toBeVisible();
+  // Only the failure has a line: no tally of bots, no line per bot that answered or found nothing.
+  await expect(group(page, "messages").locator(".s-sub")).toHaveText([
     "Pip · couldn't search: the search index is busy",
-  );
-  await expect(group(page, "messages")).toContainText("Otto · all 2 matches");
-  await expect(group(page, "messages")).toContainText("Marlow · no matches");
+  ]);
+  await expect(group(page, "messages")).not.toContainText("bots answered");
+  await expect(group(page, "messages")).not.toContainText("all 2 matches");
+  // The live region names the bot that couldn't be searched, as the screen does.
+  await expect(announcer(page)).toContainText("Pip · couldn't search: the search index is busy");
+  await expect(options(page, "messages").filter({ hasText: "· Otto" })).not.toHaveCount(0);
   expect((await sent(page, "searchMessages")).map((each) => each.botId)).toEqual([
     null,
     null,
-    "main",
+    "clawtrate-main-bot",
     "marlow",
     "otto",
     "pip",
     "quartermaster",
   ]);
   await options(page, "messages").filter({ hasText: "Try again for Pip" }).click();
-  await expect(group(page, "messages")).toContainText("Pip · no matches");
+  await expect(options(page, "messages").filter({ hasText: "Try again for Pip" })).toHaveCount(0);
+  await expect(group(page, "messages").locator(".s-sub")).toHaveCount(0);
 });
 
 test("F-033: past 24 bots, Search the next bots adds the next batch and keeps the earlier one's rows and retries", async ({
@@ -773,7 +867,7 @@ test("F-033: past 24 bots, Search the next bots adds the next batch and keeps th
       bots: [
         ...state.bots,
         ...Array.from({ length: 25 }, (_, i) => ({
-          ...state.bots[0]!,
+          ...state.bots.find((bot) => bot.id === "clawtrate-main-bot")!,
           id: `extra-${i + 1}`,
           name: `Extra ${i + 1}`,
         })),
@@ -783,35 +877,42 @@ test("F-033: past 24 bots, Search the next bots adds the next batch and keeps th
   await page.keyboard.press("ControlOrMeta+K");
   await page.keyboard.type("backup");
   await options(page, "messages").filter({ hasText: "Search each bot for more" }).click();
-  await expect(group(page, "messages")).toContainText("23 of 24 bots answered.");
-  await expect(group(page, "messages")).toContainText("Not asked: Extra 20, Extra 21");
   await expect(options(page, "messages").filter({ hasText: "Try again for Pip" })).toBeVisible();
-  await options(page, "messages")
-    .filter({ hasText: /^Search the next 6 bots$/ })
-    .click();
-  await expect(group(page, "messages")).toContainText("29 of 30 bots answered.");
+  const next = options(page, "messages").filter({ hasText: /^Search the next 6 bots$/ });
+  await expect(next).toBeVisible();
   await expect(group(page, "messages")).not.toContainText("Not asked");
-  await expect(group(page, "messages")).toContainText("Otto · all 2 matches");
-  await expect(group(page, "messages")).toContainText("Extra 25 · no matches");
+  await expect(group(page, "messages")).not.toContainText("bots answered");
+  await next.click();
+  await expect
+    .poll(async () => (await sent(page, "searchMessages")).filter((each) => each.botId).length)
+    .toBe(30);
+  await expect(next).toHaveCount(0);
+  await expect(options(page, "messages").filter({ hasText: "· Otto" })).not.toHaveCount(0);
+  await expect(group(page, "messages")).not.toContainText("Extra 25");
   await expect(options(page, "messages").filter({ hasText: "Try again for Pip" })).toBeVisible();
-  expect((await sent(page, "searchMessages")).filter((each) => each.botId)).toHaveLength(30);
   await options(page, "messages").filter({ hasText: "Try again for Pip" }).click();
-  await expect(group(page, "messages")).toContainText("30 of 30 bots answered.");
+  await expect(options(page, "messages").filter({ hasText: "Try again for Pip" })).toHaveCount(0);
 });
 
 test("F-033: routines load a page at a time, and a list that changed between pages stops paging", async ({
   page,
 }) => {
   await search(page, "e", `${BASE}&routinepage=3`);
-  await expect(group(page, "routines")).toContainText("First 3 of 8");
+  const heading = group(page, "routines").locator(".s-group-name");
+  // The heading counts what is loaded; the action says how many more there are, with no tally line.
+  await expect(heading).toHaveText("Routines · 3");
+  await expect(group(page, "routines")).not.toContainText("First 3 of 8");
   await options(page, "routines")
     .filter({ hasText: /^Show 3 more routines$/ })
     .click();
-  await expect(group(page, "routines")).toContainText("First 6 of 8");
+  await expect(heading).toHaveText("Routines · 6");
+  await expect(group(page, "routines")).not.toContainText("First 6 of 8");
   await options(page, "routines")
     .filter({ hasText: /^Show 2 more routines$/ })
     .click();
-  await expect(group(page, "routines")).toContainText("All 8 routines");
+  await expect(heading).toHaveText("Routines · 8");
+  await expect(options(page, "routines").filter({ hasText: /more routines/ })).toHaveCount(0);
+  await expect(group(page, "routines")).not.toContainText("All 8 routines");
   expect((await sent(page, "searchRoutines")).map((each) => each.offset)).toEqual([0, 3, 6]);
 
   await search(page, "e", `${BASE}&routinepage=3&src=routineschanged`);
@@ -824,20 +925,22 @@ test("F-033: routines load a page at a time, and a list that changed between pag
   await expect(options(page, "routines").filter({ hasText: /more routines/ })).toHaveCount(0);
 });
 
-test("F-033: files are searched per bot, names only, with each bot's coverage, a refusal and its retry", async ({
+test("F-033: files are searched per bot, names only, and only a refusal has a line, with its retry", async ({
   page,
 }) => {
   await search(page, "md", `${BASE}&src=filesfail,filescap`);
   const files = group(page, "files");
-  await expect(files).toContainText(
-    "Names the gateway returned from the workspaces of Juniper, Otto and Quartermaster of the Family Calendar and Errands. Some folders may be skipped.",
+  await expect(files.locator(".s-group-lines")).toHaveText(
+    "Pip: the gateway refused the search: permission denied.",
   );
-  await expect(files).toContainText("Not searched: Marlow's workspace could not be verified.");
-  await expect(files).toContainText(
+  for (const words of [
+    "Names the gateway returned from the workspaces of",
+    "Some folders may be skipped.",
+    "Not searched: Marlow's workspace could not be verified.",
     "Otto: the gateway stopped at its limit of 500 names or 5,000 entries walked.",
-  );
-  await expect(files).toContainText("Pip: the gateway refused the search: permission denied.");
-  await expect(files).toContainText("3 of 5 bots' workspaces searched.");
+    "3 of 5 bots' workspaces searched.",
+  ])
+    await expect(files).not.toContainText(words);
   // A file result is its name: Enter says why it opens nothing, and the palette stays.
   const notes = options(page, "files").filter({ hasText: "heat-pumps.md" });
   await expect(notes).toContainText("notes · Juniper");
@@ -854,14 +957,14 @@ test("F-033: files are searched per bot, names only, with each bot's coverage, a
   await expect(options(page, "files").filter({ hasText: "mountain-weekend.md" })).toBeVisible();
 });
 
-test("F-033: offline, the gateway's groups say they were not searched and the device's own still filter", async ({
+test("F-033: offline, one line says the gateway's sources were not searched and the device's own still filter", async ({
   page,
 }) => {
   await search(page, "otto", `scene=offline&${OTTO_DISK}&search=on`);
-  for (const id of ["messages", "files", "routines"])
-    await expect(group(page, id)).toContainText(
-      "Not searched: 127.0.0.1:18789 isn't connected. Search runs again when it reconnects.",
-    );
+  const offline = "Messages, files and routines weren't searched: 127.0.0.1:18789 isn't connected.";
+  await expect(palette(page).getByTestId("search-status")).toHaveText(offline);
+  for (const id of ["messages", "files", "routines"]) await expect(group(page, id)).toHaveCount(0);
+  await expect(announcer(page)).toContainText(offline);
   await expect(options(page, "bots").first()).toHaveAccessibleName(/^Bot Otto/);
   expect(await sent(page, "searchMessages")).toEqual([]);
 });
@@ -895,4 +998,43 @@ test("F-033: Up, Down, Page Up and Page Down move the active row across groups, 
   // Focus never leaves the field, and Tab stays in the palette.
   await page.keyboard.press("Tab");
   await expect(field(page)).toBeFocused();
+});
+
+test("F-033: a bot's file search that failed keeps its line and Try again when no file matched, and is announced", async ({
+  page,
+}) => {
+  await search(page, "kayak", `${BASE}&src=filesfail`);
+  await expect(palette(page).getByTestId("search-status").locator(".s-status")).toHaveText([
+    "No results for “kayak”.",
+  ]);
+  await expect(group(page, "files").locator(".s-group-name")).toHaveText("Files");
+  await expect(group(page, "files").locator(".s-group-lines")).toHaveText(
+    "Pip: the gateway refused the search: permission denied.",
+  );
+  await expect(options(page, "files")).toHaveText(["Try again for Pip"]);
+  await expect(announcer(page)).toHaveText(
+    "Pip: the gateway refused the search: permission denied. No results for “kayak”.",
+  );
+  // Asked again and answered with nothing, Pip's line and its retry go, and so does Files.
+  await options(page, "files").filter({ hasText: "Try again for Pip" }).click();
+  await expect(group(page, "files")).toHaveCount(0);
+});
+
+test("F-033: after Search each bot for more, a bot still indexing keeps its line under Messages even with no match of its own", async ({
+  page,
+}) => {
+  await search(page, "backup", `${BASE}&src=truncated,indexing`);
+  await options(page, "messages").filter({ hasText: "Search each bot for more" }).click();
+  await expect(palette(page).getByTestId("search-status")).toHaveCount(0);
+  const indexing = "Some messages are still being indexed.";
+  // Every bot asked but Marlow says it is still indexing (the fixture's Marlow isn't); Otto has
+  // matches, the others none, and each still has its line.
+  await expect(group(page, "messages").locator(".s-sub")).toHaveText([
+    `Juniper · ${indexing}`,
+    `Otto · ${indexing}`,
+    `Pip · ${indexing}`,
+    `Quartermaster of the Family Calendar and Errands · ${indexing}`,
+  ]);
+  await expect(group(page, "messages")).not.toContainText("Marlow");
+  await expect(announcer(page)).toContainText(`Pip · ${indexing}`);
 });
