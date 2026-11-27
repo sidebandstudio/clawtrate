@@ -429,7 +429,7 @@ function runEntries(
   cards: CardsFor,
   rest: CardRef[],
   tally: Tally,
-  inRows: ReadonlySet<string>,
+  afterText: ReadonlySet<string>,
 ): FeedEntry<FeedRef>[] {
   const entries: FeedEntry<FeedRef>[] = [];
   const preambles = [...(run.preambles ?? [])];
@@ -472,8 +472,9 @@ function runEntries(
   }
   // The run's text is an item a call placed as the text beside it: that bubble, not a reply, and
   // not drawn twice. Known by the item's id, never its words. An earlier message's text is drawn
-  // from its own row once history holds the row of a call a later message made after it.
-  const inHistory = run.textBeforeCall !== undefined && inRows.has(run.textBeforeCall);
+  // from its own row once history holds that row and, after it, the row of a call a later message
+  // made: a page that holds only the call's row leaves it the reply.
+  const inHistory = run.textBeforeCall !== undefined && afterText.has(run.textBeforeCall);
   if (run.text.trim() && !textPlaced(run) && !inHistory)
     entries.push({ type: "bubble", id: `reply:${run.id}`, ref: { t: "reply", run } });
   return entries;
@@ -717,6 +718,25 @@ export function ActionScope({
         item.blocks.flatMap((block) => (block.kind === "tool-call" ? [block.callId] : [])),
       ),
     );
+    // The calls whose rows come after a row of the bot's text since their run's message, both in
+    // the page held: history writes an earlier message's text before a later message's call.
+    const afterText = new Set<string>();
+    for (const run of transcript.runs) {
+      const call = run.textBeforeCall;
+      if (call === undefined) continue;
+      const at = transcript.items.findIndex((item) =>
+        item.blocks.some((block) => block.kind === "tool-call" && block.callId === call),
+      );
+      const from = transcript.items.findIndex((item) => item.id === run.anchorItemId);
+      const text = transcript.items
+        .slice(from + 1, at)
+        .some(
+          (item) =>
+            item.role === "assistant" &&
+            item.blocks.some((block) => block.kind === "text" && block.text.trim()),
+        );
+      if (at >= 0 && text) afterText.add(call);
+    }
     const drawnOf = new Map<string, Set<string>>();
     const tally = new Tally();
     const built: Array<{
@@ -747,7 +767,7 @@ export function ActionScope({
       const rest = placement.byRun.get(run.id) ?? [];
       builtRuns.push({
         id: run.id,
-        entries: runEntries(run, cards, rest, tally, inRows),
+        entries: runEntries(run, cards, rest, tally, afterText),
         revision: run.reasoningRevision,
       });
     }

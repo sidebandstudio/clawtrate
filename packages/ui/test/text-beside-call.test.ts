@@ -353,6 +353,23 @@ describe("F-088: text beside a call is known by its item, never by its words", (
     expect(live).toContain('data-testid="live-turn"');
   });
 
+  it("text from a message with no call stays the reply when history's page holds the later call's row but not its own", () => {
+    // A page cut between the two rows: the answer's own row isn't loaded, so only the reply has it.
+    const model: [string, Record<string, unknown>] = ["lifecycle", { phase: "model" }];
+    const rows = [
+      { role: "user", content: "Also check the cache.", __openclaw: { id: "u2", seq: 3 } },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "c2", name: "ls", arguments: { path: "cache" } }],
+        __openclaw: { id: "a2", seq: 4, runId: RUN },
+      },
+    ];
+    const events = [...start, model, ...said("m:1", "The logs are clean."), model, ...call("c2")];
+    const html = draw(transcriptOf(events, rows));
+    expect(count(html, "The logs are clean.")).toBe(1);
+    expect(html).toContain('data-testid="live-turn"');
+  });
+
   it("on 2026.10.6, text its preamble item holds is drawn twice until its call starts, then once", () => {
     // The gateway sends the preamble item after the message's text and before the call's start.
     // Until the call starts, nothing ties the preamble to the stream's item, so the text is also
