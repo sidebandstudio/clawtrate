@@ -10,6 +10,7 @@ export * from "./gateway-update.ts";
 export * from "./openclaw-update.ts";
 export * from "./runs.ts";
 export * from "./not-run.ts";
+export { failedByRow } from "./quiet-end.ts";
 export * from "./approvals.ts";
 export * from "./approval-refusals.ts";
 export * from "./cards.ts";
