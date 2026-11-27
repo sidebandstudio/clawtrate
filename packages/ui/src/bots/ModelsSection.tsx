@@ -278,19 +278,21 @@ export function useModelsSection({
               {fallbacks.map((ref) => (
                 <li key={ref}>
                   <span>{modelWords(ref, accounts)}</span>
-                  <button
-                    type="button"
-                    className="button"
-                    data-variant="quiet"
-                    data-size="sm"
-                    disabled={disabled}
-                    aria-label={`Remove ${modelWords(ref, accounts)} from the backups`}
-                    onClick={() =>
-                      void set({ fallbacks: fallbacks.filter((each) => each !== ref) })
-                    }
-                  >
-                    Remove
-                  </button>
+                  {admin && (
+                    <button
+                      type="button"
+                      className="button"
+                      data-variant="quiet"
+                      data-size="sm"
+                      disabled={disabled}
+                      aria-label={`Remove ${modelWords(ref, accounts)} from the backups`}
+                      onClick={() =>
+                        void set({ fallbacks: fallbacks.filter((each) => each !== ref) })
+                      }
+                    >
+                      Remove
+                    </button>
+                  )}
                 </li>
               ))}
             </ul>

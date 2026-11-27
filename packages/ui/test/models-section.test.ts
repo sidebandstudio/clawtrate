@@ -202,5 +202,7 @@ describe("Settings › Models", () => {
     const html = render(accounts, { ...admin, canAdmin: false, scopes: ["operator.read"] });
     expect(html).toContain("disabled");
     expect(html).toContain("Changing the models needs admin access.");
+    // Nothing that looks pressable is shown for what can't be changed.
+    expect(html).not.toContain(">Remove<");
   });
 });
