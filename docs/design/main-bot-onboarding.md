@@ -721,10 +721,10 @@ _Why:_ the person asked for the bot-making part, and a question about which bot 
 
 **Decision: the gateway's own bot stays in view, as an ordinary bot, unless it is untouched.** Untouched means OpenClaw's own first conversation hasn't happened: `agents.files.list {agentId: <defaultId>}` lists `BOOTSTRAP.md`, or lists every starting file as missing, and `agents.list` gives it no name of its own (a name other than its id, compared without case), and its `MEMORY.md` is missing. Only then does F-562's rule leave it out while another bot exists. Any other gateway's own bot is the person's: a row like the others, never starred, never moved; it goes under Hidden bots only if the person hides it.
 
-- **Read** with `operator.read` (#495's B7), once per connection and again whenever `agents.list` is read again. Until the answer is in, or if the read fails, the bot is shown: nothing is hidden before Clawtrate knows.
+- **Read** with `operator.read` (#495's B7), once per connection and again whenever `agents.list` is read again. Before the first answer on this device, or when the read fails, the bot is shown: nothing is hidden before Clawtrate knows. After that the last answer holds until the next one.
 - **Its "i"** in its settings, not under its name: "Your gateway's own bot. Chat-app messages and other apps' requests that name no bot go to it."
 - **"Show the gateway's own bot"** in Settings → Advanced is shown only while the gateway's own bot is untouched, since otherwise it is already in view.
-- **Nothing else in F-562 changes**: a `selectionRequired` gateway has no own bot; a task of its own that waits on the person brings an untouched one back; Unread work from an untouched one isn't counted.
+- **Nothing else in F-562 changes**: a `selectionRequired` gateway has no own bot; a task of its own that waits on the person brings an untouched one back; unread work from an untouched one isn't counted.
 
 _Why:_ OpenClaw itself deletes `BOOTSTRAP.md` once the bot's files are its own (the table above), on both versions, so the test is OpenClaw's and needs no record of Clawtrate's. A bot someone named or that keeps memory is a bot someone uses. A gateway set up by Clawtrate, or by an onboarding that skipped the account, has an untouched own bot, and the merged rule holds there unchanged. #757's fixture `main` (named "main", one channel-fed conversation) stays out of view once its listing includes `BOOTSTRAP.md`, as the seed's does.
 
@@ -746,7 +746,7 @@ _Why:_ the request for wider access is decided (#418) and nothing is added to it
 
 ### 15.5 What is written on the person's gateway
 
-Making the Main Bot is the person's own act in the first run. Everything that changes their OpenClaw beyond it is said in one line, and each can be taken back. Nothing is deleted.
+Making the Main Bot is the person's own act in the first run. Everything else Clawtrate changes on their gateway is said in one line and can be taken back, except Clawtrate's guide, which the owner decided is always there (#795). What OpenClaw writes by itself is below the table. Nothing is deleted.
 
 | Written                                                                                                                                            | When                                   | Said                                                                                                                                                                       | Taken back                                                                          |
 | -------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------- |
@@ -784,7 +784,7 @@ _Why:_ an error the person can do nothing about in Clawtrate is said once, plain
 
 ### 15.7 A person who used Clawtrate with this gateway before
 
-**Decision: no first run is pushed at them. The "Set up your Main Bot" tile is offered once, at the top of the sidebar, with Set up and Hide; after Hide it is never shown again.** "Before" is either of: this device kept this gateway from a build older than the one that ships the first run (marked once, at the update), or the person's `users.prefs` on the gateway already holds a key of Clawtrate's (`clawtrate.` and more: the sidebar's arrangement, a bot's account, budgets). **Set up** runs the first run from the start, as for anyone. **Hide** is kept in their `users.prefs` (`clawtrate.first-run.offer`, "hidden"), so no device of theirs offers it again; the "+" menu keeps **Set up your Main Bot** while the gateway has none. The tile is only drawn while the gateway lists no Main Bot.
+**Decision: no first run is pushed at them. The "Set up your Main Bot" tile is offered once, at the top of the sidebar, with Set up and Hide; after Hide it is never shown again.** "Before" is either of: this device kept this gateway from a build older than the one that ships the first run (marked once, at the update), or the person's `users.prefs` on the gateway already holds a key of Clawtrate's (any key starting `clawtrate.`: the sidebar's arrangement, a bot's account, budgets). **Set up** runs the first run from the start, as for anyone. **Hide** is kept in their `users.prefs` (`clawtrate.first-run.offer`, "hidden"), so no device of theirs offers it again; the "+" menu keeps **Set up your Main Bot** while the gateway has none. The tile is only drawn while the gateway lists no Main Bot.
 
 This replaces section 4's "A bot already starred", whose default was a first run on every gateway at the update.
 

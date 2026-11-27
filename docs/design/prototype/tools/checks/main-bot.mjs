@@ -723,7 +723,9 @@ if (pictures) {
     await shoot(`brought-desktop-${theme}`, `theme=${theme}&gateway=brought&at=greeted`, false, greeted);
     await shoot(`offer-desktop-${theme}`, `theme=${theme}&offer=1`);
   }
-  await shoot("brought-phone-dark", "theme=dark&gateway=brought&at=greeted&pane=list", true, greeted);
+  await shoot("brought-phone-dark", "theme=dark&gateway=brought&at=greeted&pane=list", true, (page) =>
+    page.getByTestId("main-tile").waitFor(),
+  );
   await shoot("brought-info-desktop-dark", "theme=dark&gateway=brought&at=greeted&info=1&allowlist=1", false, greeted);
   await shoot("offer-phone-dark", "theme=dark&offer=1&pane=list", true);
   await shoot("waiting-desktop-dark", "theme=dark&waiting=include", false, (page) =>
