@@ -7,7 +7,10 @@
   - button "New"
   - list:
     - listitem:
-      - button "Otto, working, 14 tasks, unread, home server operations" [expanded]: Otto home server operations
+      - button "Otto, working, 14 tasks, unread, home server operations" [expanded]:
+        - text: Otto home server operations
+        - time: now
+        - text: Rotating logs on rack-2
       - list "Otto's tasks":
         - listitem:
           - button "Rotate the logs on every machine in the rack before the disks fill up again, working": Rotate the logs on every machine in the rack before the disks fill up again
@@ -28,13 +31,25 @@
         - listitem:
           - button "Archived"
     - listitem:
-      - button "Marlow, waiting for you, 1 task, editing": Marlow editing
+      - button "Marlow, waiting for you, 1 task, editing":
+        - text: Marlow editing
+        - time: 5:34 PM
+        - text: "Waiting for you: approve a command"
     - listitem:
-      - button "Juniper, 3 tasks, unread, research, primary bot": Juniper research
+      - button "Juniper, 3 tasks, unread, research":
+        - text: Juniper research
+        - time: 5:24 PM
+        - text: Ask these five, and get the answers in writing.
     - listitem:
-      - button "Pip, waiting for you, 4 tasks, unread, planning": Pip planning
+      - button "Pip, waiting for you, 4 tasks, unread, planning":
+        - text: Pip planning
+        - time: 5:28 PM
+        - text: "Waiting for you: a question"
     - listitem:
-      - button "Quartermaster of the Family Calendar and Errands, 2 tasks, household logistics": Quartermaster of the Family Calendar and Errands household logistics
+      - button "Quartermaster of the Family Calendar and Errands, 2 tasks, household logistics":
+        - text: Quartermaster of the Family Calendar and Errands household logistics
+        - time: Sat
+        - text: Both are on Saturday's route, pharmacy first because it closes at noon.
   - status
   - button "127.0.0.1:18789, connected. Open the gateway menu."
   - button "Settings"

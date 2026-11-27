@@ -32,19 +32,28 @@
         - listitem:
           - button "Archived"
     - listitem:
-      - button "Juniper, 3 tasks, unread, research, primary bot": Juniper research
+      - button "Juniper, 3 tasks, unread, research":
+        - text: Juniper research
+        - time: 5:24 PM
+        - text: Ask these five, and get the answers in writing.
       - button "More for Juniper"
     - listitem:
       - paragraph: Home
       - list "Home":
         - listitem:
-          - button "Marlow, 1 task, editing": Marlow editing
+          - button "Marlow, 1 task, editing":
+            - text: Marlow editing
+            - time: 4:58 PM
+            - text: Tightened the intro and cut about 80 words.
           - button "More for Marlow"
     - listitem:
       - paragraph: Work
       - list "Work":
         - listitem:
-          - button "Quartermaster of the Family Calendar and Errands, 2 tasks, household logistics": Quartermaster of the Family Calendar and Errands household logistics
+          - button "Quartermaster of the Family Calendar and Errands, 2 tasks, household logistics":
+            - text: Quartermaster of the Family Calendar and Errands household logistics
+            - time: Sat
+            - text: Both are on Saturday's route, pharmacy first because it closes at noon.
           - button "More for Quartermaster of the Family Calendar and Errands"
   - status
   - button "127.0.0.1:18789, connected. Open the gateway menu."

@@ -6,7 +6,7 @@
   - button "Search"
   - list:
     - listitem:
-      - button "Otto, working, 14 tasks, unread, home server operations" [expanded]: Otto home server operations
+      - button "Otto, working, 14 tasks, unread, home server operations" [expanded]: Otto home server operations Rotating logs on rack-2
       - button "More for Otto"
       - list "Otto's tasks":
         - listitem:
@@ -20,19 +20,31 @@
         - listitem:
           - button "Show all 16"
     - listitem:
-      - button "Juniper, 3 tasks, unread, research, primary bot": Juniper research
+      - button "Juniper, 3 tasks, unread, research":
+        - text: Juniper research
+        - time: 5:24 PM
+        - text: Ask these five, and get the answers in writing.
       - button "More for Juniper"
     - listitem:
-      - button "Marlow, working, 1 task, editing": Marlow editing
+      - button "Marlow, working, 1 task, editing":
+        - text: Marlow editing
+        - time: 4:58 PM
+        - text: Running Morning digest
       - button "More for Marlow"
       - list "Marlow's tasks":
         - listitem:
           - button "Morning digest, routine run, running": Morning digest
     - listitem:
-      - button "Pip, a run failed, 4 tasks, unread, planning": Pip planning
+      - button "Pip, a run failed, 4 tasks, unread, planning":
+        - text: Pip planning
+        - time: 3:10 PM
+        - text: Here is the week, with Thursday kept clear.
       - button "More for Pip"
     - listitem:
-      - button "Quartermaster of the Family Calendar and Errands, 2 tasks, household logistics": Quartermaster of the Family Calendar and Errands household logistics
+      - button "Quartermaster of the Family Calendar and Errands, 2 tasks, household logistics":
+        - text: Quartermaster of the Family Calendar and Errands household logistics
+        - time: Sat
+        - text: Both are on Saturday's route, pharmacy first because it closes at noon.
       - button "More for Quartermaster of the Family Calendar and Errands"
   - status
   - button "127.0.0.1:18789, connected. Open the gateway menu."

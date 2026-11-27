@@ -8,7 +8,7 @@
     - listitem:
       - list "Pinned bots":
         - listitem:
-          - button "Juniper, 3 tasks, unread, research, primary bot": Juniper
+          - button "Juniper, 3 tasks, unread, research": Juniper
           - button "More for Juniper"
         - listitem:
           - button "Otto, working, 14 tasks, unread, home server operations" [expanded]: Otto

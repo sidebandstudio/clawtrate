@@ -6,7 +6,10 @@
   - button "Search"
   - list:
     - listitem:
-      - button "Otto, working, 14 tasks, unread, home server operations" [expanded]: Otto home server operations
+      - button "Otto, working, 14 tasks, unread, home server operations" [expanded]:
+        - text: Otto home server operations
+        - time: now
+        - text: Rotating logs on rack-2
       - list "Otto's tasks":
         - listitem:
           - button "Rotate the logs on every machine in the rack before the disks fill up again, working": Rotate the logs on every machine in the rack before the disks fill up again
@@ -23,16 +26,28 @@
         - listitem:
           - button "Show all 16"
     - listitem:
-      - button "Juniper, 3 tasks, unread, research, primary bot": Juniper research
+      - button "Juniper, 3 tasks, unread, research":
+        - text: Juniper research
+        - time: 5:24 PM
+        - text: Ask these five, and get the answers in writing.
     - listitem:
-      - button "Marlow, 1 task, editing": Marlow editing
+      - button "Marlow, 1 task, editing":
+        - text: Marlow editing
+        - time: 4:58 PM
+        - text: Tightened the intro and cut about 80 words.
       - list "Marlow's tasks":
         - listitem:
           - button "Morning digest, routine run": Morning digest
     - listitem:
-      - button "Pip, a run failed, 4 tasks, unread, planning": Pip planning
+      - button "Pip, a run failed, 4 tasks, unread, planning":
+        - text: Pip planning
+        - time: 3:10 PM
+        - text: Here is the week, with Thursday kept clear.
     - listitem:
-      - button "Quartermaster of the Family Calendar and Errands, 2 tasks, household logistics": Quartermaster of the Family Calendar and Errands household logistics
+      - button "Quartermaster of the Family Calendar and Errands, 2 tasks, household logistics":
+        - text: Quartermaster of the Family Calendar and Errands household logistics
+        - time: Sat
+        - text: Both are on Saturday's route, pharmacy first because it closes at noon.
   - status
   - button "127.0.0.1:18789, connected. Open the gateway menu."
   - button "Settings"
@@ -46,6 +61,7 @@
     - radio "Week"
   - combobox "Bots":
     - option "All bots"
+    - option "main"
     - option "Juniper"
     - option "Marlow"
     - option "Otto" [selected]

@@ -97,7 +97,7 @@ export function computerParams(params: URLSearchParams): ComputerParams {
 }
 
 /** Juniper's research task, whose run uses the browser and waits on the person. */
-export const COMPUTER_TASK = "agent:main:ebook-apps";
+export const COMPUTER_TASK = "agent:clawtrate-main-bot:ebook-apps";
 export const FIXTURE_VIEWER = "fixture-viewer";
 const MINUTE = 60_000;
 const TABS = [
@@ -516,7 +516,7 @@ export function computerFixture(
 
   const event = (state: string, gen: string, reason?: string) =>
     engine.controlEvent({
-      agentId: "main",
+      agentId: "clawtrate-main-bot",
       profile: "bot-juniper",
       targetId: TABS[shownTab]!.targetId,
       holder: state === "draining" || state === "granted" ? "user" : "bot",
@@ -531,27 +531,32 @@ export function computerFixture(
       case "clawtrate-computer.tabs": {
         if (mode === "unconfigured") throw refuse("UNAVAILABLE", "bot_not_configured");
         const key = String(p.sessionKey ?? "");
-        if (!key.startsWith("agent:main:"))
+        if (!key.startsWith("agent:clawtrate-main-bot:"))
           throw Object.assign(new Error("policy"), {
             gatewayCode: "FORBIDDEN",
             details: { code: "SESSION_RESOURCE_TOOL_POLICY" },
           });
         if (mode === "closed")
-          return { agentId: "main", profile: "bot-juniper", browser: "running", tabs: [] };
+          return {
+            agentId: "clawtrate-main-bot",
+            profile: "bot-juniper",
+            browser: "running",
+            tabs: [],
+          };
         // The plugin's list timed out: it couldn't look (`tabslater`: every read after the first).
         tabReads += 1;
         // `tabsfail`: every read after the first is refused.
         if (mode === "tabsfail" && tabReads > 1) throw refuse("UNAVAILABLE", "plugin_busy");
         if (mode === "tabsunknown" || (mode === "tabslater" && tabReads > 1))
           return {
-            agentId: "main",
+            agentId: "clawtrate-main-bot",
             profile: "bot-juniper",
             browser: "not-running",
             reason: "discovery_timeout",
             tabs: [],
           };
         return {
-          agentId: "main",
+          agentId: "clawtrate-main-bot",
           profile: "bot-juniper",
           browser: "running",
           tabs: TABS.map((tab, i) => ({
@@ -779,7 +784,7 @@ export function computerFixture(
                 },
               }
             : {},
-          otto ? "otto" : "main",
+          otto ? "otto" : "clawtrate-main-bot",
           [],
         ),
         nodes: otto

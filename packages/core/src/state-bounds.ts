@@ -1183,6 +1183,7 @@ const account = object<GatewayAccount>()({
 const signInMethod = object<SignInMethod>()({
   id: ID,
   provider: ID,
+  providerLabel: NAME,
   label: NAME,
   hint: NAME,
   kind: ENUM,

@@ -6,33 +6,44 @@
   - button "Search"
   - list:
     - listitem:
-      - button "Juniper, 4 tasks, unread, research, primary bot" [expanded]: Juniper research
-      - list "Juniper's tasks":
-        - listitem:
-          - button "Main"
-        - listitem:
-          - button "Heat pump vs. gas furnace"
-        - listitem:
-          - button "Library e-book apps compared, unread": Library e-book apps compared
-        - listitem:
-          - button "Caffeine cutoff time"
+      - button "main, 1 task, primary bot":
+        - text: main
+        - time: 5:39 PM
+        - text: About 40 GB are free. The cache uses most of the rest.
     - listitem:
-      - button "Otto, working, 14 tasks, unread, home server operations": Otto home server operations
+      - button "Otto, working, 14 tasks, unread, home server operations":
+        - text: Otto home server operations
+        - time: now
+        - text: Rotating logs on rack-2
     - listitem:
-      - button "Marlow, 1 task, editing": Marlow editing
+      - button "Juniper, 3 tasks, unread, research":
+        - text: Juniper research
+        - time: 5:24 PM
+        - text: Ask these five, and get the answers in writing.
     - listitem:
-      - button "Pip, a run failed, 4 tasks, unread, planning": Pip planning
+      - button "Marlow, 1 task, editing":
+        - text: Marlow editing
+        - time: 4:58 PM
+        - text: Tightened the intro and cut about 80 words.
     - listitem:
-      - button "Quartermaster of the Family Calendar and Errands, 2 tasks, household logistics": Quartermaster of the Family Calendar and Errands household logistics
+      - button "Pip, a run failed, 4 tasks, unread, planning":
+        - text: Pip planning
+        - time: 3:10 PM
+        - text: Here is the week, with Thursday kept clear.
+    - listitem:
+      - button "Quartermaster of the Family Calendar and Errands, 2 tasks, household logistics":
+        - text: Quartermaster of the Family Calendar and Errands household logistics
+        - time: Sat
+        - text: Both are on Saturday's route, pharmacy first because it closes at noon.
   - status
   - button "127.0.0.1:18789, connected. Open the gateway menu."
   - button "Settings"
 - region "Conversation":
-  - button "Juniper, Main. Show details.": Juniper ·Main
+  - button "main, Main. Show details.": main ·Main
   - button "Show work panel"
   - region "Transcript":
     - heading "Main" [level=1]
-    - paragraph: "Context: 5,425 of 128,000 tokens"
+    - paragraph: "Context: 3,388 of 128,000 tokens"
     - text: Today 5:38 PM
     - paragraph: How much space is left on the disk?
     - toolbar "Message actions":
@@ -46,7 +57,7 @@
       - paragraph: "✅ OpenClaw updated. For details, open Settings → Updates in the OpenClaw app or run `openclaw update status` in your terminal."
     - status
   - region "Access":
-    - text: Read-only. You can follow Juniper's work here. Approvals and questions aren't shown on this connection.
+    - text: Read-only. You can follow main's work here. Approvals and questions aren't shown on this connection.
     - button "Request access"
   - status
 - status

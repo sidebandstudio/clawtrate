@@ -15,23 +15,20 @@
     - button "Close settings"
     - heading "Advanced" [level=3]
     - text: Show commands
+    - button "About Show commands"
     - switch "Show commands"
-    - paragraph: Shows each action as its own card with its command or call, in the conversation and the Computer tab.
     - text: Show thinking
+    - button "About Show thinking"
     - switch "Show thinking"
-    - paragraph: "Shows a bot's reasoning: Thought lines in the conversation, and its thinking while it works."
     - text: Show external channel chats
+    - button "About Show external channel chats"
     - switch "Show external channel chats"
-    - paragraph:
-      - text: Off by default. Chats that reach a bot through Discord, Telegram, Slack, iMessage, WhatsApp, Signal or another channel stay out of the task list, its previews and its unread marks. A bot's main conversation always shows. If the gateway sends a channel's direct messages to it, which it does unless its
-      - code: session.dmScope
-      - text: setting gives each channel conversation its own session, those messages still appear there.
     - text: Show sessions from other tools
+    - button "About Show sessions from other tools"
     - switch "Show sessions from other tools"
-    - paragraph: Off by default. Sessions that an API client, a scheduled routine or another tool started with a bot stay out of the task list, its previews and its unread marks. A routine's runs open from Routines. One that is waiting for your approval or answer always shows.
     - text: Show the gateway's own bot
+    - button "About Show the gateway's own bot"
     - switch "Show the gateway's own bot"
-    - paragraph: "Off by default. Every gateway has a bot of its own, its default bot: channel messages, other tools' calls and scheduled runs that name no bot land on it. While you have another bot, it stays out of the sidebar unless it is waiting on you."
   - status
 - navigation "Bots":
   - button "Routines"
@@ -39,7 +36,10 @@
   - button "Search"
   - list:
     - listitem:
-      - button "Otto, working, 14 tasks, unread, home server operations" [expanded]: Otto home server operations
+      - button "Otto, working, 14 tasks, unread, home server operations" [expanded]:
+        - text: Otto home server operations
+        - time: now
+        - text: Rotating logs on rack-2
       - list "Otto's tasks":
         - listitem:
           - button "Rotate the logs on every machine in the rack before the disks fill up again, working": Rotate the logs on every machine in the rack before the disks fill up again
@@ -56,11 +56,25 @@
         - listitem:
           - button "Show all 14"
     - listitem:
-      - button "Marlow, 1 task, editing": Marlow editing
+      - button "Juniper, 3 tasks, unread, research":
+        - text: Juniper research
+        - time: 5:24 PM
+        - text: Ask these five, and get the answers in writing.
     - listitem:
-      - button "Pip, a run failed, 4 tasks, unread, planning": Pip planning
+      - button "Marlow, 1 task, editing":
+        - text: Marlow editing
+        - time: 4:58 PM
+        - text: Tightened the intro and cut about 80 words.
     - listitem:
-      - button "Quartermaster of the Family Calendar and Errands, 2 tasks, household logistics": Quartermaster of the Family Calendar and Errands household logistics
+      - button "Pip, a run failed, 4 tasks, unread, planning":
+        - text: Pip planning
+        - time: 3:10 PM
+        - text: Here is the week, with Thursday kept clear.
+    - listitem:
+      - button "Quartermaster of the Family Calendar and Errands, 2 tasks, household logistics":
+        - text: Quartermaster of the Family Calendar and Errands household logistics
+        - time: Sat
+        - text: Both are on Saturday's route, pharmacy first because it closes at noon.
   - status
   - button "127.0.0.1:18789, connected. Open the gateway menu."
   - button "Settings"

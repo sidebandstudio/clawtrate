@@ -7,9 +7,15 @@
   - button "New"
   - list:
     - listitem:
-      - button "Otto, working, 14 tasks, unread, home server operations": Otto home server operations
+      - button "Otto, working, 14 tasks, unread, home server operations":
+        - text: Otto home server operations
+        - time: now
+        - text: Rotating logs on rack-2
     - listitem:
-      - button "Juniper, 3 tasks, unread, research, primary bot" [expanded]: Juniper research
+      - button "Juniper, 3 tasks, unread, research" [expanded]:
+        - text: Juniper research
+        - time: 5:24 PM
+        - text: Ask these five, and get the answers in writing.
       - list "Juniper's tasks":
         - listitem:
           - button "Heat pump vs. gas furnace"
@@ -22,9 +28,15 @@
         - listitem:
           - button "Archived"
     - listitem:
-      - button "Marlow, 1 task, editing": Marlow editing
+      - button "Marlow, 1 task, editing":
+        - text: Marlow editing
+        - time: 4:58 PM
+        - text: Tightened the intro and cut about 80 words.
     - listitem:
-      - button "Quartermaster of the Family Calendar and Errands, 2 tasks, household logistics": Quartermaster of the Family Calendar and Errands household logistics
+      - button "Quartermaster of the Family Calendar and Errands, 2 tasks, household logistics":
+        - text: Quartermaster of the Family Calendar and Errands household logistics
+        - time: Sat
+        - text: Both are on Saturday's route, pharmacy first because it closes at noon.
   - status
   - button "127.0.0.1:18789, connected. Open the gateway menu."
   - button "Settings"
@@ -63,9 +75,9 @@
     - heading "Usage" [level=3]
     - 'button "Usage: This week: 2,239,000 tokens · about $5.92, as of 5:39 PM. Open."': "Usage This week: 2,239,000 tokens · about $5.92, as of 5:39 PM"
     - heading "Runs on" [level=3]
-    - 'button "Where Juniper runs: Command setting: not set · Same setting as Quartermaster of the Family Calendar and Errands. Open."': "Where Juniper runs Command setting: not set · Same setting as Quartermaster of the Family Calendar and Errands"
+    - 'button "Where Juniper runs: Command setting: not set. Open."': "Where Juniper runs Command setting: not set"
     - heading "Manage" [level=3]
-    - paragraph: Juniper is your Main Bot, so it can't be deleted.
+    - button "Delete bot…"
   - status
 - dialog "Pip was deleted, but some of it is left":
   - banner:

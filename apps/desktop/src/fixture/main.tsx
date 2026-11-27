@@ -7,7 +7,7 @@
 //   &bot=otto&task=<key>   the bot and task to open (stored as the app stores them)
 //   &panel=open            the Work pane
 //   &theme=dark            the app's own theme override
-//   &pins=main,otto        pinned bots, in order (this device's rail arrangement for the gateway)
+//   &pins=clawtrate-main-bot,otto pinned bots, in order (this device's rail arrangement for the gateway)
 //   &hidden=marlow         hidden bots
 //   &sort=name             the rail's sort order: recent, name or manual
 //   &files=loaded          the Work pane's Files states (files.ts), with &checkout=1, &fileload=failed
@@ -78,7 +78,7 @@ function seedPreferences() {
   // The Computer scenes: the one-time note before the first watch was seen, unless asked for,
   // then unseen even when an earlier scene in this browser saw it.
   if (params.has("computer")) {
-    for (const bot of ["main", "otto", "marlow", "pip"]) {
+    for (const bot of ["clawtrate-main-bot", "otto", "marlow", "pip"]) {
       if (params.get("firstwatch") !== "1") write(`computerNote.${bot}`, "1");
       else
         try {
@@ -124,7 +124,7 @@ const bridge = createFixtureBridge(isScene(sceneName) ? sceneName : "main", {
   device: params.get("device"),
   deviceRead: params.get("deviceread"),
   gatewayName: params.get("gatewayName"),
-  showGatewayBot: params.get("gatewaybot") !== "off",
+  showGatewayBot: params.get("gatewaybot") === "on",
 });
 if (params.has("hold")) bridge.hold();
 // "Show sessions from other tools" on, for checks of what it lists (F-563, F-193).

@@ -80,7 +80,8 @@ export function withMessageIds(
 }
 
 const FILES: Record<string, string[]> = {
-  main: ["AGENTS.md", "notes/heat-pumps.md", "notes/installer-questions.md"],
+  main: ["AGENTS.md", "notes/porch-light.md"],
+  "clawtrate-main-bot": ["AGENTS.md", "notes/heat-pumps.md", "notes/installer-questions.md"],
   marlow: ["AGENTS.md", "drafts/newsletter-intro.md"],
   otto: ["AGENTS.md", "inventory.md", "notes/media-box.md", "notes/disk-2026-11-16.md"],
   pip: ["AGENTS.md", "lists/mountain-weekend.md", "pictures/trail-map.png"],
@@ -256,14 +257,16 @@ export function searchCommands(
       }
       case "searchFiles": {
         const { botId } = command;
-        if (src.has("slow") || (botId === "main" && src.has("filestimeout"))) return never();
+        if (src.has("slow") || (botId === "clawtrate-main-bot" && src.has("filestimeout")))
+          return never();
         if (botId === "pip" && src.has("filesfail") && !filesFailed) {
           filesFailed = true;
           return Promise.reject(new Error("permission denied"));
         }
         return answer((): FileSearch => {
           if (botId === "marlow" && !params.marlow) return { status: "unverified", botId };
-          if (botId === "main" && src.has("filesnoroot")) return { status: "no-root", botId };
+          if (botId === "clawtrate-main-bot" && src.has("filesnoroot"))
+            return { status: "no-root", botId };
           const q = command.query.toLowerCase();
           const paths = (FILES[botId] ?? []).filter((path) => path.toLowerCase().includes(q));
           return {

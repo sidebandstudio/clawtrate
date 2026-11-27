@@ -98,15 +98,16 @@ test("F-013: pinned bots are large tiles, three per row, the name centred and tr
 test("F-015: the primary bot's avatar carries a small round badge with a star at its lower right", async ({
   page,
 }) => {
-  await openFixture(page, `scene=main&${OTTO_DISK}&pins=otto`, "light");
-  // Juniper is the gateway's default bot; no other bot has the badge.
+  // The gateway's default bot, `main`, shown by the switch; no other bot has the badge.
+  await openFixture(page, `scene=main&${OTTO_DISK}&pins=otto&gatewaybot=on`, "light");
   await expect(page.getByTestId("primary-star")).toHaveCount(1);
-  const juniper = bot(page, "Juniper");
-  await expect(juniper).toHaveAccessibleName(/, primary bot$/);
+  const own = bot(page, "main");
+  await expect(own).toHaveAccessibleName(/, primary bot$/);
+  await expect(bot(page, "Juniper")).not.toHaveAccessibleName(/primary/);
   await expect(bot(page, "Otto")).not.toHaveAccessibleName(/primary/);
   const check = async () => {
-    const avatar = await rect(page, juniper.locator(".avatar"));
-    const star = juniper.getByTestId("primary-star");
+    const avatar = await rect(page, own.locator(".avatar"));
+    const star = own.getByTestId("primary-star");
     const badge = await rect(page, star);
     expect(badge.width).toBeLessThanOrEqual(avatar.width * 0.45);
     expect(badge.width).toBe(badge.height);
@@ -143,7 +144,7 @@ test("F-015: the primary bot's avatar carries a small round badge with a star at
   };
   await check();
   // The same on a pinned tile.
-  await menuItem(page, "Juniper", "Pin");
+  await menuItem(page, "main", "Pin");
   await expect(page.locator(".pin").filter({ has: page.getByTestId("primary-star") })).toHaveCount(
     1,
   );

@@ -6,12 +6,17 @@
     - heading "Check-ins" [level=3]
     - paragraph: A bot that checks in gets a turn on a schedule to look for anything that needs you. The gateway can skip a scheduled attempt.
     - button "Refresh"
+    - region "main":
+      - heading "main" [level=4]
+      - text: Checks in every 30 minutes
+      - button "Change main's check-ins": Change
+      - paragraph: Every 30 minutes, main looks for anything that needs you. Its prompt asks it to stay quiet when nothing does.
+      - paragraph: Next scheduled attempt 6:00 PM
     - region "Juniper":
       - heading "Juniper" [level=4]
-      - text: Checks in every 30 minutes
+      - text: No check-ins
       - button "Change Juniper's check-ins": Change
-      - paragraph: Every 30 minutes, Juniper looks for anything that needs you. Its prompt asks it to stay quiet when nothing does.
-      - paragraph: Next scheduled attempt 6:00 PM
+      - paragraph: Juniper doesn't check in. The gateway's default for check-ins doesn't cover it.
     - region "Marlow":
       - heading "Marlow" [level=4]
       - text: No check-ins
@@ -45,7 +50,7 @@
         - listitem:
           - radio "Every… As often as you choose, Marlow looks for anything that needs you. Its prompt asks it to stay quiet when nothing does."
       - group: What to check
-      - paragraph: Juniper checks in now through the gateway's default. Once any bot has a setting of its own, only those bots check in, so saving also gives Juniper a setting of its own with the same cadence.
+      - paragraph: main checks in now through the gateway's default. Once any bot has a setting of its own, only those bots check in, so saving also gives main a setting of its own with the same cadence.
       - alert
       - button "Cancel"
       - button "Save"
