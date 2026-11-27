@@ -177,13 +177,16 @@ export type FoundSection =
    * `MAX_SECTION_SPAN_CHARS`, with no code fence inside: anything else with a marker in it can't
    * be told apart from the person's own text, so nothing writes to it. `moved`: an intact section
    * (its hash holds) that isn't at the top, where Clawtrate writes it: a bot moved it or a person
-   * quoted it. `newer`: the first marker names a higher version than this build's.
+   * quoted it. `newer`: the first marker names a higher version than this build's. `top`: one
+   * well-formed pair whose first marker opens the file (after a byte-order mark, never after a
+   * blank line).
    */
   | {
       kind: "changed";
       replaceable: boolean;
       moved: boolean;
       newer: boolean;
+      top: boolean;
       start: number;
       end: number;
     };
@@ -213,6 +216,7 @@ export function findSection(file: string): FoundSection {
       replaceable: false,
       moved: false,
       newer: false,
+      top: false,
       start: first.index,
       end: last.index + last[0].length,
     };
@@ -235,6 +239,7 @@ export function findSection(file: string): FoundSection {
         boundsKnown(inner),
       moved: false,
       newer,
+      top: begin.index === 0,
       start: begin.index,
       end: stop,
     };
@@ -246,6 +251,7 @@ export function findSection(file: string): FoundSection {
       replaceable: false,
       moved: true,
       newer,
+      top: false,
       start: begin.index,
       end: stop,
     };
@@ -367,12 +373,15 @@ export async function changeGuideFile(
   request: Request,
   agentId: string,
   next: (file: string) => string | null,
+  /** Asked just before each write, with what would be written: false leaves the file. */
+  ready: (wanted: string) => Promise<boolean> = async () => true,
 ): Promise<{ written: boolean; missing: boolean }> {
   for (let attempt = 0; ; attempt += 1) {
     const { content, held, utf8, missing } = await readFile(request, agentId);
     if (missing || !utf8) return { written: false, missing };
     const wanted = next(content);
     if (wanted === null || wanted === content) return { written: false, missing };
+    if (!(await ready(wanted))) return { written: false, missing };
     try {
       const result = rec(
         await request("agents.files.set", {
@@ -417,7 +426,7 @@ const stateOf = (found: FoundSection): GuideState => {
   if (found.kind === "none") return "behind";
   if (found.kind === "ours") return found.current ? "current" : "behind";
   // A later build's pair at the top, edited: that build's to keep, whose lines this one can't know.
-  if (found.newer && !found.moved && found.start <= 1) return "current";
+  if (found.newer && found.top) return "current";
   return found.replaceable ? "behind" : "unclear";
 };
 
@@ -459,8 +468,9 @@ export async function readGuideFolders(request: Request): Promise<GuideFolder[]>
  * Keep the section current in every folder of the gateway's list, or in `bot`'s alone: each file
  * read now and held to its hash, and written only when what Clawtrate keeps (`withSection`)
  * differs from what it holds. A file is left when it doesn't exist yet, isn't plain UTF-8, or
- * would grow past the length the gateway keeps whole; and every file is left while that length
- * isn't established (`readGuidesLimits`). One read and at most two writes per folder; nothing is
+ * would grow past the length the gateway keeps whole, as read once for the pass and again just
+ * before each write; and every file is left while that length isn't established
+ * (`readGuidesLimits`). Per folder: one read of the file, one more after a stale-hash refusal, at most two write attempts and at most one write; nothing is
  * remembered, so whatever was left is tried again at the next occasion. Answers what failed, one
  * sentence per folder, whether anything was written, and the bots whose file doesn't exist yet.
  */
@@ -475,11 +485,19 @@ export async function keepGuidesCurrent(
   let wrote = false;
   for (const bots of folders.filter((group) => bot === undefined || group.includes(bot))) {
     try {
-      const result = await changeGuideFile(request, bots[0]!, (file) => {
-        const next = withSection(file);
-        const limit = limits(bots);
-        return next === file || limit === null || guidesWouldBeCut(next, limit) ? null : next;
-      });
+      const fits = (limit: number | null, file: string) =>
+        limit !== null && !guidesWouldBeCut(file, limit);
+      const result = await changeGuideFile(
+        request,
+        bots[0]!,
+        (file) => {
+          const next = withSection(file);
+          return next === file || !fits(limits(bots), next) ? null : next;
+        },
+        // The limit in force when the file is written, read again just before it: a config
+        // change that lowered it while this pass read the files is seen, and the file is left.
+        async (wanted) => fits((await readGuidesLimits(request, folders.flat()))(bots), wanted),
+      );
       if (result.missing) missing.push(...bots);
       if (result.written) wrote = true;
     } catch (error) {

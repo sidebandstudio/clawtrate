@@ -23,6 +23,7 @@ import {
   SECTION_LAST_LINES,
   withSection,
 } from "../src/guides.ts";
+import type { BotGuidesAnswer } from "../src/guides.ts";
 import { ADMIN_SCOPES, INTERACTIVE_SCOPES } from "../src/scopes.ts";
 import { parseBridgeCommand } from "../src/bridge.ts";
 import { agentEvent, grantingGateway, openTask } from "./client-harness.ts";
@@ -181,6 +182,18 @@ describe("the section", () => {
       expect(withSection(`\uFEFF${file}`)).toBe(`\uFEFF${GUIDES_SECTION}${below}`);
     }
     expect(findSection(edited())).toMatchObject({ kind: "changed", replaceable: true, start: 0 });
+  });
+
+  it("tells a section at the top from one after a blank line, a newer one's included", async () => {
+    const newerEdited = newerSection().replace("newer", "edited");
+    const state = async (file: string) =>
+      (await readGuideFolders(fakeFiles({ pip: file }).request))[0]?.state;
+    // A later build's edited section at the top (after a byte-order mark too): that build's.
+    expect(await state(newerEdited + BOT_FILE)).toBe("current");
+    expect(await state(`\uFEFF${newerEdited}${BOT_FILE}`)).toBe("current");
+    // After a blank line it isn't at the top: unclear, and said.
+    expect(findSection(`\n${newerEdited}`)).toMatchObject({ kind: "changed", top: false });
+    expect(await state(`\n${newerEdited}${BOT_FILE}`)).toBe("unclear");
   });
 
   it("never writes an older version over a newer one, intact or edited", () => {
@@ -576,6 +589,33 @@ describe("the gateway's length limit", () => {
     expect(plain.sets).toHaveLength(1);
   });
 
+  it("reads the limit again just before writing, and leaves the file when it no longer fits", async () => {
+    // 9,500 characters fit a limit of 10,000 whole; with the section they wouldn't.
+    const long = `# Pip\n${"x".repeat(9_500)}\n`;
+    for (const [name, second, written] of [
+      ["lowered while the pass read the files", 10_000, 0],
+      ["unchanged", null, 1],
+    ] as const) {
+      const files = fakeFiles({ pip: long });
+      let reads = 0;
+      const request = (method: string, params: unknown) => {
+        if (method !== "config.get") return files.request(method, params);
+        reads += 1;
+        const limit = reads === 1 ? null : second;
+        return Promise.resolve({
+          config: limit === null ? {} : { agents: { defaults: { bootstrapMaxChars: limit } } },
+          hash: "h",
+          valid: true,
+          configRevisionHash: "r1",
+          appliedConfigHash: "r1",
+        });
+      };
+      await keepGuidesCurrent(request);
+      expect(reads, name).toBe(2);
+      expect(files.sets, name).toHaveLength(written);
+    }
+  });
+
   it("writes nothing while the limit can't be read, and writes at the next occasion", async () => {
     const files = fakeFiles({ pip: BOT_FILE, otto: olderSection() + BOT_FILE }, {}, {}, null);
     await keepGuidesCurrent(files.request);
@@ -888,7 +928,12 @@ describe("the guides in the client", () => {
   });
 
   /** A client on a saved route bound to `gw-a`, whose gateway names itself as `named` gives. */
-  async function routed(files: ReturnType<typeof fakeFiles>, named: () => string) {
+  async function routed(
+    files: ReturnType<typeof fakeFiles>,
+    named: () => string,
+    /** Held until it settles: the reply that names the gateway. */
+    naming: Promise<void> = Promise.resolve(),
+  ) {
     const gateway = withFiles(grantingGateway(), files);
     const ROUTE = ".openclaw-guides-check";
     const storage = memoryStorage({
@@ -904,9 +949,10 @@ describe("the guides in the client", () => {
     // The connect's reads of the gateway's name fail, as on a gateway still starting: the
     // client's own retry, half a second on, is the first to get it.
     let reads = 0;
-    gateway.handlers["gateway.identity.get"] = () => {
+    gateway.handlers["gateway.identity.get"] = async () => {
       reads += 1;
       if (reads <= 2) throw new Error("not ready");
+      await naming;
       return { deviceId: named() };
     };
     const client = new ClawtrateClient(testHost(gateway, storage), {
@@ -936,13 +982,16 @@ describe("the guides in the client", () => {
 
   it("on a saved route, keeps the section current once the gateway names itself as that route's, once", async () => {
     const files = fakeFiles({ pip: BOT_FILE });
-    const { client, reads } = await routed(files, () => "gw-a");
+    let name = () => {};
+    const naming = new Promise<void>((done) => (name = done));
+    const { client, reads } = await routed(files, () => "gw-a", naming);
     try {
-      await until(() => client.state.connection.status === "connected" && reads() >= 2);
-      // Nothing while the name is unknown.
+      // The retry's ask for the name is under way and held: nothing is written meanwhile.
+      await until(() => client.state.connection.status === "connected" && reads() >= 3, 8_000);
       await sleep(100);
       expect(client.state.connection.gatewayId).toBeNull();
       expect(files.sets).toEqual([]);
+      name();
       // The retry names it: the change runs then, with no reconnect, and only once.
       await until(() => files.sets.length === 1, 8_000);
       expect(files.store.get("pip")).toBe(withSection(BOT_FILE));
@@ -985,6 +1034,61 @@ describe("the guides in the client", () => {
       expect((await read).folders[0]?.state).toBe("current");
       expect(files.sets).toHaveLength(1);
     } finally {
+      client.stop();
+    }
+  });
+
+  it("a read asked on one connection never answers with the next one's files", async () => {
+    const files = fakeFiles({ pip: BOT_FILE });
+    const { client, gateway } = await openTask({ storage: adminStorage() });
+    withFiles(gateway, files);
+    try {
+      await reconnect(client, gateway);
+      // A guide change of this connection is still running when Settings asks.
+      let release = () => {};
+      const inLine = client as unknown as { guidesChanges: Promise<unknown> };
+      inLine.guidesChanges = new Promise<void>((done) => (release = done));
+      const read = client.readBotGuides();
+      // The next connection is up before that change ends.
+      const first = client.state.connection.connectedAt;
+      gateway.dropAll();
+      await until(
+        () =>
+          client.state.connection.status === "connected" &&
+          client.state.connection.connectedAt !== first,
+      );
+      release();
+      await expect(read).rejects.toThrow(CONNECTION_CHANGED);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("a read made by whoever hears of the connect first shows what that connect's change leaves", async () => {
+    const files = fakeFiles({ pip: BOT_FILE });
+    const { client, gateway } = await openTask({ storage: adminStorage() });
+    withFiles(gateway, files);
+    // The connect's read of the bots is slow.
+    const list = gateway.handlers["agents.list"]!;
+    let lists = 0;
+    gateway.handlers["agents.list"] = async (params) => {
+      lists += 1;
+      if (lists === 1) await sleep(200);
+      return list(params);
+    };
+    let read: Promise<BotGuidesAnswer> | null = null;
+    const was = client.state.connection.connectedAt;
+    const stop = client.store.subscribe((state) => {
+      if (read || state.connection.status !== "connected" || state.connection.connectedAt === was)
+        return;
+      read = client.readBotGuides();
+    });
+    try {
+      gateway.dropAll();
+      await until(() => read !== null);
+      expect((await read!).folders[0]?.state).toBe("current");
+    } finally {
+      stop();
       client.stop();
     }
   });
