@@ -14,7 +14,15 @@ import { INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
 import { SIDEBAR_PREF_KEY } from "../src/sidebar.ts";
 import { MAX_LISTED_TASKS } from "../src/state-bounds.ts";
 import { agentEvent, FAST, grantingGateway, KEY, openTask, URL_A } from "./client-harness.ts";
-import { deferred, memoryStorage, sleep, testHost, tokenKey, until } from "./fake-gateway.ts";
+import {
+  deferred,
+  helloOk,
+  memoryStorage,
+  sleep,
+  testHost,
+  tokenKey,
+  until,
+} from "./fake-gateway.ts";
 
 const PIP_TASK = "agent:pip:dashboard:2cc23cbf-30e2-4416-837a-56d92c983588";
 
@@ -1087,7 +1095,109 @@ describe("an archive or a delete bound to the connection it began on", () => {
       expect(gateway.calls("sessions.patch")).toEqual([]);
       client.stop();
     });
+
+    it(`${title} made while reconnecting asks no access of another gateway that answers the reconnect`, async () => {
+      const { client, gateway, stamp } = await granted("gateway-b");
+      gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway-b" });
+      gateway.dropAll();
+      expect(client.state.connection.status).not.toBe("connected");
+      expect(await outcome(act(client, stamp))).toBe(
+        "This change was made for another gateway, so nothing was sent.",
+      );
+      expect(gateway.calls("device.scopes.requestUpgrade")).toEqual([]);
+      expect(gateway.calls("sessions.patch")).toEqual([]);
+      client.stop();
+    });
+
+    it(`${title} whose access request is pending when the connection drops asks no access of another gateway that answers`, async () => {
+      const { client, gateway, stamp } = await granted("gateway-b");
+      // The request waits on A; a second one, to whichever gateway gets it, is approved.
+      const approve = gateway.handlers["device.scopes.waitUpgrade"]!;
+      let waits = 0;
+      gateway.handlers["device.scopes.waitUpgrade"] = (params) =>
+        waits++ === 0 ? new Promise(() => {}) : approve(params);
+      const acting = outcome(act(client, stamp));
+      await until(() => gateway.calls("device.scopes.waitUpgrade").length === 1);
+      gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway-b" });
+      gateway.dropAll();
+      expect(await acting).toBe("This change was made for another gateway, so nothing was sent.");
+      expect(gateway.calls("device.scopes.requestUpgrade")).toHaveLength(1);
+      expect(gateway.calls("sessions.patch")).toEqual([]);
+      client.stop();
+    });
+
+    it(`${title} whose connection drops after its guard asks no access of the read-only connection that replaces it`, async () => {
+      const { client, gateway } = await connected(INTERACTIVE_SCOPES);
+      gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway-a" });
+      gateway.handlers["sessions.describe"] = () => ({
+        session: { key: "agent:pip:main", sessionId: "s-main" },
+      });
+      gateway.handlers["sessions.delete"] = () => ({ ok: true });
+      await until(() => client.state.connection.gatewayId === "gateway-a");
+      const host = client as unknown as {
+        requireSameGateway(stamp: GatewayStamp): Promise<unknown>;
+      };
+      const guard = host.requireSameGateway.bind(client);
+      let guards = 0;
+      host.requireSameGateway = async (stamp) => {
+        const passed = await guard(stamp);
+        if (++guards < 2) return passed;
+        // The same gateway answers the reconnect, now granting this device read access only.
+        gateway.connectReply = () => ({
+          ok: true,
+          payload: helloOk([...READ_SCOPES], "device-token"),
+        });
+        gateway.dropAll();
+        await until(
+          () => client.state.connection.status === "connected" && !client.state.connection.canWrite,
+          6_000,
+        );
+        return passed;
+      };
+      const result = await outcome(act(client, gatewayStamp(client.state.connection)));
+      expect(gateway.calls("device.scopes.requestUpgrade")).toEqual([]);
+      expect(gateway.calls("sessions.patch")).toEqual([]);
+      expect(gateway.calls("sessions.delete")).toEqual([]);
+      expect(result).toBe(CONNECTION_CHANGED);
+      client.stop();
+    });
   }
+
+  it("a task change whose screen named no gateway, made while reconnecting, asks no gateway for access", async () => {
+    const { client, gateway, stamp } = await granted("gateway-a");
+    gateway.dropAll();
+    expect(client.state.connection.status).not.toBe("connected");
+    expect(
+      await outcome(
+        client.renameTask("agent:pip:main", "Weekly", { stamp: { ...stamp, gatewayId: null } }),
+      ),
+    ).toBe("The gateway hasn't said which gateway it is, so nothing was sent.");
+    expect(gateway.calls("device.scopes.requestUpgrade")).toEqual([]);
+    client.stop();
+  });
+
+  it("a task change on a gateway whose identity can't be read says so, not that it is another gateway", async () => {
+    const { client, gateway } = await connected(INTERACTIVE_SCOPES);
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway-a" });
+    await until(() => client.state.connection.gatewayId === "gateway-a");
+    const stamp = gatewayStamp(client.state.connection);
+    gateway.handlers["gateway.identity.get"] = () => {
+      throw new Error("unavailable");
+    };
+    const asked = gateway.calls("gateway.identity.get").length;
+    gateway.dropAll();
+    await until(
+      () =>
+        client.state.connection.status === "connected" &&
+        gateway.calls("gateway.identity.get").length > asked,
+      6_000,
+    );
+    expect(await outcome(client.renameTask("agent:pip:main", "Weekly", { stamp }))).toBe(
+      "Clawtrate couldn't confirm which gateway this is, so nothing was sent. Try again.",
+    );
+    expect(gateway.calls("sessions.patch")).toEqual([]);
+    client.stop();
+  });
 
   it("a task change whose viewer closes while it waits for the gateway's name asks nothing for it", async () => {
     const { client, gateway, stamp } = await granted("gateway-a");

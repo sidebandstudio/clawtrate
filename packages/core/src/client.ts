@@ -460,6 +460,10 @@ export const CONNECTION_CHANGED =
   "The connection changed since this screen was read, so nothing was sent. Look again, then try again.";
 /** Why a write stamped with one gateway's identity is not sent to another (`requireSameGateway`). */
 const ANOTHER_GATEWAY = "This change was made for another gateway, so nothing was sent.";
+const UNNAMED_GATEWAY = "The gateway hasn't said which gateway it is, so nothing was sent.";
+/** The identity read failed or named none: a retry may read it, unlike another gateway's. */
+const IDENTITY_UNREAD =
+  "Clawtrate couldn't confirm which gateway this is, so nothing was sent. Try again.";
 /** Why a file a bot handed over isn't read: its row came from another gateway (`readChatFile`). */
 export const FILE_FROM_ANOTHER_GATEWAY =
   "This file was listed by another gateway, so it wasn't read. Look again, then try again.";
@@ -1164,6 +1168,8 @@ type Waiter = {
   reject: (error: Error) => void;
   /** Who asked: a viewer's operations are withdrawn with `withdraw` when it goes away. */
   owner: object | null;
+  /** The gateway a task change's stamp named: after a reconnect, its access is asked of it only. */
+  gatewayId: string | null;
 };
 
 /** The approval kinds' list methods and readers. */
@@ -3425,6 +3431,32 @@ export class ClawtrateClient {
       );
   }
 
+  /**
+   * After a hello, access queued for a task change is asked only of the gateway its stamp named
+   * (#782): the request waits for this connection's identity, and a change whose gateway this
+   * isn't is refused, rather than asking a gateway that answered the reconnect at the same address.
+   */
+  private resumeUpgrade(): void {
+    if (this.accessWaiters.every((waiter) => waiter.gatewayId === null)) return this.startUpgrade();
+    const epoch = this.epoch;
+    void this.readGatewayIdentity().then((id) => {
+      if (epoch !== this.epoch || !this.upgradeWanted) return;
+      const waiters = this.accessWaiters;
+      this.accessWaiters = waiters.filter(
+        (waiter) => waiter.gatewayId === null || waiter.gatewayId === id,
+      );
+      for (const waiter of waiters)
+        if (!this.accessWaiters.includes(waiter))
+          waiter.reject(new Error(id === null ? IDENTITY_UNREAD : ANOTHER_GATEWAY));
+      if (this.accessWaiters.length > 0) return this.startUpgrade();
+      // shortcut: an ask with no waiter (Settings' own) queued beside them is dropped too; keep
+      // asks apart from their waiters if that ever matters.
+      this.upgradeWanted = false;
+      this.pairingWanted = false;
+      this.setUpgrade(initialScopeUpgrade);
+    });
+  }
+
   private failAccess(error: AccessRequestError): void {
     this.upgradeWanted = false;
     this.pairingWanted = false;
@@ -3464,7 +3496,11 @@ export class ClawtrateClient {
    * will not bring one, so the operation fails at once and stays retryable.
    * `owner` names the viewer that asked, so its operations can be withdrawn.
    */
-  private ensureScope(scope: string, owner: object | null = null): Promise<void> {
+  private ensureScope(
+    scope: string,
+    owner: object | null = null,
+    gatewayId: string | null = null,
+  ): Promise<void> {
     if (this.holds(scope)) return Promise.resolve();
     const connection = this.state.connection;
     if (connection.status === "error" || connection.status === "idle" || !this.protocol) {
@@ -3487,7 +3523,7 @@ export class ClawtrateClient {
       );
     }
     const waiting = new Promise<void>((resolve, reject) => {
-      this.accessWaiters.push({ scope, resolve, reject, owner });
+      this.accessWaiters.push({ scope, resolve, reject, owner, gatewayId });
     });
     // Not meant to be held yet, or held and then lost (capped or revoked) on a
     // live connection: ask the gateway's owner. Otherwise the connection is
@@ -7012,13 +7048,13 @@ export class ClawtrateClient {
     this.requireSameTarget(stamp);
     if (!alive()) throw new Error("Not connected to the gateway.");
     const gatewayId = stamp.gatewayId;
-    if (gatewayId === null)
-      throw new Error("The gateway hasn't said which gateway it is, so nothing was sent.");
+    if (gatewayId === null) throw new Error(UNNAMED_GATEWAY);
     const here = await this.readGatewayIdentity();
     // A bot command can be the first to identify this connection after discovery got no ID.
     this.confirmGatewayIdentity(here, alive);
     if (!alive()) throw new Error(CONNECTION_CHANGED);
-    // `gatewayId` is known here, so a gateway that names none (null) never matches it.
+    // An identity that wasn't read never matches, but it isn't known to be another gateway's.
+    if (here === null) throw new Error(IDENTITY_UNREAD);
     if (here !== gatewayId) throw new Error(ANOTHER_GATEWAY);
     return { gatewayId, target: stamp.target };
   }
@@ -9876,7 +9912,7 @@ export class ClawtrateClient {
       this.upgradeTier = "interactive";
       this.pairingWanted = false;
     } else if (this.upgradeWanted) {
-      this.startUpgrade();
+      this.resumeUpgrade();
     }
     this.settleAccessWaiters();
     this.checkCreations();
@@ -11272,6 +11308,7 @@ export class ClawtrateClient {
   private actionContext(
     owner: object | null,
     bound: number | null = null,
+    gatewayId: string | null = null,
   ): TaskActionContext & SidebarContext {
     const generation = this.generation;
     // The connection the action's first request went on, and whether it has sent a write yet.
@@ -11298,7 +11335,10 @@ export class ClawtrateClient {
       ensureWrite: async () => {
         if (this.options.readOnly)
           throw new Error("This host only reads; it does not change tasks.");
-        await this.ensureScope(WRITE_SCOPE, owner);
+        // Bound to a connection that has gone, it asks none that replaced it, as `request` sends none.
+        if (epoch !== null && epoch !== this.epoch)
+          throw new Error(wrote ? CONNECTION_CHANGED_AFTER_SEND : CONNECTION_CHANGED);
+        await this.ensureScope(WRITE_SCOPE, owner, gatewayId);
         this.checkNotWithdrawn(owner);
       },
       now: () => this.now(),
@@ -11380,13 +11420,17 @@ export class ClawtrateClient {
     // screen wasn't read on is never asked for it. A connected host runs the guard itself first:
     // right after a hello the identity is still being read, and the guard waits for it.
     this.requireSameTarget(stamp);
+    // No gateway answers to a stamp that names none, so none is asked, connected or not.
+    if (stamp.gatewayId === null) throw new Error(UNNAMED_GATEWAY);
     if (this.state.connection.status === "connected") await this.requireSameGateway(stamp);
     // A viewer that closed during that wait had no access waiter to withdraw yet.
     this.checkNotWithdrawn(owner);
-    await this.actionContext(owner).ensureWrite();
+    // Asked while reconnecting, the access waits for the next gateway to name itself
+    // (`resumeUpgrade`).
+    await this.actionContext(owner, null, stamp.gatewayId).ensureWrite();
     const epoch = this.epoch;
     await this.requireSameGateway(stamp);
-    return this.actionContext(owner, epoch);
+    return this.actionContext(owner, epoch, stamp.gatewayId);
   }
 
   /** With `stamp`, as for `archiveTask`. */
