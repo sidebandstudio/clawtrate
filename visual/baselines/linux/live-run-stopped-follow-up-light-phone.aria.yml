@@ -64,15 +64,19 @@
       - text: ) did not report back, so the figures above come from the disk's own counters.
     - group: 2 actions · 1 unknown
     - paragraph: Can you check the backup log from last night too?
+    - toolbar "Message actions":
+      - button "Add a reaction"
+      - button "Reply in a thread"
+      - button "More"
     - paragraph: The backup finished at 02:14 and wrote 41 GB. Two folders were skipped because they were
+    - group: Message from Marlow sessions_send delivery to agent:marlow:main failed. The target may not have received the message; retry or report the failure instead of assuming delivery succeeded. Stopped
+    - paragraph: Marlow didn't get the message. I'll send it again.
     - text: Incomplete
     - paragraph: Stopped after 36s. Completed actions are not undone.
     - list:
       - listitem: "Stopped with it: Marlow's run for this message."
       - listitem: "Then stopped: the turn the gateway started here on its own once Marlow's run was stopped."
     - group: Stopped after 36s 1 action
-    - paragraph: Marlow didn't get the message. I'll send it again.
-    - text: Incomplete
     - paragraph: Stopped after 1s. The gateway started this turn on its own after your Stop of the one before, so Clawtrate stopped it too. Completed actions are not undone.
     - status
   - button "Attach files"
