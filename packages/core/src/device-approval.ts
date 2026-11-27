@@ -539,7 +539,11 @@ export class DeviceApprovals {
   private arm(ms: number): void {
     const now = this.ctx.now();
     const due = Math.max(now + ms, this.lastReadAt + READ_GAP_MS);
-    if (this.cancelRead && this.readDue <= due) return;
+    if (this.cancelRead && this.readDue <= due) {
+      // An event's read joins the one armed: an empty list applied later no longer ends it.
+      if (ms === 0) this.eventRead = true;
+      return;
+    }
     this.clearTimer();
     this.readDue = due;
     this.eventRead = ms === 0;

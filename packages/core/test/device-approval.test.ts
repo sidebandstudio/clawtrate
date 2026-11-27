@@ -1320,6 +1320,20 @@ describe("the waiting requests", () => {
     expect(t.delays()).toEqual([0]);
   });
 
+  it("keeps a failed read's retry that an event joined, though Machines' read then finds none waiting", async () => {
+    const t = await listed([pendingRow()]);
+    t.answers["device.pair.list"] = () => {
+      throw new Error("timed out");
+    };
+    await t.fire();
+    expect(t.delays()).toHaveLength(1);
+    // Inside the retry's gap, so the event's read is the retry already armed.
+    t.engine.onEvent("device.pair.requested", { requestId: "new" });
+    t.answers["device.pair.list"] = () => ({ pending: [], paired: [] });
+    await t.engine.listDevices();
+    expect(t.delays()).toHaveLength(1);
+  });
+
   it("stops after four retries, keeping the last list read, though requests were waiting", async () => {
     const row = pendingRow();
     const t = await listed([row]);
