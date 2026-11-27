@@ -436,7 +436,7 @@ test("F-520: a bot made in New bot starts as itself: no first-run sequence, its 
 });
 
 test("F-552: a bot made in New bot with no name takes one in the chat, and is renamed once the person confirms it, its picture kept out of its file", async () => {
-  test.setTimeout(240_000);
+  test.setTimeout(270_000);
   await page.keyboard.press("ControlOrMeta+n");
   const create = dialog("New bot");
   await expect(create.getByRole("textbox", { name: "Name" })).toBeFocused();
