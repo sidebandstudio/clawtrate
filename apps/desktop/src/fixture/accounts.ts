@@ -521,16 +521,14 @@ export function fixtureAccounts(now: number, params: AccountParams): AccountsSta
       }
     : state;
   if (params.modellist) {
+    // The bot's model as the rest of the address leaves it.
+    const locked = withLock(own, params, now);
     const botId = params.bot ?? "otto";
-    const binding = own.bindings.find((b) => b.botId === botId);
+    const binding = locked.bindings.find((b) => b.botId === botId);
     const ref = { provider: binding?.provider ?? "openai", model: binding?.model ?? "gpt-5.5" };
-    return withLock(
-      params.modellist === "refused"
-        ? { ...own, modelsRefused: [{ botId, ...ref }] }
-        : { ...own, allowed: allowedLine(botId, ref, now) },
-      params,
-      now,
-    );
+    return params.modellist === "refused"
+      ? { ...locked, modelsRefused: [{ botId, ...ref }] }
+      : { ...locked, allowed: allowedLine(botId, ref, now) };
   }
   // The picker arrives after the accounts, when the page calls releasePicker().
   if (params.catalog === "latepicker") return withLock({ ...own, models: [] }, params, now);

@@ -265,6 +265,28 @@ for (const size of [SIZES[0]!, SIZES.at(-1)!]) {
   }
 }
 
+/** Otto's model refused by its list (#799), as an admin connection sees it: the card's press. */
+const MODEL_LIST = `scene=main&${OTTO_DISK}&panel=closed&access=admin&lock=bound&modellist=refused`;
+
+for (const size of [SIZES[0]!, SIZES.at(-1)!]) {
+  for (const theme of THEMES) {
+    test.describe(`a start refused for Otto's own model ${size.name} ${theme}`, () => {
+      test.use(contextFor(size, theme));
+      test(`#799: Couldn't start with Allow matches its baseline, ${theme}, ${size.name}`, async ({
+        page,
+      }) => {
+        await openFixture(page, MODEL_LIST, theme);
+        await scene(page, [], refusedForModel());
+        await expect(
+          page.getByTestId("started-task-card").getByTestId("model-refused"),
+        ).toBeVisible();
+        await settle(page);
+        await expect(page).toHaveScreenshot(`started-task-model-allow-${theme}-${size.name}.png`);
+      });
+    });
+  }
+}
+
 test.describe("a started task's card", () => {
   test.use(contextFor(SIZES[0]!));
 
@@ -306,6 +328,32 @@ test.describe("a started task's card", () => {
     await expect(refused).not.toContainText("model not allowed");
     await expect(refused.getByTestId("started-task-reason")).toHaveCount(0);
     await expect(refused.getByRole("button", { name: /^Open/ })).toHaveCount(0);
+  });
+
+  test("#799: Allow on a start refused for the bot's own model puts it on the list, with the same line", async ({
+    page,
+  }) => {
+    await openFixture(page, MODEL_LIST);
+    await scene(page, [], refusedForModel());
+    const refused = page.getByRole("group", {
+      name: "Couldn't start a task: Rotate the media logs",
+    });
+    // The card already says why: only the press.
+    await expect(refused.getByTestId("model-refused")).toHaveText("Allow gpt-5.5");
+    await refused.getByRole("button", { name: "Allow OpenAI's gpt-5.5 for Otto's tasks" }).click();
+    await expect(refused.getByTestId("model-allowed")).toHaveText(
+      "Added OpenAI's gpt-5.5 to the models this gateway allows. · Undo",
+    );
+  });
+
+  test("#799: below admin access the card offers no press", async ({ page }) => {
+    await openFixture(page, MODEL_LIST.replace("access=admin", "access=write"));
+    await scene(page, [], refusedForModel());
+    const refused = page.getByRole("group", {
+      name: "Couldn't start a task: Rotate the media logs",
+    });
+    await expect(refused).toContainText("This gateway doesn't allow tasks on OpenAI's gpt-5.5.");
+    await expect(refused.getByRole("button", { name: /^Allow/ })).toHaveCount(0);
   });
 
   test("F-587: the report back is offered, and goes to Otto's reply", async ({ page }) => {
