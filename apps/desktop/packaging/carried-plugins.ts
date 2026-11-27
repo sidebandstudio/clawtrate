@@ -23,6 +23,7 @@
 // digest is of the tar before compression, so it doesn't depend on the
 // computer's zlib; the list's integrity is the compressed file's SHA-512.
 
+import { extractFile, uncache } from "@electron/asar";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
@@ -31,6 +32,7 @@ import { parseVersion, isNewer } from "../src/main/update/version.ts";
 import {
   CARRIED_BUILD_DIR,
   CARRIED_LIST_NAME,
+  carriedPlaces,
   type CarriedList,
   type CarriedPlugin,
   type DeclaredSurface,
@@ -45,10 +47,10 @@ export const BUILD_OUT = join(ROOT, "apps/desktop", CARRIED_BUILD_DIR);
 
 /** One plugin's line in carried-plugins.json. */
 export type Recorded = { version: string; digest: string };
-export type Record = { plugins: { [folder: string]: Recorded } };
+export type CarriedRecord = { plugins: { [folder: string]: Recorded } };
 
-export const readRecord = (path = RECORD): Record =>
-  JSON.parse(readFileSync(path, "utf8")) as Record;
+export const readRecord = (path = RECORD): CarriedRecord =>
+  JSON.parse(readFileSync(path, "utf8")) as CarriedRecord;
 
 /** npm's time for every file it packs, 1985-10-26T08:15:00Z, in seconds. */
 const PACK_TIME = 499162500;
@@ -223,11 +225,11 @@ export function requireRecorded(
  * version with the same files.
  */
 export function recordPlugin(
-  record: Record,
+  record: CarriedRecord,
   folder: string,
   version: string,
   digest: string,
-): Record {
+): CarriedRecord {
   const recorded = record.plugins[folder];
   if (recorded && !(recorded.version === version && recorded.digest === digest)) {
     const was = parseVersion(recorded.version);
@@ -300,6 +302,25 @@ export function packCarried(
   const list: CarriedList = { plugins: packed.map(({ entry }) => entry) };
   writeFileSync(join(out, CARRIED_LIST_NAME), `${JSON.stringify(list, null, 2)}\n`);
   return list;
+}
+
+/**
+ * What a packaged app carries: the list read from its archive, and the folder
+ * of its tarballs, where the app looks for them (`resources` is
+ * `Contents/Resources` on macOS, `resources` on Windows).
+ */
+export function packagedCarried(resources: string): { list: CarriedList; tarballs: string } {
+  const archive = join(resources, "app.asar");
+  const { tarballs } = carriedPlaces({
+    packaged: true,
+    appPath: archive,
+    resourcesPath: resources,
+  });
+  uncache(archive);
+  const list = JSON.parse(
+    extractFile(archive, `${CARRIED_BUILD_DIR}/${CARRIED_LIST_NAME}`).toString("utf8"),
+  ) as CarriedList;
+  return { list, tarballs };
 }
 
 function main(args: string[]): void {

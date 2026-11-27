@@ -14,6 +14,7 @@ import {
   utimesSync,
   writeFileSync,
 } from "node:fs";
+import { createPackage, listPackage } from "@electron/asar";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -22,6 +23,7 @@ import {
   digestNow,
   digestOf,
   LICENSE,
+  packagedCarried,
   packCarried,
   PLUGINS_DIR,
   readRecord,
@@ -294,7 +296,7 @@ describe("where the app finds them", () => {
     expect(integrityOf(readFileSync(join(places.tarballs, voice!.file)))).toBe(voice!.integrity);
   });
 
-  it("reads the list from the archive and the tarballs from the resources when packaged", () => {
+  it("reads the list from the archive and the tarballs from the resources when packaged", async () => {
     const config = builderConfig({}, "45.3.2");
     expect(config.files).toContain("out/plugins/plugins.json");
     expect(config.extraResources).toEqual([
@@ -302,37 +304,41 @@ describe("where the app finds them", () => {
     ]);
 
     // The packaged layout, made from the configuration as electron-builder applies it:
-    // `files` go into app.asar (a folder here, which plain Node can read), and
-    // `extraResources` beside it.
+    // `files` packed into a real app.asar, and `extraResources` beside it.
     const app = temp();
-    const built = join(app, CARRIED_BUILD_DIR);
-    packCarried(built);
+    packCarried(join(app, CARRIED_BUILD_DIR));
+    const staged = temp();
+    for (const pattern of config.files as string[]) {
+      if (pattern.includes("*") || !existsSync(join(app, pattern))) continue;
+      mkdirSync(resolve(staged, pattern, ".."), { recursive: true });
+      cpSync(join(app, pattern), join(staged, pattern));
+    }
     for (const [platform, resources] of [
       ["darwin", join(temp(), "Clawtrate.app/Contents/Resources")],
       ["win32", join(temp(), "Clawtrate/resources")],
     ] as const) {
       const archive = join(resources, "app.asar");
-      for (const pattern of config.files as string[]) {
-        if (pattern.includes("*") || !existsSync(join(app, pattern))) continue;
-        mkdirSync(resolve(archive, pattern, ".."), { recursive: true });
-        cpSync(join(app, pattern), join(archive, pattern));
-      }
+      await createPackage(staged, archive);
       const [extra] = config.extraResources as { from: string; to: string }[];
       mkdirSync(join(resources, extra!.to), { recursive: true });
       for (const name of readdirSync(join(app, extra!.from)).filter((n) => n.endsWith(".tgz")))
         cpSync(join(app, extra!.from, name), join(resources, extra!.to, name));
 
-      const places = carriedPlaces({ packaged: true, appPath: archive, resourcesPath: resources });
-      expect(places, platform).toEqual({
-        list: join(archive, "out/plugins/plugins.json"),
-        tarballs: join(resources, "plugins"),
-      });
-      const [voice] = (JSON.parse(readFileSync(places.list, "utf8")) as CarriedList).plugins;
-      expect(integrityOf(readFileSync(join(places.tarballs, voice!.file))), platform).toBe(
+      expect(carriedPlaces({ packaged: true, appPath: archive, resourcesPath: resources })).toEqual(
+        { list: join(archive, "out/plugins/plugins.json"), tarballs: join(resources, "plugins") },
+      );
+      const { list, tarballs } = packagedCarried(resources);
+      expect(list, platform).toEqual(readList(join(app, CARRIED_BUILD_DIR)));
+      const [voice] = list.plugins;
+      expect(integrityOf(readFileSync(join(tarballs, voice!.file))), platform).toBe(
         voice!.integrity,
       );
       // The tarball is outside the archive, where the gateway's plain Node can read it.
-      expect(existsSync(join(archive, "out/plugins", voice!.file)), platform).toBe(false);
+      expect(listPackage(archive, { isPack: false }), platform).toEqual([
+        "/out",
+        "/out/plugins",
+        "/out/plugins/plugins.json",
+      ]);
     }
   });
 });
