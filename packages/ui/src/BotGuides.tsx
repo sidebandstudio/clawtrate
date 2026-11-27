@@ -58,11 +58,8 @@ export function guideRow(
           words: "Still has an older version of Clawtrate's section.",
           action: can("remove"),
         };
-      if (folder.spelledApart) return { words: spelledApart, action: can("update") };
       return {
-        words: folder.long
-          ? "An older version. Its instructions are long, so Clawtrate doesn't update it by itself."
-          : "An older version.",
+        words: `${folder.spelledApart ? spelledApart : "An older version."}${folder.long ? " Its instructions are long, so Clawtrate doesn't update it by itself." : ""}`,
         action: can("update"),
       };
     case "changed":
@@ -83,7 +80,12 @@ export function guideRow(
     case "none":
       if (!on) return null;
       if (!folder.utf8) return { words: notUtf8, action: null };
-      if (folder.spelledApart) return { words: spelledApart, action: can("add") };
+      // Add bypasses the length check, so a long file still says so here.
+      if (folder.spelledApart)
+        return {
+          words: folder.long ? `${spelledApart} ${long}` : spelledApart,
+          action: can("add"),
+        };
       // The gateway writes its own instructions into a missing file on the bot's next run, and
       // only while it is missing: Clawtrate waits for that.
       if (folder.missing)
