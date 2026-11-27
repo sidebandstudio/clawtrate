@@ -1,12 +1,17 @@
 {
+  "openclaw": ["2026.10.6", "2026.11.10"],
   "plugins": {
     "clawtrate-voice": {
       "version": "0.1.0",
-      "digest": "sha256-ptF5G6UWP36m81AEwf6gGrXEmQ2A3+d+X4/PSxD9qRQ=",
-      "grants": { "hooks": { "allowConversationAccess": true } },
+      "digest": "sha256-a/bAKZ908LZve+4zOjfSDkDuq+bZf0dzp517pyOpXGU=",
+      "grants": {
+        "hooks": {
+          "allowConversationAccess": true
+        }
+      },
       "sourceDigests": {
-        "2026.10.6": "50cab457bb279fbe658461d2223478ff1b7ecc25f5e22034f295d3e71f15b625",
-        "2026.11.10": "50cab457bb279fbe658461d2223478ff1b7ecc25f5e22034f295d3e71f15b625"
+        "2026.10.6": "99dfd0ed8aedfd66ca983024dc0bd56510358a3236b8530d1943eb722556c760",
+        "2026.11.10": "99dfd0ed8aedfd66ca983024dc0bd56510358a3236b8530d1943eb722556c760"
       }
     }
   }

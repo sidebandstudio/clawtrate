@@ -3,6 +3,7 @@
 //
 //   node apps/desktop/packaging/carried-plugins.ts pack [out folder]
 //   node apps/desktop/packaging/carried-plugins.ts record <plugin folder name>
+//   node apps/desktop/packaging/carried-plugins.ts bump <plugin folder name>
 //   node apps/desktop/packaging/carried-plugins.ts source-digest <plugin folder name> <OpenClaw version> <digest>
 //
 // `pack` packs each plugin `carried-plugins.json` names from the checkout into
@@ -13,20 +14,23 @@
 //
 // `carried-plugins.json` records, for each carried plugin, the version last
 // recorded and a digest of what that version packs to; the grants the plugin
-// is given when it is enabled; and, for each OpenClaw version the development
-// gateway runs (tools/dev-gateway/src/versions.ts), the source digest that
-// version's gateway reported when it loaded that packing
+// is given when it is enabled; and, for each OpenClaw version it names in
+// `openclaw` (the versions the development gateway runs; a test holds them to
+// tools/dev-gateway/src/versions.ts), the source digest that version's gateway reported when it loaded that packing
 // (`plugins.setEnabled`'s `runtime.sourceDigests`). Packing fails when a
 // plugin's files changed but its version didn't, when its version isn't the
-// one recorded, and when any OpenClaw version has no source digest. `record`
-// writes the plugin's current version and digest, only for a version newer
-// than the one recorded, and drops the source digests, which belonged to the
-// old packing. `source-digest` records one for the recorded packing.
+// one recorded, and when any OpenClaw version it names has no source digest.
+// `record` writes the plugin's current version and digest, only for a version
+// newer than the one recorded, and drops the source digests, which belonged to
+// the old packing. `bump` raises the version's patch number and records it.
+// `source-digest` records one source digest for the recorded packing.
 //
 // The tarball is written here rather than by `npm pack`, so a build needs no
-// npm and packs the same way on macOS and Windows. Its files and package.json
-// are exactly the ones plugin-npm.ts packs for npm (`packageFiles`), each at
-// `package/<path>` with npm's fixed time and modes, in a fixed order. The
+// npm and packs the same way on macOS and Windows. It holds the files the
+// plugin's package.json `files` list names and that package.json without
+// `private`, as plugin-npm.ts packs them for npm (`packageFiles`) but without
+// npm's README and LICENSE, each at `package/<path>` with npm's fixed time and
+// modes, in a fixed order. The
 // digest is of the tar before compression, so it doesn't depend on the
 // computer's zlib; the list's integrity is the compressed file's SHA-512.
 
@@ -35,7 +39,6 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
-import { OPENCLAW_VERSIONS } from "../../../tools/dev-gateway/src/versions.ts";
 import { parseVersion, isNewer } from "../src/main/update/version.ts";
 import {
   CARRIED_BUILD_DIR,
@@ -62,7 +65,11 @@ export type Recorded = {
   /** By OpenClaw version, for the recorded packing. */
   sourceDigests: { [openclawVersion: string]: string };
 };
-export type CarriedRecord = { plugins: { [folder: string]: Recorded } };
+export type CarriedRecord = {
+  /** The OpenClaw versions every carried plugin needs a source digest for. */
+  openclaw: string[];
+  plugins: { [folder: string]: Recorded };
+};
 
 export const readRecord = (path = RECORD): CarriedRecord =>
   JSON.parse(readFileSync(path, "utf8")) as CarriedRecord;
@@ -230,18 +237,19 @@ export function requireRecorded(
   version: string,
   digest: string,
   recorded: Recorded | undefined,
+  openclawVersions: readonly string[],
 ): void {
   const record = `node apps/desktop/packaging/carried-plugins.ts record ${folder}`;
   if (!recorded) throw new Error(`plugins/${folder} isn't in carried-plugins.json.`);
   if (version === recorded.version && digest !== recorded.digest)
     throw new Error(
-      `plugins/${folder} changed since its version ${version} was recorded, but its version is still ${version}. Raise its version, then run \`${record}\`.`,
+      `plugins/${folder} changed since its version ${version} was recorded, but its version is still ${version}. Run \`node apps/desktop/packaging/carried-plugins.ts bump ${folder}\`.`,
     );
   if (version !== recorded.version)
     throw new Error(
       `plugins/${folder} is version ${version}, but carried-plugins.json records ${recorded.version}. Run \`${record}\`.`,
     );
-  for (const openclaw of OPENCLAW_VERSIONS)
+  for (const openclaw of openclawVersions)
     if (!SOURCE_DIGEST.test(recorded.sourceDigests?.[openclaw] ?? ""))
       throw new Error(
         `plugins/${folder} ${version} has no source digest for OpenClaw ${openclaw}. Install it on a development gateway of that version and run \`node apps/desktop/packaging/carried-plugins.ts source-digest ${folder} ${openclaw} <digest>\` with the digest its runtime reported.`,
@@ -260,11 +268,11 @@ export function recordSourceDigest(
 ): CarriedRecord {
   const recorded = record.plugins[folder];
   if (!recorded) throw new Error(`plugins/${folder} isn't in carried-plugins.json.`);
-  if (!(OPENCLAW_VERSIONS as readonly string[]).includes(openclaw))
-    throw new Error(`OpenClaw ${openclaw} isn't a version the development gateway runs.`);
+  if (!record.openclaw.includes(openclaw))
+    throw new Error(`OpenClaw ${openclaw} isn't a version carried-plugins.json names.`);
   if (!SOURCE_DIGEST.test(digest)) throw new Error(`${digest} isn't a source digest.`);
   const sourceDigests = { ...recorded.sourceDigests, [openclaw]: digest };
-  return { plugins: { ...record.plugins, [folder]: { ...recorded, sourceDigests } } };
+  return { ...record, plugins: { ...record.plugins, [folder]: { ...recorded, sourceDigests } } };
 }
 
 /**
@@ -292,14 +300,24 @@ export function recordPlugin(
       `plugins/${folder} is version ${version}, which isn't newer than the recorded ${recorded.version}. Raise its version.`,
     );
   const next = { version, digest, grants: recorded.grants, sourceDigests: {} };
-  return { plugins: { ...record.plugins, [folder]: next } };
+  return { ...record, plugins: { ...record.plugins, [folder]: next } };
 }
 
 type Packed = { entry: CarriedPlugin; files: Map<string, Buffer>; digest: string; tgz: Buffer };
 
 /** Packs `plugins/<folder>` into a tarball's bytes and its list entry, checking nothing against the record. */
-function packOne(folder: string, pluginsDir: string, license: string, recorded?: Recorded): Packed {
+function packOne(
+  folder: string,
+  pluginsDir: string,
+  license: string,
+  recorded?: Recorded,
+  openclawVersions: readonly string[] = [],
+): Packed {
   const { manifest, pluginId, files } = packageFiles(join(pluginsDir, folder), license);
+  // Only what the gateway loads and runs: npm's package adds the README and the LICENSE, which
+  // OpenClaw doesn't need, so a change to either never makes a new version of the plugin.
+  files.delete("README.md");
+  files.delete("LICENSE");
   const tar = tarOf(files);
   const tgz = gzipSync(tar, { level: 9 });
   const name = manifest.name as string;
@@ -316,10 +334,33 @@ function packOne(folder: string, pluginsDir: string, license: string, recorded?:
     declared: declaredSurface(openclaw),
     grants: recorded?.grants ?? {},
     sourceDigests: Object.fromEntries(
-      OPENCLAW_VERSIONS.map((openclaw) => [openclaw, recorded?.sourceDigests?.[openclaw] ?? ""]),
+      openclawVersions.map((openclaw) => [openclaw, recorded?.sourceDigests?.[openclaw] ?? ""]),
     ),
   };
   return { entry, files, digest: digestOf(tar), tgz };
+}
+
+/**
+ * Raises the patch number of `plugins/<folder>`'s version, in its package.json and in each of its
+ * JavaScript files' `PLUGIN_VERSION = "<old>"`, and returns the new version and its digest.
+ */
+export function bumpPlugin(folder: string, pluginsDir = PLUGINS_DIR, license = LICENSE) {
+  const dir = join(pluginsDir, folder);
+  const path = join(dir, "package.json");
+  const text = readFileSync(path, "utf8");
+  const old = (JSON.parse(text) as { version: string }).version;
+  const parsed = parseVersion(old);
+  if (parsed?.length !== 3) throw new Error(`plugins/${folder}'s version ${old} isn't x.y.z.`);
+  const next = `${parsed[0]}.${parsed[1]}.${parsed[2] + 1}`;
+  writeFileSync(path, text.replace(`"version": "${old}"`, `"version": "${next}"`));
+  const { files } = packageFiles(dir, license);
+  for (const file of files.keys())
+    if (file.endsWith(".js")) {
+      const code = readFileSync(join(dir, file), "utf8");
+      const raised = code.replace(`PLUGIN_VERSION = "${old}"`, `PLUGIN_VERSION = "${next}"`);
+      if (raised !== code) writeFileSync(join(dir, file), raised);
+    }
+  return digestNow(folder, pluginsDir, license);
 }
 
 /** The plugin's current version and digest, for `record`. */
@@ -341,8 +382,9 @@ export function packCarried(
   const packed = Object.keys(record.plugins)
     .sort()
     .map((folder) => {
-      const one = packOne(folder, pluginsDir, license, record.plugins[folder]);
-      requireRecorded(folder, one.entry.version, one.digest, record.plugins[folder]);
+      const recorded = record.plugins[folder];
+      const one = packOne(folder, pluginsDir, license, recorded, record.openclaw);
+      requireRecorded(folder, one.entry.version, one.digest, recorded, record.openclaw);
       return one;
     });
   rmSync(out, { recursive: true, force: true });
@@ -395,6 +437,11 @@ function main(args: string[]): void {
       `${JSON.stringify(recordPlugin(readRecord(), rest[0]!, version, digest), null, 2)}\n`,
     );
     console.log(`Recorded plugins/${rest[0]} ${version} ${digest}`);
+  } else if (command === "bump" && rest.length === 1) {
+    const { version, digest } = bumpPlugin(rest[0]!);
+    const record = recordPlugin(readRecord(), rest[0]!, version, digest);
+    writeFileSync(RECORD, `${JSON.stringify(record, null, 2)}\n`);
+    console.log(`Raised plugins/${rest[0]} to ${version} and recorded it.`);
   } else if (command === "source-digest" && rest.length === 3) {
     const [folder, openclaw, digest] = rest as [string, string, string];
     const record = recordSourceDigest(readRecord(), folder, openclaw, digest);
@@ -402,7 +449,7 @@ function main(args: string[]): void {
     console.log(`Recorded plugins/${folder}'s source digest on OpenClaw ${openclaw}`);
   } else {
     throw new Error(
-      "Usage: carried-plugins.ts pack [out folder] | record <plugin folder name> | source-digest <plugin folder name> <OpenClaw version> <digest>",
+      "Usage: carried-plugins.ts pack [out folder] | record <plugin folder name> | bump <plugin folder name> | source-digest <plugin folder name> <OpenClaw version> <digest>",
     );
   }
 }

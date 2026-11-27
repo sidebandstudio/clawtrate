@@ -15,6 +15,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { createPackage, listPackage } from "@electron/asar";
+import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -22,7 +23,7 @@ import {
   declaredSurface,
   digestNow,
   digestOf,
-  LICENSE,
+  bumpPlugin,
   packagedCarried,
   packCarried,
   PLUGINS_DIR,
@@ -33,7 +34,7 @@ import {
   tarOf,
 } from "../packaging/carried-plugins.ts";
 import { builderConfig } from "../packaging/config.ts";
-import { OPENCLAW_VERSIONS } from "../../../tools/dev-gateway/src/versions.ts";
+import { OPENCLAW_VERSIONS, PINNED_OPENCLAW } from "../../../tools/dev-gateway/src/versions.ts";
 import { integrityOf, readTarball, runNpm } from "../packaging/plugin-npm.ts";
 import {
   CARRIED_BUILD_DIR,
@@ -76,6 +77,29 @@ describe("the plugins the app carries", () => {
     expect(Object.keys(readRecord().plugins)).toEqual(["clawtrate-voice"]);
   });
 
+  it("pack as the release's build packs them, on this checkout", () => {
+    // packaging/build.ts runs exactly this, with the same record and plugins, into
+    // apps/desktop/out/plugins: anything that would stop the build stops this test in `check`.
+    expect(() => packCarried(temp())).not.toThrow();
+  });
+
+  it("keep their committed bytes on every checkout", () => {
+    // No line-ending conversion (.gitattributes), so a Linux, macOS or Windows checkout, with
+    // any core.autocrlf, packs the one recorded digest.
+    const out = temp();
+    const [voice] = packCarried(out).plugins;
+    const packed = [...readTarball(join(out, voice!.file)).keys()]
+      .map((path) => path.slice("package/".length))
+      .filter((path) => path !== "package.json");
+    const sources = packed.map((path) => `plugins/clawtrate-voice/${path}`);
+    const attrs = spawnSync("git", ["check-attr", "eol", "--", ...sources], {
+      cwd: resolve(PLUGINS_DIR, ".."),
+      encoding: "utf8",
+    });
+    expect(attrs.status, attrs.stderr).toBe(0);
+    expect(attrs.stdout.trim().split("\n")).toEqual(sources.map((file) => `${file}: eol: lf`));
+  });
+
   it("are as carried-plugins.json records them in this checkout", () => {
     // A pull request that changes a carried plugin without raising its version fails here.
     const now = digestNow("clawtrate-voice");
@@ -85,6 +109,7 @@ describe("the plugins the app carries", () => {
         now.version,
         now.digest,
         readRecord().plugins["clawtrate-voice"],
+        readRecord().openclaw,
       ),
     ).not.toThrow();
   });
@@ -123,8 +148,6 @@ describe("the plugins the app carries", () => {
       integrity: voice!.integrity,
     });
     expect(report!.files.map((file) => file.path).sort()).toEqual([
-      "LICENSE",
-      "README.md",
       "index.js",
       "openclaw.plugin.json",
       "package.json",
@@ -136,9 +159,10 @@ describe("the plugins the app carries", () => {
     const out = temp();
     const [voice] = packCarried(out).plugins;
     const files = readTarball(join(out, voice!.file));
-    for (const path of ["index.js", "openclaw.plugin.json", "voice.md", "README.md"])
+    expect(files.has("package/README.md")).toBe(false);
+    expect(files.has("package/LICENSE")).toBe(false);
+    for (const path of ["index.js", "openclaw.plugin.json", "voice.md"])
       expect(files.get(`package/${path}`)).toEqual(readFileSync(join(VOICE, path)));
-    expect(files.get("package/LICENSE")).toEqual(readFileSync(LICENSE));
     const pkg = JSON.parse(files.get("package/package.json")!.toString("utf8")) as Record<
       string,
       unknown
@@ -176,8 +200,14 @@ describe("the plugins the app carries", () => {
   });
 
   it("carries a source digest for each OpenClaw version the development gateway runs", () => {
+    // Versions the development gateway runs, the pin among them; a version added to versions.ts
+    // later gets no install until its digest is recorded (the engine's step 0), and fails nothing.
+    expect(
+      readRecord().openclaw.every((v) => (OPENCLAW_VERSIONS as readonly string[]).includes(v)),
+    ).toBe(true);
+    expect(readRecord().openclaw).toContain(PINNED_OPENCLAW);
     const [voice] = packCarried(temp()).plugins;
-    expect(Object.keys(voice!.sourceDigests)).toEqual([...OPENCLAW_VERSIONS]);
+    expect(Object.keys(voice!.sourceDigests)).toEqual(readRecord().openclaw);
     for (const digest of Object.values(voice!.sourceDigests))
       expect(digest).toMatch(/^[0-9a-f]{64}$/);
   });
@@ -209,9 +239,47 @@ describe("a carried plugin's version", () => {
     const out = temp();
     writeFileSync(join(out, "kept"), "");
     expect(() => packCarried(out, { pluginsDir: plugins })).toThrow(
-      `plugins/clawtrate-voice changed since its version ${VOICE_VERSION} was recorded, but its version is still ${VOICE_VERSION}. Raise its version, then run \`node apps/desktop/packaging/carried-plugins.ts record clawtrate-voice\`.`,
+      `plugins/clawtrate-voice changed since its version ${VOICE_VERSION} was recorded, but its version is still ${VOICE_VERSION}. Run \`node apps/desktop/packaging/carried-plugins.ts bump clawtrate-voice\`.`,
     );
     expect(readdirSync(out)).toEqual(["kept"]);
+    // The same for a record whose digest was changed by hand.
+    const recorded = readRecord().plugins["clawtrate-voice"]!;
+    const record = {
+      ...readRecord(),
+      plugins: { "clawtrate-voice": { ...recorded, digest: "sha256-other" } },
+    };
+    expect(() => packCarried(out, { record })).toThrow(
+      `plugins/clawtrate-voice changed since its version ${VOICE_VERSION} was recorded`,
+    );
+    expect(readdirSync(out)).toEqual(["kept"]);
+  });
+
+  it("doesn't change for its README or the repository's LICENSE, which aren't packed", () => {
+    const plugins = pluginsCopy();
+    writeFileSync(join(plugins, "clawtrate-voice/README.md"), "Another README.\n");
+    const license = join(temp(), "LICENSE");
+    writeFileSync(license, "Another licence.\n");
+    expect(() => packCarried(temp(), { pluginsDir: plugins, license })).not.toThrow();
+  });
+
+  it("is raised and recorded in one command", () => {
+    const plugins = pluginsCopy();
+    writeFileSync(join(plugins, "clawtrate-voice/voice.md"), "Another guide.\n");
+    const raised = bumpPlugin("clawtrate-voice", plugins);
+    const [a, b, c] = VOICE_VERSION.split(".").map(Number);
+    const next = `${a}.${b}.${c! + 1}`;
+    expect(raised.version).toBe(next);
+    expect(readFileSync(join(plugins, "clawtrate-voice/index.js"), "utf8")).toContain(
+      `PLUGIN_VERSION = "${next}"`,
+    );
+    expect(
+      (
+        JSON.parse(readFileSync(join(plugins, "clawtrate-voice/package.json"), "utf8")) as {
+          version: string;
+        }
+      ).version,
+    ).toBe(next);
+    expect(raised).toEqual(digestNow("clawtrate-voice", plugins));
   });
 
   it("must be recorded when it is raised", () => {
@@ -247,6 +315,7 @@ describe("a carried plugin's version", () => {
     const grants = { hooks: { allowConversationAccess: true } };
     const sourceDigests = { "2026.10.6": "b".repeat(64) };
     const record = {
+      openclaw: ["2026.10.6"],
       plugins: {
         "clawtrate-voice": { version: "0.2.0", digest: "sha256-a", grants, sourceDigests },
       },
@@ -278,7 +347,10 @@ describe("a source digest", () => {
     const recorded = readRecord().plugins["clawtrate-voice"]!;
     for (const openclaw of OPENCLAW_VERSIONS) {
       const { [openclaw]: _left, ...rest } = recorded.sourceDigests;
-      const record = { plugins: { "clawtrate-voice": { ...recorded, sourceDigests: rest } } };
+      const record = {
+        ...readRecord(),
+        plugins: { "clawtrate-voice": { ...recorded, sourceDigests: rest } },
+      };
       expect(() => packCarried(temp(), { record })).toThrow(
         `plugins/clawtrate-voice ${VOICE_VERSION} has no source digest for OpenClaw ${openclaw}. Install it on a development gateway of that version and run \`node apps/desktop/packaging/carried-plugins.ts source-digest clawtrate-voice ${openclaw} <digest>\` with the digest its runtime reported.`,
       );
@@ -288,7 +360,7 @@ describe("a source digest", () => {
   it("is recorded only for a version the development gateway runs, in OpenClaw's form", () => {
     const record = readRecord();
     expect(() => recordSourceDigest(record, "clawtrate-voice", "2026.9.1", "a".repeat(64))).toThrow(
-      "OpenClaw 2026.9.1 isn't a version the development gateway runs.",
+      "OpenClaw 2026.9.1 isn't a version carried-plugins.json names.",
     );
     expect(() =>
       recordSourceDigest(record, "clawtrate-voice", "2026.10.6", "A".repeat(64)),
@@ -296,7 +368,7 @@ describe("a source digest", () => {
   });
 
   it("is checked for a plugin the record doesn't name", () => {
-    expect(() => requireRecorded("clawtrate-other", "0.1.0", "sha256-a", undefined)).toThrow(
+    expect(() => requireRecorded("clawtrate-other", "0.1.0", "sha256-a", undefined, [])).toThrow(
       "plugins/clawtrate-other isn't in carried-plugins.json.",
     );
   });
