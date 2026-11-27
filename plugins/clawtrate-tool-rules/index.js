@@ -31,7 +31,6 @@
 
 import { createHash, randomBytes } from "node:crypto";
 import { readdirSync, readFileSync, realpathSync } from "node:fs";
-import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 import { evaluate } from "./lib/evaluate.js";
 import { configuredAgents, explicitlyDenied, exposureWarnings } from "./lib/exposure.js";
@@ -445,15 +444,18 @@ export function codexInFolder(folder) {
 
 /**
  * The global plugin folders an untracked plugin loads from: the state folder's
- * `extensions`, and the config folder's, as both versions resolve it
- * (`resolvePluginInstallRoots`: OPENCLAW_STATE_DIR, else beside
- * OPENCLAW_CONFIG_PATH, else ~/.openclaw).
+ * `extensions`, and the config folder's where the environment moves it, as
+ * both versions resolve it (`resolvePluginInstallRoots`: OPENCLAW_STATE_DIR,
+ * else beside OPENCLAW_CONFIG_PATH; with neither, the default the state folder
+ * already is).
  */
 export function globalPluginFolders(stateDir, env = process.env) {
   const override = text(env.OPENCLAW_STATE_DIR?.trim());
   const configPath = text(env.OPENCLAW_CONFIG_PATH?.trim());
-  const configDir = override ?? (configPath ? dirname(configPath) : join(homedir(), ".openclaw"));
-  return [...new Set([join(stateDir, "extensions"), join(configDir, "extensions")])];
+  const configDir = override ?? (configPath ? dirname(configPath) : null);
+  return [
+    ...new Set([stateDir, ...(configDir ? [configDir] : [])].map((dir) => join(dir, "extensions"))),
+  ];
 }
 
 /** A key-order-free text of a call's arguments, or null where it has none. */
