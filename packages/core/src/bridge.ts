@@ -156,6 +156,11 @@ export type BridgeCommand =
   | { type: "setBotVoice"; on: boolean; stamp: GatewayStamp }
   /** Clawtrate's guides in the bots' `AGENTS.md`, read now (guides.ts). */
   | { type: "readBotGuides" }
+  /**
+   * Undo a background skill review's change, the gateway's own way, on the gateway `stamp` names
+   * (OpenClaw 2026.11.10, admin): the bot and the review a skill note's mark names.
+   */
+  | { type: "undoSkillChange"; agentId: string; reviewId: string; stamp: GatewayStamp }
   /** "Show external channel chats": list chats from Discord, Telegram and other channels, or not. */
   | { type: "setShowChannelChats"; on: boolean }
   /** "Show sessions from other tools": list sessions an API client, a routine or a plugin opened, or not. */
@@ -596,7 +601,9 @@ type BridgeResultStart<C extends BridgeCommand> = C extends { type: "readBotDele
     ? BotDeleteOutcome
     : C extends { type: "declineBotName" }
       ? { declined: boolean }
-      : BridgeResultRest<C>;
+      : C extends { type: "undoSkillChange" }
+        ? { undone: boolean }
+        : BridgeResultRest<C>;
 
 type BridgeResultRest<C extends BridgeCommand> = C extends { type: "sendMessage" }
   ? { messageId: string }
@@ -879,6 +886,8 @@ export const MAX_VIEWER_OPEN_TASKS = 4;
 /** Commands one viewer may have in flight at once. */
 export const MAX_VIEWER_PENDING_COMMANDS = 16;
 const BOT_ID_PATTERN = /^[\w.-]{1,128}$/;
+/** A skill review's id, as the gateway makes one (`SkillNote.reviewId`). */
+const SKILL_REVIEW_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const QUESTION_ID_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
 const MAX_LABEL_CHARS = 512;
 /** Why a held or queued message cannot be taken back to edit: its files would not fit. */
@@ -1567,6 +1576,15 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       return { type: "readBotVoice" };
     case "readBotGuides":
       return { type: "readBotGuides" };
+    case "undoSkillChange":
+      if (typeof command.reviewId !== "string" || !SKILL_REVIEW_ID.test(command.reviewId))
+        throw new Error("invalid skill review");
+      return {
+        type: "undoSkillChange",
+        agentId: botId(command.agentId),
+        reviewId: command.reviewId,
+        stamp: gatewayStampOf(command.stamp),
+      };
     case "setBotVoice":
       if (typeof command.on !== "boolean") throw new Error("invalid voice setting");
       return {
@@ -2373,6 +2391,8 @@ class ViewerSession implements BridgeSession {
         return client.releaseOpenClawUpdateHold();
       case "setBotPicture":
         return client.setBotPicture(command.botId, command.avatar, command.stamp);
+      case "undoSkillChange":
+        return client.undoSkillChange(command.agentId, command.reviewId, command.stamp, owner);
       case "refreshCheckIns":
         return client.refreshCheckIns(command.botId);
       case "saveCheckIn":

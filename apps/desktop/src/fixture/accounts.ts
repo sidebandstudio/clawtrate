@@ -16,6 +16,7 @@
 //                             several (two new accounts appeared while it ran)
 //   keyread=fail              a key saved directly whose read afterwards fails
 //   keyfails=1                xAI's key goes through a sign-in that refuses it
+//   plugin=1                  a plugin's provider the app has no name or logo for, with two sign-ins
 //   saved=1                   a sign-in that ended uncleanly left an account behind
 //   kept=1                    the gateway has no main bot with a shared store
 //   create=failed|slow|checking|partial   how New bot's Create goes
@@ -88,6 +89,8 @@ export type AccountParams = {
   labels: "none" | "same" | null;
   /** xAI's key goes through a sign-in on the gateway, which refuses it. */
   keyfails: boolean;
+  /** A plugin adds a provider Clawtrate has no name or logo for. */
+  plugin: boolean;
   /** A key saved directly whose read afterwards fails; Check again reads it. */
   keyread: boolean;
   /**
@@ -138,6 +141,7 @@ export function accountParams(params: URLSearchParams): AccountParams {
     bot: params.get("bot"),
     defacct: params.get("defacct") === "1",
     keyfails: params.get("keyfails") === "1",
+    plugin: params.get("plugin") === "1",
     keyread: params.get("keyread") === "fail",
     picturesave:
       params.get("picturesave") === "hold" ||
@@ -190,6 +194,7 @@ export const NO_ACCOUNT_PARAMS: AccountParams = {
   defacct: false,
   labels: null,
   keyfails: false,
+  plugin: false,
   keyread: false,
   picturesave: null,
   finish: null,
@@ -360,6 +365,7 @@ export function fixtureAccounts(now: number, params: AccountParams): AccountsSta
       {
         id: "xai/xai-oauth",
         provider: "xai",
+        providerLabel: "xAI (Grok)",
         label: "xAI",
         hint: "SuperGrok or X Premium",
         kind: "device-code",
@@ -369,6 +375,7 @@ export function fixtureAccounts(now: number, params: AccountParams): AccountsSta
       {
         id: "openai/openai-device-code",
         provider: "openai",
+        providerLabel: "OpenAI",
         label: "ChatGPT",
         hint: "Plus, Pro or Business",
         kind: "device-code",
@@ -378,6 +385,7 @@ export function fixtureAccounts(now: number, params: AccountParams): AccountsSta
       {
         id: "openai/openai",
         provider: "openai",
+        providerLabel: "OpenAI",
         label: "ChatGPT in the browser",
         hint: "Plus, Pro or Business",
         kind: "oauth",
@@ -387,6 +395,7 @@ export function fixtureAccounts(now: number, params: AccountParams): AccountsSta
       {
         id: "openai/openai-token-sharing",
         provider: "openai",
+        providerLabel: "OpenAI",
         label: "Sign in with ChatGPT",
         hint: "on the gateway's machine",
         kind: "oauth",
@@ -396,6 +405,7 @@ export function fixtureAccounts(now: number, params: AccountParams): AccountsSta
       {
         id: "github-copilot/github-copilot",
         provider: "github-copilot",
+        providerLabel: "Copilot",
         label: "GitHub Copilot",
         hint: "Copilot subscription",
         kind: "device-code",
@@ -405,6 +415,7 @@ export function fixtureAccounts(now: number, params: AccountParams): AccountsSta
       {
         id: "github-copilot/github-copilot-enterprise",
         provider: "github-copilot",
+        providerLabel: "Copilot",
         label: "GitHub Copilot Enterprise",
         hint: "Your company's GitHub",
         kind: "device-code",
@@ -414,6 +425,7 @@ export function fixtureAccounts(now: number, params: AccountParams): AccountsSta
       {
         id: "minimax/minimax-global-oauth",
         provider: "minimax-portal",
+        providerLabel: "MiniMax",
         label: "MiniMax",
         hint: "Coding plan",
         kind: "device-code",
@@ -421,19 +433,66 @@ export function fixtureAccounts(now: number, params: AccountParams): AccountsSta
         group: "subscription",
       },
       {
+        id: "minimax/minimax-cn-oauth",
+        provider: "minimax-portal",
+        providerLabel: "MiniMax",
+        label: "MiniMax China",
+        hint: "Coding plan",
+        kind: "device-code",
+        flow: "code",
+        group: "subscription",
+      },
+      {
+        id: "opencode-go/opencode-go-console",
+        provider: "opencode-go",
+        providerLabel: "OpenCode Go",
+        label: "OpenCode Go",
+        hint: "Go plan",
+        kind: "oauth",
+        flow: "paste",
+        group: "subscription",
+      },
+      {
         id: "openrouter/openrouter-oauth",
         provider: "openrouter",
+        providerLabel: "OpenRouter",
         label: "OpenRouter",
         hint: "Credits",
         kind: "oauth",
         flow: "paste",
         group: "token",
       },
+      // A plugin's provider Clawtrate has no name or logo for: shown under the gateway's name.
+      ...(params.plugin
+        ? [
+            {
+              id: "nimbus/nimbus-device",
+              provider: "nimbus",
+              providerLabel: "Nimbus Cloud",
+              label: "Nimbus device login",
+              hint: null,
+              kind: "device-code",
+              flow: "code" as const,
+              group: "subscription" as const,
+            },
+            {
+              id: "nimbus/nimbus-browser",
+              provider: "nimbus",
+              providerLabel: "Nimbus Cloud",
+              label: "Nimbus in the browser",
+              hint: null,
+              kind: "oauth",
+              flow: "paste" as const,
+              group: "subscription" as const,
+            },
+          ]
+        : []),
       ...(params.keyfails
         ? [
             {
               id: "xai/xai-api-key",
               provider: "xai",
+              providerLabel: "xAI (Grok)",
               label: "xAI API key",
               hint: null,
               kind: "api-key",

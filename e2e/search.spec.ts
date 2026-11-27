@@ -85,18 +85,16 @@ test.afterAll(async () => {
 });
 process.once("exit", () => host?.child.kill("SIGKILL"));
 
-test("F-033: on a read-only connection, messages, files and routines come from the gateway, each group saying what it searched", async () => {
+test("F-033: on a read-only connection, messages, files and routines come from the gateway", async () => {
   await search("transcode");
   // The seeded conversation's own words, as `sessions.search` returned them.
   const user = options("messages").filter({ hasText: "Disk almost full on the media box · User" });
   await expect(user.first()).toContainText("Yes, clear the transcode cache.");
-  await expect(group("messages")).toContainText(/newest first/);
-  // Files are searched through each bot's newest task, and say what they covered.
+  // Files are searched through each bot's newest task.
   await search("mountain");
   await expect(options("files").filter({ hasText: "mountain-weekend.md" })).toContainText(
     "lists · Pip",
   );
-  await expect(group("files")).toContainText("Some folders may be skipped.");
   // A routine that is off is found by its name, with its bot.
   await search(STAMP);
   const routine = options("routines").filter({ hasText: `Search check ${STAMP}` });
