@@ -22,6 +22,14 @@ import {
 } from "./device-approval.ts";
 import { MAX_UPDATED_RUNS, type UpdatedRun } from "./update-notice.ts";
 import {
+  MAX_SKILL_NAME_CHARS,
+  MAX_SKILL_NOTE_AGENT_CHARS,
+  MAX_SKILL_NOTE_SKILLS,
+  SKILL_REVIEW_ID_CHARS,
+  type SkillNote,
+  type SkillNoteSkill,
+} from "./skill-notes.ts";
+import {
   MAX_ACCOUNTS,
   MAX_CATALOG_MODELS,
   MAX_EFFORT_LEVELS,
@@ -662,6 +670,17 @@ const sentAttachment = object<SentAttachment>()({
   mimeType: NAME,
   sizeBytes: NUMBER,
 });
+// Each id with its two quotes, as bounds count JSON characters.
+const skillNoteSkill = object<SkillNoteSkill>()({
+  name: id(MAX_SKILL_NAME_CHARS + 2),
+  action: ENUM,
+});
+const skillNote = object<SkillNote>()({
+  reviewId: id(SKILL_REVIEW_ID_CHARS + 2),
+  skills: list(MAX_SKILL_NOTE_SKILLS, skillNoteSkill),
+  agentId: id(MAX_SKILL_NOTE_AGENT_CHARS + 2),
+  after: NUMBER,
+});
 const item = flagged<TranscriptItem>()({
   id: ID,
   role: ENUM,
@@ -681,6 +700,7 @@ const item = flagged<TranscriptItem>()({
   }),
   idempotencyKey: ID,
   runless: FLAG,
+  skillNote,
   brief: FLAG,
   reportRunId: ID,
   updateRunId: ID,
