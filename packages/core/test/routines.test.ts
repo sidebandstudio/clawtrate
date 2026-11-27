@@ -1325,6 +1325,49 @@ describe("F-355: a routine's runs", () => {
       { status: "ok", completion: "succeeded", totalTokens: 600, durationMs: 1815, manual: true },
     ]);
   });
+
+  it("F-024: a run started by hand is told by the id each OpenClaw gives it, and no other run is", async () => {
+    // As each version's `cron.runs` answered for a forced run, and the forms its source gives the others.
+    const uuid = "0b5d8f3e-6a41-4c2e-9f7d-2e8c1a9b4d60";
+    const ids: Array<[string | undefined, boolean]> = [
+      // 2026.10.6: `cron.run` (enqueueRun) gives `manual:<job>:<ms>:<n>`.
+      [`manual:${JOB}:1795709755320:1`, true],
+      // 2026.11.10: `cron.run` gives `cron-request.<uuid>`, which cron.runs returns as is.
+      [`cron-request.${uuid}`, true],
+      // A scheduled run on 2026.11.10: `cron:<job>:<ms>:<slot receipt>`; on 2026.10.6 it has none.
+      [`cron:${JOB}:1795709755320:cron-slot-v1.WyJzdG9yZSIsImpvYiIsMV0`, false],
+      [`cron:${JOB}:1795709755320:${uuid}`, false],
+      // 2026.11.10's run when a watched process exits: its receipt is a request, its run is not.
+      [`cron:${JOB}:1795709755320:cron-request.${uuid}`, false],
+      // 2026.11.10's run for an automation event.
+      ["event:9f2c4b7a1e0d", false],
+      // Not the gateway's form: a prefix alone, a different case, or nothing.
+      ["cron-request.", false],
+      ["cron-request.not-a-uuid", false],
+      [`cron-request.${uuid.toUpperCase()}`, false],
+      [`Cron-Request.${uuid}`, false],
+      ["", false],
+      // A scheduled run on 2026.10.6.
+      [undefined, false],
+    ];
+    const { routines } = engine({
+      "cron.runs": () => ({
+        entries: ids.map(([runId], index) => runEntry(index + 1, { runId })),
+      }),
+    });
+    expect((await routines.runs(JOB)).map((run) => [run.runId ?? undefined, run.manual])).toEqual(
+      ids.map(([runId, manual]) => [runId || undefined, manual]),
+    );
+  });
+
+  it("F-024: a run's id that isn't text is not started by hand", async () => {
+    const { routines } = engine({
+      "cron.runs": () => ({
+        entries: [runEntry(1, { runId: 7 }), runEntry(2, { runId: { manual: true } })],
+      }),
+    });
+    expect((await routines.runs(JOB)).map((run) => run.manual)).toEqual([false, false]);
+  });
 });
 
 describe("F-197: the calendar's recorded runs", () => {

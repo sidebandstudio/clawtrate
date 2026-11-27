@@ -1,27 +1,32 @@
 // Reads OpenClaw's settings file for the host (docs/design/setup-effortless.md
-// §3, "The settings reader"), and proves who holds the far end of one of the
-// host's loopback sockets (§3, "The send gate", checks (e) and (f)). It walks
+// §3, "The settings reader"), and reports who holds the far end of one of the
+// host's loopback sockets and whether it matches this account's OpenClaw
+// profile (§3, "The send gate", checks (e) and (f)). It walks
 // from the home folder the host opened, checked and passed as descriptor 3,
 // by held descriptors, follows no link and checks what it opened. It never
 // writes, repairs or runs anything.
 //
 //   ClawtrateLocalGateway read <profile folder> <file>          (fd 3: the home folder)
 //   ClawtrateLocalGateway read-private <profile folder> <file>  (a sandboxed run's home)
-//   ClawtrateLocalGateway prove <profile folder> <port> <local port>
-//   ClawtrateLocalGateway prove-private <profile folder> <port> <local port>
+//   ClawtrateLocalGateway prove <profile folder> <port> <local port> <device> <inode>
+//   ClawtrateLocalGateway prove-private <profile folder> <port> <local port> <device> <inode>
 //
-// `read` writes "ok\n" followed by the file's bytes. `prove` writes
+// `read` writes "ok <device> <inode>\n", the profile folder's identity as it
+// was opened, followed by the file's bytes. `prove` refuses ("replaced") a
+// profile folder whose device and inode aren't the ones it is given, the
+// identity the read reported, before it looks at any process; otherwise it writes
 // "proved <pid> <start> <arch> <sha256> <lock bytes> <package bytes>\n", then
 // the profile's gateway lock and the module's package.json, for the host to
-// check. Either may instead write one line "refused <why>\n".
+// check. When the holder maps no OpenClaw native module, <arch> is "none", the
+// hash "-" and the package empty; when it maps one whose file can't be matched
+// to the mapping or hashed, the hash is "-". Either command may instead write
+// one line "refused <why>\n".
 #define __STDC_WANT_LIB_EXT1__ 1
 #include <CommonCrypto/CommonDigest.h>
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <libproc.h>
-#include <mach-o/fat.h>
-#include <mach-o/loader.h>
 #include <membership.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -185,14 +190,19 @@ static int openFile(int folder, const char *name, off_t limit, const char **why)
     return *why ? -1 : file;
 }
 
-/** The file's bytes, or why not; on success the caller owns and wipes the buffer. */
+/**
+ * The file's bytes, and the identity of the profile folder it was read from,
+ * or why not; on success the caller owns and wipes the buffer.
+ */
 static const char *readSettings(int home, int privateHome, const char *folderName,
-                                const char *fileName, char **buffer, size_t *length) {
+                                const char *fileName, struct stat *identity, char **buffer,
+                                size_t *length) {
     *buffer = NULL;
     *length = 0;
     const char *why = checkHome(home, privateHome);
     if (why) return why;
     int folder = openFolder(home, folderName, &why);
+    if (!why && fstat(folder, identity) != 0) why = "failed";
     int file = why ? -1 : openFile(folder, fileName, SETTINGS_LIMIT, &why);
     if (folder >= 0) close(folder);
     if (!why) *buffer = malloc(SETTINGS_LIMIT + 1);
@@ -204,6 +214,17 @@ static const char *readSettings(int home, int privateHome, const char *folderNam
         *buffer = NULL;
     }
     return why;
+}
+
+/** A device or inode number as the host writes it: plain decimal, no leading zero. */
+static int numberArg(const char *text, unsigned long long *value) {
+    size_t length = strlen(text);
+    if (length == 0 || length > 20 || (text[0] == '0' && length > 1)) return 0;
+    for (const char *c = text; *c; ++c)
+        if (*c < '0' || *c > '9') return 0;
+    errno = 0;
+    *value = strtoull(text, NULL, 10);
+    return errno == 0;
 }
 
 /** A port as the host writes it: 1 to 65535 in plain decimal. */
@@ -334,22 +355,6 @@ static int holdsFile(pid_t pid, const struct stat *file) {
     return holds;
 }
 
-/** The program the kernel says the process runs is a Mach-O file named `node`. */
-static int runsNode(pid_t pid) {
-    char path[PROC_PIDPATHINFO_MAXSIZE];
-    if (proc_pidpath(pid, path, sizeof path) <= 0) return 0;
-    const char *name = strrchr(path, '/');
-    if (!name || strcmp(name, "/node") != 0) return 0;
-    int fd = open(path, O_RDONLY | O_NOFOLLOW | O_NONBLOCK | O_NOCTTY | O_CLOEXEC);
-    struct stat st;
-    uint32_t magic = 0;
-    int node = fd >= 0 && fstat(fd, &st) == 0 && S_ISREG(st.st_mode) &&
-               read(fd, &magic, sizeof magic) == sizeof magic &&
-               (magic == MH_MAGIC_64 || magic == FAT_CIGAM || magic == FAT_CIGAM_64);
-    if (fd >= 0) close(fd);
-    return node;
-}
-
 /** The SHA-256 of the open file, as lowercase hex. */
 static const char *hashFile(int fd, char hex[65]) {
     CC_SHA256_CTX context;
@@ -375,9 +380,11 @@ static const char *hashFile(int fd, char hex[65]) {
  * OpenClaw's native module, as the process maps it: a region backed by
  * `<root>/node_modules/@openclaw/fs-safe-darwin-<arch>/fs-safe-native.node`,
  * opened here without following a link and matched to that region by device
- * and inode, then hashed. `root` is the package that depends on it.
+ * and inode, then hashed. `root` is the package that depends on it. Whether
+ * such a region was found; its hash is "-" when its file isn't the mapped one
+ * or couldn't be read.
  */
-static const char *mappedModule(pid_t pid, char root[PATH_MAX], const char **arch, char hex[65]) {
+static int mappedModule(pid_t pid, char root[PATH_MAX], const char **arch, char hex[65]) {
     static const char marker[] = "/node_modules/@openclaw/fs-safe-darwin-";
     struct proc_regionwithpathinfo region;
     uint64_t address = 0;
@@ -402,15 +409,16 @@ static const char *mappedModule(pid_t pid, char root[PATH_MAX], const char **arc
                     ? "module"
                     : hashFile(fd, hex);
             if (fd >= 0) close(fd);
+            if (why) strcpy(hex, "-");
             memcpy(root, path, (size_t)(at - path));
             root[at - path] = '\0';
-            return why;
+            return 1;
         }
         uint64_t next = region.prp_prinfo.pri_address + region.prp_prinfo.pri_size;
         if (next <= address) break;
         address = next;
     }
-    return "module";
+    return 0;
 }
 
 /** A small file's bytes, read without following its last link; the caller frees them. */
@@ -429,18 +437,30 @@ static const char *missing(const char *why, const char *as) {
     return why && strcmp(why, "absent") == 0 ? as : why;
 }
 
+/** The folder identity the host was given: the one its read of the settings reported. */
+typedef struct {
+    unsigned long long dev, ino;
+} FolderIdentity;
+
 /**
  * The profile's gateway lock, read and identified, and the state database,
- * identified. A profile whose gateway isn't running has no lock, and may have
- * no database yet.
+ * identified, in the profile folder the read reported: a folder at that path
+ * with another device or inode is "replaced". A profile whose gateway isn't
+ * running has no lock, and may have no database yet.
  */
-static const char *profileFiles(int home, const char *folderName, struct stat *lock,
-                                struct stat *database, char *lockBytes, size_t *lockLength) {
+static const char *profileFiles(int home, const char *folderName, const FolderIdentity *expected,
+                                struct stat *lock, struct stat *database, char *lockBytes,
+                                size_t *lockLength) {
     char ownLock[32];
     snprintf(ownLock, sizeof ownLock, "openclaw-%u", (unsigned)geteuid());
     const char *names[] = {"tmp", ownLock};
     const char *why = NULL;
     int folder = openFolder(home, folderName, &why);
+    struct stat opened;
+    if (!why && fstat(folder, &opened) != 0) why = "failed";
+    if (!why && ((unsigned long long)opened.st_dev != expected->dev ||
+                 (unsigned long long)opened.st_ino != expected->ino))
+        why = "replaced";
     int state = why ? -1 : openFolder(folder, "state", &why);
     if (folder >= 0) why = missing(why, "state");
     int base = folder, lockFile = -1, file = -1;
@@ -473,19 +493,22 @@ static const char *profileFiles(int home, const char *folderName, struct stat *l
  * Checks (e) and (f) for the connection the host opened from <local port> to
  * <port>. Of the connection's holders, all this account's, the first that
  * passes (f) is written out with the facts the host checks: its start time,
- * the module's architecture and hash, the lock and the package.json. (f) runs
- * in this order: the same process the scan saw, then the profile's gateway
- * lock and state database held open, which opens nothing; only then the
- * program it runs and its mapped module, which are opened and read; last,
- * the same process again. So a process that isn't this profile's gateway has
- * nothing of its opened here, and a PID taken over midway is refused.
+ * the lock, and OpenClaw's native module with its package.json when it maps
+ * one (evidence the host holds to its pins). (f) runs in this order: the same
+ * process the scan saw, then the profile's gateway lock and state database
+ * held open, which opens nothing; only then its mapped module, which is opened
+ * and read; last, the same process again. So a process that isn't this
+ * profile's gateway has nothing of its opened here, and a PID taken over
+ * midway is refused.
  */
-static int prove(int home, int privateHome, const char *folderName, int port, int localPort) {
+static int prove(int home, int privateHome, const char *folderName, const FolderIdentity *expected,
+                 int port, int localPort) {
     static char lockBytes[LOCK_LIMIT + 1];
     size_t lockLength = 0;
     struct stat lock, database;
     const char *why = checkHome(home, privateHome);
-    if (!why) why = profileFiles(home, folderName, &lock, &database, lockBytes, &lockLength);
+    if (!why)
+        why = profileFiles(home, folderName, expected, &lock, &database, lockBytes, &lockLength);
     pid_t found[MAX_HOLDERS];
     uint64_t starts[MAX_HOLDERS];
     int count = why ? 0 : holders(port, localPort, found, starts, &why);
@@ -496,21 +519,29 @@ static int prove(int home, int privateHome, const char *folderName, int port, in
         const char *arch = NULL, *because = sameProcess(found[i], starts[i], &info);
         if (!because) because = holdsFile(found[i], &lock) ? NULL : "lock";
         if (!because) because = holdsFile(found[i], &database) ? NULL : "state";
-        if (!because) because = runsNode(found[i]) ? NULL : "node";
-        if (!because) because = mappedModule(found[i], root, &arch, hex);
+        // The module, when the holder maps one, and the package that depends on it.
+        int module = !because && mappedModule(found[i], root, &arch, hex);
         char *package = NULL;
         size_t packageLength = 0;
-        snprintf(packagePath, sizeof packagePath, "%s/package.json", because ? "" : root);
-        if (!because) because = readSmall(packagePath, PACKAGE_LIMIT, &package, &packageLength);
+        if (module) {
+            snprintf(packagePath, sizeof packagePath, "%s/package.json", root);
+            if (readSmall(packagePath, PACKAGE_LIMIT, &package, &packageLength)) {
+                free(package);
+                package = NULL;
+                packageLength = 0;
+            }
+        }
         // And still that process, so every fact above is about the one the scan saw.
         if (!because) because = sameProcess(found[i], starts[i] + PROVE_LATE_SKEW, &info);
         if (!because) {
             int written =
                 printf("proved %d %llu %s %s %zu %zu\n", found[i],
-                       (unsigned long long)info.pbi_start_tvsec, arch, hex, lockLength,
-                       packageLength) > 0 &&
+                       (unsigned long long)info.pbi_start_tvsec, module ? arch : "none",
+                       module ? hex : "-", lockLength, packageLength) > 0 &&
                 fwrite(lockBytes, 1, lockLength, stdout) == lockLength &&
-                fwrite(package, 1, packageLength, stdout) == packageLength && fflush(stdout) == 0;
+                (packageLength == 0 ||
+                 fwrite(package, 1, packageLength, stdout) == packageLength) &&
+                fflush(stdout) == 0;
             free(package);
             return written ? 0 : 1;
         }
@@ -523,10 +554,13 @@ static int prove(int home, int privateHome, const char *folderName, int port, in
 int main(int argc, char **argv) {
     const char *command = argc > 1 ? argv[1] : "";
     int privateHome = strcmp(command, "read-private") == 0 || strcmp(command, "prove-private") == 0;
-    if ((strcmp(command, "prove") == 0 || strcmp(command, "prove-private") == 0) && argc == 5) {
+    if ((strcmp(command, "prove") == 0 || strcmp(command, "prove-private") == 0) && argc == 7) {
         int port = portArg(argv[3]), localPort = portArg(argv[4]);
-        if (!component(argv[2]) || !port || !localPort || port == localPort) return 2;
-        int status = prove(3, privateHome, argv[2], port, localPort);
+        FolderIdentity expected;
+        if (!component(argv[2]) || !port || !localPort || port == localPort ||
+            !numberArg(argv[5], &expected.dev) || !numberArg(argv[6], &expected.ino))
+            return 2;
+        int status = prove(3, privateHome, argv[2], &expected, port, localPort);
         close(3);
         return status;
     }
@@ -535,11 +569,13 @@ int main(int argc, char **argv) {
         return 2;
     char *buffer;
     size_t length;
-    const char *why = readSettings(3, privateHome, argv[2], argv[3], &buffer, &length);
+    struct stat identity;
+    const char *why = readSettings(3, privateHome, argv[2], argv[3], &identity, &buffer, &length);
     close(3);
     if (why) return refuse(why);
-    int written = fputs("ok\n", stdout) >= 0 && fwrite(buffer, 1, length, stdout) == length &&
-                  fflush(stdout) == 0;
+    int written = printf("ok %llu %llu\n", (unsigned long long)identity.st_dev,
+                         (unsigned long long)identity.st_ino) > 0 &&
+                  fwrite(buffer, 1, length, stdout) == length && fflush(stdout) == 0;
     memset_s(buffer, SETTINGS_LIMIT + 1, 0, SETTINGS_LIMIT + 1);
     free(buffer);
     return written ? 0 : 1;

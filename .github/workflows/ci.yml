@@ -91,6 +91,7 @@ jobs:
             apps/desktop/test/local-prove.test.ts
             apps/desktop/test/local-connect.test.ts
             apps/desktop/test/setup-connect-boundaries.test.ts
+            apps/desktop/test/local-setup.test.ts
             tools/dev-gateway/src/instance.ts
             tools/dev-gateway/src/state-guard.ts
             tools/dev-gateway/src/endpoint.ts
@@ -314,7 +315,7 @@ jobs:
           for attempt in $(seq 1 50); do grep -q ready "$fixture/log" && break; sleep 0.2; done
           grep -q ready "$fixture/log"
           echo "CLAWTRATE_OTHER_ACCOUNT_LISTENER=19417:$fixture/log" >> "$GITHUB_ENV"
-      - run: OPENCLAW_BIN="$(npm prefix --global)/bin/openclaw" CLAWTRATE_LOCAL_GATEWAY=1 pnpm exec vitest run apps/desktop/test/local-prove.test.ts apps/desktop/test/local-connect.test.ts apps/desktop/test/setup-connect-boundaries.test.ts
+      - run: OPENCLAW_BIN="$(npm prefix --global)/bin/openclaw" CLAWTRATE_LOCAL_GATEWAY=1 pnpm exec vitest run apps/desktop/test/local-prove.test.ts apps/desktop/test/local-connect.test.ts apps/desktop/test/setup-connect-boundaries.test.ts apps/desktop/test/local-setup.test.ts
       - run: pnpm exec playwright install chromium
       # On a Mac this runs only the macOS set (playwright.visual.config.ts).
       - run: pnpm visual

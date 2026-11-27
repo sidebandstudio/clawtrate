@@ -28,9 +28,12 @@ export function useBridge(): ClawtrateBridge {
 /** The latest state snapshot from the host. */
 export function useClawtrateState(): ClawtrateState {
   const bridge = useBridge();
+  const snapshot = () => bridge.getState();
+  // The same snapshot when rendered to markup (the UI tests), as in the window.
   return useSyncExternalStore(
     useCallback((listener) => bridge.subscribe(listener), [bridge]),
-    () => bridge.getState(),
+    snapshot,
+    snapshot,
   );
 }
 

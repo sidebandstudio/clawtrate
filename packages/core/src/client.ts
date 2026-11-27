@@ -3,6 +3,12 @@
 
 import { readOpenClawUpdate, type OpenClawUpdate } from "./gateway-update.ts";
 import { OpenClawUpdates } from "./openclaw-update.ts";
+import {
+  DeviceApprovals,
+  pairCode,
+  type DeviceDecision,
+  type DeviceListRead,
+} from "./device-approval.ts";
 import { listMemory, readMemory, writeMemory } from "./memory.ts";
 import { startTasksFrom } from "./start-tasks.ts";
 import {
@@ -44,6 +50,7 @@ import {
 import { isRefusedDecision } from "./approval-refusals.ts";
 import { answerKind, readAgain, READ_AGAIN_TRIES } from "./read-again.ts";
 import { fromBase64, toBase64 } from "./bytes.ts";
+import { goesUnmarked, markerRefusal } from "./send-marker.ts";
 import { chatSendParams, sendRefusal } from "./send-size.ts";
 import { GatewayScopeUpgrade } from "@openclaw/gateway-client/scope-upgrade";
 import { ConnectErrorDetailCodes } from "@openclaw/gateway-protocol/connect-error-details";
@@ -54,7 +61,7 @@ import {
   type CreatedBot,
 } from "./accounts-engine.ts";
 import { BotNames } from "./bot-names.ts";
-import type { ModelList, ModelRefresh } from "./accounts.ts";
+import type { ModelList, ModelRefresh, OrderClear } from "./accounts.ts";
 import {
   dismissCheckInSave,
   loadCheckIns,
@@ -427,6 +434,8 @@ export const GATEWAY_CHANGED_MESSAGE = "The selected gateway changed. Choose aga
 
 /** Deferred Stops of an archive or a delete kept for their runs' aborts (`deferredStops`). */
 export const MAX_DEFERRED_STOPS = 32;
+/** A resend of a message the gateway refused the marker on, held by a question that opened meanwhile. */
+const HELD_FOR_QUESTION = Symbol("held for a question");
 /** Why a deferred Stop was given up: every place for its check is held by a Stop still waiting. */
 const TOO_MANY_STOPS =
   "Too many Stops are waiting for their runs to start, so nothing was sent for this one. Try again in a moment.";
@@ -692,17 +701,38 @@ export type ConnectionSettings = {
    * `ClientOptions.localConnect` for this name; with none, nothing is opened.
    */
   route?: string;
+  /**
+   * For a gateway saved with a `route`: the identity (`gateway.identity.get`) that route's
+   * gateway reported at its first hello. Another identity there later drops this device's token.
+   */
+  gatewayId?: string;
 };
 
+/** A gateway saved with a proved route reported another identity than the one it paired as. */
+export const ROUTE_IDENTITY_CHANGED = "ROUTE_IDENTITY_CHANGED";
+
 /**
- * Sockets the host proves itself (local connect, docs/design/setup-effortless.md
- * §3): each one's far end before its first byte, and again, by `verify`, just
- * before its credential. `verify` is about the latest socket `createSocket` made.
+ * Sockets the host checks itself (local connect, docs/design/setup-effortless.md
+ * §3): that each one's far end matches this account's OpenClaw profile, before its
+ * first byte, and again, by `verify`, just before its credential. `verify` is about
+ * the latest socket `createSocket` made. What that check establishes, and what it
+ * doesn't: docs/decisions.md, "Local connect's proof".
  */
 export type ProvedRoute = {
   createSocket: WebSocketFactory;
   verify: (signal: AbortSignal) => Promise<boolean>;
+  /**
+   * Why the host's last proof of one of these sockets refused it, in fixed words for the
+   * person (`PROOF_REFUSAL_LINES`), or null when none did since the last that passed. A
+   * connection whose socket was refused stops with these words, rather than retrying.
+   */
+  refusal?: () => string | null;
 };
+
+/** A gateway saved with a proved route, reached at its address typed under Advanced. */
+export const LOCAL_ROUTE_ONLY = "LOCAL_ROUTE_ONLY";
+/** The way on from a refused proof, said with its words. */
+const LOCAL_WAY_ON = "Choose This computer to connect to it again, or use Advanced.";
 
 export type ConnectOptions = { url: string; token?: string | null };
 
@@ -980,6 +1010,8 @@ export type SetupEndpointCheck = {
    * but the send follows it. Failing sends nothing, as `verify` failing does.
    */
   prove?: (signal: AbortSignal) => Promise<boolean>;
+  /** Why the host's proof last refused one of `createSocket`'s sockets (`ProvedRoute.refusal`). */
+  refusal?: () => string | null;
   /**
    * The host's name for the route `createSocket` proves (local connect's profile folder),
    * saved with the gateway (`ConnectionSettings.route`): once setup ends, and after a
@@ -1005,6 +1037,7 @@ function setupCheckFor(url: string, setup: SetupEndpointCheck) {
     ...(setup.consent ? { consent: setup.consent } : {}),
     ...(setup.createSocket ? { createSocket: setup.createSocket } : {}),
     ...(setup.prove ? { prove: setup.prove } : {}),
+    ...(setup.refusal ? { refusal: setup.refusal } : {}),
   };
 }
 
@@ -1150,11 +1183,15 @@ export class OutcomeUnknownError extends Error {
   }
 }
 
-/** The parameters of a creation, identical on every ask, as the gateway's idempotency requires. */
+/**
+ * The parameters of a creation, identical on every ask, as the gateway's idempotency requires.
+ * Without its message: `sessions.create` takes no `workContext` on OpenClaw 2026.10.6 or
+ * 2026.11.10, so the first message follows by `chat.send`, which says it comes from Clawtrate
+ * (`send-marker.ts`, #743).
+ */
 function creationParams(creation: TaskCreation) {
   return {
     agentId: creation.botId,
-    message: creation.text,
     idempotencyKey: creation.id,
     ...(creation.label ? { label: creation.label } : {}),
   };
@@ -1349,6 +1386,8 @@ export class ClawtrateClient {
     createSocket?: WebSocketFactory;
     /** The far end of `createSocket`'s latest socket proved again, last before its credential. */
     prove?: (signal: AbortSignal) => Promise<boolean>;
+    /** Why the host's proof last refused one of `createSocket`'s sockets. */
+    refusal?: () => string | null;
   } | null = null;
   /**
    * A connection the host's setup opened, from its first socket through its
@@ -1473,6 +1512,8 @@ export class ClawtrateClient {
   private generation = 0;
   /** True once the current connection has reached hello at least once. */
   private everConnected = false;
+  /** This connection's gateway refused the marker as a field it doesn't take (`send-marker.ts`). */
+  private markerRefused = false;
   /**
    * The gateway's `hello-ok.server.bootId`: a random id per gateway start, the
    * lifetime of its in-memory `sessions.create` idempotency cache. Null when
@@ -1948,6 +1989,8 @@ export class ClawtrateClient {
     pairing: () => this.holds(PAIRING_SCOPE),
     readOnly: () => this.options.readOnly === true,
     bots: () => this.state.bots.map((bot) => ({ id: bot.id, name: bot.name })),
+    readStatus: (botId, send) => this.accounts.readStatus(botId, send),
+    listDevices: () => this.deviceApprovals.listDevices(),
     latestTask: (botId) => {
       const tasks = this.state.tasksByBot[botId] ?? [];
       let latest: { key: string; at: number } | null = null;
@@ -1959,6 +2002,30 @@ export class ClawtrateClient {
     },
     deviceId: () => this.state.connection.deviceId,
     now: () => this.now(),
+  });
+  /** Waiting devices this admin connection can approve (`device-approval.ts`); its state is `deviceRequests`. */
+  private readonly deviceApprovals = new DeviceApprovals({
+    request: (method, params) => this.request(method, params),
+    // A setup connection publishes typed outcomes only, so it lists, approves and denies nothing,
+    // whichever path asks (a window's refresh included); its hello and events already skip it.
+    admin: () =>
+      this.holds(ADMIN_SCOPE) && !this.options.readOnly && !this.isSetup(this.settings?.url),
+    pairing: () => this.holds(PAIRING_SCOPE),
+    answered: (error) => error instanceof GatewayProtocolRequestError,
+    now: () => this.now(),
+    later: (run, ms) => {
+      const timer = setTimeout(run, ms);
+      return () => clearTimeout(timer);
+    },
+    get: () => this.state.deviceRequests,
+    set: (deviceRequests) => this.store.update((state) => ({ ...state, deviceRequests })),
+    random: (bytes) => {
+      const out = new Uint8Array(bytes);
+      const api = (globalThis as { crypto?: { getRandomValues?: (a: Uint8Array) => void } }).crypto;
+      if (api?.getRandomValues) api.getRandomValues(out);
+      else for (let i = 0; i < bytes; i += 1) out[i] = Math.floor(Math.random() * 256);
+      return out;
+    },
   });
   /**
    * Task lists being read, each its rows so far, already bounded: at most two,
@@ -3759,10 +3826,12 @@ export class ClawtrateClient {
     queueMode: "steer" | "followup",
     attachments: OutgoingAttachment[],
     replyToId?: string,
+    marked = !goesUnmarked(text),
   ) {
     return chatSendParams(
       { sessionKey: key, text, idempotencyKey, queueMode, replyToId: replyToId ?? null },
       attachments,
+      marked,
     );
   }
 
@@ -4017,8 +4086,9 @@ export class ClawtrateClient {
 
   /**
    * Create a task under a bot with its first message. `sessions.create`
-   * carries only `agentId`, `message`, `idempotencyKey` and `label`, which keep
-   * it at `operator.write`. The caller holds one interest in the new task, as
+   * carries only `agentId`, `idempotencyKey` and `label`, which keep it at
+   * `operator.write`; the message follows by `chat.send`, under the same key
+   * (`completeCreation`). The caller holds one interest in the new task, as
    * if it had called `openSession`, and releases it with `closeSession`.
    */
   async createTask(
@@ -4136,7 +4206,11 @@ export class ClawtrateClient {
     }
   }
 
-  /** The new task from a `sessions.create` answer: opened, its first message in its outbox. */
+  /**
+   * The new task from a `sessions.create` answer: opened, its first message in its outbox and on
+   * its way by `chat.send`, under the creation's key, as any message is sent (`deliver`). From
+   * here it is the task's message: a send that fails leaves it Not sent there, with Try again.
+   */
   private completeCreation(
     creation: TaskCreation,
     result: RawRecord | null,
@@ -4149,18 +4223,18 @@ export class ClawtrateClient {
       throw new OutcomeUnknownError(CREATION_UNKNOWN_WARNING);
     }
     const id = creation.id;
-    const runId = typeof result?.runId === "string" ? result.runId : null;
+    // The task was made, but the gateway says what it needs after that failed: the message waits,
+    // Not sent, for the person's Try again, rather than going to a task that may not take it.
     const runError = asRecord(result?.runError);
     const now = this.now();
     const message: OutgoingMessage = {
       id,
       text: creation.text,
       mode: "new",
-      status: runError ? "failed" : "sent",
-      runId,
-      messageSeq: typeof result?.messageSeq === "number" ? result.messageSeq : null,
-      // It went out with the task's creation.
-      leftAt: now,
+      status: runError ? "failed" : "sending",
+      runId: null,
+      messageSeq: null,
+      leftAt: null,
       createdAt: now,
       error: runError ? String(runError.message ?? "The run did not start.") : null,
       attachments: [],
@@ -4169,27 +4243,24 @@ export class ClawtrateClient {
     this.openSession(key, true);
     this.updateActivity(key, (activity, ctx) => {
       if (activity.outbox.some((each) => each.id === id)) return activity;
-      let next = startLocalRun(
+      const next = startLocalRun(
         { ...activity, outbox: [...activity.outbox, message] },
         message,
         now,
       );
-      if (runId) next = bindRun(next, id, runId);
-      if (runError) {
-        next = failRunStart(
-          next,
-          runId ?? id,
-          {
-            message: message.error!,
-            kind: typeof runError.code === "string" ? runError.code : "not-started",
-          },
-          ctx,
-        );
-      } else if (!runId) {
-        next = dropUnboundRun(next, id);
-      }
-      return next;
+      if (!runError) return next;
+      return failRunStart(
+        next,
+        id,
+        {
+          message: message.error!,
+          kind: typeof runError.code === "string" ? runError.code : "not-started",
+        },
+        ctx,
+      );
     });
+    // As any message is sent: once, under its key, while it is still to be sent.
+    if (!runError) this.enqueueDelivery(key, id);
     if (byCaller) {
       this.creations.delete(id);
       this.releaseCheckingSlot(id);
@@ -4431,6 +4502,12 @@ export class ClawtrateClient {
 
     let result: RawRecord | null;
     try {
+      // It says it comes from Clawtrate (#666), unless the gateway already refused that for this
+      // message, or for every message on this connection. A command (`/…`, `!…`) or a stop word
+      // goes without it at once (`goesUnmarked`): the gateway takes the marker only on ordinary
+      // chat messages, and a stop must not depend on its refusal of the marker arriving.
+      const marked =
+        message.unmarked !== true && !this.markerRefused && !goesUnmarked(message.text);
       const params = this.sendParams(
         key,
         message.text,
@@ -4438,16 +4515,64 @@ export class ClawtrateClient {
         message.mode === "steer" ? "steer" : "followup",
         this.attachmentContent.get(messageId)?.files ?? [],
         message.replyToId,
+        marked,
       );
       this.checkSize(params);
       // A send that starts its own run names that run's request: what a failed turn's
       // "Copy request ID" gives (F-301). A steer joins a run another frame started.
       const starts = message.mode !== "steer";
-      const sent = this.request("chat.send", params, {
-        onSent: (requestId) => {
-          if (!starts) return;
-          this.updateActivity(key, (activity) => noteRunRequest(activity, messageId, requestId));
-        },
+      const send = (frame: typeof params) =>
+        this.request("chat.send", frame, {
+          onSent: (requestId) => {
+            if (!starts) return;
+            this.updateActivity(key, (activity) => noteRunRequest(activity, messageId, requestId));
+          },
+        });
+      const generation = this.generation;
+      const sent = send(params).catch(async (error: unknown) => {
+        // Refused for the marker alone: the same message once more without it, under the same
+        // key, so it is never lost and never delivered twice. Any other refusal is its own.
+        const refused = marked ? markerRefusal(error) : null;
+        if (!refused) throw error;
+        // Learnt for the connection that answered, never for a later one.
+        if (refused === "gateway" && generation === this.generation) this.markerRefused = true;
+        // A Stop withdrew it, or it went away, while the refusal was on its way: nothing more.
+        const now = this.outgoing(key, messageId);
+        if (!now || now.steer === "withdrawn") throw error;
+        // A question opened meanwhile holds the resend, as it holds any send: the gateway would
+        // take a plain message as its answer. It goes, without the marker, once the question
+        // settles. The refused frame started nothing, so the message's own local run waits too,
+        // queued in its place ahead of what was queued after it (`requeueLocalRun`); the release
+        // starts it, or steers the message into the gateway's run and drops it. A run the person
+        // asked to stop keeps the path below, where the resend's answer names it and it is aborted.
+        const current = this.state.transcripts[key];
+        const own = current ? findRun(current, messageId) : undefined;
+        const requeue = (activity: TaskActivity) => {
+          const message = activity.outbox.find((each) => each.id === messageId);
+          return own && message ? requeueLocalRun(activity, message, this.now()) : activity;
+        };
+        const kept = current && own?.state !== "stopping" ? requeue(current) : null;
+        const keptRun = kept ? activeRun(kept) : undefined;
+        if (kept && questionPending(kept, keptRun)) {
+          this.updateActivity(key, (activity) =>
+            updateMessage(requeue(activity), messageId, {
+              status: "held",
+              unmarked: true,
+              leftAt: null,
+              runId: keptRun?.id ?? null,
+            }),
+          );
+          return HELD_FOR_QUESTION;
+        }
+        // Anything else pressed meanwhile is as it would be had the gateway taken the first
+        // frame. The refused frame started nothing, and a Stop asked for meanwhile waits for an
+        // answer that names the run: the resend's, which is aborted then (below), as before the
+        // marker. A stop word's resend is handled as the gateway answers it.
+        this.updateActivity(key, (activity) =>
+          updateMessage(activity, messageId, { unmarked: true }),
+        );
+        const { workContext: _marker, ...unmarked } = params;
+        return send(unmarked as typeof params);
       });
       // The frame has left: from here a Stop no longer parks it. A steer's own run id is its key
       // (the gateway's `clientRunId`), known before the answer: its events, and a Stop's
@@ -4457,7 +4582,9 @@ export class ClawtrateClient {
         const left = updateMessage(activity, messageId, { leftAt: this.now() });
         return joins ? registerSteerAlias(left, messageId, joins) : left;
       });
-      result = asRecord(await sent);
+      const answer = await sent;
+      if (answer === HELD_FOR_QUESTION) return;
+      result = asRecord(answer);
     } catch (error) {
       this.noteMissingScope(error);
       // A Stop withdrew it while the answer was on its way: it stays Not sent.
@@ -6706,6 +6833,24 @@ export class ClawtrateClient {
   }
 
   /**
+   * Unlock, or Clear a kept order, after its confirmation (#660): only to the gateway the screen
+   * showed (`stamp`), each request on the connection that check read, and only while the bot's
+   * order still names `account` alone (`AccountsEngine.clearOrder`).
+   */
+  async clearBotOrder(
+    id: string,
+    botId: string,
+    provider: string,
+    account: string,
+    kind: OrderClear["kind"],
+    stamp: GatewayStamp,
+  ): Promise<void> {
+    if (this.options.readOnly) throw new Error("This host only reads.");
+    await this.requireSameGateway(stamp);
+    return this.accounts.clearOrder(id, botId, provider, account, kind, this.sameConnection(stamp));
+  }
+
+  /**
    * Rename on a name card: `name` and `gatewayId` must be the ones it shows (`bot-names.ts`).
    * Nothing is sent unless that gateway is still the one connected.
    */
@@ -6739,6 +6884,44 @@ export class ClawtrateClient {
   /** Stop waiting on a press whose answer was lost, once asking the gateway has failed. */
   releaseOpenClawUpdateHold(): Promise<void> {
     return this.openclawUpdates.release();
+  }
+
+  // Approving a waiting device (`device-approval.ts`, setup-effortless.md §5) ---------------
+
+  /** The gateway's waiting devices, read again, and whether a list that new was applied. */
+  readDeviceRequests(): Promise<DeviceListRead> {
+    return this.deviceApprovals.readNow();
+  }
+
+  /** A window takes the one request the host opens by itself: true for the first that asks. */
+  takeDevicePrompt(requestId: string): boolean {
+    return this.deviceApprovals.takePrompt(requestId);
+  }
+
+  /**
+   * The person picked `code` on the sheet that showed `scopes`, read on connection `listedOn`
+   * (`deviceRequests.listedOn`) of the gateway of `stamp`.
+   */
+  async approveDevice(
+    requestId: string,
+    code: string,
+    scopes: readonly string[],
+    listedOn: number,
+    stamp: GatewayStamp,
+  ): Promise<DeviceDecision> {
+    await this.requireSameGateway(stamp);
+    return this.deviceApprovals.approve(requestId, code, scopes, listedOn);
+  }
+
+  /** "I didn't start this" denies the request; "None of these match" sends nothing. */
+  async refuseDevice(
+    requestId: string,
+    why: "not-mine" | "none-match",
+    listedOn: number,
+    stamp: GatewayStamp,
+  ): Promise<DeviceDecision> {
+    await this.requireSameGateway(stamp);
+    return this.deviceApprovals.refuse(requestId, why, listedOn);
   }
 
   /** Not now on a name card: kept on this device for that bot and that name. */
@@ -8142,7 +8325,13 @@ export class ClawtrateClient {
           const message = next.outbox.find((each) => each.id === id);
           if (!message || message.status !== "held") continue;
           if (now && now.state !== "stopping" && message.mode !== "queue") {
-            next = updateMessage(next, id, { status: "sending", mode: "steer", runId: now.id });
+            // Into the gateway's run: a queued run of its own it waited with goes.
+            const waited = findRun(next, id)?.state === "queued" ? dropUnboundRun(next, id) : next;
+            next = updateMessage(waited, id, {
+              status: "sending",
+              mode: "steer",
+              runId: now.id,
+            });
             steered.push(id);
           } else if (gatewayRunning(next, id)) {
             // The gateway is running a run under this message's own id: the message is out.
@@ -8459,7 +8648,11 @@ export class ClawtrateClient {
     // host's own socket here.
     const provedSocket =
       proved && this.setupCheck?.createSocket
-        ? { createSocket: this.setupCheck.createSocket, prove: this.setupCheck.prove }
+        ? {
+            createSocket: this.setupCheck.createSocket,
+            prove: this.setupCheck.prove,
+            refusal: this.setupCheck.refusal,
+          }
         : undefined;
     const secure = routed ? await this.secureCredentials() : false;
     if (generation !== this.generation) return;
@@ -8612,7 +8805,7 @@ export class ClawtrateClient {
         // The setup's own proved sockets, with their last proof, retries after its check ended
         // included; else, for a gateway saved with a route, the host's proved route.
         const own = check?.createSocket
-          ? { createSocket: check.createSocket, prove: check.prove }
+          ? { createSocket: check.createSocket, prove: check.prove, refusal: check.refusal }
           : provedSocket;
         const fromRoute = own ? null : route;
         // A gateway set up through local connect opens no socket the host can't prove.
@@ -8624,13 +8817,18 @@ export class ClawtrateClient {
               error: {
                 code: "LOCAL_UNVERIFIED",
                 message: `Clawtrate couldn't verify what is listening at ${hostOf(settings.url)}.`,
-                hint: null,
+                hint: LOCAL_WAY_ON,
               },
             });
           throw new Error("this gateway's sockets can't be proved");
         }
         try {
           const create = own?.createSocket ?? (fromRoute ? fromRoute.createSocket : undefined);
+          // Whose proof speaks for this connection's sockets, should one refuse them.
+          this.socketRefusal = {
+            url: settings.url,
+            refusal: own?.refusal ?? (fromRoute ? fromRoute.refusal : undefined) ?? null,
+          };
           socket = create ? create(settings.url) : this.host.createWebSocket(settings.url);
         } catch (error) {
           // A setup socket that couldn't start is a terminal path: its code goes.
@@ -8721,9 +8919,10 @@ export class ClawtrateClient {
             status: "error",
             retryAt: null,
             error: {
-              code: "LOCAL_UNVERIFIED",
-              message: `Clawtrate couldn't verify what is listening at ${hostOf(settings.url)}.`,
-              hint: null,
+              code: LOCAL_ROUTE_ONLY,
+              message:
+                "This device is paired for This computer, so it doesn't use that pairing at a typed address. No credential was sent.",
+              hint: "Choose This computer to connect to it.",
             },
           });
           throw new Error("this device's token goes only through the route it was saved over");
@@ -9130,7 +9329,12 @@ export class ClawtrateClient {
               await this.writeRecord({ ...saved, token: null });
               this.settings = { ...saved, token: null };
             } else this.settings = { ...current, token: null };
-            this.writes.retiredShared.set(settings.url, current.token);
+            // A gateway set up over a proved route keeps no copy of the token it was paired with,
+            // here or in the attempt: it is the person's own OpenClaw's token, read from its
+            // settings for this pairing only, and its route reconnects with this device's token.
+            if (current.route === undefined)
+              this.writes.retiredShared.set(settings.url, current.token);
+            else if (this.typedAttempt?.url === settings.url) this.typedAttempt = null;
           } catch {
             // The settings keep the secret, so the next hello tries again; this one goes on.
             this.log("warn", "Could not remove the shared gateway token from this device.");
@@ -9174,6 +9378,8 @@ export class ClawtrateClient {
           context.plan,
         ),
       resolveClose: (context) => {
+        // A socket of a saved route that the host's proof refused: not retried (onClose).
+        if (this.routeRefusal(settings.url)) return { retry: false, notify: true };
         // A setup connection that ended before its hello is not retried and its code is
         // forgotten, unless the gateway is waiting for its owner to approve this device.
         const setup = this.tokenGate?.generation === generation;
@@ -9202,7 +9408,18 @@ export class ClawtrateClient {
         this.routines.onClose();
         this.usage.onClose();
         this.openclawUpdates.onDisconnect();
+        this.deviceApprovals.onClose();
         const status = this.state.connection.status;
+        // The host refused a socket of this gateway's route: its words, and the way on.
+        const refused = this.routeRefusal(settings.url);
+        if (refused) {
+          this.setConnection({
+            status: "error",
+            retryAt: null,
+            error: { code: "LOCAL_UNVERIFIED", message: refused, hint: LOCAL_WAY_ON },
+          });
+          return;
+        }
         if (status !== "pairing" && this.tokenGate?.generation === generation) {
           // The setup connection ended before its hello: its code is forgotten and it stops.
           this.setupCode = null;
@@ -9286,6 +9503,7 @@ export class ClawtrateClient {
     this.accounts.reset();
     this.botNames.reset();
     this.openclawUpdates.reset();
+    this.deviceApprovals.reset();
     if (this.state.checkIns) this.store.update(({ checkIns: _, ...state }) => state);
     this.routines.reset();
     this.store.update((state) => ({ ...state, usage: initialUsage }));
@@ -9344,6 +9562,7 @@ export class ClawtrateClient {
     this.accounts.onClose();
     this.routines.onClose();
     this.usage.onClose();
+    this.deviceApprovals.onClose();
     this.protocol?.stop();
     this.protocol = null;
     this.computer.connectionLost(options?.keepPendingAnswer);
@@ -9484,6 +9703,8 @@ export class ClawtrateClient {
           approveCommand: instructions.command,
           approveNote: instructions.note,
           requestedScopes: scopes,
+          // From this device's own key and the gateway's id for its request (`pairCode`).
+          code: this.identity ? pairCode(this.identity.publicKey, requestId) : null,
         },
       });
       // The request id stays the same while we retry, so keep trying quietly
@@ -9559,6 +9780,8 @@ export class ClawtrateClient {
     const wasConnected = this.everConnected;
     this.everConnected = true;
     this.pairingSeen = null;
+    // A gateway that refused the marker may since have been updated: each connection asks again.
+    this.markerRefused = false;
     // Each connection may act for another person: read who again before marking reactions.
     this.selfId = null;
     // The protocol gives a boot id at most 96 characters; anything else names no start.
@@ -9638,6 +9861,7 @@ export class ClawtrateClient {
       : null;
     this.voiceAdvertised = listed === null ? null : listed.includes(VOICE_GET);
     this.computer.hello(listed ?? []);
+    if (!this.isSetup(this.settings?.url)) this.deviceApprovals.onHello();
     const reason =
       this.pendingResync ?? (wasConnected && !this.quietReconnect ? "reconnect" : null);
     this.pendingResync = null;
@@ -9676,6 +9900,7 @@ export class ClawtrateClient {
 
   private confirmGatewayIdentity(id: string | null, current: () => boolean): void {
     if (id === null || !current()) return;
+    this.bindRouteIdentity(id, current);
     this.accounts.onGateway(id);
     // Clearing another gateway's creation can notify a host that stops the connection.
     if (current() && this.state.connection.gatewayId !== id) this.setConnection({ gatewayId: id });
@@ -9686,6 +9911,58 @@ export class ClawtrateClient {
       this.guidesUnnamed = null;
       void this.keepGuides(unnamed.generation, unnamed.epoch, { gatewayId: id });
     }
+  }
+
+  /** The host's words for why it refused the latest socket of this gateway's route: setup's or saved. */
+  private routeRefusal(url: string): string | null {
+    const sockets = this.socketRefusal;
+    return sockets?.url === url ? (sockets.refusal?.() ?? null) : null;
+  }
+
+  /** The proof that speaks for the sockets the current connection opens (`routeRefusal`). */
+  private socketRefusal: { url: string; refusal: (() => string | null) | null } | null = null;
+
+  /**
+   * A gateway saved with a proved route is the gateway that route first reported
+   * (docs/decisions.md, "Routes"): its identity is saved with the route at that hello. One that
+   * reports another identity later has this device's token for it dropped and its connection
+   * closed, and the route isn't used again until this device pairs there again.
+   */
+  private bindRouteIdentity(id: string, current: () => boolean): void {
+    const settings = this.settings;
+    const deviceId = this.state.connection.deviceId;
+    if (settings?.route === undefined || settings.gatewayId === id) return;
+    const { url, route } = settings;
+    void this.changeConnection(async () => {
+      const now = this.settings;
+      if (!current() || now?.url !== url || now.route !== route) return;
+      if (now.gatewayId === undefined) {
+        // From the record as it is now: another client on this store may have changed it.
+        const saved = await this.savedSettings();
+        if (!current() || saved?.url !== url || saved.route !== route) return;
+        await this.writeRecord({ ...saved, gatewayId: id });
+        if (this.settings === now) this.settings = { ...now, gatewayId: id };
+        return;
+      }
+      if (now.gatewayId === id) return;
+      if (deviceId) {
+        const key = this.tokenKey(url, deviceId, "operator");
+        await this.host.storage.delete(key);
+        this.writes.grants.set(key, null);
+      }
+      this.endEligibility(url);
+      this.close();
+      this.setConnection({
+        status: "error",
+        retryAt: null,
+        error: {
+          code: ROUTE_IDENTITY_CHANGED,
+          message:
+            "Another OpenClaw gateway answers on this computer now, so Clawtrate removed this device's pairing for it. Connect again to pair with it.",
+          hint: null,
+        },
+      });
+    }).catch(() => this.log("warn", "Could not check which gateway answers on this route."));
   }
 
   /**
@@ -9853,6 +10130,9 @@ export class ClawtrateClient {
       // it was setup's is published, if it was this connection's.
       const held = this.setupUpdate;
       if (held?.generation === generation) this.setConnection({ openclawUpdate: held.update });
+      // Waiting devices start as on a hello: with admin the list is read now, so a request
+      // already waiting is listed without an event.
+      this.deviceApprovals.onHello();
     }
     if (setup) this.setupUpdate = null;
     // The host's check of the listener lasts until the bots are read, a retry's read included:
@@ -10448,7 +10728,7 @@ export class ClawtrateClient {
         // so, and Try again subscribes again (`reloadSession`).
         status: live ? "ready" : "error",
         items,
-        interSession: interSessionMessages(messages),
+        interSession: interSessionMessages(messages, items),
         // Reactions leave with the history they belonged to (F-283).
         ...(current.reactions ? { reactions: reactionsShown(current.reactions, items) } : {}),
         error: live ? null : LIVE_UPDATES_NOT_STARTED,
@@ -10581,6 +10861,12 @@ export class ClawtrateClient {
         this.setConnection({
           openclawUpdate: readOpenClawUpdate(asRecord(event.payload)?.updateAvailable),
         });
+        return;
+      case "device.pair.requested":
+      case "device.pair.resolved":
+      case "device.pair.changed":
+        if (!this.isSetup(this.settings?.url))
+          this.deviceApprovals.onEvent(event.event, event.payload);
         return;
       case "update.run.changed":
         if (!this.isSetup(this.settings?.url)) this.openclawUpdates.onRunChanged(event.payload);
@@ -11596,6 +11882,11 @@ export class ClawtrateClient {
     if (typeof parsed.token !== "string") return null;
     if (!includeRejected && this.writes.rejected.get(key)?.has(parsed.token.trim())) return null;
     const route = typeof parsed.route === "string" ? { route: parsed.route } : {};
+    // A token saved over another proved route than the one the settings name now (local
+    // connect's profile folder, replaced since and found again) is that route's gateway's, not
+    // this one's: it is never this route's, and this route's first pairing replaces it.
+    const now = this.settings?.url === url ? this.settings.route : undefined;
+    if (route.route !== undefined && now !== undefined && route.route !== now) return null;
     if (parsed.fullGrant === true) {
       const held = Array.isArray(parsed.heldScopes)
         ? FULL_SCOPES.filter((scope) => parsed.heldScopes!.includes(scope))
