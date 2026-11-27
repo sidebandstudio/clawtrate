@@ -918,7 +918,10 @@ export const BOTS_CHECKS: BotsCheck[] = [
       // A file read is outside content on both versions, and a routine's run has the file tools.
       const job = await routineRun(ctx, world, "#read #rearm");
       const said = String(rec(await routineFinished(ctx, job)).summary ?? "");
-      expect(said.includes(NOT_DONE), `next_check after reading: ${said}`);
+      // 2026.11.10 offers next_check only to a paced job or a one-shot continuation:
+      // to this routine it isn't offered at all, and the call fails before any hook.
+      if (!/Validation failed for tool "automations"/.test(said))
+        expect(said.includes(NOT_DONE), `next_check after reading: ${said}`);
       const goal = await turn(ctx, await task(ctx, world, "pip", "goal"), "#search #goal");
       const made = goal.calls.find((c) => c.name === "create_goal");
       // 2026.10.6 doesn't offer create_goal to a development gateway's bots.
