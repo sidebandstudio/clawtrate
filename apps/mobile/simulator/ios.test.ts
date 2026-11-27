@@ -90,6 +90,7 @@ import {
   rgb,
   screen,
   screenText,
+  sharedFolders,
   scrollTo,
   see,
   shoot,
@@ -2163,6 +2164,10 @@ describe("the iOS app", () => {
       ]);
       await shoot("bot-files-share-sheet");
       expect(containerHits([inPdf])[0]).toBeGreaterThan(0);
+      // One folder of the share step's own, holding the file the sheet offers.
+      const [folder, ...others] = sharedFolders();
+      expect(others).toEqual([]);
+      expect(folder).toBeDefined();
       const asked = front.requests.filter((request) => request.url.startsWith("/api/chat/media"));
       expect(asked).toHaveLength(1);
       expect(asked[0]!.method).toBe("GET");
@@ -2177,6 +2182,36 @@ describe("the iOS app", () => {
         notSee({ id: "bot-file-note", text: lit(BOT_FILE_WORDS.saved) }),
       ]);
       await until("the shared file deleted", async () => containerHits([inPdf])[0] === 0);
+      expect(sharedFolders()).not.toContain(folder);
+
+      // Ready again: Save opens the sheet a second time, for a folder of its own. Save to Files
+      // picked there and its picker cancelled, the sheet is done with, the row is ready, and that
+      // folder is gone too: nothing waits for an answer that doesn't come.
+      await steps("file-sheet-again", [
+        tap(save),
+        waitFor("Save to Files", 60_000),
+        see(lit(`PDF Document · ${reviewsDraftPdf().length} bytes`)),
+      ]);
+      const [again, ...more] = sharedFolders();
+      expect(more).toEqual([]);
+      expect(again).toBeDefined();
+      expect(again).not.toBe(folder);
+      await steps("file-save-to-files-cancelled", [
+        tap("Save to Files"),
+        waitFor("Cancel", 30_000),
+        tap("Cancel"),
+        {
+          runFlow: {
+            // If the sheet stays up to choose another activity, it is closed as above.
+            when: { visible: "Save to Files" },
+            commands: [tap({ id: "PopoverDismissRegion" })],
+          },
+        },
+        waitGone("Save to Files", 30_000),
+        see(save),
+      ]);
+      await until("the second shared file deleted", async () => !sharedFolders().includes(again!));
+      expect(containerHits([inPdf])).toEqual([0]);
     } finally {
       await front?.close();
       await gatewayCall("sessions.delete", { key: own.key, deleteTranscript: true }).catch(
