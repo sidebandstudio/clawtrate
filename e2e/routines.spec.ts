@@ -234,7 +234,6 @@ test("F-024: started marks the routine and its bot as working, and finished clea
   });
   await expect(view().locator('[data-testid="run-row"][data-running="true"]')).toBeVisible();
   await expect(botRow("Otto").first()).toHaveAttribute("data-state", "working");
-  await expect(botRow("Otto").first()).toContainText(`Running ${name}`);
   // Its row under Otto follows this run into its recorded conversation.
   const otto = botRow("Otto").first();
   if ((await otto.getAttribute("aria-expanded")) === "false") {
@@ -247,7 +246,7 @@ test("F-024: started marks the routine and its bot as working, and finished clea
   await expect(view().getByTestId("run-starting")).toHaveText("Running…");
   await started;
   await expect(view().getByTestId("run-view")).toBeVisible({ timeout: 30_000 });
-  await expect(botRow("Otto").first()).not.toContainText(`Running ${name}`);
+  await expect(botRow("Otto").first()).not.toHaveAttribute("data-state", "working");
   await view()
     .getByRole("button", { name: `Back to ${name}, all runs` })
     .click();

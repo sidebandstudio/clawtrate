@@ -390,14 +390,17 @@ textarea {
   background: color-mix(in srgb, var(--bg-hover) 55%, transparent);
 }
 
+/* A bot's row is its picture and its name (#790): the picture carries the state,
+   a dot after the name says something is unread. */
 .bot {
+  --avatar-row: var(--avatar-bot);
   display: grid;
   grid-template-columns: var(--avatar-row) minmax(0, 1fr);
   align-items: center;
   gap: 12px;
   width: 100%;
-  min-height: 60px;
-  padding: 10px 12px 10px 10px;
+  min-height: 64px;
+  padding: 8px 36px 8px 8px;
   border: 0;
   border-radius: var(--radius-lg);
   background: transparent;
@@ -419,20 +422,16 @@ textarea {
   background: transparent;
 }
 
-.bot-text {
-  min-width: 0;
-}
-
-/* new: the name and the time share a line; the preview has the next one. */
 .bot-line {
   display: flex;
   align-items: center;
-  gap: 7px;
+  gap: 8px;
+  min-width: 0;
   min-height: 20px;
 }
 
 .bot-name {
-  flex: 1;
+  flex: 0 1 auto;
   min-width: 0;
   overflow: hidden;
   font-size: var(--text-base);
@@ -440,27 +439,6 @@ textarea {
   line-height: 20px;
   white-space: nowrap;
   text-overflow: ellipsis;
-}
-
-/* new: one line of the bot's latest activity, across all of its tasks. A run
-   state mark may lead it; the unread dot ends it. The two are independent. */
-.bot-preview {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  font-size: var(--text-md);
-  line-height: 20px;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  color: var(--text-muted);
-}
-
-.bot-time {
-  flex: none;
-  font-size: var(--text-xs);
-  font-variant-numeric: tabular-nums;
-  white-space: nowrap;
-  color: var(--text-faint);
 }
 
 /* new: unread. An 8px dot in the accent. */
@@ -472,11 +450,11 @@ textarea {
   background: var(--accent-line);
 }
 
-/* new: fold or unfold a bot's tasks without opening the bot. It takes the
-   time's place while the row is hovered or focused. */
+/* new: fold or unfold a bot's tasks without opening the bot. It shows at the
+   row's right end, which the row keeps free, while the row is hovered or focused. */
 .bot-toggle {
   position: absolute;
-  top: 9px;
+  top: 21px;
   right: 8px;
   display: none;
   width: 22px;
@@ -489,11 +467,6 @@ textarea {
 .bot-group:hover > .bot-toggle,
 .bot-group:focus-within > .bot-toggle {
   display: grid;
-}
-
-.bot-group:has(> .bot-toggle):hover > .bot .bot-time,
-.bot-group:has(> .bot-toggle):focus-within > .bot .bot-time {
-  visibility: hidden;
 }
 
 .bot-toggle .icon {
@@ -2057,6 +2030,7 @@ textarea {
 /* Touch: the same layout with larger targets. Set on the root by the app. */
 [data-input="touch"] {
   --avatar-row: 44px;
+  --avatar-bot: 52px;
   --header-height: 60px;
 }
 
@@ -2077,10 +2051,6 @@ textarea {
 [data-input="touch"] .bot-name {
   font-size: var(--text-lg);
   line-height: 22px;
-}
-
-[data-input="touch"] .bot-preview {
-  font-size: var(--text-base);
 }
 
 [data-input="touch"] .bot-toggle {
@@ -2286,14 +2256,6 @@ textarea {
   white-space: nowrap;
   text-overflow: ellipsis;
   color: var(--text-muted);
-}
-
-.bot-name:has(+ .bot-label) {
-  flex: 0 1 auto;
-}
-
-.bot-label + .bot-time {
-  margin-left: auto;
 }
 
 /* Pinned bots: a grid of large avatars at the top of the list. */
@@ -2951,11 +2913,6 @@ textarea {
   margin: 0;
   padding: 0;
   list-style: none;
-}
-
-/* While a task waits for the person, line two says so in the warning colour. */
-.bot-preview[data-tone="warn"] {
-  color: var(--warn);
 }
 
 /* A refused action, or one waiting for the gateway's owner, above the footer. */

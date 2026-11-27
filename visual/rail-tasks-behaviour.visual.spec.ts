@@ -847,27 +847,27 @@ test("F-014: a task's Pin puts it first under its bot with a pin, and Unpin puts
   await expect(tasksOf(page, "Otto").first()).not.toHaveAccessibleName(/^Router firmware/);
 });
 
-test("F-021 F-057: a waiting bot says what it waits for in the warning colour, its avatar shows the waiting badge, and a stopped or queued task its own mark", async ({
+test("F-021 F-057: a waiting bot's avatar shows the waiting badge in the warning colour with no words on its row, its waiting task says it needs you, and a stopped or queued task its own mark", async ({
   page,
 }) => {
   await openFixture(page, `scene=rail-waiting&${OTTO}`, "light");
   const marlow = bot(page, "Marlow");
-  await expect(marlow.locator(".bot-preview")).toHaveText("Waiting for you: approve a command");
   await expect(marlow).toHaveAccessibleName(/^Marlow, waiting for you/);
+  await expect(marlow.locator(".bot-line")).not.toContainText("Waiting");
   await expect(marlow.locator(".presence")).toHaveAttribute("data-state", "waiting");
   await expect(marlow.locator(".presence > .glyph")).toHaveAttribute("data-state", "waiting");
   const warn = await page.evaluate(() => {
     const probe = document.createElement("span");
-    probe.style.color = "var(--warn)";
+    probe.style.backgroundColor = "var(--warn)";
     document.body.append(probe);
-    return getComputedStyle(probe).color;
+    return getComputedStyle(probe).backgroundColor;
   });
-  expect(await marlow.locator(".bot-preview").evaluate((el) => getComputedStyle(el).color)).toBe(
-    warn,
-  );
-  // Since it began waiting, not its latest activity.
-  await expect(marlow.locator(".bot-time")).toHaveText("5:34 PM");
-  await expect(bot(page, "Pip").locator(".bot-preview")).toHaveText("Waiting for you: a question");
+  expect(
+    await marlow
+      .locator(".presence > .glyph")
+      .evaluate((el) => getComputedStyle(el).backgroundColor),
+  ).toBe(warn);
+  await expect(bot(page, "Pip")).toHaveAccessibleName(/^Pip, waiting for you/);
 
   await bot(page, "Pip").focus();
   await page.keyboard.press("ArrowRight");
@@ -916,7 +916,7 @@ test("F-021 F-057: a waiting bot says what it waits for in the warning colour, i
       };
     });
   });
-  await expect(marlow.locator(".bot-preview")).not.toContainText("Waiting for you");
+  await expect(marlow).not.toHaveAccessibleName(/waiting for you/);
   await expect(marlow.locator(".presence")).toHaveAttribute("data-state", "idle");
 });
 

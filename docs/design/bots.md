@@ -49,7 +49,7 @@ Work pane, Settings tab          a bot's settings
   Model and effort                 side by side, from the account's provider
   Tools                            tools that come with the account; T3 Code for this bot
 transcript                       event lines and the turn error, as conversation.md has them
-rail                             a bot's line two carries an account notice
+rail                             a bot's row's name carries an account notice
 ```
 
 A bot is created in one sheet: a large picture, a name, shapes, colours, then one more step, Account, before Create. Everything else a bot has lives in the panel that opens from the title pill, the Work pane, under a Settings tab.
@@ -69,7 +69,7 @@ A bot is created in one sheet: a large picture, a name, shapes, colours, then on
 | Event line, the opening event line with Raw                     | `visual-language.md` §8, `conversation.md` §9 | Served by another account, an account change                     |
 | The turn error                                                  | `conversation.md` §17                         | A run that failed on its account                                 |
 | State marks                                                     | `conversation.md` §2                          | Account states, waiting lines                                    |
-| Bot row line two and its tones                                  | `conversation.md` §20                         | The account notice on a bot's row                                |
+| Bot row's accessible name                                       | `conversation.md` §20                         | The account notice on a bot's row                                |
 | Copy button and its two outcomes                                | `conversation.md` §9                          | Codes, commands, ids                                             |
 
 ### New components
@@ -490,7 +490,7 @@ The reason is the gateway's failure reason in words: "signed out" (auth), "out o
 
 **Opened**, the line shows a card: "The gateway's log for this run says OpenAI · Work failed after a rate limit and the gateway moved on to another OpenAI account. It doesn't say which account served the run." With "likely": "**Inferred:** OpenAI · Home was the only other OpenAI account <Bot> could use, so it is likely. The gateway doesn't confirm it." Then "Lock <Bot> to <account>, in its settings, to have a failure stop the run instead.", "Open <Bot>'s settings" and "Raw", which shows the log record as the gateway wrote it (the failed account appears there as a hash).
 
-**On the bot's row**, line two takes the warning in `--warn`, in place of the latest message, when the bot is otherwise calm (done, stopped or idle; a waiting, failed, blocked or working row keeps its own line, `conversation.md` §20): "Tried another account". The row's name adds ", the gateway tried another account". No new mark and no badge. A pinned tile shows nothing extra.
+**On the bot's row**, which is its picture and its name with no line of words (#790, `conversation.md` §20), when the bot is otherwise calm (done, stopped or idle): the row's name adds ", the gateway tried another account". No new mark and no badge. A pinned tile shows nothing extra.
 
 **It clears**, and only on something Clawtrate observes:
 
@@ -527,7 +527,7 @@ A run that fails on its account ends with the turn error of `conversation.md` §
 - When the bot is bound, not locked, and the log shows a rotation, the line of section 12 sits above the card.
 - "Copy request ID" and "Raw" stay as in `conversation.md` §17.
 - "Sign in again" opens Settings on the connect component, starting the same provider's sign-in. "Change account" opens the bot's Settings tab on Change account.
-- **The bot's row** uses its failed state: the failed badge and line two "Couldn't finish: OpenAI refused for quota" or "Couldn't finish: OpenAI sign-in refused" in `--danger`.
+- **The bot's row** uses its failed state: the failed badge, and its name says "a run failed".
 - **The bot's settings** add, in the Model group, a note on `--danger-soft` with the same cause and the two ways forward in words.
 - **Settings, Accounts** shows the account's own state as the gateway reports it. The gateway does not report a pause or a billing failure there, so the account can read "Connected" while its runs are refused; when the log named it as the account that failed, its page adds "Otto's last run failed on it: refused for quota, 5:58 PM."
 
@@ -793,7 +793,7 @@ Only the target column changes. The rows below are the whole set this design pro
 | A bot's Settings tab | Tabs, fact block, group word, `.menu`, empty state, skeleton, the access bar, the pairing command block and waiting line, notes | Select, sub-page head, the lock's waiting row |
 | The served line | Event line, the opening event line and Raw (`conversation.md` §9) | Nothing |
 | An account's failure | The turn error (`conversation.md` §17), the bot row's failed state | Nothing |
-| The row's warning | Bot row line two (`conversation.md` §20), in `--warn` | Nothing |
+| The row's warning | The bot row's accessible name (`conversation.md` §20) | Nothing |
 
 | Settings, Integrations | Fact block, group word, the command block and waiting line, notes, result, the access bar, confirmation | Switch |
 | A bot's T3 Code | Fact block, `b-open` rows, radio group, checkboxes | Switch |

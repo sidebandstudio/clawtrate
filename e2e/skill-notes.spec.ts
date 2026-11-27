@@ -286,15 +286,12 @@ test("F-560: a real skill note shows in the default conversation and as the bot'
   await expect(botRow("main")).not.toHaveAccessibleName(/, unread/);
 
   // With Show commands off, the note is in the conversation after the reply, drawn as the bot's
-  // words are (its code marks are formatting), and is the bot's preview.
+  // words are (its code marks are formatting).
   await setCommandsShown(false);
   await botRow("main").click();
   await expect(transcript()).toContainText(REPLY, { timeout: 60_000 });
   await expect(transcript()).toContainText(noteText.replaceAll("`", ""));
   const text = await transcript().innerText();
   expect(text.indexOf("Learned:")).toBeGreaterThan(text.lastIndexOf(REPLY));
-  await expect(botRow("main").locator(".bot-preview")).toContainText(
-    "Learned: created trail-check",
-  );
   await shots("note-shown");
 });

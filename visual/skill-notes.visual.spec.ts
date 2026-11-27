@@ -47,7 +47,6 @@ const PAGE = Array.from({ length: 200 }, (_, n) =>
 
 const transcript = (page: Page) => page.getByTestId("transcript");
 const jump = (page: Page) => page.getByTestId("jump-latest");
-const preview = (page: Page) => page.locator('[data-testid="bot"][data-bot="otto"] .bot-preview');
 const open = (page: Page, commands = false) =>
   openFixture(page, `scene=main&${OTTO_DISK}&panel=closed${commands ? "&commands=show" : ""}`);
 
@@ -152,15 +151,6 @@ test.describe("rows of the gateway's skill-note shape", () => {
     expect((await measured(page)).top).toBeGreaterThan(before.top);
     await expect(transcript(page).getByText(NOTE_TEXT)).toBeInViewport();
     await expect(jump(page)).toHaveCount(0);
-  });
-
-  test("F-560: with Show commands off, the bot's preview is the row the gateway lists", async ({
-    page,
-  }) => {
-    await open(page);
-    const history = mapHistory([said("assistant", "prior", "Old reply.", 800), note("note-1")]);
-    await update(page, { items: history, row: { updatedAt: EPOCH + 1_005, preview: NOTE_TEXT } });
-    await expect(preview(page)).toHaveText(NOTE_TEXT);
   });
 
   // A row the gateway appends after a turn names no run: whatever its fields, it is not the
