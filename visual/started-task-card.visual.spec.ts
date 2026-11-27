@@ -250,7 +250,7 @@ for (const size of [SIZES[0]!, SIZES.at(-1)!]) {
   for (const theme of THEMES) {
     test.describe(`a start refused for its model ${size.name} ${theme}`, () => {
       test.use(contextFor(size, theme));
-      test(`#799: Couldn't start for its model matches its baseline, ${theme}, ${size.name}`, async ({
+      test(`F-587 #799: Couldn't start for its model matches its baseline, ${theme}, ${size.name}`, async ({
         page,
       }) => {
         await open(page, theme);
@@ -314,7 +314,7 @@ test.describe("a started task's card", () => {
     await expect(refused.getByRole("button", { name: /^Open/ })).toHaveCount(0);
   });
 
-  test("#799: a start refused for its model says which model in plain words, not the gateway's", async ({
+  test("F-587 #799: a start refused for its model says which model in plain words, not the gateway's", async ({
     page,
   }) => {
     await open(page);

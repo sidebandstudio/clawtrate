@@ -398,8 +398,10 @@ const afterCreate: Step = (ctx) => {
 /** The task the bot started last in this conversation, from its sessions_spawn results. */
 export function lastStartedTask(ctx: PlanContext): string | null {
   for (const found of [...(ctx.history ?? [])].reverse()) {
-    if (found.name !== "sessions_spawn") continue;
-    const key = lastResult({ ...ctx, results: [found] }, "sessions_spawn")?.childSessionKey;
+    // `sessions_spawn` names the task `childSessionKey`; 2026.11.10's `sessions_create`, `sessionKey`.
+    if (found.name !== "sessions_spawn" && found.name !== "sessions_create") continue;
+    const result = lastResult({ ...ctx, results: [found] }, found.name);
+    const key = found.name === "sessions_spawn" ? result?.childSessionKey : result?.sessionKey;
     if (typeof key === "string") return key;
   }
   return null;

@@ -676,7 +676,7 @@ describe("a task a bot starts, with its reports as OpenClaw 2026.11.10 sends the
 // #799: a start the gateway's model allowlist refused, in each version's words, as a development
 // gateway of each answered with `agents.defaults.modelPolicy.allow: ["acme/dev-1"]` and the bot on
 // `scripted/dev-1`.
-describe("a start refused for its model says so in plain words (#799)", () => {
+describe("F-587: a start refused for its model says so in plain words (#799)", () => {
   const BOTH = "model not allowed: scripted/dev-1";
   const NAMED_10_6 =
     'sessions_spawn model "acme/dev-2" is not usable: model not allowed: acme/dev-2';
@@ -746,7 +746,7 @@ describe("a start refused for its model says so in plain words (#799)", () => {
 // `details` keep only `sessionKey` in history (the run's events carry all four); the task's row
 // says `createdVia: "spawn"` and the conversation it came from in `spawnedBy`, as for
 // `sessions_spawn`.
-describe("a task a bot makes with sessions_create shows as the same card (2026.11.10)", () => {
+describe("F-587: a task a bot makes with sessions_create shows as the same card (2026.11.10)", () => {
   const CREATE = "sessions_create";
   const ASK = { label: LABEL, message: BRIEF };
   const MADE = {
@@ -836,5 +836,108 @@ describe("a task a bot makes with sessions_create shows as the same card (2026.1
     const made = runs[0]!.steps.find((each) => each.kind === "tool")!;
     expect(isTaskStart(made, made.raw)).toBe(true);
     expect(isTaskStart({ ...made, toolName: "sessions_send" }, made.raw)).toBe(false);
+  });
+});
+
+// Review of #903: what a bot can put in a model's name, a task made whose brief never ran, and a
+// `sessions_create` task's report under a masked run id.
+describe("F-587: a start's words a bot can shape, and a task made but not run (#799)", () => {
+  const CREATE = "sessions_create";
+  const ASK = { label: LABEL, message: BRIEF };
+  const createRows = (body: unknown, isError = false) => [
+    user("#create-task", T, RUN),
+    call(RUN, T + 800, CALL, ASK, CREATE),
+    // As history keeps it: the compact JSON as the row's only text.
+    { ...result(RUN, T + 1_000, CALL, JSON.stringify(body), isError, CREATE) },
+    say(RUN, T + 1_040, "I started a task for it."),
+  ];
+
+  it("F-587: a model name with an override, isolate or zero-width character is no recognised refusal", () => {
+    for (const odd of ["‮", "⁦", "​", "\u0007"]) {
+      const asked = `openai/gpt${odd}5.5`;
+      const error = `sessions_spawn model "${asked}" is not usable: model not allowed: ${asked}`;
+      expect([odd, modelRefusal(error)]).toEqual([odd, null]);
+      const [card] = cards(
+        startRows(VISIBLE, { status: "error", tool: "sessions_spawn", error }, true),
+      );
+      // The gateway's words, cleaned and quoted as for any other refusal; never the plain line.
+      expect(card).toMatchObject({ state: "couldnt-start", refusedModel: null });
+      expect(card!.reason).not.toContain(odd);
+      // In the provider, too.
+      expect(modelRefusal(`model not allowed: open${odd}ai/gpt-5.5`)).toBeNull();
+    }
+    // A text past the card's bound for the gateway's words is not read either.
+    expect(modelRefusal(`model not allowed: openai/${"x".repeat(MAX_REFUSAL_CHARS)}`)).toBeNull();
+    expect(modelRefusal("model not allowed: openai/gpt-5.5")).toEqual({
+      provider: "openai",
+      model: "gpt-5.5",
+    });
+  });
+
+  it("F-587: a task sessions_create made whose first run didn't start keeps its link and says why", () => {
+    // OpenClaw 2026.11.10, `createSessionsCreateTool` (`openclaw-tools-*.mjs`): a task made with a
+    // `message` whose run didn't start answers `runStarted: false` and `runError`, the gateway's
+    // summary of why (`sessions-spawn-visible-*.mjs`, its `status: "created"` answer).
+    const made = {
+      sessionKey: CHILD,
+      sessionId: "69ffa710-173b-4111-9b2e-6698f5b46079",
+      runStarted: false,
+      runError: "Visible session run failed: provider ‮unavailable",
+    };
+    for (const tasks of [{}, listed("idle")]) {
+      const [card] = cards(createRows(made), tasks);
+      expect(card).toMatchObject({
+        taskKey: CHILD,
+        state: "failed",
+        firstRunFailed: true,
+        reason: "Visible session run failed: provider unavailable",
+        refusedModel: null,
+      });
+    }
+    // Listed with the task open, the person's own message there now runs it: its row says.
+    expect(cards(createRows(made), listed("running"))[0]).toMatchObject({
+      state: "working",
+      firstRunFailed: true,
+    });
+    // Started, as before.
+    const ran = { sessionKey: CHILD, sessionId: "s", runStarted: true, runId: CHILD_RUN };
+    expect(cards(createRows(ran), listed("idle"))[0]).toMatchObject({
+      state: "idle",
+      firstRunFailed: false,
+      reason: null,
+    });
+  });
+
+  it("F-587: a sessions_create task's report is found under a masked run id, while it alone fits", () => {
+    const key = "agent:pip:dashboard:3a4879b7-2b95-4de8-b9b3-893268271164";
+    const child = "324ec28d-e155-4f7f-9cdb-ba28ed88723c";
+    const masked = "announce:v1:agent:pip:dashboard:3a4879b7-2b95-4de8-b9b3-893268…723c";
+    const task = mapSessionRow({
+      key,
+      agentId: "pip",
+      createdVia: "spawn",
+      spawnedBy: HERE,
+      label: LABEL,
+      status: "done",
+    })!;
+    const made = { sessionKey: key, sessionId: "s", runStarted: true, runId: child };
+    const rows = [...createRows(made), say(masked, T + 2_500, "Compare trail maps finished.")];
+    expect(cards(rows, { pip: [task] })[0]!.reportedBack).toBe(mapHistory(rows).at(-1)!.id);
+    // A follow-up the same mask fits: two reports could be this one, so it is neither's.
+    const both = [
+      ...createRows(made),
+      user("#follow-up", T + 3_000, "run-f"),
+      call("run-f", T + 3_100, "call_f", { sessionKey: key, message: "More." }, "sessions_send"),
+      result(
+        "run-f",
+        T + 3_200,
+        "call_f",
+        { runId: "9999aaaa-0000-4000-8000-00000000723c", status: "accepted", sessionKey: key },
+        false,
+        "sessions_send",
+      ),
+      say(masked, T + 4_000, "Finished."),
+    ];
+    expect(cards(both, { pip: [task] })[0]!.reportedBack).toBeNull();
   });
 });
