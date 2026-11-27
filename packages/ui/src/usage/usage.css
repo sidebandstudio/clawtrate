@@ -256,3 +256,20 @@
     animation: none;
   }
 }
+
+/* A budget's token field: its label with the "i", and the input below (InfoTip.tsx). */
+.c-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.c-field-label {
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+/* The name and its "i" on one line: not the form's column of label and field. */
+.c-field-label > label {
+  display: inline;
+}
