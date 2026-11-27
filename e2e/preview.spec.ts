@@ -1953,7 +1953,9 @@ test("F-071: / lists a skill the person saved to their own library, as theirs, i
     const listed = (row: Locator) => row.and(page.locator(`[data-name="${slug}"]`));
     const rows = page.getByRole("listbox", { name: "Skills and commands" }).getByRole("option");
     // The task made before the save is still the one open.
-    await expect(page.getByRole("heading", { level: 1, name: before.title })).toBeVisible();
+    await expect(
+      page.getByRole("button", { name: `Otto, ${before.title}. Show details.` }),
+    ).toBeVisible();
     await composer(page).click();
     await page.keyboard.type("/");
     await expect(rows.first()).toBeVisible({ timeout: 30_000 });
