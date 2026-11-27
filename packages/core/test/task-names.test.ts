@@ -493,6 +493,69 @@ describe("the device that sends the first message", () => {
     }
   });
 
+  it("doesn't name a task whose first message from another device reached its row before its history", async () => {
+    // Device B sends the first message; this client sends a picture before it sees it; B's row
+    // preview arrives, its history row doesn't. The gateway's history holds B's message.
+    const picture = { type: "image", fileName: "dot.png", mimeType: "image/png", content: PNG };
+    const { gateway } = creatingGateway(["Garden plan"]);
+    const { client } = await openTask({ gateway });
+    try {
+      const key = await client.newTask("main");
+      client.openSession(key);
+      await until(() => client.state.transcripts[key]?.status === "ready");
+      const id = client.sendMessage(key, "", { attachments: [picture] });
+      const fromB = {
+        role: "user",
+        content: "Plan the spring beds",
+        timestamp: 1,
+        __openclaw: { id: "row-b", idempotencyKey: "device-b:user" },
+      };
+      gateway.handlers["chat.history"] = (params) =>
+        (params as { sessionKey: string }).sessionKey === key
+          ? { messages: [fromB, ownPicture(id)], hasMore: false }
+          : { messages: [], hasMore: false };
+      const row = {
+        key,
+        sessionId: SESSION,
+        lastMessagePreview: "Plan the spring beds",
+        updatedAt: 3,
+      };
+      gateway.emit("sessions.changed", { sessionKey: key, ...row, session: row });
+      await until(() => client.state.tasksByBot.main?.some((task) => task.key === key) === true);
+      expect(client.state.transcripts[key]?.items.some((item) => item.role === "user")).toBe(false);
+      client.sendMessage(key, MESSAGE);
+      await until(() => gateway.calls("chat.history").length > 1);
+      await sleep(50);
+      expect(titleCalls(gateway)).toEqual([]);
+      expect(patches(gateway)).toEqual([]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("doesn't name an empty task when the gateway's history can't be read, or is cut short", async () => {
+    for (const answer of [new Error("closed"), { messages: [], hasMore: true }]) {
+      const { gateway } = creatingGateway(["Garden plan"]);
+      const { client } = await openTask({ gateway });
+      try {
+        const key = await client.newTask("main");
+        client.openSession(key);
+        await until(() => client.state.transcripts[key]?.status === "ready");
+        const reads = gateway.calls("chat.history").length;
+        gateway.handlers["chat.history"] = () => {
+          if (answer instanceof Error) throw answer;
+          return answer;
+        };
+        client.sendMessage(key, MESSAGE);
+        await until(() => gateway.calls("chat.history").length > reads);
+        await sleep(50);
+        expect(titleCalls(gateway)).toEqual([]);
+      } finally {
+        client.stop();
+      }
+    }
+  });
+
   it("doesn't name a task whose picture before it came from another device", async () => {
     const { gateway } = creatingGateway();
     const { client } = await openTask({ gateway });

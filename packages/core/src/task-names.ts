@@ -10,7 +10,6 @@
 
 import { readCatalog, type CatalogModel } from "./accounts.ts";
 import { asRecord, type RawRecord } from "./mapping.ts";
-import type { TranscriptItem } from "./types.ts";
 
 /**
  * Who writes a task's name, in order of preference: each provider with the ids of its small model
@@ -70,22 +69,25 @@ export function namingCalls(
   return calls;
 }
 
+/** The rows of a task's history read fresh before an empty task is named (`onlyOwnRows`). */
+export const FIRST_CHECK_ROWS = 40;
+
 /**
- * Whether a message this client sends now is still the first with text in a task it made: each
- * person's row in the task's history is one of this client's messages with no text (`textless`,
- * their ids; the gateway stores each under `<id>:user`). With none sent yet, a last-message preview
- * on the task's row is someone else's message too; once this client has sent one, the preview can be
- * that message or the bot's reply to it.
+ * Whether a task's history, read from the gateway just before its name is made, holds no person's
+ * row but this client's own sends there (`own`: the ids of its messages with no text and of the
+ * one with text; each row is stored as `<id>:user`). The history this client holds can be behind
+ * the task's row, so another device's first message is looked for here too. A page cut short
+ * (`hasMore`) or not read can't tell, and says no.
  */
-export function firstWithText(
-  items: readonly TranscriptItem[],
-  textless: readonly string[],
-  preview: unknown,
-): boolean {
-  const ours = (key: string | undefined) =>
-    key !== undefined && textless.some((id) => key === id || key === `${id}:user`);
-  if (items.some((item) => item.role === "user" && !ours(item.idempotencyKey))) return false;
-  return textless.length > 0 || !preview;
+export function onlyOwnRows(history: unknown, own: readonly string[]): boolean {
+  const page = asRecord(history);
+  if (!page || page.hasMore === true || !Array.isArray(page.messages)) return false;
+  return page.messages.every((entry) => {
+    const row = asRecord(entry);
+    if (row?.role !== "user") return true;
+    const stored = asRecord(row.__openclaw)?.idempotencyKey ?? row.idempotencyKey;
+    return typeof stored === "string" && own.some((id) => stored === id || stored === `${id}:user`);
+  });
 }
 
 /** Whether a task has a name already: one the person or the bot gave, or one made before. */
@@ -127,10 +129,24 @@ export async function nameTask(
     botId: string;
     botModel: string | null;
     text: string;
+    /** For an empty task named from a later send: this client's sends there (`onlyOwnRows`). */
+    ownSends?: readonly string[];
   },
 ): Promise<string | null> {
   const message = namingSource(task.text);
   if (!message || hasName(ctx.row())) return null;
+  if (task.ownSends) {
+    try {
+      const history = await ctx.request("chat.history", {
+        sessionKey: task.key,
+        limit: FIRST_CHECK_ROWS,
+      });
+      if (!onlyOwnRows(history, task.ownSends)) return null;
+    } catch {
+      // Not known to be the first: no name.
+      return null;
+    }
+  }
   let catalogue: CatalogModel[] = [];
   try {
     // Only a bot whose provider may be named across needs the person's other providers.

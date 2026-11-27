@@ -389,7 +389,7 @@ import {
   type CreatedTask,
   type TaskActionContext,
 } from "./task-actions.ts";
-import { firstWithText, nameTask } from "./task-names.ts";
+import { nameTask } from "./task-names.ts";
 import { fromActivity, WaitingIndex } from "./waiting.ts";
 import { mentionRows, slashRows, type MenuRow } from "./composer-menus.ts";
 import { listedBots } from "./gateway-bot.ts";
@@ -3662,7 +3662,7 @@ export class ClawtrateClient {
       })),
       ...(replyToId ? { replyToId } : {}),
     };
-    this.noteFirstSend(key, transcript, message);
+    this.noteFirstSend(key, message);
     if (attachments.length > 0) {
       this.attachmentContent.set(message.id, {
         task: key,
@@ -11316,18 +11316,21 @@ export class ClawtrateClient {
   /**
    * A message this client sends in an empty task it made, before one with text (`taskNames`). One
    * with text names the task when everything the task holds is this client's own messages with no
-   * text: each person's row in its history is one of them, by the key the gateway stored it under
-   * (`<id>:user`, both versions). Another's message ends the wait, so does a fifth with no text.
+   * text: each person's row in the task's history as the gateway has it just before the name is
+   * made is one of them, by the key the gateway stored it under (`<id>:user`, both versions;
+   * `onlyOwnRows`). The history this client holds can be behind the task's row, so it isn't what
+   * decides. With nothing sent from here yet, a last-message preview on the row is another's
+   * message and ends the wait; so does a fifth with no text.
    */
-  private noteFirstSend(key: string, transcript: Transcript, message: OutgoingMessage): void {
+  private noteFirstSend(key: string, message: OutgoingMessage): void {
     const kept = this.taskNames.get(key);
     if (kept?.stage !== "waiting") return;
     const row = this.rows.get(capId(key, MAX_ID_CHARS));
     const bot = this.taskBot(key);
-    if (!bot || !firstWithText(transcript.items, kept.textless, row?.lastMessagePreview)) {
+    if (!bot || (kept.textless.length === 0 && row?.lastMessagePreview)) {
       this.taskNames.delete(key);
     } else if (message.text) {
-      this.startNaming(key, bot, message.text, kept.sessionId);
+      this.startNaming(key, bot, message.text, kept.sessionId, [...kept.textless, message.id]);
     } else if (kept.textless.length < MAX_TEXTLESS_SENDS) {
       kept.textless.push(message.id);
     } else {
@@ -11352,13 +11355,19 @@ export class ClawtrateClient {
    * sent that message, so with the write access they had: nothing is asked of the person, and
    * nothing that goes wrong is shown.
    */
-  private startNaming(key: string, botId: string, text: string, sessionId: string | null): void {
+  private startNaming(
+    key: string,
+    botId: string,
+    text: string,
+    sessionId: string | null,
+    ownSends?: string[],
+  ): void {
     this.keepTaskName(key, { stage: "naming", sessionId, textless: [] });
     const ctx = this.actionContext(null, this.epoch);
     const botModel = this.state.bots.find((bot) => bot.id === botId)?.model ?? null;
     void nameTask(
       { request: ctx.request, row: () => this.rows.get(capId(key, MAX_ID_CHARS)) ?? null },
-      { key, sessionId, botId, botModel, text },
+      { key, sessionId, botId, botModel, text, ...(ownSends ? { ownSends } : {}) },
     )
       .catch(() => null)
       .finally(() => {
