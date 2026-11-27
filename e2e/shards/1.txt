@@ -9,3 +9,4 @@ other-tools.spec.ts
 ui-pictures.spec.ts
 memory.spec.ts
 search.spec.ts
+device-approval.spec.ts

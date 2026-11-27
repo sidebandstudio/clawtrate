@@ -3,7 +3,12 @@
 
 import { readOpenClawUpdate, type OpenClawUpdate } from "./gateway-update.ts";
 import { OpenClawUpdates } from "./openclaw-update.ts";
-import { DeviceApprovals, pairCode, type DeviceDecision } from "./device-approval.ts";
+import {
+  DeviceApprovals,
+  pairCode,
+  type DeviceDecision,
+  type DeviceListRead,
+} from "./device-approval.ts";
 import { listMemory, readMemory, writeMemory } from "./memory.ts";
 import { startTasksFrom } from "./start-tasks.ts";
 import {
@@ -6883,9 +6888,9 @@ export class ClawtrateClient {
 
   // Approving a waiting device (`device-approval.ts`, setup-effortless.md §5) ---------------
 
-  /** The gateway's waiting devices, read again. */
-  readDeviceRequests(): Promise<void> {
-    return this.deviceApprovals.refresh();
+  /** The gateway's waiting devices, read again, and whether a list that new was applied. */
+  readDeviceRequests(): Promise<DeviceListRead> {
+    return this.deviceApprovals.readNow();
   }
 
   /** A window takes the one request the host opens by itself: true for the first that asks. */
