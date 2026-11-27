@@ -128,7 +128,14 @@ function namingGateway(answers: Array<unknown | Error>, row: Record<string, unkn
   return { ctx, state, asked, titleCalls, patches };
 }
 
-const TASK = { key: KEY, botId: "main", botModel: "google/gemini-3-pro", text: MESSAGE };
+const SESSION = NAMED_1006.sessionId;
+const TASK = {
+  key: KEY,
+  sessionId: SESSION,
+  botId: "main",
+  botModel: "google/gemini-3-pro",
+  text: MESSAGE,
+};
 
 describe("making a name", () => {
   it("keeps the first title in the task's autoLabel, with the gateway's exact request", async () => {
@@ -137,7 +144,23 @@ describe("making a name", () => {
     expect(g.titleCalls()).toEqual([
       { agentId: "main", message: MESSAGE, model: "openai/gpt-6-sol" },
     ]);
-    expect(g.patches()).toEqual([{ key: KEY, autoLabel: "Lisbon trip on a budget" }]);
+    expect(g.patches()).toEqual([
+      { key: KEY, autoLabel: "Lisbon trip on a budget", expectedSessionId: SESSION },
+    ]);
+  });
+
+  it("is bound to the task's session: from its row when the creation gave none, else not kept", async () => {
+    // A patch by key alone makes a deleted task again (both versions); with the session the
+    // gateway refuses it ("changed before patch").
+    const fromRow = namingGateway([{ title: "Lisbon" }], { sessionId: "row-session" });
+    expect(await nameTask(fromRow.ctx, { ...TASK, sessionId: null })).toBe("Lisbon");
+    expect(fromRow.patches()).toEqual([
+      { key: KEY, autoLabel: "Lisbon", expectedSessionId: "row-session" },
+    ]);
+    const gone = namingGateway([{ title: "Lisbon" }]);
+    gone.state.row = null as unknown as Record<string, unknown>;
+    expect(await nameTask(gone.ctx, { ...TASK, sessionId: null })).toBeNull();
+    expect(gone.patches()).toEqual([]);
   });
 
   it("goes on past a refusal, an empty answer and a timeout, to the bot's own provider", async () => {
@@ -245,7 +268,8 @@ function creatingGateway(titles: Array<string | null> = ["Lisbon trip on a budge
   gateway.handlers["sessions.create"] = (params) => {
     created = true;
     stored = { label: (params as { label?: string }).label ?? null };
-    return { key: KEY, runId: "run-create" };
+    // As both versions answer it: the task's key and its session.
+    return { ok: true, key: KEY, sessionId: NAMED_1006.sessionId, runId: "run-create" };
   };
   const row = () => ({ key: KEY, sessionId: NAMED_1006.sessionId, updatedAt: 1, ...stored });
   gateway.handlers["sessions.list"] = () => ({ sessions: created ? [row()] : [], hasMore: false });
@@ -271,7 +295,9 @@ describe("the device that sends the first message", () => {
       await client.createTask("main", MESSAGE);
       await until(() => patches(gateway).length === 1);
       expect(titleCalls(gateway)).toEqual([{ agentId: "main", message: MESSAGE }]);
-      expect(patches(gateway)).toEqual([{ key: KEY, autoLabel: "Lisbon trip on a budget" }]);
+      expect(patches(gateway)).toEqual([
+        { key: KEY, autoLabel: "Lisbon trip on a budget", expectedSessionId: SESSION },
+      ]);
       // The 2026.10.6 event the patch brings: the name every device shows.
       gateway.emit("sessions.changed", {
         sessionKey: KEY,
@@ -358,7 +384,9 @@ describe("the device that sends the first message", () => {
       client.sendMessage(key, "and a day in Sintra");
       await sleep(50);
       expect(titleCalls(gateway)).toEqual([{ agentId: "main", message: MESSAGE }]);
-      expect(patches(gateway)).toEqual([{ key, autoLabel: "Lisbon trip" }]);
+      expect(patches(gateway)).toEqual([
+        { key, autoLabel: "Lisbon trip", expectedSessionId: SESSION },
+      ]);
     } finally {
       client.stop();
     }
@@ -379,6 +407,71 @@ describe("the device that sends the first message", () => {
       client.sendMessage(other, MESSAGE);
       await sleep(50);
       expect(titleCalls(gateway)).toEqual([]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("doesn't name an empty task it made whose first message came from another device", async () => {
+    const { gateway } = creatingGateway();
+    const { client } = await openTask({ gateway });
+    try {
+      const key = await client.newTask("main");
+      // The other device's message, in the task's history when this one opens it.
+      gateway.handlers["chat.history"] = (params) =>
+        (params as { sessionKey: string }).sessionKey === key
+          ? {
+              messages: [
+                { role: "user", content: [{ type: "text", text: MESSAGE }], timestamp: 1 },
+              ],
+              hasMore: false,
+            }
+          : { messages: [], hasMore: false };
+      client.openSession(key);
+      await until(() => (client.state.transcripts[key]?.items.length ?? 0) > 0);
+      client.sendMessage(key, "and a day in Sintra");
+      await sleep(50);
+      expect(titleCalls(gateway)).toEqual([]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("doesn't name it either when only the task's row says it has a message", async () => {
+    const { gateway } = creatingGateway();
+    const { client } = await openTask({ gateway });
+    try {
+      const key = await client.newTask("main");
+      client.openSession(key);
+      await until(() => client.state.transcripts[key]?.status === "ready");
+      // 2026.11.10's event for the other device's message, before this one reads the history.
+      const row = { key, sessionId: SESSION, lastMessagePreview: MESSAGE, updatedAt: 2 };
+      gateway.emit("sessions.changed", { sessionKey: key, reason: "send", ...row, session: row });
+      await sleep(30);
+      client.sendMessage(key, "and a day in Sintra");
+      await sleep(50);
+      expect(titleCalls(gateway)).toEqual([]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("keeps no empty task whose key is too long to open: it takes no place of another's", async () => {
+    const { gateway } = creatingGateway(["Lisbon"]);
+    let made = 0;
+    gateway.handlers["sessions.create"] = () => {
+      made += 1;
+      const key = made === 1 ? KEY : `agent:main:dashboard:${String(made).padStart(1100, "a")}`;
+      return { ok: true, key, sessionId: SESSION };
+    };
+    const { client } = await openTask({ gateway });
+    try {
+      const key = await client.newTask("main");
+      for (let i = 0; i < MAX_NAMED_TASKS; i += 1) await client.newTask("main");
+      client.openSession(key);
+      await until(() => client.state.transcripts[key]?.status === "ready");
+      client.sendMessage(key, MESSAGE);
+      await until(() => titleCalls(gateway).length === 1);
     } finally {
       client.stop();
     }

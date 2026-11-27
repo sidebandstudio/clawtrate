@@ -91,7 +91,14 @@ export type NamingContext = {
  */
 export async function nameTask(
   ctx: NamingContext,
-  task: { key: string; botId: string; botModel: string | null; text: string },
+  task: {
+    key: string;
+    /** The session the task was created as, from the creation's answer, else its row's. */
+    sessionId: string | null;
+    botId: string;
+    botModel: string | null;
+    text: string;
+  },
 ): Promise<string | null> {
   const message = namingSource(task.text);
   if (!message || hasName(ctx.row())) return null;
@@ -117,10 +124,19 @@ export async function nameTask(
       // Refused or failed: the next one.
     }
     if (!title) continue;
-    if (hasName(ctx.row())) return null;
+    const row = ctx.row();
+    if (hasName(row)) return null;
+    // Bound to the task's own session: the gateway refuses it for a task deleted meanwhile, which a
+    // patch by key alone would make again (both versions).
+    const sessionId = task.sessionId ?? (typeof row?.sessionId === "string" ? row.sessionId : null);
+    if (!sessionId) return null;
     const name = [...title].slice(0, MAX_TASK_NAME_CHARS).join("");
     try {
-      await ctx.request("sessions.patch", { key: task.key, autoLabel: name });
+      await ctx.request("sessions.patch", {
+        key: task.key,
+        autoLabel: name,
+        expectedSessionId: sessionId,
+      });
       return name;
     } catch {
       return null;

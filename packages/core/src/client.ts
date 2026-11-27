@@ -3628,8 +3628,15 @@ export class ClawtrateClient {
     )
       throw new Error("That message can't be replied to.");
     // The first message of an empty task this client made names it.
-    const namedBy = this.taskNames.get(key) === "waiting" ? this.taskBot(key) : null;
-    if (body && namedBy) this.startNaming(key, namedBy, body);
+    if (body && this.taskNames.get(capId(key, MAX_ID_CHARS)) === "waiting") {
+      // Only while the task has no message yet: another device may have sent its first one.
+      const row = this.rows.get(capId(key, MAX_ID_CHARS));
+      const first =
+        !transcript.items.some((item) => item.role === "user") && !row?.lastMessagePreview;
+      const namedBy = first ? this.taskBot(key) : null;
+      if (namedBy) this.startNaming(key, namedBy, body, null);
+      else this.taskNames.delete(capId(key, MAX_ID_CHARS));
+    }
     const message: OutgoingMessage = {
       id: this.randomId(),
       text: body,
@@ -4247,7 +4254,10 @@ export class ClawtrateClient {
       attachments: [],
     };
     // A task created with its first message is named from it, unless the person named it.
-    if (!creation.label) this.startNaming(key, creation.botId, creation.text);
+    if (!creation.label) {
+      const sessionId = typeof result?.sessionId === "string" ? result.sessionId : null;
+      this.startNaming(key, creation.botId, creation.text, sessionId);
+    }
     // A caller holds one interest in the new task; one settled later is kept for its message.
     this.openSession(key, true);
     this.updateActivity(key, (activity, ctx) => {
@@ -11292,6 +11302,8 @@ export class ClawtrateClient {
 
   /** Note a task this client names; the oldest goes past `MAX_NAMED_TASKS`. */
   private keepTaskName(key: string, stage: "waiting" | "naming"): void {
+    // A key longer than a task can be opened with is never sent to from here: nothing to keep.
+    if (jsonTextLength(key) > MAX_ID_CHARS) return;
     this.taskNames.delete(key);
     if (this.taskNames.size >= MAX_NAMED_TASKS) {
       const oldest = this.taskNames.keys().next();
@@ -11305,13 +11317,13 @@ export class ClawtrateClient {
    * sent that message, so with the write access they had: nothing is asked of the person, and
    * nothing that goes wrong is shown.
    */
-  private startNaming(key: string, botId: string, text: string): void {
+  private startNaming(key: string, botId: string, text: string, sessionId: string | null): void {
     this.keepTaskName(key, "naming");
     const ctx = this.actionContext(null, this.epoch);
     const botModel = this.state.bots.find((bot) => bot.id === botId)?.model ?? null;
     void nameTask(
       { request: ctx.request, row: () => this.rows.get(capId(key, MAX_ID_CHARS)) ?? null },
-      { key, botId, botModel, text },
+      { key, sessionId, botId, botModel, text },
     )
       .catch(() => null)
       .finally(() => {
