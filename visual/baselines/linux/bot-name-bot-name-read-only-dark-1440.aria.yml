@@ -16,7 +16,7 @@
         - time: 5:35 PM
         - text: Johnny it is. It shows once you confirm it in Clawtrate.
     - listitem:
-      - button "Juniper, 3 tasks, unread, research, primary bot":
+      - button "Juniper, 3 tasks, unread, research":
         - text: Juniper research
         - time: 5:24 PM
         - text: Ask these five, and get the answers in writing.
