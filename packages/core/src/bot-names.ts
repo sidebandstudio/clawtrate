@@ -779,6 +779,8 @@ export class BotNames {
     line({ status: "renaming" });
     try {
       let sent = false;
+      // The day this rename is counted on: its claim's, wherever its confirmation falls.
+      let countDay = dayOf(change.at);
       for (let attempt = 0; attempt < CLAIM_ATTEMPTS && !sent; attempt += 1) {
         op = { stamp, generation: this.ctx.generation() };
         let claimedAt = this.ctx.now();
@@ -792,7 +794,7 @@ export class BotNames {
           if (this.isDeclined(record, stamp, botId, name, origin)) return "declined";
           const day = dayOf(now);
           const confirmed = record.changes.filter(
-            (each) => each.bot === botId && each.done !== undefined && dayOf(each.done) === day,
+            (each) => each.bot === botId && each.done !== undefined && dayOf(each.at) === day,
           ).length;
           if (Math.max(confirmed, renamesOn(record, botId, day)) >= MAX_RENAMES_PER_DAY)
             return "limit";
@@ -801,21 +803,20 @@ export class BotNames {
             changes: [...record.changes.filter((each) => each !== same), change],
             claims: [...record.claims.filter((each) => each.op !== opId), { ...claim, at: now }],
           };
-          // Room now for what confirming it writes too: the count of this rename and of each other
-          // one still under way, on each day it may be confirmed: this device's, the day its claim
-          // was taken, and the day that claim expires on, past midnight perhaps.
-          const confirmable = (at: number) => [dayOf(at), dayOf(at + CLAIM_EXPIRY_MS)];
+          // Room now for what confirming it writes too. A rename is counted on the day its claim
+          // was taken, whenever it is confirmed: this one's count on this day, and each other
+          // rename's still under way on the day of its own claim.
           let counted: NameRecord = withCount(next, botId, day);
-          for (const on of new Set(confirmable(now)))
-            if (on !== day) counted = { ...counted, counts: reserved(counted.counts, botId, on) };
           for (const other of next.claims) {
             if (other.undo || other.op === opId) continue;
             const pending = next.changes.find(
               (each) => each.run === other.run && each.bot === other.bot,
             );
             if (pending && pending.done === undefined && pending.undone === undefined)
-              for (const on of new Set([day, ...confirmable(other.at)]))
-                counted = { ...counted, counts: reserved(counted.counts, other.bot, on) };
+              counted = {
+                ...counted,
+                counts: reserved(counted.counts, other.bot, dayOf(other.at)),
+              };
           }
           if (!keepsWhatItAdds(record, counted, day)) return "full";
           return next;
@@ -827,6 +828,7 @@ export class BotNames {
         if (claimed === "limit") return line({ status: "not-done", reason: "limit" });
         if (claimed === "full") return line({ status: "not-done", reason: "full" });
         if (claimed === "unavailable") return line({ status: "not-done", reason: "no-record" });
+        countDay = dayOf(claimedAt);
         // Holding the claim: the bot as the gateway lists it now, on the gateway the read was for.
         await this.ctx.refreshBots();
         await this.ctx.sameGateway(stamp);
@@ -883,7 +885,7 @@ export class BotNames {
         const changes = entry
           ? record.changes.map((each) => (each === entry ? { ...each, done } : each))
           : [...record.changes, { ...change, done }];
-        return withCount({ ...record, changes, claims }, botId, dayOf(done));
+        return withCount({ ...record, changes, claims }, botId, countDay);
       }).catch((error: unknown) => {
         this.ctx.log(`could not mark ${botId}'s rename done: ${errorText(error)}`);
         return "unavailable" as const;
@@ -1435,7 +1437,8 @@ export function settled(record: NameRecord, bots: readonly Bot[], now: number): 
               changes: next.changes.map((each) => (each === entry ? { ...each, done: now } : each)),
             },
             entry.bot,
-            dayOf(now),
+            // Counted on its claim's day, as the device that took it counts it.
+            dayOf(claim.at),
           )
         : { ...next, changes: next.changes.filter((each) => each !== entry) };
     }
