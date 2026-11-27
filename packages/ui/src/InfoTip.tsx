@@ -37,15 +37,18 @@ export function InfoTip({
   const leave = useRef<ReturnType<typeof setTimeout> | null>(null);
   const open = !dismissed && (pinned || hovered || focused);
 
-  // A tap anywhere else puts a pinned card away.
+  // A tap anywhere else puts an open card away, even while the "i" keeps focus (a tap on
+  // something that takes no focus leaves it there).
   useEffect(() => {
-    if (!pinned) return;
+    if (!open) return;
     const away = (event: PointerEvent) => {
-      if (!root.current?.contains(event.target as Node)) setPinned(false);
+      if (root.current?.contains(event.target as Node)) return;
+      setPinned(false);
+      setDismissed(true);
     };
     document.addEventListener("pointerdown", away);
     return () => document.removeEventListener("pointerdown", away);
-  }, [pinned]);
+  }, [open]);
   useEffect(
     () => () => {
       if (leave.current) clearTimeout(leave.current);
@@ -57,6 +60,7 @@ export function InfoTip({
     if (event.pointerType !== "mouse") return;
     if (leave.current) clearTimeout(leave.current);
     setHovered(true);
+    setDismissed(false);
   };
   const exit = (event: ReactPointerEvent) => {
     if (event.pointerType !== "mouse") return;
@@ -75,6 +79,7 @@ export function InfoTip({
         aria-label={`About ${about}`}
         aria-expanded={open}
         aria-controls={id}
+        aria-describedby={id}
         data-testid={`${id}-i`}
         onFocus={() => setFocused(true)}
         onBlur={(event) => {
