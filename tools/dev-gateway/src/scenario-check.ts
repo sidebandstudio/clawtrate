@@ -3701,7 +3701,7 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         "the partner's task: listed under Marlow, started by Pip from Pip's task",
       );
       await checkBrief(h, started.key, started.firstRun, HAND_OFF_PARTNER.task);
-      // Juniper may start tasks only under itself.
+      // The gateway's own bot may start tasks only under itself.
       const outside = await h.run(
         "plain",
         await h.session("main", "hand-off-outside"),
