@@ -197,39 +197,72 @@ The window gives neither of them anything they don't already have.
 - `packageName`, and `version` in canonical `x.y.z` form;
 - `pluginId`, and `integrity` (`sha512-…`) of the exact, dependency-free tarball;
 - `declared`: every group `plugins.inspect` reports, each as a sorted list. The groups are `channels`, `providers`, `tools`, `contracts`, `hooks`, `mcpServers`, `cliCommands`, `cliBackends`, `skills` and `dangerousConfigFlags`. A group missing on either side is a mismatch.
-- `grants`, kept separately: the exact config the plugin is given. For `clawtrate-voice` that is `{hooks: {allowConversationAccess: true}}`.
+- `grants`, kept separately: the fields of the plugin's entry that grant it something, merged into the entry as they are. For `clawtrate-voice` that is `{hooks: {allowConversationAccess: true}}`, so the entry gets `hooks.allowConversationAccess: true`.
 - `sourceDigests`: `runtime.sourceDigests[<id>]` for each OpenClaw version the release ran it on. This is mandatory: a gateway whose version has no recorded digest gets no install (step 0).
 
-**Policy OK**, read from `config.get` and checked before every write:
+**The entry's shapes.** Every step names the plugin's entry, `plugins.entries.<id>`, by one of these shapes and no other way:
+
+| Shape   | The entry                     |
+| ------- | ----------------------------- |
+| `none`  | no entry                      |
+| `OFF`   | `{enabled: false}`            |
+| `OFF+G` | `{enabled: false, ...grants}` |
+| `ON+G`  | `{enabled: true, ...grants}`  |
+
+An entry has a shape when it has exactly the shape's fields with the shape's values, compared deeply. It may also have an empty `config: {}`, which the gateway adds by itself (ran, both). Any other field, or a `config` that isn't empty, means it has no shape. For a plugin whose `grants` are empty, `OFF+G` is `OFF` and `ON+G` is `{enabled: true}`.
+
+**Policy OK**, read from `config.get`:
 
 - the plugin is not in `plugins.deny`;
 - `plugins.allow` is empty, or names the plugin;
-- the entry holds no keys besides `enabled`, `hooks` and an empty `config`;
-- its `hooks` are absent or equal to the pin's `grants`.
+- the entry has one of the four shapes.
 
-**Before every write**, the engine does all of these. If any fails, it stops without writing:
+**The expected state** at each point, by mode:
+
+| After step | Install, Add again                                | Turn on                                        | Update                                              |
+| ---------- | ------------------------------------------------- | ---------------------------------------------- | --------------------------------------------------- |
+| 1 (chosen) | not listed; `none` (Install) or `OFF` (Add again) | listed `unloaded` at the pin; `OFF` or `OFF+G` | listed `active` at an older shipped release; `ON+G` |
+| 2          | not listed; `OFF`                                 | as after step 1                                | listed `unloaded` at the older release; `OFF+G`     |
+| 3 and 4    | listed `unloaded` at the pin; `OFF`               | as after step 1                                | listed `unloaded` at the pin; `OFF+G`               |
+| 5 and 6    | listed `unloaded` at the pin; `OFF+G`             | listed `unloaded` at the pin; `OFF+G`          | listed `unloaded` at the pin; `OFF+G`               |
+| 7 and 8    | listed `active` at the pin; `ON+G`                | the same                                       | the same                                            |
+
+"At the pin" means the pin's version and, from step 4 on, `plugins.inspect`'s `source.integrity` equal to the pin's.
+
+**Before every write** of steps 2, 3, 5 and 7, the engine does all of these. If any fails, it stops without writing:
 
 1. It reads `config.get`, `plugins.list` and `sessions.list`.
 2. It requires **policy OK**.
-3. It requires the **expected state** the walk table (3.5) gives for that point: the entry's `enabled` value, whether the plugin is listed, its version and its `runtime.state`.
+3. It requires the **expected state** after the previous step, from the table above.
 4. It requires **not busy**. If `sessions.list` shows a run going (`hasActiveRun`), it waits for it to end, five minutes at most, then stops with "Clawtrate will finish adding Bot voice when your bots are idle". Every write here reloads plugins and disposes the gateway's MCP runtimes (section 7).
 
-**The device's record.** For each gateway and plugin, the device keeps one record of the attempt it is running: its mode, the pin's integrity, the last step it completed, and the `config.get` hash after its own last write. It lives in the device's own storage, one per gateway and plugin, and is registered with its bound in `owners.ts` by the engine's pull request. It is dropped when the attempt ends, enabled or stopped for good.
+**The one write that skips all of this is turning the plugin off on a mismatch** (steps 3, 7 and 8): `plugins.setEnabled {pluginId, enabled: false, allowlistPolicy: "preserve"}`. It goes ahead whatever is running and whatever the state. If it doesn't apply, it is retried after 1, 2, 4, 8, 16 and 30 seconds, then every 30 seconds while connected. It is retried again at every connection after that (the record keeps it as "turning off"), until a read shows the entry `OFF+G` or `OFF` and the plugin `unloaded`. Meanwhile the line says: "Clawtrate is turning off its voice plugin; until OpenClaw confirms, it may be running."
 
-**Resume.** At the next connection, a device with a record checks the gateway against the expected state after the record's last step. If it matches, the engine goes on from the next step. If it doesn't, the device drops the record, and the attempt is over.
+**The device's record.** For each gateway and plugin, the device keeps one record of the attempt it is running: its mode, the pin's integrity, the last step it completed (or "turning off"), and the `config.get` hash after its own last write. It lives in the device's own storage, one per gateway and plugin, and is registered with its bound in `owners.ts` by the engine's pull request. It is dropped when the attempt ends, enabled or stopped for good.
 
-A device without a record never takes over another device's attempt. When it finds an entry `{enabled: false}` it didn't write, it waits up to 60 seconds for `plugins.changed` before showing any line: the other device is probably finishing.
+**Resume, and a write whose reply was lost.** At the next connection, a device with a record reads, and compares the gateway with the expected state:
 
-**Stops and lost replies.** "Stop" means no further write, and a line from section 10 that says the state the last read confirmed. The gateway's own answer is kept behind an "i". A lost reply is a stop: a timeout, a closed connection, or an answer missing a field this section compares. The engine never repeats a write blindly. The next connection reads first and resumes only by the record. Because every state before step 7 is `enabled: false`, a stop there leaves nothing running.
+- **The state after the record's last step:** the engine goes on from the next step.
+- **The state after the step that follows it:** that step's write applied, but its reply was lost. The engine goes on from the step after that. For a lost stage (a record at step 2, with the plugin now listed `unloaded` at the pin's version and the entry `OFF`, or `OFF+G` for Update), that is step 4. Step 4's inspect then checks the bytes, as for any stage.
+- **A record of "turning off":** the disable goes on (above).
+- **A record at step 6, with the entry `ON+G`:** step 7's write applied but its reply was lost. Step 7's lost-reply rule decides.
+- **Anything else:** the device drops the record and stops, and the line says what the read shows. The person's "Turn on" or "Add again" (section 12) picks it up later from that state.
+
+A device without a record never takes over another device's attempt. When it finds an entry `OFF` or `OFF+G` it didn't write, it waits up to 60 seconds for `plugins.changed` before showing any line: the other device is probably finishing.
+
+**Stops and lost replies.** "Stop" means no further write, and a line from section 10 that says the state the last read confirmed. The gateway's own answer is kept behind an "i". A lost reply is a stop: a timeout, a closed connection, or an answer missing a field this section compares. The engine never repeats a write blindly: the next connection reads first, and resumes only by the record, as above.
+
+- **A stop before step 7** leaves nothing running, because every state before step 7 is `enabled: false`.
+- **A lost reply at step 7 or later** leaves the state unknown until a read shows it. Until then the line says only that Clawtrate lost touch with OpenClaw, never that the plugin is off.
 
 ### 3.4 The steps
 
 **Modes.** The engine runs in one of four modes, chosen at step 1:
 
 - **Install**: the plugin is not listed and has no entry. First setup, or a person already paired (section 10).
-- **Add again**: the plugin is not listed and its entry is exactly `{enabled: false}`, which an uninstall elsewhere leaves. Only by the person's click.
-- **Turn on**: the plugin is listed at the pin's version, and its entry says `enabled: false`. It is the person's click after Take it off (section 12), or after a stop.
-- **Update**: the plugin is listed at an older release Clawtrate shipped, enabled, with the pin's grants. Only by the person's click (section 11).
+- **Add again**: the plugin is not listed, and its entry is `OFF`, which an uninstall elsewhere leaves. Only by the person's click.
+- **Turn on**: the plugin is listed `unloaded` at the pin's version, and its entry is `OFF` or `OFF+G`. It is the person's click after Take it off (section 12), or after a stop.
+- **Update**: the plugin is listed `active` at an older release Clawtrate shipped, and its entry is `ON+G`. Only by the person's click (section 11).
 
 **Step 0. Preconditions, per source.**
 
@@ -240,21 +273,23 @@ A device without a record never takes over another device's attempt. When it fin
 
 On either source, the gateway's confirmed grant on this connection must include `operator.admin` (section 6), and `hello-ok.server.version` must be one of the pin's `sourceDigests` versions. Otherwise stop. The engine never asks for a scope.
 
-**Step 1. Read and choose the mode.** Run the "before every write" read. Choose the mode by the table above. Every other state is a stop:
+**Step 1. Read and choose the mode.** Read `config.get`, `plugins.list` and `sessions.list`. Choose the mode by the list above; the entry's shape and the listing must match it exactly. Every other state is a stop:
 
 - the plugin is listed at another version, or with another integrity;
-- an entry says `enabled: true` for a plugin that isn't listed;
+- the entry is `ON+G`, or `{enabled: true}`, for a plugin that isn't listed;
 - deny or the allowlist keeps it out;
-- the entry has keys of the owner's;
-- and so on through section 10's lines.
+- the entry has no shape: it holds fields of the owner's;
+- and the rest of section 10's lines.
 
 For **Update**, also call `plugins.inspect`: the installed integrity and version must be a release in this app's table of shipped releases, and older than the pin.
 
+Create the record, with the mode and step 1.
+
 **Step 2. Off first.**
 
-- **Install:** `config.patch {baseHash, raw: {plugins: {entries: {<id>: {enabled: false}}}}}`. A stale base hash goes back to step 1, once.
-- **Update:** `plugins.setEnabled {pluginId, enabled: false}`. Then read again. The disable must have applied: the entry says `enabled: false`, the grants are still there, and the plugin is listed `unloaded` (ran, both).
-- **Add again and Turn on:** the entry already says `enabled: false`. Nothing is written.
+- **Install:** `config.patch {baseHash, raw: {plugins: {entries: {<id>: {enabled: false}}}}}`, which makes the entry `OFF`. A stale base hash goes back to step 1, once.
+- **Update:** `plugins.setEnabled {pluginId, enabled: false, allowlistPolicy: "preserve"}`. Then read again. The disable must have applied: the entry is `OFF+G` and the plugin is listed `unloaded` (ran, both).
+- **Add again and Turn on:** the entry is already `OFF` or `OFF+G`. Nothing is written.
 
 Record the step.
 
@@ -273,7 +308,7 @@ The answer must show:
 
 If any of these is missing, stop.
 
-If a source digest or selected entry names the plugin, its code ran. The engine calls `plugins.setEnabled {pluginId, enabled: false}` and stops.
+If a source digest or selected entry names the plugin, its code ran. The engine turns it off by the one write that skips the checks (3.3), and stops.
 
 Other answers:
 
@@ -296,20 +331,22 @@ Record the step.
 - every group of `declared`;
 - `reviewToken`, which must be present. Keep it.
 
-On a difference, stop. The plugin stays installed and off, and nothing is removed (3.6). Record the step.
+On a difference, stop. The plugin stays installed, `unloaded`, with the entry `OFF`, or `OFF+G` for Update and Turn on. Nothing is removed (3.6). Record the step.
 
-**Step 5. Grant.** Only when the entry lacks the pin's `grants`. Call `config.patch {baseHash, raw: {plugins: {entries: {<id>: {enabled: false, hooks: <the pin's grants>}}}}}`.
+**Step 5. Grant.** Only when the entry is `OFF`; an `OFF+G` entry skips this step. Call `config.patch {baseHash, raw: {plugins: {entries: {<id>: {enabled: false, ...grants}}}}}`. For `clawtrate-voice` that is `{enabled: false, hooks: {allowConversationAccess: true}}`.
 
 The `enabled: false` is written in the same patch as the grant, every time.
 
-Then read again. The entry must be `{enabled: false}` plus the grants (an empty `config` allowed), and the plugin must still be listed `unloaded` (ran, both). A stale base hash goes back to the read before this step, once. Record the step.
+Then read again. The entry must be `OFF+G`, and the plugin must still be listed `unloaded` (ran, both). A stale base hash goes back to the read before this step, once. Record the step.
 
 **Step 6. The last check.** Run the "before every write" read, plus `plugins.inspect` again. All of these must hold:
 
-- the entry is exactly `{enabled: false}` plus the pin's grants;
+- the entry is `OFF+G`;
 - policy OK;
 - the plugin is listed `unloaded` at the pin's version;
 - `source.integrity` still equals the pin.
+
+Record the step.
 
 **Step 7. Enable.** Call `plugins.setEnabled {pluginId, enabled: true, allowlistPolicy: "preserve", acknowledgeCapabilities: {reviewToken: <step 4's>}}`.
 
@@ -320,55 +357,63 @@ The answer must show:
 
 "blocked by allowlist", "blocked by denylist" and "plugin not installed" are stops; the plugin stays as it was.
 
-If the digest differs or is missing, call `plugins.setEnabled {pluginId, enabled: false}`, then stop. If the reply is lost, step 8 decides from what it reads.
+If the digest differs or is missing, the engine turns the plugin off by the one write that skips the checks (3.3), and stops.
+
+**If the reply is lost**, the engine has no digest. On reconnecting it reads:
+
+- **The entry is `ON+G`:** the engine turns the plugin off by the one write that skips the checks (3.3), waits for the read that shows `OFF+G` and `unloaded`, then runs step 6 and step 7 once more, to get the digest from step 7's answer. If that reply is lost too, it turns the plugin off and stops.
+- **The entry is still `OFF+G`:** step 7 didn't apply. The engine goes on from step 6.
+- **Anything else:** a stop, with the line for what the read shows.
 
 **Step 8. Confirm.** Read `config.get`, `plugins.list` and `plugins.inspect`, and call the plugin's own method. All of these must hold:
 
-- the entry says `enabled: true` with exactly the pin's grants;
+- step 7's answer is in hand, and its `runtime.sourceDigests[<id>]` equals the pin's digest for this OpenClaw version;
+- the entry is `ON+G`;
 - policy OK;
 - the plugin is listed `runtime.state: "active"` at the pin's version;
 - `source.integrity` still equals the pin;
 - the method answers, with the version it reports.
 
-If all hold, the result is **enabled, confirmed**, and the record is dropped. Otherwise call `plugins.setEnabled {pluginId, enabled: false}` and stop. The line says what the next read shows.
+If all hold, the result is **enabled, confirmed**, and the record is dropped. Otherwise the engine turns the plugin off by the one write that skips the checks (3.3), and stops. The line says "it may be running" until a read shows it off, then what that read shows.
 
 ### 3.5 Every scenario, walked through every step
 
-**The walk table** gives the entry's `enabled` value after each step. It uses these short forms:
+**The walk table** gives the entry's shape after each step, with the plugin's runtime state where it changes. It uses the shapes of 3.3, shortened:
 
-- `F`: `enabled: false`;
-- `T`: `enabled: true`;
-- `—`: no entry, or nothing written;
-- `+g`: the pin's grants are in the entry;
-- `x`: the step doesn't apply.
+- `F` is `OFF`;
+- `F+g` is `OFF+G`;
+- `T+g` is `ON+G`;
+- `—` is no entry, or nothing written;
+- `x` means the step doesn't apply.
 
 "Ran" means the row ran on development gateways of both versions in this design's runs, with the same result on each; "read" means it is derived from the source and the runs of the steps it uses. Every row ends at **enabled, confirmed**, or at a named stop with the plugin's code not loaded, except the two rows marked ⚠, which are 3.2's window.
 
-| #    | Scenario                                                   | 1 read | 2 off                                                           | 3 stage                                | 4 verify                 | 5 grant                             | 6 check       | 7 enable          | 8 confirm      | Ends with                                                                                 | Run               |
-| ---- | ---------------------------------------------------------- | ------ | --------------------------------------------------------------- | -------------------------------------- | ------------------------ | ----------------------------------- | ------------- | ----------------- | -------------- | ----------------------------------------------------------------------------------------- | ----------------- |
-| 1    | Install                                                    | —      | F                                                               | F, unloaded                            | F                        | F+g, unloaded                       | F+g           | T+g, active       | T+g            | enabled, confirmed                                                                        | ran               |
-| 2    | Add again (entry `{enabled: false}`, not listed)           | F      | F                                                               | F, unloaded                            | F                        | F+g, unloaded                       | F+g           | T+g, active       | T+g            | enabled, confirmed                                                                        | ran               |
-| 3    | Turn on (listed, entry `{enabled: false}`)                 | F      | F                                                               | x                                      | F                        | F+g                                 | F+g           | T+g, active       | T+g            | enabled, confirmed                                                                        | ran, steps 6 to 8 |
-| 4    | Update the person asks for (listed older, `T+g`)           | T+g    | F+g, unloaded                                                   | F+g, newer, unloaded                   | F+g                      | x (has g)                           | F+g           | T+g, active       | T+g            | enabled, confirmed at the new version                                                     | ran               |
-| 5a   | Stop or lost reply after step 2                            | —      | F                                                               | stop                                   |                          |                                     |               |                   |                | off; the record resumes at step 3; other devices wait, then "Add again"                   | read              |
-| 5b   | Stop after step 3 (busy, crash)                            | —      | F                                                               | F, unloaded, stop                      |                          |                                     |               |                   |                | off; resumes at step 4                                                                    | read              |
-| 5c   | Stop at step 4 (mismatch)                                  | —      | F                                                               | F                                      | stop                     |                                     |               |                   |                | installed, off; "didn't match", nothing removed                                           | read              |
-| 5d   | Stop after step 5 (busy five minutes, lost reply)          | —      | F                                                               | F                                      | F                        | F+g, stop                           |               |                   |                | off; resumes at step 6                                                                    | read              |
-| 5e   | Stop at step 6 (the state changed)                         | —      | F                                                               | F                                      | F                        | F+g                                 | stop          |                   |                | off; the line says what changed                                                           | read              |
-| 5f   | Lost reply at step 7                                       | —      | F                                                               | F                                      | F                        | F+g                                 | F+g           | ?                 | read           | step 8 confirms it, or turns it off                                                       | read              |
-| 5g   | Step 8 finds a difference                                  | —      | F                                                               | F                                      | F                        | F+g                                 | F+g           | T+g               | → F+g          | turned off; "what OpenClaw loaded didn't match"                                           | read              |
-| 6    | Two devices start at once (the second after the slash)     | — / —  | F / stale base hash: back to step 1, finds F without its record | F / x                                  | F / x                    | F+g / x                             | F+g / x       | T+g / x           | T+g / reads it | enabled, confirmed by the first; the second waits for `plugins.changed`, then shows it on | in part           |
-| 7a   | Owner denies after step 1, before step 6                   | —      | F                                                               | F (install leaves deny alone)          | F                        | stop at the read before step 5 or 6 |               |                   |                | off; "Turned off in the gateway's settings"                                               | read              |
-| 7b   | Owner denies between step 6 and step 7                     | —      | F                                                               | F                                      | F                        | F+g                                 | F+g           | blocked           |                | off; "Turned off in the gateway's settings"                                               | ran               |
-| 7c   | Owner writes `enabled: true` before step 3                 | —      | F → T                                                           | stop (read)                            |                          |                                     |               |                   |                | the owner's choice; Clawtrate stops and stages nothing                                    | read              |
-| 7d   | Owner writes `enabled: true` after step 3                  | —      | F                                                               | F → T: active                          | stop (unloaded expected) |                                     |               |                   |                | the owner ran it; Clawtrate stops; "Turned on in the gateway's settings"                  | read              |
-| 7e   | Owner revokes the grant between step 6 and step 7          | —      | F                                                               | F                                      | F                        | F+g                                 | F+g → F, no g | T, hook off       | → F            | turned off at step 8; "Turned off in the gateway's settings"                              | ran               |
-| 7f ⚠ | Owner writes `enabled: false` between step 6 and step 7    | —      | F                                                               | F                                      | F                        | F+g                                 | F+g           | T+g               | T+g            | enabled over the owner's no-op write (3.2's one exception)                                | read              |
-| 7g   | Owner uninstalls between step 6 and step 7                 | —      | F                                                               | F                                      | F                        | F+g                                 | F+g           | not installed     |                | stop; "Add again" (entry `{enabled: false}`)                                              | read              |
-| 8 ⚠  | Another admin replaces the stage between step 6 and step 7 | —      | F                                                               | F                                      | F                        | F+g                                 | F+g           | T+g, other digest | → F+g          | turned off at step 7; the replaced code ran once                                          | read              |
-| 9    | Route by address, with npm                                 | —      | F                                                               | F, unloaded (npm, `expectedIntegrity`) | F                        | F+g                                 | F+g           | T+g, active       | T+g            | enabled, confirmed                                                                        | read              |
+| #    | Scenario                                                   | 1 read | 2 off                                                           | 3 stage                                | 4 verify                 | 5 grant                             | 6 check       | 7 enable          | 8 confirm                                       | Ends with                                                                                                                      | Run               |
+| ---- | ---------------------------------------------------------- | ------ | --------------------------------------------------------------- | -------------------------------------- | ------------------------ | ----------------------------------- | ------------- | ----------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | ----------------- |
+| 1    | Install                                                    | —      | F                                                               | F, unloaded                            | F                        | F+g, unloaded                       | F+g           | T+g, active       | T+g                                             | enabled, confirmed                                                                                                             | ran               |
+| 2    | Add again (entry `{enabled: false}`, not listed)           | F      | F                                                               | F, unloaded                            | F                        | F+g, unloaded                       | F+g           | T+g, active       | T+g                                             | enabled, confirmed                                                                                                             | ran               |
+| 3    | Turn on (listed `unloaded` at the pin, `F` or `F+g`)       | F      | F                                                               | x                                      | F                        | F+g                                 | F+g           | T+g, active       | T+g                                             | enabled, confirmed                                                                                                             | ran, steps 6 to 8 |
+| 4    | Update the person asks for (listed older, `T+g`)           | T+g    | F+g, unloaded                                                   | F+g, newer, unloaded                   | F+g                      | x (has g)                           | F+g           | T+g, active       | T+g                                             | enabled, confirmed at the new version                                                                                          | ran               |
+| 5a   | Stop after step 2                                          | —      | F                                                               | stop                                   |                          |                                     |               |                   |                                                 | off; the record resumes at step 3                                                                                              | read              |
+| 5b   | Lost reply at step 3 (the stage applied)                   | —      | F                                                               | F, unloaded, reply lost                | F                        | F+g                                 | F+g           | T+g, active       | T+g                                             | the record at step 2 finds the stage: goes on at step 4; enabled, confirmed                                                    | read              |
+| 5c   | Stop after step 3 (busy, crash)                            | —      | F                                                               | F, unloaded, stop                      |                          |                                     |               |                   |                                                 | off; resumes at step 4                                                                                                         | read              |
+| 5d   | Stop at step 4 (mismatch)                                  | —      | F                                                               | F                                      | stop                     |                                     |               |                   |                                                 | installed, off; "didn't match", nothing removed                                                                                | read              |
+| 5e   | Stop after step 5 (busy five minutes, lost reply)          | —      | F                                                               | F                                      | F                        | F+g, stop                           |               |                   |                                                 | off; resumes at step 6                                                                                                         | read              |
+| 5f   | Stop at step 6 (the state changed)                         | —      | F                                                               | F                                      | F                        | F+g                                 | stop          |                   |                                                 | off; the line says what changed                                                                                                | read              |
+| 5g   | Lost reply at step 7                                       | —      | F                                                               | F                                      | F                        | F+g                                 | F+g           | ? (reply lost)    | reads: T+g → off, F+g → steps 6 and 7 once more | enabled, confirmed with step 7's digest; or turned off after a second lost reply; the line says only "lost touch" until a read | read              |
+| 5h   | Step 8 finds a difference                                  | —      | F                                                               | F                                      | F                        | F+g                                 | F+g           | T+g               | → F+g, by the disable that skips the checks     | turned off; "may be running" until a read shows it off                                                                         | read              |
+| 6    | Two devices start at once (the second after the slash)     | — / —  | F / stale base hash: back to step 1, finds F without its record | F / x                                  | F / x                    | F+g / x                             | F+g / x       | T+g / x           | T+g / reads it                                  | enabled, confirmed by the first; the second waits for `plugins.changed`, then shows it on                                      | in part           |
+| 7a   | Owner denies after step 1, before step 6                   | —      | F                                                               | F (install leaves deny alone)          | F                        | stop at the read before step 5 or 6 |               |                   |                                                 | off; "Turned off in the gateway's settings"                                                                                    | read              |
+| 7b   | Owner denies between step 6 and step 7                     | —      | F                                                               | F                                      | F                        | F+g                                 | F+g           | blocked           |                                                 | off; "Turned off in the gateway's settings"                                                                                    | ran               |
+| 7c   | Owner writes `enabled: true` before step 3                 | —      | F → T                                                           | stop (read)                            |                          |                                     |               |                   |                                                 | the owner's choice; Clawtrate stops and stages nothing                                                                         | read              |
+| 7d   | Owner writes `enabled: true` after step 3                  | —      | F                                                               | F → T: active                          | stop (unloaded expected) |                                     |               |                   |                                                 | the owner ran it; Clawtrate stops; "Turned on in the gateway's settings"                                                       | read              |
+| 7e   | Owner revokes the grant between step 6 and step 7          | —      | F                                                               | F                                      | F                        | F+g                                 | F+g → F, no g | T, hook off       | → F                                             | turned off at step 8; "Turned off in the gateway's settings"                                                                   | ran               |
+| 7f ⚠ | Owner writes `enabled: false` between step 6 and step 7    | —      | F                                                               | F                                      | F                        | F+g                                 | F+g           | T+g               | T+g                                             | enabled over the owner's no-op write (3.2's one exception)                                                                     | read              |
+| 7g   | Owner uninstalls between step 6 and step 7                 | —      | F                                                               | F                                      | F                        | F+g                                 | F+g           | not installed     |                                                 | stop; "Add again" (entry `OFF`)                                                                                                | read              |
+| 8 ⚠  | Another admin replaces the stage between step 6 and step 7 | —      | F                                                               | F                                      | F                        | F+g                                 | F+g           | T+g, other digest | → F+g                                           | turned off at step 7; the replaced code ran once                                                                               | read              |
+| 9    | Route by address, with npm                                 | —      | F                                                               | F, unloaded (npm, `expectedIntegrity`) | F                        | F+g                                 | F+g           | T+g, active       | T+g                                             | enabled, confirmed                                                                                                             | read              |
 
-Rows 1, 2 and 4 ran end to end on both versions, with the calls of 3.4. Row 3 ran from step 6, from a listed plugin whose entry said `enabled: false` with its grant; its step 4 is row 2's. Row 1 ran with an unrelated config write between steps 5 and 6, which loaded nothing. Row 6 ran in part: a second device's stage, sent at the same moment, was answered "already running", and after the first device's install the entry was the stage's own. The two devices' `config.patch` race on one base hash was read, not run, because both test writes left the config unchanged. Rows 7b and 7e ran with the owner's change written between the step 6 read and step 7.
+Row numbers 5a to 5h walk a stop or a lost reply at each step. Rows 1, 2 and 4 ran end to end on both versions, with the calls of 3.4. Row 3 ran from step 6, from a listed plugin whose entry said `enabled: false` with its grant; its step 4 is row 2's. Row 1 ran with an unrelated config write between steps 5 and 6, which loaded nothing. Row 6 ran in part: a second device's stage, sent at the same moment, was answered "already running", and after the first device's install the entry was the stage's own. The two devices' `config.patch` race on one base hash was read, not run, because both test writes left the config unchanged. Rows 7b and 7e ran with the owner's change written between the step 6 read and step 7.
 
 ### 3.6 Nothing is removed by the engine
 
@@ -453,7 +498,7 @@ With `clawtrate-bots` in `plugins.deny`, both calls answered "blocked by denylis
 
 **Proposed:**
 
-- **Defer every write while the gateway is busy.** Each write in section 3.4 waits until `sessions.list` shows no run going, at most five minutes (section 3.3). Otherwise it stops with "Clawtrate will finish adding Bot voice when your bots are idle.", and the device's record resumes it at the next connection. Every state it can stop in is `enabled: false`.
+- **Defer every write while the gateway is busy.** Each write in section 3.4 waits until `sessions.list` shows no run going, at most five minutes (section 3.3). Otherwise it stops with "Clawtrate will finish adding Bot voice when your bots are idle.", and the device's record resumes it at the next connection. Every state before step 7, where these waits are, is `enabled: false`. The one exception is turning the plugin off on a mismatch, which doesn't wait (section 3.3).
 - **Stop on an unexpected restart requirement.** Any answer with `restartRequired: true` (the docs name edited bundled code, which isn't Clawtrate's case) is a stop. The engine does not restart OpenClaw by itself. The line offers it as the person's own action: "OpenClaw needs a restart to finish adding Bot voice · Restart". Only that click calls `gateway.restart.request {}`, which on both versions answered `status: "scheduled"` with a preflight ("safe to restart now", or the active work that defers it) and restarted the gateway in place (ran). After it, the engine resumes by its record, from the step it stopped at. This is the owner's "one restart, for all plugins together, with one line", given to the person instead of done for them.
 
 ## 8. Publishing, for the route by address
@@ -549,7 +594,9 @@ One line in the same place, with the gateway's own words behind an "i" where it 
 | The install policy warned                                                                 | "OpenClaw warned about Clawtrate's voice plugin, so Clawtrate didn't add it." with the warning behind the "i". There is no way past it in Clawtrate. |
 | A mismatch at step 4                                                                      | "The plugin OpenClaw got didn't match the one this Clawtrate carries. OpenClaw has it installed and off."                                            |
 | Turned off at step 7 or 8                                                                 | "Clawtrate turned off its voice plugin: what OpenClaw loaded didn't match. Its entry says enabled: false." · Try again                               |
-| A lost reply                                                                              | "Clawtrate lost touch with OpenClaw while adding Bot voice. It is off; Clawtrate goes on when it reconnects."                                        |
+| A lost reply before step 7                                                                | "Clawtrate lost touch with OpenClaw while adding Bot voice. It is off; Clawtrate goes on when it reconnects."                                        |
+| A lost reply at step 7 or later                                                           | "Clawtrate lost touch with OpenClaw while turning on Bot voice. It shows the plugin's state once it reads it again."                                 |
+| Turning off on a mismatch, not yet confirmed                                              | "Clawtrate is turning off its voice plugin; until OpenClaw confirms, it may be running."                                                             |
 | Busy                                                                                      | "Clawtrate will finish adding Bot voice when your bots are idle."                                                                                    |
 | A restart asked for                                                                       | "OpenClaw needs a restart to finish adding Bot voice · Restart" (the person's own action)                                                            |
 | An entry of the owner's, or a name in `plugins.allow` or `plugins.deny` that keeps it out | "Turned off in the gateway's settings"                                                                                                               |
@@ -616,7 +663,7 @@ Settings shows: "A newer Bot voice plugin comes with this Clawtrate · Update". 
 
 - **"Take it off", never "Undo".** Take it off turns the plugin off and removes its grant. It runs only after the before-write read of section 3.3, and makes two writes:
   - `plugins.setEnabled {pluginId, enabled: false, allowlistPolicy: "preserve"}`;
-  - then `config.patch {baseHash, raw: {plugins: {entries: {<id>: {enabled: false, hooks: null}}}}}`.
+  - then `config.patch {baseHash, raw: {plugins: {entries: {<id>: {enabled: false, <each top-level field of grants>: null}}}}}`, for `clawtrate-voice` `{enabled: false, hooks: null}`, which leaves the entry `OFF`.
 
   The plugin stays installed, unloaded, under `enabled: false`. The line says what the next read confirmed: "Taken off; OpenClaw has it installed and off." It never calls `plugins.uninstall`:
   - uninstall takes no precondition;
@@ -625,7 +672,7 @@ Settings shows: "A newer Bot voice plugin comes with this Clawtrate · Update". 
 
   A real Undo would have to restore the earlier version, config and grants without overwriting changes made since. No OpenClaw method offers that.
 
-- **The marker.** An entry that says `enabled: false` is the record, on every device and across reinstalls, that the plugin is off on purpose. This holds whether the plugin is installed (Take it off, or a stop) or not (an uninstall elsewhere). Every write in section 3.4 checks it first. Only the person's own "Turn on" or "Add again" goes past it, and each verifies the installed artifact before it enables anything.
+- **The marker.** An entry that is `OFF` or `OFF+G` (section 3.3) is the record, on every device and across reinstalls, that the plugin is off on purpose. This holds whether the plugin is installed (Take it off, or a stop) or not (an uninstall elsewhere). Every write in section 3.4 checks it first. Only the person's own "Turn on" or "Add again" goes past it, and each verifies the installed artifact before it enables anything.
 - **Turn off** (the plugin's own switch, where it has one, such as Bot voice's) is the plugin's setting, not the plugin.
 - **Taking off `clawtrate-voice` asks nothing.** It removes nothing, and the voice setting survives (ran). A plugin whose removal loses something a person can't get back, such as the bots plugin's journal, asks once, as `bots-in-clawtrate.md` §6.6 says.
 
