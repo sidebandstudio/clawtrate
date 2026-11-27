@@ -8,10 +8,12 @@
 //   the test's own in front of this run's shared instance. Every development instance keeps local
 //   auto-approval off, so its pairing waits as one on another computer does. The first pairing
 //   asks for the six, the owner approves once, and nothing asks again.
-// - This computer: a typed `ws://127.0.0.1:<port>` on an instance of this file's own, started
-//   with `--default-local-pairing` (OpenClaw's own default policy). Loopback isn't a protected
-//   route until local connect's send gate, so the pairing asks for read, which the gateway
-//   approves with no step, and the first send asks once more for sending and answering.
+// - This computer at a typed address: `ws://127.0.0.1:<port>` on an instance of this file's own,
+//   started with `--default-local-pairing` (OpenClaw's own default policy). A typed loopback
+//   address isn't a protected route (only local connect's proved sockets are, and its one-click
+//   Connect is checked in apps/desktop/test/local-setup.test.ts, on development gateways of its
+//   own in private temporary homes), so the pairing asks for read, which the gateway approves
+//   with no step, and the first send asks once more for sending and answering.
 //
 // The instance is this file's own: started in its beforeAll and reset in its afterAll, so only
 // the shard that runs this file starts it, and recorded in a run record of its own first.
@@ -136,15 +138,21 @@ async function firstRun(
     expect(await pendingFor(instance, deviceId)).toEqual([]);
   } catch (error) {
     // A first run that failed leaves nothing running and nothing on the gateway: its client is
-    // stopped, its pending request refused and its device removed, then the failure stands.
-    client.stop();
-    if (deviceId) {
-      const runner = openInstance(instance).runner;
-      for (const request of await pendingFor(instance, deviceId).catch(() => []))
-        if (request.requestId) await runner.run(["devices", "reject", request.requestId]);
-      await runner.run(["devices", "remove", deviceId]);
+    // stopped, its pending request refused and its device removed, and its data folder goes
+    // whatever those do. The first failure is the one that stands; a cleanup's own is logged.
+    try {
+      client.stop();
+      if (deviceId) {
+        const runner = openInstance(instance).runner;
+        for (const request of await pendingFor(instance, deviceId).catch(() => []))
+          if (request.requestId) await runner.run(["devices", "reject", request.requestId]);
+        await runner.run(["devices", "remove", deviceId]);
+      }
+    } catch (cleanup) {
+      process.stderr.write(`first run cleanup failed: ${String(cleanup)}\n`);
+    } finally {
+      rmSync(dataDir, { recursive: true, force: true });
     }
-    rmSync(dataDir, { recursive: true, force: true });
     throw error;
   }
   return {
