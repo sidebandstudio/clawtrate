@@ -361,11 +361,19 @@ export class RunOrigins {
     const runId = sessionKey ? this.active.get(sessionKey) : undefined;
     const run = runId ? this.runs.get(runId) : undefined;
     if (!run || run.ended) return;
-    const kind = message.provenance?.kind;
+    const provenance = message.provenance;
+    const kind = provenance?.kind;
     if (kind && kind !== "external_user") {
-      // The run's own first message carries the run's own provenance, which
-      // already makes it C; any other is a message that joined it.
-      if (run.provenance?.kind === kind) return;
+      // The run's own first message carries the run's own provenance (the
+      // same kind, from the same session and tool), which already makes it C;
+      // any other, another bot's or the system's, is a message that joined it.
+      const own = run.provenance;
+      if (
+        own?.kind === kind &&
+        own.sourceSessionKey === str(provenance.sourceSessionKey) &&
+        own.sourceTool === str(provenance.sourceTool)
+      )
+        return;
       this.markRead(run, "message", null);
       return;
     }

@@ -181,8 +181,9 @@ async function withSetting<T>(
   const read = rec(await ctx.clients.admin.request("config.get", {}));
   const tools = rec(rec(read.config).tools);
   const before = Object.hasOwn(tools, key) ? tools[key] : null;
-  await patchConfig(ctx, { tools: { [key]: value } });
   try {
+    // Inside: a patch the gateway took but didn't apply in time is put back too.
+    await patchConfig(ctx, { tools: { [key]: value } });
     return await body();
   } finally {
     await patchConfig(ctx, { tools: { [key]: before } });
