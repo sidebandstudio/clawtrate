@@ -236,7 +236,12 @@ test("F-017 F-021 F-022 F-426: with no words on the row, each state is still sho
 });
 
 test.describe("at phone width", () => {
-  test.use(contextFor(SIZES.find((size) => size.name === "phone")!, "light"));
+  test.use(
+    contextFor(
+      SIZES.find((size) => size.name === "phone")!,
+      "light",
+    ),
+  );
 
   test("F-017: a bot's row is its picture, 52 px, and its name, 68 px tall, with no preview and no time", async ({
     page,
