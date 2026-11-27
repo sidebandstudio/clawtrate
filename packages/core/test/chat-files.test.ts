@@ -23,7 +23,7 @@ import { READ_SCOPES } from "../src/scopes.ts";
 import { enforceState } from "../src/state-bounds.ts";
 import type { Task, Transcript } from "../src/types.ts";
 import { FAST, grantingGateway, KEY, URL_A } from "./client-harness.ts";
-import { deferred, memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
+import { deferred, memoryStorage, sleep, testHost, tokenKey, until } from "./fake-gateway.ts";
 
 const PDF = "artifact_managed_media_470797d5-f45d-444a-901d-21a6bd2c2f96";
 const NOTES = "artifact_managed_media_dcdee85c-5f62-4293-9cc5-68c53084eba3";
@@ -611,6 +611,10 @@ describe("F-115: a file a bot attaches, read", () => {
     await staying.apply({ type: "openSession", key: KEY });
     const left = leaving.apply({ type: "readChatFile", key: KEY, artifactId: PDF, stamp });
     const kept = staying.apply({ type: "readChatFile", key: KEY, artifactId: PDF, stamp });
+    // The wait for a place polls every 100 ms and keeps no queue to look at: past one poll, both
+    // reads have passed their gateway check and are waiting, while the four still hold the places.
+    await sleep(150);
+    expect(gateway.calls("artifacts.download")).toHaveLength(4);
     await leaving.apply({ type: "closeSession", key: KEY });
     release();
     await Promise.all(busy);
