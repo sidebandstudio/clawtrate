@@ -297,14 +297,19 @@ test.describe("1440", () => {
     await expect(view(page)).toContainText("By default the gateway keeps 7 days of runs");
   });
 
-  test("F-024: a bot whose routine is running shows the working mark and the routine's name", async ({
+  test("F-024: a bot whose routine is running shows the working ring, and the run under it", async ({
     page,
   }) => {
     await openFixture(page, "scene=main&routines=running&others=show", "light");
     const marlow = page.getByTestId("bot-list").getByRole("button", { name: /^Marlow\b/ });
     await expect(marlow).toHaveAttribute("data-state", "working");
-    await expect(marlow).toContainText("Running Morning digest");
+    await expect(marlow.locator(".presence")).toHaveAttribute("data-state", "working");
     await expect(marlow).toHaveAccessibleName(/^Marlow, working/);
+    // No words on the row: the run is listed under the bot (F-193).
+    await expect(marlow.locator(".bot-line")).not.toContainText("Morning digest");
+    await expect(
+      page.getByTestId("routine-task").filter({ hasText: "Morning digest" }),
+    ).toHaveAccessibleName("Morning digest, routine run, running");
     // Without a run in progress the same bot is idle.
     await openFixture(page, ROUTINES, "light");
     await expect(
