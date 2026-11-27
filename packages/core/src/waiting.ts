@@ -307,10 +307,6 @@ export class WaitingIndex {
     // After a failure, a run not known to be older counts: on 2026.11.10 a second message's
     // dispatch error can come before the debounced row that admits it.
     if (latest && latest.runId !== runId && !latest.failed && !latest.inputSince) return false;
-    // An abort is never a new message's dispatch failure: another run's would only use up the
-    // admission the newer message's failure needs (#783).
-    if (payload.state === "aborted" && latest && latest.runId !== runId && latest.inputSince)
-      return false;
     const failed =
       // An end the gateway marked not to show is a quiet one, not a failure (#680, 2026.11.10).
       (payload.state === "error" && payload.suppressErrorNotice !== true) ||

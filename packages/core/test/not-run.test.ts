@@ -755,13 +755,14 @@ describe("the rules underneath", () => {
     expect(index.failedAt(KEY)).toBe(3_000);
   });
 
-  it("an unseen older run's late chat abort after a new message was admitted leaves that message's failure to mark the task (#783)", () => {
+  it("a new message stopped before its run starts clears an earlier failure's mark (#783)", () => {
     const index = new WaitingIndex();
-    index.onChat({ sessionKey: KEY, runId: "r2", state: "final" }, 1_000);
+    index.onChat({ sessionKey: KEY, runId: "r1", state: "error" }, 1_000);
+    expect(index.failedAt(KEY)).toBe(1_000);
+    // The next message is admitted, then stopped before its run starts: its row brings no start.
     index.noteInput(KEY);
-    expect(index.onChat({ sessionKey: KEY, runId: "r1", state: "aborted" }, 1_500)).toBe(false);
-    expect(index.onChat({ sessionKey: KEY, runId: "r3", state: "error" }, 2_000)).toBe(true);
-    expect(index.failedAt(KEY)).toBe(2_000);
+    index.onChat({ sessionKey: KEY, runId: "r2", state: "aborted" }, 1_500);
+    expect(index.failedAt(KEY)).toBeNull();
   });
 
   it("a run's chat abort after its own chat error keeps the task marked failed (#783)", () => {
