@@ -11554,7 +11554,12 @@ export class ClawtrateClient {
       // Its message is chosen already: only that one, once accepted, names the task, unless the
       // person deleted it or took it back unsent. A retry keeps it.
       const claimed = this.outgoing(key, kept.first);
-      if (claimed && claimed.status !== "cancelled") return;
+      if (claimed && claimed.status !== "cancelled") {
+        // One with no text is still this client's own row (`onlyOwnRows`), if that one goes.
+        if (!message.text && kept.textless.length < MAX_TEXTLESS_SENDS)
+          kept.textless.push(message.id);
+        return;
+      }
       kept.first = null;
     }
     const row = this.rows.get(capId(key, MAX_ID_CHARS));
@@ -11581,9 +11586,10 @@ export class ClawtrateClient {
     if (kept?.stage !== "waiting") return;
     if (kept.first !== messageId) {
       // The message chosen first was deleted or taken back while this one was on its way: this
-      // one takes its place, as a send after the delete would. A retry of that one keeps it.
+      // one takes its place, as a send after the delete would. A retry of that one keeps it, and
+      // one with no text leaves the place to the next with text.
       const claimed = kept.first === null ? null : this.outgoing(key, kept.first);
-      if (kept.first === null || (claimed && claimed.status !== "cancelled")) return;
+      if (kept.first === null || !text || (claimed && claimed.status !== "cancelled")) return;
       kept.first = messageId;
     }
     const bot = this.taskBot(key);

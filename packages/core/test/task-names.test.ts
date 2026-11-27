@@ -488,6 +488,47 @@ describe("the device that sends the first message", () => {
     }
   });
 
+  it("names a task from the next message with text when a picture alone took its refused first message's place", async () => {
+    // A refused, a picture B sent, A deleted before the gateway answers B, then B accepted: B
+    // names nothing and is one of this client's own, so C, with text, names the task.
+    const picture = { type: "image", fileName: "dot.png", mimeType: "image/png", content: PNG };
+    const { gateway } = creatingGateway(["Garden plan"]);
+    const { client } = await openTask({ gateway });
+    try {
+      const accept = gateway.handlers["chat.send"]!;
+      const answer = deferred<void>();
+      let sends = 0;
+      gateway.handlers["chat.send"] = async (params) => {
+        sends += 1;
+        if (sends === 1)
+          throw new GatewayError({ code: "UNAVAILABLE", message: "the bot is busy" });
+        if (sends === 2) await answer.promise;
+        return accept(params);
+      };
+      await client.createTask("main", "Plan the spring beds");
+      const failed = () =>
+        client.state.transcripts[KEY]?.outbox.find((each) => each.status === "failed");
+      await until(() => failed() !== undefined);
+      const first = failed()!.id;
+      const pictureId = client.sendMessage(KEY, "", { attachments: [picture] });
+      await until(() => sends === 2);
+      client.deleteMessage(KEY, first);
+      gateway.handlers["chat.history"] = () => ({
+        messages: [ownPicture(pictureId)],
+        hasMore: false,
+      });
+      answer.resolve();
+      const sent = () =>
+        client.state.transcripts[KEY]?.outbox.find((each) => each.id === pictureId);
+      await until(() => sent()?.status !== "sending");
+      client.sendMessage(KEY, MESSAGE);
+      await until(() => patches(gateway).length === 1);
+      expect(titleCalls(gateway)).toEqual([{ agentId: "main", message: MESSAGE }]);
+    } finally {
+      client.stop();
+    }
+  });
+
   it("doesn't name a task it created when another device sent in it first", async () => {
     // Between `sessions.create` and this client's `chat.send`, another device's message reached
     // the new task: the gateway's history holds it before this client's.
