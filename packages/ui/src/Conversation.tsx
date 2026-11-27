@@ -689,7 +689,9 @@ function buildLive(bot: Bot, task: Task, transcript: Transcript, options: LiveOp
     if (from < 0 || to < 0) return [];
     const notes = transcript.items
       .slice(from + 1, to)
-      .filter((item): item is SkillNoteItem => item.skillNote !== undefined && !folded.has(item.id));
+      .filter(
+        (item): item is SkillNoteItem => item.skillNote !== undefined && !folded.has(item.id),
+      );
     for (const note of notes) folded.add(note.id);
     return notes;
   };
