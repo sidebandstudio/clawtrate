@@ -1932,16 +1932,17 @@ test("F-071 F-070: / lists the bot's own skills by name and the gateway's comman
 test("F-071: / lists a skill the person saved to their own library, as theirs, in a task started after it; the chosen skill runs on the gateway by its command", async ({
   page,
 }) => {
-  await openShell(page);
   // The person, on a paired connection as the app is: the CLI's shared token has no profile, so
   // the gateway keeps no library for it and gives a task it makes no library skills. The
-  // development gateway has one profile, which the app acts for too.
+  // development gateway has one profile, which the app acts for too. Paired before the page
+  // opens, so the app never shows its pairing request.
   const person = await openOperator(
     openInstance(INSTANCE),
     "Clawtrate skill library check",
     ["operator.read", "operator.write"],
     [],
   );
+  await openShell(page);
   // A task the person starts, as the app's New task does (`sessions.create`), opened in the page.
   const personTask = async (label: string) => {
     const { key, title } = newTaskName("otto", label);

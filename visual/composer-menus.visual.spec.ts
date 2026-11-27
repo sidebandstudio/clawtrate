@@ -186,6 +186,7 @@ test.describe("the composer's menus", () => {
     await record(page);
     await field(page).click();
     await page.keyboard.type("/tide");
+    await expect(page.getByRole("option", { name: /tide-table/ })).toBeVisible();
     await page.keyboard.press("Enter");
     const chip = page.getByTestId("token-chip");
     await expect(chip).toHaveText(/Your skill\s*tide-table/);

@@ -6045,7 +6045,8 @@ export class ClawtrateClient {
       // The library skills this task has, the person's own among them.
       this.request("skills.library.list", { sessionKey: key }).catch(() => null),
     ]);
-    if (skills === null && metadata === null) throw new Error("The gateway did not list them.");
+    if (skills === null && metadata === null && library === null)
+      throw new Error("The gateway did not list them.");
     return slashRows(skills, metadata, library);
   }
 

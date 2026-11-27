@@ -208,6 +208,19 @@ describe("the / menu's read", () => {
       "skill",
       "command",
     ]);
+    // The task's library skills are listed though the other two reads are refused; with all
+    // three refused, the menu says the gateway did not list them.
+    const refuse = () => {
+      throw new Error("refused");
+    };
+    gateway.handlers["skills.status"] = refuse;
+    gateway.handlers["chat.metadata"] = refuse;
+    gateway.handlers["skills.library.list"] = () => library(selected([own]));
+    expect(await client.readComposerMenu(KEY, "/")).toEqual([tide]);
+    gateway.handlers["skills.library.list"] = refuse;
+    await expect(client.readComposerMenu(KEY, "/")).rejects.toThrow(
+      "The gateway did not list them.",
+    );
     client.stop();
   });
 });
