@@ -43,6 +43,9 @@ export function InfoTip({
     if (!open) return;
     const away = (event: PointerEvent) => {
       if (root.current?.contains(event.target as Node)) return;
+      // A press elsewhere also ends any hover: a pointer that rested on the "i" has moved on.
+      if (leave.current) clearTimeout(leave.current);
+      setHovered(false);
       setPinned(false);
       setDismissed(true);
     };
