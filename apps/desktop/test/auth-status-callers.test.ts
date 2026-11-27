@@ -2,8 +2,9 @@
 // no read of the bot's status began after its own, or the newest was applied and still shows the
 // confirmed order. That holds only while every read takes its number as it is sent, which
 // `AccountsEngine.statusRead` does: this reads the source of every package and app and fails for
-// a request of the method made anywhere but in the send `statusRead` is given, directly or
-// through `readStatus`, which hands its send to it.
+// a request of the method made anywhere but inside a function given as the send to `statusRead`,
+// or to `readStatus`, which hands its send to it. Each is accepted only where it is called by
+// name in its own file, so a helper elsewhere that merely shares the name numbers nothing.
 import {
   mkdirSync,
   mkdtempSync,
@@ -22,7 +23,11 @@ import { describe, expect, it } from "vitest";
 const root = fileURLToPath(new URL("../../../", import.meta.url));
 
 const METHOD = "models.authStatus";
-const NUMBERED = new Set(["statusRead", "readStatus"]);
+/** The calls that number a read, by file: the engine's own helper, and the machines page's way in. */
+const NUMBERED: Record<string, string> = {
+  "packages/core/src/accounts-engine.ts": "this.statusRead",
+  "packages/core/src/machines.ts": "ctx.readStatus",
+};
 
 /** Folders that hold no source: dependencies, build output (a desktop build's `out`), tests. */
 const NOT_SOURCE = new Set(["node_modules", "out", "dist", "build", "coverage", "test"]);
@@ -45,14 +50,18 @@ const calleeName = (call: ts.CallExpression) => {
   return null;
 };
 
-/** Inside a function given to `statusRead` or `readStatus`. */
-function numbered(node: ts.Node): boolean {
+/**
+ * Inside a function written as an argument of `helper`, so it runs only when the helper sends: a
+ * request evaluated as an argument itself has gone out before the helper takes its number.
+ */
+function numbered(node: ts.Node, helper: string | undefined): boolean {
   for (let at: ts.Node = node; at.parent; at = at.parent) {
     const parent = at.parent;
     if (
+      (ts.isArrowFunction(at) || ts.isFunctionExpression(at)) &&
       ts.isCallExpression(parent) &&
-      parent.arguments.includes(at as ts.Expression) &&
-      NUMBERED.has(calleeName(parent) ?? "")
+      parent.arguments.includes(at) &&
+      parent.expression.getText() === helper
     )
       return true;
   }
@@ -68,6 +77,7 @@ function unnumbered(dir: string, tops: string[]): string[] {
   const found: string[] = [];
   for (const top of tops) {
     for (const file of sources(join(dir, top))) {
+      const path = relative(dir, file).split(sep).join("/");
       const text = readFileSync(file, "utf8");
       if (!text.includes(METHOD)) continue;
       const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
@@ -84,9 +94,9 @@ function unnumbered(dir: string, tops: string[]): string[] {
             ts.isCallExpression(parent) &&
             calleeName(parent) === "request" &&
             parent.arguments[0] === node;
-          if (!compared && !(sent && numbered(node))) {
+          if (!compared && !(sent && numbered(node, NUMBERED[path]))) {
             const line = source.getLineAndCharacterOfPosition(node.getStart(source)).line + 1;
-            found.push(`${relative(dir, file).split(sep).join("/")}:${line}`);
+            found.push(`${path}:${line}`);
           }
         }
         ts.forEachChild(node, visit);
@@ -102,10 +112,11 @@ describe("models.authStatus's senders", () => {
     expect(unnumbered(root, ["packages", "apps"])).toEqual([]);
   });
 
-  it("a direct request, or one through a constant, is found; a numbered one and a comment aren't", () => {
+  it("a direct request, one through a constant, an eager argument or a namesake helper is found; a numbered one and a comment aren't", () => {
     const dir = mkdtempSync(join(tmpdir(), "auth-status-senders-"));
     try {
       mkdirSync(join(dir, "packages/lib/src"), { recursive: true });
+      mkdirSync(join(dir, "packages/core/src"), { recursive: true });
       writeFileSync(
         join(dir, "packages/lib/src/reads.ts"),
         [
@@ -113,14 +124,31 @@ describe("models.authStatus's senders", () => {
           'export const direct = (ctx) => ctx.request("models.authStatus", { agentId: "a" });',
           'const M = "models.authStatus";',
           "export const constant = (ctx) => ctx.request(M, {});",
-          "export const ok = (engine, ctx) =>",
-          '  engine.statusRead(ctx, ["a"], () => ctx.request("models.authStatus", { agentId: "a" }));',
+          "const readStatus = (send) => send();",
+          'export const namesake = (ctx) => readStatus(() => ctx.request("models.authStatus", {}));',
           "",
         ].join("\n"),
       );
-      expect(unnumbered(dir, ["packages"])).toEqual([
+      writeFileSync(
+        join(dir, "packages/core/src/accounts-engine.ts"),
+        [
+          "const prepare = (pending) => () => pending;",
+          "export class Engine {",
+          "  ok(ctx) {",
+          '    this.statusRead(ctx, ["a"], () => ctx.request("models.authStatus", { agentId: "a" }));',
+          "  }",
+          "  eager(ctx) {",
+          '    this.statusRead(ctx, ["a"], prepare(ctx.request("models.authStatus", {})));',
+          "  }",
+          "}",
+          "",
+        ].join("\n"),
+      );
+      expect(unnumbered(dir, ["packages"]).sort()).toEqual([
+        "packages/core/src/accounts-engine.ts:7",
         "packages/lib/src/reads.ts:2",
         "packages/lib/src/reads.ts:3",
+        "packages/lib/src/reads.ts:6",
       ]);
     } finally {
       rmSync(dir, { recursive: true, force: true });
