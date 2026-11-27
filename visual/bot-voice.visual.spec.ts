@@ -273,10 +273,15 @@ test.describe("bot voice", () => {
     await expect(voice).not.toBeChecked();
   });
 
-  test("F-527: a missing plugin or a refusal read before a disconnect is not shown as current", async ({
+  test("F-527: a refusal read before a disconnect is not shown as current, and a missing plugin stays unshown", async ({
     page,
   }) => {
-    for (const voice of ["missing", "refused"]) {
+    const missing = await openPane(page, "&voice=missing");
+    await expect(missing.getByTestId("bot-voice")).toHaveCount(0);
+    await disconnect(page);
+    await expect(missing.getByTestId("turn-limit")).toBeVisible();
+    await expect(missing.getByTestId("bot-voice")).toHaveCount(0);
+    for (const voice of ["refused"]) {
       const settings = await openPane(page, `&voice=${voice}`);
       await expect(settings.getByTestId("bot-voice")).toHaveAttribute("data-confirmed", "true");
       await expect(settings.getByTestId("bot-voice-freshness")).toHaveCount(0);
@@ -291,7 +296,7 @@ test.describe("bot voice", () => {
   test("F-527: a read that fails after a reconnect keeps its error and its retry", async ({
     page,
   }) => {
-    for (const voice of ["on", "missing", "refused"]) {
+    for (const voice of ["on", "refused"]) {
       const settings = await openPane(page, `&voice=${voice}`);
       await expect(settings.getByTestId("bot-voice")).toHaveAttribute("data-confirmed", "true");
       await disconnect(page);
