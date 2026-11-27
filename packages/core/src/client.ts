@@ -1906,8 +1906,21 @@ export class ClawtrateClient {
       };
     },
     refreshBots: () => this.refreshBots(),
-    readHistory: (key) =>
-      this.tracked(key) ? this.loadTranscript(key, false, null).catch(() => {}) : Promise.resolve(),
+    // Read only when a read that began after this call has published the task's history: a read
+    // in flight runs once more after it (`loadTranscript`), and a failed one keeps the older time.
+    readHistory: async (key) => {
+      if (!this.tracked(key)) return false;
+      const generation = this.generation;
+      const since = this.now();
+      await this.loadTranscript(key, false, null).catch(() => {});
+      const read = this.state.transcripts[key];
+      return (
+        generation === this.generation &&
+        read !== undefined &&
+        (read.status !== "error" || read.error === LIVE_UPDATES_NOT_STARTED) &&
+        (read.loadedAt ?? Number.NEGATIVE_INFINITY) >= since
+      );
+    },
     // A run some of whose steps aren't kept is a run whose steps aren't known. A person's message
     // in the conversation after the run's own and before its end joined it as a steer.
     runFacts: (sessionKey, runId) => {

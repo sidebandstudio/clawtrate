@@ -344,6 +344,8 @@ function device(
     generation?: () => string;
     /** The bot list as last read: it changes only when the engine reads it again. */
     cached?: boolean;
+    /** Whether the task's history could be read at the run's end. */
+    history?: boolean;
   } = {},
 ) {
   let lines: NameLine[] = [];
@@ -371,7 +373,7 @@ function device(
     refreshBots: async () => {
       listed = gw.state.bots;
     },
-    readHistory: async () => {},
+    readHistory: async () => options.history ?? true,
     runFacts: () => ({
       steps: options.steps === undefined ? [EDIT_OWN] : options.steps,
       steered: options.steered ?? false,
@@ -1023,6 +1025,13 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
     await s.engine.afterRun("pip", KEY, "run-1");
     expect(s.line()).toMatchObject({ whose: "bot" });
 
+    // History unread at the run's end: a steer from another device may be in it.
+    const unread = gateway();
+    const u = device(unread, { history: false });
+    u.engine.sent(KEY, "run-1", "call yourself Juniper");
+    await u.engine.afterRun("pip", KEY, "run-1");
+    expect(u.line()).toMatchObject({ whose: "bot" });
+
     const files = gateway();
     const f = device(files);
     f.engine.sent(KEY, "run-1", "call yourself Juniper", true);
@@ -1068,6 +1077,27 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
     expect(b.line()).toMatchObject({ status: "undone", after: "Juniper" });
     expect(lost.kept().changes[0]!.undone).toBeUndefined();
     expect(lost.kept().claims).toEqual([]);
+
+    // The bot list can't be read again, or is read on another connection: nothing is confirmed,
+    // nothing declined, and the claim stays for the record to settle by the name listed.
+    for (const how of ["refused", "reconnected"] as const) {
+      const unread = gateway();
+      let generation = "1:1";
+      const c = device(unread, { generation: () => generation });
+      await c.engine.afterRun("pip", KEY, "run-1");
+      unread.state.update = "lost";
+      // The client's read returns, applying nothing, when its connection changed meanwhile.
+      unread.state.onUpdate = () =>
+        (c.ctx.refreshBots = async () => {
+          if (how === "refused") throw new Error("no answer");
+          generation = "2:1";
+        });
+      await c.engine.undo("pip", runTag("run-1"), "Pip", STAMP);
+      expect(c.line()).toMatchObject({ status: "undone", after: null });
+      expect(c.line()!.error).toContain("isn't confirmed");
+      expect(unread.kept().declined).toEqual([]);
+      expect(unread.kept().claims).toHaveLength(1);
+    }
   });
 
   it("F-552: an Undo's unsaved decline is kept and written again after a reconnect to the same gateway", async () => {
@@ -1081,8 +1111,12 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
     // Connected again to the same gateway: the host's target is new.
     stamp = { gatewayId: "gw-a", target: 2 };
     me.engine.reset();
+    // Another device cleared the record meanwhile: only this device's copy holds the decline.
+    gw.state.record = undefined;
     await me.engine.afterRun("pip", KEY, "run-2");
     expect(gw.state.updates).toEqual(["Juniper", "Pip"]);
+    // Declined here, so nothing is said: not a rename the record couldn't hold.
+    expect(me.line()).toBeUndefined();
     gw.state.prefsDown = false;
     gw.state.downAt = null;
     await me.engine.afterRun("pip", KEY, "run-3");
@@ -1333,6 +1367,24 @@ describe("F-552: through the client", () => {
       edit(id, "Johnny", 2);
       gw.emit("agent", agentEvent(id, 4, "lifecycle", { phase: "end" }, "agent:new-bot:main"));
       await until(() => client.state.botNames?.[0]?.status === "renamed");
+      expect(client.state.botNames![0]).toMatchObject({ to: "Johnny", whose: "bot" });
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("F-552: a run whose history can't be read at its end isn't shown to be the person's ask", async () => {
+    const { client, gw, edit } = await namingClient();
+    try {
+      const id = client.sendMessage("agent:new-bot:main", "call yourself Johnny");
+      await until(() => gw.calls("chat.send").length === 1);
+      edit(id, "Johnny");
+      // A steer from another device may be in what couldn't be read.
+      gw.handlers["chat.history"] = () => {
+        throw new Error("the gateway was busy");
+      };
+      gw.emit("agent", agentEvent(id, 3, "lifecycle", { phase: "end" }, "agent:new-bot:main"));
+      await until(() => client.state.botNames?.[0]?.status === "renamed", 10_000);
       expect(client.state.botNames![0]).toMatchObject({ to: "Johnny", whose: "bot" });
     } finally {
       client.stop();

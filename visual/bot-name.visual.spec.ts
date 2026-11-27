@@ -125,7 +125,7 @@ test.describe("bot name behaviour", () => {
     );
     // Shown in the line too, not only announced.
     await expect(line(page).getByRole("status")).toHaveText(
-      "Renamed to Johnny Undo didn't go through: This change was read on another gateway, so nothing was sent.",
+      "Renamed to Johnny. Undo didn't go through: This change was read on another gateway, so nothing was sent.",
     );
     await expect(page.locator(".title-pill-name")).toHaveText("Johnny");
   });

@@ -171,7 +171,7 @@ export function NameLine({ bot, onAnnounce }: { bot: Bot; onAnnounce: (text: str
           {words(line)}
           {/* Shown, and already announced: a screen reader hears it once. */}
           {problem?.run === line.run && line.status === "renamed" && (
-            <span aria-hidden="true"> Undo didn't go through: {problem.text}</span>
+            <span aria-hidden="true">. Undo didn't go through: {problem.text}</span>
           )}
         </p>
         <div className="name-line-actions">

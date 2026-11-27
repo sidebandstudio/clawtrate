@@ -498,8 +498,8 @@ export type BotNamesContext = {
     sessionKey: string,
     runId: string,
   ) => { steps: RunStepFacts[] | null; steered: boolean };
-  /** Read a task's history now, so what it holds covers a run that just ended. */
-  readHistory: (sessionKey: string) => Promise<void>;
+  /** Read a task's history now, so what it holds covers a run that just ended. Whether it did. */
+  readHistory: (sessionKey: string) => Promise<boolean>;
   /** Whether an error is the gateway refusing for a missing scope (and note it). */
   missingScope: (error: unknown) => boolean;
   /** Whether an error is the gateway's own refusal, so nothing was written (`isCertainRefusal`). */
@@ -540,6 +540,7 @@ type Applied = {
 
 const NOTHING_SENT = "The connection changed, so nothing was sent.";
 const NO_LONGER = "That change can no longer be undone.";
+const UNCONFIRMED = "Clawtrate couldn't read the bot list again, so this isn't confirmed.";
 
 export class BotNames {
   /** Each bot's line, and when it was set here: a later change on the gateway replaces an earlier line. */
@@ -659,8 +660,9 @@ export class BotNames {
       if (name === now.name || name === plainName(now.name)) return this.reconcile();
       const sent = runId === undefined ? undefined : this.sentRuns.get(runId);
       const mine = sent?.sessionKey === sessionKey;
-      // History read through the run's end: a steer another device sent is in it by then.
-      if (runId !== undefined) await this.ctx.readHistory(sessionKey);
+      // History read through the run's end: a steer another device sent is in it by then. Unread,
+      // nothing shows there was none.
+      const read = runId !== undefined && (await this.ctx.readHistory(sessionKey));
       if (stale()) return;
       const run = runId === undefined ? null : this.ctx.runFacts(sessionKey, runId);
       const facts: RunFacts = {
@@ -668,7 +670,7 @@ export class BotNames {
         text: mine ? sent!.text : null,
         cut: mine && sent!.cut,
         attachments: mine && sent!.attachments,
-        steered: (mine && sent!.steered) || (run?.steered ?? false),
+        steered: (mine && sent!.steered) || !read || (run?.steered ?? false),
         steps: run?.steps ?? null,
       };
       const origin: RenameOrigin = {
@@ -955,8 +957,18 @@ export class BotNames {
       throw error;
     }
     await this.keepPictureOutOfFile(botId, epoch);
-    await this.ctx.refreshBots().catch(() => {});
-    // What the gateway lists now, said as it is.
+    // What the gateway lists now, read again on the connection Undo went on. A list that couldn't
+    // be read says nothing of Undo: its claim stays, for the record to settle by the name listed.
+    const generation = this.ctx.generation();
+    const reread = await this.ctx.refreshBots().then(
+      () => true,
+      () => false,
+    );
+    if (!reread || generation !== this.ctx.generation() || !sameStamp(this.ctx.stamp(), stamp)) {
+      restore({ status: "undone", after: null, error: UNCONFIRMED });
+      return;
+    }
+    // Said as it is.
     const after = this.ctx.bots().find((each) => each.id === botId)?.name ?? null;
     if (after !== change.from) {
       await this.release({ stamp, generation: this.ctx.generation() }, opId, botId, run, false);
