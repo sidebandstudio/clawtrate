@@ -1259,7 +1259,7 @@ test.describe("Messaged cards", () => {
     };
     expect(await word("messaged-recipient-stopped")).toBe("Recipient stopped");
     expect(await word("messaged-recipient-waiting")).toBe("Recipient waiting");
-    expect(await word("messaged-no-reply")).toBe("No reply yet");
+    expect(await word("messaged-no-reply")).toBe("Finished");
     expect(await word("messaged-recipient-failed")).toBe("Recipient failed");
   });
 

@@ -228,7 +228,7 @@ export function BotMessageCardView({
   const [, word] = MESSAGED_STATES[key];
   const first = firstLineOf(card.text);
   const domId = cardDomId({ kind: "bot-message", id: card.id });
-  const names = { sender: sender.name, recipient: recipient.name };
+  const names = { sender: sender.name, recipient: recipient.name, task: task?.title };
 
   let cameBack: ReactNode;
   if (key === "working") {

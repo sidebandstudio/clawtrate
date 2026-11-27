@@ -489,6 +489,7 @@ export type MessagedKey =
   | "working"
   | "recipient-waiting"
   | "no-reply"
+  | "finished"
   | "replied"
   | "recipient-stopped"
   | "recipient-failed"
@@ -510,6 +511,7 @@ export const MESSAGED_STATES: Record<
   working: ["working", "Working", "accent"],
   "recipient-waiting": ["waiting", "Recipient waiting", "warn"],
   "no-reply": ["queued", "No reply yet", null],
+  finished: ["check", "Finished", null],
   replied: ["check", "Replied", "accent"],
   "recipient-stopped": ["stopped", "Recipient stopped", null],
   "recipient-failed": ["failed", "Recipient failed", "danger"],
@@ -532,6 +534,7 @@ const DELIVERED: ReadonlySet<MessagedKey> = new Set([
   "working",
   "recipient-waiting",
   "no-reply",
+  "finished",
   "replied",
   "recipient-stopped",
   "recipient-failed",
@@ -565,6 +568,10 @@ export function botMessageKey(card: BotMessageCard): MessagedKey {
     case "recipient-waiting":
       return "recipient-waiting";
     case "no-reply-yet":
+      // A send that didn't wait has no reply in the call: the answer is in the recipient's task.
+      return card.resultStatus === "accepted" && card.recipientRunState === "completed"
+        ? "finished"
+        : "no-reply";
     case "recipient-outcome-unknown":
       return "no-reply";
     case "replied":
@@ -630,7 +637,8 @@ function notSentLine(
 export function botMessageNote(
   key: MessagedKey,
   card: BotMessageCard,
-  names: { sender: string; recipient: string },
+  /** `task`: the title of the task the message went to, when the card names one. */
+  names: { sender: string; recipient: string; task?: string | null },
   approvals: ApprovalCard[],
   run: Pick<Run, "state"> | undefined,
 ): string {
@@ -646,6 +654,8 @@ export function botMessageNote(
       return `${r} is waiting on its user in its own task: it asked a question, or it needs an approval.`;
     case "no-reply":
       return `${card.resultStatus === "timeout" ? "The message was sent, and no reply came in time." : `${r}'s run finished without a reply.`} A reply that names this message appears here; any other arrives as a message from ${r}.`;
+    case "finished":
+      return `Finished. The answer is in ${names.task ?? `${r}'s task`}.`;
     case "recipient-stopped":
       return `${r}'s run for this message was stopped before it replied.`;
     case "recipient-failed":

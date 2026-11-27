@@ -255,7 +255,7 @@ test("F-587: a task a bot starts shows as a card where it was asked, reaches Don
   const follow = page.getByTestId("messaged-card");
   await expect(follow.locator(".messaged-verb")).toHaveText("Sent to", { timeout: 60_000 });
   // The follow-up's run in the task has ended.
-  await expect(follow).toHaveAttribute("data-state", "no-reply", { timeout: 60_000 });
+  await expect(follow).toHaveAttribute("data-state", "finished", { timeout: 60_000 });
   await expect(reports).toHaveCount(afterPerson + (SHAPE.reportsFollowUpRun ? 1 : 0), {
     timeout: 60_000,
   });
