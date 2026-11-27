@@ -455,6 +455,9 @@ export const RUN: Bound = flagged<Run>()({
   endFromRows: FLAG,
   ranInHistory: FLAG,
   startSaid: FLAG,
+  quietEnd: ENUM,
+  quietError: runError,
+  unansweredInHistory: FLAG,
   anchorKeyed: FLAG,
   preambles: list(MAX_PREAMBLES_PER_RUN, preamble),
   reasoningAnchor: ID,
@@ -1057,6 +1060,7 @@ const SESSION_ROW_FIELDS = [
   "lastChannel",
   "lastMessagePreview",
   "lastRunError",
+  "lastRunId",
   "markedUnreadAt",
   "pinned",
   "sessionId",
@@ -1065,6 +1069,7 @@ const SESSION_ROW_FIELDS = [
   "startedAt",
   "status",
   "subject",
+  "suppressErrorNotice",
   "totalTokens",
   "totalTokensFresh",
   "unread",
@@ -1072,7 +1077,14 @@ const SESSION_ROW_FIELDS = [
 ] as const;
 
 /** Session-row fields that are ids: kept under the id cap (`#digest` when longer), never cut. */
-const SESSION_ROW_IDS = new Set(["agentId", "key", "sessionId", "sessionKey", "spawnedBy"]);
+const SESSION_ROW_IDS = new Set([
+  "agentId",
+  "key",
+  "lastRunId",
+  "sessionId",
+  "sessionKey",
+  "spawnedBy",
+]);
 
 /**
  * A session row as the client keeps it: the fields it reads, ids under the id
