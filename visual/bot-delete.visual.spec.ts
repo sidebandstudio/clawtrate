@@ -363,7 +363,8 @@ test.describe("behaviour", () => {
   test("F-050: closing a delete lands on a Main Bot with no tasks at its heading", async ({
     page,
   }) => {
-    const dialog = await openDelete(page, "access=admin");
+    // The app lands on the gateway's default bot when the rail lists it.
+    const dialog = await openDelete(page, "access=admin&gatewaybot=on");
     await page.evaluate(() =>
       (
         window as unknown as {
@@ -373,7 +374,7 @@ test.describe("behaviour", () => {
         }
       ).clawtrateFixture.setState((state) => ({
         ...state,
-        tasksByBot: { ...state.tasksByBot, "clawtrate-main-bot": [] },
+        tasksByBot: { ...state.tasksByBot, main: [] },
       })),
     );
     await dialog.getByTestId("delete-type").fill("Pip");

@@ -163,7 +163,7 @@ const open = (page: Page, theme: (typeof THEMES)[number], where: Where = "main")
   openFixture(
     page,
     where === "main"
-      ? `scene=main&bot=main&task=${MAIN}&panel=closed`
+      ? `scene=main&bot=main&task=${MAIN}&panel=closed&gatewaybot=on`
       : `scene=main&${OTTO_DISK}&panel=closed`,
     theme,
   );

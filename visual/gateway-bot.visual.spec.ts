@@ -133,7 +133,9 @@ test.describe("the gateway's own bot", () => {
     // Nor its workspace's files: the others' are searched, and its notes/porch-light.md is not.
     await found.getByRole("combobox", { name: "Search" }).fill("porch");
     const files = found.getByTestId("search-group-files");
-    await expect(files).toContainText("No file names returned from Otto");
+    // Five bots' workspaces: every bot but the gateway's own.
+    await expect(files).toContainText("4 of 5 bots' workspaces searched.");
+    await expect(files).not.toContainText(/\bmain\b/);
     await expect(files).not.toContainText("porch-light");
   });
 
@@ -233,8 +235,9 @@ test.describe("the gateway's own bot", () => {
       `${OTTO_DISK}&panel=closed&gatewaybot=off&search=on&src=truncated`,
       "light",
     );
-    const messages = (await palette(page, "porch")).getByTestId("search-group-messages");
-    const found = messages.getByRole("option").filter({ hasText: OWN_WORDS });
+    // Its answer, the one message that says "sunset".
+    const messages = (await palette(page, "sunset")).getByTestId("search-group-messages");
+    const found = messages.getByRole("option").filter({ hasText: "sunset" });
     await expect(found).toHaveCount(1);
     await messages.getByRole("option", { name: "Search each bot for more" }).click();
     await expect(messages).toContainText("bots answered");
@@ -469,6 +472,8 @@ test.describe("the gateway's own bot", () => {
     );
     const transcript = page.getByTestId("transcript");
     await expect(transcript).toContainText(OWN_WORDS);
+    // A second task of its own, which the search below finds.
+    await setState(page, SECOND_OWN);
     const settings = await advanced(page);
     await settings.getByRole("switch", { name: "Show the gateway's own bot" }).click();
     await page.keyboard.press("Escape");
@@ -479,7 +484,13 @@ test.describe("the gateway's own bot", () => {
     // A message found in one of its tasks opens that task. Opened, the bot is in the rail until
     // another is opened.
     const found = await palette(page, "porch");
-    await found.getByTestId("search-group-messages").getByRole("option").first().click();
+    await found
+      .getByTestId("search-group-messages")
+      .getByRole("option")
+      .filter({ hasText: "Hallway motion sensor" })
+      .first()
+      .click();
+    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Hallway motion sensor");
     await expect(transcript).toContainText(OWN_WORDS);
     await expect(railBot(page, "main")).toBeVisible();
     await railBot(page, "Pip").click();
