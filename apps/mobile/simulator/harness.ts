@@ -357,7 +357,7 @@ export async function transcriptLinkTap(
     link.x2 > viewport.x2
   ) {
     throw new Error(
-      `Link ${pattern}: ${JSON.stringify(link)} is outside ${JSON.stringify(viewport)}`,
+      `Link ${pattern} isn't wholly in the transcript: the link is at ${JSON.stringify(link)}, the transcript's view at ${JSON.stringify(viewport)}`,
     );
   }
   const point = { point: `${x},${y}` };
