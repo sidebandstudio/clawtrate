@@ -1034,8 +1034,12 @@ describe("an archive or a delete bound to the connection it began on", () => {
         requireSameGateway(stamp: GatewayStamp): Promise<unknown>;
       };
       const guard = host.requireSameGateway.bind(client);
+      let guards = 0;
       host.requireSameGateway = async (stamp) => {
         const passed = await guard(stamp);
+        // A connected host runs the guard before it asks for access, then again for the
+        // connection the action is bound to: the drop follows that second one.
+        if (++guards < 2) return passed;
         id = "gateway-x";
         gateway.dropAll();
         await until(() => client.state.connection.status !== "connected");
@@ -1062,5 +1066,48 @@ describe("an archive or a delete bound to the connection it began on", () => {
       expect(gateway.calls("sessions.patch")).toEqual([]);
       client.stop();
     });
+
+    it(`${title} read on one gateway asks no access of a read-only gateway at the same address that hasn't named itself yet`, async () => {
+      const { client, gateway, stamp } = await granted("gateway-b");
+      const naming = deferred<{ deviceId: string }>();
+      gateway.handlers["gateway.identity.get"] = () => naming.promise;
+      const asked = gateway.calls("gateway.identity.get").length;
+      gateway.dropAll();
+      await until(
+        () =>
+          client.state.connection.status === "connected" &&
+          gateway.calls("gateway.identity.get").length > asked,
+        6_000,
+      );
+      expect(client.state.connection.gatewayId).toBeNull();
+      const acting = outcome(act(client, stamp));
+      naming.resolve({ deviceId: "gateway-b" });
+      expect(await acting).toBe("This change was made for another gateway, so nothing was sent.");
+      expect(gateway.calls("device.scopes.requestUpgrade")).toEqual([]);
+      expect(gateway.calls("sessions.patch")).toEqual([]);
+      client.stop();
+    });
   }
+
+  it("a task change whose viewer closes while it waits for the gateway's name asks nothing for it", async () => {
+    const { client, gateway, stamp } = await granted("gateway-a");
+    const naming = deferred<{ deviceId: string }>();
+    gateway.handlers["gateway.identity.get"] = () => naming.promise;
+    const asked = gateway.calls("gateway.identity.get").length;
+    gateway.dropAll();
+    await until(
+      () =>
+        client.state.connection.status === "connected" &&
+        gateway.calls("gateway.identity.get").length > asked,
+      6_000,
+    );
+    const viewer = {};
+    const acting = outcome(client.archiveTask("agent:pip:main", { owner: viewer, stamp }));
+    client.withdraw(viewer);
+    naming.resolve({ deviceId: "gateway-a" });
+    expect(await acting).toBe("The request was withdrawn.");
+    expect(gateway.calls("device.scopes.requestUpgrade")).toEqual([]);
+    expect(gateway.calls("sessions.patch")).toEqual([]);
+    client.stop();
+  });
 });
