@@ -6,6 +6,7 @@
 // one request and is kept nowhere: not in the state, not in a field here, not
 // in an error. `withoutSecret` takes it out of anything the gateway answers.
 
+import { openClawAtLeast } from "./gateway-version.ts";
 import {
   ACCOUNT_READ_CONCURRENCY,
   accountProvider,
@@ -49,6 +50,13 @@ import {
   readKeyProviders,
   readMethods,
   readModelConfig,
+  readModelDefaults,
+  defaultsValues,
+  sameDefaults,
+  defaultsPatch,
+  MAX_FALLBACKS,
+  type DefaultsChange,
+  type DefaultsValues,
   readStep,
   SIGNIN_WAIT_MS,
   MAX_SIGNIN_SECRETS,
@@ -101,6 +109,10 @@ export type AccountsContext = {
   refreshMs?: number;
   /** The monotonic clock a Refresh's deadline is measured on: `performance.now()` unless a test sets it. */
   clock?: () => number;
+  /** The gateway's OpenClaw version (`hello-ok` `server.version`), for what a restart does. */
+  serverVersion?: () => string | null;
+  /** How long a Models change waits for OpenClaw to come back after a restart, unless a test sets it. */
+  restartWaitMs?: number;
   get(): AccountsState;
   update(change: (accounts: AccountsState) => AccountsState): void;
   /** The bots the client lists: ids, names, which is the default, and their pictures. */
@@ -720,6 +732,7 @@ export class AccountsEngine {
     const entries = asRecord(agents.entries) ?? {};
     const defaults = asRecord(agents.defaults) ?? {};
     const defaultModel = readModelConfig(defaults.model).primary;
+    const modelDefaults = readModelDefaults(root);
     const accounts = mergeAccounts(views, this.kinds);
     const main = asRecord(entries.main);
     const anyView = views.get("main") ?? [...views.values()][0];
@@ -748,6 +761,7 @@ export class AccountsEngine {
       readAt: at,
       labels: this.ctx.admin(),
       defaultModel,
+      defaults: modelDefaults,
       // A `main` listed on the gateway, with no folder of its own configured (row 33).
       mainShared: views.has("main") && (main === null || typeof main.agentDir !== "string"),
       accounts,
@@ -2730,6 +2744,230 @@ export class AccountsEngine {
       throw error;
     }
     await this.checkLock(botId);
+  }
+
+  // Settings › Models: the defaults every bot uses (gateway-settings.md sections 4.1, 6, 7) ------
+
+  /**
+   * Change the default model, its backups or the thinking level. A change that restarts OpenClaw
+   * (reload `off`, or a setting whose `reloadKind` isn't `hot` or `none`, or can't be read) is held
+   * until the person presses Save and restart (`restart`). After the write it is read back, and
+   * counts as made only when each setting holds the value this device wrote.
+   */
+  async setDefaults(
+    values: DefaultsValues,
+    restart: boolean,
+    beforeSend?: (sent: boolean) => void,
+  ): Promise<void> {
+    this.requireAdmin("Changing the default model");
+    this.checkDefaults(values);
+    await this.writeDefaults(values, restart, false, beforeSend);
+  }
+
+  /**
+   * Put back what the last change replaced, only while every setting it wrote still holds what it
+   * wrote (section 6: evidence of matching content). Otherwise nothing is written, and the line
+   * says what is there now.
+   */
+  async putBackDefaults(beforeSend?: (sent: boolean) => void): Promise<void> {
+    this.requireAdmin("Changing the default model");
+    const last = this.ctx.get().defaultsChange;
+    if (!last || last.status !== "saved") throw new Error("There is nothing to put back.");
+    const { ctx } = this.checked(beforeSend);
+    const read = asRecord(await ctx.request("config.get", {}));
+    const now = defaultsValues(
+      readModelDefaults(read?.config),
+      Object.keys(last.after) as Array<keyof DefaultsValues>,
+    );
+    if (!sameDefaults(last.after, now)) {
+      this.setDefaultsChange({ ...last, status: "changedSince", current: now, at: this.ctx.now() });
+      return;
+    }
+    await this.writeDefaults(last.before, true, true, beforeSend);
+  }
+
+  /** The values a person can set here: models the gateway lists, a level the model offers. */
+  private checkDefaults(values: DefaultsValues): void {
+    const state = this.ctx.get();
+    const listed = (ref: string) => {
+      const parsed = parseModelRef(ref);
+      if (!parsed) return false;
+      if (!state.models.some((m) => m.provider === parsed.provider && m.id === parsed.model))
+        return false;
+      return parsed.account === null || state.accounts.some((a) => a.id === parsed.account);
+    };
+    if (Object.keys(values).length === 0) throw new Error("Nothing to change.");
+    if (values.primary !== undefined && (values.primary === null || !listed(values.primary)))
+      throw new Error("Choose a model the gateway lists.");
+    if (values.fallbacks !== undefined && values.fallbacks !== null) {
+      if (values.fallbacks.length > MAX_FALLBACKS)
+        throw new Error(`At most ${MAX_FALLBACKS} backup models.`);
+      if (new Set(values.fallbacks).size !== values.fallbacks.length)
+        throw new Error("A backup model is listed twice.");
+      if (!values.fallbacks.every(listed))
+        throw new Error("Choose backup models the gateway lists.");
+    }
+    if (values.thinking !== undefined && values.thinking !== null) {
+      const primary = parseModelRef(values.primary ?? state.defaults?.primary ?? null);
+      const model = primary
+        ? state.models.find((m) => m.provider === primary.provider && m.id === primary.model)
+        : undefined;
+      if (!model?.levels.includes(values.thinking))
+        throw new Error("The default model doesn't offer that thinking level.");
+    }
+  }
+
+  private async writeDefaults(
+    after: DefaultsValues,
+    restartPressed: boolean,
+    putBack: boolean,
+    beforeSend?: (sent: boolean) => void,
+  ): Promise<void> {
+    const fields = Object.keys(after) as Array<keyof DefaultsValues>;
+    const gatewayId = this.ctx.gatewayNow();
+    const { ctx, check } = this.checked(beforeSend);
+    const read = asRecord(await ctx.request("config.get", {}));
+    const found = readModelDefaults(read?.config);
+    const before = defaultsValues(found, fields);
+    const baseHash = typeof read?.hash === "string" ? read.hash : undefined;
+    const restart = found.reloadOff || (await this.restartBound(ctx, fields));
+    const change: DefaultsChange = {
+      status: "saving",
+      before,
+      after,
+      current: null,
+      restart,
+      putBack,
+      error: null,
+      at: this.ctx.now(),
+      gatewayId,
+    };
+    if (restart && !restartPressed) {
+      this.setDefaultsChange({ ...change, status: "held" });
+      return;
+    }
+    this.setDefaultsChange(change);
+    try {
+      await ctx.request("config.patch", {
+        raw: JSON.stringify(defaultsPatch(after)),
+        ...(baseHash ? { baseHash } : {}),
+        // Writing the backup list, or taking it out, removes entries: both versions refuse that
+        // without its path here ("config.patch would remove entries from array path(s)").
+        ...("fallbacks" in after ? { replacePaths: ["agents.defaults.model.fallbacks"] } : {}),
+      });
+      check();
+    } catch (error) {
+      const said = errorText(error);
+      this.setDefaultsChange({
+        ...change,
+        status: "failed",
+        error: /changed since last load|config changed/i.test(said)
+          ? "Changed on another device just now. Your change is still here to save."
+          : this.scrub(said),
+        at: this.ctx.now(),
+      });
+      throw error;
+    }
+    if (restart) this.setDefaultsChange({ ...change, status: "restarting", at: this.ctx.now() });
+    await this.readBackDefaults(change, restart, read?.configRevisionHash);
+  }
+
+  /** Whether any setting changed restarts OpenClaw, by `config.schema.lookup`'s `reloadKind`. */
+  private async restartBound(
+    ctx: AccountsContext,
+    fields: Array<keyof DefaultsValues>,
+  ): Promise<boolean> {
+    const paths = new Set(
+      fields.map((f) =>
+        f === "thinking" ? "agents.defaults.thinkingDefault" : "agents.defaults.model",
+      ),
+    );
+    for (const path of paths) {
+      const kind = await ctx.request("config.schema.lookup", { path }).then(
+        (answer) => asRecord(answer)?.reloadKind,
+        () => undefined,
+      );
+      // A kind that can't be read is treated as a restart (section 7).
+      if (kind !== "hot" && kind !== "none") return true;
+    }
+    return false;
+  }
+
+  /**
+   * Read the change back until the saved revision is applied, and compare each setting with the
+   * value written: a revision applied with another value is another device's (section 7).
+   * Through a restart it waits for the gateway to come back: on 2026.10.6 for its fixed 5-minute
+   * drain and a minute to start, otherwise 60 seconds from when the gateway went away.
+   */
+  private async readBackDefaults(
+    change: DefaultsChange,
+    restart: boolean,
+    revisionBefore: unknown,
+  ): Promise<void> {
+    const ctx = this.ctx;
+    const started = ctx.now();
+    const older = !openClawAtLeast(ctx.serverVersion?.() ?? null, 2026, 11, 10);
+    const known = ctx.serverVersion?.() != null;
+    const restartMs = ctx.restartWaitMs ?? (older && known ? 360_000 : 60_000);
+    let goneAt: number | null = null;
+    let savedOnly = false;
+    const pause = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));
+    for (let reads = 0; reads < 2_000; reads += 1) {
+      const elapsed = ctx.now() - started;
+      if (!restart && elapsed > 20_000) break;
+      if (restart && ctx.now() - (goneAt ?? started) > restartMs) break;
+      if (!ctx.connected()) {
+        goneAt ??= ctx.now();
+        await pause(restart ? 500 : 200);
+        continue;
+      }
+      // The change is the connected gateway's only while it is the one written to.
+      if (change.gatewayId !== null && ctx.gatewayNow() !== change.gatewayId) break;
+      const read = await ctx.request("config.get", {}).then(asRecord, () => null);
+      if (read) {
+        // Saved with this device's values, not yet applied: with reload off, 2026.11.10 keeps it
+        // so until OpenClaw next restarts, and doesn't restart by itself (2026.10.6 does).
+        const saved =
+          read.configRevisionHash !== revisionBefore &&
+          sameDefaults(
+            change.after,
+            defaultsValues(
+              readModelDefaults(read.config),
+              Object.keys(change.after) as Array<keyof DefaultsValues>,
+            ),
+          );
+        savedOnly = saved && read.appliedConfigHash !== read.configRevisionHash;
+        const applied =
+          read.configRevisionHash === undefined ||
+          (read.configRevisionHash !== revisionBefore &&
+            read.appliedConfigHash === read.configRevisionHash);
+        if (applied) {
+          const found = readModelDefaults(read.config);
+          const now = defaultsValues(
+            found,
+            Object.keys(change.after) as Array<keyof DefaultsValues>,
+          );
+          ctx.update((a) => ({ ...a, defaults: found, defaultModel: found.primary }));
+          this.setDefaultsChange(
+            sameDefaults(change.after, now)
+              ? { ...change, status: "saved", at: ctx.now() }
+              : { ...change, status: "changedSince", current: now, at: ctx.now() },
+          );
+          return;
+        }
+      }
+      await pause(restart ? 500 : 200);
+    }
+    this.setDefaultsChange({
+      ...change,
+      // The gateway never went away and holds the values saved: they wait for its next restart.
+      status: savedOnly && goneAt === null ? "notApplied" : "unconfirmed",
+      at: ctx.now(),
+    });
+  }
+
+  private setDefaultsChange(change: DefaultsChange): void {
+    this.ctx.update((a) => ({ ...a, defaultsChange: change }));
   }
 
   // The connection -------------------------------------------------------------------------

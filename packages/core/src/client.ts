@@ -50,7 +50,7 @@ import {
   type CreatedBot,
 } from "./accounts-engine.ts";
 import { BotNames } from "./bot-names.ts";
-import type { ModelList, ModelRefresh, OrderClear } from "./accounts.ts";
+import type { DefaultsValues, ModelList, ModelRefresh, OrderClear } from "./accounts.ts";
 import {
   dismissCheckInSave,
   loadCheckIns,
@@ -1909,6 +1909,7 @@ export class ClawtrateClient {
     refreshBots: () => this.refreshBots(),
     gateway: () => this.readGatewayIdentity(),
     gatewayNow: () => this.state.connection.gatewayId,
+    serverVersion: () => this.state.connection.serverVersion,
     readStamp: () => ({
       gatewayId: this.state.connection.gatewayId,
       target: this.target,
@@ -6953,6 +6954,22 @@ export class ClawtrateClient {
     if (stamp === undefined) return this.accounts.setModel(botId, model, effort);
     await this.requireSameGateway(stamp);
     return this.accounts.setModel(botId, model, effort, this.sameConnection(stamp));
+  }
+
+  /** Settings › Models (gateway-settings.md section 4.1): only to the gateway the screen showed. */
+  async setModelDefaults(
+    values: DefaultsValues,
+    restart: boolean,
+    stamp: GatewayStamp,
+  ): Promise<void> {
+    await this.requireSameGateway(stamp);
+    return this.accounts.setDefaults(values, restart, this.sameConnection(stamp));
+  }
+
+  /** Put back what the last Models change replaced, while its settings still match (section 6). */
+  async putBackModelDefaults(stamp: GatewayStamp): Promise<void> {
+    await this.requireSameGateway(stamp);
+    return this.accounts.putBackDefaults(this.sameConnection(stamp));
   }
 
   /** With `stamp`, as for `changeBotAccount`. */

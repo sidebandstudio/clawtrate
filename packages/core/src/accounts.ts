@@ -554,6 +554,64 @@ export type OrderClear = {
 /** How long a press waits for the gateway's answer before it reads the order to find out. */
 export const ORDER_CLEAR_WAIT_MS = 20_000;
 
+/**
+ * The models every bot uses unless it has its own (gateway-settings.md section 4.1), as one
+ * `config.get` read them. `null` for a setting means it is absent from the config.
+ */
+export type ModelDefaults = {
+  /** `agents.defaults.model.primary`. */
+  primary: string | null;
+  /** `agents.defaults.model.fallbacks`, at most `MAX_FALLBACKS`. */
+  fallbacks: string[] | null;
+  /** `agents.defaults.thinkingDefault`. */
+  thinking: string | null;
+  /** `gateway.reload.mode` is "off": every change restarts OpenClaw (section 7). */
+  reloadOff: boolean;
+};
+
+/** The settings a Models change sets: each is written, or `null` to take it out of the config. */
+export type DefaultsValues = {
+  primary?: string | null;
+  fallbacks?: string[] | null;
+  thinking?: string | null;
+};
+
+/**
+ * The last change made in Settings › Models from this device, with what it put back
+ * (gateway-settings.md sections 6 and 7). Kept in the state only: Put back is this device's.
+ */
+export type DefaultsChange = {
+  /**
+   * `held`: it restarts OpenClaw and waits for Save and restart. `saving`: sent. `restarting`:
+   * written; OpenClaw restarts to apply it. `saved`: read back as written. `changedSince`: read
+   * back holding another value. `notApplied`: saved, and OpenClaw applies it when it next
+   * restarts (reload off on 2026.11.10). `unconfirmed`: not read back in time. `failed`: refused.
+   */
+  status:
+    | "held"
+    | "saving"
+    | "restarting"
+    | "saved"
+    | "changedSince"
+    | "notApplied"
+    | "unconfirmed"
+    | "failed";
+  /** The values before, as the read before the write showed them; only the settings changed. */
+  before: DefaultsValues;
+  /** The values written. */
+  after: DefaultsValues;
+  /** What the read-back found instead, for `changedSince`. */
+  current: DefaultsValues | null;
+  /** It restarts OpenClaw. */
+  restart: boolean;
+  /** This change is a Put back of the one before it. */
+  putBack: boolean;
+  error: string | null;
+  at: number;
+  /** The gateway it was written to. */
+  gatewayId: string | null;
+};
+
 export type AccountsState = {
   status: "idle" | "loading" | "ready" | "error";
   error: string | null;
@@ -564,6 +622,10 @@ export type AccountsState = {
   labels: boolean;
   /** `agents.defaults.model.primary`. */
   defaultModel: string | null;
+  /** The defaults Settings › Models shows, from the same read; null before one. */
+  defaults: ModelDefaults | null;
+  /** The last change made there from this device. */
+  defaultsChange: DefaultsChange | null;
   /** A sign-in for `main` lands in the shared store: there is a `main` with no folder of its own. */
   mainShared: boolean;
   accounts: GatewayAccount[];
@@ -589,6 +651,8 @@ export const initialAccountsState: AccountsState = {
   readOn: null,
   labels: false,
   defaultModel: null,
+  defaults: null,
+  defaultsChange: null,
   mainShared: false,
   accounts: [],
   methods: [],
@@ -1165,6 +1229,53 @@ export function readModelConfig(value: unknown): {
     primary: str(record.primary),
     fallbacks: Array.isArray(record.fallbacks) ? strings(record.fallbacks, MAX_FALLBACKS) : null,
   };
+}
+
+/** The models every bot uses unless it has its own, from one `config.get` answer's `config`. */
+export function readModelDefaults(root: unknown): ModelDefaults {
+  const config = asRecord(root) ?? {};
+  const defaults = asRecord(asRecord(config.agents)?.defaults) ?? {};
+  const model = readModelConfig(defaults.model);
+  return {
+    primary: model.primary,
+    fallbacks: model.fallbacks,
+    thinking: str(defaults.thinkingDefault),
+    reloadOff: asRecord(asRecord(config.gateway)?.reload)?.mode === "off",
+  };
+}
+
+/** The values of `fields` as `defaults` holds them. */
+export function defaultsValues(
+  defaults: ModelDefaults,
+  fields: ReadonlyArray<keyof DefaultsValues>,
+): DefaultsValues {
+  const out: DefaultsValues = {};
+  for (const field of fields) out[field] = defaults[field] as never;
+  return out;
+}
+
+/** Every setting `want` names holds the same value in `have`: a list in the same order. */
+export function sameDefaults(want: DefaultsValues, have: DefaultsValues): boolean {
+  for (const field of Object.keys(want) as Array<keyof DefaultsValues>) {
+    const a = want[field] ?? null;
+    const b = have[field] ?? null;
+    if (Array.isArray(a) || Array.isArray(b)) {
+      if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+      if (a.some((each, i) => each !== b[i])) return false;
+    } else if (a !== b) return false;
+  }
+  return true;
+}
+
+/** The merge patch that writes `values` into `agents.defaults`; `null` takes a setting out. */
+export function defaultsPatch(values: DefaultsValues): Record<string, unknown> {
+  const defaults: Record<string, unknown> = {};
+  const model: Record<string, unknown> = {};
+  if ("primary" in values) model.primary = values.primary ?? null;
+  if ("fallbacks" in values) model.fallbacks = values.fallbacks ?? null;
+  if (Object.keys(model).length > 0) defaults.model = model;
+  if ("thinking" in values) defaults.thinkingDefault = values.thinking ?? null;
+  return { agents: { defaults } };
 }
 
 /** What Clawtrate set for a bot, kept with the person's preferences. */

@@ -18,7 +18,14 @@ import type { CheckoutDiff, FileRead, TaskFileList, WorkspacePage } from "./file
 import type { ChatPictureRead, SentPictureRead } from "./pictures.ts";
 import type { ChatFileRead } from "./chat-files.ts";
 import { MAX_BOT_NAME_CHARS } from "./bot-names.ts";
-import { modelIdProblem, type ModelList, type ModelRefresh } from "./accounts.ts";
+import {
+  MAX_FALLBACKS,
+  modelIdProblem,
+  parseModelRef,
+  type DefaultsValues,
+  type ModelList,
+  type ModelRefresh,
+} from "./accounts.ts";
 import { parseInput, type ComputerFrame, type ComputerInput } from "./computer.ts";
 import type { MachineFacts } from "./machine.ts";
 import { FULL_SCOPES } from "./scopes.ts";
@@ -397,6 +404,9 @@ export type BridgeCommand =
       stamp: GatewayStamp;
     }
   | { type: "removeBotFallbacks"; botId: string; stamp: GatewayStamp }
+  /** Settings › Models: the defaults every bot uses (gateway-settings.md section 4.1). */
+  | { type: "setModelDefaults"; values: DefaultsValues; restart: boolean; stamp: GatewayStamp }
+  | { type: "putBackModelDefaults"; stamp: GatewayStamp }
   /**
    * Unlock, or Clear a kept order, after its confirmation (#660): `account` is the one account
    * the order named on screen, and nothing is sent unless it still does, on the gateway `stamp`
@@ -889,6 +899,37 @@ function sessionKey(value: unknown): string {
   return value;
 }
 
+/** A model reference, `<provider>/<model>` with an optional `@<account>`. */
+function modelRef(value: unknown): string {
+  const text = id(value, "model");
+  if (text.length > 256 || parseModelRef(text) === null) throw new Error("invalid model");
+  return text;
+}
+
+/** The settings of one Models change: only those named, each a value or `null` to take it out. */
+function defaultsValuesOf(value: unknown): DefaultsValues {
+  if (typeof value !== "object" || value === null || Array.isArray(value))
+    throw new Error("invalid defaults");
+  const record = value as Record<string, unknown>;
+  const out: DefaultsValues = {};
+  for (const key of Object.keys(record)) {
+    if (key !== "primary" && key !== "fallbacks" && key !== "thinking")
+      throw new Error("invalid defaults");
+  }
+  if ("primary" in record) out.primary = record.primary === null ? null : modelRef(record.primary);
+  if ("fallbacks" in record) {
+    const list = record.fallbacks;
+    if (list === null) out.fallbacks = null;
+    else if (Array.isArray(list) && list.length <= MAX_FALLBACKS)
+      out.fallbacks = list.map(modelRef);
+    else throw new Error("invalid defaults");
+  }
+  if ("thinking" in record)
+    out.thinking = record.thinking === null ? null : id(record.thinking, "thinking level");
+  if (Object.keys(out).length === 0) throw new Error("invalid defaults");
+  return out;
+}
+
 /** A model id under the one rule the typed field uses too (`modelIdProblem`). */
 function modelId(value: unknown): string {
   if (typeof value !== "string" || modelIdProblem(value) !== null) throw new Error("invalid model");
@@ -1361,6 +1402,15 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         botId: botId(command.botId),
         stamp: gatewayStampOf(command.stamp),
       };
+    case "setModelDefaults":
+      return {
+        type: "setModelDefaults",
+        values: defaultsValuesOf(command.values),
+        restart: command.restart === true,
+        stamp: gatewayStampOf(command.stamp),
+      };
+    case "putBackModelDefaults":
+      return { type: "putBackModelDefaults", stamp: gatewayStampOf(command.stamp) };
     case "clearBotOrder":
       return {
         type: "clearBotOrder",
@@ -2334,6 +2384,10 @@ class ViewerSession implements BridgeSession {
         return client.setBotModel(command.botId, command.model, command.effort, command.stamp);
       case "removeBotFallbacks":
         return client.removeBotFallbacks(command.botId, command.stamp);
+      case "setModelDefaults":
+        return client.setModelDefaults(command.values, command.restart, command.stamp);
+      case "putBackModelDefaults":
+        return client.putBackModelDefaults(command.stamp);
       case "clearBotOrder":
         return client.clearBotOrder(
           command.press,

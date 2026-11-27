@@ -32,6 +32,9 @@ import {
   MAX_SIGNIN_METHODS,
   type AccountsState,
   type AccountWrite,
+  type DefaultsChange,
+  type DefaultsValues,
+  type ModelDefaults,
   type OrderClear,
   type BotBinding,
   type BotCreationState,
@@ -1293,6 +1296,28 @@ const orderClear = object<OrderClear>()({
   checkedSeq: NUMBER,
   checkedAt: NUMBER,
 });
+const defaultsValues = object<DefaultsValues>()({
+  primary: ID,
+  fallbacks: list(MAX_FALLBACKS, ID),
+  thinking: ENUM,
+});
+const modelDefaults = object<ModelDefaults>()({
+  primary: ID,
+  fallbacks: list(MAX_FALLBACKS, ID),
+  thinking: ENUM,
+  reloadOff: FLAG,
+});
+const defaultsChange = object<DefaultsChange>()({
+  status: ENUM,
+  before: defaultsValues,
+  after: defaultsValues,
+  current: defaultsValues,
+  restart: FLAG,
+  putBack: FLAG,
+  error: text(MAX_MESSAGE_LINE_CHARS),
+  at: NUMBER,
+  gatewayId: ID,
+});
 export const ACCOUNTS: Bound = object<AccountsState>()({
   status: ENUM,
   error: text(MAX_MESSAGE_LINE_CHARS),
@@ -1300,6 +1325,8 @@ export const ACCOUNTS: Bound = object<AccountsState>()({
   readOn: object<ReadStamp>()({ gatewayId: ID, target: NUMBER, connectedAt: NUMBER }),
   labels: FLAG,
   defaultModel: ID,
+  defaults: modelDefaults,
+  defaultsChange,
   mainShared: FLAG,
   accounts: list(MAX_ACCOUNTS, account),
   methods: list(MAX_SIGNIN_METHODS, signInMethod),
