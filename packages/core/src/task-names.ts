@@ -3,9 +3,12 @@
 // scope `operator.write`): a one-off call with the title instruction and the message, no tools and
 // no session of its own, which leaves nothing behind (no task, no message, no run). The gateway
 // answers it with the small model of the provider of the `model` it is given (that provider's
-// `defaultUtilityModel`), or with the model its own `agents.defaults.utilityModel` names. It answers
-// `null` when that small model is the `model` itself, when the provider has none, and when the call
-// fails or gives no text. The name is kept in the task's `autoLabel`, so every device running
+// `defaultUtilityModel`), unless a utility model is set on the gateway (the bot's own
+// `utilityModel`, else `agents.defaults.utilityModel`): that one is used instead of any model named,
+// whatever the bot's provider (2026.10.6 `utility-model-Cuvv2ou2.mjs:62`; 2026.11.10
+// `utility-model-BLcB-6eH.mjs:3`, `resolveUtilityModelSelectionForAgent`). It answers `null` when
+// that small model is the `model` itself, when the provider has none, and when the call fails or
+// gives no text. The name is kept in the task's `autoLabel`, so every device running
 // Clawtrate shows it; a name the person or the bot gave (`label`) always comes first.
 
 import { readCatalog, type CatalogModel } from "./accounts.ts";
@@ -46,8 +49,9 @@ export function namesAcross(botModel: string | null): boolean {
  * - A bot on a provider above: for each provider above that the person has connected, a model of it
  *   (none for the bot's own); its person's words may go to the other one, on their own account.
  * - A bot on any other provider, or one whose provider isn't known (a model the person runs
- *   themselves, a provider they chose instead): its own provider's alone, so the words go to no
- *   company the bot doesn't talk to.
+ *   themselves, a provider they chose instead): its own provider's alone. Clawtrate names no OpenAI
+ *   or Anthropic model for that task; a utility model set on the gateway is used instead of any
+ *   model the app names, whatever the bot's provider.
  */
 export function namingCalls(
   botModel: string | null,

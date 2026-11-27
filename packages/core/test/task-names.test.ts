@@ -65,8 +65,9 @@ describe("which model writes a name", () => {
     ]);
   });
 
-  it("for a bot on any other provider: its own provider's alone, never OpenAI's or Anthropic's", () => {
-    // Its person's words go to no company the bot doesn't talk to, though both are connected.
+  it("for a bot on any other provider: its own provider's alone, naming no OpenAI or Anthropic model", () => {
+    // Clawtrate names neither for that task, though both are connected (a utility model set on the
+    // gateway would still be used instead of any model named: the person's own setting).
     for (const bot of ["google/gemini-3-pro", "ollama/llama-4", "scripted/dev-1"])
       expect(namingCalls(bot, CATALOGUE)).toEqual([null]);
   });
