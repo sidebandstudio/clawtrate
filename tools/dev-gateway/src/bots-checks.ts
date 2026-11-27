@@ -371,13 +371,21 @@ export const BOTS_CHECKS: BotsCheck[] = [
   },
   {
     name: "a spawn the gateway refused leaves no wait behind: the person's next task is typed",
-    covers: ["#hand-off-twice"],
+    covers: ["#hand-off-twice", "#hand-off-same"],
     async run(ctx, world) {
       const t = await turn(ctx, await task(ctx, world, "pip", "twice"), "#hand-off-twice");
       const spawns = t.calls.filter((c) => c.name === "sessions_spawn");
       expect(
         spawns.length === 2 && /"status":\s*"error"/.test(spawns[1]!.text),
         `the second spawn: ${show(spawns.map((c) => c.text.slice(0, 120)))}`,
+      );
+      // Once the first task has reported back, one refused spawn on its own, nothing after it.
+      await sleep(5000);
+      const again = await turn(ctx, await task(ctx, world, "pip", "same"), "#hand-off-same");
+      const refused = again.calls.find((c) => c.name === "sessions_spawn");
+      expect(
+        /"status":\s*"error"/.test(refused?.text ?? ""),
+        `the refused spawn: ${show(refused)}`,
       );
       // Within the minute a spawn waits for its task's first run.
       const next = await turn(ctx, await task(ctx, world, "pip", "after-twice"), "#text");
