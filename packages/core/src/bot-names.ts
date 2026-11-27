@@ -827,6 +827,9 @@ export class BotNames {
       return line({ status: "not-done", reason: "taken" });
     // A name before that a rename couldn't set again would leave no real Undo.
     if (!record || !isPlainName(bot.name)) return line({ status: "not-done", reason: "no-record" });
+    // Nor would a name before that another bot has too: Undo can't put a shared name back.
+    if (nameTaken(this.ctx.bots(), botId, bot.name))
+      return line({ status: "not-done", reason: "shared" });
     const opId = runTag(`${origin.run}\n${this.ctx.now()}\n${Math.random()}`);
     const change: NameRecordChange = {
       bot: botId,
@@ -904,6 +907,16 @@ export class BotNames {
         if (!still || still.name !== bot.name) {
           await this.release(op, opId, botId, origin.run, true);
           return this.giveUp(botId);
+        }
+        // Another bot took the name meanwhile, or the one before: nothing is sent into a clash.
+        const clash = nameTaken(this.ctx.bots(), botId, name)
+          ? ("taken" as const)
+          : nameTaken(this.ctx.bots(), botId, still.name)
+            ? ("shared" as const)
+            : null;
+        if (clash) {
+          await this.release(op, opId, botId, origin.run, true);
+          return line({ status: "not-done", reason: clash });
         }
         // Sent only on the connection that holds the claim, while the claim is young enough to
         // outlast the request; otherwise the claim is taken again.
@@ -1043,6 +1056,11 @@ export class BotNames {
           await this.release(op, opId, botId, run, false);
           this.reconcile();
           throw new Error(NO_LONGER);
+        }
+        // Another bot has the name before now: nothing is sent into a clash.
+        if (nameTaken(this.ctx.bots(), botId, change.from)) {
+          await this.release(op, opId, botId, run, false);
+          throw new Error(`Another bot is called ${change.from} now, so nothing was sent.`);
         }
         if (!this.current(op) || this.ctx.now() - claimedAt >= CLAIM_SEND_MS) continue;
         try {

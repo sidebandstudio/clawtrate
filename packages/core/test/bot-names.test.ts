@@ -1535,6 +1535,50 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
     expect(c.line()).toMatchObject({ whose: "person", status: "renamed" });
   });
 
+  it("F-552: nothing is sent into a name clash the final read shows: the new name, or the one before, now another bot's", async () => {
+    // Another bot takes the new name as the claim is written.
+    const taken = gateway();
+    taken.state.afterSet = () => (taken.state.bots = [bot("pip", "Pip"), bot("otto", "Juniper")]);
+    const a = device(taken);
+    await a.engine.afterRun("pip", KEY, "run-1");
+    expect(taken.state.updates).toEqual([]);
+    expect(a.line()).toMatchObject({ status: "not-done", reason: "taken" });
+    expect(taken.kept()).toMatchObject({ changes: [], claims: [] });
+
+    // Another bot takes the name before as the claim is written: Undo couldn't put it back.
+    const shared = gateway();
+    shared.state.afterSet = () => (shared.state.bots = [bot("pip", "Pip"), bot("otto", "Pip")]);
+    const b = device(shared);
+    await b.engine.afterRun("pip", KEY, "run-1");
+    expect(shared.state.updates).toEqual([]);
+    expect(b.line()).toMatchObject({ status: "not-done", reason: "shared" });
+    expect(shared.kept()).toMatchObject({ changes: [], claims: [] });
+  });
+
+  it("F-552: a bot whose name another bot has too isn't renamed: its Undo couldn't give the name back", async () => {
+    const gw = gateway();
+    gw.state.bots = [bot("pip", "Pip"), bot("otto", "pip")];
+    const me = device(gw);
+    await me.engine.afterRun("pip", KEY, "run-1");
+    expect(gw.state.updates).toEqual([]);
+    expect(me.line()).toMatchObject({ status: "not-done", reason: "shared" });
+    // Said before any claim is taken: the record isn't written.
+    expect(gw.state.sets).toBe(0);
+  });
+
+  it("F-552: Undo sends nothing when the final read shows another bot with the name it puts back", async () => {
+    const gw = gateway();
+    const me = device(gw);
+    await me.engine.afterRun("pip", KEY, "run-1");
+    // Otto is renamed Pip as Undo's claim is written.
+    gw.state.afterSet = () => (gw.state.bots = [bot("pip", "Juniper"), bot("otto", "Pip")]);
+    await expect(me.engine.undo("pip", runTag("run-1"), "Pip", STAMP)).rejects.toThrow(
+      "Another bot is called Pip now",
+    );
+    expect(gw.state.updates).toEqual(["Juniper"]);
+    expect(gw.kept().claims).toEqual([]);
+  });
+
   it("F-552: a claim's entry is never the one the record's room drops", () => {
     const changes = Array.from({ length: 9 }, (_, n) =>
       change({ bot: `bot-${n}`, run: runTag(`r${n}`), done: NOW }),

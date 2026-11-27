@@ -725,8 +725,11 @@ export type NameLine = {
   whose: NameWhose;
   source: NameSource;
   status: "renaming" | "renamed" | "undoing" | "undone" | "not-done" | "failed";
-  /** Why a rename wasn't made: a name another bot has, the day's limit, no admin, no record. */
-  reason: "taken" | "limit" | "full" | "no-admin" | "no-record" | null;
+  /**
+   * Why a rename wasn't made: a name another bot has, a name before that another bot has too (so
+   * Undo couldn't put it back), the day's limit, no room, no admin, no record.
+   */
+  reason: "taken" | "shared" | "limit" | "full" | "no-admin" | "no-record" | null;
   /** After Undo: the bot's name as the gateway's bot list gave it back, or null before. */
   after: string | null;
   error: string | null;

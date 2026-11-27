@@ -86,6 +86,11 @@ function words(line: Line) {
         <>
           {from} wrote “{to}” as its new name, which another bot has, so its name stays {from}.
         </>
+      ) : line.reason === "shared" ? (
+        <>
+          {from} wrote a new name for itself, {to}, but another bot is also called {from}, so Undo
+          couldn't give it its name back; its name stays {from}.
+        </>
       ) : line.reason === "limit" ? (
         <>
           {from} wrote a new name for itself, {to}, but it was already renamed 3 times today, so its
