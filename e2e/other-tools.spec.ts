@@ -246,7 +246,7 @@ test("F-563: an API client's session and a scheduled run stay out of a bot's tas
     label: "Notes from Clawtrate",
   })) as { key: string };
   expect(created.key).toMatch(/^agent:marlow:dashboard:/);
-  // Marlow's one task: listed under him, and its reply is his preview.
+  // Marlow's one task: his row opens it, and its reply is his preview.
   await expect(botRow("marlow").locator(".bot-preview")).toContainText("plain reply", {
     timeout: 60_000,
   });
