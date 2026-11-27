@@ -1,4 +1,4 @@
-// Settings › Models (docs/design/gateway-settings.md section 4.1): the default model every bot
+// Settings › OpenClaw › Models (docs/design/gateway-settings.md sections 3 and 4.1): the default model every bot
 // uses and the account it runs on, its backup models and the thinking level. A change applies at
 // once, read back against the value this device wrote, with "Put back <earlier value>" while the
 // setting still holds it (section 6). A change that restarts OpenClaw waits for one press

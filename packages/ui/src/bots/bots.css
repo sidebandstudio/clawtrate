@@ -1812,3 +1812,33 @@ button.b-open > .icon {
   flex: 1 1 240px;
   min-width: 0;
 }
+
+/* Settings › OpenClaw's parts, once there are two (gateway-settings.md section 3). */
+.b-parts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0 0 12px;
+}
+
+.b-part {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+}
+
+.b-part[aria-selected="true"] {
+  background: var(--bg-selected);
+  color: var(--text);
+}
+
+.b-part:focus-visible {
+  outline: 2px solid var(--accent-line);
+  outline-offset: 2px;
+}

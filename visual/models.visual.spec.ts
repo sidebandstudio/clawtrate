@@ -1,4 +1,4 @@
-// Settings › Models (docs/design/gateway-settings.md section 4.1): the default model every bot
+// Settings › OpenClaw › Models (docs/design/gateway-settings.md sections 3 and 4.1): the default model every bot
 // uses with the account it runs on, its backups and each bot's model; a change with its line and
 // "Put back"; the line when another device changed it since; a change that waits for one press,
 // in the words of each OpenClaw version; and the section read-only without admin. Dark first,
@@ -10,12 +10,12 @@ type Scene = { name: string; query: string; ready: (page: Page) => Promise<void>
 
 const ADMIN = `scene=main&${OTTO_DISK}&access=admin`;
 
-/** Settings, on Models. */
+/** Settings, on OpenClaw, which opens on Models. */
 async function models(page: Page) {
   await page.keyboard.press("ControlOrMeta+,");
   const settings = page.getByRole("dialog", { name: "Settings" });
-  await settings.getByRole("button", { name: "Models", exact: true }).click();
-  await expect(settings.getByRole("heading", { name: "Models", level: 3 })).toBeVisible();
+  await settings.getByRole("button", { name: "OpenClaw", exact: true }).click();
+  await expect(settings.getByRole("heading", { name: "OpenClaw", level: 3 })).toBeVisible();
 }
 
 /** Models, after choosing another default model: the line with Put back. */

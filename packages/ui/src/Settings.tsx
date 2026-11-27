@@ -31,7 +31,7 @@ import { Updates } from "./Updates.tsx";
 import { BotGuidesPane } from "./BotGuides.tsx";
 import { useBridge, useClawtrateState, useCommand } from "./bridge.tsx";
 import { useAccountsSection } from "./bots/AccountsSection.tsx";
-import { useModelsSection } from "./bots/ModelsSection.tsx";
+import { useOpenClawSection } from "./bots/OpenClawSection.tsx";
 import { useCheckInsSection } from "./check-ins/CheckIns.tsx";
 import { useUsageSection } from "./usage/UsageSection.tsx";
 import { useMachinesSection } from "./machines/Machines.tsx";
@@ -136,7 +136,7 @@ export function gatewayProblem(
 export type SettingsSection =
   | "gateway"
   | "accounts"
-  | "models"
+  | "openclaw"
   | "conversation"
   | "usage"
   | "machines"
@@ -148,7 +148,7 @@ type Section = SettingsSection;
 export const SETTINGS_SECTIONS: Array<[Section, string, string]> = [
   ["gateway", "Gateway", "The gateway, its address and this device"],
   ["accounts", "Accounts", "Provider accounts the bots run on"],
-  ["models", "Models", "The default model, and what to try if it can't answer"],
+  ["openclaw", "OpenClaw", "The default model, and OpenClaw's own settings"],
   ["conversation", "Conversation", "How long a bot's turn may run, and how the bots talk"],
   ["usage", "Usage", "Tokens, cost and warning budgets"],
   ["machines", "Machines", "Where the bots run"],
@@ -1003,7 +1003,7 @@ export function Settings({
     toNav,
   });
   const showGatewayBot = useClawtrateState().showGatewayBot === true;
-  const modelsSection = useModelsSection({
+  const openClawSection = useOpenClawSection({
     accounts,
     bots,
     connection,
@@ -1241,7 +1241,7 @@ export function Settings({
                         body: <AdvancedPane announce={announce} />,
                       }
                     : { title: "Gateway", back: toNav, body: gatewayPane, foot: null };
-    const view = section === "models" ? modelsSection : shown;
+    const view = section === "openclaw" ? openClawSection : shown;
     content = (
       <>
         <header className="b-section-head">

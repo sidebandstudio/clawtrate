@@ -1318,6 +1318,11 @@ Every task Clawtrate makes ends up with a name a model wrote: a few words that s
 - **What a person sees.** The task's title changes from the first one to the model's name a moment after they send, in the sidebar, the header and search, with nothing to answer or switch on. The name lands while the bot's first reply runs, which already put the task at the top of its bot's list; the patch moves its `updatedAt` as any change does.
 - **What a name costs, from the person's own allowance.** One call: about 200 tokens of the gateway's fixed instruction, plus the first message (at most 1,000 characters, about 250 tokens; a typical first message is 20 to 80), in; the title, at most 60 characters (about 15 tokens), out. That is about 220 to 460 tokens in and 15 out per name, on OpenAI's or Anthropic's small model, with no thinking tokens except OpenAI on 2026.10.6, where the provider's default effort may add some (capped at 4,096 output tokens by the gateway). A refused call costs nothing; a call that fails costs at most the same again, for up to two. The gateway's own title for the task, which it makes whether Clawtrate is there or not, is one more call of the same size (two when the small model gives nothing). Not measured with a real provider: the development gateway's scripted model counts no tokens of its own.
 
+## OpenClaw's settings in Settings
+
+Settings' list has one row for OpenClaw's own settings, "OpenClaw", and its parts (Models first; Chat apps, Plugins and All OpenClaw settings to come) are tabs inside that section, shown from the second part (`docs/design/gateway-settings.md` section 3).
+Why: the owner asked for one place to change OpenClaw's settings, and every row added to the list changes every picture of Settings (about 290), so one row costs that once instead of four times.
+
 ## Not done yet
 
 - The Computer tab draws no event lines in the conversation for control moments, reads node stats only from the node's record, and does not send one-finger drags on the phone as page scrolling (see The computer).

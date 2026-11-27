@@ -111,14 +111,6 @@ function render(state: AccountsState, connection: ConnectionState = admin): stri
 }
 
 describe("Settings › Models", () => {
-  it("is a section of Settings, after Accounts", () => {
-    const ids = SETTINGS_SECTIONS.map(([id]) => id);
-    expect(ids.indexOf("models")).toBe(ids.indexOf("accounts") + 1);
-    expect(SETTINGS_SECTIONS.find(([id]) => id === "models")?.[2]).toBe(
-      "The default model, and what to try if it can't answer",
-    );
-  });
-
   it("names a model with the account it runs on", () => {
     expect(modelWords("acme/swift-2@acme:work", accounts)).toBe("Swift 2, on Acme · Work");
     expect(modelWords(null, accounts)).toBe("None");

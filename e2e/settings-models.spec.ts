@@ -1,4 +1,4 @@
-// Settings › Models (docs/design/gateway-settings.md section 4.1) against the accounts instance's
+// Settings › OpenClaw › Models (docs/design/gateway-settings.md sections 3 and 4.1) against the accounts instance's
 // real gateway: changing the default model writes `agents.defaults.model.primary`, reads it back
 // as written and offers Put back with the earlier value; once another device has written the
 // setting, Put back writes nothing and says what is there now. No real provider is involved.
@@ -114,7 +114,7 @@ test("the default model changes, is read back as written, and Put back restores 
   test.setTimeout(120_000);
   await page.keyboard.press("ControlOrMeta+,");
   const settings = page.getByRole("dialog", { name: "Settings" });
-  await settings.getByRole("button", { name: "Models" }).click();
+  await settings.getByRole("button", { name: "OpenClaw", exact: true }).click();
   const choice = settings.getByRole("combobox", { name: /Default model/ });
   await expect(choice).toBeEnabled({ timeout: 30_000 });
   await choice.selectOption(CHOSEN);
