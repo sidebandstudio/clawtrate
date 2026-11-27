@@ -1538,15 +1538,25 @@ export const RULES_CHECKS: RulesCheck[] = [
         // on 2026.10.6, so they are told apart by when their reads came. 2026.11.10 runs the
         // person's first one before Marlow's, while Marlow's message waits: it asks no one.
         // 2026.10.6 runs Marlow's first: both of the person's then ask.
-        const reads = (await decisionsOf(ctx, { agentId: "pip", sessionKey: PIP_MAIN, limit: 20 }))
-          .filter(
-            (r) =>
-              r.tool === "read" &&
-              Number(r.at) >= startedAt &&
-              r.runId !== busy &&
-              r.runId !== recipient,
-          )
-          .sort((x, y) => Number(x.at) - Number(y.at));
+        // On 2026.10.6 both of the person's queued runs start after Marlow's: wait for them.
+        const queuedReads = async () =>
+          (await decisionsOf(ctx, { agentId: "pip", sessionKey: PIP_MAIN, limit: 20 }))
+            .filter(
+              (r) =>
+                r.tool === "read" &&
+                Number(r.at) >= startedAt &&
+                r.runId !== busy &&
+                r.runId !== recipient,
+            )
+            .sort((x, y) => Number(x.at) - Number(y.at));
+        const reads = await eventually(
+          "the reads of the person's queued messages",
+          async () => {
+            const found = await queuedReads();
+            return found.length >= 2 ? found : undefined;
+          },
+          LONG_RUN_MS,
+        );
         same(reads.length, 2, "the reads of the person's queued messages");
         const [first, last] = reads as [Decision, Decision];
         if (Number(first.at) < Number(marlows.record.at)) {
