@@ -918,12 +918,16 @@ export async function applyGuidesChange(
   async function recordRemoval(groups: string[][]): Promise<string[][] | null> {
     const holding: string[][] = [];
     for (const bots of groups) {
-      // A file that can't be read now may hold one: it is recorded, and its change says why it failed.
-      const found = await readFile(request, bots[0]!).then(
-        ({ content }) => findSection(content).kind,
-        () => "unread" as const,
-      );
-      if (found !== "none") holding.push(bots);
+      try {
+        if (findSection((await readFile(request, bots[0]!)).content).kind !== "none")
+          holding.push(bots);
+      } catch (error) {
+        // A file that can't be read now may never have held one: recorded, it would read as
+        // removed on another device. It is neither recorded nor changed, and the change says why.
+        errors.push(
+          `${bots.join(", ")}: ${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
     }
     if (holding.length === 0 || (!history.known && !history.kept)) return holding;
     if (!history.known) return null;
@@ -938,7 +942,8 @@ export async function applyGuidesChange(
     const recorded = await recordRemoval(
       folders.filter((group) => group.some((bot) => change.bots.includes(bot))),
     );
-    if (recorded === null) return { record, errors: [GUIDES_HISTORY_NOT_SAVED], wrote, missing };
+    if (recorded === null)
+      return { record, errors: [...errors, GUIDES_HISTORY_NOT_SAVED], wrote, missing };
     for (const bots of recorded)
       await each(bots, (file, found) => {
         // A section that changed since Settings read it isn't Clawtrate's to take out: said, so
@@ -990,7 +995,7 @@ export async function applyGuidesChange(
     // sections stay, and their rows say so, with Remove.
     const recorded = await recordRemoval(folders);
     if (recorded === null)
-      return { record: offRecord(), errors: [GUIDES_HISTORY_NOT_SAVED], wrote, missing };
+      return { record: offRecord(), errors: [...errors, GUIDES_HISTORY_NOT_SAVED], wrote, missing };
     for (const bots of recorded)
       await each(bots, (file, found) => (found.kind === "ours" ? withoutSection(file) : null));
     return { record: offRecord(), errors, wrote, missing };

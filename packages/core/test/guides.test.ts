@@ -805,6 +805,27 @@ describe("the switch and the rows' changes", () => {
     expect(files.sets).toEqual([]);
   });
 
+  it("a removal records nothing for a file it can't read, so another device doesn't read it as removed", async () => {
+    // Pip never had the section; the read the removal makes first fails once.
+    const files = fakeFiles({ pip: BOT_FILE });
+    let failRead = true;
+    const flaky = async (method: string, params: unknown) => {
+      if (method === "agents.files.get" && failRead) {
+        failRead = false;
+        throw new Error("connection reset");
+      }
+      return files.request(method, params);
+    };
+    const off = await applyGuidesChange(
+      flaky,
+      { on: true, bots: [] },
+      { action: "switch", on: false },
+    );
+    expect(off.errors).toEqual(["pip: connection reset"]);
+    expect(files.prefs.entries.get(GUIDES_HISTORY_KEY)).toBeUndefined();
+    expect((await readGuideFolders(files.request, null))[0]?.state).toBe("none");
+  });
+
   it("by itself, adds nothing to a folder whose history the gateway can't say; turning it on, or Add, still does", async () => {
     for (const answer of ["no_durable_identity", "full"]) {
       const files = fakeFiles({ pip: BOT_FILE, otto: withSection(BOT_FILE) });
