@@ -15,6 +15,7 @@ import {
   lineOf,
   phraseCall,
   readingContextOf,
+  CREATE_TASK_TOOL,
   START_TASK_TOOL,
   type ActionCall,
   type ReadingContext,
@@ -76,7 +77,8 @@ function hasCardInView(call: ActionCall, ctx: ReadingContext): boolean {
   return (
     kind === "message" ||
     kind === "t3" ||
-    (call.name === START_TASK_TOOL && call.args.visible === true)
+    (call.name === START_TASK_TOOL && call.args.visible === true) ||
+    call.name === CREATE_TASK_TOOL
   );
 }
 

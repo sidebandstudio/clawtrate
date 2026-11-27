@@ -10,6 +10,8 @@ import {
   isTaskStart,
   MAX_BRIEF_LINE_CHARS,
   MAX_REFUSAL_CHARS,
+  modelRefusal,
+  refusedModelLine,
   selectStartedTasks,
   startedTaskOf,
   tasksShownHere,
@@ -668,5 +670,170 @@ describe("a task a bot starts, with its reports as OpenClaw 2026.11.10 sends the
         (run) => [run.id, run.state, run.anchorItemId?.replace(/:\d+$/, "")],
       );
     expect(runs(rows)).toEqual(runs(without));
+  });
+});
+
+// #799: a start the gateway's model allowlist refused, in each version's words, as a development
+// gateway of each answered with `agents.defaults.modelPolicy.allow: ["acme/dev-1"]` and the bot on
+// `scripted/dev-1`.
+describe("a start refused for its model says so in plain words (#799)", () => {
+  const BOTH = "model not allowed: scripted/dev-1";
+  const NAMED_10_6 =
+    'sessions_spawn model "acme/dev-2" is not usable: model not allowed: acme/dev-2';
+  const NAMED_11_10 = `${NAMED_10_6}. Rejected by agents.defaults.modelPolicy.allow. Add the model or its provider wildcard to agents.defaults.modelPolicy.allow, or choose an allowed model.`;
+
+  it("reads the model from each version's refusal, and from nothing else", () => {
+    expect(modelRefusal(BOTH)).toEqual({ provider: "scripted", model: "dev-1" });
+    expect(modelRefusal(NAMED_10_6)).toEqual({ provider: "acme", model: "dev-2" });
+    expect(modelRefusal(NAMED_11_10)).toEqual({ provider: "acme", model: "dev-2" });
+    // A bot's own list names its path; an id with dots and a provider with a namespace.
+    expect(
+      modelRefusal(
+        'sessions_spawn model "openai/gpt-5.4" is not usable: model not allowed: openai/gpt-5.4. Rejected by agents.entries.*.modelPolicy.allow. Add the model or its provider wildcard to agents.entries.*.modelPolicy.allow, or choose an allowed model.',
+      ),
+    ).toEqual({ provider: "openai", model: "gpt-5.4" });
+    expect(modelRefusal("model not allowed: openrouter/anthropic/claude-x")).toEqual({
+      provider: "openrouter",
+      model: "anthropic/claude-x",
+    });
+    for (const other of [
+      null,
+      "label already in use: Compare trail maps",
+      "agentId is not allowed for sessions_spawn (allowed: main)",
+      "model not allowed: dev-1",
+      "the model not allowed: acme/dev-1",
+      `${BOTH} because the gateway says so`,
+      'sessions_spawn model "acme/dev-2" is not usable: invalid model: acme/dev-2',
+    ])
+      expect([other, modelRefusal(other)]).toEqual([other, null]);
+  });
+
+  it("says which model, as the app names it, in one sentence", () => {
+    expect(refusedModelLine({ provider: "scripted", model: "dev-1" })).toBe(
+      "This gateway doesn't allow tasks on Scripted's dev-1.",
+    );
+    expect(refusedModelLine({ provider: "openai-codex", model: "gpt-6-astra" })).toBe(
+      "This gateway doesn't allow tasks on OpenAI's gpt-6-astra.",
+    );
+  });
+
+  it("a refused start's card carries the model; any other refusal carries none", () => {
+    for (const error of [BOTH, NAMED_10_6, NAMED_11_10]) {
+      const [card] = cards(
+        startRows(VISIBLE, { status: "error", tool: "sessions_spawn", error }, true),
+      );
+      expect(card).toMatchObject({ state: "couldnt-start", reason: error });
+      expect(card!.refusedModel).toEqual(modelRefusal(error));
+    }
+    const [label] = cards(
+      startRows(
+        VISIBLE,
+        { status: "error", error: "label already in use: Compare trail maps" },
+        true,
+      ),
+    );
+    expect(label).toMatchObject({ state: "couldnt-start", refusedModel: null });
+    // An exception's text that happens to read so is not the gateway's answer.
+    const [plain] = cards(startRows(VISIBLE, BOTH, true));
+    expect(plain).toMatchObject({ state: "couldnt-start", reason: BOTH, refusedModel: null });
+    // Started: nothing refused.
+    expect(cards(startRows(), listed("running"))[0]!.refusedModel).toBeNull();
+  });
+});
+
+// OpenClaw 2026.11.10's `sessions_create`, from the rows a development gateway of that version
+// keeps: the call's result is compact JSON as the row's only text, and on a task made its
+// `details` keep only `sessionKey`; the task's row says `createdVia: "spawn"` and the conversation
+// it came from in `spawnedBy`, as for `sessions_spawn`.
+describe("a task a bot makes with sessions_create shows as the same card (2026.11.10)", () => {
+  const CREATE = "sessions_create";
+  const ASK = { label: LABEL, message: BRIEF };
+  const MADE = {
+    sessionKey: CHILD,
+    sessionId: "69ffa710-173b-4111-9b2e-6698f5b46079",
+    runStarted: true,
+    runId: CHILD_RUN,
+  };
+  const created = (body: unknown, isError = false, details?: unknown) => {
+    const row = result(RUN, T + 1_000, CALL, JSON.stringify(body), isError, CREATE);
+    return details === undefined ? row : { ...row, details };
+  };
+  const rowsWith = (resultRow: unknown) => [
+    user("#create-task", T, RUN),
+    call(RUN, T + 800, CALL, ASK, CREATE),
+    resultRow,
+    say(RUN, T + 1_040, "I started a task for it: Compare trail maps."),
+  ];
+
+  it("is a start for the person to see, before a result and after one", () => {
+    const [card] = cards(rowsWith(created(MADE, false, { sessionKey: CHILD })), listed("running"));
+    expect(card).toMatchObject({
+      toolCallId: CALL,
+      agentId: "pip",
+      taskKey: CHILD,
+      title: LABEL,
+      label: LABEL,
+      brief: BRIEF,
+      state: "working",
+      resultStatus: "accepted",
+      reason: null,
+      refusedModel: null,
+    });
+    // The task Open goes to: the list holds it as started from here.
+    expect(card!.task?.key).toBe(CHILD);
+    const open = [user("#create-task", T, RUN), call(RUN, T + 800, CALL, ASK, CREATE)];
+    expect(cards(open, listed("running"), RUN)[0]).toMatchObject({
+      state: "starting",
+      brief: BRIEF,
+    });
+  });
+
+  it("takes the task's state from its row, and reads the result with or without its details", () => {
+    for (const row of [created(MADE, false, { sessionKey: CHILD }), created(MADE)]) {
+      expect(cards(rowsWith(row), listed("done"))[0]).toMatchObject({
+        state: "done",
+        taskKey: CHILD,
+      });
+      // Not in the list here: started, and nothing to open.
+      expect(cards(rowsWith(row))[0]).toMatchObject({ state: "started", task: null });
+    }
+    // Only what the step keeps of the result, the payload not read.
+    expect(cards(rowsWith(created(MADE)), listed("done"), null, false)[0]).toMatchObject({
+      state: "done",
+      taskKey: CHILD,
+    });
+  });
+
+  it("is Couldn't start with the gateway's refusal, and in plain words for its model", () => {
+    const label = {
+      status: "error",
+      tool: CREATE,
+      error: "label already in use: Compare trail maps",
+    };
+    expect(cards(rowsWith(created(label, true)))[0]).toMatchObject({
+      state: "couldnt-start",
+      reason: label.error,
+      refusedModel: null,
+      taskKey: null,
+    });
+    const model = { status: "error", tool: CREATE, error: "model not allowed: scripted/dev-1" };
+    expect(cards(rowsWith(created(model, true)))[0]).toMatchObject({
+      state: "couldnt-start",
+      refusedModel: { provider: "scripted", model: "dev-1" },
+    });
+  });
+
+  it("is never another tool's card, and sessions_spawn's hidden helper stays a step", () => {
+    const step = cards(rowsWith(created(MADE)), listed("running"))[0]!;
+    expect(step.toolCallId).toBe(CALL);
+    const rows = rowsWith(created(MADE));
+    const runs = runsFromHistory(rows, null, {
+      sessionKey: HERE,
+      now: T + 60_000,
+      raw: new RawTable(),
+    });
+    const made = runs[0]!.steps.find((each) => each.kind === "tool")!;
+    expect(isTaskStart(made, made.raw)).toBe(true);
+    expect(isTaskStart({ ...made, toolName: "sessions_send" }, made.raw)).toBe(false);
   });
 });

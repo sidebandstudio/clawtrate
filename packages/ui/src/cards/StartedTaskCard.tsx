@@ -4,7 +4,7 @@
 // as text. The task it opens and its state come only from the engine's card
 // (`selectStartedTasks`): the gateway's own result and this connection's task list.
 
-import type { StartedTaskCard } from "@clawtrate/core";
+import { refusedModelLine, type StartedTaskCard } from "@clawtrate/core";
 import { useContext, useEffect, useRef } from "react";
 import { Avatar } from "../Avatar.tsx";
 import { CardThoughtContext, useCardEnv } from "./context.tsx";
@@ -95,6 +95,8 @@ export function StartedTaskCardView({ card, read }: { card: StartedTaskCard; rea
     note = "This task is not in the task list here, so it can't be opened from this card.";
   else if (card.state === "unknown")
     note = "The gateway's record of this call doesn't say whether the task started.";
+  // A start the gateway's model allowlist refused, in plain words; its own words stay in Details.
+  else if (refused && card.refusedModel) note = refusedModelLine(card.refusedModel);
 
   return (
     <section
@@ -129,7 +131,7 @@ export function StartedTaskCardView({ card, read }: { card: StartedTaskCard; rea
           </p>
         )}
         {note && <p className="exchange-note">{note}</p>}
-        {refused && card.reason && (
+        {refused && card.reason && !card.refusedModel && (
           <>
             <p className="exchange-note">The gateway says:</p>
             <div className="exchange-text" data-testid="started-task-reason">

@@ -32,6 +32,7 @@ import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { ClawtrateClient, CONNECTION_CHANGED, ROUTE_IDENTITY_CHANGED } from "../src/client.ts";
 import { PUBLISHED_SECTIONS } from "./guides-published.ts";
 import { V2_SECTION, v2Pass } from "./guides-build-v2.ts";
+import { V3_SECTION, v3Pass } from "./guides-build-v3.ts";
 import { FAST, URL_A } from "./client-harness.ts";
 
 const hash = (text: string) => sha256Hex(utf8Bytes(text));
@@ -135,7 +136,7 @@ function fakeFiles(
 describe("the section", () => {
   it("is the two guides between Clawtrate's markers, says changes inside it are replaced, and is bounded", () => {
     const lines = GUIDES_SECTION.split("\n");
-    expect(lines[0]).toMatch(/^<!-- clawtrate:guides begin v3 sha256=[a-f0-9]{64} -->$/);
+    expect(lines[0]).toMatch(/^<!-- clawtrate:guides begin v4 sha256=[a-f0-9]{64} -->$/);
     expect(lines[1]).toBe(GUIDES_NOTICE);
     expect(GUIDES_NOTICE).toBe(
       "<!-- Added by Clawtrate, which keeps it current. Changes inside this section are replaced, so edit outside it. -->",
@@ -147,8 +148,8 @@ describe("the section", () => {
     expect(GUIDES_SECTION.split(VOICE_GUIDE)).toHaveLength(2);
     expect(GUIDES_SECTION.split(WHERE_GUIDE)).toHaveLength(2);
     // It is in every run's prompt: bounded.
-    expect(GUIDES_SIZE).toBe(3_978);
-    expect(GUIDES_SIZE).toBeLessThanOrEqual(4_000);
+    expect(GUIDES_SIZE).toBe(4_078);
+    expect(GUIDES_SIZE).toBeLessThanOrEqual(4_100);
   });
 
   it("is added at the top, and every other byte of the file stays as it was", () => {
@@ -280,7 +281,7 @@ describe("the section", () => {
         `^<!-- clawtrate:guides begin v${GUIDES_VERSION} sha256=${GUIDES_PINNED_SHA256}[a-f0-9]{48} -->$`,
       ),
     );
-    expect(GUIDES_VERSION).toBe(3);
+    expect(GUIDES_VERSION).toBe(4);
   });
 });
 
@@ -419,6 +420,39 @@ describe("keeping the section current", () => {
       // Settled: this version, and neither build writes it again.
       expect(files.store.get("pip"), name).toBe(withSection(BOT_FILE));
       expect(v2Pass(files.store.get("pip")!), name).toBeNull();
+      const before = files.sets.length;
+      await keepGuidesCurrent(files.request);
+      expect(files.sets, name).toHaveLength(before);
+    }
+  });
+
+  it("version 3's build and this one, taking turns on one file, write at most twice and then leave it", async () => {
+    // The released version 3 build's own parser and rule (guides-build-v3.ts), as it shipped.
+    const v3 = PUBLISHED_SECTIONS.find((each) => each.version === 3)!.section;
+    expect(V3_SECTION).toBe(v3);
+    const starts = {
+      "no section": BOT_FILE,
+      "version 3's": `${v3}\n${BOT_FILE}`,
+      "version 3's, edited": `${v3.replace("Be warm", "Be bold")}\n${BOT_FILE}`,
+      "this version's": withSection(BOT_FILE),
+      "this version's, edited": edited(),
+    };
+    for (const [name, start] of Object.entries(starts)) {
+      const files = fakeFiles({ pip: start });
+      let v3Writes = 0;
+      for (let round = 0; round < 4; round += 1) {
+        // The older build's device, then this build's, on the same file.
+        const written = v3Pass(files.store.get("pip")!);
+        if (written !== null) {
+          files.store.set("pip", written);
+          v3Writes += 1;
+        }
+        await keepGuidesCurrent(files.request);
+      }
+      expect(v3Writes + files.sets.length, name).toBeLessThanOrEqual(2);
+      // Settled: this version, and neither build writes it again.
+      expect(files.store.get("pip"), name).toBe(withSection(BOT_FILE));
+      expect(v3Pass(files.store.get("pip")!), name).toBeNull();
       const before = files.sets.length;
       await keepGuidesCurrent(files.request);
       expect(files.sets, name).toHaveLength(before);
@@ -1117,7 +1151,7 @@ describe("the guides in the client", () => {
 // so it is brought up to date by itself under the same rules as any write.
 describe("the sections earlier builds wrote", () => {
   it("each is pinned, of a lower version, and reads as Clawtrate's own, unedited and older", () => {
-    expect(PUBLISHED_SECTIONS.map((each) => each.version)).toEqual([1, 2]);
+    expect(PUBLISHED_SECTIONS.map((each) => each.version)).toEqual([1, 2, 3]);
     for (const { version, pin, section } of PUBLISHED_SECTIONS) {
       expect(section.split("\n")[0]).toMatch(
         new RegExp(`^<!-- clawtrate:guides begin v${version} sha256=${pin}[a-f0-9]{48} -->$`),
@@ -1129,13 +1163,26 @@ describe("the sections earlier builds wrote", () => {
 
   it("version 3 changes only the notice: it names no switch, and says edits inside are replaced", () => {
     const v2 = PUBLISHED_SECTIONS.find((each) => each.version === 2)!.section;
+    const v3 = PUBLISHED_SECTIONS.find((each) => each.version === 3)!.section;
     const body = (section: string) => section.slice(section.indexOf("## How you talk"));
-    expect(body(v2)).toBe(body(GUIDES_SECTION));
+    expect(body(v2)).toBe(body(v3));
     expect(v2).toContain("Turn it off in Clawtrate: Settings, Conversation.");
-    expect(GUIDES_SECTION.length - v2.length).toBe(12);
+    expect(v3).toContain(GUIDES_NOTICE);
+    expect(v3.length - v2.length).toBe(12);
     // Written over only within its bound, and a file with only the section is far from the cut.
     expect(GUIDES_SECTION.length).toBeLessThanOrEqual(MAX_SECTION_SPAN_CHARS);
     expect(guidesWouldBeCut(withSection(""), GUIDES_LONG_CHARS)).toBe(false);
+  });
+
+  it("version 4 adds only one sentence: a start refused for its model is started again on an allowed one", () => {
+    const v3 = PUBLISHED_SECTIONS.find((each) => each.version === 3)!.section;
+    const sentence =
+      " If it's refused because its model isn't allowed, start it again with `model` set to an allowed one.";
+    expect(WHERE_GUIDE).toContain(
+      `so don't send a link.${sentence} If you only think a task would help, ask first and wait for a yes.`,
+    );
+    const inner = (section: string) => section.split("\n").slice(1).join("\n");
+    expect(inner(GUIDES_SECTION).replace(sentence, "")).toBe(inner(v3));
   });
 
   it("an unedited one is brought up to date, and nothing else in the file changes", async () => {

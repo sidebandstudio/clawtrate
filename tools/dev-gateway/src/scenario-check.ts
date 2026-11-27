@@ -48,7 +48,13 @@ import {
   SEND_PICTURE_AFTER,
   SEND_PICTURE_TEXT,
 } from "./scenarios.ts";
-import { FOLLOW_UP_MESSAGE, HAND_OFF, HAND_OFF_HIDDEN, HAND_OFF_PARTNER } from "./scenarios.ts";
+import {
+  CREATE_TASK,
+  FOLLOW_UP_MESSAGE,
+  HAND_OFF,
+  HAND_OFF_HIDDEN,
+  HAND_OFF_PARTNER,
+} from "./scenarios.ts";
 import { startedTaskReply } from "./scripts.ts";
 import { FILES_BOT, PICTURE_PATH, trailMap } from "./seed-files.ts";
 import {
@@ -1112,6 +1118,9 @@ export const EXPECTED_OFFERED_TOOLS = [
   "web_search",
   "write",
 ].sort();
+
+/** The tools offered on the version that runs: the list above and the ones only it has. */
+const offeredTools = () => [...EXPECTED_OFFERED_TOOLS, ...shape().extraAllowedTools].sort();
 
 /** What `tools.effective` reports available; it lists owner-only tools whoever asks. */
 export const EXPECTED_EFFECTIVE_TOOLS = [
@@ -3504,6 +3513,41 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
     },
   },
   {
+    name: "a task a bot starts with sessions_create, on OpenClaw 2026.11.10 only",
+    covers: ["#create-task"],
+    run: async (h) => {
+      const key = await h.session("pip", "create-task");
+      const view = await h.run("plain", key, "#create-task");
+      same(view.terminal.state, "final", "the run's end");
+      if (!shape().extraAllowedTools.includes("sessions_create")) {
+        // 2026.10.6 has no such tool: nothing is made.
+        expect(
+          view.finalText().startsWith("The task did not start ("),
+          `the reply without the tool: ${view.finalText()}`,
+        );
+        return;
+      }
+      // A task made is its key, with no status; `details` keep only the key.
+      const made = view.result("sessions_create");
+      same(made.isError, false, "the call's error flag");
+      const answer = JSON.parse(made.text) as JsonRecord;
+      const childKey = String(answer.sessionKey);
+      expect(/^agent:pip:dashboard:/.test(childKey), `the task's key: ${childKey}`);
+      same(answer.status, undefined, "the result's status");
+      same(answer.runStarted, true, "the first turn started");
+      same(made.details, { sessionKey: childKey }, "the result's details");
+      view.expectEnd("final", `I started a task for it: ${CREATE_TASK.label}.`);
+      // Listed as a task started from this conversation, by the same fields as sessions_spawn's.
+      const row = await listedRow(h, childKey);
+      expect(row, "the task is in the task list");
+      same(
+        [row.agentId, row.label, row.createdVia, row.spawnedBy],
+        ["pip", CREATE_TASK.label, "spawn", key],
+        "the task's row",
+      );
+    },
+  },
+  {
     name: "a hidden helper a bot starts stays out of the task list",
     covers: ["#hand-off-hidden"],
     run: async (h) => {
@@ -3709,9 +3753,7 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       same(
         await h.offeredTools(paired),
         withImages(
-          shape().pairedAutomations
-            ? [...EXPECTED_OFFERED_TOOLS, "automations"].sort()
-            : EXPECTED_OFFERED_TOOLS,
+          shape().pairedAutomations ? [...offeredTools(), "automations"].sort() : offeredTools(),
         ),
         "tools offered in a paired client's run",
       );
@@ -3721,7 +3763,7 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       ownerRun.expectEnd("final", scriptedFinalText("#text"));
       same(
         await h.offeredTools(ownerKey),
-        withImages([...EXPECTED_OFFERED_TOOLS, "automations"].sort()),
+        withImages([...offeredTools(), "automations"].sort()),
         "tools offered in an owner's run",
       );
       // What the gateway reports as available, which does not know the sender.
@@ -3737,7 +3779,7 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
           .filter((t) => t.status === "available")
           .map((t) => String(t.id))
           .sort(),
-        withImages(EXPECTED_EFFECTIVE_TOOLS),
+        withImages([...EXPECTED_EFFECTIVE_TOOLS, ...shape().extraAllowedTools].sort()),
         "tools.effective available tools",
       );
       for (const tool of [...DENIED_TOOLS, ...shape().extraDeniedTools].filter(
