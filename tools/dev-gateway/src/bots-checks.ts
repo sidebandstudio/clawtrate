@@ -912,10 +912,11 @@ export const BOTS_CHECKS: BotsCheck[] = [
     },
   },
   {
-    name: "fix round 2: create_goal and next_check schedule no more work after reading a web page",
+    name: "fix round 2: create_goal and next_check schedule no more work after reading something from outside",
     covers: ["#goal", "#rearm"],
     async run(ctx, world) {
-      const job = await routineRun(ctx, world, "#search #rearm");
+      // A file read is outside content on both versions, and a routine's run has the file tools.
+      const job = await routineRun(ctx, world, "#read #rearm");
       const said = String(rec(await routineFinished(ctx, job)).summary ?? "");
       expect(said.includes(NOT_DONE), `next_check after reading: ${said}`);
       const goal = await turn(ctx, await task(ctx, world, "pip", "goal"), "#search #goal");
