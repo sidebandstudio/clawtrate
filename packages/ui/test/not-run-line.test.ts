@@ -16,6 +16,7 @@ import {
   type Run,
   type TaskActivity,
   type Transcript,
+  wordsCut,
 } from "@clawtrate/core";
 import { describe, expect, it } from "vitest";
 import {
@@ -370,6 +371,38 @@ describe("#686: a not-run line sits only under the message its run is known to h
     const full = Array.from({ length: 8 }, (_, i) => `blocks[${i}].text`);
     expect(attachmentsCut({ cut: full })).toBe(true);
     expect(attachmentsCut({ cut: full.slice(1) })).toBe(false);
+  });
+
+  it("words go again only when they are known whole (#726)", () => {
+    const long = "Back up the photos. ".repeat(150);
+    const { transcript } = reloaded([userRow("run-a", long, 1), failedRow("run-a", 2)]);
+    const failed = transcript.runs.find((each) => each.id === "run-a")!;
+    const anchorOf = (t: Transcript) => t.items.find((item) => item.id === failed.anchorItemId)!;
+    // Its text cut to the block's bound as the client keeps it: no Try again.
+    const state = enforceState({ transcripts: { [KEY]: transcript } } as never);
+    const kept = (state as unknown as { transcripts: Record<string, Transcript> }).transcripts[
+      KEY
+    ]!;
+    expect(wordsCut(anchorOf(kept))).toBe(true);
+    expect(retryPlan(failed, kept)).toEqual({ kind: "words-cut" });
+    // The gateway cut its row: no Try again either.
+    const short = reloaded([userRow("run-a", "Back up the photos.", 1), failedRow("run-a", 2)]);
+    const marked = {
+      ...short.transcript,
+      items: short.transcript.items.map((item) =>
+        item.id === failed.anchorItemId ? { ...item, truncated: true } : item,
+      ),
+    } as Transcript;
+    expect(retryPlan(failed, marked)).toEqual({ kind: "words-cut" });
+    // Whole: its words go again.
+    expect(retryPlan(failed, short.transcript)).toMatchObject({
+      kind: "text",
+      text: "Back up the photos.",
+    });
+    // A full list of cut paths (eight, `MAX_CUT_PATHS`) may have let the one for its text go.
+    const full = Array.from({ length: 8 }, (_, i) => `attachments[${i}]`);
+    expect(wordsCut({ cut: full })).toBe(true);
+    expect(wordsCut({ cut: full.slice(1) })).toBe(false);
   });
 
   it("a run that started, then failed before replying: the gateway's row says nothing more", () => {

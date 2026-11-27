@@ -286,6 +286,18 @@ export function attachmentsCut(item: { cut?: string[] }): boolean {
   const cut = item.cut ?? [];
   return cut.length >= MAX_CUT_PATHS || cut.some((path) => path.startsWith("attachments"));
 }
+/**
+ * A person's message whose words may not be whole (#726): the gateway cut its row (`truncated`),
+ * a text block was cut to `MAX_BLOCK_CHARS`, or a full list of cut paths may have let that one go.
+ */
+export function wordsCut(item: { truncated?: boolean; cut?: string[] }): boolean {
+  const cut = item.cut ?? [];
+  return (
+    item.truncated === true ||
+    cut.length >= MAX_CUT_PATHS ||
+    cut.some((path) => path.startsWith("blocks"))
+  );
+}
 /** Inter-session messages kept per task, newest. */
 export const MAX_INTER_SESSION = 64;
 /** Outgoing messages per task (also `MAX_OUTBOX_PER_TASK`). */

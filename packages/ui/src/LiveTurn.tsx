@@ -6,6 +6,7 @@
 
 import {
   attachmentsCut,
+  wordsCut,
   isTerminal,
   type Bot,
   type OutgoingMessage,
@@ -217,6 +218,8 @@ function keyedAnchor(run: Run, transcript: Transcript) {
  *   again, and the line says to send it again with them;
  * - `files-unknown`: only history has it, and history's list of its files was cut to its bound, so
  *   whether it had any isn't known: no Try again, and the line says to send it again with any;
+ * - `words-cut`: only history has it, and its words may be only their start (`wordsCut`): no Try
+ *   again, and the line says to send it again in full;
  * - null: no message is known to have started the run.
  */
 export type RetryPlan =
@@ -224,6 +227,7 @@ export type RetryPlan =
   | { kind: "text"; text: string; replyToId: string | null }
   | { kind: "files-gone" }
   | { kind: "files-unknown" }
+  | { kind: "words-cut" }
   | null;
 
 export function retryPlan(run: Run, transcript: Transcript): RetryPlan {
@@ -234,6 +238,8 @@ export function retryPlan(run: Run, transcript: Transcript): RetryPlan {
   if ((anchor.attachments?.length ?? 0) > 0) return { kind: "files-gone" };
   // Words alone go again only when the message is known to have had no files.
   if (attachmentsCut(anchor)) return { kind: "files-unknown" };
+  // Nor do words that may be only their start.
+  if (wordsCut(anchor)) return { kind: "words-cut" };
   const text = messageTextOf(run, transcript);
   return text ? { kind: "text", text, replyToId: messageReplyOf(run, transcript) } : null;
 }
@@ -488,6 +494,11 @@ export function RunEnding({
         <p className="turn-error-reason" data-testid="retry-files-unknown">
           This device can't tell whether this message had files. To try again, send it again with
           any files it had.
+        </p>
+      )}
+      {retry?.kind === "words-cut" && (
+        <p className="turn-error-reason" data-testid="retry-words-cut">
+          This message is too long to send again from here. To try again, send it again in full.
         </p>
       )}
       {(resend || requestId || raw || (notRun?.ways.length ?? 0) > 0) && (
