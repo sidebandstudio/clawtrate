@@ -1404,13 +1404,17 @@ export function requeueLocalRun(
 
 /**
  * A queued run that is about to be sent goes from `queued` to `running`: the queued one with
- * that id, beside an earlier run of the same message the gateway named.
+ * that id, beside an earlier run of the same message the gateway named. A held steer released
+ * this way is a run of its own from here, so its alias to the run it was sent into goes: Stop
+ * and the composer then find this run before its first event.
  */
 export function startQueuedRun(activity: TaskActivity, runId: string, now: number): TaskActivity {
   const queued = activity.runs.find((run) => run.id === runId && run.state === "queued");
   if (!queued) return activity;
+  const { [runId]: _joined, ...steerAliases } = activity.steerAliases;
   return {
     ...activity,
+    steerAliases,
     runs: activity.runs.map((run) =>
       run === queued ? { ...run, state: "running", startedAt: now } : run,
     ),
