@@ -284,8 +284,13 @@ test("#872 #738: an answer a steer kept going is known by its row while the stee
       .poll(() => runs(client, key).find((run) => run.id === id)?.state, { timeout: 90_000 })
       .toBe("completed");
     await expect.poll(() => gatewayIdle(op, key), { timeout: 15_000 }).toBe(true);
-    // The moment happened, and in every state of it the row was the reply's.
-    expect(held.length).toBeGreaterThan(0);
+    // Where the steer joined the run (the answer's run holds a call: `#slow` makes none), the
+    // moment happened, and in every state of it the row was the reply's. Where the steer ran as a
+    // turn of its own, the answer's run ended first and nothing was drawn twice.
+    const joined = runs(client, key)
+      .find((run) => run.id === id)!
+      .steps.some((step) => step.kind === "tool");
+    if (joined) expect(held.length).toBeGreaterThan(0);
     expect(held.filter((row) => row !== null)).toEqual([]);
   } finally {
     stop();
