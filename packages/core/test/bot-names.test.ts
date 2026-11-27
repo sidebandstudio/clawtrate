@@ -109,6 +109,14 @@ describe("F-552: whose ask a rename was", () => {
     expect(namesInText("is Pippa there", "Pip")).toBe(false);
     expect(namesInText("Pip, then Pippa", "Pip")).toBe(true);
     expect(namesInText("name it Café Noir.", "café   noir")).toBe(true);
+    // A hyphen joins words; a name with one is matched whole.
+    expect(namesInText("my juniper-berry", "Juniper")).toBe(false);
+    expect(namesInText("call yourself Juniper-Rose", "Juniper-Rose")).toBe(true);
+    expect(namesInText("call yourself Juniper!", "Juniper")).toBe(true);
+    // A message cut where the device stopped keeping it: its end is no word's end.
+    expect(namesInText("call yourself Juniper", "Juniper", true)).toBe(false);
+    expect(namesInText("call yourself Juniper! and", "Juniper", true)).toBe(true);
+    expect(judge({ text: "call yourself Juniper", cut: true }).whose).toBe("bot");
   });
 
   it("F-552: reading the bot's own IDENTITY.md counts as reading a file, before the edit too", () => {
@@ -168,6 +176,8 @@ describe("F-552: the record of changes", () => {
       ["an unknown classification", { whose: "admin" as "person" }],
       ["too old", { at: NOW - UNDO_WINDOW_MS - 1 }],
       ["in the future", { at: NOW + 60 * 60 * 1000 }],
+      ["a done time no date can hold", { done: 1e300 }],
+      ["an undone time no date can hold", { undone: -1e300 }],
       ["not an entry", "not an entry"],
     ];
     for (const [what, patch] of forged)
@@ -271,11 +281,15 @@ function gateway(options: { prefs?: "ok" | "none"; file?: string } = {}) {
     sets: 0,
     /** From this `users.prefs.set` on, the store refuses writes. */
     downAt: null as number | null,
+    /** Every `agents.files.get` the gateway was sent. */
+    reads: 0,
   };
   const request = async (method: string, raw: unknown): Promise<unknown> => {
     const params = raw as Record<string, unknown>;
-    if (method === "agents.files.get")
+    if (method === "agents.files.get") {
+      state.reads += 1;
       return { file: { content: state.file, hash: "a".repeat(64) } };
+    }
     if (method === "config.get") return { config: {} };
     if (method === "agents.update") {
       state.onUpdate?.();
@@ -328,21 +342,36 @@ function device(
     claim?: () => Promise<void>;
     stamp?: () => GatewayStamp;
     generation?: () => string;
+    /** The bot list as last read: it changes only when the engine reads it again. */
+    cached?: boolean;
   } = {},
 ) {
   let lines: NameLine[] = [];
+  let listed = gw.state.bots;
+  /** File reads held now. */
+  let slots = 0;
   const published: NameLine[][] = [];
   let shown: { changes: NameRecordChange[] } | null = null;
   const ctx: BotNamesContext = {
     request: gw.request,
-    bots: () => gw.state.bots,
+    bots: () => (options.cached ? listed : gw.state.bots),
     canRename: () => options.admin ?? true,
     stamp: options.stamp ?? (() => STAMP),
     generation: options.generation ?? (() => "1:1"),
     sameGateway: async () => {},
     storage: memoryStorage(),
-    takeRead: () => () => {},
-    refreshBots: async () => {},
+    takeRead: () => {
+      slots += 1;
+      let held = true;
+      return () => {
+        if (held) slots -= 1;
+        held = false;
+      };
+    },
+    refreshBots: async () => {
+      listed = gw.state.bots;
+    },
+    readHistory: async () => {},
     runFacts: () => ({
       steps: options.steps === undefined ? [EDIT_OWN] : options.steps,
       steered: options.steered ?? false,
@@ -360,7 +389,15 @@ function device(
   };
   const engine = new BotNames(ctx);
   const line = () => lines.find((each) => each.botId === "pip");
-  return { engine, lines: () => lines, line, published, record: () => shown };
+  return {
+    engine,
+    ctx,
+    lines: () => lines,
+    line,
+    published,
+    record: () => shown,
+    slots: () => slots,
+  };
 }
 
 /** Whether a device shows a line for the bot's current name with an Undo that can work. */
@@ -623,9 +660,8 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
 
   it("F-552: holding the claim, the bot is read again: renamed meanwhile by a writer outside Clawtrate, nothing is sent and the claim goes", async () => {
     const gw = gateway();
-    const me = device(gw);
-    me.engine["ctx"].refreshBots = async () => {};
-    // Renamed elsewhere as the claim is written.
+    const me = device(gw, { cached: true });
+    // Renamed elsewhere as the claim is written: seen only by reading the bot list again.
     gw.state.afterSet = () => (gw.state.bots = [bot("pip", "Maple"), bot("otto", "Otto")]);
     await me.engine.afterRun("pip", KEY, "run-1");
     expect(gw.state.updates).toEqual([]);
@@ -635,7 +671,7 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
 
   it("F-552: holding the claim, Undo reads the bot again: renamed meanwhile, nothing is sent", async () => {
     const gw = gateway();
-    const me = device(gw);
+    const me = device(gw, { cached: true });
     await me.engine.afterRun("pip", KEY, "run-1");
     gw.state.afterSet = () => (gw.state.bots = [bot("pip", "Maple"), bot("otto", "Otto")]);
     await expect(me.engine.undo("pip", runTag("run-1"), "Pip", STAMP)).rejects.toThrow(
@@ -811,6 +847,8 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
     await mine.engine.onPrefsChanged([NAME_RECORD_KEY]);
     expect(mine.line()).toMatchObject({ status: "undone", after: "Pip" });
     await expect(mine.engine.undo("pip", runTag("run-1"), "Pip", STAMP)).rejects.toThrow();
+    // The name the button didn't show is never sent.
+    expect(otherName.state.updates).toEqual(["Juniper"]);
     for (const each of [renamedAgain, otherName, old])
       expect(each.state.updates.filter((name) => name === "Pip")).toEqual([]);
     expect(shared.state.updates).toEqual(["Juniper", "Pip"]);
@@ -905,7 +943,7 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
     expect(restarted.line()).toMatchObject({ to: "Juniper", whose: "person", status: "renamed" });
     expect(restarted.record()!.changes).toHaveLength(1);
     expect(undoable(restarted, gw)).toBe(true);
-    restarted.engine.dismiss("pip");
+    restarted.engine.dismiss("pip", runTag("run-1"));
     await restarted.engine.onPrefsChanged([NAME_RECORD_KEY]);
     restarted.engine.onBots(gw.state.bots);
     expect(restarted.lines()).toEqual([]);
@@ -992,6 +1030,112 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
     expect(f.line()).toMatchObject({ whose: "bot", source: "attachment" });
   });
 
+  it("F-552: the file read's slot goes once the read settles, not after the wait and the rename", async () => {
+    const gw = gateway();
+    let during = -1;
+    const other = device(gw, { claim: async () => void (during = other.slots()) });
+    await other.engine.afterRun("pip", KEY, "run-1");
+    expect(during).toBe(0);
+    expect(gw.state.updates).toEqual(["Juniper"]);
+  });
+
+  it("F-552: a bot renamed during the wait before the claim keeps that name: nothing is sent", async () => {
+    const gw = gateway();
+    const other = device(gw, {
+      claim: async () => void (gw.state.bots = [bot("pip", "Maple"), bot("otto", "Otto")]),
+    });
+    await other.engine.afterRun("pip", KEY, "run-1");
+    expect(gw.state.updates).toEqual([]);
+    expect(gw.kept()).toMatchObject({ changes: [], claims: [] });
+  });
+
+  it("F-552: an Undo whose answer was lost reads the name back: back if the gateway lists it, said as it is if not", async () => {
+    const landed = gateway();
+    const a = device(landed);
+    await a.engine.afterRun("pip", KEY, "run-1");
+    landed.state.update = "lost";
+    await a.engine.undo("pip", runTag("run-1"), "Pip", STAMP);
+    expect(a.line()).toMatchObject({ status: "undone", after: "Pip", error: null });
+    expect(landed.kept().declined).toEqual([
+      { bot: "pip", name: "Juniper", file: FILE_TAG, at: NOW },
+    ]);
+
+    const lost = gateway();
+    const b = device(lost);
+    await b.engine.afterRun("pip", KEY, "run-1");
+    lost.state.update = "dropped";
+    await b.engine.undo("pip", runTag("run-1"), "Pip", STAMP);
+    expect(b.line()).toMatchObject({ status: "undone", after: "Juniper" });
+    expect(lost.kept().changes[0]!.undone).toBeUndefined();
+    expect(lost.kept().claims).toEqual([]);
+  });
+
+  it("F-552: an Undo's unsaved decline is kept and written again after a reconnect to the same gateway", async () => {
+    const gw = gateway();
+    let stamp = STAMP;
+    const me = device(gw, { steps: [], stamp: () => stamp });
+    await me.engine.afterRun("pip", KEY, "run-1");
+    // Undo's claim is written; the write that declines the edit isn't.
+    gw.state.downAt = gw.state.sets + 2;
+    await me.engine.undo("pip", runTag("run-1"), "Pip", stamp);
+    // Connected again to the same gateway: the host's target is new.
+    stamp = { gatewayId: "gw-a", target: 2 };
+    me.engine.reset();
+    await me.engine.afterRun("pip", KEY, "run-2");
+    expect(gw.state.updates).toEqual(["Juniper", "Pip"]);
+    gw.state.prefsDown = false;
+    gw.state.downAt = null;
+    await me.engine.afterRun("pip", KEY, "run-3");
+    expect(gw.state.updates).toEqual(["Juniper", "Pip"]);
+    expect(gw.kept().declined).toEqual([{ bot: "pip", name: "Juniper", file: FILE_TAG, at: NOW }]);
+  });
+
+  it("F-552: unsaved declines the record has no room for stay pending; only those it kept are cleared", async () => {
+    const gw = gateway();
+    const me = device(gw);
+    const pending = me.engine["unrecorded"];
+    for (let n = 0; n < 9; n += 1)
+      pending.set(`gw-a\nbot-${n}`, {
+        stamp: STAMP,
+        botId: `bot-${n}`,
+        name: `Name ${n}`,
+        run: runTag(`r${n}`),
+        file: FILE_TAG,
+        op: runTag(`o${n}`),
+      });
+    await me.engine.afterRun("pip", KEY, "run-1");
+    expect(gw.kept().declined).toHaveLength(8);
+    expect([...pending.values()].map((each) => each.botId)).toEqual(["bot-0"]);
+  });
+
+  it("F-552: a claim's entry is never the one the record's room drops", () => {
+    const changes = Array.from({ length: 9 }, (_, n) =>
+      change({ bot: `bot-${n}`, run: runTag(`r${n}`), done: NOW }),
+    );
+    // The paused rename's entry: claimed, not yet confirmed.
+    const held = change({ bot: "bot-0", run: runTag("r0") });
+    const fitted = fitNameRecord({
+      rev: 1,
+      changes: [held, ...changes.slice(1)],
+      declined: [],
+      counts: [],
+      claims: [{ bot: "bot-0", op: "c".repeat(16), run: runTag("r0"), at: NOW }],
+    });
+    expect(fitted.changes).toHaveLength(MAX_RECORD_CHANGES);
+    expect(fitted.changes[0]).toEqual(held);
+    expect(fitted.changes.map((each) => each.bot)).not.toContain("bot-1");
+  });
+
+  it("F-552: Close puts away only the line it was pressed on", async () => {
+    const gw = gateway();
+    const me = device(gw);
+    await me.engine.afterRun("pip", KEY, "run-1");
+    me.engine.dismiss("pip", runTag("another run"));
+    expect(me.line()).toMatchObject({ run: runTag("run-1") });
+    me.engine.dismiss("pip", runTag("run-1"));
+    expect(me.lines()).toEqual([]);
+  });
+
   it("F-552: the default bot is never read", async () => {
     const gw = gateway();
     gw.state.bots = [{ ...bot("pip", "Pip"), isDefault: true }];
@@ -999,6 +1143,7 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
     await me.engine.afterRun("pip", KEY, "run-1");
     expect(me.lines()).toEqual([]);
     expect(gw.state.updates).toEqual([]);
+    expect(gw.state.reads).toBe(0);
   });
 
   it("F-552: names are read as the gateway reads them, and made plain and bounded as a rename saves them", () => {
@@ -1011,7 +1156,7 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
 
 describe("F-552: through the client", () => {
   /** A client with one New bot whose IDENTITY.md the test writes, and the gateway's record. */
-  async function namingClient() {
+  async function namingClient(options: { identityFails?: number } = {}) {
     const files = { content: "- **Name:** New bot\n" };
     const held = ADMIN_SCOPES;
     const storage = guidesOff(
@@ -1026,14 +1171,34 @@ describe("F-552: through the client", () => {
       }),
     );
     const gw = grantingGateway();
-    gw.handlers["gateway.identity.get"] = () => ({ deviceId: "gw-a" });
+    let fails = options.identityFails ?? 0;
+    gw.handlers["gateway.identity.get"] = () => {
+      if (fails > 0) {
+        fails -= 1;
+        throw new Error("the gateway was busy");
+      }
+      return { deviceId: "gw-a" };
+    };
     // The gateway runs a message under its idempotency key (`chat-send-handler`, both versions).
     gw.handlers["chat.send"] = (params) => ({
       runId: (params as { idempotencyKey: string }).idempotencyKey,
       status: "started",
     });
     const bots = { name: "New bot" };
-    let record: unknown;
+    // With a failing identity read, a record kept from before: what Recent changes would list.
+    let stored: unknown = options.identityFails
+      ? record({
+          changes: [
+            change({
+              bot: "new-bot",
+              from: "Old bot",
+              to: "New bot",
+              at: Date.now(),
+              done: Date.now(),
+            }),
+          ],
+        })
+      : undefined;
     gw.handlers["agents.list"] = () => ({
       defaultId: "main",
       agents: [{ id: "main" }, { id: "new-bot", name: bots.name, identity: { name: bots.name } }],
@@ -1059,10 +1224,10 @@ describe("F-552: through the client", () => {
     };
     gw.handlers["users.prefs.get"] = () => ({
       status: "ok",
-      entries: record === undefined ? {} : { [NAME_RECORD_KEY]: record },
+      entries: stored === undefined ? {} : { [NAME_RECORD_KEY]: stored },
     });
     gw.handlers["users.prefs.set"] = (params) => {
-      record = (params as { entries: Record<string, unknown> }).entries[NAME_RECORD_KEY];
+      stored = (params as { entries: Record<string, unknown> }).entries[NAME_RECORD_KEY];
       return { status: "ok" };
     };
     const { client } = await openTask({
@@ -1130,6 +1295,18 @@ describe("F-552: through the client", () => {
     }
   });
 
+  it("F-552: the record is read once the gateway is named, when its first identity read failed", async () => {
+    const { client, gw } = await namingClient({ identityFails: 1 });
+    try {
+      await until(() => client.state.connection.gatewayId === "gw-a", 5_000);
+      await until(() => client.state.botNameRecord?.stamp.gatewayId === "gw-a", 5_000);
+      expect(client.state.botNameRecord!.changes).toHaveLength(1);
+      expect(gw.calls("users.prefs.get").length).toBeGreaterThan(0);
+    } finally {
+      client.stop();
+    }
+  });
+
   it("F-552: a person's message another device sent within the run makes the rename the bot's own", async () => {
     const { client, gw, edit } = await namingClient();
     try {
@@ -1151,15 +1328,8 @@ describe("F-552: through the client", () => {
         ],
         inFlightRun: { runId: id },
       });
-      const reads = gw.calls("chat.history").length;
-      gw.emit("session.message", { sessionKey: "agent:new-bot:main" });
-      await until(() => gw.calls("chat.history").length > reads);
-      await until(
-        () =>
-          client.state.transcripts["agent:new-bot:main"]?.items.some(
-            (item) => item.messageId === "u-2",
-          ) ?? false,
-      );
+      // The gateway has the other device's message, but no history read has brought it here yet:
+      // the run's end reads it before its rename is judged.
       edit(id, "Johnny", 2);
       gw.emit("agent", agentEvent(id, 4, "lifecycle", { phase: "end" }, "agent:new-bot:main"));
       await until(() => client.state.botNames?.[0]?.status === "renamed");

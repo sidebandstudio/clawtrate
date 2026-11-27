@@ -166,21 +166,26 @@ export const nameTaken = (bots: readonly Bot[], botId: string, name: string) =>
 export const runTag = (runId: string) => sha256Hex(utf8Bytes(runId)).slice(0, 16);
 
 const WORD = /[\p{L}\p{N}\p{M}_]/u;
+/** Hyphens join words: "juniper-berry" is one word, not Juniper. */
+const HYPHEN = /[-‐‑]/;
 
 /**
- * Whether `name` is in `text` as whole words, both compared as names are: "call yourself Juniper"
- * names Juniper; "Junipers", "my juniper-berry" and "Pip" in "Pippa" don't.
+ * Whether `name` is in `text` as whole words, both compared as names are: "call yourself Juniper!"
+ * names Juniper; "Junipers", "my juniper-berry" and "Pip" in "Pippa" don't. When `cut`, the text
+ * stops where the device stopped keeping it, so its end is no word's end.
  */
-export function namesInText(text: string, name: string): boolean {
+export function namesInText(text: string, name: string, cut = false): boolean {
   const haystack = folded(text);
   const needle = folded(name);
   if (!needle) return false;
   for (let at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, at + 1)) {
     const before = Array.from(haystack.slice(Math.max(0, at - 2), at)).at(-1) ?? "";
     const after = Array.from(haystack.slice(at + needle.length, at + needle.length + 2))[0] ?? "";
-    const edge = (inner: string, outer: string) => !(WORD.test(inner) && WORD.test(outer));
+    const edge = (inner: string, outer: string) =>
+      !(WORD.test(inner) && WORD.test(outer)) && !HYPHEN.test(outer);
     const first = Array.from(needle)[0]!;
     const last = Array.from(needle).at(-1)!;
+    if (cut && at + needle.length === haystack.length) continue;
     if (edge(first, before) && edge(last, after)) return true;
   }
   return false;
@@ -195,6 +200,8 @@ export type RunFacts = {
   sentHere: boolean;
   /** What that message said (its first characters), or null. */
   text: string | null;
+  /** The text was longer than the device keeps: its end is not the message's. */
+  cut?: boolean;
   /** That message carried files. */
   attachments: boolean;
   /** A steer joined the run: one this device sent, or another message seen within it. */
@@ -247,7 +254,7 @@ export function judgeRename(
     !facts.steered &&
     source === null &&
     facts.text !== null &&
-    namesInText(facts.text, name);
+    namesInText(facts.text, name, facts.cut ?? false);
   return { whose: person ? "person" : "bot", source };
 }
 
@@ -302,8 +309,9 @@ const isBot = (value: unknown): value is string =>
   typeof value === "string" && value.length > 0 && value.length <= MAX_RECORD_BOT_CHARS;
 const isTag = (value: unknown): value is string =>
   typeof value === "string" && /^[0-9a-f]{16}$/.test(value);
+/** A time a `Date` can hold: past its range, `dayOf` would throw. */
 const isTime = (value: unknown): value is number =>
-  typeof value === "number" && Number.isFinite(value);
+  typeof value === "number" && Number.isFinite(value) && Math.abs(value) <= 8.64e15;
 const SOURCES = new Set(["web", "file", "conversation", "tool", "attachment"]);
 const WHOSE = new Set(["person", "bot", "file"]);
 
@@ -383,21 +391,36 @@ export function parseNameRecord(raw: unknown, now: number): NameRecord {
  * Claims are never dropped; a write whose claims alone don't fit isn't made (`writeRecord`).
  */
 export function fitNameRecord(record: NameRecord): NameRecord {
+  const claims = record.claims.slice(-MAX_RECORD_CLAIMS);
   const next = {
     rev: record.rev,
-    changes: record.changes.slice(-MAX_RECORD_CHANGES),
+    changes: record.changes.slice(),
     declined: record.declined.slice(-MAX_RECORD_DECLINED),
     counts: record.counts.slice(-MAX_RECORD_COUNTS),
-    claims: record.claims.slice(-MAX_RECORD_CLAIMS),
+    claims,
   };
+  // The oldest change no claim holds goes first: a claim's rename keeps its entry to confirm.
+  while (next.changes.length > MAX_RECORD_CHANGES) {
+    const at = unheld(next.changes, claims);
+    if (at === -1) break;
+    next.changes.splice(at, 1);
+  }
   // The counts are small and outlast the changes: the day's limit holds while history goes.
   while (utf8Length(JSON.stringify(next)) > MAX_RECORD_BYTES) {
+    const at = unheld(next.changes, claims);
     if (next.declined.length > next.changes.length) next.declined.shift();
-    else if (next.changes.length > 0) next.changes.shift();
+    else if (at !== -1) next.changes.splice(at, 1);
     else if (next.counts.length > 0) next.counts.shift();
     else break;
   }
   return next;
+}
+
+/** The first change no claim holds, or -1. */
+function unheld(changes: readonly NameRecordChange[], claims: readonly NameClaim[]): number {
+  return changes.findIndex(
+    (change) => !claims.some((claim) => claim.run === change.run && claim.bot === change.bot),
+  );
 }
 
 /** How many renames of a bot the record counts on a day. */
@@ -475,6 +498,8 @@ export type BotNamesContext = {
     sessionKey: string,
     runId: string,
   ) => { steps: RunStepFacts[] | null; steered: boolean };
+  /** Read a task's history now, so what it holds covers a run that just ended. */
+  readHistory: (sessionKey: string) => Promise<void>;
   /** Whether an error is the gateway refusing for a missing scope (and note it). */
   missingScope: (error: unknown) => boolean;
   /** Whether an error is the gateway's own refusal, so nothing was written (`isCertainRefusal`). */
@@ -486,6 +511,14 @@ export type BotNamesContext = {
   publishRecord: (record: { stamp: GatewayStamp; changes: NameRecordChange[] } | null) => void;
   log: (text: string) => void;
 };
+
+/**
+ * Whether two stamps name the same preference store: the same verified gateway, whatever the
+ * host's target, which a reconnect to the same gateway changes. Requests still go only on the
+ * connection the operation began on.
+ */
+const sameStore = (a: GatewayStamp, b: GatewayStamp) =>
+  a.gatewayId !== null && a.gatewayId === b.gatewayId;
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
@@ -519,7 +552,7 @@ export class BotNames {
   /** Runs this device started, by id: their task, the text sent, its files, and a steer of its own. */
   private readonly sentRuns = new Map<
     string,
-    { sessionKey: string; text: string; attachments: boolean; steered: boolean }
+    { sessionKey: string; text: string; cut: boolean; attachments: boolean; steered: boolean }
   >();
   /** Renames this device applied (`MAX_NAME_CARDS`), by gateway and run. */
   private readonly applied = new Map<string, Applied>();
@@ -552,6 +585,7 @@ export class BotNames {
     this.sentRuns.set(runId, {
       sessionKey,
       text: text.slice(0, MAX_SENT_TEXT_CHARS),
+      cut: text.length > MAX_SENT_TEXT_CHARS,
       attachments,
       steered: false,
     });
@@ -598,7 +632,10 @@ export class BotNames {
     try {
       const answer = asRecord(
         asRecord(
-          await this.ctx.request("agents.files.get", { agentId: botId, name: "IDENTITY.md" }),
+          await this.ctx
+            .request("agents.files.get", { agentId: botId, name: "IDENTITY.md" })
+            // The read's slot goes once it settles: the wait and the rename hold no file read.
+            .finally(release),
         )?.file,
       );
       if (stale()) return;
@@ -622,10 +659,14 @@ export class BotNames {
       if (name === now.name || name === plainName(now.name)) return this.reconcile();
       const sent = runId === undefined ? undefined : this.sentRuns.get(runId);
       const mine = sent?.sessionKey === sessionKey;
+      // History read through the run's end: a steer another device sent is in it by then.
+      if (runId !== undefined) await this.ctx.readHistory(sessionKey);
+      if (stale()) return;
       const run = runId === undefined ? null : this.ctx.runFacts(sessionKey, runId);
       const facts: RunFacts = {
         sentHere: mine,
         text: mine ? sent!.text : null,
+        cut: mine && sent!.cut,
         attachments: mine && sent!.attachments,
         steered: (mine && sent!.steered) || (run?.steered ?? false),
         steps: run?.steps ?? null,
@@ -640,7 +681,7 @@ export class BotNames {
         await this.ctx.waitToClaim();
         if (stale()) return;
       }
-      await this.apply(botId, name, origin, stamp, epoch);
+      await this.apply(botId, name, origin, stamp, epoch, now.name);
     } catch (error) {
       this.ctx.log(`could not read ${botId}'s IDENTITY.md: ${errorText(error)}`);
     } finally {
@@ -662,9 +703,12 @@ export class BotNames {
     origin: RenameOrigin,
     stamp: GatewayStamp,
     epoch = this.epoch,
+    seen?: string,
   ): Promise<void> {
     const bot = this.ctx.bots().find((each) => each.id === botId);
     if (!bot) return;
+    // Renamed by someone else since the file was read (during the wait, say): not this rename's.
+    if (seen !== undefined && bot.name !== seen) return this.giveUp(botId);
     const line = (patch: Partial<NameLine>) => {
       if (epoch !== this.epoch) return;
       this.setLine({
@@ -895,7 +939,14 @@ export class BotNames {
           throw new Error(NO_LONGER);
         }
         if (!this.current(op)) continue;
-        await this.ctx.request("agents.update", { agentId: botId, name: change.from });
+        try {
+          await this.ctx.request("agents.update", { agentId: botId, name: change.from });
+        } catch (error) {
+          // A refusal: nothing was written. Any other error: the answer was lost and the name
+          // may be back, which the read below settles.
+          if (this.ctx.certainRefusal(error)) throw error;
+          this.ctx.log(`no answer to ${botId}'s Undo: ${errorText(error)}`);
+        }
         sent = true;
       }
       if (!sent) throw new Error(NOTHING_SENT);
@@ -937,34 +988,56 @@ export class BotNames {
    * undone, its edit declined, its claim let go. Whether none is left for it.
    */
   private async flushDeclines(op: RecordOp): Promise<boolean> {
-    const mine = [...this.unrecorded].filter(([, each]) => sameStamp(each.stamp, op.stamp));
+    const mine = [...this.unrecorded].filter(([, each]) => sameStore(each.stamp, op.stamp));
     if (mine.length === 0) return true;
     const now = this.ctx.now();
-    const result = await this.writeRecord(op, (record) => ({
-      ...record,
-      changes: record.changes.map((each) =>
-        mine.some(([, kept]) => kept.run === each.run && each.undone === undefined)
-          ? { ...each, undone: now }
-          : each,
-      ),
-      declined: [
-        ...record.declined.filter(
-          (each) =>
-            !mine.some(
-              ([, kept]) =>
-                kept.botId === each.bot && kept.name === each.name && kept.file === each.file,
-            ),
+    let kept: NameRecord | null = null;
+    const result = await this.writeRecord(
+      op,
+      (record) => ({
+        ...record,
+        changes: record.changes.map((each) =>
+          mine.some(([, kept]) => kept.run === each.run && each.undone === undefined)
+            ? { ...each, undone: now }
+            : each,
         ),
-        ...mine.map(([, kept]) => ({ bot: kept.botId, name: kept.name, file: kept.file, at: now })),
-      ],
-      claims: record.claims.filter((each) => !mine.some(([, kept]) => kept.op === each.op)),
-    })).catch((error: unknown) => {
+        declined: [
+          ...record.declined.filter(
+            (each) =>
+              !mine.some(
+                ([, kept]) =>
+                  kept.botId === each.bot && kept.name === each.name && kept.file === each.file,
+              ),
+          ),
+          ...mine.map(([, kept]) => ({
+            bot: kept.botId,
+            name: kept.name,
+            file: kept.file,
+            at: now,
+          })),
+        ],
+        claims: record.claims.filter((each) => !mine.some(([, kept]) => kept.op === each.op)),
+      }),
+      (value) => (kept = value),
+    ).catch((error: unknown) => {
       this.ctx.log(`could not record an undo: ${errorText(error)}`);
       return "unavailable" as const;
     });
-    if (result !== "written") return false;
-    for (const [key] of mine) this.unrecorded.delete(key);
-    return true;
+    if (result !== "written" || kept === null) return false;
+    // Only those the gateway kept: one the record's room left out stays here, and is written again.
+    const saved: NameRecord = kept;
+    let all = true;
+    for (const [key, each] of mine) {
+      if (
+        saved.declined.some(
+          (decline) =>
+            decline.bot === each.botId && decline.name === each.name && decline.file === each.file,
+        )
+      )
+        this.unrecorded.delete(key);
+      else all = false;
+    }
+    return all;
   }
 
   /**
@@ -983,7 +1056,7 @@ export class BotNames {
       each.name === name && each.file === origin.file;
     if (record?.declined.some((each) => each.bot === botId && same(each))) return true;
     return [...this.unrecorded.values()].some(
-      (each) => sameStamp(each.stamp, stamp) && each.botId === botId && same(each),
+      (each) => sameStore(each.stamp, stamp) && each.botId === botId && same(each),
     );
   }
 
@@ -1020,10 +1093,13 @@ export class BotNames {
     if (this.applied.size > MAX_NAME_CARDS) this.applied.delete(this.applied.keys().next().value!);
   }
 
-  /** Put a line away on this device. Nothing is sent. */
-  dismiss(botId: string): void {
-    const run = this.lines.get(botId)?.line.run;
-    if (run !== undefined) {
+  /**
+   * Put a line away on this device, only while it is the line of the change `run` names: a newer
+   * line that replaced it meanwhile stays. Nothing is sent.
+   */
+  dismiss(botId: string, run: string): void {
+    if (this.lines.get(botId)?.line.run !== run) return;
+    {
       this.dismissed.add(run);
       if (this.dismissed.size > MAX_NAME_CARDS)
         this.dismissed.delete(this.dismissed.values().next().value!);
@@ -1170,6 +1246,7 @@ export class BotNames {
   private async writeRecord<T extends string>(
     op: RecordOp,
     change: (record: NameRecord) => NameRecord | T,
+    written?: (value: NameRecord) => void,
   ): Promise<"written" | "unavailable" | "full" | T> {
     for (let attempt = 0; attempt < RECORD_WRITE_ATTEMPTS; attempt += 1) {
       const { record, raw } = await this.readRecord(op);
@@ -1184,6 +1261,7 @@ export class BotNames {
         expectedEntries: { [NAME_RECORD_KEY]: raw ?? null },
       });
       if (result?.status === "ok") {
+        written?.(value);
         if (this.current(op)) this.show(op.stamp, this.own(op.stamp, value));
         return "written";
       }

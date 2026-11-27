@@ -115,6 +115,8 @@ export function NameLine({ bot, onAnnounce }: { bot: Bot; onAnnounce: (text: str
   const bridge = useBridge();
   const canRename = useCanRename();
   const [busy, setBusy] = useState(false);
+  // Why the last Undo pressed here didn't go through, for the change it was pressed on.
+  const [problem, setProblem] = useState<{ run: string; text: string } | null>(null);
   // The change this view pressed Undo for: its outcome is announced once the line says it.
   const pressed = useRef<string | null>(null);
   // Ticks while a line is up, so Undo goes at the end of its window.
@@ -136,6 +138,7 @@ export function NameLine({ bot, onAnnounce }: { bot: Bot; onAnnounce: (text: str
     canUndoName(change, changes, state.bots, now);
   const undo = async () => {
     setBusy(true);
+    setProblem(null);
     // Marked before it is sent: the line may say "undone" before the answer comes.
     pressed.current = line.run;
     try {
@@ -148,7 +151,9 @@ export function NameLine({ bot, onAnnounce }: { bot: Bot; onAnnounce: (text: str
       });
     } catch (error) {
       pressed.current = null;
-      onAnnounce(error instanceof Error ? error.message : String(error));
+      const text = error instanceof Error ? error.message : String(error);
+      setProblem({ run: line.run, text });
+      onAnnounce(text);
     } finally {
       setBusy(false);
     }
@@ -164,6 +169,10 @@ export function NameLine({ bot, onAnnounce }: { bot: Bot; onAnnounce: (text: str
       >
         <p className="name-line-words" role="status">
           {words(line)}
+          {/* Shown, and already announced: a screen reader hears it once. */}
+          {problem?.run === line.run && line.status === "renamed" && (
+            <span aria-hidden="true"> Undo didn't go through: {problem.text}</span>
+          )}
         </p>
         <div className="name-line-actions">
           {undoable && (
@@ -185,7 +194,9 @@ export function NameLine({ bot, onAnnounce }: { bot: Bot; onAnnounce: (text: str
             className="icon-button"
             data-variant="quiet"
             aria-label="Close"
-            onClick={() => void bridge.invoke({ type: "dismissBotName", botId: bot.id })}
+            onClick={() =>
+              void bridge.invoke({ type: "dismissBotName", botId: bot.id, run: line.run })
+            }
           >
             <CloseIcon />
           </button>

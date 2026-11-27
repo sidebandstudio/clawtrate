@@ -348,7 +348,8 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // rename was.
   "botNames.lines": {
     max: MAX_BOTS,
-    each: 3 * ID + 3 * MAX_NAME_CHARS + MAX_NAME_ERROR_CHARS + 4 * SHORT + 2 * N,
+    // The error as JSON writes it: up to six characters (`\uXXXX`) for each one kept.
+    each: 3 * ID + 3 * MAX_NAME_CHARS + 6 * MAX_NAME_ERROR_CHARS + 4 * SHORT + 2 * N,
     row: "bookkeeping",
   },
   // Undos whose decline couldn't be written to the gateway yet: a key, a stamp, a bot, a name,

@@ -1906,6 +1906,8 @@ export class ClawtrateClient {
       };
     },
     refreshBots: () => this.refreshBots(),
+    readHistory: (key) =>
+      this.tracked(key) ? this.loadTranscript(key, false, null).catch(() => {}) : Promise.resolve(),
     // A run some of whose steps aren't kept is a run whose steps aren't known. A person's message
     // in the conversation after the run's own and before its end joined it as a steer.
     runFacts: (sessionKey, runId) => {
@@ -6962,9 +6964,9 @@ export class ClawtrateClient {
     return this.deviceApprovals.refuse(requestId, why, listedOn);
   }
 
-  /** Put a bot's name line away on this device. Nothing is sent. */
-  async dismissBotName(botId: string): Promise<void> {
-    this.botNames.dismiss(botId);
+  /** Put a bot's name line away on this device, only while it is the change `run` names. Nothing is sent. */
+  async dismissBotName(botId: string, run: string): Promise<void> {
+    this.botNames.dismiss(botId, run);
   }
 
   /** A new picture for a bot: a creature with its choice inside, or the person's own (`avatar.ts`). */
@@ -9936,8 +9938,12 @@ export class ClawtrateClient {
     this.bindRouteIdentity(id, current);
     this.accounts.onGateway(id);
     // Clearing another gateway's creation can notify a host that stops the connection.
-    if (current() && this.state.connection.gatewayId !== id) this.setConnection({ gatewayId: id });
+    const named = this.state.connection.gatewayId !== id;
+    if (current() && named) this.setConnection({ gatewayId: id });
     if (current()) this.settleReadStamps(id);
+    // The record of name changes is this gateway's: read again once the gateway is named, as a
+    // retried identity read names it after the connection's own read found it unnamed.
+    if (current() && named) void this.botNames.loadRecord();
     // The guide change after this connection's connect found it unnamed: once, now it is named.
     const unnamed = this.guidesUnnamed;
     if (current() && unnamed?.generation === this.generation && unnamed.epoch === this.epoch) {

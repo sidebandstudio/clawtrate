@@ -41,7 +41,12 @@ const SECOND = 1000;
 const FILE =
   "# IDENTITY.md - Who Am I?\n\n- **Name:** New bot\n\nYour name was chosen in Clawtrate when you were made. Keep it unless the person asks for another.\n\nWhen the person gives you a new name, write it on the `- Name:` line above. Clawtrate shows it as your name after your turn, when it can.\n";
 
-function rows(start: number) {
+/**
+ * The conversation, its run's steps as each scene's line needs them: the read of IDENTITY.md
+ * and the edit (the bot's own, as `#take-name` runs), the edit alone (the person's ask), or
+ * neither (a name picked up from the file).
+ */
+function rows(start: number, steps: "read-edit" | "edit" | "none") {
   const run = "3c1f4b7e-9a2d-4e51-8f0b-6d2a7c9e1b40";
   const meta = (id: string, runId: string | null, seq: number) => ({
     id,
@@ -49,16 +54,7 @@ function rows(start: number) {
     ...(runId ? { runId } : {}),
   });
   const at = (n: number) => start + n * SECOND;
-  return [
-    { role: "user", content: "can i name u", timestamp: at(0), __openclaw: meta("n-1", null, 1) },
-    {
-      role: "assistant",
-      content: [{ type: "text", text: "Yes. What would you like to call me?" }],
-      timestamp: at(2),
-      model: "scripted/dev-1",
-      __openclaw: meta("n-2", "8e0d2f61-5b7a-4c3e-9d14-2f6b8a0c7e95", 2),
-    },
-    { role: "user", content: "Johnny", timestamp: at(30), __openclaw: meta("n-3", null, 3) },
+  const READ = [
     {
       role: "assistant",
       content: [
@@ -77,6 +73,8 @@ function rows(start: number) {
       timestamp: at(31),
       __openclaw: meta("n-5", run, 5),
     },
+  ];
+  const EDIT = [
     {
       role: "assistant",
       content: [
@@ -104,6 +102,19 @@ function rows(start: number) {
       timestamp: at(32),
       __openclaw: meta("n-7", run, 7),
     },
+  ];
+  return [
+    { role: "user", content: "can i name u", timestamp: at(0), __openclaw: meta("n-1", null, 1) },
+    {
+      role: "assistant",
+      content: [{ type: "text", text: "Yes. What would you like to call me?" }],
+      timestamp: at(2),
+      model: "scripted/dev-1",
+      __openclaw: meta("n-2", "8e0d2f61-5b7a-4c3e-9d14-2f6b8a0c7e95", 2),
+    },
+    { role: "user", content: "Johnny", timestamp: at(30), __openclaw: meta("n-3", null, 3) },
+    ...(steps === "read-edit" ? READ : []),
+    ...(steps === "none" ? [] : EDIT),
     {
       role: "assistant",
       content: [{ type: "text", text: "Johnny it is." }],
@@ -120,7 +131,10 @@ export function botNameScene(
   now: number,
 ): ClawtrateState {
   const start = now - 5 * 60 * SECOND;
-  const history = rows(start);
+  const history = rows(
+    start,
+    name === "bot-name" ? "edit" : name === "bot-name-file" ? "none" : "read-edit",
+  );
   const ctx: EngineContext = { sessionKey: NAMED_TASK, now, raw: new RawTable() };
   const admin = name !== "bot-name-read-only";
   const renamed = name === "bot-name" || name === "bot-name-own" || name === "bot-name-file";
@@ -230,7 +244,9 @@ export function botNameCommand(
   if (command.type === "dismissBotName") {
     set({
       ...state,
-      botNames: (state.botNames ?? []).filter((each) => each.botId !== command.botId),
+      botNames: (state.botNames ?? []).filter(
+        (each) => each.botId !== command.botId || each.run !== command.run,
+      ),
     });
     return Promise.resolve();
   }
