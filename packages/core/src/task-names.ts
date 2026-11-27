@@ -78,20 +78,24 @@ export const FIRST_CHECK_ROWS = 40;
 
 /**
  * Whether a task's history, read from the gateway just before its name is made, holds no person's
- * row but this client's own sends there (`own`: the ids of its messages with no text and of the
- * one with text; each row is stored as `<id>:user`). The history this client holds can be behind
- * the task's row, so another device's first message is looked for here too. A page cut short
- * (`hasMore`) or not read can't tell, and says no.
+ * row but this client's own sends there (`own`: the ids of its messages with no text, then the one
+ * with text the name is made from; each row is stored as `<id>:user`) up to that last one. Rows
+ * after it came later, another device's too, and don't make it any less the first. The history this
+ * client holds can be behind the task's row, so another device's first message is looked for here
+ * too. A page cut short (`hasMore`) or not read can't tell, and says no.
  */
 export function onlyOwnRows(history: unknown, own: readonly string[]): boolean {
   const page = asRecord(history);
   if (!page || page.hasMore === true || !Array.isArray(page.messages)) return false;
-  return page.messages.every((entry) => {
+  for (const entry of page.messages) {
     const row = asRecord(entry);
-    if (row?.role !== "user") return true;
+    if (row?.role !== "user") continue;
     const stored = asRecord(row.__openclaw)?.idempotencyKey ?? row.idempotencyKey;
-    return typeof stored === "string" && own.some((id) => stored === id || stored === `${id}:user`);
-  });
+    const id = own.find((each) => stored === each || stored === `${each}:user`);
+    if (id === undefined) return false;
+    if (id === own[own.length - 1]) return true;
+  }
+  return true;
 }
 
 /** Whether a task has a name already: one the person or the bot gave, or one made before. */

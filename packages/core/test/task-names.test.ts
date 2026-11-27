@@ -529,6 +529,108 @@ describe("the device that sends the first message", () => {
     }
   });
 
+  it("doesn't name a task made again under its key from a message the one before sent", async () => {
+    // S1's first message is on its way; the key is made again as S2, whose first message, queued
+    // behind it, is cancelled; then the gateway accepts S1's message.
+    const { gateway } = creatingGateway(["Garden plan"]);
+    const accept = gateway.handlers["chat.send"]!;
+    const answer = deferred<void>();
+    gateway.handlers["chat.send"] = async (params) => {
+      await answer.promise;
+      return accept(params);
+    };
+    const { client } = await openTask({ gateway });
+    try {
+      await client.createTask("main", "Plan the spring beds");
+      await until(() => gateway.calls("chat.send").length === 1);
+      const create = gateway.handlers["sessions.create"]!;
+      gateway.handlers["sessions.create"] = (params) => ({
+        ...(create(params) as Record<string, unknown>),
+        sessionId: "session-2",
+      });
+      expect(await client.newTask("main")).toBe(KEY);
+      const queued = client.sendMessage(KEY, MESSAGE, { mode: "queue" });
+      client.cancelQueued(KEY, queued);
+      answer.resolve();
+      await until(
+        () =>
+          client.state.transcripts[KEY]?.outbox.every((each) => each.status !== "sending") === true,
+      );
+      await sleep(50);
+      expect(titleCalls(gateway)).toEqual([]);
+      expect(patches(gateway)).toEqual([]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("names a task from its first message when history confirms it before the gateway answers its send", async () => {
+    // A on its way; history holds A, so it leaves the outbox; B sent; then A accepted: named from A.
+    const { gateway } = creatingGateway(["Garden plan"]);
+    const accept = gateway.handlers["chat.send"]!;
+    const answer = deferred<void>();
+    gateway.handlers["chat.send"] = async (params) => {
+      if (gateway.calls("chat.send").length === 1) await answer.promise;
+      return accept(params);
+    };
+    const { client } = await openTask({ gateway });
+    try {
+      await client.createTask("main", MESSAGE);
+      await until(() => gateway.calls("chat.send").length === 1);
+      const first = client.state.transcripts[KEY]!.outbox[0]!.id;
+      gateway.handlers["chat.history"] = () => ({
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "text", text: MESSAGE }],
+            timestamp: 1,
+            __openclaw: { id: "row-a", idempotencyKey: `${first}:user` },
+          },
+        ],
+        hasMore: false,
+      });
+      client.closeSession(KEY);
+      client.openSession(KEY);
+      await until(
+        () => client.state.transcripts[KEY]?.outbox.some((each) => each.id === first) === false,
+      );
+      client.sendMessage(KEY, "and a day in Sintra");
+      answer.resolve();
+      await until(() => patches(gateway).length === 1);
+      expect(titleCalls(gateway)).toEqual([{ agentId: "main", message: MESSAGE }]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("names a task when another device's message came after its first one", async () => {
+    const { gateway } = creatingGateway(["Lisbon"]);
+    const { client } = await openTask({ gateway });
+    try {
+      const key = await client.newTask("main");
+      client.openSession(key);
+      await until(() => client.state.transcripts[key]?.status === "ready");
+      const id = client.sendMessage(key, MESSAGE);
+      const own = {
+        role: "user",
+        content: [{ type: "text", text: MESSAGE }],
+        timestamp: 1,
+        __openclaw: { id: "row-a", idempotencyKey: `${id}:user` },
+      };
+      const fromB = {
+        role: "user",
+        content: "and a day in Sintra",
+        timestamp: 2,
+        __openclaw: { id: "row-b", idempotencyKey: "device-b:user" },
+      };
+      gateway.handlers["chat.history"] = () => ({ messages: [own, fromB], hasMore: false });
+      await until(() => patches(gateway).length === 1);
+      expect(titleCalls(gateway)).toEqual([{ agentId: "main", message: MESSAGE }]);
+    } finally {
+      client.stop();
+    }
+  });
+
   it("doesn't name a task it created when another device sent in it first", async () => {
     // Between `sessions.create` and this client's `chat.send`, another device's message reached
     // the new task: the gateway's history holds it before this client's.

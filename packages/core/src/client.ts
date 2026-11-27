@@ -4109,6 +4109,7 @@ export class ClawtrateClient {
         message.status !== "handled")
     )
       return;
+    this.releaseFirst(key, messageId);
     this.dropAttachments(messageId);
     this.updateActivity(key, (activity) => ({
       ...removeMessage(activity, messageId),
@@ -4122,6 +4123,7 @@ export class ClawtrateClient {
   cancelQueued(key: string, messageId: string): void {
     const message = this.outgoing(key, messageId);
     if (!message || (message.status !== "queued" && message.status !== "held")) return;
+    this.releaseFirst(key, messageId);
     // A cancelled message is never sent: its files are not kept.
     this.dropAttachments(messageId);
     this.updateActivity(key, (activity) =>
@@ -4156,6 +4158,7 @@ export class ClawtrateClient {
 
   takeBack(key: string, messageId: string): { text: string; attachments: OutgoingAttachment[] } {
     const { text, attachments: files } = this.peekTakeBack(key, messageId);
+    this.releaseFirst(key, messageId);
     this.dropAttachments(messageId);
     this.updateActivity(key, (activity) =>
       updateMessage(cancelQueuedRun(activity, messageId, this.now()), messageId, {
@@ -11636,16 +11639,11 @@ export class ClawtrateClient {
     const kept = this.taskNames.get(key);
     if (kept?.stage !== "waiting") return;
     if (kept.first !== null) {
-      // Its message is chosen already: only that one, once accepted, names the task, unless the
-      // person deleted it or took it back unsent. A retry keeps it.
-      const claimed = this.outgoing(key, kept.first);
-      if (claimed && claimed.status !== "cancelled") {
-        // One with no text is still this client's own row (`onlyOwnRows`), if that one goes.
-        if (!message.text && kept.textless.length < MAX_TEXTLESS_SENDS)
-          kept.textless.push(message.id);
-        return;
-      }
-      kept.first = null;
+      // Its message is chosen already: only that one, once accepted, names the task. One with no
+      // text is still this client's own row (`onlyOwnRows`), if that one is deleted or taken back.
+      if (!message.text && kept.textless.length < MAX_TEXTLESS_SENDS)
+        kept.textless.push(message.id);
+      return;
     }
     const row = this.rows.get(capId(key, MAX_ID_CHARS));
     if (!this.taskBot(key) || (kept.textless.length === 0 && row?.lastMessagePreview)) {
@@ -11668,15 +11666,7 @@ export class ClawtrateClient {
    */
   private nameAccepted(key: string, messageId: string, text: string): void {
     const kept = this.taskNames.get(key);
-    if (kept?.stage !== "waiting") return;
-    if (kept.first !== messageId) {
-      // The message chosen first was deleted or taken back while this one was on its way: this
-      // one takes its place, as a send after the delete would. A retry of that one keeps it, and
-      // one with no text leaves the place to the next with text.
-      const claimed = kept.first === null ? null : this.outgoing(key, kept.first);
-      if (kept.first === null || !text || (claimed && claimed.status !== "cancelled")) return;
-      kept.first = messageId;
-    }
+    if (kept?.stage !== "waiting" || kept.first !== messageId) return;
     const bot = this.taskBot(key);
     if (!bot || !text) {
       this.taskNames.delete(key);
@@ -11684,6 +11674,24 @@ export class ClawtrateClient {
     }
     // A task created with its message too: another device can send in it before this one does.
     this.startNaming(key, bot, text, kept.sessionId, [...kept.textless, messageId]);
+  }
+
+  /**
+   * The person deleted or took back a message before the gateway accepted it. If it was the one a
+   * task waits to be named from, the next with text sent after it there takes its place, and names
+   * the task now if the gateway accepted it already. Only the person's own act frees the place: a
+   * message history confirmed leaves the outbox too, and still names the task once its answer
+   * comes. Messages before it in the outbox can be another session's under the same key.
+   */
+  private releaseFirst(key: string, messageId: string): void {
+    const kept = this.taskNames.get(key);
+    if (kept?.stage !== "waiting" || kept.first !== messageId) return;
+    const outbox = this.state.transcripts[key]?.outbox ?? [];
+    const next = outbox
+      .slice(outbox.findIndex((each) => each.id === messageId) + 1)
+      .find((each) => each.text && each.status !== "cancelled");
+    kept.first = next?.id ?? null;
+    if (next?.status === "sent") this.nameAccepted(key, next.id, next.text);
   }
 
   /** Note a task this client names; the oldest goes past `MAX_NAMED_TASKS`. */
