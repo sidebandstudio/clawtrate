@@ -1280,6 +1280,55 @@ describe("F-191 on OpenClaw 2026.11.10: a cron event that carries only a summary
     await vi.advanceTimersByTimeAsync(RETRY_MS);
     expect(requests.some((each) => each.method === "cron.list")).toBe(false);
   });
+
+  it("a pause that answers after a read found its routine gone does not bring it back", async () => {
+    const reply = Promise.withResolvers<unknown>();
+    const sent = Promise.withResolvers<void>();
+    const { routines, state } = open(
+      {
+        "cron.get": (params) => {
+          throw missing(params.id as string);
+        },
+        "cron.update": () => {
+          sent.resolve();
+          return reply.promise;
+        },
+      },
+      loaded(job()),
+      ADMIN,
+    );
+    const pausing = routines.setEnabled(JOB, false);
+    await sent.promise;
+    // The gateway's `removed` event is lost; only the read says the job is gone.
+    routines.onEvent({ jobId: JOB, action: "updated", job: summaryOf(job({ name: "Renamed" })) });
+    await until(() => state().routines.length === 0);
+    reply.resolve(job({ enabled: false }));
+    expect(await pausing).toEqual({ status: "deleted" });
+    expect(state().routines).toEqual([]);
+  });
+
+  it("at the cap, a read that finds a shown routine gone reads the list to fill its place", async () => {
+    const many = Array.from({ length: MAX_ROUTINES }, (_, index) => job({ id: `h${index}` }));
+    const { routines, state } = open(
+      {
+        "cron.get": (params) => {
+          throw missing(params.id as string);
+        },
+        "cron.status": () => ({ enabled: true }),
+        "cron.list": () => ({
+          jobs: [...many.slice(1), job({ id: "h200" })],
+          total: 204,
+          hasMore: true,
+          nextOffset: MAX_ROUTINES,
+        }),
+      },
+      { ...loaded(...many), omitted: 5 },
+    );
+    routines.onEvent({ jobId: "h0", action: "updated", job: summaryOf(job({ id: "h0" })) });
+    await until(() => state().omitted === 4);
+    expect(state().routines).toHaveLength(MAX_ROUTINES);
+    expect(state().routines.some((each) => each.id === "h0")).toBe(false);
+  });
 });
 describe("F-355: a routine's runs", () => {
   it("are at most 20, in the gateway's order: newest finished first", async () => {
