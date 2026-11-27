@@ -164,10 +164,18 @@ export function archivedListParams(botId: string): Record<string, unknown> {
 // Reading ---------------------------------------------------------------------
 
 /** An archived row to what the group shows; any other row is not one. */
-export function mapArchivedRow(row: RawRecord, botId: string): ArchivedTask | null {
+export function mapArchivedRow(
+  row: RawRecord,
+  botId: string,
+  firstMessageTitle?: (key: string) => string | null,
+): ArchivedTask | null {
   if (row.archived !== true) return null;
   // The task list's own mapping refuses archived rows; read the rest the same way.
-  const task = mapSessionRow({ ...row, archived: false });
+  const key = typeof row.key === "string" ? row.key : null;
+  const task = mapSessionRow(
+    { ...row, archived: false },
+    { firstMessage: key ? (firstMessageTitle?.(key) ?? null) : null },
+  );
   if (!task || task.botId !== botId) return null;
   const archivedAt = typeof row.archivedAt === "number" ? row.archivedAt : null;
   return {
@@ -190,7 +198,12 @@ export function mapArchivedRow(row: RawRecord, botId: string): ArchivedTask | nu
 export async function listArchived(
   ctx: TaskActionContext,
   botId: string,
-  options: { showChannelChats?: boolean; showOtherToolSessions?: boolean } = {},
+  options: {
+    showChannelChats?: boolean;
+    showOtherToolSessions?: boolean;
+    /** The title a task's first message makes, as the task list has it (`taskTitle`). */
+    firstMessageTitle?: (key: string) => string | null;
+  } = {},
 ): Promise<ArchivedList> {
   const tasks: ArchivedTask[] = [];
   let more: boolean;
@@ -206,7 +219,7 @@ export async function listArchived(
       const row = asRecord(entry);
       if (row && options.showChannelChats !== true && externalChannelOf(row)) continue;
       if (row && options.showOtherToolSessions !== true && isOtherToolSession(row)) continue;
-      const task = row && mapArchivedRow(row, botId);
+      const task = row && mapArchivedRow(row, botId, options.firstMessageTitle);
       if (task) tasks.push(task);
     }
     const next = result?.nextOffset;

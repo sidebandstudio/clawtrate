@@ -2534,3 +2534,19 @@ test("F-592: an unsure Clear order says Check now, and its line has the button t
     .poll(async () => (await sent(page)).filter((each) => each.type === "checkLock").length)
     .toBeGreaterThan(before);
 });
+
+test("F-480: Change model settled as the person moves to another bot leaves focus with them, not on that bot's model", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=not-run-api-key&${OTTO_DISK}&access=admin`, "light");
+  await holdFrames(page);
+  await page.getByTestId("turn-error").getByRole("button", { name: "Change model" }).click();
+  const model = page.getByTestId("model-select");
+  await expect(model).toBeEnabled();
+  const pip = page.getByTestId("bot-list").getByRole("button", { name: /^Pip\b/ });
+  await pip.click();
+  await expect(page.getByTestId("bot-settings")).toContainText("Pip");
+  await releaseFrames(page);
+  await expect(pip).toBeFocused();
+  await expect(model).not.toBeFocused();
+});

@@ -375,6 +375,12 @@ describe("how a run ends", () => {
       endingOf(run({ state: "failed", error: { message: "Provider overloaded.", kind: null } })),
     ).toEqual({ kind: "failed", reason: "Provider overloaded." });
   });
+
+  it("F-102: a failed run whose before-reply row kept no words says the gateway gave no reason", () => {
+    expect(
+      endingOf(run({ state: "failed", error: { message: "", kind: null, beforeReply: true } })),
+    ).toEqual({ kind: "failed", reason: "The gateway gave no reason." });
+  });
 });
 
 describe("the access tier", () => {
