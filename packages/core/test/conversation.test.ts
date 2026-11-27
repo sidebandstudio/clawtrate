@@ -238,7 +238,13 @@ describe("sending (F-075, F-081, F-106)", () => {
     expect(transcript().live).toEqual({ runId: id, text: "" });
     await until(() => transcript().outbox[0]?.status === "sent");
     expect(gateway.calls("chat.send")).toEqual([
-      { sessionKey: KEY, message: "Clear it.", idempotencyKey: id, queueMode: "followup" },
+      {
+        sessionKey: KEY,
+        message: "Clear it.",
+        idempotencyKey: id,
+        queueMode: "followup",
+        workContext: { page: "Clawtrate" },
+      },
     ]);
     expect(transcript().runs[0]).toMatchObject({ id: "run-1", bound: true, messageId: id });
 
@@ -631,22 +637,26 @@ describe("creating a task", () => {
       ok: true,
       key: "agent:otto:dashboard:abc",
       sessionId: "s-9",
-      runStarted: true,
-      runId: "run-new",
+      runStarted: false,
+    });
+    gateway.handlers["chat.send"] = (params) => ({
+      runId: (params as { idempotencyKey: string }).idempotencyKey,
+      status: "started",
     });
     const { client } = await openTask({ gateway });
     const key = await client.createTask("otto", "Check the backups", { label: "Backups" });
     expect(key).toBe("agent:otto:dashboard:abc");
     const [params] = gateway.calls("sessions.create") as Array<Record<string, unknown>>;
-    expect(Object.keys(params!).sort()).toEqual(["agentId", "idempotencyKey", "label", "message"]);
-    expect(params).toMatchObject({
-      agentId: "otto",
-      message: "Check the backups",
-      label: "Backups",
-    });
+    expect(Object.keys(params!).sort()).toEqual(["agentId", "idempotencyKey", "label"]);
+    expect(params).toMatchObject({ agentId: "otto", label: "Backups" });
     expect(client.sessionInterest(key)).toBe(1);
+    // Its first message follows by chat.send, under the creation's key, and its run is that key.
+    await until(() => client.state.transcripts[key]!.outbox[0]?.status === "sent");
+    expect(gateway.calls("chat.send")).toMatchObject([
+      { sessionKey: key, message: "Check the backups", idempotencyKey: params!.idempotencyKey },
+    ]);
     expect(client.state.transcripts[key]!.runs[0]).toMatchObject({
-      id: "run-new",
+      id: params!.idempotencyKey,
       state: "running",
     });
     client.stop();

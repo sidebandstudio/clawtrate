@@ -9,10 +9,10 @@
   "dependencies": {
     "@openclaw/gateway-client": "2026.10.6",
     "@openclaw/gateway-protocol": "2026.10.6",
-    "typebox": "1.4.6"
+    "typebox": "1.4.7"
   },
   "devDependencies": {
     "@types/ws": "8.18.2",
-    "ws": "8.22.2"
+    "ws": "8.23.0"
   }
 }

@@ -21,6 +21,8 @@ import { MAX_BOT_NAME_CHARS } from "./bot-names.ts";
 import { modelIdProblem, type ModelList, type ModelRefresh } from "./accounts.ts";
 import { parseInput, type ComputerFrame, type ComputerInput } from "./computer.ts";
 import type { MachineFacts } from "./machine.ts";
+import { FULL_SCOPES } from "./scopes.ts";
+import { type DeviceDecision, type DeviceListRead } from "./device-approval.ts";
 import type { QuestionAnswer, RunRawRead, StepRead } from "./runs.ts";
 import {
   MAX_SIDEBAR_BOTS,
@@ -154,7 +156,7 @@ export type BridgeCommand =
   | { type: "setBotVoice"; on: boolean; stamp: GatewayStamp }
   /** Clawtrate's guides in the bots' `AGENTS.md`, read now (guides.ts). */
   | { type: "readBotGuides" }
-  /** Add, replace or remove them, or answer "Not now", on the gateway `stamp` names (admin). */
+  /** The switch, or a row's Add, Replace or Remove, on the gateway `stamp` names (admin). */
   | { type: "changeBotGuides"; change: GuidesChange; stamp: GatewayStamp }
   /** "Show external channel chats": list chats from Discord, Telegram and other channels, or not. */
   | { type: "setShowChannelChats"; on: boolean }
@@ -397,6 +399,21 @@ export type BridgeCommand =
       stamp: GatewayStamp;
     }
   | { type: "removeBotFallbacks"; botId: string; stamp: GatewayStamp }
+  /**
+   * Unlock, or Clear a kept order, after its confirmation (#660): `account` is the one account
+   * the order named on screen, and nothing is sent unless it still does, on the gateway `stamp`
+   * names (`ClawtrateState.accounts.clear`).
+   */
+  | {
+      type: "clearBotOrder";
+      /** The press's id, chosen by the screen: the line it shows as its own. */
+      press: string;
+      botId: string;
+      provider: string;
+      account: string;
+      kind: "unlock" | "clear";
+      stamp: GatewayStamp;
+    }
   /** A name card's Rename and Not now (`ClawtrateState.botNames`): `name` is the one it shows. */
   | { type: "acceptBotName"; botId: string; name: string; stamp: GatewayStamp }
   | { type: "declineBotName"; botId: string; name: string; stamp: GatewayStamp }
@@ -526,6 +543,24 @@ export type BridgeCommand =
   | { type: "removeMachine"; nodeId: string; stamp: GatewayStamp }
   | { type: "renameDevice"; deviceId: string; name: string }
   | { type: "removeDevice"; deviceId: string; stamp: GatewayStamp }
+  /** Waiting devices (setup-effortless.md §5): the list read again, the one opened by itself, a pick. */
+  | { type: "readDeviceRequests" }
+  | { type: "takeDevicePrompt"; requestId: string }
+  | {
+      type: "approveDevice";
+      requestId: string;
+      code: string;
+      scopes: string[];
+      listedOn: number;
+      stamp: GatewayStamp;
+    }
+  | {
+      type: "refuseDevice";
+      requestId: string;
+      why: "not-mine" | "none-match";
+      listedOn: number;
+      stamp: GatewayStamp;
+    }
   // Deleting a bot (`bot-delete.ts`). The read is `operator.read`; the delete needs admin.
   /** What the delete dialog lists for a bot, read now. */
   | { type: "readBotDelete"; botId: string }
@@ -543,7 +578,17 @@ export type BridgeCommand =
     };
 
 /** What each command answers with. */
-export type BridgeResultFor<C extends BridgeCommand> = C extends { type: "readBotDelete" }
+export type BridgeResultFor<C extends BridgeCommand> = C extends {
+  type: "approveDevice" | "refuseDevice";
+}
+  ? DeviceDecision
+  : C extends { type: "takeDevicePrompt" }
+    ? { taken: boolean }
+    : C extends { type: "readDeviceRequests" }
+      ? DeviceListRead
+      : BridgeResultStart<C>;
+
+type BridgeResultStart<C extends BridgeCommand> = C extends { type: "readBotDelete" }
   ? BotDeleteRead
   : C extends { type: "deleteBot" }
     ? BotDeleteOutcome
@@ -893,32 +938,33 @@ function guidesChange(value: unknown): GuidesChange {
   const change =
     value !== null && typeof value === "object" ? (value as Record<string, unknown>) : {};
   switch (change.action) {
+    case "switch":
+      if (typeof change.on !== "boolean") throw new Error("invalid guides change");
+      return { action: "switch", on: change.on };
     case "add":
-      if (
-        !Array.isArray(change.bots) ||
-        change.bots.length > 512 ||
-        typeof change.newBots !== "boolean"
-      )
+    case "remove":
+      if (!Array.isArray(change.bots) || change.bots.length > 512)
         throw new Error("invalid guides change");
-      return { action: "add", bots: change.bots.map(botId), newBots: change.newBots };
+      return { action: change.action, bots: change.bots.map(botId) };
     case "replace":
       if (typeof change.shown !== "string" || change.shown.length > MAX_CHANGED_SECTION_CHARS)
         throw new Error("invalid guides change");
       return { action: "replace", bot: botId(change.bot), shown: change.shown };
-    case "remove":
-    case "decline":
-      return { action: change.action };
-    case "newBots":
-      if (typeof change.on !== "boolean") throw new Error("invalid guides change");
-      return { action: "newBots", on: change.on };
     default:
-      // "update" is the client's own, after a connect: never a viewer's.
+      // "auto" is the client's own, after a connect and for a bot just made: never a viewer's.
       throw new Error("invalid guides change");
   }
 }
 
 function botId(value: unknown): string {
   if (typeof value !== "string" || !BOT_ID_PATTERN.test(value)) throw new Error("invalid bot id");
+  return value;
+}
+
+/** A press's id, as a screen makes one: short, plain characters. */
+function pressId(value: unknown): string {
+  if (typeof value !== "string" || !/^[\w-]{8,64}$/.test(value))
+    throw new Error("invalid press id");
   return value;
 }
 
@@ -1340,6 +1386,16 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       return {
         type: "removeBotFallbacks",
         botId: botId(command.botId),
+        stamp: gatewayStampOf(command.stamp),
+      };
+    case "clearBotOrder":
+      return {
+        type: "clearBotOrder",
+        press: pressId(command.press),
+        botId: botId(command.botId),
+        provider: providerId(command.provider),
+        account: profileId(command.account),
+        kind: oneOf(command.kind, ["unlock", "clear"] as const, "kind"),
         stamp: gatewayStampOf(command.stamp),
       };
     case "acceptBotName":
@@ -1992,6 +2048,30 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         deviceId: id(command.deviceId, "device"),
         stamp: gatewayStampOf(command.stamp),
       };
+    case "readDeviceRequests":
+      return { type: "readDeviceRequests" };
+    case "takeDevicePrompt":
+      return { type: "takeDevicePrompt", requestId: id(command.requestId, "request") };
+    case "approveDevice": {
+      if (!Array.isArray(command.scopes) || command.scopes.length > FULL_SCOPES.length)
+        throw new Error("invalid scopes");
+      return {
+        type: "approveDevice",
+        requestId: id(command.requestId, "request"),
+        code: shortText(command.code, 16, "code"),
+        scopes: command.scopes.map((scope) => oneOf(scope, FULL_SCOPES, "scope")),
+        listedOn: count(command.listedOn, Number.MAX_SAFE_INTEGER, "listedOn"),
+        stamp: gatewayStampOf(command.stamp),
+      };
+    }
+    case "refuseDevice":
+      return {
+        type: "refuseDevice",
+        requestId: id(command.requestId, "request"),
+        why: oneOf(command.why, ["not-mine", "none-match"] as const, "reason"),
+        listedOn: count(command.listedOn, Number.MAX_SAFE_INTEGER, "listedOn"),
+        stamp: gatewayStampOf(command.stamp),
+      };
     default:
       throw new Error("unknown command");
   }
@@ -2287,6 +2367,15 @@ class ViewerSession implements BridgeSession {
         return client.setBotModel(command.botId, command.model, command.effort, command.stamp);
       case "removeBotFallbacks":
         return client.removeBotFallbacks(command.botId, command.stamp);
+      case "clearBotOrder":
+        return client.clearBotOrder(
+          command.press,
+          command.botId,
+          command.provider,
+          command.account,
+          command.kind,
+          command.stamp,
+        );
       case "acceptBotName":
         return client.acceptBotName(command.botId, command.name, command.stamp);
       case "declineBotName":
@@ -2619,6 +2708,20 @@ class ViewerSession implements BridgeSession {
         return client.renameDevice(command.deviceId, command.name, { owner });
       case "removeDevice":
         return client.removeDevice(command.deviceId, command.stamp);
+      case "readDeviceRequests":
+        return client.readDeviceRequests();
+      case "takeDevicePrompt":
+        return { taken: client.takeDevicePrompt(command.requestId) };
+      case "approveDevice":
+        return client.approveDevice(
+          command.requestId,
+          command.code,
+          command.scopes,
+          command.listedOn,
+          command.stamp,
+        );
+      case "refuseDevice":
+        return client.refuseDevice(command.requestId, command.why, command.listedOn, command.stamp);
     }
   }
 

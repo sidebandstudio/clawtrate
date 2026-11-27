@@ -1,0 +1,195 @@
+// A message the gateway couldn't run (#663, F-480): it failed the message before any run of it
+// started, so no reply and no action came. Why, from the gateway's own words only: its `chat`
+// error, its lifecycle error, or the "run-failed-before-reply" row it keeps in history. Each kind
+// below is a text the gateway writes for it (OpenClaw 2026.10.6 and 2026.11.10 alike); any other
+// text is shown as the gateway's words, one plain line, cut to `MAX_NOT_RUN_WORDS`. Nothing is
+// read from the gateway's log, and nothing is guessed from silence.
+
+import { cleanLine } from "./gateway-names.ts";
+import type { Run } from "./runs.ts";
+
+/** The longest the gateway's own words are shown, in characters. */
+export const MAX_NOT_RUN_WORDS = 300;
+
+export type NotRunKind =
+  /** The model's API takes an API key, and the bot's account is a sign-in (OAuth). */
+  | "needs-api-key"
+  /** The model's API takes a subscription sign-in, and the bot's account is an API key. */
+  | "needs-sign-in"
+  /** The account the bot is set to isn't available on the gateway. */
+  | "account-missing"
+  /** The account the bot is set to isn't set up for its model's provider. */
+  | "account-other-provider"
+  /** The gateway doesn't know the bot's model. */
+  | "model-unknown"
+  /** The gateway found no account it can use for the model's provider. */
+  | "no-account"
+  /** Anything else: the gateway's own words. */
+  | "other"
+  /** The gateway said the message failed and kept no reason. */
+  | "unsaid";
+
+export type NotRunCause = { kind: NotRunKind; words: string | null };
+
+/** What the gateway puts in front of a reason, and its whole text when it kept none. */
+const PREFIXES = [
+  /^Your request couldn['’]t be completed[.:]?\s*/i,
+  /^(?:Failover)?Error:\s*/,
+  /^⚠️\s*/u,
+];
+
+/** The gateway's words without what it put in front of them; empty when nothing is left. */
+function reasonOf(raw: string): string {
+  let text = raw.trim();
+  for (let again = true; again;) {
+    again = false;
+    for (const prefix of PREFIXES) {
+      const next = text.replace(prefix, "");
+      if (next !== text) {
+        text = next.trim();
+        again = true;
+      }
+    }
+  }
+  return text;
+}
+
+/** Why the gateway couldn't run a message, from what it said; null when it said nothing. */
+export function notRunCause(said: string | null | undefined): NotRunCause | null {
+  if (typeof said !== "string" || !said.trim()) return null;
+  const text = reasonOf(said);
+  if (!text) return { kind: "unsaid", words: null };
+  const kind = kindOf(text);
+  // An unknown model keeps the gateway's words too: they name the model, and what it suggests.
+  const shown = kind === "other" || kind === "model-unknown";
+  return { kind, words: shown ? cleanLine(text, MAX_NOT_RUN_WORDS) || null : null };
+}
+
+function kindOf(text: string): NotRunKind {
+  // `Auth profile "<id>" uses <mode> auth, but <provider>/<api> <reason>.` Only the two
+  // requirements read whole are ours to say; any other reason (a consent to give, an operation a
+  // sign-in can't do) is the gateway's own, with its own remedy, so its words are shown.
+  const mode = /\bAuth profile "[^"]*" uses (\S+) auth, but \S+ (.*)$/is.exec(text);
+  if (mode) {
+    if (/^oauth$/i.test(mode[1]!) && /^requires an? (?:\S+ )*API key profile\.?$/i.test(mode[2]!))
+      return "needs-api-key";
+    if (
+      /^api[-_]?key$/i.test(mode[1]!) &&
+      /^requires an? (?:\S+ )*subscription \(OAuth or token\) profile\.?$/i.test(mode[2]!)
+    )
+      return "needs-sign-in";
+    return "other";
+  }
+  // A provider's own word for a sign-in where the model needs a key (OpenAI's ChatGPT/Codex OAuth).
+  if (
+    /\bNo API key found for provider "[^"]*"\.\s*You are authenticated with\b[^.]*\bOAuth\b/i.test(
+      text,
+    )
+  )
+    return "needs-api-key";
+  if (
+    /\bSelected auth profile "[^"]*" is unavailable\b/i.test(text) ||
+    /\bThis saved login isn['’]t available\b/i.test(text) ||
+    /\bNo credentials found for profile "/i.test(text)
+  )
+    return "account-missing";
+  if (/\bAuth profile "[^"]*" is not configured for \S/i.test(text))
+    return "account-other-provider";
+  if (/^Unknown model: \S/i.test(text) || /\bThis model was not found\b/i.test(text))
+    return "model-unknown";
+  if (/\bNo API key found for provider "/i.test(text)) return "no-account";
+  return "other";
+}
+
+/**
+ * What this client saw of the run that only a run that started can send: a lifecycle start, an
+ * action or a reasoning block (`steps`, from `tool`, `item` tool and `thinking` events), reply
+ * text (an `assistant` or `chat` delta, or a `chat` final), text beside a call (an `item`
+ * preamble), or an approval or question it waited on. A lifecycle `model` or `fallback_step`, a
+ * `run_status` or a `chat` status is not: the gateway sends those for a message it then fails
+ * before any run of it starts (an unknown model, OpenClaw 2026.10.6).
+ */
+export function startSeen(
+  run: Pick<
+    Run,
+    | "startSaid"
+    | "reportedStartAt"
+    | "steps"
+    | "text"
+    | "preambles"
+    | "pendingCards"
+    | "suspendedCards"
+    | "closedCards"
+    | "omittedSteps"
+    | "ending"
+  >,
+): boolean {
+  return (
+    // An event said so where nothing else of the run keeps it: one after the run's end, say.
+    run.startSaid === true ||
+    run.reportedStartAt !== null ||
+    run.steps.length > 0 ||
+    // Steps it had that were dropped at their bound.
+    run.omittedSteps > 0 ||
+    // Its terminal lifecycle event says the provider started (both versions set it only once a
+    // model request was under way: a provider's assistant message, or a timeout during the prompt).
+    run.ending?.providerStarted === true ||
+    run.text !== "" ||
+    (run.preambles?.length ?? 0) > 0 ||
+    run.pendingCards.length > 0 ||
+    run.suspendedCards.length > 0 ||
+    run.closedCards.length > 0
+  );
+}
+
+/**
+ * The gateway failed this run's message before any run of it started: history says so (its
+ * "run-failed-before-reply" row), or the run, followed live here, failed with nothing reported
+ * started, no action and no reply text. A run history rebuilt has no start of its own to go by,
+ * so only the gateway's row counts for it.
+ */
+export function neverRan(
+  run: Pick<
+    Run,
+    | "state"
+    | "error"
+    | "origin"
+    | "reportedStartAt"
+    | "steps"
+    | "text"
+    | "ranInHistory"
+    | "preambles"
+    | "pendingCards"
+    | "suspendedCards"
+    | "closedCards"
+    | "omittedSteps"
+    | "ending"
+    | "startSaid"
+  >,
+): boolean {
+  if (run.state !== "failed" || run.error?.quiet === true) return false;
+  // A reply row of it in history: it ran, whatever an earlier read said. The gateway writes its
+  // "failed before reply" row only for a run with no reply row.
+  if (run.ranInHistory === true) return false;
+  // The gateway writes that row too for a run that started and failed before replying (a provider
+  // error after the request went out): any evidence that it started wins over the row (#686).
+  if (run.error?.beforeReply === true) return !startSeen(run);
+  return run.origin !== "history" && !startSeen(run);
+}
+
+/**
+ * A message this client sent that the gateway accepted, and then ended without a word: no event of
+ * a run came, and history, read once the gateway had nothing in flight, holds no row of one. The
+ * gateway didn't start a run for it, and said nothing about why.
+ */
+export function neverStarted(run: Run): boolean {
+  return (
+    run.state === "completed" &&
+    !run.outcomeKnown &&
+    run.origin === "local" &&
+    run.bound &&
+    // History holds a row of it (a reply whose events this client missed): it ran.
+    run.ranInHistory !== true &&
+    !startSeen(run)
+  );
+}

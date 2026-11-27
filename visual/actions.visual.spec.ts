@@ -775,7 +775,7 @@ test.describe("action cards", () => {
     await expect(
       page.locator(".msg", { hasText: text }).locator("xpath=following-sibling::*[1]"),
     ).toHaveAttribute("data-call", "call_l3");
-    // The gateway's chat stream carries the same text while that message streams: still one bubble.
+    // The run's text is still that message's item, as its stream left it part way: still one bubble.
     await setState(
       page,
       `const key = "agent:otto:disk-space";

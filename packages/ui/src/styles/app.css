@@ -2793,6 +2793,11 @@ textarea {
   margin-top: var(--space-6);
 }
 
+/* Conversation: "Bots know how Clawtrate works" (BotGuides.tsx), below Bot voice. */
+.bot-guides {
+  margin-top: var(--space-6);
+}
+
 /* Whether the gateway permits the prompt hook: a short fact, then where the guide doesn't reach. */
 .bot-voice .bot-voice-hook {
   margin-top: var(--space-3);
@@ -3175,6 +3180,145 @@ textarea {
 
 .full-offer .command {
   margin-bottom: var(--space-5);
+}
+
+/* A waiting device (DeviceApproval.tsx): what it reports, what it would be allowed, the pick. */
+.b-dialog[data-kind="confirm"]:has(.device-ask) {
+  width: min(480px, calc(100vw - 32px));
+}
+
+.device-ask {
+  max-height: calc(100dvh - 48px);
+  overflow-y: auto;
+}
+
+/* Focus starts on the title so no decision has it; the title is not a control, so no ring. */
+.device-ask h2[tabindex="-1"]:focus {
+  outline: none;
+}
+
+.device-facts {
+  display: grid;
+  gap: 6px;
+  margin: 0 0 var(--space-4);
+  font-size: var(--text-sm);
+}
+
+.device-facts div {
+  display: grid;
+  grid-template-columns: 9.5em minmax(0, 1fr);
+  gap: var(--space-3);
+}
+
+.device-facts dt {
+  color: var(--text-muted);
+}
+
+.device-facts dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.b-confirm .device-allowed-title {
+  margin: 0 0 4px;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
+}
+
+.device-allowed {
+  margin: 0 0 var(--space-5);
+  padding-left: 1.2em;
+  font-size: var(--text-sm);
+}
+
+.device-pick {
+  margin: 0 0 var(--space-5);
+  padding: 0;
+  border: 0;
+}
+
+.device-pick legend {
+  margin-bottom: var(--space-3);
+  padding: 0;
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+}
+
+.device-refusals,
+.device-codes {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-2);
+}
+
+.device-refusals {
+  margin-bottom: var(--space-3);
+}
+
+.device-refusals .button {
+  height: auto;
+  min-height: var(--tap-min);
+  padding-inline: var(--space-2);
+  white-space: normal;
+}
+
+.button.device-code {
+  min-height: var(--tap-min);
+  font-family: var(--font-mono);
+  font-size: var(--text-base);
+  letter-spacing: 0.06em;
+}
+
+/* The code whose decision is under way stays marked while the others wait with it. */
+.button.device-code[aria-pressed="true"] {
+  box-shadow: inset 0 0 0 1px var(--accent);
+  color: var(--text);
+}
+
+.b-confirm .device-outcome {
+  color: var(--text);
+}
+
+/* Where focus returns when a sheet's own row was decided and left the list: not a control. */
+.device-requests-place:focus {
+  outline: none;
+}
+
+.device-requests ul {
+  margin: 0 0 var(--space-3);
+  padding: 0;
+  list-style: none;
+}
+
+.device-requests .button {
+  display: flex;
+  justify-content: space-between;
+  gap: var(--space-3);
+  width: 100%;
+  text-align: start;
+}
+
+.device-request-seen {
+  color: var(--text-muted);
+}
+
+/* The waiting device's own code, under the lede of its pairing screen. */
+.pair-code {
+  margin: 0 0 var(--space-5);
+  text-align: center;
+}
+
+.pair-code-value {
+  margin: 0 0 var(--space-2);
+  font-family: var(--font-mono);
+  font-size: var(--text-title-sm);
+  letter-spacing: 0.08em;
+}
+
+.pair-code-note {
+  margin: 0;
+  font-size: var(--text-sm);
+  color: var(--text-muted);
 }
 
 .settings-full {

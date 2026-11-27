@@ -47,9 +47,9 @@ import { updatingHere, updatingStripWords } from "./bots/update-words.ts";
 import { ShortcutList } from "./Shortcuts.tsx";
 import { isWorkTab, WorkPanel, type WorkTab } from "./WorkPanel.tsx";
 import { setUsageOpener } from "./usage/navigation.ts";
+import { setBotSettingsOpener } from "./bots/settings-request.ts";
 import { NewBot } from "./bots/NewBot.tsx";
 import { FullControlOffer } from "./FullControl.tsx";
-import { BotGuidesOffer } from "./BotGuides.tsx";
 import { DeleteBot } from "./bots/DeleteBot.tsx";
 import "./bots/bots.css";
 import { RoutinesView, ROUTINES_HOME, type RoutinesNav } from "./routines/RoutinesView.tsx";
@@ -57,6 +57,7 @@ import { revealStep, WorkLinksContext, type FileRequest, type WorkLinks } from "
 import { SearchPalette, type SearchTarget } from "./search/SearchPalette.tsx";
 import { PlacementSavesProvider } from "./machines/RunsOn.tsx";
 import type { SettingsSection } from "./Settings.tsx";
+import { DeviceRequestPrompt, DevicesAsking } from "./DeviceApproval.tsx";
 
 /**
  * Command for Try again on an open task: carries the failure text this view is retrying so the
@@ -124,6 +125,8 @@ export function Shell({
   // lives on in Settings only.
   const [offerFor, setOfferFor] = useState<string | null>(null);
   const [offerOpen, setOfferOpen] = useState(false);
+  // The waiting device's sheet, opened by itself: it keeps the keyboard while open.
+  const [deviceSheetOpen, setDeviceSheetOpen] = useState(false);
   const offerUrl = state.connection.gatewayUrl;
   if (
     !inert &&
@@ -185,8 +188,10 @@ export function Shell({
   const overlay = mainWidth !== null && mainWidth < DOCK_FROM;
   // The Routines view takes the main pane, Work included: no drawer, scrim or inert rail behind it.
   const drawerOpen = panelOpen && overlay && !routines;
-  // While the offer of full control is open, its dialog keeps the keyboard, not the drawer behind.
-  const drawerKeys = drawerOpen && !offerOpen;
+  // While the offer of full control or a waiting device's sheet is open, its dialog keeps the
+  // keyboard, not the drawer behind.
+  // Settings over the shell (`inert`) keeps it too.
+  const drawerKeys = drawerOpen && !offerOpen && !deviceSheetOpen && !inert;
 
   const setPanel = useCallback((open: boolean) => {
     if (open) {
@@ -211,6 +216,15 @@ export function Shell({
   useEffect(
     () =>
       setUsageOpener(() => {
+        setPanel(true);
+        setWorkTab("settings");
+      }),
+    [setPanel, setWorkTab],
+  );
+  // "Change model" and "Change account" under a message the gateway couldn't run (#663).
+  useEffect(
+    () =>
+      setBotSettingsOpener(() => {
         setPanel(true);
         setWorkTab("settings");
       }),
@@ -255,10 +269,14 @@ export function Shell({
     null,
   );
   const deletingOpen = deleting !== null;
+  // Every dialog the shell opens itself, a waiting device's sheet included: none opens over
+  // another, by a shortcut or by itself.
+  const shellDialogOpen =
+    offerOpen || shortcuts || searchOpen || newBot || deletingOpen || deviceSheetOpen;
   const openNewBot = useCallback(() => setNewBot(true), []);
   const mac = isMac();
   useEffect(() => {
-    if (inert || newBot || shortcuts || searchOpen || offerOpen) return;
+    if (inert || shellDialogOpen) return;
     const onKey = (event: KeyboardEvent) => {
       if (
         (mac ? event.metaKey : event.ctrlKey) &&
@@ -272,10 +290,10 @@ export function Shell({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [inert, newBot, shortcuts, searchOpen, offerOpen, mac, openPalette]);
+  }, [inert, shellDialogOpen, mac, openPalette]);
   useEffect(() => {
-    // The full-control offer keeps ⌘N, as it keeps ⌘K: nothing opens over it.
-    if (!interactive || inert || offerOpen) return;
+    // A dialog of the shell's keeps ⌘N, as it keeps ⌘K: nothing opens over it.
+    if (!interactive || inert || shellDialogOpen) return;
     const onKey = (event: KeyboardEvent) => {
       if (
         (event.metaKey || event.ctrlKey) &&
@@ -289,7 +307,7 @@ export function Shell({
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [interactive, inert, offerOpen]);
+  }, [interactive, inert, shellDialogOpen]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key === "/") {
@@ -896,11 +914,7 @@ export function Shell({
           bubbles={bubbles}
           onBubbles={onBubbles}
           top={railTop}
-          notice={
-            interactive && !info.readOnly ? (
-              <BotGuidesOffer onReview={() => onOpenSettings("conversation")} />
-            ) : null
-          }
+          notice={<DevicesAsking onReview={() => onOpenSettings("gateway")} />}
           onOpenSettings={onOpenSettings}
           updating={updating}
           settingsKeys={mac ? "⌘," : "Ctrl+,"}
@@ -1027,6 +1041,11 @@ export function Shell({
             onClose={() => setOfferOpen(false)}
           />
         )}
+        {/* A device waiting for approval, opened by itself when it is the only one (§5). */}
+        <DeviceRequestPrompt
+          busy={inert === true || shellDialogOpen}
+          onOpenChange={setDeviceSheetOpen}
+        />
         {shortcuts && <ShortcutList onClose={() => setShortcuts(false)} />}
         {searchOpen && (
           <SearchPalette

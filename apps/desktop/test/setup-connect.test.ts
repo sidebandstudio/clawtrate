@@ -613,6 +613,39 @@ describe("Connect on this computer", () => {
     });
     h.client.stop();
   });
+
+  it("a saved pairing's Connect that nothing answers yet keeps retrying, and connects once the gateway answers", async () => {
+    const gateway = new FakeGateway();
+    gateway.connectReply = () => ({
+      ok: true,
+      payload: helloOk(["operator.read"], "device-token"),
+    });
+    const h = harness({ gateway });
+    await h.storage.set(
+      tokenKey(URL),
+      JSON.stringify({
+        token: "device-token",
+        grantedScopes: ["operator.read"],
+        heldScopes: ["operator.read"],
+      }),
+    );
+    await h.client.start();
+    await h.setup.look();
+    gateway.refuseConnections = true;
+    const phases: string[] = [];
+    h.client.store.subscribe((state) => void phases.push(state.setup?.phase ?? ""));
+    await h.setup.connect();
+    await until(
+      () => h.client.state.connection.error?.code === "UNREACHABLE" && gateway.sockets.length >= 3,
+    );
+    // Local connect's "didn't answer" ending is local connect's only: this path retries.
+    expect(h.setup.current.phase).toBe("connecting");
+    gateway.refuseConnections = false;
+    await until(() => h.setup.current.phase === "done");
+    expect(phases).not.toContain("failed");
+    expect(h.setup.current.failure).toBeNull();
+    h.client.stop();
+  });
 });
 
 describe("the programs setup starts", () => {

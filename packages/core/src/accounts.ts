@@ -334,6 +334,33 @@ export type LockEvidence = {
   lastMatchAt: number | null;
   /** A read found the order no longer matching after one that did. */
   lostAt: number | null;
+  /**
+   * Where the read that gave this evidence stands among the engine's reads and sends, in the order
+   * they began (`AccountsEngine.nextSeq`); null until a read. Reads are ordered by it, never by the
+   * clock, which can give two of them the same millisecond.
+   */
+  readSeq: number | null;
+  /**
+   * The newest read begun that has been applied here, one that failed included (`readSeq` of a
+   * read shown, or of a failure said): a read begun before it publishes nothing.
+   */
+  attemptSeq: number | null;
+  /**
+   * The newest read of the bot sent, stamped as it is sent, whatever becomes of it (still out,
+   * failed, discarded, or applied): a press sends only when no read began after its own, or the
+   * newest one began is the one applied here as a reading (`readSeq`).
+   */
+  startedSeq: number | null;
+  /**
+   * The gateway the read that gave this evidence was answered by, as its connection named it;
+   * null when that wasn't known. Only a read of the gateway a press was sent to settles it.
+   */
+  readGateway: string | null;
+  /**
+   * The read that gave this evidence listed the binding's provider: only then does its missing
+   * order mean there is none. False until a read, and for a read that didn't list it.
+   */
+  providerRead: boolean;
   error: string | null;
 };
 
@@ -489,6 +516,44 @@ export type AccountWrite = {
   at: number;
 };
 
+/**
+ * A press of Unlock or Clear on a bot's Account page (#660): `models.authOrderSet {provider,
+ * agentId}` with no account ids, which clears the bot's stored order for the provider over the
+ * connection. What it ended as is said only from the gateway's own read after it.
+ */
+export type OrderClear = {
+  /** The press's own id, chosen by the screen that pressed it: what that screen shows as its own. */
+  id: string;
+  /** The gateway the press was confirmed for, by its identity: another gateway shows nothing of it. */
+  gatewayId: string | null;
+  botId: string;
+  provider: string;
+  /** `unlock`: the order of a bot bound to an account; `clear`: one kept for a bot the gateway chooses for. */
+  kind: "unlock" | "clear";
+  /** The one account the order named when the confirmation opened: the order the press acts on. */
+  account: string;
+  /**
+   * `sending`: under way. `cleared`: the read after it finds no stored order. `refused`: the
+   * gateway answered no. `unanswered`: no answer came, and the read after it doesn't show the
+   * order cleared. `kept`: the gateway answered yes, and its read still shows the order. `unread`:
+   * the gateway answered yes, and the read after it failed. `moved`: the order read before
+   * sending wasn't the one the confirmation showed, so nothing was sent. `unsent`: that read
+   * failed, or the connection changed first, so nothing was sent.
+   */
+  status: "sending" | "cleared" | "refused" | "unanswered" | "kept" | "unread" | "moved" | "unsent";
+  /** The gateway's words for a refusal, or why an answer or a read didn't come. */
+  error: string | null;
+  at: number;
+  /** Where the send stands among the engine's reads and sends: a read begun after it can settle an unsure ending. */
+  sentSeq: number | null;
+  /** The read that found no stored order: where it stands, and when it began (the time the line names). */
+  checkedSeq: number | null;
+  checkedAt: number | null;
+};
+
+/** How long a press waits for the gateway's answer before it reads the order to find out. */
+export const ORDER_CLEAR_WAIT_MS = 20_000;
+
 export type AccountsState = {
   status: "idle" | "loading" | "ready" | "error";
   error: string | null;
@@ -513,6 +578,8 @@ export type AccountsState = {
   signIn: SignInState | null;
   creation: BotCreationState | null;
   write: AccountWrite | null;
+  /** The last Unlock or Clear, for the line that says how it went. */
+  clear: OrderClear | null;
 };
 
 export const initialAccountsState: AccountsState = {
@@ -533,6 +600,7 @@ export const initialAccountsState: AccountsState = {
   signIn: null,
   creation: null,
   write: null,
+  clear: null,
 };
 
 export const unreadEvidence: LockEvidence = {
@@ -540,6 +608,11 @@ export const unreadEvidence: LockEvidence = {
   checkedAt: null,
   lastMatchAt: null,
   lostAt: null,
+  readSeq: null,
+  attemptSeq: null,
+  startedSeq: null,
+  readGateway: null,
+  providerRead: false,
   error: null,
 };
 
@@ -621,6 +694,11 @@ export type ViewProfile = {
 /** One bot's `models.authStatus` answer, as read. */
 export type BotView = {
   profiles: ViewProfile[];
+  /**
+   * The providers the answer lists, within `MAX_ACCOUNTS`. A provider not here was not read: its
+   * missing order says nothing, so it is never taken as "no order".
+   */
+  providers: string[];
   orders: Record<string, StoredOrder>;
   /** Providers with a key configured or saved: `apiKey` set, or an `api_key` profile. */
   keyed: string[];
@@ -638,16 +716,31 @@ export function unavailableReason(answer: unknown): string | null {
   return (code ?? "unavailable").slice(0, 128);
 }
 
+/**
+ * Said when a `models.authStatus` answer is no record, or a record without its `providers` list:
+ * the gateway always sends that list, an empty one included, so such an answer is no reading.
+ */
+export const NO_ACCOUNT_STATUS = "The gateway's answer carried no account status for the bot.";
+
+/**
+ * One bot's `models.authStatus` answer. An answer that says it is unavailable is read as such;
+ * one with no record or no `providers` list throws `NO_ACCOUNT_STATUS`, so it is never read as a
+ * bot with no accounts and no order.
+ */
 export function readBotView(answer: unknown): BotView {
+  const unavailable = unavailableReason(answer);
   const record = asRecord(answer) ?? {};
+  if (unavailable === null && !Array.isArray(record.providers)) throw new Error(NO_ACCOUNT_STATUS);
   const profiles: ViewProfile[] = [];
   const orders: Record<string, StoredOrder> = {};
   const keyed = new Set<string>();
+  const listed = new Set<string>();
   const providers = Array.isArray(record.providers) ? record.providers : [];
   for (const raw of providers.slice(0, MAX_ACCOUNTS)) {
     const provider = asRecord(raw);
     const id = str(provider?.provider);
     if (!provider || !id) continue;
+    listed.add(id);
     if (asRecord(provider.apiKey)) keyed.add(id);
     const order = strings(provider.profileOrder, MAX_ORDER_IDS);
     if (Array.isArray(provider.profileOrder)) {
@@ -684,10 +777,11 @@ export function readBotView(answer: unknown): BotView {
     .slice(0, MAX_KEY_PROVIDERS);
   return {
     profiles,
+    providers: [...listed],
     orders,
     keyed: [...keyed],
     capabilities,
-    unavailable: unavailableReason(answer),
+    unavailable,
   };
 }
 
@@ -1095,7 +1189,21 @@ export function evaluateOrder(
   order: StoredOrder | null,
   accountListed: boolean,
   at: number,
+  seq: number | null = null,
+  gateway: string | null = null,
+  providerRead = true,
 ): LockEvidence {
+  // A bot bound to an account whose provider the answer doesn't list: no reading of its order.
+  // As a failed read, the last confirmation stands with its time, and nothing is said lost.
+  if (binding.mode === "account" && binding.account && !providerRead)
+    return {
+      ...previous,
+      status: "failed",
+      attemptSeq: seq,
+      readGateway: gateway,
+      providerRead: false,
+      error: providerNotListed(binding.provider ?? ""),
+    };
   let status: LockEvidence["status"];
   const ids = order?.ids ?? [];
   if (binding.mode !== "account" || !binding.account || ids.length === 0) status = "none";
@@ -1119,8 +1227,26 @@ export function evaluateOrder(
     checkedAt: at,
     lastMatchAt: matched ? at : previous.lastMatchAt,
     lostAt: matched ? null : wasMatched ? at : previous.lostAt,
+    readSeq: seq,
+    attemptSeq: seq,
+    startedSeq: previous.startedSeq,
+    readGateway: gateway,
+    providerRead,
     error: null,
   };
+}
+
+/**
+ * Said when a read of the bot begun after the press's read before the send failed, and none has
+ * succeeded since: nothing confirms the order the person confirmed, so nothing is sent.
+ */
+export function unconfirmedOrder(kind: "unlock" | "clear"): string {
+  return `Clawtrate couldn't read the order again just now. Check now, then ${kind === "unlock" ? "Unlock" : "Clear order"} again.`;
+}
+
+/** Said when the gateway's answer for a bot doesn't list the provider of its account or order. */
+export function providerNotListed(provider: string): string {
+  return `The gateway's answer didn't list ${provider}, so it says nothing of that provider's order.`;
 }
 
 /** The word a bot's account row carries, from what was read. */
@@ -1147,6 +1273,46 @@ export function accountWord(binding: BotBinding): AccountWord {
 export function retainedOrder(binding: BotBinding): string | null {
   if (binding.mode !== "gateway" || !binding.order?.stored) return null;
   return binding.order.ids.length === 1 ? binding.order.ids[0]! : null;
+}
+
+/**
+ * What an Unlock or Clear is shown as now, from the gateway's reads of the bot, ordered by when
+ * each began (`readSeq`, never the clock): as it ended, with the time of the read that settled it.
+ * An unsure ending (`unanswered`, `unread`, `kept`) becomes `cleared` when a read begun after the
+ * send, answered by the gateway the press was sent to, lists its provider and finds no stored order
+ * for it, while no newer attempt has failed. A `cleared` one is shown no more (null) once a read
+ * begun after its own finds a stored order there again: the line never says the order is gone
+ * above a page that shows it.
+ */
+export function clearShown(
+  clear: OrderClear,
+  binding: BotBinding,
+): { status: OrderClear["status"]; checkedAt: number | null } | null {
+  const seq = binding.evidence.readSeq;
+  const same = binding.provider === clear.provider;
+  const stored = same && binding.order?.stored === true;
+  if (clear.status === "cleared")
+    return stored && seq !== null && clear.checkedSeq !== null && seq > clear.checkedSeq
+      ? null
+      : { status: "cleared", checkedAt: clear.checkedAt };
+  const unsure =
+    clear.status === "unanswered" || clear.status === "unread" || clear.status === "kept";
+  const gateway =
+    clear.gatewayId !== null &&
+    binding.evidence.readGateway === clear.gatewayId &&
+    binding.evidence.providerRead;
+  if (
+    unsure &&
+    gateway &&
+    same &&
+    !stored &&
+    seq !== null &&
+    binding.evidence.attemptSeq === seq &&
+    clear.sentSeq !== null &&
+    seq > clear.sentSeq
+  )
+    return { status: "cleared", checkedAt: binding.evidence.checkedAt };
+  return { status: clear.status, checkedAt: null };
 }
 
 /** The gateway's command line for the lock, in its own form (rows 12 and 14). */

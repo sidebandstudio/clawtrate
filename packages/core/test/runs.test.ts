@@ -34,6 +34,7 @@ import {
   type Step,
   type TaskActivity,
 } from "../src/runs.ts";
+import { MAX_PREAMBLES_PER_RUN } from "../src/state-bounds.ts";
 
 const KEY = "agent:otto:disk-space";
 let raw: RawTable;
@@ -899,7 +900,8 @@ describe("rebuilding from history (F-107, F-093)", () => {
         stopReason: "aborted",
         __openclaw: { id: "a1", seq: 2, runId: "r1" },
       },
-      { role: "user", content: "b", __openclaw: { id: "u2", seq: 3 } },
+      // A failed run sits under the row the gateway keyed for it (`<runId>:user`).
+      { role: "user", content: "b", __openclaw: { id: "u2", seq: 3, idempotencyKey: "r2:user" } },
       {
         role: "assistant",
         content: [{ type: "toolCall", id: "c1", name: "exec", arguments: {} }],
@@ -1207,6 +1209,312 @@ describe("text beside a tool call (conversation.md 7.6)", () => {
       details: { status: "completed", exitCode: 0 },
     });
     expect(run.steps[0]!.details).not.toHaveProperty("aggregated");
+  });
+});
+
+describe("text beside a tool call on a gateway that sends no preamble item (OpenClaw 2026.11.10)", () => {
+  const BESIDE = "I will look first, then answer that message.";
+  const ANSWER = "This answers m-1.";
+  /** One `assistant` item: its first event carries `text`, the next only `delta`, as both versions send. */
+  const said = (seq: number, itemId: string, text: string): Frame[] => {
+    const cut = Math.ceil(text.length / 2);
+    return [
+      A("run-1", seq, "assistant", { text: text.slice(0, cut), delta: text.slice(0, cut), itemId }),
+      A("run-1", seq + 1, "assistant", { delta: text.slice(cut), itemId }),
+    ];
+  };
+  const itemTool = (seq: number, id: string, phase: string): Frame =>
+    A("run-1", seq, "item", {
+      itemId: `tool:${id}`,
+      toolCallId: id,
+      name: "ls",
+      kind: "tool",
+      phase,
+    });
+  const tool = (seq: number, id: string, phase: string): Frame =>
+    A("run-1", seq, "tool", {
+      toolCallId: id,
+      name: "ls",
+      phase,
+      ...(phase === "start" ? { args: { path: "." } } : { result: lsResult }),
+    });
+  /** A call as its sender sees it: the item, then the tool events. */
+  const call = (seq: number, id: string): Frame[] => [
+    itemTool(seq, id, "start"),
+    tool(seq + 1, id, "start"),
+    tool(seq + 2, id, "result"),
+    itemTool(seq + 3, id, "end"),
+  ];
+  const start = A("run-1", 1, "lifecycle", { phase: "start", startedAt: 1_001 });
+  const end = (seq: number): Frame[] => [
+    A("run-1", seq, "lifecycle", { phase: "end", endedAt: 2_000 }),
+    // 2026.11.10's final message joins every text of the run with blank lines.
+    C("run-1", seq + 1, "final", {
+      message: { role: "assistant", content: [{ type: "text", text: `${BESIDE}\n\n${ANSWER}` }] },
+    }),
+  ];
+
+  it("F-088: the text streaming when a call starts is the text beside that call, and the answer after it is the reply", () => {
+    const run = only(
+      play([
+        start,
+        ...said(2, "s:1", BESIDE),
+        ...call(4, "c1"),
+        ...said(8, "s:2", ANSWER),
+        ...end(10),
+      ]).activity,
+    );
+    expect(run.preambles).toEqual([
+      { id: "s:1", item: "s:1", text: BESIDE, ended: true, beforeCall: "c1" },
+    ]);
+    expect(run.text).toBe(ANSWER);
+    expect(run.state).toBe("completed");
+  });
+
+  it("F-088: a client that did not send the message sees only the call's item, and places the text the same way", () => {
+    const frames = [start, ...said(2, "s:1", BESIDE), itemTool(4, "c1", "start")];
+    const live = only(play(frames).activity);
+    expect(live.preambles).toEqual([
+      { id: "s:1", item: "s:1", text: BESIDE, ended: true, beforeCall: "c1" },
+    ]);
+    // Until the next text comes, the run's text is the same text: shown once, beside its call.
+    expect(live.text).toBe(BESIDE);
+  });
+
+  it("F-088: the sender's tool start alone places it too", () => {
+    const run = only(play([start, ...said(2, "s:1", BESIDE), tool(4, "c1", "start")]).activity);
+    expect(run.preambles).toEqual([
+      { id: "s:1", item: "s:1", text: BESIDE, ended: true, beforeCall: "c1" },
+    ]);
+  });
+
+  it("F-088: text beside each of two calls stays beside its own call, in order", () => {
+    const second = "The coding agent picked it up.";
+    const run = only(
+      play([
+        start,
+        ...said(2, "s:1", BESIDE),
+        ...call(4, "c1"),
+        ...said(8, "s:2", second),
+        ...call(10, "c2"),
+        ...said(14, "s:3", ANSWER),
+        ...end(16),
+      ]).activity,
+    );
+    expect(run.preambles).toEqual([
+      { id: "s:1", item: "s:1", text: BESIDE, ended: true, beforeCall: "c1" },
+      { id: "s:2", item: "s:2", text: second, ended: true, beforeCall: "c2" },
+    ]);
+    expect(run.text).toBe(ANSWER);
+  });
+
+  it("F-088: two calls of one message share its text, which stays before the first", () => {
+    const run = only(
+      play([start, ...said(2, "s:1", BESIDE), ...call(4, "c1"), ...call(8, "c2")]).activity,
+    );
+    expect(run.preambles).toEqual([
+      { id: "s:1", item: "s:1", text: BESIDE, ended: true, beforeCall: "c1" },
+    ]);
+  });
+
+  it("F-088: a run keeps the texts beside its newest calls, within the bound", () => {
+    const frames: Frame[] = [start];
+    for (let i = 1; i <= MAX_PREAMBLES_PER_RUN + 2; i += 1)
+      frames.push(...said(i * 10, `s:${i}`, `Step ${i} next.`), ...call(i * 10 + 2, `c${i}`));
+    const run = only(play(frames).activity);
+    expect(run.preambles?.map((p) => p.beforeCall)).toEqual(
+      Array.from({ length: MAX_PREAMBLES_PER_RUN }, (_, i) => `c${i + 3}`),
+    );
+  });
+
+  it("F-088: a call with no text before it, or after text already placed, adds none", () => {
+    expect(
+      only(play([start, ...call(2, "c1"), ...said(6, "s:2", ANSWER)]).activity).preambles,
+    ).toBe(undefined);
+    const blank = only(play([start, ...said(2, "s:1", "  \n"), ...call(4, "c1")]).activity);
+    expect(blank.preambles).toBe(undefined);
+  });
+
+  it("F-088: two items with the same words are two texts, each beside its own call; a reply with those words stays the reply", () => {
+    const same = "Checking logs.";
+    const run = only(
+      play([
+        start,
+        ...said(2, "s:1", same),
+        ...call(4, "c1"),
+        ...said(8, "s:2", same),
+        ...call(10, "c2"),
+        ...said(14, "s:3", same),
+      ]).activity,
+    );
+    expect(run.preambles).toEqual([
+      { id: "s:1", item: "s:1", text: same, ended: true, beforeCall: "c1" },
+      { id: "s:2", item: "s:2", text: same, ended: true, beforeCall: "c2" },
+    ]);
+    expect(run.text).toBe(same);
+    expect(run.textItemId).toBe("s:3");
+  });
+
+  it("F-088: only a call's first start places text: its later events, a repeated start included, leave the text streaming after it as the reply", () => {
+    const run = only(
+      play([
+        start,
+        itemTool(2, "c1", "start"),
+        ...said(3, "s:2", ANSWER),
+        tool(5, "c1", "start"),
+        itemTool(6, "c1", "end"),
+      ]).activity,
+    );
+    expect(run.preambles).toBe(undefined);
+    expect(run.text).toBe(ANSWER);
+  });
+
+  it("F-088: on 2026.10.6, whose preamble item holds the text, nothing is added", () => {
+    // `#reply-to` on 2026.10.6: the text is also on the assistant stream, then the item comes.
+    const preamble = (seq: number, phase: string): Frame =>
+      A("run-1", seq, "item", {
+        kind: "preamble",
+        title: "Preamble",
+        phase,
+        progressText: BESIDE,
+        itemId: "commentary-0-a1",
+      });
+    const run = only(
+      play([
+        start,
+        ...said(2, "s:1", BESIDE),
+        preamble(4, "update"),
+        preamble(5, "end"),
+        ...call(6, "c1"),
+        // A second message with only a call: the stream's text is still the first item's.
+        ...call(10, "c2"),
+        ...said(14, "s:2", ANSWER),
+        A("run-1", 16, "lifecycle", { phase: "end", endedAt: 2_000 }),
+        C("run-1", 17, "final", {
+          message: { role: "assistant", content: [{ type: "text", text: ANSWER }] },
+        }),
+      ]).activity,
+    );
+    expect(run.preambles).toEqual([
+      { id: "commentary-0-a1", item: "s:1", text: BESIDE, ended: true, beforeCall: "c1" },
+    ]);
+    // `#think #steps` on 2026.10.6: the text is only in the item.
+    const quiet = only(
+      play([start, preamble(2, "update"), preamble(3, "end"), ...call(4, "c1")]).activity,
+    );
+    expect(quiet.preambles).toEqual([
+      { id: "commentary-0-a1", text: BESIDE, ended: true, beforeCall: "c1" },
+    ]);
+  });
+
+  it("F-088: a later message's preamble item never takes an earlier message's text", () => {
+    // `lifecycle` `model` comes at each message's start: an answer before a steer, then the next
+    // message's text only as a preamble item (2026.10.6), or no text at all (2026.11.10).
+    const model = (seq: number): Frame => A("run-1", seq, "lifecycle", { phase: "model" });
+    const note = A("run-1", 5, "item", {
+      kind: "preamble",
+      phase: "end",
+      progressText: "Now the cache.",
+      itemId: "commentary-0-b2",
+    });
+    const commentary = only(
+      play([start, ...said(2, "s:1", ANSWER), model(4), note, ...call(6, "c2")]).activity,
+    );
+    expect(commentary.textEarlier).toBe(true);
+    expect(commentary.preambles).toEqual([
+      { id: "commentary-0-b2", text: "Now the cache.", ended: true, beforeCall: "c2" },
+    ]);
+    expect(commentary.text).toBe(ANSWER);
+    // A message that starts two calls: neither moves the earlier text beside itself.
+    const two = only(
+      play([start, ...said(2, "s:1", ANSWER), model(4), note, ...call(6, "c2"), ...call(10, "c3")])
+        .activity,
+    );
+    expect(two.preambles).toEqual([
+      { id: "commentary-0-b2", text: "Now the cache.", ended: true, beforeCall: "c2" },
+    ]);
+    expect(two.text).toBe(ANSWER);
+    // With no preamble item, the earlier text stays the reply too.
+    const bare = only(
+      play([start, ...said(2, "s:1", ANSWER), model(4), ...call(6, "c2"), ...call(10, "c3")])
+        .activity,
+    );
+    expect(bare.preambles).toBe(undefined);
+    expect(bare.text).toBe(ANSWER);
+    // The next message's own text is that message's again, and is placed beside its call.
+    const next = only(
+      play([
+        start,
+        ...said(2, "s:1", ANSWER),
+        model(4),
+        ...said(5, "s:2", BESIDE),
+        ...call(7, "c2"),
+      ]).activity,
+    );
+    expect(next.textEarlier).toBe(undefined);
+    expect(next.preambles).toEqual([
+      { id: "s:2", item: "s:2", text: BESIDE, ended: true, beforeCall: "c2" },
+    ]);
+    // A message start with only placed text before it marks nothing.
+    const placed = only(
+      play([start, ...said(2, "s:1", BESIDE), ...call(4, "c1"), model(8)]).activity,
+    );
+    expect(placed.textEarlier).toBe(undefined);
+  });
+
+  it("F-088: a preamble item with no text of its own is not kept, and takes nothing", () => {
+    const run = only(
+      play([
+        start,
+        ...said(2, "s:1", BESIDE),
+        A("run-1", 4, "item", { kind: "preamble", phase: "end", itemId: "commentary-0-c3" }),
+        A("run-1", 5, "item", {
+          kind: "preamble",
+          phase: "update",
+          progressText: "  ",
+          itemId: "commentary-0-c4",
+        }),
+        ...call(6, "c1"),
+      ]).activity,
+    );
+    expect(run.preambles).toEqual([
+      { id: "s:1", item: "s:1", text: BESIDE, ended: true, beforeCall: "c1" },
+    ]);
+  });
+
+  it("F-088: a preamble item that came with other words still keeps its call, and the stream's text is not added beside it", () => {
+    const run = only(
+      play([
+        start,
+        ...said(2, "s:1", `${BESIDE} [[reply_to_current]]`),
+        A("run-1", 4, "item", {
+          kind: "preamble",
+          phase: "end",
+          progressText: BESIDE,
+          itemId: "p",
+        }),
+        ...call(5, "c1"),
+        // A second call of the same message, with no new text: the stream's item is placed already.
+        ...call(9, "c2"),
+      ]).activity,
+    );
+    expect(run.preambles).toEqual([
+      { id: "p", item: "s:1", text: BESIDE, ended: true, beforeCall: "c1" },
+    ]);
+  });
+
+  it("F-088: text with no item id, or from the chat stream alone, stays the run's text", () => {
+    const bare = only(
+      play([start, A("run-1", 2, "assistant", { text: BESIDE, delta: BESIDE }), ...call(3, "c1")])
+        .activity,
+    );
+    expect(bare.preambles).toBe(undefined);
+    expect(bare.text).toBe(BESIDE);
+    const chatOnly = only(
+      play([start, C("run-1", 2, "delta", {}, BESIDE), itemTool(3, "c1", "start")]).activity,
+    );
+    expect(chatOnly.preambles).toBe(undefined);
+    expect(chatOnly.text).toBe(BESIDE);
   });
 });
 

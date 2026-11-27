@@ -7,6 +7,7 @@
 // sessions".
 
 import type { RawRecord } from "./mapping.ts";
+import { titleWithoutMarker } from "./send-marker.ts";
 
 /** Labels for the channels the gateway names most; any other id is shown as it comes. */
 const CHANNEL_LABELS: Record<string, string> = {
@@ -168,12 +169,16 @@ function isRawChannelTitle(title: string, channel: string): boolean {
  * else "<Channel> chat".
  */
 export function channelChatTitle(row: RawRecord, channel: string): string {
+  // A title the gateway derived from the model's copy of a first message from Clawtrate loses the
+  // marker, as a task's does.
+  const derived = (value: unknown) =>
+    typeof value === "string" ? titleWithoutMarker(value) : value;
   for (const value of [
     row.label,
     row.subject,
     row.groupChannel,
-    row.derivedTitle,
-    row.displayName,
+    derived(row.derivedTitle),
+    derived(row.displayName),
   ]) {
     if (typeof value !== "string") continue;
     const title = stripChannelMetadata(value).trim();

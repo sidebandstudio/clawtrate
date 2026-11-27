@@ -313,7 +313,11 @@ test.describe("the default conversation (7.11)", () => {
       );
       await expect(loose).toHaveCount(shown ? 1 : 0);
       if (shown) await expect(card).toHaveAttribute("data-status", "failed");
-      await changeRun(page, `return { ...run, text: "One step failed. I'll try another way." };`);
+      // The run's next message streams its reply: a new item of the `assistant` stream.
+      await changeRun(
+        page,
+        `return { ...run, text: "One step failed. I'll try another way.", textItemId: "stream-live:4" };`,
+      );
       await expect(transcript(page).getByText("One step failed.")).toBeVisible();
       await expect(loose).toHaveCount(shown ? 1 : 0);
       await changeRun(
