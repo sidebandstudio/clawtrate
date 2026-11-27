@@ -3,6 +3,7 @@
 // temporary folder; nothing here touches a gateway.
 
 import { rmSync } from "node:fs";
+import { join } from "node:path";
 import { tempDir } from "../../../test/temp-dir.ts";
 import { createToolRules } from "../index.js";
 
