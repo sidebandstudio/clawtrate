@@ -26,7 +26,7 @@
         - listitem:
           - button "Show all 16"
     - listitem:
-      - button "Juniper, 3 tasks, unread, research, primary bot":
+      - button "Juniper, 3 tasks, unread, research":
         - text: Juniper research
         - time: 5:24 PM
         - text: Ask these five, and get the answers in writing.
@@ -147,7 +147,7 @@
   - term: Files
   - definition: File names returned from workspaces the palette can verify. Some folders may be skipped.
   - term: Links
-  - definition: "Links in the conversations loaded on this device: 24 now."
+  - definition: "Links in the conversations loaded on this device: 25 now."
   - term: Routines
   - definition: Routine names, descriptions and bot details.
   - term: Settings
