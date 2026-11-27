@@ -79,6 +79,7 @@ import {
   WAITING_HELD_CHARS,
   WAITING_MARKER_CHARS,
   WAITING_RUN_CHARS,
+  MAX_OLDER_RUNS,
 } from "./waiting.ts";
 import { MAX_QUIET_CHECKS, quietCheckChars } from "./quiet-end.ts";
 import {
@@ -200,6 +201,7 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   "waiting.sessions.*": { max: MAX_WAITING_MARKERS, each: WAITING_MARKER_CHARS, row: null },
   // Each task's latest run by id, and whether it was stopped.
   "waiting.runs": { max: MAX_WAITING_SESSIONS, each: WAITING_RUN_CHARS, row: "bookkeeping" },
+  "waiting.runs.*.older": { max: MAX_OLDER_RUNS, each: MAX_WAITING_ID_CHARS, row: null },
   // Tasks the engine follows, as their runs describe them.
   // A task's read on opening, while it is on its way.
   openedReads: { max: MAX_OPENED_READS, each: ID, row: "bookkeeping" },
