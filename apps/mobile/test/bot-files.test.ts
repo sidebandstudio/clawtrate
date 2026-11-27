@@ -772,6 +772,26 @@ describe("F-115: the share step", () => {
     expect(await sharing).toBe("saved");
   });
 
+  it("F-115: a sheet slow to come on screen keeps its file, and says nothing has failed, until it settles", async () => {
+    const fake = fakeSystem();
+    const { share } = createSharing(fake.system);
+    let outcome: string | null = null;
+    const sharing = share("a.pdf", BYTES, here()).then(
+      (end) => (outcome = end),
+      (error: Error) => (outcome = error.message),
+    );
+    await until(() => fake.opened("folder-1"));
+    // However long the present takes to attach, the file stays and nothing is said.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(outcome).toBeNull();
+    expect(fake.folders.has("folder-1")).toBe(true);
+    expect(fake.log.some((line) => line.startsWith("remove"))).toBe(false);
+    fake.end("folder-1", saved);
+    await sharing;
+    expect(outcome).toBe("saved");
+    expect(fake.folders.size).toBe(0);
+  });
+
   it("F-115: a second Save while a sheet is up is refused with words that say so, and the first file stays until its sheet is done", async () => {
     const fake = fakeSystem();
     const { share } = createSharing(fake.system);

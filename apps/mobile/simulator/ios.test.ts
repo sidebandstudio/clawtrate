@@ -2200,7 +2200,12 @@ describe("the iOS app", () => {
         tap(save),
         waitFor("Save to Files", 60_000),
         see("reviews-draft"),
-        see(lit(`PDF Document · ${reviewsDraftPdf().length} bytes`)),
+        // While the sheet is open the row says nothing: no failure, no outcome yet.
+        notSee({ id: "bot-file-note" }),
+        // iOS reads the size from the file once it has the sheet up: given a moment, never
+        // assumed at once.
+        waitFor(lit(`PDF Document · ${reviewsDraftPdf().length} bytes`), 20_000),
+        notSee({ id: "bot-file-note" }),
       ]);
       await shoot("bot-files-share-sheet");
       expect(containerHits([inPdf])[0]).toBeGreaterThan(0);
@@ -2230,7 +2235,8 @@ describe("the iOS app", () => {
       await steps("file-sheet-again", [
         tap(save),
         waitFor("Save to Files", 60_000),
-        see(lit(`PDF Document · ${reviewsDraftPdf().length} bytes`)),
+        waitFor(lit(`PDF Document · ${reviewsDraftPdf().length} bytes`), 20_000),
+        notSee({ id: "bot-file-note" }),
       ]);
       const [again, ...more] = sharedFolders();
       expect(more).toEqual([]);
