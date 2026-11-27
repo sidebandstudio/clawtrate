@@ -389,7 +389,7 @@ import {
   type CreatedTask,
   type TaskActionContext,
 } from "./task-actions.ts";
-import { nameTask } from "./task-names.ts";
+import { firstWithText, nameTask } from "./task-names.ts";
 import { fromActivity, WaitingIndex } from "./waiting.ts";
 import { mentionRows, slashRows, type MenuRow } from "./composer-menus.ts";
 import { listedBots } from "./gateway-bot.ts";
@@ -518,6 +518,24 @@ const GATEWAY_BOT_KEY = "show-gateway-bot";
 export const MAX_TRACKED_TASKS = TRACKED_TASKS;
 /** Tasks this client names at once, or waits to name (`taskNames`); past it, the oldest goes. */
 export const MAX_NAMED_TASKS = 32;
+/** Messages with no text one empty task may have from this client before it gives up naming it. */
+export const MAX_TEXTLESS_SENDS = 4;
+
+/** A session id from the gateway, kept when it is within the id bound. */
+function sessionOf(value: unknown): string | null {
+  return typeof value === "string" && value && jsonTextLength(value) <= MAX_ID_CHARS ? value : null;
+}
+
+/**
+ * A task this client names (`taskNames`): `waiting` for the first message with text of an empty task
+ * it made, with the ids of the messages it sent there with no text (a picture or a file alone), or
+ * `naming` while its name is made. With the session the task was created as, when known.
+ */
+type TaskNaming = {
+  stage: "waiting" | "naming";
+  sessionId: string | null;
+  textless: string[];
+};
 /**
  * Messages one task's outbox may hold, whatever their state: waiting, being
  * sent, accepted but not yet in history, unconfirmed, failed or cancelled. A
@@ -1741,7 +1759,7 @@ export class ClawtrateClient {
    * empty task it made, `naming` while the name is made. Only the device that sends a task's
    * first message names it, so two devices never both do.
    */
-  private readonly taskNames = new Map<string, "waiting" | "naming">();
+  private readonly taskNames = new Map<string, TaskNaming>();
   /** Pictures read back from the gateway, by `task\0messageKey\0index`, oldest first (`MAX_READ_BACK_PICTURES`). */
   private readonly readBackPictures = new Map<
     string,
@@ -3627,16 +3645,6 @@ export class ClawtrateClient {
       (typeof replyToId !== "string" || !replyToId || replyToId.length > MAX_ID_CHARS)
     )
       throw new Error("That message can't be replied to.");
-    // The first message of an empty task this client made names it.
-    if (body && this.taskNames.get(capId(key, MAX_ID_CHARS)) === "waiting") {
-      // Only while the task has no message yet: another device may have sent its first one.
-      const row = this.rows.get(capId(key, MAX_ID_CHARS));
-      const first =
-        !transcript.items.some((item) => item.role === "user") && !row?.lastMessagePreview;
-      const namedBy = first ? this.taskBot(key) : null;
-      if (namedBy) this.startNaming(key, namedBy, body, null);
-      else this.taskNames.delete(capId(key, MAX_ID_CHARS));
-    }
     const message: OutgoingMessage = {
       id: this.randomId(),
       text: body,
@@ -3654,6 +3662,7 @@ export class ClawtrateClient {
       })),
       ...(replyToId ? { replyToId } : {}),
     };
+    this.noteFirstSend(key, transcript, message);
     if (attachments.length > 0) {
       this.attachmentContent.set(message.id, {
         task: key,
@@ -4255,8 +4264,7 @@ export class ClawtrateClient {
     };
     // A task created with its first message is named from it, unless the person named it.
     if (!creation.label) {
-      const sessionId = typeof result?.sessionId === "string" ? result.sessionId : null;
-      this.startNaming(key, creation.botId, creation.text, sessionId);
+      this.startNaming(key, creation.botId, creation.text, sessionOf(result?.sessionId));
     }
     // A caller holds one interest in the new task; one settled later is kept for its message.
     this.openSession(key, true);
@@ -11294,14 +11302,41 @@ export class ClawtrateClient {
     options: { label?: string | null; owner?: object } = {},
   ): Promise<string> {
     const ctx = this.actionContext(options.owner ?? null);
-    const key = this.listCreated(await newTask(ctx, botId, options.label ?? null));
-    // An empty task is named from the first message the person sends in it, unless they named it.
-    if (!options.label?.trim()) this.keepTaskName(key, "waiting");
+    const created = await newTask(ctx, botId, options.label ?? null);
+    const key = this.listCreated(created);
+    // An empty task is named from the first message with text the person sends in it, unless they
+    // named it.
+    if (!options.label?.trim()) {
+      const sessionId = sessionOf(created.row.sessionId);
+      this.keepTaskName(key, { stage: "waiting", sessionId, textless: [] });
+    }
     return key;
   }
 
+  /**
+   * A message this client sends in an empty task it made, before one with text (`taskNames`). One
+   * with text names the task when everything the task holds is this client's own messages with no
+   * text: each person's row in its history is one of them, by the key the gateway stored it under
+   * (`<id>:user`, both versions). Another's message ends the wait, so does a fifth with no text.
+   */
+  private noteFirstSend(key: string, transcript: Transcript, message: OutgoingMessage): void {
+    const kept = this.taskNames.get(key);
+    if (kept?.stage !== "waiting") return;
+    const row = this.rows.get(capId(key, MAX_ID_CHARS));
+    const bot = this.taskBot(key);
+    if (!bot || !firstWithText(transcript.items, kept.textless, row?.lastMessagePreview)) {
+      this.taskNames.delete(key);
+    } else if (message.text) {
+      this.startNaming(key, bot, message.text, kept.sessionId);
+    } else if (kept.textless.length < MAX_TEXTLESS_SENDS) {
+      kept.textless.push(message.id);
+    } else {
+      this.taskNames.delete(key);
+    }
+  }
+
   /** Note a task this client names; the oldest goes past `MAX_NAMED_TASKS`. */
-  private keepTaskName(key: string, stage: "waiting" | "naming"): void {
+  private keepTaskName(key: string, naming: TaskNaming): void {
     // A key longer than a task can be opened with is never sent to from here: nothing to keep.
     if (jsonTextLength(key) > MAX_ID_CHARS) return;
     this.taskNames.delete(key);
@@ -11309,7 +11344,7 @@ export class ClawtrateClient {
       const oldest = this.taskNames.keys().next();
       if (!oldest.done) this.taskNames.delete(oldest.value);
     }
-    this.taskNames.set(key, stage);
+    this.taskNames.set(key, naming);
   }
 
   /**
@@ -11318,7 +11353,7 @@ export class ClawtrateClient {
    * nothing that goes wrong is shown.
    */
   private startNaming(key: string, botId: string, text: string, sessionId: string | null): void {
-    this.keepTaskName(key, "naming");
+    this.keepTaskName(key, { stage: "naming", sessionId, textless: [] });
     const ctx = this.actionContext(null, this.epoch);
     const botModel = this.state.bots.find((bot) => bot.id === botId)?.model ?? null;
     void nameTask(
@@ -11327,7 +11362,7 @@ export class ClawtrateClient {
     )
       .catch(() => null)
       .finally(() => {
-        if (this.taskNames.get(key) === "naming") this.taskNames.delete(key);
+        if (this.taskNames.get(key)?.stage === "naming") this.taskNames.delete(key);
       });
   }
 

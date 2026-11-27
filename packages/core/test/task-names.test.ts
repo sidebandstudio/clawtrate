@@ -4,7 +4,7 @@
 
 import { describe, expect, it } from "vitest";
 import type { CatalogModel } from "../src/accounts.ts";
-import { MAX_NAMED_TASKS } from "../src/client.ts";
+import { MAX_NAMED_TASKS, MAX_TEXTLESS_SENDS } from "../src/client.ts";
 import { groupTasks, mapSessionRow } from "../src/mapping.ts";
 import { readMessageSearch } from "../src/search.ts";
 import { mapArchivedRow } from "../src/task-actions.ts";
@@ -52,14 +52,9 @@ const CATALOGUE = [
 ];
 
 describe("which model writes a name", () => {
-  it("prefers OpenAI, then Anthropic, then the bot's own provider's small model", () => {
+  it("for a bot on OpenAI or Anthropic: OpenAI's small model, then Anthropic's, the bot's own among them", () => {
     // The `model` named is a model of that provider other than its small one: the gateway then
     // writes the title with the small one. None (null) is the bot's own provider.
-    expect(namingCalls("google/gemini-3-pro", CATALOGUE)).toEqual([
-      "openai/gpt-6-sol",
-      "anthropic/claude-sonnet-5-5",
-      null,
-    ]);
     expect(namingCalls("anthropic/claude-sonnet-5-5", CATALOGUE)).toEqual([
       "openai/gpt-6-sol",
       null,
@@ -68,29 +63,31 @@ describe("which model writes a name", () => {
       null,
       "anthropic/claude-sonnet-5-5",
     ]);
-    // A bot on the gateway's default model: the providers in order, then its own.
-    expect(namingCalls(null, CATALOGUE)).toEqual([
-      "openai/gpt-6-sol",
-      "anthropic/claude-sonnet-5-5",
-      null,
-    ]);
+  });
+
+  it("for a bot on any other provider: its own provider's alone, never OpenAI's or Anthropic's", () => {
+    // Its person's words go to no company the bot doesn't talk to, though both are connected.
+    for (const bot of ["google/gemini-3-pro", "ollama/llama-4", "scripted/dev-1"])
+      expect(namingCalls(bot, CATALOGUE)).toEqual([null]);
+  });
+
+  it("for a bot whose provider isn't known: as for any other provider", () => {
+    for (const bot of [null, "", "no-slash", "/gpt-6-sol", "openai-codex/gpt-6-sol"])
+      expect(namingCalls(bot, CATALOGUE)).toEqual([null]);
   });
 
   it("skips a provider the person hasn't connected, and one whose only model is the small one", () => {
     const unconnected = CATALOGUE.map((each) =>
       each.provider === "openai" ? { ...each, available: false } : each,
     );
-    expect(namingCalls("google/gemini-3-pro", unconnected)).toEqual([
-      "anthropic/claude-sonnet-5-5",
-      null,
-    ]);
-    expect(namingCalls("google/gemini-3-pro", [model("openai", "gpt-5.6-luna")])).toEqual([null]);
-    expect(namingCalls("scripted/dev-1", [])).toEqual([null]);
+    expect(namingCalls("anthropic/claude-sonnet-5-5", unconnected)).toEqual([null]);
+    expect(namingCalls("anthropic/x", [model("openai", "gpt-5.6-luna")])).toEqual([null]);
+    expect(namingCalls("openai/gpt-6-sol", [])).toEqual([null]);
   });
 
   it("is one list, keyed by provider, and its length bounds the calls", () => {
     expect(NAMING_MODELS.map((each) => each.provider)).toEqual(["openai", "anthropic"]);
-    expect(MAX_NAMING_CALLS).toBe(3);
+    expect(MAX_NAMING_CALLS).toBe(2);
     for (const bot of [null, "google/gemini-3-pro", "openai/gpt-6-sol", "anthropic/x"])
       expect(namingCalls(bot, CATALOGUE).length).toBeLessThanOrEqual(MAX_NAMING_CALLS);
   });
@@ -133,7 +130,7 @@ const TASK = {
   key: KEY,
   sessionId: SESSION,
   botId: "main",
-  botModel: "google/gemini-3-pro",
+  botModel: "anthropic/claude-sonnet-5-5",
   text: MESSAGE,
 };
 
@@ -163,35 +160,33 @@ describe("making a name", () => {
     expect(gone.patches()).toEqual([]);
   });
 
-  it("goes on past a refusal, an empty answer and a timeout, to the bot's own provider", async () => {
+  it("goes on past a refusal, an empty answer or a timeout, to the bot's own provider", async () => {
     // 2026.11.10 refuses a model the person's policy doesn't allow; any version answers a failed or
     // empty call, or one whose account is out of allowance, with no title; a call can time out.
-    const g = namingGateway([
+    for (const first of [
       new GatewayError({ code: "INVALID_REQUEST", message: "model not allowed: openai/gpt-6-sol" }),
       { title: null },
-      { title: "Lisbon on a budget" },
-    ]);
-    expect(await nameTask(g.ctx, TASK)).toBe("Lisbon on a budget");
-    expect(g.titleCalls().map((each) => each.model ?? null)).toEqual([
-      "openai/gpt-6-sol",
-      "anthropic/claude-sonnet-5-5",
-      null,
-    ]);
-    const timedOut = namingGateway([
-      new Error("request timed out"),
       { title: "  " },
-      { title: "x" },
-    ]);
-    expect(await nameTask(timedOut.ctx, TASK)).toBe("x");
+      new Error("request timed out"),
+    ]) {
+      const g = namingGateway([first, { title: "Lisbon on a budget" }]);
+      expect(await nameTask(g.ctx, TASK)).toBe("Lisbon on a budget");
+      expect(g.titleCalls().map((each) => each.model ?? null)).toEqual(["openai/gpt-6-sol", null]);
+    }
+  });
+
+  it("asks a bot on another provider, or an unknown one, its own small model alone, and reads no other provider", async () => {
+    // OpenAI and Anthropic are both connected (`models.list` would list them): no call names either.
+    for (const botModel of ["ollama/llama-4", null]) {
+      const g = namingGateway([{ title: null }, { title: "z" }]);
+      expect(await nameTask(g.ctx, { ...TASK, botModel })).toBeNull();
+      expect(g.titleCalls()).toEqual([{ agentId: "main", message: MESSAGE }]);
+      expect(g.asked.some((each) => each.method === "models.list")).toBe(false);
+    }
   });
 
   it("keeps nothing when every call fails, and asks at most once per model", async () => {
-    const g = namingGateway([
-      { title: null },
-      new Error("closed"),
-      { title: null },
-      { title: "z" },
-    ]);
+    const g = namingGateway([{ title: null }, new Error("closed"), { title: "z" }]);
     expect(await nameTask(g.ctx, TASK)).toBeNull();
     expect(g.titleCalls()).toHaveLength(MAX_NAMING_CALLS);
     expect(g.patches()).toEqual([]);
@@ -207,6 +202,7 @@ describe("making a name", () => {
       },
     };
     expect(await nameTask(failing, TASK)).toBe("Lisbon");
+    // OpenAI's wasn't known to be connected: only the bot's own.
     expect(g.titleCalls()).toEqual([{ agentId: "main", message: MESSAGE }]);
   });
 
@@ -284,6 +280,21 @@ function creatingGateway(titles: Array<string | null> = ["Lisbon trip on a budge
   return { gateway, row };
 }
 
+/** A one-pixel picture. */
+const PNG =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==";
+/** A person's row with a picture and no text, as both versions store one sent as `id`. */
+const ownPicture = (id: string) => ({
+  role: "user",
+  content: "",
+  timestamp: 1,
+  __openclaw: {
+    id: `row-${id}`,
+    idempotencyKey: `${id}:user`,
+    media: [{ kind: "image", fileName: "dot.png", contentType: "image/png" }],
+  },
+});
+const botReply = { role: "assistant", content: [{ type: "text", text: "A dot." }], timestamp: 2 };
 const titleCalls = (gateway: FakeGateway) => gateway.calls("sessions.title.prepare");
 const patches = (gateway: FakeGateway) => gateway.calls("sessions.patch");
 
@@ -407,6 +418,113 @@ describe("the device that sends the first message", () => {
       client.sendMessage(other, MESSAGE);
       await sleep(50);
       expect(titleCalls(gateway)).toEqual([]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  /**
+   * An empty task this client made, a picture with no text sent in it, then a message with text:
+   * with the picture still on its way (`delivered` false) or already in the task's history and row.
+   */
+  async function pictureThenText(delivered: boolean) {
+    const picture = { type: "image", fileName: "dot.png", mimeType: "image/png", content: PNG };
+    const { gateway } = creatingGateway(["Garden plan"]);
+    const { client } = await openTask({ gateway });
+    try {
+      const key = await client.newTask("main");
+      client.openSession(key);
+      await until(() => client.state.transcripts[key]?.status === "ready");
+      const id = client.sendMessage(key, "", { attachments: [picture] });
+      if (delivered) {
+        // The picture is in the task's history, as both versions store it (`<id>:user`, no
+        // text), with the bot's reply, and the row's preview is that reply.
+        gateway.handlers["chat.history"] = (params) =>
+          (params as { sessionKey: string }).sessionKey === key
+            ? { messages: [ownPicture(id), botReply], hasMore: false }
+            : { messages: [], hasMore: false };
+        const row = { key, sessionId: SESSION, lastMessagePreview: "A dot.", updatedAt: 3 };
+        gateway.emit("sessions.changed", { sessionKey: key, ...row, session: row });
+        client.closeSession(key);
+        client.openSession(key);
+        await until(() => (client.state.transcripts[key]?.items.length ?? 0) === 2);
+      } else {
+        expect(client.state.transcripts[key]?.outbox.some((each) => each.id === id)).toBe(true);
+      }
+      client.sendMessage(key, MESSAGE);
+      await until(() => patches(gateway).length === 1);
+      expect(titleCalls(gateway)).toEqual([{ agentId: "main", message: MESSAGE }]);
+      expect(patches(gateway)).toEqual([
+        { key, autoLabel: "Garden plan", expectedSessionId: SESSION },
+      ]);
+      // Tried once: a later message names nothing.
+      client.sendMessage(key, "and a day in Sintra");
+      await sleep(50);
+      expect(titleCalls(gateway)).toHaveLength(1);
+    } finally {
+      client.stop();
+    }
+  }
+
+  it("names a task that began with a picture from its first message with text, the picture still on its way", async () => {
+    await pictureThenText(false);
+  });
+
+  it("names a task that began with a picture from its first message with text, the picture in its history", async () => {
+    await pictureThenText(true);
+  });
+
+  it("gives up on a task with more than MAX_TEXTLESS_SENDS messages with no text before one with text", async () => {
+    const picture = { type: "image", fileName: "dot.png", mimeType: "image/png", content: PNG };
+    for (const sends of [MAX_TEXTLESS_SENDS, MAX_TEXTLESS_SENDS + 1]) {
+      const { gateway } = creatingGateway(["Garden plan"]);
+      const { client } = await openTask({ gateway });
+      try {
+        const key = await client.newTask("main");
+        client.openSession(key);
+        await until(() => client.state.transcripts[key]?.status === "ready");
+        for (let i = 0; i < sends; i += 1) client.sendMessage(key, "", { attachments: [picture] });
+        client.sendMessage(key, MESSAGE);
+        await sleep(50);
+        expect(titleCalls(gateway)).toHaveLength(sends === MAX_TEXTLESS_SENDS ? 1 : 0);
+      } finally {
+        client.stop();
+      }
+    }
+  });
+
+  it("doesn't name a task whose picture before it came from another device", async () => {
+    const { gateway } = creatingGateway();
+    const { client } = await openTask({ gateway });
+    try {
+      const key = await client.newTask("main");
+      gateway.handlers["chat.history"] = (params) =>
+        (params as { sessionKey: string }).sessionKey === key
+          ? { messages: [ownPicture("another-device")], hasMore: false }
+          : { messages: [], hasMore: false };
+      client.openSession(key);
+      await until(() => (client.state.transcripts[key]?.items.length ?? 0) === 1);
+      client.sendMessage(key, MESSAGE);
+      await sleep(50);
+      expect(titleCalls(gateway)).toEqual([]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("names an empty task with the session it was created as, when its row has gone", async () => {
+    const { gateway } = creatingGateway(["Lisbon"]);
+    const { client } = await openTask({ gateway });
+    try {
+      const key = await client.newTask("main");
+      client.openSession(key);
+      await until(() => client.state.transcripts[key]?.status === "ready");
+      // The list no longer holds the task's row when the title comes back.
+      gateway.emit("sessions.changed", { sessionKey: key, reason: "delete", deleted: true });
+      await until(() => client.state.tasksByBot.main?.some((task) => task.key === key) !== true);
+      client.sendMessage(key, MESSAGE);
+      await until(() => patches(gateway).length === 1);
+      expect(patches(gateway)).toEqual([{ key, autoLabel: "Lisbon", expectedSessionId: SESSION }]);
     } finally {
       client.stop();
     }
