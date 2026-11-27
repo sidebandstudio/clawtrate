@@ -110,7 +110,7 @@ function world(now: number, params: MachineParams) {
           },
         ];
   const exec: Record<string, { host: string | null; node: string | null }> = {
-    juniper: { host: null, node: null },
+    "clawtrate-main-bot": { host: null, node: null },
     marlow: { host: null, node: null },
     otto:
       params.machine === "gatewayhost" || params.machine === "none"
@@ -123,7 +123,9 @@ function world(now: number, params: MachineParams) {
     pip: params.machine === "shared" ? { host: "node", node: MEDIA } : { host: null, node: null },
   };
   const workspaces: Record<string, string> = {
-    juniper: "/srv/clawtrate/workspace",
+    // The gateway's own bot keeps the gateway's workspace folder; Juniper, the Main Bot, its own.
+    main: "/srv/clawtrate/workspace",
+    "clawtrate-main-bot": "/srv/clawtrate/workspaces/clawtrate-main-bot",
     marlow: "/srv/clawtrate/workspaces/marlow",
     otto: "/srv/clawtrate/workspaces/otto",
     pip:
@@ -260,7 +262,10 @@ export function machineCommands(now: number, params: MachineParams) {
       browser: {
         readAt: now,
         browser: {
-          own: { allow: null, deny: botId === "otto" || botId === "juniper" ? ["browser"] : null },
+          own: {
+            allow: null,
+            deny: botId === "otto" || botId === "clawtrate-main-bot" ? ["browser"] : null,
+          },
           everyBot: { allow: null, deny: [] },
           gateway: { control: null, plugin: true },
           plugin: ownBrowser

@@ -16,6 +16,11 @@
     - heading "Check-ins" [level=3]
     - paragraph: A bot that checks in gets a turn on a schedule to look for anything that needs you. The gateway can skip a scheduled attempt.
     - button "Refresh"
+    - region "main":
+      - heading "main" [level=4]
+      - paragraph:
+        - text: This OpenClaw keeps check-ins as routines.
+        - button "main's routines"
     - region "Juniper":
       - heading "Juniper" [level=4]
       - paragraph:
@@ -73,7 +78,7 @@
         - listitem:
           - button "Archived"
     - listitem:
-      - button "Juniper, 3 tasks, unread, research, primary bot":
+      - button "Juniper, 3 tasks, unread, research":
         - text: Juniper research
         - time: 5:24 PM
         - text: Ask these five, and get the answers in writing.

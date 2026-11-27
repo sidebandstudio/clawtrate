@@ -1,14 +1,20 @@
 name: iOS
 
 # A run holds four macOS runners for about an hour and a half, so pull requests run it only
-# when they change the iPhone app or this workflow. Most desktop pull requests
-# change the shared code the app builds from, so that is checked once a day on
-# main. Use workflow_dispatch to run it on a branch sooner.
+# when they change the iPhone app, this workflow, or what the Simulator checks use outside
+# them: the development gateway, which seeds the bots the checks look for, and the two files
+# the checks import from elsewhere. test/ci-ios-gate.test.ts checks that list against the
+# checks' imports. Most desktop pull requests change the shared code under packages/ that the
+# app builds from, so that is checked once a day on main. Use workflow_dispatch to run it on a
+# branch sooner.
 on:
   pull_request:
     paths:
       - ".github/workflows/ios.yml"
       - "apps/mobile/**"
+      - "tools/dev-gateway/**"
+      - "tools/brand/src/png.ts"
+      - "apps/desktop/src/host/runtime.ts"
   schedule:
     - cron: "0 9 * * *"
   workflow_dispatch:
