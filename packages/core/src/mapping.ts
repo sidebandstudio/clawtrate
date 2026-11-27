@@ -6,8 +6,10 @@ import { cutText, jsonTextLength } from "./bounds.ts";
 import { utf8Length } from "./encoding.ts";
 import { channelChatTitle, externalChannelOf, stripChannelMetadata } from "./channels.ts";
 import { isOtherToolSession } from "./origins.ts";
+import { previewWithoutMarker, titleWithoutMarker } from "./send-marker.ts";
 import {
   gatewayPreviewOf,
+  LIST_PREVIEW_MAX_CHARS,
   rowIdempotencyKey,
   UPDATE_NOTICE_KEY_PREFIX,
   updateNoticeLine,
@@ -143,6 +145,16 @@ export function isSessionRemoval(payload: unknown): boolean {
 }
 
 /**
+ * A title the gateway made from a task's first message: a sentence of the model's copy of it, or
+ * a model's name for the task from that copy, which ends with the marker a message from Clawtrate
+ * carries. The marker comes off, and a title of nothing else is none.
+ */
+function derivedTitle(value: unknown): string | null {
+  const title = str(value);
+  return title === null ? null : str(titleWithoutMarker(title));
+}
+
+/**
  * Gateway previews are the start of the last message, often markdown, and for
  * a channel turn wrapped in what the gateway wrote around it. Reduce them to
  * readable plain text for a two-line list preview.
@@ -161,7 +173,11 @@ export function plainPreview(text: string | null): string | null {
     .replace(/^\s*·\s*|\s*·\s*$/g, "")
     .replace(/\s+/g, " ")
     .trim();
-  return plain || null;
+  // A person's message from Clawtrate is listed with the marker the gateway keeps after its words,
+  // and cut, as any preview, to 240 characters with "..." (`gatewayPreviewOf`).
+  const atLimit =
+    text.length >= LIST_PREVIEW_MAX_CHARS - 1 && text.length <= LIST_PREVIEW_MAX_CHARS;
+  return previewWithoutMarker(plain, atLimit) || null;
 }
 
 function taskStatus(row: RawRecord): TaskStatus {
@@ -212,18 +228,22 @@ export function isPlaceholderName(row: RawRecord, key: string): boolean {
 }
 
 /**
- * A task's title: its label, else the gateway's derived title or display name, else the key's.
+ * A task's title: its label, else the gateway's derived title or display name (without the marker
+ * on a message from Clawtrate), else the key's.
  * The gateway's placeholder counts as no title (its derived title is then the same name), and the
  * title from the task's first message, where the client knows it, comes before the key's.
  */
 function taskTitle(row: RawRecord, key: string, firstMessageTitle: string | null): string {
   if (isPlaceholderName(row, key)) {
-    const derived = str(row.derivedTitle);
-    return (
-      (derived !== row.displayName ? derived : null) ?? firstMessageTitle ?? fallbackTitle(key)
-    );
+    const derived = row.derivedTitle !== row.displayName ? derivedTitle(row.derivedTitle) : null;
+    return derived ?? firstMessageTitle ?? fallbackTitle(key);
   }
-  return str(row.label) ?? str(row.derivedTitle) ?? str(row.displayName) ?? fallbackTitle(key);
+  return (
+    str(row.label) ??
+    derivedTitle(row.derivedTitle) ??
+    derivedTitle(row.displayName) ??
+    fallbackTitle(key)
+  );
 }
 
 /**

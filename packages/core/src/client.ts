@@ -45,6 +45,7 @@ import {
 import { isRefusedDecision } from "./approval-refusals.ts";
 import { answerKind, readAgain, READ_AGAIN_TRIES } from "./read-again.ts";
 import { fromBase64, toBase64 } from "./bytes.ts";
+import { goesUnmarked, markerRefusal } from "./send-marker.ts";
 import { chatSendParams, sendRefusal } from "./send-size.ts";
 import { GatewayScopeUpgrade } from "@openclaw/gateway-client/scope-upgrade";
 import { ConnectErrorDetailCodes } from "@openclaw/gateway-protocol/connect-error-details";
@@ -432,6 +433,8 @@ export const GATEWAY_CHANGED_MESSAGE = "The selected gateway changed. Choose aga
 
 /** Deferred Stops of an archive or a delete kept for their runs' aborts (`deferredStops`). */
 export const MAX_DEFERRED_STOPS = 32;
+/** A resend of a message the gateway refused the marker on, held by a question that opened meanwhile. */
+const HELD_FOR_QUESTION = Symbol("held for a question");
 /** Why a deferred Stop was given up: every place for its check is held by a Stop still waiting. */
 const TOO_MANY_STOPS =
   "Too many Stops are waiting for their runs to start, so nothing was sent for this one. Try again in a moment.";
@@ -1513,6 +1516,8 @@ export class ClawtrateClient {
   private generation = 0;
   /** True once the current connection has reached hello at least once. */
   private everConnected = false;
+  /** This connection's gateway refused the marker as a field it doesn't take (`send-marker.ts`). */
+  private markerRefused = false;
   /**
    * The gateway's `hello-ok.server.bootId`: a random id per gateway start, the
    * lifetime of its in-memory `sessions.create` idempotency cache. Null when
@@ -3831,10 +3836,12 @@ export class ClawtrateClient {
     queueMode: "steer" | "followup",
     attachments: OutgoingAttachment[],
     replyToId?: string,
+    marked = !goesUnmarked(text),
   ) {
     return chatSendParams(
       { sessionKey: key, text, idempotencyKey, queueMode, replyToId: replyToId ?? null },
       attachments,
+      marked,
     );
   }
 
@@ -4504,6 +4511,12 @@ export class ClawtrateClient {
 
     let result: RawRecord | null;
     try {
+      // It says it comes from Clawtrate (#666), unless the gateway already refused that for this
+      // message, or for every message on this connection. A command (`/…`, `!…`) or a stop word
+      // goes without it at once (`goesUnmarked`): the gateway takes the marker only on ordinary
+      // chat messages, and a stop must not depend on its refusal of the marker arriving.
+      const marked =
+        message.unmarked !== true && !this.markerRefused && !goesUnmarked(message.text);
       const params = this.sendParams(
         key,
         message.text,
@@ -4511,16 +4524,64 @@ export class ClawtrateClient {
         message.mode === "steer" ? "steer" : "followup",
         this.attachmentContent.get(messageId)?.files ?? [],
         message.replyToId,
+        marked,
       );
       this.checkSize(params);
       // A send that starts its own run names that run's request: what a failed turn's
       // "Copy request ID" gives (F-301). A steer joins a run another frame started.
       const starts = message.mode !== "steer";
-      const sent = this.request("chat.send", params, {
-        onSent: (requestId) => {
-          if (!starts) return;
-          this.updateActivity(key, (activity) => noteRunRequest(activity, messageId, requestId));
-        },
+      const send = (frame: typeof params) =>
+        this.request("chat.send", frame, {
+          onSent: (requestId) => {
+            if (!starts) return;
+            this.updateActivity(key, (activity) => noteRunRequest(activity, messageId, requestId));
+          },
+        });
+      const generation = this.generation;
+      const sent = send(params).catch(async (error: unknown) => {
+        // Refused for the marker alone: the same message once more without it, under the same
+        // key, so it is never lost and never delivered twice. Any other refusal is its own.
+        const refused = marked ? markerRefusal(error) : null;
+        if (!refused) throw error;
+        // Learnt for the connection that answered, never for a later one.
+        if (refused === "gateway" && generation === this.generation) this.markerRefused = true;
+        // A Stop withdrew it, or it went away, while the refusal was on its way: nothing more.
+        const now = this.outgoing(key, messageId);
+        if (!now || now.steer === "withdrawn") throw error;
+        // A question opened meanwhile holds the resend, as it holds any send: the gateway would
+        // take a plain message as its answer. It goes, without the marker, once the question
+        // settles. The refused frame started nothing, so the message's own local run waits too,
+        // queued in its place ahead of what was queued after it (`requeueLocalRun`); the release
+        // starts it, or steers the message into the gateway's run and drops it. A run the person
+        // asked to stop keeps the path below, where the resend's answer names it and it is aborted.
+        const current = this.state.transcripts[key];
+        const own = current ? findRun(current, messageId) : undefined;
+        const requeue = (activity: TaskActivity) => {
+          const message = activity.outbox.find((each) => each.id === messageId);
+          return own && message ? requeueLocalRun(activity, message, this.now()) : activity;
+        };
+        const kept = current && own?.state !== "stopping" ? requeue(current) : null;
+        const keptRun = kept ? activeRun(kept) : undefined;
+        if (kept && questionPending(kept, keptRun)) {
+          this.updateActivity(key, (activity) =>
+            updateMessage(requeue(activity), messageId, {
+              status: "held",
+              unmarked: true,
+              leftAt: null,
+              runId: keptRun?.id ?? null,
+            }),
+          );
+          return HELD_FOR_QUESTION;
+        }
+        // Anything else pressed meanwhile is as it would be had the gateway taken the first
+        // frame. The refused frame started nothing, and a Stop asked for meanwhile waits for an
+        // answer that names the run: the resend's, which is aborted then (below), as before the
+        // marker. A stop word's resend is handled as the gateway answers it.
+        this.updateActivity(key, (activity) =>
+          updateMessage(activity, messageId, { unmarked: true }),
+        );
+        const { workContext: _marker, ...unmarked } = params;
+        return send(unmarked as typeof params);
       });
       // The frame has left: from here a Stop no longer parks it. A steer's own run id is its key
       // (the gateway's `clientRunId`), known before the answer: its events, and a Stop's
@@ -4530,7 +4591,9 @@ export class ClawtrateClient {
         const left = updateMessage(activity, messageId, { leftAt: this.now() });
         return joins ? registerSteerAlias(left, messageId, joins) : left;
       });
-      result = asRecord(await sent);
+      const answer = await sent;
+      if (answer === HELD_FOR_QUESTION) return;
+      result = asRecord(answer);
     } catch (error) {
       this.noteMissingScope(error);
       // A Stop withdrew it while the answer was on its way: it stays Not sent.
@@ -8271,7 +8334,13 @@ export class ClawtrateClient {
           const message = next.outbox.find((each) => each.id === id);
           if (!message || message.status !== "held") continue;
           if (now && now.state !== "stopping" && message.mode !== "queue") {
-            next = updateMessage(next, id, { status: "sending", mode: "steer", runId: now.id });
+            // Into the gateway's run: a queued run of its own it waited with goes.
+            const waited = findRun(next, id)?.state === "queued" ? dropUnboundRun(next, id) : next;
+            next = updateMessage(waited, id, {
+              status: "sending",
+              mode: "steer",
+              runId: now.id,
+            });
             steered.push(id);
           } else if (gatewayRunning(next, id)) {
             // The gateway is running a run under this message's own id: the message is out.
@@ -9721,6 +9790,8 @@ export class ClawtrateClient {
     const wasConnected = this.everConnected;
     this.everConnected = true;
     this.pairingSeen = null;
+    // A gateway that refused the marker may since have been updated: each connection asks again.
+    this.markerRefused = false;
     // Each connection may act for another person: read who again before marking reactions.
     this.selfId = null;
     // The protocol gives a boot id at most 96 characters; anything else names no start.

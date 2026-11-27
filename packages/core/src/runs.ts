@@ -674,6 +674,11 @@ export type OutgoingMessage = {
    * id answered that it cancelled it, so it never runs, and that id cannot be sent again.
    */
   steer?: "joined" | "withdrawn";
+  /**
+   * The gateway refused the marker that says it comes from Clawtrate (`send-marker.ts`), so it
+   * went without it; sent again, it goes the same way, as the gateway took it.
+   */
+  unmarked?: true;
 };
 
 export type OutgoingAttachmentInfo = { fileName: string; mimeType: string; sizeBytes: number };
@@ -1354,6 +1359,8 @@ export function gatewayRunning(activity: TaskActivity, messageId: string): boole
  * place of the run it had, so it stays ahead of messages queued after it and its id names one run.
  * That run may be a local one the gateway never named, or one the gateway named and ended; a run
  * the gateway is still running under the message's id is left as it is (the message is out).
+ * A message with no run (held as it was sent, or a steer held after it was sent) gets one ahead of
+ * the queued runs of messages written after it.
  */
 export function requeueLocalRun(
   activity: TaskActivity,
@@ -1361,7 +1368,21 @@ export function requeueLocalRun(
   now: number,
 ): TaskActivity {
   const run = findRun(activity, message.id);
-  if (!run) return queueLocalRun(activity, message, now);
+  if (!run) {
+    const written = (id: string) => activity.outbox.findIndex((each) => each.id === id);
+    const place = written(message.id);
+    const queued = newRun(
+      message.id,
+      { state: "queued", origin: "local", messageId: message.id },
+      now,
+    );
+    const after = activity.runs.findIndex(
+      (each) => each.state === "queued" && written(each.id) > place,
+    );
+    const runs = [...activity.runs];
+    runs.splice(after === -1 ? runs.length : after, 0, queued);
+    return { ...activity, runs };
+  }
   if (gatewayRunning(activity, message.id)) return activity;
   return replaceRun(
     activity,
