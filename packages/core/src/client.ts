@@ -8427,6 +8427,10 @@ export class ClawtrateClient {
     return this.fileTransfers.chunk(owner, id, index);
   }
 
+  holdsFile(id: string, owner: object): boolean {
+    return this.fileTransfers.holds(owner, id);
+  }
+
   /** Drop a file's transfer before its last part was read. */
   releaseFile(id: string, owner: object = DIRECT_CALLER): void {
     this.fileTransfers.release(owner, id);
