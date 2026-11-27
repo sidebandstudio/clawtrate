@@ -515,6 +515,12 @@ export type Run = {
    */
   ranInHistory?: true;
   /**
+   * The id `mapHistory` gives this failed run's error row: the run's last row (`stopReason:
+   * "error"`), text only, whose text is the error. An item with that id is that row alone; its
+   * failure card says it, so it is not drawn as a reply too (#723). Absent otherwise.
+   */
+  errorItemId?: string;
+  /**
    * An event of the run said it started where none of its other fields keeps it: one that came
    * after the run's end (a lifecycle error saying the provider started, after the `chat` error), or
    * an attempt's error saying the provider started. Evidence that a run started is kept whatever
@@ -2979,6 +2985,8 @@ export function runsFromHistory(
   const inFlightRunId = str(snapshot?.runId);
   const runs = new Map<string, Run>();
   const lastAssistant = new Map<string, RawRecord>();
+  /** The item id `mapHistory` gives each run's last assistant row. */
+  const lastAssistantItem = new Map<string, string>();
   /** Runs whose last persisted content is a thinking block: that segment may still be streaming. */
   const trailingThinking = new Map<string, boolean>();
   let anchor: string | null = null;
@@ -3057,6 +3065,7 @@ export function runsFromHistory(
       );
     if (message.role === "assistant") {
       lastAssistant.set(runId, message);
+      lastAssistantItem.set(runId, historyItemId(message, index));
       run = { ...run, model: str(message.model) ?? run.model, endedAt: at ?? run.endedAt };
       const content = Array.isArray(message.content) ? message.content : [];
       if (typeof message.content === "string" && message.content.trim())
@@ -3252,7 +3261,12 @@ export function runsFromHistory(
       // The gateway writes the failure as the run's last row; its text is the error itself.
       const message =
         str(last?.errorMessage) || liveTextFromChatMessage(last).trim() || "The run failed.";
-      return finishRun(run, "failed", ctx, { message, kind: null }, run.endedAt);
+      const failedRun = finishRun(run, "failed", ctx, { message, kind: null }, run.endedAt);
+      const content = last?.content;
+      const textOnly =
+        typeof content === "string" ||
+        (Array.isArray(content) && content.every((part) => asRecord(part)?.type === "text"));
+      return textOnly ? { ...failedRun, errorItemId: lastAssistantItem.get(run.id)! } : failedRun;
     }
     // Only a final reply establishes completion. A last row that stops for a
     // tool, or no reply row at all, says the run ended but not how.
@@ -3505,6 +3519,7 @@ export function mergeHistoryRuns(
       reasoningRevision: current.reasoningRevision + (reasoningIdsChanged(current, steps) ? 1 : 0),
       // A row of the run in history is the gateway's word that it ran: kept once seen.
       ...(fromRun.ranInHistory || current.ranInHistory ? { ranInHistory: true as const } : {}),
+      ...(fromRun.errorItemId ? { errorItemId: fromRun.errorItemId } : {}),
       // History's word that the gateway failed it before running it stays with the live error.
       ...(fromRun.error?.beforeReply && current.error && !current.error.beforeReply
         ? { error: { ...current.error, beforeReply: true as const } }

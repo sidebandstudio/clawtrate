@@ -34,6 +34,7 @@ import {
   type Step,
   type TaskActivity,
 } from "../src/runs.ts";
+import { mapHistory } from "../src/mapping.ts";
 import { MAX_PREAMBLES_PER_RUN } from "../src/state-bounds.ts";
 
 const KEY = "agent:otto:disk-space";
@@ -937,6 +938,36 @@ describe("rebuilding from history (F-107, F-093)", () => {
     expect(runs[1]!.error?.message).toBe("provider down");
     expect(runs[1]!.steps[0]).toMatchObject({ status: "done", truncated: true });
     expect(runs[2]!.steps[0]!.status).toBe("running");
+  });
+
+  it("a run that failed after it started names the row the gateway stored its error in (#723)", () => {
+    const rows = [
+      // No `<runId>:user` key and no `startedBy`: nothing ties the run to a message.
+      { role: "user", content: "a", __openclaw: { id: "u1", seq: 1 } },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "provider down" }],
+        stopReason: "error",
+        errorMessage: "provider down",
+        __openclaw: { id: "a1", seq: 2, runId: "r1" },
+      },
+      { role: "user", content: "b", __openclaw: { id: "u2", seq: 3 } },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Looking." },
+          { type: "toolCall", id: "c1", name: "exec", arguments: {} },
+        ],
+        stopReason: "error",
+        __openclaw: { id: "a2", seq: 4, runId: "r2" },
+      },
+    ];
+    const [failed, withCall] = runsFromHistory(rows, null, ctx());
+    expect(failed).toMatchObject({ state: "failed", anchorItemId: null, errorItemId: "a1:1" });
+    expect(mapHistory(rows).map((item) => item.id)).toContain("a1:1");
+    // A row that holds more than the error is not the error alone.
+    expect(withCall!.state).toBe("failed");
+    expect(withCall!.errorItemId).toBeUndefined();
   });
 
   it("merges a reload into live runs without duplicating runs or steps", () => {
