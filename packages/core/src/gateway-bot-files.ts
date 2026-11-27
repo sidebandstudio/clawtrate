@@ -6,14 +6,20 @@
 // yet), and has no `MEMORY.md`, has never been used. `agents.files.list` reads that at
 // `operator.read` on both versions (`core-method-policy`), so every connection may ask.
 //
-// Every doubt shows the bot: only an answer of the known shape that says untouched hides it.
-// No answer yet, the method not offered, a refusal, a lost answer, an unknown shape or an older
-// gateway all leave `untouched` null, which `gateway-bot.ts` reads as shown.
+// Every doubt shows the bot: only an answer of the known shape that says untouched hides it. The
+// method not offered, an older or unreadable version, a refusal, a lost answer, an answer past
+// `FILES_READ_TIMEOUT_MS` and an unknown shape all leave `untouched` null, which `gateway-bot.ts`
+// reads as shown. A read still out is not a doubt: while the first read about a bot is out, the
+// bot stays out of view, as before this rule, for at most that timeout; so on a gateway whose own
+// bot is untouched it never appears, and on one the person used it appears a moment after the
+// others. A verdict already held for that bot is kept until a new read answers.
 
 import { openClawAtLeast } from "./gateway-version.ts";
 import { asRecord } from "./mapping.ts";
 
 export const FILES_LIST = "agents.files.list";
+/** The longest a files read is waited for; past it, the answer counts as lost and the bot shows. */
+export const FILES_READ_TIMEOUT_MS = 5_000;
 
 /**
  * Whether an `agents.files.list` answer for `botId` says the bot is untouched: true only for an
@@ -48,6 +54,8 @@ type Deps = {
   serverVersion: () => string | null | undefined;
   /** Publish the verdict: the id of the gateway's own bot when untouched, otherwise null. */
   publish: (untouched: string | null) => void;
+  /** How long a read is waited for (`FILES_READ_TIMEOUT_MS`; shorter in tests). */
+  timeoutMs?: () => number | undefined;
 };
 
 /**
@@ -65,6 +73,8 @@ export class GatewayBotFiles {
   private wanted: string | null = null;
   /** The generation of the read under way, or null when none is. */
   private reading: number | null = null;
+  /** The bot a read last answered about on this gateway: its verdict is kept until the next. */
+  private answeredFor: string | null = null;
 
   private readonly deps: Deps;
 
@@ -81,6 +91,7 @@ export class GatewayBotFiles {
   reset(): void {
     this.asked += 1;
     this.wanted = null;
+    this.answeredFor = null;
     this.deps.publish(null);
   }
 
@@ -99,6 +110,8 @@ export class GatewayBotFiles {
       this.deps.publish(null);
       return;
     }
+    // No answer about this bot yet: it stays out of view, as before this rule, while it is read.
+    if (this.answeredFor !== this.wanted) this.deps.publish(this.wanted);
     const generation = this.deps.generation();
     // A read under way on this connection reads the newest list's bot when it answers.
     if (this.reading === generation) return;
@@ -113,16 +126,28 @@ export class GatewayBotFiles {
         const botId = this.wanted;
         if (botId === null) return;
         let untouched = false;
+        let timer: ReturnType<typeof setTimeout> | undefined;
         try {
-          untouched = filesSayUntouched(
-            await this.deps.request(FILES_LIST, { agentId: botId }),
-            botId,
-          );
+          const late = new Promise<"late">((resolve) => {
+            timer = setTimeout(
+              () => resolve("late"),
+              this.deps.timeoutMs?.() ?? FILES_READ_TIMEOUT_MS,
+            );
+          });
+          const answer = await Promise.race([
+            this.deps.request(FILES_LIST, { agentId: botId }),
+            late,
+          ]);
+          // The timeout's "late" is no answer of the known shape: a doubt, so shown.
+          untouched = filesSayUntouched(answer, botId);
         } catch {
           untouched = false;
+        } finally {
+          clearTimeout(timer);
         }
         if (generation !== this.deps.generation()) return;
         if (asked === this.asked) {
+          this.answeredFor = botId;
           this.deps.publish(untouched ? botId : null);
           return;
         }

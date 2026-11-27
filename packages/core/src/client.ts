@@ -821,6 +821,8 @@ export type ClientOptions = {
   creationCheckMs?: number;
   /** First wait before a read answered as passing is asked again; `READ_AGAIN_MS` unless a test shortens it. */
   readAgainMs?: number;
+  /** How long a read of the gateway's own bot's files is waited for (`FILES_READ_TIMEOUT_MS`). */
+  filesReadTimeoutMs?: number;
   /**
    * Counts the host sets for its device. Each defaults to the bound the
    * retention arithmetic assumes and may only be lower: `trackedTasks`, the
@@ -2173,6 +2175,7 @@ export class ClawtrateClient {
       if ((this.state.untouchedGatewayBot ?? null) === untouched) return;
       this.store.update((state) => ({ ...state, untouchedGatewayBot: untouched }));
     },
+    timeoutMs: () => this.options.filesReadTimeoutMs,
   });
   private readonly computer: ComputerViews = new ComputerViews({
     request: (method, params) => this.request(method, params),
@@ -7816,14 +7819,15 @@ export class ClawtrateClient {
    */
   private applyBots(result: unknown): void {
     const shownBefore = this.state.bots;
-    this.store.update((state) => ({ ...state, bots: mapAgents(result) }));
-    this.botNames.onBots(this.state.bots);
+    const bots = mapAgents(result);
     // Whether the gateway's own bot is untouched matters only while it could be left out: it is
     // the gateway's own, another bot exists and it has no name of its own (`gateway-bot.ts`).
-    const own = this.state.bots.find((bot) => bot.isDefault && bot.ownerless !== true);
-    this.gatewayBotFiles.check(
-      own && this.state.bots.length > 1 && !hasOwnName(own) ? own.id : null,
-    );
+    // Checked before the list is published, so a bot whose files are still being read is never
+    // drawn for a moment before it leaves.
+    const own = bots.find((bot) => bot.isDefault && bot.ownerless !== true);
+    this.gatewayBotFiles.check(own && bots.length > 1 && !hasOwnName(own) ? own.id : null);
+    this.store.update((state) => ({ ...state, bots }));
+    this.botNames.onBots(this.state.bots);
     // Every id the gateway lists, system agents and bots past the display cap included.
     const listed = rosterIds(result);
     if (listed === null) return;

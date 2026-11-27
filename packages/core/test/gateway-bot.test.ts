@@ -191,12 +191,15 @@ async function connected(
     gateway.handlers["agents.files.list"] = (params) =>
       untouched((params as { agentId: string }).agentId);
   },
+  watch?: (client: ClawtrateClient) => void,
+  options: Partial<typeof FAST> & { filesReadTimeoutMs?: number } = {},
 ) {
   const gateway = new FakeGateway();
   gateway.handlers["agents.list"] = () => roster;
   setUp(gateway);
   const storage = memoryStorage(saved);
-  const client = new ClawtrateClient(testHost(gateway, storage), FAST);
+  const client = new ClawtrateClient(testHost(gateway, storage), { ...FAST, ...options });
+  watch?.(client);
   await client.start();
   await client.connect({ url: URL_A, token: "bootstrap" });
   await until(() => client.state.discovery.status === "ready");
@@ -449,16 +452,73 @@ describe("F-562: reading whether the gateway's own bot is untouched", () => {
       expect(ids(listedBots(client.state))).toContain("atlas");
       client.stop();
     }
-    // An answer that hasn't come: shown meanwhile.
+  });
+
+  it("F-562: at connect on a gateway whose own bot is untouched, it is never listed, not even for a moment", async () => {
+    const seen: string[][] = [];
+    const { client } = await connected({}, undefined, (client) =>
+      client.store.subscribe((state) => {
+        if (state.bots.length > 0) seen.push(ids(listedBots(state)));
+      }),
+    );
+    await until(() => client.state.untouchedGatewayBot === "atlas");
+    await sleep(30);
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.filter((listed) => listed.includes("atlas"))).toEqual([]);
+    client.stop();
+  });
+
+  it("F-562: on a gateway whose own bot was used, it appears when the answer arrives, after the others", async () => {
     const held = deferred<unknown>();
     const { client } = await connected({}, (gateway) => {
       gateway.connectReply = () => hello();
       gateway.handlers["agents.files.list"] = () => held.promise;
     });
     await sleep(30);
-    expect(ids(listedBots(client.state))).toContain("atlas");
+    // The read is out: as before this rule, it stays out of view.
+    expect(ids(listedBots(client.state))).toEqual(["main", "pip"]);
+    held.resolve(used("atlas"));
+    await until(() => ids(listedBots(client.state)).includes("atlas"));
+    expect(client.state.untouchedGatewayBot ?? null).toBeNull();
+    client.stop();
+  });
+
+  it("F-562: a read that never answers shows it at the timeout, and a late answer changes nothing", async () => {
+    const held = deferred<unknown>();
+    const { client } = await connected(
+      {},
+      (gateway) => {
+        gateway.connectReply = () => hello();
+        gateway.handlers["agents.files.list"] = () => held.promise;
+      },
+      undefined,
+      { filesReadTimeoutMs: 80 },
+    );
+    expect(ids(listedBots(client.state))).toEqual(["main", "pip"]);
+    await until(() => ids(listedBots(client.state)).includes("atlas"));
     held.resolve(untouched("atlas"));
-    await until(() => client.state.untouchedGatewayBot === "atlas");
+    await sleep(30);
+    expect(ids(listedBots(client.state))).toContain("atlas");
+    client.stop();
+  });
+
+  it("F-562: a reconnect keeps the verdict held until the new read answers", async () => {
+    let answer: () => unknown = () => used("atlas");
+    const { client, gateway } = await connected({}, (gateway) => {
+      gateway.connectReply = () => hello();
+      gateway.handlers["agents.files.list"] = () => answer();
+    });
+    await until(() => ids(listedBots(client.state)).includes("atlas"));
+    // Reconnect with the next read held: the bot the person used stays listed meanwhile.
+    const held = deferred<unknown>();
+    answer = () => held.promise;
+    const asked = gateway.calls("agents.files.list").length;
+    gateway.dropAll();
+    await until(() => gateway.calls("agents.files.list").length > asked);
+    expect(ids(listedBots(client.state))).toContain("atlas");
+    held.resolve(used("atlas"));
+    await sleep(30);
+    expect(ids(listedBots(client.state))).toContain("atlas");
     client.stop();
   });
 
