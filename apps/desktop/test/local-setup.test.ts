@@ -698,7 +698,13 @@ describe.skipIf(!mac)(
         );
         listener.on("tlsClientError", () => (plaintext += 1));
         // Every TCP connection, counted apart from the TLS errors it may end in.
-        listener.on("connection", () => (dials += 1));
+        // And how many of them the listener still has open: none once each has closed its side.
+        let open = 0;
+        listener.on("connection", (socket) => {
+          dials += 1;
+          open += 1;
+          socket.once("close", () => (open -= 1));
+        });
         await new Promise<void>((done) => listener.listen(0, "127.0.0.1", done));
         const port = (listener.address() as AddressInfo).port;
         const local: LocalConnect = {
@@ -715,8 +721,9 @@ describe.skipIf(!mac)(
           await client.start({ resume: false });
           await setup.look();
           expect(setup.current.look).toMatchObject({ outcome: "running", port });
-          // From after the look: what Connect itself dials.
-          await sleep(200);
+          // From after the look: what Connect itself dials. The look's socket is counted once the
+          // listener has closed it, with any TLS error it ended in, before the counts are taken.
+          await until(() => open === 0, 15_000);
           const dialsBefore = dials;
           const plaintextBefore = plaintext;
           // The failed attempt's disconnect reads the store before it closes anything: held well
@@ -742,6 +749,61 @@ describe.skipIf(!mac)(
           await new Promise((done) => listener.close(done));
         }
       });
+
+    it("F-602: paired, then a drop while the bots load and a reconnect nothing answers: setup goes on watching, and is done once the bots are read", async () => {
+      const home = newHome();
+      const gateway = silentGateway();
+      // The first read of the bots is held: the drop comes while they load. Later reads answer.
+      const held = deferred<unknown>();
+      const answer = gateway.handlers["agents.list"]!;
+      let lists = 0;
+      gateway.handlers["agents.list"] = (params) =>
+        (lists += 1) === 1 ? held.promise : answer(params);
+      const server = await bridged(gateway);
+      const local: LocalConnect = {
+        home,
+        helper: standInHelper(home),
+        platform,
+        sandboxed: true,
+        deadlineMs: SLOW,
+      };
+      settingsFile(home, ".openclaw", tokenSettings(server.port, "a-gateway-token"));
+      proofFile(home, ".openclaw", provedAnswer(home, ".openclaw", server.port));
+      const { client, setup } = localApp(local);
+      const phases: string[] = [];
+      const stop = client.store.subscribe((state) => {
+        const phase = state.setup?.phase;
+        if (phase && phases.at(-1) !== phase) phases.push(phase);
+      });
+      try {
+        await client.start({ resume: false });
+        await setup.look();
+        await setup.connect();
+        // The first paired hello: the connection is the person's now, its bots still loading.
+        await until(() => client.state.connection.status === "connected", 60_000);
+        expect(client.state.discovery.status).toBe("loading");
+        expect(setup.current.phase).toBe("connecting");
+        // It drops, and the next socket ends before anything answers.
+        gateway.refuseConnections = true;
+        gateway.dropAll();
+        await until(
+          () =>
+            client.state.connection.status === "reconnecting" &&
+            client.state.connection.error?.code === "UNREACHABLE",
+          60_000,
+        );
+        // The gateway answers again: the client's own retry connects and reads the bots.
+        gateway.refuseConnections = false;
+        await until(() => setup.current.phase === "done", 60_000);
+        expect(client.state.connection.status).toBe("connected");
+        expect(client.state.bots.length).toBeGreaterThan(0);
+        expect(phases).not.toContain("failed");
+      } finally {
+        stop();
+        client.stop();
+        await server.close();
+      }
+    });
 
     it("F-602: outside a person's app, never dials OpenClaw's default ports, before any socket", async () => {
       // Pure: both profiles' default ports, sandboxed; never refused in a person's app.

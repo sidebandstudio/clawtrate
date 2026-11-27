@@ -85,15 +85,28 @@
     - button "Request access"
   - status
 - dialog "Search":
-  - combobox "Search" [expanded]: router
+  - combobox "Search" [expanded]: transcode
   - button "Cancel"
   - listbox "Results":
-    - group "Tasks · 1":
-      - paragraph: Tasks · 1
-      - option "Task Router firmware, Otto, Sat" [selected]: Router firmware Otto · Sat
-    - group "Messages · 2":
-      - paragraph: Messages · 2
-      - 'option "Message in Router firmware, from Otto, Nov 14: The router is two releases behind. Neither is urgent."': Router firmware · Otto · Sat The router is two releases behind. Neither is urgent.
-      - 'option "Message in Router firmware, from a user, Nov 14: Is the router''s firmware current?"': Router firmware · User · Sat Is the router's firmware current?
-  - status: "3 results: 1 task, 2 messages."
+    - group "Messages · 3":
+      - paragraph: Messages · 3
+      - text: All 3 matching messages, newest first
+      - 'option "Message in Disk almost full on the media box, from Otto, Nov 16: … | --- | --- | --- | | Disk used | 94% | 61% | | Transcode cache | 180 GB | 0 GB | | Free space | 33 GB | 213 GB | I moved the cache to `transcode-cache.old` instead of deleting it. To undo: ``` …" [selected]': "Disk almost full on the media box · Otto · 5:36 PM … | --- | --- | --- | | Disk used | 94% | 61% | | Transcode cache | 180 GB | 0 GB | | Free space | 33 GB | 213 GB | I moved the cache to `transcode-cache.old` instead of deleting it. To undo: ``` …"
+      - 'option "Message in Disk almost full on the media box, from a user, Nov 16: Yes, clear the transcode cache."': Disk almost full on the media box · User · 5:35 PM Yes, clear the transcode cache.
+      - 'option "Message in Disk almost full on the media box, from Otto, Nov 16: ### Found The usual suspects on a media box, largest first: 1. `/var/lib/transcode-cache`, about 180 GB of temporary transcodes that were never cleaned up. 2. Old container images, about 40 GB across 12 unused tags. 3. Rotated logs, about 6 GB, mostly from one noisy service. ### Changed …"': "Disk almost full on the media box · Otto · 5:31 PM ### Found The usual suspects on a media box, largest first: 1. `/var/lib/transcode-cache`, about 180 GB of temporary transcodes that were never cleaned up. 2. Old container images, about 40 GB across 12 unused tags. 3. Rotated logs, about 6 GB, mostly from one noisy service. ### Changed …"
+    - group "Files":
+      - paragraph: Files
+      - text: "No file names returned from Juniper, Otto, Pip and Quartermaster of the Family Calendar and Errands. Some folders may be skipped. Not searched: Marlow's workspace could not be verified. 4 of 5 bots' workspaces searched."
+    - paragraph: No matches in Bots, Tasks, Links, Routines and Settings
+    - term: Bots
+    - definition: Every bot this connection can see, by name.
+    - term: Tasks
+    - definition: Titles in this device's task list, which keeps up to 500 tasks.
+    - term: Links
+    - definition: Links in the 25 conversations this device has loaded.
+    - term: Routines
+    - definition: Routine names, descriptions and bot details.
+    - term: Settings
+    - definition: The sections of Clawtrate's Settings.
+  - status: No matches in Bots, Tasks, Links, Routines and Settings. Some folders may be skipped.
 - status

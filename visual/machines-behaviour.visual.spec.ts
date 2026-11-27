@@ -87,6 +87,21 @@ test("F-046: choosing where Otto's commands run is announced only once the answe
   );
 });
 
+test("F-046: Juniper, the Main Bot, runs in a workspace of its own, not the gateway's own bot's", async ({
+  page,
+}) => {
+  await openFixture(
+    page,
+    "scene=main&bot=clawtrate-main-bot&task=agent:clawtrate-main-bot:heat-pump&panel=open&tab=settings",
+    "light",
+  );
+  await page.getByRole("button", { name: /^Where Juniper runs: / }).click();
+  await expect(page.getByTestId("runs-on-workspace")).toHaveText(
+    "/srv/clawtrate/workspaces/clawtrate-main-bot",
+  );
+  await expect(page.getByTestId("runs-on-page")).not.toContainText("same workspace setting");
+});
+
 test("F-046: a save that completes after Back still brings the Runs on row up to date", async ({
   page,
 }) => {
