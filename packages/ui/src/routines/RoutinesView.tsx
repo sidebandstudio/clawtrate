@@ -381,10 +381,14 @@ function resultsWords(routine: Routine): string {
 
 function Instruction({ routine, bot }: { routine: Routine; bot: string }) {
   if (routine.payload === "agentTurn") return <p className="r-instruction">{routine.text}</p>;
+  // On both OpenClaw versions the bot gets the reminder in a turn of its own and may answer it
+  // (docs/decisions.md, "What a reminder does").
   if (routine.payload === "systemEvent")
     return (
       <>
-        <p className="r-hint">Posts a reminder in {bot}&apos;s main conversation:</p>
+        <p className="r-hint">
+          {bot} gets this reminder in its main conversation, uses its model, and may answer there:
+        </p>
         <p className="r-instruction">{routine.text}</p>
       </>
     );
@@ -654,9 +658,16 @@ function RunView({
       ? `${run.inputTokens} in, ${run.outputTokens} out tokens`
       : null,
   ].filter(Boolean);
-  const returned = (
-    <p data-testid="run-summary">What the run returned: {run.summary ?? outcome.text}</p>
+  // A run with no summary returned nothing the gateway kept: its status is in the foot, not
+  // offered as its result (#847).
+  const summaryLine = (label: string) => (
+    <p data-testid="run-summary">
+      {run.summary === null
+        ? "The gateway recorded nothing this run returned."
+        : `${label} ${run.summary}`}
+    </p>
   );
+  const returned = summaryLine("What the run returned:");
   return (
     <div className="r-convo" data-testid="run-view">
       {command || shared ? (
@@ -692,7 +703,9 @@ function RunView({
             <strong>Clawtrate can&apos;t confirm which conversation this run used.</strong> The
             gateway recorded no session for it, and the routine may have been edited since it ran.
           </p>
-          {returned}
+          {/* A reminder's run on OpenClaw 2026.10.6 records the reminder's own text here, not the
+              bot's answer (docs/decisions.md, "What a reminder does"). */}
+          {summaryLine("What the gateway recorded:")}
         </Note>
       ) : read.status === "loading" ? (
         <p className="r-hint">Loading this run…</p>
