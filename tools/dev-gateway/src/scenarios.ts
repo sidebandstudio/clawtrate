@@ -958,7 +958,8 @@ export const SCENARIOS: Scenario[] = [
       "In a routine's own run: re-arms it to run again in 30 minutes (`automations` `next_check`).",
     steps: () => [
       tool("automations", { action: "next_check", in: "30m" }),
-      (ctx) => [say(routineSaid(ctx, "re-armed"))],
+      // The result's own first line: a refusal on 2026.11.10 carries the call's JSON after it.
+      (ctx) => [say(`The scheduler answered: ${(ctx.results.at(-1)?.text ?? "").split("\n")[0]}`)],
     ],
   },
   {
