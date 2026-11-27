@@ -4,8 +4,14 @@
 // the approval with `exec.approval.resolve`, then checks the run's outcome and
 // the session's durable history.
 
-import { TERMINAL_CHAT_STATES, type OperatorSession } from "./operator.ts";
-import { resolveRound, scenarioRounds, selectScenarios } from "./scenarios.ts";
+import { TERMINAL_CHAT_STATES, type GatewayEvent, type OperatorSession } from "./operator.ts";
+import {
+  resolveRound,
+  SAME_CALL_REPLY_SECONDS,
+  SAME_CALL_RUN_MS,
+  scenarioRounds,
+  selectScenarios,
+} from "./scenarios.ts";
 import {
   SCENARIO_EXAMPLES,
   sessionKeyFor,
@@ -26,6 +32,30 @@ export const SEED_SCOPES = [
 ];
 /** Approval events reach only clients that say they can show approvals. */
 export const SEED_CAPS = ["tool-events", "approvals", "exec-approvals"];
+
+/**
+ * Ceilings, not waits: each ends as soon as the gateway reports (#883). A question or an approval
+ * comes after the run's preparation and first model call; on a loaded hosted runner one chat
+ * send's preparation took 35 s, over half the 60 s this used to give. The bot-to-bot answer has
+ * the same 180 s (`SAME_CALL_REPLY_SECONDS`), as do the seed's connect and each of its requests.
+ */
+export const SEED_ANSWER_MS = SAME_CALL_REPLY_SECONDS * 1000;
+/** A whole example run: the answer it may wait on, and the run's own work around it. */
+export const SEED_RUN_MS = SAME_CALL_RUN_MS;
+
+const seconds = (ms: number) => Math.round(ms / 1000);
+
+/** What the gateway last reported about a run after event `after`, and how long ago. */
+export function lastReport(events: GatewayEvent[], runId: string, after: number): string {
+  const last = events.findLast((e) => e.seq > after && rec(e.payload).runId === runId);
+  if (!last) return `nothing about run ${runId}`;
+  const payload = rec(last.payload);
+  const data = rec(payload.data);
+  const words = [last.event, payload.stream, data.phase ?? payload.state, data.name].filter(
+    (word) => typeof word === "string" && word !== "",
+  );
+  return `${words.join(" ")}, ${seconds(Date.now() - last.at)} s before the seed stopped`;
+}
 
 export type HistoryRow = {
   details?: unknown;
@@ -202,24 +232,42 @@ export async function seedExample(
     const p = rec(payload);
     return p.sessionKey === key || rec(p.request).sessionKey === key;
   };
+  /** A wait that stops the seed says how long it waited and what the gateway last reported. */
+  const within = async <T>(what: string, wait: Promise<T>): Promise<T> => {
+    const started = Date.now();
+    try {
+      return await wait;
+    } catch (error) {
+      throw new Error(
+        `${where}: no ${what} after ${seconds(Date.now() - started)} s; the gateway last reported ${lastReport(op.events, runId, before)}`,
+        { cause: error },
+      );
+    }
+  };
 
   if (example.interaction?.kind === "question") {
-    const asked = await op.waitFor(
-      `the question in ${key}`,
-      (e) => e.event === "question.requested" && ofThisSession(e.payload),
-      60_000,
-      before,
+    const asked = await within(
+      "question",
+      op.waitFor(
+        `the question in ${key}`,
+        (e) => e.event === "question.requested" && ofThisSession(e.payload),
+        SEED_ANSWER_MS,
+        before,
+      ),
     );
     const id = String(rec(asked.payload).id);
     await op.request("question.resolve", { id, answers: { answers: example.interaction.answers } });
     log(`    answered question ${id} with question.resolve`);
   }
   if (example.interaction?.kind === "approval") {
-    const asked = await op.waitFor(
-      `the approval in ${key}`,
-      (e) => e.event === "exec.approval.requested" && ofThisSession(e.payload),
-      60_000,
-      before,
+    const asked = await within(
+      "approval request",
+      op.waitFor(
+        `the approval in ${key}`,
+        (e) => e.event === "exec.approval.requested" && ofThisSession(e.payload),
+        SEED_ANSWER_MS,
+        before,
+      ),
     );
     const request = rec(rec(asked.payload).request);
     if (request.command !== example.interaction.command) {
@@ -234,23 +282,38 @@ export async function seedExample(
     );
   }
 
-  const end = await op.terminal(runId, 120_000);
+  const end = await within("end of the run", op.terminal(runId, SEED_RUN_MS));
   if (end.state !== "final") {
     throw new Error(`${where}: run ended ${String(end.state)} (${String(end.errorMessage ?? "")})`);
   }
   if (example.recipientSession) {
-    const result = op.events.find(
-      (e) =>
-        e.seq > before &&
-        e.event === "agent" &&
-        rec(e.payload).runId === runId &&
-        rec(e.payload).stream === "tool" &&
-        rec(rec(e.payload).data).phase === "result",
-    );
+    const toolEvent = (phase: string) =>
+      op.events.find(
+        (e) =>
+          e.seq > before &&
+          e.event === "agent" &&
+          rec(e.payload).runId === runId &&
+          rec(e.payload).stream === "tool" &&
+          rec(rec(e.payload).data).phase === phase,
+      );
+    const result = toolEvent("result");
     const details = rec(rec(rec(result?.payload).data).result).details;
     const recipientRun = String(rec(details).runId ?? "");
     if (rec(details).status !== "ok" || !recipientRun) {
-      throw new Error(`${where}: the message was not answered in the same call`);
+      // A later turn may still bring the answer, but the example is the answer within the call.
+      const sent = toolEvent("start");
+      const waited = result && sent ? `after ${seconds(result.at - sent.at)} s` : "";
+      const disposition = rec(details).targetDisposition;
+      throw new Error(
+        [
+          `${where}: the message was not answered within the call's ${SAME_CALL_REPLY_SECONDS} s:`,
+          result
+            ? `sessions_send reported ${JSON.stringify(rec(details).status ?? null)}`
+            : "the gateway reported no sessions_send result",
+          ...(typeof disposition === "string" ? [`(${disposition})`] : []),
+          ...(waited ? [waited] : []),
+        ].join(" "),
+      );
     }
     const reply = op.events.find(
       (e) =>

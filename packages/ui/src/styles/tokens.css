@@ -43,6 +43,8 @@
   --tap-min: 44px;
 
   --avatar-row: 40px;
+  /* A bot's row in the sidebar: the picture and the name, nothing else (#790). */
+  --avatar-bot: 48px;
   --avatar-pin: 56px;
   --avatar-hero: 64px;
   /* The live picture in New bot (bots.md section 2). */

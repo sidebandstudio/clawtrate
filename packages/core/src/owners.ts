@@ -44,6 +44,7 @@ import {
   MAX_NAMED_TASKS,
   MAX_TEXTLESS_SENDS,
   MAX_FIRST_MESSAGE_TITLES,
+  MAX_FOLLOW_UPS,
   MAX_OUTCOME_LOOKUPS,
   MAX_FILE_READS,
   MAX_PICTURE_READS,
@@ -81,6 +82,7 @@ import {
   WAITING_RUN_CHARS,
   MAX_OLDER_RUNS,
 } from "./waiting.ts";
+import { MAX_QUIET_CHECKS, quietCheckChars } from "./quiet-end.ts";
 import {
   APPROVAL_ATTEMPTS,
   MAX_BOTS,
@@ -169,6 +171,11 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // An archive's or a delete's Stop of a run not named yet: task and run ids, and the action's
   // connection check; kept while its run is stopping, and never past the bound.
   deferredStops: { max: MAX_DEFERRED_STOPS, each: 2 * ID + 1, row: "bookkeeping" },
+  // The turn the gateway owes a task after a Stop of this client's stopped a recipient (#645):
+  // task, recipient session and run, the stopped run, when the wait ends, the run found to be
+  // that turn, whether its stop was asked and the connection (target, epoch); gone once the wait
+  // ends.
+  followUps: { max: MAX_FOLLOW_UPS, each: 5 * ID + 3 + 3 * N, row: "bookkeeping" },
   // One per task and list kind (three approval kinds and questions).
   listRequested: { max: T * 4, each: ID + SHORT + N, row: "bookkeeping" },
   listApplied: { max: T * 4, each: ID + SHORT + N, row: "bookkeeping" },
@@ -208,6 +215,8 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // separator between them, which JSON escapes to six characters (`\u0000`).
   botDeletes: { max: MAX_BOT_DELETES, each: 2 * ID + 4, row: "bookkeeping" },
   "waiting.held": { max: MAX_WAITING_SESSIONS, each: WAITING_HELD_CHARS, row: "bookkeeping" },
+  // What history said of a marked failure of a task not followed (#680): its key, run and verdict.
+  "quietChecks.checks": { max: MAX_QUIET_CHECKS, each: quietCheckChars(ID), row: "bookkeeping" },
   // Sessions no viewer has open: a few runs each, without their steps; their payloads are not kept.
   foreign: {
     max: FOREIGN_SESSIONS,
@@ -459,6 +468,7 @@ export const CLIENT_PARTS: Record<string, string> = {
   deviceApprovals: "DeviceApprovals",
   machines: "MachinesEngine",
   waiting: "WaitingIndex",
+  quietChecks: "QuietChecks",
   computer: "ComputerViews",
 };
 

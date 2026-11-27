@@ -107,8 +107,11 @@ describe("the engine follows one release-asset redirect", () => {
     };
   });
   afterEach(async () => {
-    await server.close();
-    dir.remove();
+    try {
+      dir.remove();
+    } finally {
+      await server.close();
+    }
   });
 
   const downloads = () => (existsSync(dir.path) ? readdirSync(dir.path) : []);
