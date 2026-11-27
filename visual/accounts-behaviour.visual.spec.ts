@@ -2647,6 +2647,32 @@ test("F-473: a Change account refused after the person went to another bot and b
   );
 });
 
+test("F-473: a Change account saved after the person went to another bot and back leaves the next save on its page", async ({
+  page,
+}) => {
+  await openFixture(page, `${SETTINGS_TAB}&lock=bound`, "light");
+  const bots = page.getByTestId("bot-list");
+  const changeTo = async (account: RegExp) => {
+    await page.getByRole("button", { name: /^Account: / }).click();
+    await page.getByRole("button", { name: "Change account" }).click();
+    await page.getByRole("radio", { name: account }).click();
+    await page.getByRole("button", { name: "Save" }).click();
+  };
+  await holdReply(page, "changeBotAccount");
+  await changeTo(/^OpenAI · Home/);
+  await bots.getByRole("button", { name: /^Pip\b/ }).click();
+  await expect(page.getByTestId("bot-settings")).toContainText("Pip");
+  await bots.getByRole("button", { name: /^Otto\b/ }).click();
+  await expect(page.getByTestId("bot-settings")).toContainText("Otto");
+  await changeTo(/^OpenAI · Home/);
+  await expect(page.getByRole("button", { name: "Saving…" })).toBeVisible();
+  await releaseReply(page);
+  await settle(page);
+  // The first save's answer moves no page: the second is still waiting on Change account.
+  await expect(page.getByRole("heading", { name: "Change account", level: 3 })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Saving…" })).toBeVisible();
+});
+
 test("F-474: an account connected with a label as the person moves to another bot leaves that bot's page on its first view", async ({
   page,
 }) => {

@@ -237,7 +237,8 @@ export function BotSettings({
     drawnBot.current = bot.id;
   });
   // A save answers only while it is the latest one on the bot that sent it: one sent before a
-  // switch away and back would otherwise end the wait, or show its error, of the save after it.
+  // switch away and back would otherwise end the wait, show its error, or move the page of the
+  // save after it.
   const saveAttempt = useRef<object | null>(null);
   useLayoutEffect(() => {
     saveAttempt.current = null;
@@ -709,7 +710,7 @@ export function BotSettings({
             ? `${name} now has no fixed account`
             : `${name} now runs on ${target ? accountName(target, accounts) : chosen}`,
         );
-        go("account");
+        if (saveAttempt.current === attempt) go("account");
       } catch (failure) {
         if (saveAttempt.current === attempt)
           setError(failure instanceof Error ? failure.message : String(failure));
