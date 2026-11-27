@@ -3,7 +3,7 @@
 
 import { describe, expect, it } from "vitest";
 import { createHooks } from "../lib/hooks.js";
-import { madeSession, versionKnown } from "../lib/runs.js";
+import { createRuns, madeSession, versionKnown } from "../lib/runs.js";
 
 type Json = Record<string, unknown>;
 type Handler = (event: Json, ctx: Json) => unknown;
@@ -25,7 +25,6 @@ function host({
   version = "2026.10.6",
   config = CONFIG as Json,
   sessions = [] as Json[] | ((agentId: string) => Json[]),
-  describeHolds = undefined as ((origin: Json) => string[]) | undefined,
 } = {}) {
   const hooks = new Map<string, Handler>();
   const tools = new Map<
@@ -46,7 +45,6 @@ function host({
     slots: {},
     config: () => config,
     sessions: (agentId: string) => (typeof sessions === "function" ? sessions(agentId) : sessions),
-    describeHolds,
   } as never);
   const fire = (name: string, event: Json, ctx: Json = {}) => hooks.get(name)!(event, ctx);
   const tool = async (name: string, ctx: Json, callId: string, params: Json = {}) =>
@@ -310,20 +308,37 @@ describe("fix round", () => {
   it("with conversation access off, every run is C with something read, in the holds and in clawtrate_here alike", async () => {
     const seen: Json[] = [];
     const config = structuredClone(CONFIG) as Json;
-    const h = host({
-      config,
-      describeHolds: (origin) => {
-        seen.push(origin);
-        return [];
-      },
-    });
+    const hooks = new Map<string, Handler>();
+    const tools = new Map<
+      string,
+      (ctx: Json) => { execute: (id: string, p: Json) => Promise<{ content: { text: string }[] }> }
+    >();
+    const runs = createRuns(
+      {
+        on: (name: string, handler: Handler) => hooks.set(name, handler),
+        registerTool: (factory: never, opts: { name: string }) => tools.set(opts.name, factory),
+        runtime: { version: "2026.10.6" },
+      } as never,
+      {
+        slots: {},
+        config: () => config,
+        sessions: () => [],
+        describeHolds: (origin: Json) => {
+          seen.push(origin);
+          return [];
+        },
+      } as never,
+    );
     // The run was recorded while access was on; then the person turned it off.
-    h.fire("before_prompt_build", {}, typed);
+    hooks.get("before_prompt_build")!({}, typed);
     (config as { plugins: Json }).plugins = { entries: {} };
-    h.fire("before_tool_call", call("clawtrate_here", {}, "c2"), toolCtx);
-    const text = await h.tool("clawtrate_here", toolCtx, "c2");
+    expect(runs.sawCall(call("write", {}, "c2"), toolCtx).origin).toMatchObject({
+      origin: "C",
+      read: "lost",
+    });
+    const answer = await tools.get("clawtrate_here")!(toolCtx).execute("c2", {});
     expect(seen.at(-1)).toMatchObject({ origin: "C", read: "lost", kind: "unknown" });
-    expect(text).not.toMatch(/can't tell yet/);
+    expect(answer.content[0]!.text).not.toMatch(/can't tell yet/);
   });
 
   it("clawtrate_tasks lists the tasks it started under other bots", async () => {
