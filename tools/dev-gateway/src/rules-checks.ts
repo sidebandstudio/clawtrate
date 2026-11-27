@@ -1265,6 +1265,9 @@ export const RULES_CHECKS: RulesCheck[] = [
             : change === "never"
               ? [{ action: "never", tools: ["write"] }]
               : [{ ...askWrite("**"), id }],
+          // An Allow decides only where "Ask when nothing else decides" would ask: with it on,
+          // the look after the answer meets a real Allow, not a rule that decides nothing.
+          change === "allow",
         );
         expect(
           (await waitingCards(ctx.clients.interactive)).includes(card.id),
@@ -1394,8 +1397,11 @@ export const RULES_CHECKS: RulesCheck[] = [
                 }),
           async () => {
             if (where === "every bot") {
-              const deny = rec((await config()).tools).deny;
-              if (JSON.stringify(deny) === JSON.stringify(originalDeny)) return;
+              // Restored only once the gateway runs with it, not when it is merely saved.
+              const restored = JSON.stringify(originalDeny);
+              if (await configHolds(ctx, (c) => JSON.stringify(rec(c.tools).deny) === restored)) {
+                return;
+              }
               await patchConfig(ctx, { tools: { deny: originalDeny } }, ["tools.deny"]);
               return;
             }
