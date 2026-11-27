@@ -273,8 +273,26 @@ if (HEARTBEATS) {
         platform: process.platform,
       },
     });
-    let readsToHold = 0;
-    let release: (() => void) | undefined;
+    // The client sends `config.get` for more than check-ins, so holding the Nth one can hold
+    // another reader's and let the save's own read through (#709). While holding, every
+    // `config.get` waits, so the save's read waits whatever else is read meanwhile.
+    // `holdReads("patch")` starts at the save's `config.patch`, so its read-back waits, and
+    // `patchAnswered` says the patch's answer has reached the client.
+    let hold: "reads" | "after the patch" | null = null;
+    const held: Array<() => void> = [];
+    let patchId: unknown;
+    let patchAnswered = false;
+    const holdReads = (from: "now" | "patch") => {
+      held.length = 0;
+      patchId = undefined;
+      patchAnswered = false;
+      hold = from === "now" ? "reads" : "after the patch";
+    };
+    /** Sends what was held, in order; `drop` forgets it instead, for a socket that has closed. */
+    const stopHolding = (drop = false) => {
+      hold = null;
+      for (const send of held.splice(0)) if (!drop) send();
+    };
     const client = new ClawtrateClient(
       {
         ...node,
@@ -282,10 +300,19 @@ if (HEARTBEATS) {
           const socket = node.createWebSocket(url);
           const send = socket.send.bind(socket);
           socket.send = (data) => {
-            if (readsToHold > 0 && JSON.parse(data).method === "config.get" && --readsToHold === 0)
-              release = () => send(data);
+            const frame = JSON.parse(data) as { id?: unknown; method?: string };
+            if (frame.method === "config.patch") {
+              patchId = frame.id;
+              if (hold === "after the patch") hold = "reads";
+            }
+            if (hold === "reads" && frame.method === "config.get") held.push(() => send(data));
             else send(data);
           };
+          // Registered before the client's own `onmessage`, so it runs first.
+          (socket as unknown as EventTarget).addEventListener("message", (event) => {
+            const frame = JSON.parse(String((event as MessageEvent).data)) as { id?: unknown };
+            if (patchId !== undefined && frame.id === patchId) patchAnswered = true;
+          });
           return socket;
         },
       },
@@ -317,13 +344,17 @@ if (HEARTBEATS) {
         kept: [],
       });
       const before = patches();
+      /** The save is under way and its read is held, or will be: it can't reach its patch. */
+      const reading = (saveId: string) =>
+        expect.poll(() => client.state.checkIns?.save?.id === saveId && held.length > 0).toBe(true);
 
+      // The viewer closes while the save reads, before its patch: nothing is sent.
       const first = createBridgeSession(client);
-      readsToHold = 1;
+      holdReads("now");
       const unsent = first.apply(draft("unsent"));
-      await expect.poll(() => release !== undefined).toBe(true);
+      await reading("unsent");
       first.dispose();
-      release!();
+      stopHolding();
       await unsent;
       expect(patches()).toBe(before);
       expect(client.state.checkIns?.save).toMatchObject({
@@ -333,15 +364,15 @@ if (HEARTBEATS) {
       });
       expect(client.state.connection.status).toBe("connected");
 
+      // The viewer closes once the patch is answered, while its read-back is held: still saved.
       const second = createBridgeSession(client);
-      release = undefined;
-      readsToHold = 2;
+      holdReads("patch");
       const sent = second.apply(draft("sent"));
-      await expect.poll(() => release !== undefined).toBe(true);
+      await expect.poll(() => patchAnswered).toBe(true);
       await expect.poll(patches).toBe(before + 1);
       second.dispose();
       expect(client.state.connection.status).toBe("connected");
-      release!();
+      stopHolding();
       await sent;
       expect(client.state.checkIns?.save).toMatchObject({ id: "sent", status: "saved" });
 
@@ -355,29 +386,46 @@ if (HEARTBEATS) {
         expect(await observer.apply({ type: "refreshCheckIns", botId: "marlow" })).not.toBeNull();
       };
       const third = createBridgeSession(client);
-      release = undefined;
-      readsToHold = 1;
+      holdReads("now");
       const cut = third.apply(draft("cut-unsent", "30m", "24h"));
-      await expect.poll(() => release !== undefined).toBe(true);
+      await reading("cut-unsent");
       await observer.apply({ type: "suspend" });
       await cut;
+      stopHolding(true);
       expect(client.state.checkIns?.save).toMatchObject({ id: "cut-unsent", status: "failed" });
       await reconnect();
       expect(patches()).toBe(before + 1);
 
-      release = undefined;
-      readsToHold = 2;
+      // The suspend lands before the read-back's answer: the patch may have taken, so unknown.
+      holdReads("patch");
       const cutSent = third.apply(draft("cut-sent", "30m", "24h"));
-      await expect.poll(() => release !== undefined).toBe(true);
+      await expect.poll(() => patchAnswered).toBe(true);
       await expect.poll(patches).toBe(before + 2);
       await observer.apply({ type: "suspend" });
       await cutSent;
+      stopHolding(true);
       expect(client.state.checkIns?.save).toMatchObject({ id: "cut-sent", status: "unknown" });
       await reconnect();
       expect(client.state.checkIns?.jobs.find((job) => job.botId === "marlow")?.everyMs).toBe(
         1_800_000,
       );
       expect(patches()).toBe(before + 2);
+
+      // The other order: the read-back's answer lands first, so it is saved, and the suspend
+      // after it leaves it so.
+      holdReads("patch");
+      const cutAfter = third.apply(draft("cut-after", "24h", "30m"));
+      await expect.poll(() => patchAnswered).toBe(true);
+      stopHolding();
+      await cutAfter;
+      expect(client.state.checkIns?.save).toMatchObject({ id: "cut-after", status: "saved" });
+      await observer.apply({ type: "suspend" });
+      expect(client.state.checkIns?.save).toMatchObject({ id: "cut-after", status: "saved" });
+      await reconnect();
+      expect(client.state.checkIns?.jobs.find((job) => job.botId === "marlow")?.everyMs).toBe(
+        86_400_000,
+      );
+      expect(patches()).toBe(before + 3);
       third.dispose();
     } finally {
       observer.dispose();
