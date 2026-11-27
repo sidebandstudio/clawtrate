@@ -122,14 +122,29 @@ export function quietInHistory(messages: unknown, runId: string): boolean {
   });
 }
 
-const hasText = (message: RawRecord): boolean =>
-  typeof message.content === "string"
+/**
+ * The text both OpenClaw versions put in place of a row too large for `chat.history`, on a row they
+ * mark `truncated: true`, `reason: "oversized"` (2026.10.6 and 2026.11.10 `chat-history-budget`,
+ * `CHAT_HISTORY_OVERSIZED_PLACEHOLDER`). What the row said can't be read from it: it is no answer.
+ */
+const OVERSIZED_PLACEHOLDER = "[chat.history omitted: message too large]";
+
+const hasText = (message: RawRecord): boolean => {
+  const meta = asRecord(message.__openclaw);
+  const replaced = meta?.truncated === true && meta.reason === "oversized";
+  return typeof message.content === "string"
     ? message.content.trim() !== ""
     : Array.isArray(message.content) &&
-      message.content.some((part) => {
-        const block = asRecord(part);
-        return block?.type === "text" && typeof block.text === "string" && block.text.trim() !== "";
-      });
+        message.content.some((part) => {
+          const block = asRecord(part);
+          return (
+            block?.type === "text" &&
+            typeof block.text === "string" &&
+            block.text.trim() !== "" &&
+            !(replaced && block.text === OVERSIZED_PLACEHOLDER)
+          );
+        });
+};
 
 /** Whether no row of the bot's in the run has text: it answered nothing (a step is no answer). */
 const answeredNoText = (messages: unknown, runId: string): boolean =>
