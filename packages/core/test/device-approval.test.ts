@@ -142,6 +142,7 @@ function setup(options: Options = {}) {
     calls,
     answers,
     engine,
+    real,
     state: () => state!,
     request: (id: string) => state!.requests.find((each) => each.requestId === id)!,
     /** The delays of the timers still set. */
@@ -629,6 +630,89 @@ describe("approving a waiting device", () => {
     expect(u.state().prompt).toBe(next.requestId);
   });
 
+  it("says a removal failed only when the gateway said so, and not known when its answer is lost", async () => {
+    const differing = async (remove: (t: Awaited<ReturnType<typeof listed>>) => unknown) => {
+      const row = pendingRow();
+      const t = await listed([row]);
+      t.answers["device.pair.approve"] = () => {
+        t.gw.pending = [];
+        t.gw.paired = [pairedOf(row, { scopes: ["operator.admin"] })];
+        return {};
+      };
+      t.answers["device.pair.remove"] = () => remove(t);
+      return t.engine.approve(row.requestId as string, codeOf(row), [...FULL_SCOPES]);
+    };
+    // The gateway refused the removal: it failed.
+    expect(
+      await differing(() => {
+        throw new Refusal("busy");
+      }),
+    ).toEqual({ kind: "undo-failed", what: ["access"], message: "busy" });
+    // The removal's answer was lost: it may have gone through.
+    expect(
+      await differing(() => {
+        throw new Error("connection closed");
+      }),
+    ).toEqual({ kind: "undo-unknown", what: ["access"] });
+    // The gateway answered, and its paired list still has the device: it failed.
+    expect(await differing(() => ({}))).toEqual({
+      kind: "undo-failed",
+      what: ["access"],
+      message: "The gateway still lists the device.",
+    });
+  });
+
+  it("says no approval was sent when the read before it is lost, and refused only for the gateway's refusal", async () => {
+    for (const [error, decision] of [
+      [new Error("timed out"), { kind: "unread", message: "timed out" }],
+      [new Refusal("missing scope"), { kind: "refused", message: "missing scope" }],
+    ] as const) {
+      const row = pendingRow();
+      const t = await listed([row]);
+      t.answers["device.pair.list"] = () => {
+        throw error;
+      };
+      expect(
+        await t.engine.approve(row.requestId as string, codeOf(row), [...FULL_SCOPES]),
+      ).toEqual(decision);
+      expect(t.calls).not.toContain("device.pair.approve");
+    }
+  });
+
+  it("reads the list for a caller that waits, and says whether a list that new was applied", async () => {
+    const row = pendingRow();
+    const t = await listed([row]);
+    // A read under way is waited out, then one more is sent for the caller.
+    let release = () => {};
+    t.answers["device.pair.list"] = () =>
+      new Promise((resolve) => {
+        release = () => resolve({ pending: t.gw.pending, paired: [] });
+      });
+    void t.engine.refresh();
+    const reads = t.calls.filter((call) => call === "device.pair.list").length;
+    let done: unknown = null;
+    const asked = t.real.readNow().then((read) => (done = read));
+    await t.settle();
+    expect(done).toBeNull();
+    delete t.answers["device.pair.list"];
+    release();
+    await asked;
+    expect(done).toEqual({ fresh: true, error: null });
+    expect(t.calls.filter((call) => call === "device.pair.list").length).toBe(reads + 1);
+    // A read that fails says why, and the list stays as last applied.
+    t.answers["device.pair.list"] = () => {
+      throw new Error("timed out");
+    };
+    expect(await t.real.readNow()).toEqual({ fresh: false, error: "timed out" });
+    expect(t.request(row.requestId as string)).toBeDefined();
+    // A reply without a waiting list isn't a list read.
+    t.answers["device.pair.list"] = () => ({ paired: [] });
+    expect((await t.real.readNow()).fresh).toBe(false);
+    // Without admin nothing is read.
+    t.setAdmin(false);
+    expect(await t.real.readNow()).toEqual({ fresh: false, error: null });
+  });
+
   it("compares and removes the paired device read once after a lost answer", async () => {
     const row = pendingRow();
     const t = await listed([row]);
@@ -644,9 +728,10 @@ describe("approving a waiting device", () => {
       throw new Error("connection closed");
     };
     const decision = await t.engine.approve(row.requestId as string, codeOf(row), [...FULL_SCOPES]);
-    // The pairing that differs is removed on that one read; the removal isn't confirmed.
+    // The pairing that differs is removed on that one read; the removal isn't confirmed, so
+    // whether it is gone isn't known.
     expect(t.calls).toContain("device.pair.remove");
-    expect(decision).toEqual({ kind: "undo-failed", what: ["access"], message: "timed out" });
+    expect(decision).toEqual({ kind: "undo-unknown", what: ["access"] });
   });
 
   it("confirms no removal from a read without a paired list", async () => {
@@ -663,9 +748,8 @@ describe("approving a waiting device", () => {
       return {};
     };
     expect(await t.engine.approve(row.requestId as string, codeOf(row), [...FULL_SCOPES])).toEqual({
-      kind: "undo-failed",
+      kind: "undo-unknown",
       what: ["access"],
-      message: "The gateway's answer didn't list its paired devices.",
     });
     // An empty list is a confirmation.
     const u = await listed([row]);
@@ -912,9 +996,8 @@ describe("a connection that changes during a decision", () => {
       return {};
     };
     expect(await t.engine.approve(row.requestId as string, codeOf(row), [...FULL_SCOPES])).toEqual({
-      kind: "undo-failed",
+      kind: "undo-unknown",
       what: ["access"],
-      message: "The connection changed before Clawtrate could confirm the removal.",
     });
     expect(readsAfter(t, "device.pair.remove")).toEqual([]);
   });

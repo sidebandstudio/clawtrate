@@ -122,6 +122,7 @@ const bridge = createFixtureBridge(isScene(sceneName) ? sceneName : "main", {
   guides: guidesParam(params),
   fullPairing: params.get("full") === "1",
   device: params.get("device"),
+  deviceRead: params.get("deviceread"),
   gatewayName: params.get("gatewayName"),
   showGatewayBot: params.get("gatewaybot") !== "off",
 });

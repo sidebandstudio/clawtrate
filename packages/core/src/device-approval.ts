@@ -183,6 +183,13 @@ export const initialDeviceRequests: DeviceRequestsState = {
   listedOn: 0,
 };
 
+/**
+ * A list read a caller waited for (`readNow`): `fresh` when a list at least as new as that read
+ * was applied; otherwise `error` says why, or is null when the connection changed or has no
+ * admin.
+ */
+export type DeviceListRead = { fresh: boolean; error: string | null };
+
 /** What a decision did, for the sheet to say. */
 export type DeviceDecision =
   | { kind: "approved"; deviceId: string }
@@ -196,14 +203,24 @@ export type DeviceDecision =
   | { kind: "changed"; what: string[] }
   /** Approved, then the paired device had other access than shown: its pairing was removed. */
   | { kind: "undone"; what: string[] }
-  /** As `undone`, but removing it failed: the person must remove it. */
+  /** As `undone`, but removing it failed, as the gateway said or before it was sent. */
   | { kind: "undo-failed"; what: string[]; message: string }
+  /**
+   * As `undone`, but the removal's answer was lost or its read-back didn't arrive: whether the
+   * pairing is still there isn't known.
+   */
+  | { kind: "undo-unknown"; what: string[] }
   /** The gateway refused: its message. */
   | { kind: "refused"; message: string }
   /** The answer was lost: what the gateway did isn't known. */
   | { kind: "unknown" }
   /** The connection changed before the approval was sent: nothing was approved. */
   | { kind: "interrupted" }
+  /**
+   * The read before approving failed without a refusal from the gateway (its answer was lost,
+   * or it timed out): no approval was sent.
+   */
+  | { kind: "unread"; message: string }
   /** Not offered here: not admin, a read-only host, or a blocked request. */
   | { kind: "not-allowed" };
 
@@ -376,6 +393,8 @@ export class DeviceApprovals {
   private applied = 0;
   /** List reads that failed in a row on this connection, for the bounded retry. */
   private failures = 0;
+  /** The list read under way, until it ends: `readNow` waits it out before reading. */
+  private current: Promise<void> | null = null;
 
   constructor(ctx: DeviceApprovalsContext) {
     this.ctx = ctx;
@@ -462,6 +481,26 @@ export class DeviceApprovals {
   /** Read the list now, or once the read under way ends. */
   refresh(): Promise<void> {
     return this.read();
+  }
+
+  /**
+   * A read whose outcome the caller waits for (a window that must not say the list was read
+   * again before it was): any read under way is waited out, then one starts, and the answer says
+   * whether a list at least that new was applied.
+   */
+  async readNow(): Promise<DeviceListRead> {
+    while (this.current) await this.current;
+    if (!this.ctx.admin()) return { fresh: false, error: null };
+    const epoch = this.epoch;
+    // `read()` numbers its send before its first await: the next number.
+    const seq = this.sent + 1;
+    await this.read();
+    if (epoch !== this.epoch) return { fresh: false, error: null };
+    if (this.applied >= seq) return { fresh: true, error: null };
+    return {
+      fresh: false,
+      error: this.state.error ?? "The gateway's answer didn't list the waiting devices.",
+    };
   }
 
   /** A window takes the one request the host opens by itself; only the first that asks gets it. */
@@ -563,6 +602,9 @@ export class DeviceApprovals {
     this.clearTimer();
     const epoch = this.epoch;
     this.reading = true;
+    let ended = () => {};
+    const current = new Promise<void>((resolve) => (ended = resolve));
+    this.current = current;
     this.lastReadAt = this.ctx.now();
     // `list()` numbers this send, before its first await: the next number.
     const seq = this.sent + 1;
@@ -578,6 +620,8 @@ export class DeviceApprovals {
         outcome = "failed";
       } else outcome = "older";
     } finally {
+      if (this.current === current) this.current = null;
+      ended();
       if (epoch === this.epoch) {
         this.reading = false;
         if (this.again) {
@@ -726,9 +770,14 @@ export class DeviceApprovals {
    * gateway's, after a reset) frees nothing.
    */
   private settle(requestId: string, token: number, decision: DeviceDecision): void {
-    const acted = ["approved", "undone", "undo-failed", "unknown", "denied"].includes(
-      decision.kind,
-    );
+    const acted = [
+      "approved",
+      "undone",
+      "undo-failed",
+      "undo-unknown",
+      "unknown",
+      "denied",
+    ].includes(decision.kind);
     if (!acted && this.deciding.get(requestId) === token) this.deciding.delete(requestId);
   }
 
@@ -765,7 +814,10 @@ export class DeviceApprovals {
       // in it (hidden past the sixteen), or blocked in it, takes no approval.
       if (this.shown(requestId)?.blocked !== null) return { kind: "not-allowed" };
     } catch (error) {
-      return { kind: "refused", message: errorText(error) };
+      // No approval was sent. Only an answer from the gateway is its refusal.
+      return this.ctx.answered(error)
+        ? { kind: "refused", message: errorText(error) }
+        : { kind: "unread", message: errorText(error) };
     }
     try {
       await this.ctx.request("device.pair.approve", { requestId });
@@ -799,26 +851,29 @@ export class DeviceApprovals {
     if (!device) return { kind: "unknown" };
     const what = pairedDifferences(shown, device);
     if (what.length === 0) return { kind: "approved", deviceId: shown.deviceId };
+    if (!same())
+      return {
+        kind: "undo-failed",
+        what,
+        message: "The connection changed before Clawtrate could remove it.",
+      };
     try {
-      if (!same())
-        return {
-          kind: "undo-failed",
-          what,
-          message: "The connection changed before Clawtrate could remove it.",
-        };
       await this.ctx.request("device.pair.remove", { deviceId: shown.deviceId });
+    } catch (error) {
+      // Failed only when the gateway said so; a lost answer may have removed it.
+      return this.ctx.answered(error)
+        ? { kind: "undo-failed", what, message: errorText(error) }
+        : { kind: "undo-unknown", what };
+    }
+    // The removal counts once a read of the paired devices lacks it; no such read, not known.
+    try {
       const again = await this.readPairedOn(shown.deviceId, same);
-      if (!again)
-        return {
-          kind: "undo-failed",
-          what,
-          message: "The connection changed before Clawtrate could confirm the removal.",
-        };
+      if (!again) return { kind: "undo-unknown", what };
       if (again.device)
         return { kind: "undo-failed", what, message: "The gateway still lists the device." };
       return { kind: "undone", what };
-    } catch (error) {
-      return { kind: "undo-failed", what, message: errorText(error) };
+    } catch {
+      return { kind: "undo-unknown", what };
     }
   }
 

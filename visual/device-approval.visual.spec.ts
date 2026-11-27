@@ -45,7 +45,7 @@ const decisions = (page: Page) =>
  */
 const setRequests = (
   page: Page,
-  change: { listedOn?: number; prompt?: null; blocked?: DeviceRequestBlock },
+  change: { listedOn?: number; prompt?: string | null; blocked?: DeviceRequestBlock },
 ) =>
   page.evaluate((change) => {
     const fixture = (
@@ -245,14 +245,26 @@ test("F-550: a sheet from an earlier connection decides nothing; the list is rea
   await expect(sheet).toBeVisible();
   // The connection changed under the open sheet, and the new one read its own list.
   await setRequests(page, { listedOn: 2 });
+  // The read again is held: until it is applied the sheet says it is reading, and takes nothing.
+  await hold(page);
   await sheet.getByRole("button", { name: "Code K 7 Q F, 2 M X A", exact: true }).click();
+  await expect(sheet.getByTestId("device-reread")).toHaveText(
+    "Nothing was approved or denied. Clawtrate is reading the waiting devices again.",
+  );
+  await expect(
+    sheet.getByRole("button", { name: "Code K 7 Q F, 2 M X A", exact: true }),
+  ).toHaveAttribute("aria-disabled", "true");
+  await expect(
+    sheet.getByRole("heading", { name: "A device is asking to use this gateway" }),
+  ).toBeFocused();
+  await sheet
+    .getByRole("button", { name: "Code K 7 Q F, 2 M X A", exact: true })
+    .click({ force: true });
+  await release(page);
   await expect(sheet.getByTestId("device-reread")).toHaveText(
     "Nothing was approved or denied. Clawtrate read the waiting devices again; this is the request as it is now.",
   );
   await expect(sheet.getByTestId("device-outcome")).toHaveCount(0);
-  await expect(
-    sheet.getByRole("heading", { name: "A device is asking to use this gateway" }),
-  ).toBeFocused();
   // The pick again carries the list it was shown from now, and approves.
   await sheet.getByRole("button", { name: "Code K 7 Q F, 2 M X A", exact: true }).click();
   await expect(sheet.getByTestId("device-outcome")).toHaveText(
@@ -318,4 +330,215 @@ test("F-550: a request kept from opening by itself is still in the rail and Sett
   const settings = page.getByRole("dialog", { name: "Settings" });
   await settings.getByRole("button", { name: /^Clawtrate Desktop \(reported\)/ }).click();
   await expect(sheetOf(page).locator(".device-code")).toHaveCount(4);
+});
+
+test("F-550: a read again that fails says so, and shows the last list as the last that worked", async ({
+  page,
+}) => {
+  await openFixture(page, "scene=device-request&deviceread=fail", "dark");
+  const sheet = sheetOf(page);
+  await expect(sheet).toBeVisible();
+  await setRequests(page, { listedOn: 2 });
+  await sheet.getByRole("button", { name: "Code K 7 Q F, 2 M X A", exact: true }).click();
+  await expect(sheet.getByTestId("device-reread")).toHaveText(
+    "Nothing was approved or denied. Clawtrate couldn't read the waiting devices again: The gateway didn't answer. What is listed here is from the last read that worked.",
+  );
+  await expect(sheet.getByTestId("device-outcome")).toHaveCount(0);
+  // The last list stays, and its request can be decided.
+  await expect(
+    sheet.getByRole("button", { name: "Code K 7 Q F, 2 M X A", exact: true }),
+  ).not.toHaveAttribute("aria-disabled", "true");
+});
+
+for (const [answer, pick, words, check] of [
+  [
+    "lost",
+    "Code K 7 Q F, 2 M X A",
+    "Clawtrate didn't get the gateway's answer, so it can't say whether the device was approved.",
+    true,
+  ],
+  [
+    "unknown",
+    "I didn't start this",
+    "Clawtrate didn't get the gateway's answer, so it can't say whether the request was denied.",
+    true,
+  ],
+  [
+    "host-error",
+    "Code K 7 Q F, 2 M X A",
+    "Clawtrate couldn't send this: Clawtrate is connected to another gateway now. Nothing was approved.",
+    false,
+  ],
+  [
+    "undo-unknown",
+    "Code K 7 Q F, 2 M X A",
+    "Clawtrate asked to remove that pairing but couldn't confirm it is gone.",
+    false,
+  ],
+] as const) {
+  test(`F-550: ${answer} after "${pick}" says only what is known`, async ({ page }) => {
+    await openFixture(page, `scene=device-request&device=${answer}`, "dark");
+    const sheet = sheetOf(page);
+    await sheet.getByRole("button", { name: pick, exact: true }).click();
+    const outcome = sheet.getByTestId("device-outcome");
+    await expect(outcome).toContainText(words);
+    await expect(outcome).not.toContainText(/refused|Approved\./);
+    if (check) {
+      // Not known: the list is read again, and the sheet says when it was.
+      await expect(sheet.getByTestId("device-check")).toHaveText(
+        "Clawtrate read the waiting devices again: Settings, Gateway and Settings, Machines show what the gateway holds now.",
+      );
+      expect((await decisions(page)).at(-1)).toEqual({ type: "readDeviceRequests" });
+    } else await expect(sheet.getByTestId("device-check")).toHaveCount(0);
+  });
+}
+
+const ONLY = "0c4f7a2e-91d3-4b6e-8a5f-000000000003";
+const takes = (page: Page) =>
+  page.evaluate(
+    () =>
+      (window as unknown as { clawtrateFixture: { sent: Sent } }).clawtrateFixture.sent.filter(
+        (each) => each.type === "takeDevicePrompt",
+      ).length,
+  );
+
+test("F-550: the sheet opens by itself when nothing else has the person", async ({ page }) => {
+  await openFixture(page, "scene=devices-asking", "dark");
+  await expect(page.getByTestId("devices-asking")).toBeVisible();
+  await setRequests(page, { prompt: ONLY });
+  await expect(sheetOf(page)).toBeVisible();
+});
+
+for (const [busy, start] of [
+  [
+    "typing in the composer",
+    async (page: Page) => {
+      await page.getByTestId("composer-input").click();
+      await page.keyboard.type("Rotate the");
+    },
+  ],
+  [
+    "words left in the composer",
+    async (page: Page) => {
+      await page.getByTestId("composer-input").fill("Rotate the");
+      await page
+        .getByTestId("devices-asking")
+        .getByText(/asking/)
+        .click();
+    },
+  ],
+  [
+    "Search",
+    async (page: Page) => {
+      await page.keyboard.press("ControlOrMeta+K");
+      await expect(page.getByRole("dialog", { name: /search/i })).toBeVisible();
+    },
+  ],
+  [
+    "New bot",
+    async (page: Page) => {
+      await page.keyboard.press("ControlOrMeta+N");
+      await expect(page.getByRole("dialog", { name: /new bot/i })).toBeVisible();
+    },
+  ],
+] as const) {
+  test(`F-550: no sheet opens by itself over ${busy}; the request waits in the rail line`, async ({
+    page,
+  }) => {
+    await openFixture(page, "scene=devices-asking", "dark");
+    await start(page);
+    await setRequests(page, { prompt: ONLY });
+    await settle(page);
+    await expect(sheetOf(page)).toHaveCount(0);
+    expect(await takes(page)).toBe(0);
+    await expect(page.getByTestId("devices-asking")).toContainText("devices are asking");
+  });
+}
+
+test("F-550: a sheet taken while nothing was busy doesn't open if Settings opened before the answer", async ({
+  page,
+}) => {
+  // The take goes out on load and its answer is held.
+  await openFixture(page, "scene=device-request&hold", "dark");
+  await expect.poll(() => takes(page)).toBe(1);
+  await page.keyboard.press("ControlOrMeta+,");
+  await expect(page.getByRole("dialog", { name: "Settings" })).toBeVisible();
+  await release(page);
+  await settle(page);
+  await expect(sheetOf(page)).toHaveCount(0);
+  await page.keyboard.press("Escape");
+  await expect(page.getByRole("dialog", { name: "Settings" })).toHaveCount(0);
+  // Taken here, it isn't opened later by itself: it waits in the rail line.
+  await settle(page);
+  await expect(sheetOf(page)).toHaveCount(0);
+  await expect(page.getByTestId("devices-asking")).toContainText("A device is asking");
+});
+
+test("F-550: a sheet taken while nothing was busy doesn't open if typing started before the answer", async ({
+  page,
+}) => {
+  await openFixture(page, "scene=device-request&hold", "dark");
+  await expect.poll(() => takes(page)).toBe(1);
+  await page.getByTestId("composer-input").click();
+  await page.keyboard.type("Rotate");
+  await release(page);
+  await settle(page);
+  await expect(sheetOf(page)).toHaveCount(0);
+  await expect(page.getByTestId("composer-input")).toHaveValue("Rotate");
+});
+
+test("F-550: the sheet keeps Tab while the Work drawer is open", async ({ page }) => {
+  await page.setViewportSize({ width: 900, height: 800 });
+  await openFixture(page, "scene=device-request&panel=open", "dark");
+  const sheet = sheetOf(page);
+  await expect(sheet).toBeVisible();
+  await expect(
+    sheet.getByRole("heading", { name: "A device is asking to use this gateway" }),
+  ).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(sheet.getByRole("button", { name: "I didn't start this" })).toBeFocused();
+  await page.keyboard.press("Tab");
+  await expect(sheet.getByRole("button", { name: "None of these match" })).toBeFocused();
+  await page.keyboard.press("Shift+Tab");
+  await expect(sheet.getByRole("button", { name: "I didn't start this" })).toBeFocused();
+});
+
+test("F-550: focus returns to the list when the row that opened the sheet is gone", async ({
+  page,
+}) => {
+  await openFixture(page, "scene=devices-asking", "dark");
+  await page.getByTestId("devices-asking").getByRole("button", { name: "Review" }).click();
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("button", { name: /^Work laptop \(reported\)/ }).click();
+  const sheet = sheetOf(page);
+  await sheet.getByRole("button", { name: "I didn't start this" }).click();
+  await expect(sheet.getByTestId("device-outcome")).toHaveText("Denied. The device can ask again.");
+  await expect(settings.getByRole("button", { name: /^Work laptop/ })).toHaveCount(0);
+  await sheet.getByRole("button", { name: "Close" }).click();
+  await expect(sheet).toHaveCount(0);
+  await expect(settings.locator(".device-requests-place")).toBeFocused();
+});
+
+test("F-550: a held decision still answers when the fixture's state is replaced under it", async ({
+  page,
+}) => {
+  await openFixture(page, "scene=device-request", "dark");
+  const sheet = sheetOf(page);
+  await hold(page);
+  await sheet.getByRole("button", { name: "Code K 7 Q F, 2 M X A", exact: true }).click();
+  await page.evaluate(() => {
+    const fixture = (
+      window as unknown as {
+        clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+      }
+    ).clawtrateFixture;
+    fixture.setState((s) => {
+      const { deviceRequests: _gone, ...rest } = s;
+      return rest;
+    });
+  });
+  await release(page);
+  await expect(sheet.getByTestId("device-outcome")).toHaveText(
+    "The connection changed before Clawtrate could approve it. Nothing was approved.",
+  );
 });

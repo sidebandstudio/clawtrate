@@ -125,6 +125,8 @@ export function Shell({
   // lives on in Settings only.
   const [offerFor, setOfferFor] = useState<string | null>(null);
   const [offerOpen, setOfferOpen] = useState(false);
+  // The waiting device's sheet, opened by itself: it keeps the keyboard while open.
+  const [deviceSheetOpen, setDeviceSheetOpen] = useState(false);
   const offerUrl = state.connection.gatewayUrl;
   if (
     !inert &&
@@ -186,8 +188,9 @@ export function Shell({
   const overlay = mainWidth !== null && mainWidth < DOCK_FROM;
   // The Routines view takes the main pane, Work included: no drawer, scrim or inert rail behind it.
   const drawerOpen = panelOpen && overlay && !routines;
-  // While the offer of full control is open, its dialog keeps the keyboard, not the drawer behind.
-  const drawerKeys = drawerOpen && !offerOpen;
+  // While the offer of full control or a waiting device's sheet is open, its dialog keeps the
+  // keyboard, not the drawer behind.
+  const drawerKeys = drawerOpen && !offerOpen && !deviceSheetOpen;
 
   const setPanel = useCallback((open: boolean) => {
     if (open) {
@@ -1034,7 +1037,10 @@ export function Shell({
           />
         )}
         {/* A device waiting for approval, opened by itself when it is the only one (§5). */}
-        <DeviceRequestPrompt inert={inert === true || offerOpen} />
+        <DeviceRequestPrompt
+          busy={inert === true || offerOpen || searchOpen || newBot || shortcuts}
+          onOpenChange={setDeviceSheetOpen}
+        />
         {shortcuts && <ShortcutList onClose={() => setShortcuts(false)} />}
         {searchOpen && (
           <SearchPalette

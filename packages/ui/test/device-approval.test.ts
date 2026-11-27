@@ -25,7 +25,11 @@ import {
   DeviceRequestsList,
   DevicesAsking,
   NOTICE_WITHOUT_ADMIN,
+  CHECKING_WORDS,
   REREAD_WORDS,
+  REREADING_WORDS,
+  rereadFailedWords,
+  type SheetOutcome,
 } from "../src/DeviceApproval.tsx";
 
 const info: HostInfo = { kind: "desktop", version: "test", devGateway: null };
@@ -227,12 +231,33 @@ describe("a decision under way", () => {
     expect(idle).not.toContain(DECIDING_WORDS);
   });
 
-  it("F-550: after a decision that wasn't allowed, says nothing was decided and the list was read again", () => {
-    const html = body({ reread: true });
-    expect(html).toContain(REREAD_WORDS);
-    // The request as it is now takes a pick again.
-    expect(buttons(html)).toContain("Code K 7 Q F, 2 M X A");
-    expect(body({ reread: true, result: { kind: "gone" } })).not.toContain(REREAD_WORDS);
+  it("F-550: after a decision that wasn't allowed, holds every decision until the list is read again", () => {
+    // Reading: it says so, says nothing of a read done, and takes no decision.
+    const reading = body({ held: true, note: REREADING_WORDS });
+    expect(reading).toContain(REREADING_WORDS);
+    expect(reading).not.toContain(REREAD_WORDS);
+    expect(held(reading)).toEqual([
+      "I didn't start this",
+      "None of these match",
+      "Code 4 C 7 R, M Z 2 D",
+      "Code 9 H 3 K, T Q 8 B",
+      "Code K 7 Q F, 2 M X A",
+      "Code W X 5 N, 0 P J 6",
+    ]);
+    expect(reading).not.toContain(DECIDING_WORDS);
+    // Read: the request as it is now takes a pick again.
+    const read = body({ note: REREAD_WORDS });
+    expect(read).toContain(REREAD_WORDS);
+    expect(held(read)).toEqual([]);
+    // Failed: it says so, and that the list is the last that worked.
+    const failed = body({ note: rereadFailedWords("The gateway didn't answer.") });
+    expect(failed).toContain(
+      "Nothing was approved or denied. Clawtrate couldn't read the waiting devices again: The gateway didn't answer. What is listed here is from the last read that worked.",
+    );
+    expect(failed).not.toContain(REREAD_WORDS);
+    // An outcome takes the note's place above the pick, and says it under itself instead.
+    const checking = body({ result: { kind: "unknown" }, note: CHECKING_WORDS });
+    expect(checking).toContain(CHECKING_WORDS);
   });
 
   it("F-550: says each way an approval can end without a plain approval", () => {
@@ -249,12 +274,44 @@ describe("a decision under way", () => {
         { kind: "undo-failed", what: ["access"], message: "busy." },
         "Clawtrate couldn't remove it: busy. Remove it in Settings, Machines.",
       ],
-    ] as Array<[DeviceDecision, string]>) {
+      [
+        { kind: "undo-unknown", what: ["access"] },
+        "Clawtrate asked to remove that pairing but couldn't confirm it is gone. Look in Settings, Machines.",
+      ],
+      [
+        { kind: "unread", message: "timed out." },
+        "Clawtrate couldn't read the request again before approving it: timed out. Nothing was approved.",
+      ],
+      [
+        { kind: "not-sent", message: "Clawtrate is connected to another gateway now." },
+        "Clawtrate couldn't send this: Clawtrate is connected to another gateway now. Nothing was approved.",
+      ],
+    ] as Array<[SheetOutcome, string]>) {
       const html = body({ result });
       expect(html).toContain(words);
       expect(html).not.toContain("Approved.");
       expect(buttons(html)).toEqual(["Close"]);
     }
+  });
+
+  it("F-550: says only what is known of a denial or a pick whose answer didn't come", () => {
+    expect(decisionWords({ kind: "unknown" }, "deny")).toBe(
+      "Clawtrate didn't get the gateway's answer, so it can't say whether the request was denied.",
+    );
+    expect(decisionWords({ kind: "unknown" }, "none-match")).toBe(
+      "Clawtrate didn't get an answer, so it can't say whether this pick was kept. Nothing was approved.",
+    );
+    expect(decisionWords({ kind: "refused", message: "busy." }, "deny")).toBe(
+      "The gateway refused: busy. Nothing was denied.",
+    );
+    expect(decisionWords({ kind: "not-sent", message: "Too many requests." }, "deny")).toBe(
+      "Clawtrate couldn't send this: Too many requests. Nothing was denied.",
+    );
+    // Only the gateway's refusal is called one.
+    for (const kind of ["unknown", "unread", "not-sent", "undo-unknown"] as const)
+      expect(
+        decisionWords({ kind, message: "x", what: ["access"] } as SheetOutcome, "approve"),
+      ).not.toMatch(/refused|failed/);
   });
 });
 
@@ -286,7 +343,10 @@ describe("where waiting requests show", () => {
     // Even a list left from before shows nothing once access is "none".
     const setup = { access: "none" as const, requests: [request()] };
     expect(render(createElement(DevicesAsking, { onReview: () => {} }), setup)).toBe("");
-    expect(render(createElement(DeviceRequestsList), setup)).toBe("");
+    // Only the empty place focus can return to.
+    expect(render(createElement(DeviceRequestsList), setup)).toBe(
+      '<div class="device-requests-place" tabindex="-1"></div>',
+    );
   });
 
   it("F-550: a request the quiet minutes keep from opening by itself is still listed", () => {

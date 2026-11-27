@@ -3279,6 +3279,11 @@ textarea {
   color: var(--text);
 }
 
+/* Where focus returns when a sheet's own row was decided and left the list: not a control. */
+.device-requests-place:focus {
+  outline: none;
+}
+
 .device-requests ul {
   margin: 0 0 var(--space-3);
   padding: 0;

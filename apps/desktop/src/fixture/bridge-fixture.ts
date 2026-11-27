@@ -29,9 +29,11 @@ import {
   type BridgeResultFor,
   type ClawtrateBridge,
   noDesktopUpdates,
+  HostReplyLost,
   type ClawtrateState,
   type ConnectionState,
   type DeviceDecision,
+  type DeviceListRead,
   type DeviceRequest,
   type DeviceRequestsState,
   type HostInfo,
@@ -714,10 +716,14 @@ export function createFixtureBridge(
     /** `full=1`: the scene's connection is a full pairing, on a host that pairs with full control. */
     fullPairing?: boolean;
     /**
-     * What the right code's approval ends as (`?device=`): approved unless `unknown` (the answer
-     * was lost), `undone` or `undo-failed` (the paired device had other access).
+     * What the right code's approval ends as (`?device=`): approved unless `unknown` (the
+     * gateway's answer was lost; a denial too), `undone`, `undo-failed` or `undo-unknown` (the
+     * paired device had other access), `lost` (the host's reply was lost with its link) or
+     * `host-error` (the host refused it before sending anything).
      */
     device?: string | null;
+    /** `?deviceread=fail`: a read of the waiting devices fails, and the last list stays. */
+    deviceRead?: string | null;
     /** A name given to the fixture gateway on this device (`?gatewayName=`). */
     gatewayName?: string | null;
     /**
@@ -974,7 +980,7 @@ export function createFixtureBridge(
     }
     if (command.type === "readDeviceRequests") {
       sent.push(command);
-      return;
+      return readDevices();
     }
     const checkIn = checkInCommand(command, () => state, set);
     if (checkIn) {
@@ -1445,7 +1451,9 @@ export function createFixtureBridge(
     const decision: DeviceDecision =
       command.type === "refuseDevice"
         ? command.why === "not-mine"
-          ? { kind: "denied" }
+          ? options.device === "unknown"
+            ? { kind: "unknown" }
+            : { kind: "denied" }
           : { kind: "none-match" }
         : !right
           ? { kind: "wrong-code" }
@@ -1455,12 +1463,21 @@ export function createFixtureBridge(
               ? { kind: "undone", what: ["access"] }
               : options.device === "undo-failed"
                 ? { kind: "undo-failed", what: ["access"], message: "The gateway is busy." }
-                : { kind: "approved", deviceId: shown.deviceId };
+                : options.device === "undo-unknown"
+                  ? { kind: "undo-unknown", what: ["access"] }
+                  : { kind: "approved", deviceId: shown.deviceId };
+    if (options.device === "host-error")
+      return Promise.reject(new Error("Clawtrate is connected to another gateway now."));
     deciding.add(shown.requestId);
-    return new Promise((resolve) =>
+    return new Promise((resolve, reject) =>
       timers.deferred(() => {
         deciding.delete(shown.requestId);
-        const now = state.deviceRequests!;
+        const now = state.deviceRequests;
+        // The state was replaced while the answer was held: nothing of this request is left.
+        if (!now) {
+          resolve({ kind: "interrupted" });
+          return;
+        }
         const ends = ["approved", "undone", "undo-failed", "denied"].includes(decision.kind);
         set({
           ...state,
@@ -1475,7 +1492,30 @@ export function createFixtureBridge(
                 ),
           },
         });
-        resolve(decision);
+        // The host carried it out, and its reply was lost with the link.
+        if (options.device === "lost" && right) reject(new HostReplyLost());
+        else resolve(decision);
+      }, 0),
+    );
+  }
+
+  /**
+   * The waiting devices read again, answered after a deferred step so a test can hold it: the
+   * list as it stands, published afresh, or, with `?deviceread=fail`, the failure with the last
+   * list kept.
+   */
+  function readDevices(): Promise<DeviceListRead> {
+    return new Promise((resolve) =>
+      timers.deferred(() => {
+        const now = state.deviceRequests;
+        if (!now || now.access !== "admin") return resolve({ fresh: false, error: null });
+        if (options.deviceRead === "fail") {
+          const error = "The gateway didn't answer.";
+          set({ ...state, deviceRequests: { ...now, error } });
+          return resolve({ fresh: false, error });
+        }
+        set({ ...state, deviceRequests: { ...now, requests: [...now.requests], error: null } });
+        resolve({ fresh: true, error: null });
       }, 0),
     );
   }
@@ -1512,9 +1552,13 @@ export function createFixtureBridge(
         return read as BridgeResultFor<C>;
       }
       case "takeDevicePrompt": {
+        // Taken at once, as the host does; the answer comes after a step a test can hold.
+        sent.push({ ...command });
         const taken = state.deviceRequests?.prompt === command.requestId;
         if (taken) set({ ...state, deviceRequests: { ...state.deviceRequests!, prompt: null } });
-        return { taken } as BridgeResultFor<C>;
+        return new Promise((resolve) =>
+          timers.deferred(() => resolve({ taken } as BridgeResultFor<C>), 0),
+        );
       }
       case "approveDevice":
       case "refuseDevice": {

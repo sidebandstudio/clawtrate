@@ -5,6 +5,7 @@
 
 import {
   gatewayStamp,
+  HostReplyLost,
   spokenCode,
   type DeviceDecision,
   type DeviceRequest,
@@ -47,14 +48,36 @@ const listWords = (what: string[]) => what.join(" and ");
 /** A decision on this request is under way: no other is taken until it ends. */
 export const DECIDING_WORDS =
   "Deciding this request. Nothing else can be picked for it until it ends.";
-/** A decision came back not-allowed: nothing was decided, and the list was read again. */
+/** A decision came back not-allowed: nothing was decided; the list is being read again. */
+export const REREADING_WORDS =
+  "Nothing was approved or denied. Clawtrate is reading the waiting devices again.";
+/** ...and that read was applied. */
 export const REREAD_WORDS =
   "Nothing was approved or denied. Clawtrate read the waiting devices again; this is the request as it is now.";
+/** ...and that read failed: the last list read stays, and says so. */
+export const rereadFailedWords = (error: string | null) =>
+  `Nothing was approved or denied. Clawtrate couldn't read the waiting devices again${error ? `: ${error}` : "."} What is listed here is from the last read that worked.`;
+/** After an outcome that isn't known, the list is read to see what the gateway holds now. */
+export const CHECKING_WORDS = "Clawtrate is checking the waiting devices again.";
+export const CHECKED_WORDS =
+  "Clawtrate read the waiting devices again: Settings, Gateway and Settings, Machines show what the gateway holds now.";
+export const checkFailedWords = (error: string | null) =>
+  `Clawtrate couldn't read the waiting devices again${error ? `: ${error}` : "."}`;
 export const SPENT_WORDS =
   "A pick on this device already approved nothing for this request. Deny it, then ask again from the waiting device.";
 
-/** What a decision did, in a sentence that is true of it. */
-export function decisionWords(decision: DeviceDecision): string {
+/** Which decision was asked for: the words of an outcome depend on it. */
+export type DecisionAct = "approve" | "deny" | "none-match";
+
+/**
+ * What the sheet shows of a decision: the host's answer, or, when the host didn't answer with
+ * one, `not-sent` (the host refused it, or it never reached the host: nothing was decided).
+ */
+export type SheetOutcome = DeviceDecision | { kind: "not-sent"; message: string };
+
+/** What a decision did, in a sentence that is true of it and of what was asked. */
+export function decisionWords(decision: SheetOutcome, act: DecisionAct = "approve"): string {
+  const none = act === "deny" ? "Nothing was denied." : "Nothing was approved.";
   switch (decision.kind) {
     case "approved":
       return "Approved. The device connects in a moment.";
@@ -72,30 +95,50 @@ export function decisionWords(decision: DeviceDecision): string {
       return `The gateway paired the device with another ${listWords(decision.what)} than shown, so Clawtrate removed that pairing at once. Nothing stays approved.`;
     case "undo-failed":
       return `The gateway paired the device with another ${listWords(decision.what)} than shown, and Clawtrate couldn't remove it: ${decision.message} Remove it in Settings, Machines.`;
+    case "undo-unknown":
+      return `The gateway paired the device with another ${listWords(decision.what)} than shown. Clawtrate asked to remove that pairing but couldn't confirm it is gone. Look in Settings, Machines.`;
     case "refused":
-      return `The gateway refused: ${decision.message} Nothing was approved.`;
+      return `The gateway refused: ${decision.message} ${none}`;
     case "interrupted":
       return "The connection changed before Clawtrate could approve it. Nothing was approved.";
+    case "unread":
+      return `Clawtrate couldn't read the request again before approving it: ${decision.message} Nothing was approved.`;
+    case "not-sent":
+      return `Clawtrate couldn't send this: ${decision.message} ${none}`;
     case "unknown":
-      return "Clawtrate didn't get the gateway's answer, so it can't say whether the device was approved. Look in Settings, Machines.";
+      return act === "deny"
+        ? "Clawtrate didn't get the gateway's answer, so it can't say whether the request was denied."
+        : act === "none-match"
+          ? "Clawtrate didn't get an answer, so it can't say whether this pick was kept. Nothing was approved."
+          : "Clawtrate didn't get the gateway's answer, so it can't say whether the device was approved. Look in Settings, Machines.";
     case "not-allowed":
       return "This request can't be approved here.";
   }
 }
 
+const actOf = (pick: Pick): DecisionAct =>
+  pick.type === "approveDevice" ? "approve" : pick.why === "not-mine" ? "deny" : "none-match";
+
 const reported = (text: string | null, none: string) => (text ? `${text} (reported)` : none);
 
 /** The sheet for one request, as it first showed it, until it is closed. */
-export function DeviceRequestSheet(props: { requestId: string; onClose: () => void }) {
+export function DeviceRequestSheet(props: {
+  requestId: string;
+  onClose: () => void;
+  /** Where focus goes when the control that opened it is gone (its row decided and removed). */
+  fallbackFocus?: RefObject<HTMLElement | null>;
+}) {
+  const { fallbackFocus, ...view } = props;
   return (
     <Dialog
       kind="confirm"
+      fallbackFocus={fallbackFocus}
       labelledBy="device-ask-title"
       describedBy="device-ask-lede"
       onClose={props.onClose}
       testId="device-request"
     >
-      <DeviceRequestView {...props} />
+      <DeviceRequestView {...view} />
     </Dialog>
   );
 }
@@ -108,10 +151,21 @@ type Pick =
   | { type: "refuseDevice"; why: "not-mine" | "none-match" };
 
 /**
+ * The list read again after a decision: under way, applied, or failed with why. While it is
+ * under way after a not-allowed answer, nothing on the request can be decided.
+ */
+type Check = {
+  after: "not-allowed" | "unknown";
+  read: "reading" | "read" | "failed";
+  error?: string | null;
+};
+
+/**
  * What the sheet shows, and its decisions. The request is kept as it was shown, with the list it
  * came from, and every decision carries that list back. A decision that comes back not-allowed
  * (its list is from an earlier connection, or the request is blocked or being decided) changed
- * nothing: the list is read again and the sheet shows the request as it is now.
+ * nothing: the list is read again, and only once that read was applied does the sheet say so and
+ * show the request as it is now. An outcome that isn't known has the list read again too.
  */
 export function DeviceRequestView({
   requestId,
@@ -122,18 +176,17 @@ export function DeviceRequestView({
 }) {
   const { connection, deviceRequests } = useClawtrateState();
   const bridge = useBridge();
-  const send = useCommand();
   const admin = deviceRequests?.access === "admin";
   const listedOn = deviceRequests?.listedOn ?? 0;
   const live = admin
     ? (deviceRequests.requests.find((each) => each.requestId === requestId) ?? null)
     : null;
-  // Null after a not-allowed answer: the sheet follows the list until the next pick.
+  // Null once a read after a not-allowed answer ended: the sheet follows the list until the next pick.
   const [seen, setSeen] = useState<Seen | null>(() => (live ? { request: live, listedOn } : null));
-  const [reread, setReread] = useState(false);
+  const [check, setCheck] = useState<Check | null>(null);
   const [stamp] = useState(() => gatewayStamp(connection));
   const [pending, setPending] = useState<Pick | null>(null);
-  const [outcome, setOutcome] = useState<DeviceDecision | null>(null);
+  const [outcome, setOutcome] = useState<{ shown: SheetOutcome; act: DecisionAct } | null>(null);
   const titleRef = useRef<HTMLHeadingElement>(null);
   const closeRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
@@ -147,6 +200,18 @@ export function DeviceRequestView({
     current && fresh && live
       ? { ...current.request, blocked: live.blocked, spent: live.spent, choices: live.choices }
       : (current?.request ?? null);
+  /** Read the list again and say how that went; after not-allowed, then follow the list. */
+  const readAgain = (after: Check["after"]) => {
+    setCheck({ after, read: "reading" });
+    const ended = (read: "read" | "failed", error: string | null = null) => {
+      if (after === "not-allowed") setSeen(null);
+      setCheck({ after, read, error });
+    };
+    bridge.invoke({ type: "readDeviceRequests" }).then(
+      (answer) => (answer?.fresh ? ended("read") : ended("failed", answer?.error ?? null)),
+      (error: unknown) => ended("failed", error instanceof Error ? error.message : String(error)),
+    );
+  };
   // Taken before the first await, so a second press in the same moment sends nothing.
   const inFlight = useRef(false);
   const decide = (pick: Pick) => {
@@ -154,7 +219,8 @@ export function DeviceRequestView({
     inFlight.current = true;
     setPending(pick);
     setSeen(current);
-    setReread(false);
+    setCheck(null);
+    const act = actOf(pick);
     const sent =
       pick.type === "approveDevice"
         ? bridge.invoke({
@@ -168,36 +234,68 @@ export function DeviceRequestView({
     sent
       .then(
         (decision) => {
-          if (decision.kind !== "not-allowed") return setOutcome(decision);
-          // Nothing was decided: read the list again and show the request as it is now.
-          setOutcome(null);
-          setSeen(null);
-          setReread(true);
-          titleRef.current?.focus();
-          void send({ type: "readDeviceRequests" }).catch(() => {});
+          if (decision.kind === "not-allowed") {
+            // Nothing was decided: the sheet waits for the list read again before saying so.
+            setOutcome(null);
+            titleRef.current?.focus();
+            readAgain("not-allowed");
+            return;
+          }
+          setOutcome({ shown: decision, act });
+          if (decision.kind === "unknown") readAgain("unknown");
         },
-        (error: unknown) =>
-          setOutcome({
-            kind: "refused",
-            message: error instanceof Error ? error.message : String(error),
-          }),
+        (error: unknown) => {
+          // A reply lost with the host link: the host may have acted, so it isn't known. Any
+          // other refusal is the host's own, before anything went to the gateway.
+          if (error instanceof HostReplyLost) {
+            setOutcome({ shown: { kind: "unknown" }, act });
+            readAgain("unknown");
+          } else
+            setOutcome({
+              shown: {
+                kind: "not-sent",
+                message: error instanceof Error ? error.message : String(error),
+              },
+              act,
+            });
+        },
       )
       .finally(() => {
         inFlight.current = false;
         setPending(null);
       });
   };
+  const rereading = check?.after === "not-allowed" && check.read === "reading";
   // Decided elsewhere or gone while open, by the list it came from, before any pick here.
-  const ended = !outcome && !pending && (current === null || (fresh && admin && !live));
-  const result: DeviceDecision | null =
-    outcome ?? (ended ? (admin ? { kind: "gone" } : { kind: "not-allowed" }) : null);
+  const ended =
+    !outcome && !pending && !rereading && (current === null || (fresh && admin && !live));
+  const result: SheetOutcome | null =
+    outcome?.shown ?? (ended ? (admin ? { kind: "gone" } : { kind: "not-allowed" }) : null);
+  const note =
+    check === null
+      ? null
+      : check.after === "not-allowed"
+        ? outcome
+          ? null
+          : check.read === "reading"
+            ? REREADING_WORDS
+            : check.read === "read"
+              ? REREAD_WORDS
+              : rereadFailedWords(check.error ?? null)
+        : check.read === "reading"
+          ? CHECKING_WORDS
+          : check.read === "read"
+            ? CHECKED_WORDS
+            : checkFailedWords(check.error ?? null);
   return (
     <DeviceRequestBody
       gateway={gatewayLabel(connection.gatewayUrl)}
       request={request}
       result={result}
+      act={outcome?.act ?? "approve"}
       pending={pending}
-      reread={reread}
+      held={rereading}
+      note={note}
       onDecide={decide}
       onClose={onClose}
       titleRef={titleRef}
@@ -211,8 +309,10 @@ export function DeviceRequestBody({
   gateway,
   request,
   result,
+  act = "approve",
   pending,
-  reread = false,
+  held = false,
+  note = null,
   onDecide,
   onClose,
   titleRef,
@@ -220,17 +320,21 @@ export function DeviceRequestBody({
 }: {
   gateway: string;
   request: DeviceRequest | null;
-  result: DeviceDecision | null;
+  result: SheetOutcome | null;
+  /** What was asked for, for the outcome's words. */
+  act?: DecisionAct;
   /** The decision under way: every decision on this request waits for it. */
   pending: Pick | null;
-  /** A decision came back not-allowed and the list was read again. */
-  reread?: boolean;
+  /** No decision can be made yet (the list is being read again after a not-allowed answer). */
+  held?: boolean;
+  /** What the list read again after a decision says, under the outcome or above the pick. */
+  note?: string | null;
   onDecide: (pick: Pick) => void;
   onClose: () => void;
   titleRef?: RefObject<HTMLHeadingElement | null>;
   closeRef?: RefObject<HTMLButtonElement | null>;
 }) {
-  const busy = pending !== null;
+  const busy = pending !== null || held;
   const press = (pick: Pick) => () => {
     if (!busy) onDecide(pick);
   };
@@ -283,20 +387,27 @@ export function DeviceRequestBody({
           </ul>
         </>
       )}
-      {reread && !result && (
+      {note && !result && (
         <p className="device-outcome" role="status" data-testid="device-reread">
-          {REREAD_WORDS}
+          {note}
         </p>
       )}
-      {busy && (
+      {pending && (
         <p className="device-outcome" role="status" data-testid="device-deciding">
           {DECIDING_WORDS}
         </p>
       )}
       {result ? (
-        <p className="device-outcome" role="status" data-testid="device-outcome">
-          {decisionWords(result)}
-        </p>
+        <>
+          <p className="device-outcome" role="status" data-testid="device-outcome">
+            {decisionWords(result, act)}
+          </p>
+          {note && (
+            <p className="device-outcome" role="status" data-testid="device-check">
+              {note}
+            </p>
+          )}
+        </>
       ) : request?.blocked ? (
         <p className="device-outcome" data-testid="device-blocked">
           {BLOCKED_WORDS[request.blocked]}
@@ -374,27 +485,71 @@ export function DeviceRequestBody({
   );
 }
 
-/** The one request the host opens by itself, in the window that has focus when it comes. */
-export function DeviceRequestPrompt({ inert }: { inert: boolean }) {
+/**
+ * The person is typing: a text field has focus, or the composer holds words not yet sent. A sheet
+ * opening now would take the keystrokes meant for it.
+ */
+function typing(): boolean {
+  const active = document.activeElement;
+  if (
+    active instanceof HTMLElement &&
+    (active.isContentEditable ||
+      active instanceof HTMLTextAreaElement ||
+      (active instanceof HTMLInputElement &&
+        !["button", "checkbox", "radio", "submit", "reset", "range", "color", "file"].includes(
+          active.type,
+        )))
+  )
+    return true;
+  return [...document.querySelectorAll<HTMLTextAreaElement>(".composer-input")].some(
+    (input) => input.value.trim() !== "",
+  );
+}
+
+/**
+ * The one request the host opens by itself, in the window that has focus when it comes, and only
+ * while the person isn't busy: no dialog open (`busy`: Settings, Search, New bot and the others
+ * the shell knows) and no typing. Each condition is checked when the host offers the request
+ * and again when its answer comes. A request this window took but can't show then isn't opened
+ * later by itself: it waits in the rail line and in Settings, Gateway.
+ */
+export function DeviceRequestPrompt({
+  busy,
+  onOpenChange,
+}: {
+  busy: boolean;
+  /** The sheet opened or closed: the shell's own keys leave it alone while it is open. */
+  onOpenChange?: (open: boolean) => void;
+}) {
   const { deviceRequests } = useClawtrateState();
   const bridge = useBridge();
   const [open, setOpen] = useState<string | null>(null);
   const prompt = deviceRequests?.prompt ?? null;
+  // The latest `busy`, for an answer that comes after this render.
+  const busyRef = useRef(busy);
   useEffect(() => {
-    if (!prompt || open || inert) return;
+    busyRef.current = busy;
+  }, [busy]);
+  useEffect(() => {
+    onOpenChange?.(open !== null);
+  }, [open, onOpenChange]);
+  useEffect(() => {
+    if (!prompt || open || busy) return;
+    const free = () => document.hasFocus() && !busyRef.current && !typing();
     const take = () => {
-      if (!document.hasFocus()) return;
+      if (!free()) return;
       bridge
         .invoke({ type: "takeDevicePrompt", requestId: prompt })
         .then((answer) => {
-          if (answer.taken) setOpen(prompt);
+          // Again on the answer: focus may have moved, a dialog opened or typing started.
+          if (answer.taken && free()) setOpen(prompt);
         })
         .catch(() => {});
     };
     take();
     window.addEventListener("focus", take);
     return () => window.removeEventListener("focus", take);
-  }, [prompt, open, inert, bridge]);
+  }, [prompt, open, busy, bridge]);
   return open ? <DeviceRequestSheet requestId={open} onClose={() => setOpen(null)} /> : null;
 }
 
@@ -425,13 +580,17 @@ export function DevicesAsking({ onReview }: { onReview: () => void }) {
 /** Settings, Gateway: the requests waiting, each opening the sheet. */
 export function DeviceRequestsList() {
   const [open, setOpen] = useState<string | null>(null);
+  // Focus returns here when the row that opened the sheet was decided and left the list.
+  const place = useRef<HTMLDivElement>(null);
   // The open sheet stays while the list changes under it, even to empty: it shows what it
   // was opened on and its outcome until it is closed.
   return (
-    <>
+    <div className="device-requests-place" ref={place} tabIndex={-1}>
       <DeviceRequestRows onOpen={setOpen} />
-      {open && <DeviceRequestSheet requestId={open} onClose={() => setOpen(null)} />}
-    </>
+      {open && (
+        <DeviceRequestSheet requestId={open} onClose={() => setOpen(null)} fallbackFocus={place} />
+      )}
+    </div>
   );
 }
 
