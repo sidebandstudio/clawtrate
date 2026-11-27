@@ -65,7 +65,7 @@
       - button "Add a reaction"
       - button "Reply in a thread"
       - button "More"
-    - group: Worked 2 actions
+    - group: Worked 1 action
     - status
   - region "Johnny's name":
     - status: Renamed to Johnny

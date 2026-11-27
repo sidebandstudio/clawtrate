@@ -65,7 +65,6 @@
       - button "Add a reaction"
       - button "Reply in a thread"
       - button "More"
-    - group: Worked 2 actions
     - status
   - region "Johnny's name":
     - status: New bot is now Johnny, the name in its identity file
