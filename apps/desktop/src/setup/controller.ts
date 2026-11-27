@@ -654,10 +654,18 @@ export class SetupController implements SetupHost {
       // last check is their own, no longer this attempt's, which Back or a new look ends.
       let kept = false;
       this.watch(attempt, found.url, found.port, selection, true, () => (kept = true));
+      // Until then, a socket only while this attempt is still Connecting. Once it has failed, the
+      // client's own retry may come due before setup's disconnect is through the client's queue:
+      // that retry dials nothing.
+      const createSocket = (url: string) => {
+        if (!kept && !(current() && this.state.phase === "connecting"))
+          throw new Error("This Connect has ended.");
+        return sockets.createWebSocket(url);
+      };
       await client.connect(
         { url: found.url, token: token.reveal() },
         {
-          createSocket: sockets.createWebSocket,
+          createSocket,
           prove: provedWhile(() => current() || kept, sockets.verify),
           route: routeOf(found),
           consent,
