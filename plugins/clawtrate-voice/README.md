@@ -6,7 +6,7 @@ Asks the bots on a gateway to talk to their person plainly and kindly, with no e
 
 It is built and checked against OpenClaw 2026.10.6, the version `docs/decisions.md` pins, and 2026.11.10.
 
-The desktop app carries it, packed from its release's own commit (`apps/desktop/packaging/carried-plugins.ts`), and installs it on a gateway on the same computer through the gateway's own methods: staged off, checked against the copy the app carries, given its one grant, and only then turned on (`packages/core/src/plugin-install.ts`, `docs/design/plugins-install.md`). Nobody runs a command or edits a config for it.
+The desktop app carries it, packed from its release's own commit (`apps/desktop/packaging/carried-plugins.ts`). Its install engine (`packages/core/src/plugin-install.ts`, `docs/design/plugins-install.md`) installs it on a gateway on the same computer through the gateway's own methods: staged off, checked against the copy the app carries, given its one grant, and only then turned on. The desktop app doesn't call the engine yet; that comes with the step that shows it in Settings. Until then, the development gateway's `--install-plugin`, below, is the way to install it like this.
 
 Its one grant is `plugins.entries.clawtrate-voice.hooks.allowConversationAccess: true`, which OpenClaw requires before it registers `before_prompt_build` for a plugin it didn't bundle. Clawtrate writes it when it installs the plugin, and removes it when the plugin is taken off. The plugin reads nothing from the conversation. It only returns the guide. A config with `allowPromptInjection: false` for this plugin still blocks the hook, and the only other sign of that is a warning in the gateway's log.
 

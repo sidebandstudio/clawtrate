@@ -139,6 +139,8 @@ const RUN_WAIT_MS = 5 * 60_000;
 const RUN_POLL_MS = 5_000;
 const OTHER_DEVICE_MS = 60_000;
 const BUSY_TRIES = 3;
+const SESSION_PAGE = 200;
+const MAX_SESSION_PAGES = 50;
 const BUSY_WAITS = [1_000, 2_000, 4_000];
 const OFF_WAITS = [1_000, 2_000, 4_000, 8_000, 16_000, 30_000];
 const OFF_EVERY_MS = 30_000;
@@ -201,6 +203,8 @@ export type GatewayRead = {
   shape: Shape | null;
   /** The entry says `enabled: true`, whatever else it holds. */
   enabledSet: boolean;
+  /** The entry says `enabled: false`, whatever else it holds. */
+  disabled: boolean;
   /** `plugins.deny` names it, or a non-empty `plugins.allow` leaves it out. */
   keptOut: boolean;
   listed: { version: string | null; active: boolean; unloaded: boolean } | null;
@@ -322,10 +326,17 @@ export class PluginInstaller {
   /**
    * A write, numbered, waited on while the gateway says another change is running (it says so
    * with `mutationAccepted: false` on 2026.11.10): its `retryAfterMs`, else 1, 2 and 4 seconds,
-   * three tries at most. Only an admin connection writes.
+   * three tries at most. `prepare` runs before every try, the first and each retry: it is the
+   * step's before-write read, and gives the parameters from what it read (a fresh `baseHash`).
+   * Only an admin connection writes.
    */
-  private async write(epoch: number, method: string, params: unknown): Promise<Json> {
+  private async write(
+    epoch: number,
+    method: string,
+    prepare: () => Promise<unknown>,
+  ): Promise<Json> {
     for (let attempt = 0; ; attempt += 1) {
+      const params = await prepare();
       if (!this.ctx.admin()) throw new Stop("no-admin");
       this.writes += 1;
       try {
@@ -342,12 +353,12 @@ export class PluginInstaller {
   }
 
   private async readGateway(epoch: number, pin: PluginPin): Promise<GatewayRead> {
-    const [config, list, sessions] = await Promise.all([
+    const [config, list, busy] = await Promise.all([
       this.call(epoch, "config.get", {}),
       this.call(epoch, "plugins.list", {}),
-      this.call(epoch, "sessions.list", {}),
+      this.anyRunGoing(epoch),
     ]);
-    if (!Array.isArray(list.plugins) || !isRec(config.config) || !Array.isArray(sessions.sessions))
+    if (!Array.isArray(list.plugins) || !isRec(config.config))
       throw new Lost("a read missing a field");
     const plugins = rec(rec(config.config).plugins);
     const deny = Array.isArray(plugins.deny) ? plugins.deny : [];
@@ -358,12 +369,29 @@ export class PluginInstaller {
       hash: str(config.hash),
       shape: entryShape(rec(plugins.entries)[pin.pluginId], pin.grants),
       enabledSet: rec(rec(plugins.entries)[pin.pluginId]).enabled === true,
+      disabled: rec(rec(plugins.entries)[pin.pluginId]).enabled === false,
       keptOut: deny.includes(pin.pluginId) || (allow.length > 0 && !allow.includes(pin.pluginId)),
       listed: row
         ? { version: str(row.version), active: state === "active", unloaded: state === "unloaded" }
         : null,
-      busy: sessions.sessions.some((s) => rec(s).hasActiveRun === true),
+      busy,
     };
+  }
+
+  /**
+   * Whether any session has a run going, over every page of `sessions.list` (`hasMore` and
+   * `nextOffset`). More pages than `MAX_SESSION_PAGES` count as busy: idle is never assumed.
+   */
+  private async anyRunGoing(epoch: number): Promise<boolean> {
+    let params: Json = { limit: SESSION_PAGE };
+    for (let pages = 0; pages < MAX_SESSION_PAGES; pages += 1) {
+      const page = await this.call(epoch, "sessions.list", params);
+      if (!Array.isArray(page.sessions)) throw new Lost("a read missing a field");
+      if (page.sessions.some((s) => rec(s).hasActiveRun === true)) return true;
+      if (page.hasMore !== true || typeof page.nextOffset !== "number") return false;
+      params = { limit: SESSION_PAGE, offset: page.nextOffset };
+    }
+    return true;
   }
 
   private async inspect(epoch: number, pin: PluginPin): Promise<Json> {
@@ -507,7 +535,14 @@ export class PluginInstaller {
       const digest = pin.sourceDigests[openclaw];
       if (!digest) throw new Stop("openclaw-version");
 
-      // A record left by this device: go on where it stopped, or stop.
+      // A record left by this device: go on where it stopped, or stop. Until a read shows the
+      // plugin off, a record whose write could have left it running says it may be (#832, 4).
+      if (record)
+        mayBeRunning =
+          record.turningOff ||
+          record.pending === 7 ||
+          record.step >= 7 ||
+          (record.mode === "update" && (record.step < 2 || record.pending === 2));
       if (record) {
         const resumed = await this.resumeFrom(
           epoch,
@@ -582,14 +617,8 @@ export class PluginInstaller {
       throw new Stop(this.describe(read, pin));
     }
     if (mode === "update") {
-      const installed = await this.inspect(epoch, pin);
-      const source = rec(installed.source);
       olderVersion = read.listed!.version;
-      const shipped = this.ctx.shipped.some(
-        (r) => r.version === olderVersion && r.integrity === source.integrity,
-      );
-      if (!shipped || source.packageName !== pin.packageName || !older(olderVersion!, pin.version))
-        throw new Stop("other-copy");
+      await this.requireShipped(epoch, pin, olderVersion);
     }
     const record: PluginRecord = {
       mode,
@@ -615,6 +644,21 @@ export class PluginInstaller {
       running,
       olderVersion,
     );
+  }
+
+  /** Update's copy is a release this app shipped, of its package, older than the pin. */
+  private async requireShipped(epoch: number, pin: PluginPin, version: string | null) {
+    const source = rec((await this.inspect(epoch, pin)).source);
+    const shipped = this.ctx.shipped.some(
+      (r) => r.version === version && r.integrity === source.integrity,
+    );
+    if (
+      !shipped ||
+      source.packageName !== pin.packageName ||
+      !version ||
+      !older(version, pin.version)
+    )
+      throw new Stop("other-copy");
   }
 
   private chooseMode(read: GatewayRead, pin: PluginPin): PluginMode | null {
@@ -668,7 +712,8 @@ export class PluginInstaller {
   ): Promise<{ kind: "continue"; from: number } | { kind: "done"; outcome: PluginOutcome }> {
     if (record.turningOff) {
       const off = await this.turnOffUntilApplied(epoch, pin);
-      await drop();
+      // Kept until a read shows it off, so the next connection goes on turning it off.
+      if (off) await drop();
       return {
         kind: "done",
         outcome: { kind: "stopped", stop: off ? "turned-off" : "lost", mayBeRunning: !off },
@@ -678,6 +723,16 @@ export class PluginInstaller {
     const mode = record.mode;
     const pending = record.pending;
     if (pending === 7) {
+      if (read.shape === "ON+G" && record.again) {
+        // Steps 6 and 7 already ran again once: turn it off and stop, never a third enable.
+        await save({ turningOff: true });
+        const off = await this.turnOffUntilApplied(epoch, pin);
+        if (off) await drop();
+        return {
+          kind: "done",
+          outcome: { kind: "stopped", stop: off ? "turned-off" : "lost", mayBeRunning: !off },
+        };
+      }
       if (read.shape === "ON+G") {
         // Step 7 applied but its answer was lost: turn it off, then steps 6 and 7 again for the digest.
         await save({ turningOff: true });
@@ -733,14 +788,15 @@ export class PluginInstaller {
     const entry = (value: Json) => JSON.stringify({ plugins: { entries: { [id]: value } } });
     const patch = async (after: number, value: Json, step: number) => {
       for (let attempt = 0; ; attempt += 1) {
-        const read = await this.beforeWrite(epoch, pin, mode, after, olderVersion);
-        await save({ pending: step });
+        let base: string | null = null;
         try {
-          const answer = await this.write(epoch, "config.patch", {
-            baseHash: read.hash,
-            raw: entry(value),
+          const answer = await this.write(epoch, "config.patch", async () => {
+            const read = await this.beforeWrite(epoch, pin, mode, after, olderVersion);
+            await save({ pending: step });
+            base = read.hash;
+            return { baseHash: read.hash, raw: entry(value) };
           });
-          await save({ configHash: str(answer.hash) ?? read.hash });
+          await save({ configHash: str(answer.hash) ?? base });
           return;
         } catch (error) {
           if (error instanceof Stop || error instanceof Lost || !staleHash(error)) throw error;
@@ -774,14 +830,14 @@ export class PluginInstaller {
         else if (mode === "update") {
           if (!olderVersion)
             olderVersion = (await this.readGateway(epoch, pin)).listed?.version ?? null;
-          await this.beforeWrite(epoch, pin, mode, 1, olderVersion);
-          await save({ pending: 2 });
+          // On a resume too: the copy it turns off and replaces is a release this app shipped.
+          await this.requireShipped(epoch, pin, olderVersion);
           running(true);
           try {
-            await this.write(epoch, "plugins.setEnabled", {
-              pluginId: id,
-              enabled: false,
-              allowlistPolicy: "preserve",
+            await this.write(epoch, "plugins.setEnabled", async () => {
+              await this.beforeWrite(epoch, pin, mode, 1, olderVersion);
+              await save({ pending: 2 });
+              return { pluginId: id, enabled: false, allowlistPolicy: "preserve" };
             });
           } catch (error) {
             if (error instanceof Lost) throw new Stop("lost", error.message);
@@ -795,15 +851,17 @@ export class PluginInstaller {
         await save({ step: 2, pending: null });
       } else if (step === 3) {
         if (mode === "turn-on") continue;
-        await this.beforeWrite(epoch, pin, mode, 2, olderVersion);
-        await save({ pending: 3 });
         let answer: Json;
         try {
-          answer = await this.write(epoch, "plugins.install", {
-            source: "npm-pack",
-            archivePath,
-            enable: false,
-            ...(mode === "update" ? { mode: "update" } : {}),
+          answer = await this.write(epoch, "plugins.install", async () => {
+            await this.beforeWrite(epoch, pin, mode, 2, olderVersion);
+            await save({ pending: 3 });
+            return {
+              source: "npm-pack",
+              archivePath,
+              enable: false,
+              ...(mode === "update" ? { mode: "update" } : {}),
+            };
           });
         } catch (error) {
           if (error instanceof Stop || error instanceof Lost) throw error;
@@ -860,16 +918,19 @@ export class PluginInstaller {
         await save({ step: 6 });
       } else if (step === 7) {
         if (token === null) throw new Stop("lost", "no review token");
-        await this.beforeWrite(epoch, pin, mode, 6);
-        await save({ pending: 7 });
-        running(true);
+        const reviewToken = token;
         let answer: Json;
         try {
-          answer = await this.write(epoch, "plugins.setEnabled", {
-            pluginId: id,
-            enabled: true,
-            allowlistPolicy: "preserve",
-            acknowledgeCapabilities: { reviewToken: token },
+          answer = await this.write(epoch, "plugins.setEnabled", async () => {
+            await this.beforeWrite(epoch, pin, mode, 6);
+            await save({ pending: 7 });
+            running(true);
+            return {
+              pluginId: id,
+              enabled: true,
+              allowlistPolicy: "preserve",
+              acknowledgeCapabilities: { reviewToken },
+            };
           });
         } catch (error) {
           if (error instanceof Lost && record.again) await disable("lost");
@@ -888,16 +949,15 @@ export class PluginInstaller {
         stepDigest = got;
         await save({ step: 7, pending: null, sourceDigest: got });
       } else if (step === 8) {
-        const [read, inspected] = [
-          await this.readGateway(epoch, pin),
-          await this.inspect(epoch, pin),
-        ];
+        // The plugin's own read first, then the reads the result is decided from.
         let reported: string | null = null;
         try {
           reported = str(rec(await this.call(epoch, confirm.method, confirm.params)).version);
         } catch (error) {
           if (error instanceof Stop || error instanceof Lost) throw error;
         }
+        const read = await this.readGateway(epoch, pin);
+        const inspected = await this.inspect(epoch, pin);
         const ok =
           stepDigest === digest &&
           read.shape === "ON+G" &&
@@ -919,12 +979,13 @@ export class PluginInstaller {
   /**
    * The one write that skips the checks: `setEnabled false` whatever is running and whatever the
    * state, tried again after 1, 2, 4, 8, 16 and 30 seconds and then every 30 while connected,
-   * until a read shows the entry `OFF+G` or `OFF` and the plugin `unloaded`. False when the
+   * until a read shows the entry `enabled: false` and the plugin `unloaded`. False when the
    * connection went first: the record keeps "turning off" for the next.
    */
   private async turnOffUntilApplied(epoch: number, pin: PluginPin): Promise<boolean> {
     for (let attempt = 0; attempt < MAX_OFF_TRIES; attempt += 1) {
-      if (this.ctx.epoch() !== epoch) return false;
+      // Without a confirmed admin grant nothing is sent: the record keeps "turning off".
+      if (this.ctx.epoch() !== epoch || !this.ctx.admin()) return false;
       try {
         this.writes += 1;
         await this.call(epoch, "plugins.setEnabled", {
@@ -937,11 +998,7 @@ export class PluginInstaller {
       }
       try {
         const read = await this.readGateway(epoch, pin);
-        if (
-          (read.shape === "OFF" || read.shape === "OFF+G") &&
-          (!read.listed || read.listed.unloaded)
-        )
-          return true;
+        if (read.disabled && (!read.listed || read.listed.unloaded)) return true;
       } catch (error) {
         if (error instanceof Stop) return false;
       }
@@ -959,28 +1016,39 @@ export class PluginInstaller {
     let mayBeRunning = false;
     try {
       if (!this.ctx.admin()) throw new Stop("no-admin");
+      const route = this.ctx.route();
+      if (route !== "same-computer" && route !== "ssh") throw new Stop("route");
       const read = await this.readGateway(epoch, pin);
       if (read.shape === null || !read.listed) throw new Stop(this.describe(read, pin));
       if (read.shape === "ON+G" || read.listed.active) {
         mayBeRunning = true;
-        await this.write(epoch, "plugins.setEnabled", {
+        await this.write(epoch, "plugins.setEnabled", async () => ({
           pluginId: pin.pluginId,
           enabled: false,
           allowlistPolicy: "preserve",
-        });
+        }));
       }
-      const off = await this.readGateway(epoch, pin);
-      const nulls = Object.fromEntries(Object.keys(pin.grants).map((key) => [key, null]));
-      if (off.shape === "OFF+G" && Object.keys(nulls).length > 0)
-        await this.write(epoch, "config.patch", {
-          baseHash: off.hash,
-          raw: JSON.stringify({
-            plugins: { entries: { [pin.pluginId]: { enabled: false, ...nulls } } },
-          }),
-        });
+      const grantKeys = Object.keys(pin.grants).length;
+      const raw = JSON.stringify({
+        plugins: {
+          entries: {
+            [pin.pluginId]: {
+              enabled: false,
+              ...Object.fromEntries(Object.keys(pin.grants).map((key) => [key, null])),
+            },
+          },
+        },
+      });
+      if (grantKeys > 0 && (await this.readGateway(epoch, pin)).shape === "OFF+G")
+        await this.write(epoch, "config.patch", async () => ({
+          baseHash: (await this.readGateway(epoch, pin)).hash,
+          raw,
+        }));
       const after = await this.readGateway(epoch, pin);
       if (after.shape !== "OFF" || !after.listed?.unloaded)
         throw new Stop(this.describe(after, pin));
+      // Taken off on purpose: an attempt this device had under way is over.
+      await this.ctx.saveRecord(pin.pluginId, null);
       return { kind: "taken-off" };
     } catch (error) {
       return this.stopped(error, mayBeRunning);

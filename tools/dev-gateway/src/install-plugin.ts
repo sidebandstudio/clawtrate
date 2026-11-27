@@ -70,14 +70,16 @@ export function operatorContext(
   shipped: PluginInstallContext["shipped"] = [],
 ): PluginInstallContext {
   return {
-    request: (method, params) => session.request(method, params, 120_000),
+    // Bound to one connection: sent on the connection that is up, never waited for or sent
+    // again on the next (the engine's epoch is the session's hello count).
+    request: (method, params) => session.requestOnce(method, params, 120_000),
     admin: () => true,
     serverVersion: () => session.serverVersion,
     route: () => "same-computer",
     answered: (error) =>
       typeof (error as { code?: unknown })?.code === "string" &&
       (error as { code: string }).code !== "CLIENT_TIMEOUT",
-    epoch: () => 1,
+    epoch: () => session.generation,
     sleep: (ms) => new Promise((done) => setTimeout(done, ms)),
     now: () => Date.now(),
     changed: (ms) =>
@@ -114,7 +116,10 @@ export function describeOutcome(
     outcome.reported && version
       ? `\nThe gateway reported the source digest ${outcome.reported}. If this packing is the one to ship, record it: node apps/desktop/packaging/carried-plugins.ts source-digest ${name} ${version} ${outcome.reported}`
       : "";
-  return `Didn't install ${name}: ${outcome.stop}${said}.${digest}`;
+  const running = outcome.mayBeRunning
+    ? "\nIt may still be running: no read has shown it off since."
+    : "";
+  return `Didn't install ${name}: ${outcome.stop}${said}.${running}${digest}`;
 }
 
 /**
@@ -138,6 +143,9 @@ export async function installPlugin(
       ]),
     ),
   };
+  // An attempt this tool left resumes, and its outcome is final: a recovery's stop never turns
+  // into a fresh Add again or Turn on.
+  if (records.get(packed.pin.pluginId)) return engine.resume(pin, packed.archive, confirm);
   const first = await engine.install(pin, packed.archive, confirm);
   if (first.kind === "stopped" && first.stop === "not-listed-off")
     return engine.addAgain(pin, packed.archive, confirm);

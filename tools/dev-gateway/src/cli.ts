@@ -101,7 +101,7 @@ import {
   profileArgs,
   selectInstance,
 } from "./instance.ts";
-import { describeOutcome, installPlugin, packCarried } from "./install-plugin.ts";
+import { describeOutcome, INSTALLABLE, installPlugin, packCarried } from "./install-plugin.ts";
 import { instanceLockPath, portLockPath, withLock } from "./lock.ts";
 import {
   OPENCLAW_VERSION,
@@ -3023,6 +3023,15 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
   // The selector is validated before any command runs or any path is built.
   const selected = selectInstance(values.instance, env);
   const [command, ...rest] = positionals;
+  // Before any command runs or any instance changes: only start takes it, and only with plugins
+  // the desktop app carries.
+  if (values["install-plugin"] && command !== "start" && command !== "up")
+    throw new Error(`--install-plugin is a start option; ${command} does not take it`);
+  for (const name of values["install-plugin"] ?? [])
+    if (!(INSTALLABLE as readonly string[]).includes(name))
+      throw new Error(
+        `--install-plugin takes ${INSTALLABLE.join(", ")}, not ${JSON.stringify(name)}`,
+      );
   if (command === "setup") {
     if (selected !== null)
       throw new Error("setup is for this checkout; it does not take --instance");
@@ -3070,8 +3079,6 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
       throw new Error(`--${option} is a start option; ${command} does not take it`);
     }
   }
-  if (values["install-plugin"] && command !== "start" && command !== "up")
-    throw new Error(`--install-plugin is a start option; ${command} does not take it`);
   const renew = values["renew-timeout-ms"];
   if (renew !== undefined && command !== "start" && command !== "up") {
     throw new Error(`--renew-timeout-ms is a start option; ${command} does not take it`);

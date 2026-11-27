@@ -58,6 +58,8 @@ export class OperatorSession {
   private client: GatewayClient | null = null;
   /** Between a close and the client's own reconnect, requests wait for the next hello. */
   private ready = false;
+  /** Moves on with each hello: what was read on one connection is never written on the next. */
+  generation = 0;
   private readonly helloWaiters = new Set<() => void>();
   private lastClose = "";
   /** This connection's device, as the gateway lists it. */
@@ -156,6 +158,7 @@ export class OperatorSession {
               return;
             }
             session.client = client;
+            session.generation += 1;
             session.ready = true;
             for (const wake of session.helloWaiters) wake();
             session.helloWaiters.clear();
@@ -215,6 +218,17 @@ export class OperatorSession {
       await this.connected(timeoutMs, left(), true);
       return send();
     }
+  }
+
+  /**
+   * One request on the connection that is up now, or none: no wait for a hello and no resend on
+   * the next connection. For a write decided from reads on this connection (the plugin install
+   * engine's), which must never go out on another one.
+   */
+  requestOnce<T = JsonRecord>(method: string, params: unknown, timeoutMs = 60_000): Promise<T> {
+    const client = this.client;
+    if (!client || !this.ready) return Promise.reject(new Error("not connected"));
+    return client.request<T>(method, params, { timeoutMs });
   }
 
   private notReconnected(timeoutMs: number): Error {

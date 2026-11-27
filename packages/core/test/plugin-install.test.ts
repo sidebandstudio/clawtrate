@@ -562,6 +562,146 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
     });
   });
 
+  describe("what the automated review found", () => {
+    const record = (patch: Partial<PluginRecord>): PluginRecord => ({
+      mode: "install",
+      integrity: PIN.integrity,
+      step: 1,
+      pending: null,
+      turningOff: false,
+      sourceDigest: null,
+      configHash: null,
+      ...patch,
+    });
+    const withRecord = (g: FakeGateway, r: PluginRecord, options = {}) =>
+      contextFor(g, { records: new Map([[ID, r]]), ...options });
+
+    it("reads again before it sends a write the gateway asked to send later", async () => {
+      const g = at(version, "fresh");
+      // Refused as busy, and a bot starts a run during the wait.
+      g.hooks.push({
+        method: "plugins.setEnabled",
+        nth: 1,
+        before: (gw) => (gw.busy = true),
+        refuse: "busy",
+      });
+      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, ARCHIVE, CONFIRM);
+      expect(outcome).toMatchObject({ stop: "bots-busy" });
+      expect(g.calls.filter((c) => c.method === "plugins.setEnabled")).toHaveLength(1);
+      expect(g.loaded).toBe(false);
+    });
+
+    it("reads every page of sessions.list before it calls the gateway idle", async () => {
+      const g = at(version, "fresh");
+      g.sessionPages = [[{ key: "agent:main:a" }], [{ key: "agent:pip:b", hasActiveRun: true }]];
+      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, ARCHIVE, CONFIRM);
+      expect(outcome).toMatchObject({ stop: "bots-busy" });
+      expect(g.writes()).toEqual([]);
+      const offsets = g.calls
+        .filter((c) => c.method === "sessions.list")
+        .map((c) => c.params.offset);
+      expect(offsets).toContain(1);
+    });
+
+    it("keeps saying it may be running when a resume after a lost Update step 2 can't read", async () => {
+      const g = at(version, "older-on");
+      g.hooks.push({ method: "config.get", nth: 1, lose: "before" });
+      const ctx = withRecord(g, record({ mode: "update", step: 1, pending: 2 }));
+      const outcome = await new PluginInstaller(ctx).resume(PIN, ARCHIVE, CONFIRM);
+      expect(outcome).toMatchObject({ stop: "lost", mayBeRunning: true });
+    });
+
+    it("keeps a turning-off record until a read shows the plugin off", async () => {
+      const g = at(version, "on");
+      let epoch = 1;
+      // The connection goes while the disable is on its way: no read shows the plugin off.
+      g.hooks.push({ method: "plugins.setEnabled", nth: 1, before: () => (epoch = 2) });
+      const ctx = withRecord(g, record({ step: 7, turningOff: true }), { epoch: () => epoch });
+      expect(await new PluginInstaller(ctx).resume(PIN, ARCHIVE, CONFIRM)).toMatchObject({
+        stop: "lost",
+        mayBeRunning: true,
+      });
+      expect(ctx.records.get(ID)).toMatchObject({ turningOff: true });
+    });
+
+    it("sends the disable only with a confirmed admin grant", async () => {
+      const g = at(version, "on");
+      let checks = 0;
+      // Admin at step 0, gone by the time the disable would go.
+      const ctx = withRecord(g, record({ step: 7, turningOff: true }), {
+        admin: () => (checks += 1) === 1,
+      });
+      expect(await new PluginInstaller(ctx).resume(PIN, ARCHIVE, CONFIRM)).toMatchObject({
+        stop: "lost",
+        mayBeRunning: true,
+      });
+      expect(g.writes()).toEqual([]);
+      expect(ctx.records.get(ID)).toMatchObject({ turningOff: true });
+    });
+
+    it("never enables a third time after the second enable's reply was lost", async () => {
+      const g = at(version, "on");
+      const ctx = withRecord(g, record({ step: 6, pending: 7, again: true }));
+      const outcome = await new PluginInstaller(ctx).resume(PIN, ARCHIVE, CONFIRM);
+      expect(outcome).toMatchObject({ stop: "turned-off", mayBeRunning: false });
+      expect(g.writes().map((c) => c.params.enabled)).toEqual([false]);
+      expect(g.loaded).toBe(false);
+    });
+
+    it("checks the installed copy is a shipped release again when it resumes an Update", async () => {
+      const g = at(version, "older-on");
+      // The owner replaced the shipped copy with another at the same version before the resume.
+      g.staged = { ...g.staged!, integrity: "sha512-another" };
+      const ctx = withRecord(g, record({ mode: "update", step: 1, pending: 2 }));
+      const outcome = await new PluginInstaller(ctx).resume(PIN, ARCHIVE, CONFIRM);
+      expect(outcome).toMatchObject({ stop: "other-copy" });
+      expect(g.writes()).toEqual([]);
+    });
+
+    it("decides step 8 from reads taken after the plugin's own answer", async () => {
+      const g = at(version, "fresh");
+      g.hooks.push({
+        method: "clawtrate-voice.get",
+        before: (gw) => (gw.entry = { ...gw.entry, config: { mine: true } }),
+      });
+      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, ARCHIVE, CONFIRM);
+      expect(outcome).toMatchObject({ kind: "stopped", stop: "owner-settings" });
+    });
+
+    it("takes nothing off on a route the engine doesn't write on", async () => {
+      const g = at(version, "on");
+      const outcome = await new PluginInstaller(contextFor(g, { route: "other" })).takeOff(PIN);
+      expect(outcome).toMatchObject({ stop: "route" });
+      expect(g.calls).toEqual([]);
+    });
+
+    it("ends an attempt under way when the person takes the plugin off", async () => {
+      const g = at(version, "off");
+      const ctx = withRecord(g, record({ step: 4, pending: 5 }));
+      expect(await new PluginInstaller(ctx).takeOff(PIN)).toEqual({ kind: "taken-off" });
+      expect(ctx.records.get(ID)).toBeNull();
+      // A later connection resumes nothing: the grant stays off.
+      expect(await new PluginInstaller(ctx).resume(PIN, ARCHIVE, CONFIRM)).toMatchObject({
+        stop: "lost",
+      });
+      expect(g.loaded).toBe(false);
+      expect(g.shape()).toBe("OFF");
+    });
+
+    it("a resume at step 7 inspects again and acknowledges that inspect's token (#832, 3)", async () => {
+      const g = at(version, "off");
+      g.token = "d".repeat(64);
+      const ctx = withRecord(g, record({ step: 6, pending: null }));
+      expect(await new PluginInstaller(ctx).resume(PIN, ARCHIVE, CONFIRM)).toEqual({
+        kind: "enabled",
+      });
+      const enable = g.calls.find((c) => c.method === "plugins.setEnabled" && c.params.enabled)!;
+      expect(enable.params.acknowledgeCapabilities).toEqual({ reviewToken: "d".repeat(64) });
+      const before = g.calls.findIndex((c) => c === enable);
+      expect(g.calls.slice(0, before).some((c) => c.method === "plugins.inspect")).toBe(true);
+    });
+  });
+
   describe("step 0 and the gateway's own answers", () => {
     it("writes nothing without a confirmed admin grant, and asks for none", async () => {
       const g = at(version, "fresh");

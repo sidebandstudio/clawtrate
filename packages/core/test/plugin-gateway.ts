@@ -120,6 +120,8 @@ export class FakeGateway {
   /** Every digest that ever loaded, in order: what ran. */
   ran: string[] = [];
   busy = false;
+  /** Sessions served a page at a time, as the gateway pages `sessions.list`; one page when null. */
+  sessionPages: Json[][] | null = null;
   hash = 0;
   token = "e9ee055fdf3a7d0f5c8f4db342886ceca40fecac78cbd94febb73acd562e45fd";
   readonly calls: Call[] = [];
@@ -200,6 +202,13 @@ export class FakeGateway {
         return this.listAnswer();
       case "sessions.list": {
         const answer = clone(this.f.sessions);
+        if (this.sessionPages) {
+          const at = typeof params.offset === "number" ? params.offset : 0;
+          answer.sessions = this.sessionPages[at] ?? [];
+          answer.hasMore = at + 1 < this.sessionPages.length;
+          answer.nextOffset = answer.hasMore ? at + 1 : null;
+          return answer;
+        }
         answer.sessions = this.busy ? [{ key: "agent:main:main", hasActiveRun: true }] : [];
         return answer;
       }

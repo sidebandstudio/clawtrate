@@ -242,9 +242,9 @@ An entry has a shape when it has exactly the shape's fields with the shape's val
 1. It reads `config.get`, `plugins.list` and `sessions.list`.
 2. It requires **policy OK**.
 3. It requires the **expected state** after the previous step, from the table above.
-4. It requires **not busy**. If `sessions.list` shows a run going (`hasActiveRun`), it waits for it to end, five minutes at most, then stops with "Clawtrate will finish adding Bot voice when your bots are idle". Every write here reloads plugins and disposes the gateway's MCP runtimes (section 7).
+4. It requires **not busy**. If `sessions.list` shows a run going (`hasActiveRun`), it waits for it to end, five minutes at most, then stops with "Clawtrate will finish adding Bot voice when your bots are idle". Every write here reloads plugins and disposes the gateway's MCP runtimes (section 7). It reads every page of `sessions.list` (`hasMore`, `nextOffset`); more than 50 pages count as busy. A write the gateway answers "already running" goes through this whole read again before it is sent again, and a `config.patch` takes the new read's `baseHash`.
 
-**The one write that skips all of this is turning the plugin off on a mismatch** (steps 3, 7 and 8): `plugins.setEnabled {pluginId, enabled: false, allowlistPolicy: "preserve"}`. It goes ahead whatever is running and whatever the state. If it doesn't apply, it is retried after 1, 2, 4, 8, 16 and 30 seconds, then every 30 seconds while connected. It is retried again at every connection after that (the record keeps it as "turning off"), until a read shows the entry `OFF+G` or `OFF` and the plugin `unloaded`. Meanwhile the line says: "Clawtrate is turning off its voice plugin; until OpenClaw confirms, it may be running."
+**The one write that skips all of this is turning the plugin off on a mismatch** (steps 3, 7 and 8): `plugins.setEnabled {pluginId, enabled: false, allowlistPolicy: "preserve"}`. It goes ahead whatever is running and whatever the state. If it doesn't apply, it is retried after 1, 2, 4, 8, 16 and 30 seconds, then every 30 seconds while connected. It is retried again at every connection after that (the record keeps it as "turning off"), until a read shows the entry `OFF+G` or `OFF` and the plugin `unloaded`. Meanwhile the line says: "Clawtrate is turning off its voice plugin; until OpenClaw confirms, it may be running." It is sent only on a connection whose confirmed grant still holds admin; without one, the record keeps "turning off". The record is dropped only once a read shows the entry `enabled: false` and the plugin `unloaded`, and after a second lost step 7 reply it is this disable, never a third enable.
 
 **The device's record.** For each gateway and plugin, the device keeps one record of the attempt it is running: its mode, the pin's integrity, the last step it completed (or "turning off"), the write it sent whose reply hasn't come, step 7's `runtime.sourceDigests[<id>]` once it answered (#832), and the `config.get` hash after its own last write. It lives in the device's own storage, one per gateway and plugin, and is registered with its bound in `owners.ts` by the engine's pull request. It is dropped when the attempt ends, enabled or stopped for good.
 
@@ -291,7 +291,7 @@ On either source, the gateway's confirmed grant on this connection must include 
 - the entry has no shape: it holds fields of the owner's;
 - and the rest of section 10's lines.
 
-For **Update**, also call `plugins.inspect`: the installed integrity and version must be a release in this app's table of shipped releases, and older than the pin.
+For **Update**, also call `plugins.inspect`: the installed integrity and version must be a release in this app's table of shipped releases, and older than the pin. Step 2 checks it again before its disable, on a resume too.
 
 Create the record, with the mode and step 1.
 
@@ -376,7 +376,7 @@ If the digest differs or is missing, the engine turns the plugin off by the one 
 - **The entry is still `OFF+G`:** a stop, never a retry: the entry may be the owner's disable (#832). The person's "Turn on" picks it up.
 - **Anything else:** a stop, with the line for what the read shows.
 
-**Step 8. Confirm.** Read `config.get`, `plugins.list` and `plugins.inspect`, and call the plugin's own method. All of these must hold:
+**Step 8. Confirm.** Call the plugin's own method, then read `config.get`, `plugins.list` and `plugins.inspect`, so the result is decided from reads taken after its answer. All of these must hold:
 
 - step 7's `runtime.sourceDigests[<id>]`, from its answer or from the device's record, equals the pin's digest for this OpenClaw version;
 - the entry is `ON+G`;
@@ -674,7 +674,7 @@ Settings shows: "A newer Bot voice plugin comes with this Clawtrate · Update". 
 
 **Proposed:**
 
-- **"Take it off", never "Undo".** Take it off turns the plugin off and removes its grant. It runs only after the before-write read of section 3.3, and makes two writes:
+- **"Take it off", never "Undo".** Take it off turns the plugin off and removes its grant. It runs only after the before-write read of section 3.3, and makes two writes: It runs only where the engine writes (step 0's routes and admin), and ends any attempt this device had under way for the plugin: its record is dropped, so no resume puts the grant back.
   - `plugins.setEnabled {pluginId, enabled: false, allowlistPolicy: "preserve"}`;
   - then `config.patch {baseHash, raw: {plugins: {entries: {<id>: {enabled: false, <each top-level field of grants>: null}}}}}`, for `clawtrate-voice` `{enabled: false, hooks: null}`, which leaves the entry `OFF`.
 
