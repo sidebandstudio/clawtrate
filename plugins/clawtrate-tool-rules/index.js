@@ -505,8 +505,15 @@ function remember(map, key, value, { peopleFirst = false, letGo } = {}) {
 /** Who started a run once the plugin let go of a bot's mark with nowhere left to keep it. */
 const UNSURE = Object.freeze({ bot: null, unsure: true });
 
-/** The `sessions_send` results the gateway gives only once the run is over, or the message was never taken. */
-const SEND_ENDED = new Set(["ok", "no_reply", "timeout", "error"]);
+/**
+ * The `sessions_send` results that say the run has ended: answered (`ok`) or
+ * finished with nothing to say (`no_reply`); both versions give them only once
+ * their wait saw the run end. An `error` or a `timeout` does not say so: both
+ * versions give `error` for a deadline while the gateway's admission is still
+ * pending ("Gateway admission is still pending"), and `timeout` for an error
+ * seen while the run is still pending, so the message may yet start a run.
+ */
+const SEND_ENDED = new Set(["ok", "no_reply"]);
 
 export const LOST_TRACK_LINE =
   "Let go of a bot's message past its memory limit: until the gateway restarts, an Ask in a run that no person's message started is refused.";
@@ -573,7 +580,7 @@ export function createToolRules(api, options = {}) {
   //     bot's too;
   //   - is let go when its run starts, when the sending bot's `sessions_send`
   //     result says the gateway steered it into a run under way or its run has
-  //     ended (answered, failed or timed out), or after MARK_EXPIRY_MS; a run it
+  //     ended (answered, or finished with no reply), or after MARK_EXPIRY_MS; a run it
   //     names that starts later is still that bot's.
   // A run is noted at its first model call. Past a bound, a mark is let go only
   // after its task and its run are kept among the forgotten, which count as a
@@ -762,10 +769,10 @@ export function createToolRules(api, options = {}) {
    * into a run under way (which its write made the bot's), it starts no run,
    * so its mark is let go; a person's message written since the task's latest
    * run was noted may have started a run not noted yet, into which the gateway
-   * steered it: then the next run noted is the bot's too. Ended (answered,
-   * failed, timed out: the gateway says so only once the run is over, or the
-   * message was never taken), its mark is let go and its run, should it start,
-   * is still the bot's. A result that comes before its message is written is
+   * steered it: then the next run noted is the bot's too. Ended (answered, or
+   * finished with no reply: SEND_ENDED), its mark is let go and its run,
+   * should it start, is still the bot's. Any other result (an error, a
+   * timeout) leaves the mark waiting until MARK_EXPIRY_MS. A result that comes before its message is written is
    * kept until it is.
    */
   function noteSent(event) {

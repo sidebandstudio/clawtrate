@@ -778,6 +778,8 @@ describe("a run another bot's message started or reached (#606)", () => {
       },
       { status: "accepted", runId: "run-s", sessionKey: PIP, targetDisposition: "queued" },
       { status: "forbidden", runId: "run-s", sessionKey: PIP },
+      { status: "error", runId: "run-s", sessionKey: PIP, sentBeforeError: true },
+      { status: "timeout", runId: "run-s", sessionKey: PIP, sentBeforeError: true },
     ]) {
       h.sent(MARLOW, details);
       expect(pending(h)).toEqual([{ bot: "marlow", run: "run-s" }]);
@@ -972,13 +974,8 @@ describe("a run another bot's message started or reached (#606)", () => {
     asks(h, "run-p1");
   });
 
-  it("a bot's message dropped or cancelled before its first model call lets the task go once its send says the run ended; the run is still the bot's", async () => {
-    for (const ended of [
-      { status: "error", error: "dropped from the queue", sentBeforeError: true },
-      { status: "timeout", error: "agent run timed out", sentBeforeError: true },
-      { status: "no_reply" },
-      { status: "ok", reply: "done" },
-    ]) {
+  it("a bot's message lets the task go once its send says the run ended; the run is still the bot's", async () => {
+    for (const ended of [{ status: "no_reply" }, { status: "ok", reply: "done" }]) {
       const h = host();
       await h.save("pip", [{ action: "ask", tools: ["read"] }]);
       personRun(h, "run-q1");
@@ -995,11 +992,39 @@ describe("a run another bot's message started or reached (#606)", () => {
     }
   });
 
+  it("a bot's message dropped or cancelled before its first model call: an error or a timeout keeps the task held until MARK_EXPIRY_MS, then a person's Ask is asked", async () => {
+    for (const unsure of [
+      // A deadline while the gateway's admission is still pending: the message may yet run.
+      {
+        status: "error",
+        error: "Gateway admission is still pending; inspect this run before retrying.",
+        sentBeforeError: true,
+      },
+      { status: "error", error: "dropped from the queue", sentBeforeError: true },
+      { status: "timeout", error: "agent run timed out", sentBeforeError: true },
+    ]) {
+      let clock = 1_800_000_000_000;
+      const h = host({ now: () => clock });
+      await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+      personRun(h, "run-q1");
+      h.write(PIP, fromMarlow("run-s"));
+      h.sent(MARLOW, { ...unsure, runId: "run-s", sessionKey: PIP });
+      expect(pending(h)).toEqual([{ bot: "marlow", run: "run-s" }]);
+      personRun(h, "run-q2");
+      refusedFor(h, "run-q2");
+      clock += MARK_EXPIRY_MS + 1;
+      personRun(h, "run-q3");
+      asks(h, "run-q3");
+      h.modelCall("run-s", PIP);
+      refusedFor(h, "run-s");
+    }
+  });
+
   it("a send's result that its run ended, before its message is written, leaves nothing waiting", async () => {
     const h = host();
     await h.save("pip", [{ action: "ask", tools: ["read"] }]);
     personRun(h, "run-q1");
-    h.sent(MARLOW, { status: "error", runId: "run-s", sessionKey: PIP, sentBeforeError: true });
+    h.sent(MARLOW, { status: "no_reply", runId: "run-s", sessionKey: PIP });
     h.write(PIP, fromMarlow("run-s"));
     expect(pending(h)).toEqual([]);
     personRun(h, "run-q2");
