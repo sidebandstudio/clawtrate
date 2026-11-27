@@ -29,10 +29,13 @@ const NOWHERE: ShownStamp = { gatewayId: null, target: -1, connectedAt: null };
 /**
  * Where the history each task shows was read: the connection in the first state that held
  * it. Every read of a task's history gives it new items, so a row takes the stamp of the read
- * that drew it. A row from before a reconnect keeps its stamp, and core refuses its Save; once
- * the history is read again on the new connection, its rows take that one, and Save works
- * without leaving the task (the desktop keeps a row's first stamp until the task is opened
- * again, #505). Watches the client's store from the app's start, so it sees every read.
+ * that drew it, and keeps it. Core refuses its Save only when the target has changed since (a
+ * Connect, Disconnect, switch or new pairing), when the identity read on the connection open now
+ * differs, or when the read itself crosses a reconnect. A socket reconnect to the same gateway
+ * keeps both, so Save still works there. After a switch, once the history is read again, its
+ * rows take the new stamp and Save works without leaving the task (the desktop keeps a row's
+ * first stamp until the task is opened again, #505). Watches the client's store from the app's
+ * start, so it sees every read.
  */
 export function historyStamps(source: StateSource): {
   of(items: readonly TranscriptItem[]): ShownStamp;
