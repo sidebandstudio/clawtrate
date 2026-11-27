@@ -535,7 +535,8 @@ describe("the iPhone chat's rows", () => {
       id: "earlier",
       text: "Only part of this task's history is loaded here, so earlier messages may be missing.",
     });
-    expect(rows.find((row) => row.kind === "note" && row.id === "shortened:a2")?.text).toBe(
+    const shortened = rows.find((row) => row.kind === "note" && row.id === "shortened:a2");
+    expect(shortened?.kind === "note" ? shortened.text : undefined).toBe(
       "Shortened here. Some of this message is missing from this view.",
     );
     const truncated = chatRows(
