@@ -131,9 +131,10 @@ function fakeNative(body: Uint8Array = BYTES) {
 async function iphone(
   native: NativeFetch,
   files: unknown[] = [attachment(PDF, "reviews-draft.pdf", "application/pdf", 861)],
+  messages: unknown[] = history(files),
 ) {
   const gateway = grantingGateway();
-  gateway.handlers["chat.history"] = () => ({ messages: history(files) });
+  gateway.handlers["chat.history"] = () => ({ messages });
   gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway-1" });
   gateway.handlers["artifacts.download"] = () => ({
     url: GRANT,
@@ -199,6 +200,43 @@ describe("F-115: a bot's file among the iPhone chat's rows", () => {
       ],
     });
     expect(rows.filter((row) => row.kind === "files")).toHaveLength(1);
+    client.stop();
+  });
+
+  it("F-115: in a turn of two messages, a file goes under the first, the one that carried it, not at the turn's end", async () => {
+    const LATER = "And here is what I did next.";
+    const { client } = await iphone(
+      fakeNative().native,
+      [],
+      [
+        { role: "user", content: "#attach", __openclaw: { id: "u1", seq: 1 } },
+        {
+          role: "assistant",
+          content: [
+            { type: "text", text: TEXT },
+            attachment(PDF, "reviews-draft.pdf", "application/pdf", 861),
+          ],
+          model: "dev-1",
+          __openclaw: { runId: "probe-attach", id: ROW, seq: 2 },
+        },
+        {
+          role: "assistant",
+          content: [{ type: "text", text: LATER }],
+          model: "dev-1",
+          stopReason: "stop",
+          __openclaw: { runId: "probe-attach", id: "row-later", seq: 3 },
+        },
+      ],
+    );
+    const rows = chatRows(TASK, client.state.transcripts[KEY]!, "Otto", Date.now(), LINK);
+    const first = rows.findIndex((row) => row.kind === "bot" && row.text === TEXT);
+    const later = rows.findIndex((row) => row.kind === "bot" && row.text === LATER);
+    const files = rows.findIndex((row) => row.kind === "files");
+    // Both messages are in the turn, and the file row sits between them.
+    expect(first).toBeGreaterThan(-1);
+    expect(later).toBeGreaterThan(first);
+    expect(files).toBe(first + 1);
+    expect(rows[files]).toMatchObject({ files: [expect.objectContaining({ artifactId: PDF })] });
     client.stop();
   });
 
