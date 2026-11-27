@@ -251,8 +251,13 @@ function localApp(local: LocalConnect, options: { secure?: boolean; dataDir?: st
   const writes: { key: string; value: string | null }[] = [];
   // A write the test says the store refuses, before anything is kept.
   let refuse: ((key: string, value: string) => boolean) | null = null;
+  // A read the test holds until what it waits for has happened.
+  let hold: ((key: string) => Promise<void> | void) | null = null;
   const storage = {
-    get: (key: string) => host.storage.get(key),
+    get: async (key: string) => {
+      await hold?.(key);
+      return host.storage.get(key);
+    },
     delete: async (key: string) => {
       writes.push({ key, value: null });
       await host.storage.delete(key);
@@ -292,6 +297,7 @@ function localApp(local: LocalConnect, options: { secure?: boolean; dataDir?: st
     writes,
     local,
     refuseWrites: (rule: (key: string, value: string) => boolean) => (refuse = rule),
+    holdReads: (rule: (key: string) => Promise<void> | void) => (hold = rule),
   };
 }
 
@@ -703,7 +709,7 @@ describe.skipIf(!mac)(
       };
       settingsFile(home, ".openclaw", tokenSettings(port, "a-gateway-token"));
       proofFile(home, ".openclaw", provedAnswer(home, ".openclaw", port));
-      const { client, setup } = localApp(local);
+      const { client, setup, holdReads } = localApp(local);
       try {
         await client.start({ resume: false });
         await setup.look();
@@ -712,6 +718,17 @@ describe.skipIf(!mac)(
         await sleep(200);
         const dialsBefore = dials;
         const plaintextBefore = plaintext;
+        // Setup's cleanup after the failure reads the saved gateway first. On a busy machine that
+        // read can take longer than the client's backoff: held here until a retry the client has
+        // scheduled by then has dialled.
+        holdReads(async (key) => {
+          if (
+            key === "connection" &&
+            setup.current.phase === "failed" &&
+            client.state.connection.retryAt !== null
+          )
+            await until(() => dials - dialsBefore > 1, 15_000);
+        });
         await setup.connect();
         // Not left on Connecting, and not retried for ever: failed, with Look again and Advanced
         // (the card's ways on after a failed Connect).
