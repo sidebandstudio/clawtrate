@@ -1254,6 +1254,39 @@ describe("a pending read when the gateway comes to deny group:fs (#606)", () => 
   }
 });
 
+describe("a pending call when the gateway comes to deny a group that holds its tool (#606)", () => {
+  // Every group whole, as either version's catalog has it: a group read short would let the call run.
+  for (const [tool, deny] of [
+    ["web_fetch", "group:openclaw"],
+    ["web_fetch", "group:web"],
+    ["sessions_create", "group:sessions"],
+    ["heartbeat_respond", "group:automation"],
+    ["automations", "cron"],
+    ["coder__deploy", "group:plugins"],
+    ["coder__deploy", "bundle-mcp"],
+  ] as const) {
+    it(`refuses Allow once for ${tool} when ${deny} is denied while its card waits`, async () => {
+      const config: Record<string, unknown> = {};
+      const h = host({ config });
+      await h.save("main", [{ action: "ask", tools: [tool] }]);
+      const card = h.before("main", tool, {});
+      config.tools = { deny: [deny] };
+      expect(h.answer(card, "allow-once", "main", tool, {})?.blockReason).toContain(
+        `the gateway's settings now deny ${tool} to this bot`,
+      );
+    });
+  }
+
+  it("lets Allow once stand when the group denied does not hold the tool", async () => {
+    const config: Record<string, unknown> = {};
+    const h = host({ config });
+    await h.save("main", [{ action: "ask", tools: ["web_fetch"] }]);
+    const card = h.before("main", "web_fetch", {});
+    config.tools = { deny: ["group:fs", "group:plugins"] };
+    expect(h.answer(card, "allow-once", "main", "web_fetch", {})).toBeUndefined();
+  });
+});
+
 describe("a call another plugin's policy changed after this one decided it (#606)", () => {
   it("decides it again: into a Never it is blocked, into an Ask it is refused, unchanged it is left alone", async () => {
     const h = host();

@@ -26,19 +26,137 @@ import { realpathSync } from "node:fs";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 
 /**
- * The groups of OpenClaw 2026.10.6 and 2026.11.10 (tool-catalog, the same in
- * both) holding the tools checked here; `group:fs` whole, as a deny saved while
- * a card waits names any of its tools.
+ * The tool groups of OpenClaw 2026.10.6 and 2026.11.10, whole: each version's
+ * `CORE_TOOL_GROUPS` (tool-catalog), a group holding a tool where either
+ * version puts it there. A deny saved while a card waits names a tool by any
+ * group that holds it, so a group read short would let the call run; read
+ * long, it only refuses more. The tools the start-up check reads (gateway,
+ * plugins, exec, process and the file tools) are in the same groups on both.
  */
 const GROUPS = {
-  "group:openclaw": ["gateway", "plugins"],
-  "group:automation": ["gateway", "plugins"],
-  "group:runtime": ["exec", "process"],
-  "group:fs": ["ls", "read", "write", "edit", "apply_patch"],
+  "group:agents": [
+    "agents_list",
+    "ask_user",
+    "create_goal",
+    "decision_evaluate",
+    "get_goal",
+    "progress_card",
+    "skill_library",
+    "skill_workshop",
+    "skills_read",
+    "skills_search",
+    "update_goal",
+  ],
+  "group:automation": ["automations", "gateway", "heartbeat_respond", "openclaw", "plugins"],
+  "group:fs": ["apply_patch", "edit", "ls", "read", "write"],
+  "group:media": ["image_generate", "music_generate", "pdf", "tts", "video_generate", "view_image"],
+  "group:memory": ["memory_get", "memory_search", "personal_instructions"],
+  "group:messaging": ["message"],
+  "group:nodes": ["computer", "mobile_ui", "nodes"],
+  "group:openclaw": [
+    "agents_list",
+    "agents_wait",
+    "ask_user",
+    "automations",
+    "browser",
+    "code_execution",
+    "computer",
+    "conversations_list",
+    "conversations_send",
+    "conversations_turn",
+    "create_goal",
+    "dashboard",
+    "decision_evaluate",
+    "dismiss_task",
+    "gateway",
+    "get_goal",
+    "github_identity_status",
+    "github_publish",
+    "heartbeat_respond",
+    "image_generate",
+    "memory_get",
+    "memory_search",
+    "message",
+    "mobile_ui",
+    "music_generate",
+    "nodes",
+    "openclaw",
+    "pdf",
+    "personal_instructions",
+    "plugins",
+    "portal",
+    "presence",
+    "progress_card",
+    "screen",
+    "secrets",
+    "session_status",
+    "sessions",
+    "sessions_create",
+    "sessions_history",
+    "sessions_list",
+    "sessions_search",
+    "sessions_send",
+    "sessions_spawn",
+    "sessions_yield",
+    "show_widget",
+    "skill_library",
+    "skill_workshop",
+    "skills_read",
+    "skills_search",
+    "subagents",
+    "suggest_task",
+    "terminal",
+    "theme",
+    "tts",
+    "update_goal",
+    "video_generate",
+    "view_image",
+    "web_fetch",
+    "web_search",
+    "x_search",
+  ],
+  "group:runtime": ["code_execution", "exec", "process", "secrets"],
+  "group:sessions": [
+    "agents_wait",
+    "conversations_list",
+    "conversations_send",
+    "conversations_turn",
+    "dismiss_task",
+    "github_identity_status",
+    "github_publish",
+    "presence",
+    "session_status",
+    "sessions",
+    "sessions_create",
+    "sessions_history",
+    "sessions_list",
+    "sessions_search",
+    "sessions_send",
+    "sessions_spawn",
+    "sessions_yield",
+    "subagents",
+    "suggest_task",
+  ],
+  "group:ui": [
+    "browser",
+    "canvas",
+    "dashboard",
+    "portal",
+    "screen",
+    "show_widget",
+    "terminal",
+    "theme",
+  ],
+  "group:web": ["web_fetch", "web_search", "x_search"],
 };
+/** The core catalog's tools; any other is a plugin's or a tool server's (`<server>__<tool>`). */
+const CORE_TOOLS = new Set(Object.values(GROUPS).flat());
+/** Deny entries that cover every tool outside the core catalog, as the gateway reads them. */
+const PLUGIN_GROUPS = new Set(["group:plugins", "bundle-mcp"]);
 const ALIASES = new Map([
   ["bash", "exec"],
   ["apply-patch", "apply_patch"],
+  ["cron", "automations"],
 ]);
 
 const rec = (value) =>
@@ -52,6 +170,7 @@ function covers(entry, tool) {
   const name = ALIASES.get(entry.trim().toLowerCase()) ?? entry.trim().toLowerCase();
   if (name === "*" || name === tool) return true;
   if (groupOf(name)?.includes(tool)) return true;
+  if (PLUGIN_GROUPS.has(name) && !CORE_TOOLS.has(tool)) return true;
   if (name.includes("*")) {
     const pattern = new RegExp(
       `^${name
