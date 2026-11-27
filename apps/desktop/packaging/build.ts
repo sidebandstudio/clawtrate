@@ -59,7 +59,7 @@ for (const file of ["out/main/index.js", "out/preload/index.cjs", "out/renderer/
 // changed without a new version stops the build here, before anything is built.
 try {
   for (const plugin of packCarried(BUILD_OUT).plugins)
-    console.log(`Carrying ${plugin.name} ${plugin.version}, ${plugin.integrity}.`);
+    console.log(`Carrying ${plugin.packageName} ${plugin.version}, ${plugin.integrity}.`);
 } catch (error) {
   console.error((error as Error).message);
   process.exit(1);

@@ -29,10 +29,16 @@ export type DeclaredSurface = {
   dangerousConfigFlags: string[];
 };
 
+/** The config the plugin's entry is given beside `enabled` (`plugins.entries.<id>`). */
+export type Grants = {
+  hooks?: { allowConversationAccess?: boolean; allowPromptInjection?: boolean };
+};
+
+/** One plugin the app carries, as the app is built with it. Every field is required. */
 export type CarriedPlugin = {
   /** The package name, `@clawtrate/<plugin id>`. */
-  name: string;
-  /** Its exact version. */
+  packageName: string;
+  /** Its exact version, canonical `x.y.z`. */
   version: string;
   pluginId: string;
   /** The tarball's `sha512-…`, as `plugins.inspect` reports `source.integrity`. */
@@ -40,6 +46,13 @@ export type CarriedPlugin = {
   /** The tarball's file name in the carried folder. */
   file: string;
   declared: DeclaredSurface;
+  /** Kept apart from `declared`: what the engine writes into the plugin's entry. */
+  grants: Grants;
+  /**
+   * By OpenClaw version (`hello-ok` `server.version`), the `runtime.sourceDigests[<id>]` that
+   * version's gateway reported when it loaded this tarball. A version with none gets no install.
+   */
+  sourceDigests: { [openclawVersion: string]: string };
 };
 
 export type CarriedList = { plugins: CarriedPlugin[] };

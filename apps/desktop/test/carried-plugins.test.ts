@@ -28,10 +28,12 @@ import {
   PLUGINS_DIR,
   readRecord,
   recordPlugin,
+  recordSourceDigest,
   requireRecorded,
   tarOf,
 } from "../packaging/carried-plugins.ts";
 import { builderConfig } from "../packaging/config.ts";
+import { OPENCLAW_VERSIONS } from "../../../tools/dev-gateway/src/versions.ts";
 import { integrityOf, readTarball, runNpm } from "../packaging/plugin-npm.ts";
 import {
   CARRIED_BUILD_DIR,
@@ -94,7 +96,7 @@ describe("the plugins the app carries", () => {
     expect(list.plugins).toHaveLength(1);
     const [voice] = list.plugins;
     expect(voice).toMatchObject({
-      name: "@clawtrate/clawtrate-voice",
+      packageName: "@clawtrate/clawtrate-voice",
       version: VOICE_VERSION,
       pluginId: "clawtrate-voice",
       file: `clawtrate-clawtrate-voice-${VOICE_VERSION}.tgz`,
@@ -116,7 +118,7 @@ describe("the plugins the app carries", () => {
       files: { path: string }[];
     }[];
     expect(report).toMatchObject({
-      name: voice!.name,
+      name: voice!.packageName,
       version: voice!.version,
       integrity: voice!.integrity,
     });
@@ -164,6 +166,22 @@ describe("the plugins the app carries", () => {
     expect(readFileSync(join(dir, "index.js"))).toEqual(readFileSync(join(VOICE, "index.js")));
   });
 
+  it("gives the voice plugin the grant its development contract names, kept apart from its surface", () => {
+    const [voice] = packCarried(temp()).plugins;
+    const contract = JSON.parse(
+      readFileSync(join(VOICE, "clawtrate-dev-contract.json"), "utf8"),
+    ) as { hooks: unknown };
+    expect(voice!.grants).toEqual({ hooks: contract.hooks });
+    expect(voice!.grants).toEqual({ hooks: { allowConversationAccess: true } });
+  });
+
+  it("carries a source digest for each OpenClaw version the development gateway runs", () => {
+    const [voice] = packCarried(temp()).plugins;
+    expect(Object.keys(voice!.sourceDigests)).toEqual([...OPENCLAW_VERSIONS]);
+    for (const digest of Object.values(voice!.sourceDigests))
+      expect(digest).toMatch(/^[0-9a-f]{64}$/);
+  });
+
   it("records every capability group the voice plugin's manifest declares", () => {
     const out = temp();
     const [voice] = packCarried(out).plugins;
@@ -203,21 +221,78 @@ describe("a carried plugin's version", () => {
       `plugins/clawtrate-voice is version 9.0.0, but carried-plugins.json records ${VOICE_VERSION}. Run \`node apps/desktop/packaging/carried-plugins.ts record clawtrate-voice\`.`,
     );
     const now = digestNow("clawtrate-voice", plugins);
-    const record = recordPlugin(readRecord(), "clawtrate-voice", now.version, now.digest);
-    expect(record.plugins["clawtrate-voice"]).toEqual({ version: "9.0.0", digest: now.digest });
-    expect(packCarried(temp(), { pluginsDir: plugins, record }).plugins[0]!.version).toBe("9.0.0");
+    const raised = recordPlugin(readRecord(), "clawtrate-voice", now.version, now.digest);
+    expect(raised.plugins["clawtrate-voice"]).toEqual({
+      version: "9.0.0",
+      digest: now.digest,
+      grants: readRecord().plugins["clawtrate-voice"]!.grants,
+      sourceDigests: {},
+    });
+    // The source digests belonged to the old packing: a new one needs each again.
+    expect(() => packCarried(temp(), { pluginsDir: plugins, record: raised })).toThrow(
+      `plugins/clawtrate-voice 9.0.0 has no source digest for OpenClaw ${OPENCLAW_VERSIONS[0]}.`,
+    );
+    const record = OPENCLAW_VERSIONS.reduce(
+      (into, openclaw) => recordSourceDigest(into, "clawtrate-voice", openclaw, "a".repeat(64)),
+      raised,
+    );
+    const [voice] = packCarried(temp(), { pluginsDir: plugins, record }).plugins;
+    expect(voice!.version).toBe("9.0.0");
+    expect(Object.values(voice!.sourceDigests)).toEqual(
+      OPENCLAW_VERSIONS.map(() => "a".repeat(64)),
+    );
   });
 
   it("is recorded only when it is newer, or unchanged with the same files", () => {
-    const record = { plugins: { "clawtrate-voice": { version: "0.2.0", digest: "sha256-a" } } };
+    const grants = { hooks: { allowConversationAccess: true } };
+    const sourceDigests = { "2026.10.6": "b".repeat(64) };
+    const record = {
+      plugins: {
+        "clawtrate-voice": { version: "0.2.0", digest: "sha256-a", grants, sourceDigests },
+      },
+    };
     expect(recordPlugin(record, "clawtrate-voice", "0.2.0", "sha256-a")).toEqual(record);
     for (const version of ["0.2.0", "0.1.9"])
       expect(() => recordPlugin(record, "clawtrate-voice", version, "sha256-b")).toThrow(
         `plugins/clawtrate-voice is version ${version}, which isn't newer than the recorded 0.2.0. Raise its version.`,
       );
     expect(recordPlugin(record, "clawtrate-voice", "0.10.0", "sha256-b").plugins).toEqual({
-      "clawtrate-voice": { version: "0.10.0", digest: "sha256-b" },
+      "clawtrate-voice": { version: "0.10.0", digest: "sha256-b", grants, sourceDigests: {} },
     });
+    expect(() => recordPlugin(record, "clawtrate-tool-rules", "0.1.0", "sha256-c")).toThrow(
+      "plugins/clawtrate-tool-rules isn't in carried-plugins.json. A plugin joins it, with its grants, in the pull request after its review.",
+    );
+  });
+
+  it("must be canonical x.y.z", () => {
+    const plugins = pluginsCopy();
+    setVersion(plugins, "0.01.0");
+    expect(() => digestNow("clawtrate-voice", plugins)).toThrow();
+    setVersion(plugins, "1.0.0-beta.20261127.1");
+    expect(() => digestNow("clawtrate-voice", plugins)).toThrow();
+  });
+});
+
+describe("a source digest", () => {
+  it("is required for every OpenClaw version before packing", () => {
+    const recorded = readRecord().plugins["clawtrate-voice"]!;
+    for (const openclaw of OPENCLAW_VERSIONS) {
+      const { [openclaw]: _left, ...rest } = recorded.sourceDigests;
+      const record = { plugins: { "clawtrate-voice": { ...recorded, sourceDigests: rest } } };
+      expect(() => packCarried(temp(), { record })).toThrow(
+        `plugins/clawtrate-voice ${VOICE_VERSION} has no source digest for OpenClaw ${openclaw}. Install it on a development gateway of that version and run \`node apps/desktop/packaging/carried-plugins.ts source-digest clawtrate-voice ${openclaw} <digest>\` with the digest its runtime reported.`,
+      );
+    }
+  });
+
+  it("is recorded only for a version the development gateway runs, in OpenClaw's form", () => {
+    const record = readRecord();
+    expect(() => recordSourceDigest(record, "clawtrate-voice", "2026.9.1", "a".repeat(64))).toThrow(
+      "OpenClaw 2026.9.1 isn't a version the development gateway runs.",
+    );
+    expect(() =>
+      recordSourceDigest(record, "clawtrate-voice", "2026.10.6", "A".repeat(64)),
+    ).toThrow(`${"A".repeat(64)} isn't a source digest.`);
   });
 
   it("is checked for a plugin the record doesn't name", () => {
@@ -252,7 +327,6 @@ describe("a manifest's declared surface", () => {
         providers: ["p2", { id: "p1" }, {}],
         contracts: { tools: ["t2"], webSearchProviders: ["w"] },
         toolMetadata: { t1: {}, t2: {} },
-        hooks: ["before_prompt_build"],
         mcpServers: { m: {} },
         cliCommands: [{ name: "c" }],
         cliBackends: ["b"],
@@ -264,7 +338,7 @@ describe("a manifest's declared surface", () => {
       providers: ["p1", "p2"],
       tools: ["t1", "t2"],
       contracts: ["tools: t2", "webSearchProviders: w"],
-      hooks: ["before_prompt_build"],
+      hooks: [],
       mcpServers: ["m"],
       cliCommands: ["c"],
       cliBackends: ["b"],
@@ -272,6 +346,13 @@ describe("a manifest's declared surface", () => {
       dangerousConfigFlags: ["x.y"],
     });
     expect(declaredSurface({ channels: ["a"], channel: { id: "b" } }).channels).toEqual(["a"]);
+  });
+
+  it("refuses hooks, which OpenClaw doesn't report for a plugin that isn't a bundle", () => {
+    // Staged on both versions with `hooks: ["before_prompt_build"]`, inspect said `hooks: []`.
+    expect(() => declaredSurface({ hooks: ["before_prompt_build"] })).toThrow(
+      "The manifest declares hooks, which OpenClaw doesn't report for a plugin that isn't a bundle.",
+    );
   });
 
   it("refuses a contract family only one OpenClaw version counts", () => {

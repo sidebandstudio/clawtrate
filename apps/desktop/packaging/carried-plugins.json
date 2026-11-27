@@ -2,7 +2,12 @@
   "plugins": {
     "clawtrate-voice": {
       "version": "0.1.0",
-      "digest": "sha256-ptF5G6UWP36m81AEwf6gGrXEmQ2A3+d+X4/PSxD9qRQ="
+      "digest": "sha256-ptF5G6UWP36m81AEwf6gGrXEmQ2A3+d+X4/PSxD9qRQ=",
+      "grants": { "hooks": { "allowConversationAccess": true } },
+      "sourceDigests": {
+        "2026.10.6": "50cab457bb279fbe658461d2223478ff1b7ecc25f5e22034f295d3e71f15b625",
+        "2026.11.10": "50cab457bb279fbe658461d2223478ff1b7ecc25f5e22034f295d3e71f15b625"
+      }
     }
   }
 }

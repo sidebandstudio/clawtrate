@@ -3,6 +3,7 @@
 //
 //   node apps/desktop/packaging/carried-plugins.ts pack [out folder]
 //   node apps/desktop/packaging/carried-plugins.ts record <plugin folder name>
+//   node apps/desktop/packaging/carried-plugins.ts source-digest <plugin folder name> <OpenClaw version> <digest>
 //
 // `pack` packs each plugin `carried-plugins.json` names from the checkout into
 // apps/desktop/out/plugins (or the folder given): its tarball, and
@@ -11,10 +12,16 @@
 // outside its archive, and the list inside it (config.ts).
 //
 // `carried-plugins.json` records, for each carried plugin, the version last
-// recorded and a digest of what that version packs to. Packing fails when a
-// plugin's files changed but its version didn't, and when its version isn't
-// the one recorded. `record` writes the plugin's current version and digest,
-// and only for a version newer than the one recorded.
+// recorded and a digest of what that version packs to; the grants the plugin
+// is given when it is enabled; and, for each OpenClaw version the development
+// gateway runs (tools/dev-gateway/src/versions.ts), the source digest that
+// version's gateway reported when it loaded that packing
+// (`plugins.setEnabled`'s `runtime.sourceDigests`). Packing fails when a
+// plugin's files changed but its version didn't, when its version isn't the
+// one recorded, and when any OpenClaw version has no source digest. `record`
+// writes the plugin's current version and digest, only for a version newer
+// than the one recorded, and drops the source digests, which belonged to the
+// old packing. `source-digest` records one for the recorded packing.
 //
 // The tarball is written here rather than by `npm pack`, so a build needs no
 // npm and packs the same way on macOS and Windows. Its files and package.json
@@ -28,6 +35,7 @@ import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { gzipSync } from "node:zlib";
+import { OPENCLAW_VERSIONS } from "../../../tools/dev-gateway/src/versions.ts";
 import { parseVersion, isNewer } from "../src/main/update/version.ts";
 import {
   CARRIED_BUILD_DIR,
@@ -36,6 +44,7 @@ import {
   type CarriedList,
   type CarriedPlugin,
   type DeclaredSurface,
+  type Grants,
 } from "../src/main/carried-plugins.ts";
 import { integrityOf, packageFiles, readTarball } from "./plugin-npm.ts";
 
@@ -46,7 +55,13 @@ export const RECORD = join(import.meta.dirname, "carried-plugins.json");
 export const BUILD_OUT = join(ROOT, "apps/desktop", CARRIED_BUILD_DIR);
 
 /** One plugin's line in carried-plugins.json. */
-export type Recorded = { version: string; digest: string };
+export type Recorded = {
+  version: string;
+  digest: string;
+  grants: Grants;
+  /** By OpenClaw version, for the recorded packing. */
+  sourceDigests: { [openclawVersion: string]: string };
+};
 export type CarriedRecord = { plugins: { [folder: string]: Recorded } };
 
 export const readRecord = (path = RECORD): CarriedRecord =>
@@ -146,6 +161,10 @@ export function declaredSurface(manifest: Json): DeclaredSurface {
       throw new Error(
         `The manifest declares contracts.${family}, which not every OpenClaw counts.`,
       );
+  if (manifest.hooks !== undefined)
+    throw new Error(
+      "The manifest declares hooks, which OpenClaw doesn't report for a plugin that isn't a bundle.",
+    );
   const channel = isObject(manifest.channel) ? manifest.channel.id : undefined;
   const providers = Array.isArray(manifest.providers) ? manifest.providers : [];
   const objectKeys = (value: unknown) => (isObject(value) ? Object.keys(value) : []);
@@ -179,7 +198,12 @@ export function declaredSurface(manifest: Json): DeclaredSurface {
         names(ids, `contracts.${family}`).map((id) => `${family}: ${id}`),
       ),
     ),
-    hooks: sorted(names(manifest.hooks, "hooks")),
+    // A plugin that isn't a bundle reports no hooks, whatever its manifest says: both
+    // versions build its record with `hooks: []` (`buildPluginManifestRecord`,
+    // `<2026.10.6>/dist/manifest-registry-build-BGqXwGUm.mjs:388`), and so `declared.hooks` is
+    // empty (ran on both). A manifest that names hooks would make the list promise what the
+    // gateway can't report, so it is refused above.
+    hooks: [],
     mcpServers: sorted(objectKeys(manifest.mcpServers)),
     cliCommands: sorted(
       commands.flatMap((command: unknown) =>
@@ -217,12 +241,37 @@ export function requireRecorded(
     throw new Error(
       `plugins/${folder} is version ${version}, but carried-plugins.json records ${recorded.version}. Run \`${record}\`.`,
     );
+  for (const openclaw of OPENCLAW_VERSIONS)
+    if (!SOURCE_DIGEST.test(recorded.sourceDigests?.[openclaw] ?? ""))
+      throw new Error(
+        `plugins/${folder} ${version} has no source digest for OpenClaw ${openclaw}. Install it on a development gateway of that version and run \`node apps/desktop/packaging/carried-plugins.ts source-digest ${folder} ${openclaw} <digest>\` with the digest its runtime reported.`,
+      );
+}
+
+/** `runtime.sourceDigests`' form: a SHA-256 in lowercase hex. */
+const SOURCE_DIGEST = /^[0-9a-f]{64}$/;
+
+/** Records the source digest OpenClaw `openclaw` reported for the recorded packing of `folder`. */
+export function recordSourceDigest(
+  record: CarriedRecord,
+  folder: string,
+  openclaw: string,
+  digest: string,
+): CarriedRecord {
+  const recorded = record.plugins[folder];
+  if (!recorded) throw new Error(`plugins/${folder} isn't in carried-plugins.json.`);
+  if (!(OPENCLAW_VERSIONS as readonly string[]).includes(openclaw))
+    throw new Error(`OpenClaw ${openclaw} isn't a version the development gateway runs.`);
+  if (!SOURCE_DIGEST.test(digest)) throw new Error(`${digest} isn't a source digest.`);
+  const sourceDigests = { ...recorded.sourceDigests, [openclaw]: digest };
+  return { plugins: { ...record.plugins, [folder]: { ...recorded, sourceDigests } } };
 }
 
 /**
- * Records the plugin's current version and digest in `record`. Refuses a
- * version that isn't newer than the one recorded, unless it is the same
- * version with the same files.
+ * Records the plugin's current version and digest in `record`, keeping its
+ * grants and dropping its source digests. Refuses a plugin the record doesn't
+ * name, and a version that isn't newer than the one recorded, unless it is the
+ * same version with the same files.
  */
 export function recordPlugin(
   record: CarriedRecord,
@@ -231,34 +280,44 @@ export function recordPlugin(
   digest: string,
 ): CarriedRecord {
   const recorded = record.plugins[folder];
-  if (recorded && !(recorded.version === version && recorded.digest === digest)) {
-    const was = parseVersion(recorded.version);
-    const now = parseVersion(version);
-    if (!was || !now || !isNewer(now, was))
-      throw new Error(
-        `plugins/${folder} is version ${version}, which isn't newer than the recorded ${recorded.version}. Raise its version.`,
-      );
-  }
-  return { plugins: { ...record.plugins, [folder]: { version, digest } } };
+  if (!recorded)
+    throw new Error(
+      `plugins/${folder} isn't in carried-plugins.json. A plugin joins it, with its grants, in the pull request after its review.`,
+    );
+  if (recorded.version === version && recorded.digest === digest) return record;
+  const was = parseVersion(recorded.version);
+  const now = parseVersion(version);
+  if (!was || !now || !isNewer(now, was))
+    throw new Error(
+      `plugins/${folder} is version ${version}, which isn't newer than the recorded ${recorded.version}. Raise its version.`,
+    );
+  const next = { version, digest, grants: recorded.grants, sourceDigests: {} };
+  return { plugins: { ...record.plugins, [folder]: next } };
 }
 
 type Packed = { entry: CarriedPlugin; files: Map<string, Buffer>; digest: string; tgz: Buffer };
 
 /** Packs `plugins/<folder>` into a tarball's bytes and its list entry, checking nothing against the record. */
-function packOne(folder: string, pluginsDir: string, license: string): Packed {
+function packOne(folder: string, pluginsDir: string, license: string, recorded?: Recorded): Packed {
   const { manifest, pluginId, files } = packageFiles(join(pluginsDir, folder), license);
   const tar = tarOf(files);
   const tgz = gzipSync(tar, { level: 9 });
   const name = manifest.name as string;
   const version = manifest.version as string;
+  if (parseVersion(version)?.length !== 3)
+    throw new Error(`plugins/${folder}'s version ${version} isn't a canonical x.y.z.`);
   const openclaw = JSON.parse(files.get("openclaw.plugin.json")!.toString("utf8")) as Json;
   const entry: CarriedPlugin = {
-    name,
+    packageName: name,
     version,
     pluginId,
     integrity: integrityOf(tgz),
     file: `${name.replace(/^@/, "").replace("/", "-")}-${version}.tgz`,
     declared: declaredSurface(openclaw),
+    grants: recorded?.grants ?? {},
+    sourceDigests: Object.fromEntries(
+      OPENCLAW_VERSIONS.map((openclaw) => [openclaw, recorded?.sourceDigests?.[openclaw] ?? ""]),
+    ),
   };
   return { entry, files, digest: digestOf(tar), tgz };
 }
@@ -282,7 +341,7 @@ export function packCarried(
   const packed = Object.keys(record.plugins)
     .sort()
     .map((folder) => {
-      const one = packOne(folder, pluginsDir, license);
+      const one = packOne(folder, pluginsDir, license, record.plugins[folder]);
       requireRecorded(folder, one.entry.version, one.digest, record.plugins[folder]);
       return one;
     });
@@ -318,7 +377,7 @@ export function packagedCarried(resources: string): { list: CarriedList; tarball
   });
   uncache(archive);
   const list = JSON.parse(
-    extractFile(archive, `${CARRIED_BUILD_DIR}/${CARRIED_LIST_NAME}`).toString("utf8"),
+    extractFile(archive, join(CARRIED_BUILD_DIR, CARRIED_LIST_NAME)).toString("utf8"),
   ) as CarriedList;
   return { list, tarballs };
 }
@@ -328,7 +387,7 @@ function main(args: string[]): void {
   if (command === "pack" && rest.length <= 1) {
     const out = rest[0] ? resolve(rest[0]) : BUILD_OUT;
     for (const plugin of packCarried(out).plugins)
-      console.log(`Carried ${plugin.name} ${plugin.version} ${plugin.integrity}`);
+      console.log(`Carried ${plugin.packageName} ${plugin.version} ${plugin.integrity}`);
   } else if (command === "record" && rest.length === 1) {
     const { version, digest } = digestNow(rest[0]!);
     writeFileSync(
@@ -336,8 +395,15 @@ function main(args: string[]): void {
       `${JSON.stringify(recordPlugin(readRecord(), rest[0]!, version, digest), null, 2)}\n`,
     );
     console.log(`Recorded plugins/${rest[0]} ${version} ${digest}`);
+  } else if (command === "source-digest" && rest.length === 3) {
+    const [folder, openclaw, digest] = rest as [string, string, string];
+    const record = recordSourceDigest(readRecord(), folder, openclaw, digest);
+    writeFileSync(RECORD, `${JSON.stringify(record, null, 2)}\n`);
+    console.log(`Recorded plugins/${folder}'s source digest on OpenClaw ${openclaw}`);
   } else {
-    throw new Error("Usage: carried-plugins.ts pack [out folder] | record <plugin folder name>");
+    throw new Error(
+      "Usage: carried-plugins.ts pack [out folder] | record <plugin folder name> | source-digest <plugin folder name> <OpenClaw version> <digest>",
+    );
   }
 }
 
