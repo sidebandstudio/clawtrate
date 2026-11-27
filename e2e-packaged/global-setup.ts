@@ -531,10 +531,11 @@ function codeOf(error: unknown): string {
  * development gateway runs on Windows, so there are no instances, no run
  * record and no listeners to protect. The app is asked to close the way
  * Windows asks at sign-out (a close message to its windows), and the run
- * fails if it or a helper is still running 15 seconds later; anything left
- * is then ended, the app by its handle and its helpers by PID, so the machine
- * is not left with it. How the app had ended by then goes beside any taskbar
- * overlay report in `outputDirs`.
+ * fails if it or a helper is still running 15 seconds later. The app, if it
+ * still runs then, is ended by its handle; nothing is ended by PID, so a helper
+ * or any other process still listed with its data folder fails the run, named
+ * by PID for a person to check. How the app had ended by then goes beside any
+ * taskbar overlay report in `outputDirs`.
  */
 async function windowsSetup(outputDirs: string[]) {
   const app = packagedApp();
@@ -553,7 +554,13 @@ async function windowsSetup(outputDirs: string[]) {
    * reaches no other. Once it has, the app's PID may be another program's, so
    * the app is left alone, under its PID in the process list too. A spawn that
    * failed has no PID, and no exit field set until Node reports why a tick
-   * later; Node 24's kill of it throws. Its helpers are ended by PID.
+   * later; Node 24's kill of it throws. Nothing else is ended: a process the
+   * list shows with the run's data folder in its command line, a helper's or
+   * the app's own PID after Node reported its exit included, may be any
+   * program's, since a command line says only how a process was started and
+   * a PID can be reused. Each still listed, other than the app while Node
+   * holds it, is reported by PID alone, never by its command line, and may
+   * need ending by hand.
    * If Windows refuses to end the app, Node throws, or raises an error event,
    * which the wait for the app's start may be listening for too: either is
    * reported once, by its code alone, since its text may name paths, and the
@@ -565,13 +572,13 @@ async function windowsSetup(outputDirs: string[]) {
     if (finished) return [];
     finished = true;
     const problems: string[] = [];
-    const root = appProcess?.pid;
-    for (const pid of processesUsing(userData)) if (pid !== root) forceEnd(pid);
+    let held: number | undefined;
     if (
       appProcess?.pid !== undefined &&
       appProcess.exitCode === null &&
       appProcess.signalCode === null
     ) {
+      held = appProcess.pid;
       const faults: unknown[] = [];
       const seen = (error: Error) => faults.push(error);
       appProcess.on("error", seen);
@@ -586,6 +593,18 @@ async function windowsSetup(outputDirs: string[]) {
         problems.push(
           `the app (pid ${appProcess.pid}) could not be ended by its handle${codeOf(faults[0])}`,
         );
+    }
+    // This is the last look, so a list that cannot be read leaves what runs unknown, and is said so.
+    try {
+      const left = processesUsing(userData).filter((pid) => pid !== held);
+      if (left.length > 0)
+        problems.push(
+          `processes whose command line names the run's data folder are still running and were not ended: pid ${left.join(", ")}; check them by hand`,
+        );
+    } catch (error) {
+      problems.push(
+        `whether any process still names the run's data folder is unknown: the process list could not be read${codeOf(error)}`,
+      );
     }
     try {
       rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
@@ -625,9 +644,8 @@ async function windowsSetup(outputDirs: string[]) {
         exits.afterClose = exitOf(appProcess);
       }
     }
+    // The helpers' 10 seconds; what is still listed then, finish reports.
     for (let i = 0; i < 50 && processesUsing(userData).length > 0; i += 1) await sleep(200);
-    const left = processesUsing(userData);
-    if (left.length > 0) problems.push(`app processes still running: ${left.join(", ")}`);
     problems.push(...finish());
     if (problems.length > 0) throw new Error(problems.join("\n"));
     console.log(`Closed the packaged app and removed ${dir}`);
