@@ -240,10 +240,10 @@ export function judgeRename(
           : "tool";
     break;
   }
+  // Files sent with the message are outside content too: the person's words aren't all of it.
   if (source === null && facts.sentHere && facts.attachments) source = "attachment";
   const person =
     facts.sentHere &&
-    !facts.attachments &&
     !facts.steered &&
     source === null &&
     facts.text !== null &&
@@ -1082,10 +1082,10 @@ export class BotNames {
       const shown = this.lines.get(bot.id);
       if (shown && ["renaming", "undoing"].includes(shown.line.status)) continue;
       if (shown && shown.line.run === latest.run) {
-        if (undone && shown.line.status === "renamed")
-          this.setLine({ ...shown.line, status: "undone", after: bot.name, error: null });
-        if (!undone && ["renamed", "undone"].includes(shown.line.status)) continue;
-        if (undone) continue;
+        // Already this change's line; otherwise a refusal or failure it replaces, or now undone.
+        const status = shown.line.status;
+        if (!undone && (status === "renamed" || status === "undone")) continue;
+        if (undone && status === "undone") continue;
       } else if (shown && shown.at > (latest.undone ?? latest.done ?? latest.at)) continue;
       this.setLine({
         botId: bot.id,
