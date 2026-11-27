@@ -1,4 +1,4 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import type { ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { cpSync, mkdtempSync, rmSync } from "node:fs";
@@ -1922,6 +1922,66 @@ test("F-071 F-070: / lists the bot's own skills by name and the gateway's comman
   await expect(mentions.filter({ hasText: /Bot$/ })).toHaveCount(4);
   await page.keyboard.press("Escape");
   await composer(page).fill("");
+});
+
+test("F-071: / lists a skill the person saved to their own library, as theirs, in a task started after it; the chosen skill runs on the gateway by its command", async ({
+  page,
+}) => {
+  await openShell(page);
+  // A task that started before the save: the gateway has not given it the skill.
+  const before = await ownTask(page, "Before the skill");
+  const slug = `tide-table-${randomBytes(3).toString("hex")}`;
+  const saved = await gatewayCall<{ entry: { skillId: string; name: string; revision: string } }>(
+    "skills.library.save",
+    {
+      expectedRevision: null,
+      slug,
+      content: `---\nname: ${slug}\ndescription: Use when someone asks when the tide turns at the harbour.\n---\n\nRead the harbour's tide table and give the next high and low water.\n`,
+    },
+  );
+  try {
+    const listed = (row: Locator) => row.and(page.locator(`[data-name="${slug}"]`));
+    const rows = page.getByRole("listbox", { name: "Skills and commands" }).getByRole("option");
+    await openTask(page, "Otto", before.title);
+    await composer(page).click();
+    await page.keyboard.type("/");
+    await expect(rows.first()).toBeVisible({ timeout: 30_000 });
+    await expect(listed(rows)).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await composer(page).fill("");
+
+    const { key } = await ownTask(page, "With the skill");
+    await composer(page).click();
+    await page.keyboard.type("/");
+    await expect(listed(rows)).toHaveCount(1, { timeout: 30_000 });
+    await expect(listed(rows).locator(".composer-menu-tag")).toHaveText("Your skill");
+    await page.keyboard.type(slug);
+    await expect(rows).toHaveCount(1);
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("token-chip")).toHaveText(new RegExp(`Your skill\\s*${slug}`));
+    await page.keyboard.type("for Saturday");
+    await page.keyboard.press("Enter");
+    // The gateway ran the skill: the model was told to read it.
+    await expect
+      .poll(() => gatewayHasMessage(key, `/skill ${saved.entry.name} for Saturday`), {
+        timeout: 30_000,
+      })
+      .toBe(true);
+    await expect.poll(() => gatewayIdle(key), { timeout: 60_000 }).toBe(true);
+    const history = await gatewayCall<{ messages: Array<{ role: string; content?: unknown }> }>(
+      "chat.history",
+      { sessionKey: key, limit: 10 },
+    );
+    const reply = JSON.stringify(history.messages.filter((row) => row.role === "assistant"));
+    expect(reply).toContain("Use the following explicitly referenced skills");
+    expect(reply).toContain(saved.entry.name);
+  } finally {
+    await gatewayCall("skills.library.mutate", {
+      skillId: saved.entry.skillId,
+      expectedRevision: saved.entry.revision,
+      action: "remove",
+    });
+  }
 });
 
 test("F-100: with the Turn time limit set to 1 minute, a longer turn is stopped through the gateway, and once it confirms the card names the limit and who stopped it", async ({
