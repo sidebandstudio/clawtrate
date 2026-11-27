@@ -197,6 +197,14 @@ The window gives neither of them anything they don't already have.
 - `packageName`, and `version` in canonical `x.y.z` form;
 - `pluginId`, and `integrity` (`sha512-…`) of the exact, dependency-free tarball;
 - `declared`: every group `plugins.inspect` reports, each as a sorted list. The groups are `channels`, `providers`, `tools`, `contracts`, `hooks`, `mcpServers`, `cliCommands`, `cliBackends`, `skills` and `dangerousConfigFlags`. A group missing on either side is a mismatch.
+  - **`declared.hooks` is always empty for Clawtrate's plugins, and the manifest can't change that.** A plugin that isn't a bundle has no way to declare its hooks to OpenClaw:
+    - neither version's manifest type has a `hooks` field: `PluginManifest`, `<1006>/dist/types.openclaw-yUy4bDSr.d.ts:7867` and `<1110>/dist/types.openclaw-D8uW-XQA.d.ts:8470`;
+    - neither version's manifest reader reads one: `loadPluginManifest`, `<1006>/dist/manifest--jjvMb9t.mjs:983`, and the same function in `<1110>/dist/manifest-registry-BDiVz1qN.mjs`;
+    - both build the record of a plugin that isn't a bundle with `hooks: []`: `buildPluginManifestRecord`, `<1006>/dist/manifest-registry-build-BGqXwGUm.mjs:388`, and the same function in `<1110>/dist/manifest-registry-build-DR3ZGZqm.mjs`;
+    - both versions' manifest docs say not to use the manifest for "registering native runtime hooks" (`docs/plugins/manifest.md:42` in each);
+    - ran, both versions: a copy of the voice plugin whose manifest named `before_prompt_build` still inspected as `declared.hooks: []`.
+
+    So the pin can't name the hook in `declared`; if it did, step 4 would find a mismatch on every gateway. The app's packer refuses a manifest that names `hooks`. The hook is carried instead by its grant: a test of the app registers the plugin's code with a stand-in host and requires the pin's `grants` to cover every hook the code registers, and steps 6 and 8 require `plugins.inspect`'s `grants.hooks` to report that grant in effect (row 5i).
 - `grants`, kept separately: the fields of the plugin's entry that grant it something, merged into the entry as they are. For `clawtrate-voice` that is `{hooks: {allowConversationAccess: true}}`, so the entry gets `hooks.allowConversationAccess: true`.
 - `sourceDigests`: `runtime.sourceDigests[<id>]` for each OpenClaw version the release ran it on. This is mandatory: a gateway whose version has no recorded digest gets no install (step 0).
 
