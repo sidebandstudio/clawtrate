@@ -59,8 +59,11 @@ beforeEach(async () => {
   server.route("/files/app.zip", bytes(fixture.body));
 });
 afterEach(async () => {
-  await server.close();
-  dir.remove();
+  try {
+    dir.remove();
+  } finally {
+    await server.close();
+  }
 });
 /** The feed's and the files' requests; a check also asks for the lists beside the feed (F-554). */
 const feedRequests = () => server.requests.filter((path) => path !== "/whats-new.json");

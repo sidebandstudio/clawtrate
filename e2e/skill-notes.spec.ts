@@ -221,7 +221,9 @@ test("F-560: a real skill note folds into its run's line, and its undo works", a
   const marks = !instanceForm(openInstance(INSTANCE)).reviewsCliTurns;
   if (!marks) await gatewayCall("chat.send", send);
   else {
-    // 2026.11.10 reviews only a turn an admin connection sent (#609), not one the CLI sent.
+    // 2026.11.10 reviews only a turn offered skill_workshop (#609): of the paired clients, an admin
+    // connection's on a gateway with one profile; the others get skill_library instead. Nor does
+    // it review a turn the CLI sent.
     const op = await openOperator(
       openInstance(INSTANCE),
       "Clawtrate skill note check",
