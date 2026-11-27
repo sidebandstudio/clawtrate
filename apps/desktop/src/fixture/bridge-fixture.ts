@@ -73,7 +73,7 @@ import {
 import { machineCommands, NO_MACHINE_PARAMS, type MachineParams } from "./machines.ts";
 import { botDeleteCommands, NO_BOT_DELETE_PARAMS, type BotDeleteParams } from "./bot-delete.ts";
 import { FAILED_EVENT, LIVE_SCENES, liveCommand, liveScene, type LiveScene } from "./live.ts";
-import { isRailScene, RAIL_SCENES, railCommands, railScene } from "./rail.ts";
+import { emptyTranscript, isRailScene, RAIL_SCENES, railCommands, railScene } from "./rail.ts";
 import { ACTION_SCENES, actionScene, isActionScene } from "./actions.ts";
 import {
   isPictureScene,
@@ -1256,6 +1256,20 @@ export function createFixtureBridge(
             if (restored) publish();
             return;
           }
+        }
+        // A bot's main conversation the gateway holds no session for yet reads as an empty
+        // history, as the gateway answers it (docs/design/bot-opens-main.md); nothing is made.
+        if (
+          !history &&
+          !current &&
+          command.type === "openSession" &&
+          /^agent:[^:]+:main$/.test(key)
+        ) {
+          set({
+            ...state,
+            transcripts: { ...state.transcripts, [key]: emptyTranscript(key, Date.now()) },
+          });
+          return;
         }
         if (!history || history === current || (current && current.status !== "error")) {
           if (restored) publish();

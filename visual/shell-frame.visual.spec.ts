@@ -113,7 +113,9 @@ test.describe("bot search", () => {
     await page.keyboard.press("ControlOrMeta+Shift+F");
     await page.keyboard.type("marl");
     await page.keyboard.press("Enter");
-    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Main");
+    // Its main conversation: the header names Marlow alone.
+    await expect(page.locator(".title-pill-name")).toHaveText("Marlow");
+    await expect(page.locator(".title-pill-task")).toHaveCount(0);
     await expect(botRow(page, "Marlow")).toBeFocused();
     await expect(rows).toHaveCount(5);
   });
@@ -126,40 +128,40 @@ test.describe("moving between bots", () => {
     page,
   }) => {
     await openFixture(page, `scene=main&${OTTO_DISK}`, "light");
-    const heading = page.getByRole("heading", { level: 1 });
-    const opened = async (bot: string, task: string | RegExp) => {
-      await expect(heading).toHaveText(task);
+    // Each opens the bot's main conversation: the header names the bot alone.
+    const opened = async (bot: string) => {
       await expect(page.locator(".title-pill-name")).toHaveText(bot);
+      await expect(page.locator(".title-pill-task")).toHaveCount(0);
     };
     await page.locator(".transcript").focus();
     // The rail's order is recent activity: Otto, Juniper, Marlow, Pip, Quartermaster.
     await page.keyboard.press("ControlOrMeta+3");
-    await opened("Marlow", "Main");
+    await opened("Marlow");
     await page.keyboard.press("ControlOrMeta+2");
-    await opened("Juniper", "Heat pump vs. gas furnace");
+    await opened("Juniper");
     await page.keyboard.press("ControlOrMeta+5");
-    await opened("Quartermaster of the Family Calendar and Errands", /Pick up the dry cleaning/);
+    await opened("Quartermaster of the Family Calendar and Errands");
     // There is no sixth bot, so nothing changes.
     await page.keyboard.press("ControlOrMeta+6");
-    await opened("Quartermaster of the Family Calendar and Errands", /Pick up the dry cleaning/);
+    await opened("Quartermaster of the Family Calendar and Errands");
     await page.keyboard.press("ControlOrMeta+1");
-    await opened("Otto", "Disk almost full on the media box");
+    await opened("Otto");
     await page.keyboard.press("Alt+ArrowDown");
-    await opened("Juniper", "Heat pump vs. gas furnace");
+    await opened("Juniper");
     await page.keyboard.press("Alt+ArrowDown");
-    await opened("Marlow", "Main");
+    await opened("Marlow");
     await page.keyboard.press("Alt+ArrowUp");
-    await opened("Juniper", "Heat pump vs. gas furnace");
+    await opened("Juniper");
     await page.keyboard.press("Control+Tab");
-    await opened("Marlow", "Main");
+    await opened("Marlow");
     await page.keyboard.press("Control+Tab");
-    await opened("Pip", "Plan the week");
+    await opened("Pip");
     await page.keyboard.press("Control+Shift+Tab");
-    await opened("Marlow", "Main");
+    await opened("Marlow");
     // From a row in the rail, focus follows to the bot that opened.
     await botRow(page, "Marlow").focus();
     await page.keyboard.press("Control+Tab");
-    await opened("Pip", "Plan the week");
+    await opened("Pip");
     await expect(botRow(page, "Pip")).toBeFocused();
 
     // Ten bots: Cmd/Ctrl+6 to 9 open the sixth to the ninth; the tenth has no shortcut.
@@ -193,7 +195,7 @@ test.describe("moving between bots", () => {
       await expect(page.locator(".title-pill-name")).toHaveText(name);
     }
     await page.keyboard.press("ControlOrMeta+1");
-    await opened("Otto", "Disk almost full on the media box");
+    await opened("Otto");
     await page.keyboard.press("ControlOrMeta+9");
     await expect(page.locator(".title-pill-name")).toHaveText("Dahlia");
   });

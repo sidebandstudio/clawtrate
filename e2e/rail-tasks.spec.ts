@@ -928,7 +928,7 @@ test("F-558: a bot another client makes, renames and deletes shows, takes its ne
   }
 });
 
-test("F-424: a bot's canonical main stays and offers neither Archive nor Delete; a bot without one gets exactly one empty Main, selected, when its last task is archived or deleted, however many clients act", async () => {
+test("F-424: a bot's canonical main stays and has no task row; a bot without one gets exactly one empty main conversation, open, when its last task is archived or deleted, however many clients act", async () => {
   // Two bots of its own are made and removed; each step waits on the gateway with its own deadline.
   test.setTimeout(300_000);
   // The gateway refuses to archive a canonical main, and the rail offers neither action for it.
@@ -947,12 +947,10 @@ test("F-424: a bot's canonical main stays and offers neither Archive nor Delete;
     "--json",
   ]);
   expect(refused.stdout + refused.stderr).toContain("Cannot archive an agent's main session.");
+  // The main conversation is the bot's own row, not a task row: no row offers to archive it.
   await unfold(page, "Marlow");
-  await taskMenu(page, "Notes for Pip");
-  const items = await page.getByRole("menu").getByRole("menuitem").allTextContents();
-  expect(items).not.toContain("Archive");
-  expect(items).not.toContain("Delete…");
-  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("task").first()).toBeVisible();
+  await expect(page.locator('[data-testid="task"][data-key="agent:marlow:main"]')).toHaveCount(0);
 
   // Two bots of this check's own, made on the gateway with no main session.
   const archiving = await ownBot(`Scout${STAMP}`);
@@ -990,7 +988,9 @@ test("F-424: a bot's canonical main stays and offers neither Archive nor Delete;
     await scout.focus();
     await page.keyboard.press("Shift+F10");
     await page.getByRole("menuitem", { name: "Archive task" }).click();
-    await expect(page.locator(".title-pill-task")).toHaveText("Main", { timeout: 20_000 });
+    // Its main conversation is open: the header names the bot alone.
+    await expect(page.locator(".title-pill-name")).toHaveText(`Scout${STAMP}`, { timeout: 20_000 });
+    await expect(page.locator(".title-pill-task")).toHaveCount(0);
     await onlyMain(archiving);
     await expect(page.getByTestId("composer-input")).toBeVisible();
     // The new Main is canonical: neither action is offered for it.
@@ -1021,7 +1021,10 @@ test("F-424: a bot's canonical main stays and offers neither Archive nor Delete;
     // gateway, not only archived.
     await expect(page.getByRole("dialog")).toHaveCount(0, { timeout: 30_000 });
     await gateway.poll(async () => await describe(onlyTask.get(deleting)!)).toBeNull();
-    await expect(page.locator(".title-pill-task")).toHaveText("Main", { timeout: 20_000 });
+    await expect(page.locator(".title-pill-name")).toHaveText(`Ranger${STAMP}`, {
+      timeout: 20_000,
+    });
+    await expect(page.locator(".title-pill-task")).toHaveCount(0);
     await onlyMain(deleting);
   } finally {
     await removeBot(archiving);

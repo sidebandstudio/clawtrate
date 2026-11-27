@@ -1,6 +1,8 @@
 import {
   gatewayBotHidden,
   listedBots,
+  botMainConversation,
+  tasksUnderBot,
   mapSessionRow,
   seenThroughUpdateNotice,
   updateNoticeScope,
@@ -119,8 +121,8 @@ export const STATE_WORDS: Record<RunState, string> = {
 
 /**
  * A bot's accessible name: its name and state first, as assistive tools read a
- * busy bot ("Otto, working"), then its tasks and what else is true: "Otto,
- * working, 14 tasks, unread".
+ * busy bot ("Otto, working"), then its tasks, when any are listed under it, and
+ * what else is true: "Otto, working, 14 tasks, unread".
  */
 export function botLabel(
   bot: Bot,
@@ -131,7 +133,8 @@ export function botLabel(
   return (
     bot.name +
     (summary.state ? `, ${STATE_WORDS[summary.state]}` : "") +
-    `, ${count} ${count === 1 ? "task" : "tasks"}` +
+    // No count for a bot with no task listed under it: its row opens its main conversation.
+    (count > 0 ? `, ${count} ${count === 1 ? "task" : "tasks"}` : "") +
     (summary.unread ? ", unread" : "") +
     (extra.label ? `, ${extra.label}` : "") +
     (extra.primary ? ", primary bot" : "")
@@ -152,6 +155,55 @@ export function visibleTasks<T extends { key: string }>(
   return top;
 }
 
+/**
+ * A bot's row's accessible name, from all of its conversations: the state and unread of every one,
+ * its main conversation included, and the count of the tasks listed under it, which leaves the
+ * main conversation out since the row itself opens it (docs/design/bot-opens-main.md).
+ */
+export function botRowLabel(
+  bot: Bot,
+  all: readonly Task[],
+  summary: BotSummary,
+  extra: { primary?: boolean; label?: string | null } = {},
+): string {
+  return botLabel(bot, tasksUnderBot(all).length, summary, extra);
+}
+
+/** Whether a bot has rows to unfold: a task listed under it, or routine runs. */
+export function canUnfold(tasks: readonly Task[], hasRoutineRows = false): boolean {
+  return hasRoutineRows || tasksUnderBot(tasks).length > 0;
+}
+
+/**
+ * The conversation a bot shows: the one it last had open while its list still holds it (or the
+ * linked task its list doesn't), else its main conversation.
+ */
+export function shownConversation(
+  tasks: readonly Task[],
+  remembered: string | undefined,
+  linked: Task | null,
+  main: Task,
+): Task {
+  return (
+    tasks.find((t) => t.key === remembered) ?? (linked?.key === remembered ? linked : null) ?? main
+  );
+}
+
+/**
+ * What opening bot `id` from its row changes: the main conversation it opens, and whether the
+ * bot changes. Null when that main conversation is already on screen. A bot open on one of its
+ * tasks opens its main conversation too; what it last had open doesn't count.
+ */
+export function botOpening(
+  id: string,
+  tasks: readonly Task[] | undefined,
+  open: { botId: string | null; key: string | null },
+): { key: string; otherBot: boolean } | null {
+  const key = botMainConversation(id, tasks).key;
+  if (open.botId === id && open.key === key) return null;
+  return { key, otherBot: open.botId !== id };
+}
+
 /** Rows shown under an unfolded bot in one pane, so the rest of the list stays in view. */
 export const TASK_CAP_ONE_PANE = 3;
 
@@ -168,9 +220,9 @@ const SEEN_KEY = "seen";
 
 /**
  * Three things are tracked separately: the selected bot, the selected task (the
- * last one opened for each bot, which wins over the most recent), and which bots
- * are unfolded. A bot with several tasks unfolds while it is open, unless it was
- * folded by hand; a bot unfolded by hand stays unfolded until it is folded.
+ * last one opened for each bot, else its main conversation), and which bots are
+ * unfolded. A bot with a task listed under it unfolds while it is open, unless it
+ * was folded by hand; a bot unfolded by hand stays unfolded until it is folded.
  */
 /** No local reads: unread is the gateway's alone. */
 const NOTHING_SEEN: SeenMap = Object.freeze({}) as SeenMap;
@@ -325,15 +377,18 @@ export function useSelection(
     state.tasksByBot[linked.task.botId]?.some((t) => t.key === linked.task.key)
   )
     setLinked(null);
-  const task =
-    tasks.find((t) => t.key === remembered) ??
-    (linked?.gatewayId === gatewayId &&
-    linked.task.key === remembered &&
-    linked.task.botId === bot?.id
-      ? linked.task
-      : null) ??
-    tasks[0] ??
-    null;
+  // The bot's main conversation: its row, or a stand-in at its key for a bot the gateway lists
+  // none for yet. Kept while the list is the same, so the open task is one object across renders.
+  const main = useMemo(() => (bot ? botMainConversation(bot.id, tasks) : null), [bot, tasks]);
+  // What the bot last had open, else its main conversation (docs/design/bot-opens-main.md).
+  const task = main
+    ? shownConversation(
+        tasks,
+        remembered,
+        linked?.gatewayId === gatewayId && linked.task.botId === bot?.id ? linked.task : null,
+        main,
+      )
+    : null;
 
   // Leaving a task marks it read as of its latest activity, so its dot only
   // returns for activity that happens after this viewer saw it.
@@ -401,17 +456,34 @@ export function useSelection(
     });
   }, []);
 
-  /** Open a bot: its remembered task, or else its most recent. */
+  /**
+   * Open a bot: its main conversation, also for the bot already open on one of its tasks
+   * (docs/design/bot-opens-main.md). Nothing is written to the gateway to open it.
+   */
   const selectBot = useCallback(
     (id: string) => {
-      if (id === bot?.id) return;
+      const opening = botOpening(id, state.tasksByBot[id], {
+        botId: bot?.id ?? null,
+        key: task?.key ?? null,
+      });
+      // Opening a bot shows its tasks under it, also the open bot folded by hand.
+      setFolded(false);
+      if (!opening) return;
+      const { key } = opening;
       markRead();
       keepIfLeftOut(id);
-      setBotId(id);
-      writePreference("bot", id);
-      setFolded(false);
+      if (opening.otherBot) {
+        setBotId(id);
+        writePreference("bot", id);
+      }
+      setTaskByBot((current) => {
+        if (current[id] === key) return current;
+        const next = { ...current, [id]: key };
+        writePreference("tasks", JSON.stringify(next));
+        return next;
+      });
     },
-    [bot, markRead, setFolded, keepIfLeftOut],
+    [bot, task, markRead, setFolded, keepIfLeftOut, state.tasksByBot],
   );
 
   /** Open a task under any bot: one operation for the bot, the task and what is read. */
@@ -449,7 +521,7 @@ export function useSelection(
 
   const isOpen = useCallback(
     (id: string, hasRoutineRows = false) =>
-      (hasRoutineRows || (state.tasksByBot[id]?.length ?? 0) > 1) &&
+      canUnfold(state.tasksByBot[id] ?? [], hasRoutineRows) &&
       (held.has(id) || (id === bot?.id && !openFolded)),
     [state.tasksByBot, held, bot, openFolded],
   );
@@ -457,7 +529,7 @@ export function useSelection(
   /** Fold or unfold by hand, without changing the selection. */
   const toggleFold = useCallback(
     (id: string, hasRoutineRows = false) => {
-      if (!hasRoutineRows && (state.tasksByBot[id]?.length ?? 0) < 2) return;
+      if (!canUnfold(state.tasksByBot[id] ?? [], hasRoutineRows)) return;
       if (isOpen(id, hasRoutineRows)) {
         updateHeld((ids) => ids.delete(id));
         if (id === bot?.id) setFolded(true);
@@ -474,7 +546,7 @@ export function useSelection(
     (id: string, group: string[], hasRoutineRows = false) => {
       updateHeld((ids) => {
         for (const other of group) if (other !== id) ids.delete(other);
-        if (hasRoutineRows || (state.tasksByBot[id]?.length ?? 0) > 1) ids.add(id);
+        if (canUnfold(state.tasksByBot[id] ?? [], hasRoutineRows)) ids.add(id);
       });
       if (bot && bot.id !== id && group.includes(bot.id)) setFolded(true);
       if (bot?.id === id) setFolded(false);
@@ -497,11 +569,11 @@ export function useSelection(
     [updateHeld],
   );
 
-  /** The task a bot opens to: its remembered task, or else its most recent. */
+  /** The conversation a bot has open: its remembered task, or else its main conversation. */
   const taskFor = useCallback(
     (id: string): Task | null => {
       const list = state.tasksByBot[id] ?? [];
-      return list.find((t) => t.key === taskByBot[id]) ?? list[0] ?? null;
+      return list.find((t) => t.key === taskByBot[id]) ?? botMainConversation(id, list);
     },
     [state.tasksByBot, taskByBot],
   );

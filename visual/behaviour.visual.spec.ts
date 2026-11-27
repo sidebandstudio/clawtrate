@@ -35,7 +35,9 @@ test.describe("the rail", () => {
 
   test("folding the open bot keeps the selection and the summary", async ({ page }) => {
     await openFixture(page, `scene=main&${OTTO_DISK}`, "light");
-    await bot(page, "Otto").click();
+    // The fold, not the row: the row opens the bot's main conversation.
+    await bot(page, "Otto").hover();
+    await page.getByRole("button", { name: "Hide Otto's tasks" }).click();
     await expect(bot(page, "Otto")).toHaveAttribute("aria-expanded", "false");
     await expect(bot(page, "Otto")).toHaveAttribute("aria-current", "true");
     await expect(page.getByRole("heading", { level: 1 })).toHaveText(
@@ -50,8 +52,8 @@ test.describe("the rail", () => {
   }) => {
     await openFixture(page, `scene=main&${OTTO_DISK}`, "light");
     await bot(page, "Pip").click();
-    // Nothing remembered for Pip: its newest task shows, and the person chooses that very task.
-    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Plan the week");
+    // Pip's row opens its main conversation, and the person chooses its newest task.
+    await expect(page.locator(".title-pill-task")).toHaveCount(0);
     await page.getByRole("list", { name: "Pip's tasks" }).getByText("Plan the week").click();
     // Another task of Pip's starts, newer than every other.
     await page.evaluate(() => {
@@ -77,19 +79,71 @@ test.describe("the rail", () => {
     await expect(page.getByRole("heading", { level: 1 })).toHaveText("Plan the week");
   });
 
-  test("selecting a bot opens its remembered task; a bot with one task is a plain row", async ({
+  test("a bot's row opens its main conversation, not the task it last had open; Main is not a row", async ({
     page,
   }) => {
     await openFixture(page, `scene=main&${OTTO_DISK}`, "light");
+    const pill = page.locator(".title-pill");
     await bot(page, "Pip").click();
-    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Plan the week");
+    await expect(pill).toHaveAccessibleName("Pip. Show details.");
     await page.getByRole("list", { name: "Pip's tasks" }).getByText("Birthday dinner").click();
+    await expect(pill).toHaveAccessibleName("Pip, Birthday dinner. Show details.");
+    // Marlow has only its main conversation: a plain row, current, with no task under it.
     await bot(page, "Marlow").click();
     await expect(bot(page, "Marlow")).not.toHaveAttribute("aria-expanded");
     await expect(bot(page, "Marlow")).toHaveAttribute("aria-current", "true");
+    await expect(bot(page, "Marlow")).toHaveAccessibleName(/^Marlow, editing$/);
+    await expect(page.getByTestId("task").filter({ hasText: /^Main$/ })).toHaveCount(0);
+    await expect(pill).toHaveAccessibleName("Marlow. Show details.");
+    await expect(page.getByRole("heading", { level: 1, name: "Marlow" })).toBeAttached();
+    await expect(page.locator(".title-pill-task")).toHaveCount(0);
     await expect(page.getByRole("list", { name: "Pip's tasks" })).toHaveCount(0);
+    // Back to Pip: its main conversation, not Birthday dinner.
     await bot(page, "Pip").click();
-    await expect(page.getByRole("heading", { level: 1 })).toHaveText("Birthday dinner");
+    await expect(pill).toHaveAccessibleName("Pip. Show details.");
+  });
+
+  test("the open bot's row goes back to its main conversation from one of its tasks", async ({
+    page,
+  }) => {
+    await openFixture(page, `scene=main&${OTTO_DISK}`, "light");
+    const pill = page.locator(".title-pill");
+    await expect(pill).toHaveAccessibleName(
+      "Otto, Disk almost full on the media box. Show details.",
+    );
+    await expect(bot(page, "Otto")).not.toHaveAttribute("aria-current");
+    await bot(page, "Otto").click();
+    await expect(pill).toHaveAccessibleName("Otto. Show details.");
+    await expect(bot(page, "Otto")).toHaveAttribute("aria-current", "true");
+    // The row never folds the bot: its tasks stay listed under it.
+    await expect(bot(page, "Otto")).toHaveAttribute("aria-expanded", "true");
+    await expect(page.getByRole("list", { name: "Otto's tasks" }).getByTestId("task")).toHaveCount(
+      6,
+    );
+    // From the keyboard: Left from a task row goes to the bot, and Enter opens its main conversation.
+    await page.getByRole("list", { name: "Otto's tasks" }).getByTestId("task").nth(1).click();
+    await expect(pill).not.toHaveAccessibleName("Otto. Show details.");
+    await page.getByRole("list", { name: "Otto's tasks" }).getByTestId("task").nth(1).focus();
+    await page.keyboard.press("ArrowLeft");
+    await expect(bot(page, "Otto")).toBeFocused();
+    await page.keyboard.press("Enter");
+    await expect(pill).toHaveAccessibleName("Otto. Show details.");
+  });
+
+  test("a bot with no main conversation yet opens an empty one, and nothing is made", async ({
+    page,
+  }) => {
+    await openFixture(page, `scene=main&${OTTO_DISK}`, "light");
+    await bot(page, "Juniper").click();
+    await expect(page.locator(".title-pill")).toHaveAccessibleName("Juniper. Show details.");
+    await expect(page.getByRole("heading", { level: 1, name: "Nothing here yet" })).toBeVisible();
+    await expect(page.getByText("Ask Juniper anything, or to put work in a task.")).toBeVisible();
+    await expect(page.getByTestId("composer-input")).toBeVisible();
+    // No session is made for it, and its tasks are as they were.
+    await expect(
+      page.getByRole("list", { name: "Juniper's tasks" }).getByTestId("task"),
+    ).toHaveCount(3);
+    await expect(page.locator('[data-testid="task"][data-key="agent:main:main"]')).toHaveCount(0);
   });
 
   test("arrow keys move through the rail, Right unfolds and Left folds", async ({ page }) => {
@@ -983,14 +1037,16 @@ test.describe("a failed history", () => {
 test.describe("the phone", () => {
   test.use(contextFor(PHONE, "light"));
 
-  test("tapping a bot with several tasks unfolds it in place; a task opens; Back returns", async ({
+  test("tapping a bot opens its main conversation; Back shows its tasks; a task opens; Back returns", async ({
     page,
   }) => {
     await openFixture(page, `scene=main&${OTTO_DISK}`, "light");
     await page.getByRole("button", { name: "Back to bots" }).click();
     await bot(page, "Pip").tap();
+    await expect(page.locator(".conversation")).toBeVisible();
+    await expect(page.locator(".title-pill")).toHaveAccessibleName("Pip. Show details.");
+    await page.getByRole("button", { name: "Back to bots" }).tap();
     await expect(bot(page, "Pip")).toHaveAttribute("aria-expanded", "true");
-    await expect(page.locator(".conversation")).toBeHidden();
     await page.getByRole("list", { name: "Pip's tasks" }).getByText("Birthday dinner").tap();
     await expect(page.getByRole("heading", { level: 1, name: "Birthday dinner" })).toBeVisible();
     await page.getByRole("button", { name: "Back to bots" }).tap();

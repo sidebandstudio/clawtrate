@@ -117,6 +117,12 @@ async function hostCommand(command: Json): Promise<void> {
 }
 
 const botRow = (bot: string) => page.locator(`[data-testid="bot"][data-bot="${bot}"]`);
+
+/** The task the note's turn ran in: the bot's row opens its main conversation, the task is under it. */
+async function openNoteTask(key: string): Promise<void> {
+  await botRow("main").click();
+  await page.locator(`[data-testid="task"][data-key="${key}"]`).click({ timeout: 30_000 });
+}
 const transcript = () => page.getByTestId("transcript");
 
 async function setCommandsShown(on: boolean): Promise<void> {
@@ -246,7 +252,7 @@ test("F-560: a real skill note shows in the default conversation and as the bot'
   }
 
   // The person reads the bot's reply, then goes to another bot before the review ends.
-  await botRow("main").click();
+  await openNoteTask(key);
   await expect(transcript()).toContainText(REPLY, { timeout: 60_000 });
   const other = page.locator('[data-testid="bot"]:not([data-bot="main"])').first();
   await other.click();
@@ -288,7 +294,7 @@ test("F-560: a real skill note shows in the default conversation and as the bot'
   // With Show commands off, the note is in the conversation after the reply, drawn as the bot's
   // words are (its code marks are formatting), and is the bot's preview.
   await setCommandsShown(false);
-  await botRow("main").click();
+  await openNoteTask(key);
   await expect(transcript()).toContainText(REPLY, { timeout: 60_000 });
   await expect(transcript()).toContainText(noteText.replaceAll("`", ""));
   const text = await transcript().innerText();

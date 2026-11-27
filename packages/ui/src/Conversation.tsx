@@ -133,6 +133,22 @@ export function echoesError(item: TranscriptItem, run: Run): boolean {
   return error !== "" && plain(itemText(item)) === error;
 }
 
+/**
+ * The conversation's heading: a task's title, or in the bot's main conversation the bot's name,
+ * for screen readers only, since the header already names the bot (docs/design/bot-opens-main.md).
+ */
+function TaskHeading({ task, bot }: { task: Task; bot: Bot }) {
+  return task.isMain === true ? (
+    <h1 className="task-line visually-hidden" tabIndex={-1}>
+      {bot.name}
+    </h1>
+  ) : (
+    <h1 className="task-line" tabIndex={-1}>
+      {task.title}
+    </h1>
+  );
+}
+
 /** Under the task's name: how much of the model's context the task uses, once the gateway reports it. */
 function TaskContext({ task }: { task: Task }) {
   const words = contextWords(task.context);
@@ -506,9 +522,7 @@ function TranscriptView({
               ctx={reading}
             >
               <MessageProvider env={messageEnv}>
-                <h1 className="task-line" tabIndex={-1}>
-                  {task.title}
-                </h1>
+                <TaskHeading task={task} bot={bot} />
                 {starter && <StartedLine starter={starter} onOpen={openTask} />}
                 <TaskContext task={task} />
                 {note}
@@ -965,9 +979,12 @@ export function Conversation({
     });
   }, []);
 
+  // The bot's main conversation is the bot: its name alone. A task adds its title.
   const pillName = bot
     ? task
-      ? `${bot.name}, ${task.title}. Show details.`
+      ? task.isMain === true
+        ? `${bot.name}. Show details.`
+        : `${bot.name}, ${task.title}. Show details.`
       : `${bot.name}, no task selected. Show details.`
     : "";
 
@@ -1156,9 +1173,7 @@ export function Conversation({
       <div className="transcript-wrap">
         <div className="transcript" data-testid="transcript">
           <div className="transcript-inner" aria-busy="true" aria-label="Loading conversation">
-            <h1 className="task-line" tabIndex={-1}>
-              {task.title}
-            </h1>
+            <TaskHeading task={task} bot={bot} />
             <TaskContext task={task} />
             <div className="skeleton" data-side="end" style={{ width: "46%", marginTop: 22 }} />
             <div className="skeleton" style={{ width: "62%", height: 88, marginTop: 16 }} />
@@ -1186,7 +1201,11 @@ export function Conversation({
       <EmptyState
         bot={bot}
         title="Nothing here yet"
-        body={`Messages between you and ${bot.name} in this task will appear here.`}
+        body={
+          task.isMain === true
+            ? `Ask ${bot.name} anything, or to put work in a task.`
+            : `Messages between you and ${bot.name} in this task will appear here.`
+        }
       />
     );
   } else {
@@ -1254,12 +1273,12 @@ export function Conversation({
             type="button"
             className="title-pill"
             aria-label={pillName}
-            title={task?.title}
+            title={task && task.isMain !== true ? task.title : bot.name}
             onClick={onOpenPanel}
           >
             <Avatar bot={bot} />
             <bdi className="title-pill-name">{bot.name}</bdi>
-            {task && <span className="title-pill-task">{task.title}</span>}
+            {task && task.isMain !== true && <span className="title-pill-task">{task.title}</span>}
           </button>
         ) : (
           <span />

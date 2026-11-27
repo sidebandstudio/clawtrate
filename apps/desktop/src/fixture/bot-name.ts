@@ -144,6 +144,7 @@ export function botNameScene(
           botId: NAMED_BOT,
           sessionId: "5f2c8e1a-7b3d-4a96-b0e4-1d9c6a2f8e37",
           title: "Main",
+          isMain: true,
           preview: "Johnny it is. It shows once you confirm it in Clawtrate.",
           updatedAt: start + 33 * SECOND,
           status: "done",

@@ -12,6 +12,7 @@ import {
   avatarFor,
   gatewayAddress,
   MAX_GATEWAY_NAME_CHARS,
+  tasksUnderBot,
 } from "@clawtrate/core";
 import {
   createContext,
@@ -68,7 +69,7 @@ import {
 } from "./RailActions.tsx";
 import { arrange, rosterScope, SORT_ORDERS, useRoster } from "./roster.ts";
 import {
-  botLabel,
+  botRowLabel,
   summarize,
   taskState,
   TASK_CAP,
@@ -1016,33 +1017,18 @@ export function Rail({
     shown: shownStamp(connection),
   });
 
-  const clickBot = (bot: Bot, count: number) => {
-    if (count < 2) {
-      selection.selectBot(bot.id);
-      onOpen();
-    } else if (onePane || bot.id === selection.bot?.id) {
-      // One pane: a bot with several tasks unfolds in place. Two panes: the
-      // open bot's row folds and unfolds it.
-      selection.toggleFold(bot.id);
-    } else {
-      selection.selectBot(bot.id);
-    }
+  // A bot's row opens its main conversation, also from one of its own tasks
+  // (docs/design/bot-opens-main.md). Its fold, and Right and Left, show and hide its tasks.
+  const clickBot = (bot: Bot) => {
+    selection.selectBot(bot.id);
+    onOpen();
   };
 
-  // A pinned tile. The grid has one task block, with one owner at a time.
-  const clickPin = (bot: Bot, count: number) => {
-    const hasRoutines = pinHasRoutines(bot.id);
-    if (count < 2 && !hasRoutines) {
-      selection.selectBot(bot.id);
-      onOpen();
-    } else if (bot.id === owner?.id) {
-      selection.toggleFold(bot.id, hasRoutines);
-    } else if (onePane || bot.id === selection.bot?.id) {
-      selection.unfoldOnly(bot.id, pinnedIds, hasRoutines);
-    } else {
-      selection.selectBot(bot.id);
-      selection.release(pinnedIds.filter((id) => id !== bot.id));
-    }
+  // A pinned tile, the same. The grid has one task block, with one owner at a time: the bot opened.
+  const clickPin = (bot: Bot) => {
+    selection.selectBot(bot.id);
+    selection.release(pinnedIds.filter((id) => id !== bot.id));
+    onOpen();
   };
 
   const openSearch = useCallback(() => {
@@ -1116,7 +1102,7 @@ export function Rail({
   useEffect(() => {
     const open = (bot: Bot) => {
       // Routines covers the conversation: the selected bot's is not on screen yet.
-      if (bot.id === selection.bot?.id && !routinesOpen) return;
+      if (bot.id === selection.bot?.id && selection.task?.isMain === true && !routinesOpen) return;
       const inList = listRef.current?.contains(document.activeElement) ?? false;
       selection.selectBot(bot.id);
       onOpen();
@@ -1933,15 +1919,18 @@ export function Rail({
     routines.find((each) => each.botId === botId && each.runningAt !== null) ?? null;
 
   const renderRow = (bot: Bot, place: "list" | "section" | "hidden" | "search") => {
-    const tasks = tasksByBot[bot.id] ?? [];
+    // Every conversation, the main one included, for what the row says; the rows under it list
+    // the rest, since the row itself opens the main conversation.
+    const all = tasksByBot[bot.id] ?? [];
+    const tasks = tasksUnderBot(all);
     const running = runningRoutine(bot.id);
     const summary = withRoutine(
-      summarize(tasks, selection.seen, onScreenKey, selection.unreadSeen),
+      summarize(all, selection.seen, onScreenKey, selection.unreadSeen),
       running,
     );
-    const waiting = waitingWords(tasks);
+    const waiting = waitingWords(all);
     const open = place !== "search" && selection.isOpen(bot.id);
-    const several = tasks.length > 1;
+    const several = tasks.length > 0;
     const routineRuns = place !== "search" && (open || !several) ? runsUnder(bot) : [];
     const showTasks = open || (place !== "search" && interactive && archivedOpen.has(bot.id));
     const selected = bot.id === selection.bot?.id;
@@ -1974,15 +1963,13 @@ export function Rail({
             setDrag({ id: bot.id, over: null, before: true });
           }}
           onDragEnd={() => setDrag(null)}
-          aria-current={selected && !open ? "true" : undefined}
+          aria-current={selected && (selection.task?.isMain === true || !open) ? "true" : undefined}
           aria-expanded={several && place !== "search" ? open : undefined}
-          aria-label={botLabel(bot, tasks.length, summary, {
+          aria-label={botRowLabel(bot, all, summary, {
             primary: bot.isDefault,
             label: bot.theme,
           })}
-          onClick={() =>
-            clickBot(bot, place === "search" ? Math.min(tasks.length, 1) : tasks.length)
-          }
+          onClick={() => clickBot(bot)}
           onContextMenu={onContextMenu(bot)}
         >
           <Presence bot={bot} state={summary.state} primary={bot.isDefault} />
@@ -2047,12 +2034,13 @@ export function Rail({
   };
 
   const renderPin = (bot: Bot) => {
-    const tasks = tasksByBot[bot.id] ?? [];
+    const all = tasksByBot[bot.id] ?? [];
+    const tasks = tasksUnderBot(all);
     const summary = withRoutine(
-      summarize(tasks, selection.seen, onScreenKey, selection.unreadSeen),
+      summarize(all, selection.seen, onScreenKey, selection.unreadSeen),
       runningRoutine(bot.id),
     );
-    const several = tasks.length > 1 || pinHasRoutines(bot.id);
+    const several = tasks.length > 0 || pinHasRoutines(bot.id);
     return (
       <li key={bot.id}>
         <button
@@ -2063,12 +2051,12 @@ export function Rail({
           data-state={summary.state ?? undefined}
           aria-current={bot.id === selection.bot?.id ? "true" : undefined}
           aria-expanded={several ? owner?.id === bot.id : undefined}
-          aria-label={botLabel(bot, tasks.length, summary, {
+          aria-label={botRowLabel(bot, all, summary, {
             primary: bot.isDefault,
             label: bot.theme,
           })}
           title={bot.name}
-          onClick={() => clickPin(bot, tasks.length)}
+          onClick={() => clickPin(bot)}
           onContextMenu={onContextMenu(bot)}
         >
           <Presence bot={bot} state={summary.state} primary={bot.isDefault} />
@@ -2226,7 +2214,7 @@ export function Rail({
                   </p>
                   <TaskRows
                     bot={owner}
-                    tasks={tasksByBot[owner.id] ?? []}
+                    tasks={tasksUnderBot(tasksByBot[owner.id] ?? [])}
                     routineRuns={runsUnder(owner)}
                     onOpenRoutineRun={onOpenRoutineRun}
                     selection={selection}

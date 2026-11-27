@@ -312,6 +312,8 @@ export function fixtureTasks(now: number, bots: Bot[]): Record<string, Task[]> {
       updatedAt: now - spec.ago * MINUTE,
       status: spec.status ?? "done",
       unread: spec.unread ?? false,
+      // The bot's main session, marked as the engine marks it from the gateway's row.
+      ...(spec.slug === "main" ? { isMain: true } : {}),
       // Marlow's gateway reports no context use, so its task shows no context line.
       ...(bot.id === "marlow"
         ? {}

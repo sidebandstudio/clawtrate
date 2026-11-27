@@ -44,8 +44,10 @@ test("F-425: a bot's disclosure shows its tasks with title, status and time, and
   await expect(otto).toHaveCount(14);
   await expect(otto.nth(13).locator(".task-time")).toHaveText("Oct 28");
 
-  // Fold Otto (the open bot) and unfold Pip, both by hand; a restart keeps both.
-  await bot(page, "Otto").click();
+  // Fold Otto (the open bot) and unfold Pip, both by hand; a restart keeps both. Otto's row opens
+  // its main conversation, so Left on it folds it.
+  await bot(page, "Otto").focus();
+  await page.keyboard.press("ArrowLeft");
   await expect(bot(page, "Otto")).toHaveAttribute("aria-expanded", "false");
   await bot(page, "Pip").focus();
   await page.keyboard.press("ArrowRight");
@@ -64,7 +66,7 @@ test("F-425: a bot's disclosure shows its tasks with title, status and time, and
     "failed",
   );
   await expect(tasksOf(page, "Otto")).toHaveCount(0);
-  // And unfolding Otto again is remembered too.
+  // And unfolding Otto again, by opening it, is remembered too.
   await bot(page, "Otto").click();
   await page.reload();
   await expect(bot(page, "Otto")).toHaveAttribute("aria-expanded", "true");

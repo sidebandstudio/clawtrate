@@ -119,7 +119,11 @@ test.describe("the gateway's own bot", () => {
   }) => {
     await openFixture(page, `${OTTO_DISK}&panel=closed&gatewaybot=off`, "light");
     await setState(page, heatPump("waiting"));
+    // Its row opens its main conversation, as any bot's does; the waiting task is under it.
     await railBot(page, "Juniper").click();
+    await expect(page.locator(".title-pill")).toHaveAccessibleName(/^Juniper\. Show details\.$/);
+    await expect(page.locator(".title-pill-task")).toHaveCount(0);
+    await page.getByRole("list", { name: "Juniper's tasks" }).getByText("Heat pump").click();
     const heading = page.getByRole("heading", { level: 1 });
     await expect(page.getByTestId("transcript")).toContainText("installer");
     const opened = await heading.textContent();
@@ -213,8 +217,10 @@ test.describe("the gateway's own bot", () => {
     await expect(railBot(page, "Juniper")).toHaveAccessibleName(/waiting for you/);
     await expect(heading).toHaveText(opened!);
     expect(await page.evaluate(() => localStorage.getItem("clawtrate.bot"))).toBe("marlow");
-    // Picked by the person, it opens.
+    // Picked by the person, it opens: its main conversation, with the waiting task under it.
     await railBot(page, "Juniper").click();
+    await expect(page.locator(".title-pill-task")).toHaveCount(0);
+    await page.getByRole("list", { name: "Juniper's tasks" }).getByText("Heat pump").click();
     await expect(page.getByTestId("transcript")).toContainText("installer");
   });
 
