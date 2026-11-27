@@ -4311,6 +4311,7 @@ export class ClawtrateClient {
             error: null,
             key: null,
             gatewayBootId: null,
+            gatewayId: null,
           };
     this.putCreation(creation);
     let sent = false;
@@ -4336,6 +4337,7 @@ export class ClawtrateClient {
       if (epoch !== this.epoch || forGateway === null || here !== forGateway)
         throw new Error(WRITTEN_FOR_ANOTHER);
       creation.gatewayBootId = this.gatewayBootId;
+      creation.gatewayId = forGateway;
       this.putCreation(creation);
       sent = true;
       const result = asRecord(await this.request("sessions.create", creationParams(creation)));
@@ -4562,7 +4564,7 @@ export class ClawtrateClient {
     try {
       const result = asRecord(await this.request("sessions.create", creationParams(creation)));
       if (this.creations.get(id)?.status !== "checking") return;
-      this.completeCreation(creation, result, false);
+      this.completeCreation(creation, result, false, creation.gatewayId);
     } catch (error) {
       if (this.creations.get(id)?.status !== "checking") return;
       if (error instanceof GatewayProtocolRequestError) {
