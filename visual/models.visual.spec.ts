@@ -23,7 +23,7 @@ async function changed(page: Page) {
   await models(page);
   await page
     .getByRole("combobox", { name: /Default model/ })
-    .selectOption("openai/gpt-5.5-mini@openai:home");
+    .selectOption("openai/gpt-5.5@openai:work");
   await expect(page.getByRole("button", { name: /^Put back / })).toBeVisible();
 }
 
@@ -78,7 +78,7 @@ test.describe("Settings › Models in the fixture", () => {
     );
     expect(sent.map((each) => each.type)).toEqual(["setModelDefaults", "putBackModelDefaults"]);
     expect(sent[0]).toMatchObject({
-      values: { primary: "openai/gpt-5.5-mini@openai:home" },
+      values: { primary: "openai/gpt-5.5@openai:work" },
       restart: false,
       stamp: { gatewayId: expect.any(String) },
     });

@@ -91,7 +91,8 @@ function render(state: AccountsState, connection: ConnectionState = admin): stri
     const view = useModelsSection({
       accounts: state,
       bots: [
-        { id: "main", name: "Juniper" },
+        { id: "main", name: "Gateway bot", isDefault: true },
+        { id: "juniper", name: "Juniper" },
         { id: "otto", name: "Otto" },
       ] as never,
       connection,
@@ -150,6 +151,12 @@ describe("Settings › Models", () => {
       "Changed on another device since: default model is now Globex One, on Globex · Team.",
     );
     expect(render({ ...accounts, defaultsChange: since })).not.toContain("Put back");
+  });
+
+  it("leaves the gateway's own bot out of Each bot, as every bot list does", () => {
+    const html = render(accounts);
+    expect(html).not.toContain(">Gateway bot<");
+    expect(html).toContain(">Juniper<");
   });
 
   it("a change that restarts OpenClaw waits for one press, with the version's words", () => {

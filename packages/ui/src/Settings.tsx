@@ -1002,7 +1002,16 @@ export function Settings({
     announce,
     toNav,
   });
-  const modelsSection = useModelsSection({ accounts, bots, connection, info, announce, toNav });
+  const showGatewayBot = useClawtrateState().showGatewayBot === true;
+  const modelsSection = useModelsSection({
+    accounts,
+    bots,
+    connection,
+    info,
+    announce,
+    toNav,
+    showGatewayBot,
+  });
   const usageSection = useUsageSection({
     bots,
     connection,

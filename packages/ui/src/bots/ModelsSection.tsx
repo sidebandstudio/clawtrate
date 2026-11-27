@@ -5,6 +5,7 @@
 // (section 7). Writes go through the accounts engine, which reads and writes the models already.
 
 import {
+  gatewayBotHidden,
   openClawAtLeast,
   parseModelRef,
   type AccountsState,
@@ -122,9 +123,12 @@ export function useModelsSection({
   info,
   announce,
   toNav,
+  showGatewayBot = false,
 }: {
   accounts: AccountsState;
   bots: readonly Bot[];
+  /** "Show the gateway's own bot" (Advanced): otherwise it is left out, as in every bot list. */
+  showGatewayBot?: boolean;
   connection: ConnectionState;
   info: HostInfo;
   announce: (text: string) => void;
@@ -332,20 +336,22 @@ export function useModelsSection({
           {line}
           <h4 className="b-group">Each bot</h4>
           <ul className="b-models-bots">
-            {bots.map((bot) => {
-              const binding = accounts.bindings.find((b) => b.botId === bot.id);
-              const own = binding && binding.mode !== "default-model" ? binding.primary : null;
-              return (
-                <li key={bot.id}>
-                  <span className="b-models-bot">{bot.name}</span>
-                  <span className="b-hint">
-                    {own
-                      ? modelWords(own, accounts)
-                      : `The default: ${modelWords(defaults.primary, accounts)}`}
-                  </span>
-                </li>
-              );
-            })}
+            {bots
+              .filter((bot) => !gatewayBotHidden(bot, bots, showGatewayBot))
+              .map((bot) => {
+                const binding = accounts.bindings.find((b) => b.botId === bot.id);
+                const own = binding && binding.mode !== "default-model" ? binding.primary : null;
+                return (
+                  <li key={bot.id}>
+                    <span className="b-models-bot">{bot.name}</span>
+                    <span className="b-hint">
+                      {own
+                        ? modelWords(own, accounts)
+                        : `The default: ${modelWords(defaults.primary, accounts)}`}
+                    </span>
+                  </li>
+                );
+              })}
           </ul>
         </>
       )}
