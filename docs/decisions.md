@@ -1305,6 +1305,16 @@ Every task Clawtrate makes ends up with a name a model wrote: a few words that s
 - **What a person sees.** The task's title changes from the first one to the model's name a moment after they send, in the sidebar, the header and search, with nothing to answer or switch on. The name lands while the bot's first reply runs, which already put the task at the top of its bot's list; the patch moves its `updatedAt` as any change does.
 - **What a name costs, from the person's own allowance.** One call: about 200 tokens of the gateway's fixed instruction, plus the first message (at most 1,000 characters, about 250 tokens; a typical first message is 20 to 80), in; the title, at most 60 characters (about 15 tokens), out. That is about 220 to 460 tokens in and 15 out per name, on OpenAI's or Anthropic's small model, with no thinking tokens except OpenAI on 2026.10.6, where the provider's default effort may add some (capped at 4,096 output tokens by the gateway). A refused call costs nothing; a call that fails costs at most the same again, for up to two. The gateway's own title for the task, which it makes whether Clawtrate is there or not, is one more call of the same size (two when the small model gives nothing). Not measured with a real provider: the development gateway's scripted model counts no tokens of its own.
 
+## A setting's explanation behind an "i"
+
+A setting shows its name and its control; what it does is one press away, behind a small "i" beside its name (#798, `packages/ui/src/InfoTip.tsx`).
+
+- **Opens on hover, keyboard focus and tap.** Escape, a second press, a tap elsewhere, and the pointer or focus leaving put it away; Escape closes only the card, never the dialog or form around it.
+- **Below the setting's whole row** (the nearest `.info-row`), as wide as the row: it never covers the control it explains, and fits a phone's screen with no sideways scroll.
+- **Nothing lost for someone who can't see it.** The text is always in the page, hidden while closed; the control's `aria-describedby` names it, so a screen reader reads it as the control's description, and the "i" is a button named "About <setting>".
+- **Shortened first.** Each explanation says only what a person needs to choose: not the default the control already shows, not the mechanism behind it.
+- **What stays in view.** A warning a person must read before acting (a budget is a warning only; Off for check-ins stops only the schedule; a typed check-in prompt replaces the gateway's own; a model a provider may not let an account use; a change to the gateway's own settings), and status: why a control can't be used, what the gateway reported, a read that failed, the lines Clawtrate says when it can't keep a bot's instructions.
+
 ## Not done yet
 
 - The Computer tab draws no event lines in the conversation for control moments, reads node stats only from the node's record, and does not send one-finger drags on the phone as page scrolling (see The computer).
