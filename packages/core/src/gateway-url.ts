@@ -36,8 +36,8 @@ export function protectedGatewayUrl(raw: string): boolean {
   return !loopbackHost(url.hostname);
 }
 
-/** Whether a parsed host name is this computer's: loopback or unspecified, in any spelling. */
-function loopbackHost(hostname: string): boolean {
+/** Whether a parsed host name is this device's: loopback or unspecified, in any spelling. */
+export function loopbackHost(hostname: string): boolean {
   const host = hostname.toLowerCase().replace(/\.$/, "");
   if (host === "" || host === "localhost" || host.endsWith(".localhost")) return true;
   // The URL parser writes every IPv4 form (decimal, hex, short) as a dotted quad.
