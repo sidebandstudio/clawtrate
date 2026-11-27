@@ -1020,6 +1020,12 @@ export function createFixtureBridge(
       sent.push(command);
       return guides();
     }
+    // A skill note's undo (F-560): the gateway's answer, for a connection with admin access.
+    if (command.type === "undoSkillChange") {
+      sent.push(command);
+      if (!state.connection.canAdmin) throw new Error("missing scope: operator.admin");
+      return { undone: true };
+    }
     if (
       command.type === "listMemory" ||
       command.type === "readMemory" ||

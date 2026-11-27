@@ -63,11 +63,11 @@
       - paragraph: "Juniper still reports when a command it started in the background finishes: Off stops only the schedule, and the gateway starts that turn."
       - group:
         - text: What to check Prompt
+        - button "About Prompt"
         - textbox "Prompt":
           - /placeholder: Follow the heartbeat monitor scratch context when provided. Recurring tasks are automations; create or change their schedules with the automations tool, not heartbeat scratch. Do not infer or repeat old tasks from prior chats. If nothing needs attention, reply NO_REPLY.
           - text: Theirs. If nothing needs attention, reply NO_REPLY.
         - paragraph: This prompt replaces the gateway's own, which asks Juniper to reply NO_REPLY when nothing needs attention. Whether Juniper stays quiet depends on what this prompt asks.
-        - paragraph: Empty uses the gateway's built-in prompt, which asks the bot to reply NO_REPLY when nothing needs attention. Up to 4,000 characters.
       - alert:
         - paragraph: Not saved. Check-ins changed on the gateway since this dialog opened, so nothing was saved. Its cadence was changed. Your changes are kept; the rest of this dialog, and the check-ins behind it, show what the gateway has now. Save again to apply your changes over it.
       - button "Cancel"

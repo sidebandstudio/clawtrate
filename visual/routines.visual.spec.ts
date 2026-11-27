@@ -1,7 +1,8 @@
 // The Routines view (docs/design/automation.md) against approved baselines, in
 // light and dark at 1440, 1100 and 800 px and at phone width: the list, one
-// bot's routines, a routine's page with its runs, a run with its conversation
-// and one without, the calendar, and a bot working while its routine runs.
+// bot's routines, a routine's page with its runs, a reminder's page and its
+// run, a run with its conversation and one without, the calendar, and a bot
+// working while its routine runs.
 // The fixture's routines are made up (apps/desktop/src/fixture/routines.ts).
 import { test, type Page } from "@playwright/test";
 import { contextFor, expect, openFixture, settle, SIZES, THEMES } from "./fixture.ts";
@@ -36,6 +37,16 @@ const SCENES: Scene[] = [
     },
   },
   { name: "page", query: ON, ready: routinePage("Morning digest") },
+  { name: "reminder", query: ON, ready: routinePage("Stretch break") },
+  {
+    name: "reminder-run",
+    query: ON,
+    ready: async (page, phone) => {
+      await routinePage("Stretch break")(page, phone);
+      await view(page).getByTestId("run-row").first().click();
+      await expect(view(page).getByTestId("run-summary")).toBeVisible();
+    },
+  },
   {
     name: "run",
     query: ON,

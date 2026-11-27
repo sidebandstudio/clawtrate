@@ -6,7 +6,7 @@ import { describe, expect, it } from "vitest";
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { mapSessionRow, plainPreview } from "../src/mapping.ts";
 import { readMessageSearch } from "../src/search.ts";
-import { isActive } from "../src/runs.ts";
+import { isActive, runningRunId } from "../src/runs.ts";
 import {
   CLAWTRATE_WORK_CONTEXT,
   goesUnmarked,
@@ -375,6 +375,19 @@ describe("a refusal of the marker", () => {
       gateway.emit("agent", agentEvent(steer, 2, "lifecycle", { phase: "end" }, KEY));
       await until(() => sends(gateway).length === 3);
       expect(sends(gateway)[2]).toMatchObject({ message: "and then this", idempotencyKey: later });
+      client.stop();
+    });
+
+    it("F-097: the asking run ends and the steer's own run is acknowledged: Stop, before its first event, aborts that run", async () => {
+      const { client, gateway, transcript, steer } = await heldSteerThenQueued();
+      // OpenClaw answers `started` before it dispatches the run, so no event has come yet.
+      gateway.handlers["chat.send"] = () => ({ runId: steer, status: "started" });
+      gateway.handlers["chat.abort"] = () => ({ ok: true, aborted: true, runIds: [steer] });
+      gateway.emit("agent", agentEvent("run-y", 2, "lifecycle", { phase: "end" }, KEY));
+      await until(() => transcript().outbox.find((m) => m.id === steer)?.status === "sent");
+      expect(runningRunId(transcript(), steer)).toBe(steer);
+      await client.stopRun(KEY, steer);
+      expect(gateway.calls("chat.abort")).toEqual([expect.objectContaining({ runId: steer })]);
       client.stop();
     });
 
