@@ -232,12 +232,29 @@ test.describe("1440", () => {
     );
   });
 
+  test("F-190: a run that recorded no summary says so, and its status is not offered as what it returned", async ({
+    page,
+  }) => {
+    await open(page);
+    await view(page).getByTestId("routine-row").filter({ hasText: "Morning digest" }).click();
+    // The skipped run recorded no summary (#847).
+    await view(page).getByTestId("run-row").nth(3).click();
+    await expect(view(page).getByTestId("run-summary")).toHaveText(
+      "The gateway recorded nothing this run returned.",
+    );
+    await expect(view(page).getByTestId("run-view")).toContainText("Skipped");
+  });
+
   test("F-190: a reminder in the main conversation is shown as such, not as a run of its own", async ({
     page,
   }) => {
     await open(page);
     await view(page).getByTestId("routine-row").filter({ hasText: "Stretch break" }).click();
-    await expect(view(page)).toContainText("Posts a reminder in Juniper's main conversation:");
+    // On both OpenClaw versions the bot gets the reminder in a turn of its own (#752).
+    await expect(view(page)).toContainText(
+      "Juniper gets this reminder in its main conversation, uses its model, and may answer there:",
+    );
+    await expect(view(page)).not.toContainText("Posts a reminder");
     await expect(view(page).getByTestId("routine-facts")).toContainText(
       "Runs inJuniper's main conversation",
     );
@@ -246,6 +263,11 @@ test.describe("1440", () => {
     // cannot say which conversation it used.
     await expect(view(page).getByTestId("run-not-kept")).toContainText(
       "Clawtrate can't confirm which conversation this run used. The gateway recorded no session for it",
+    );
+    // With no session, the summary is what the gateway recorded (on 2026.10.6, the reminder's own
+    // text), not an answer the run returned.
+    await expect(view(page).getByTestId("run-summary")).toHaveText(
+      "What the gateway recorded: Time to stand up and stretch.",
     );
   });
 
