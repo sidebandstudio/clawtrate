@@ -1,7 +1,11 @@
 import { execFileSync } from "node:child_process";
 import type * as ChildProcesses from "node:child_process";
 import { beforeEach, expect, it, vi } from "vitest";
-import { taskbarOverlayDescription, type OverlayRead } from "../e2e-packaged/windows.ts";
+import {
+  taskbarOverlayDescription,
+  windowsProcesses,
+  type OverlayRead,
+} from "../e2e-packaged/windows.ts";
 
 vi.mock("node:child_process", () => ({ execFileSync: vi.fn() }));
 
@@ -114,3 +118,66 @@ it("records a failed read by its exit status or error code, never its script or 
   ]);
   expect(JSON.stringify(reads)).not.toMatch(/Add-Type|powershell|Users|\$env/i);
 });
+
+it("lists every process with its parent and command line, and bounds the query with a timeout", () => {
+  vi.mocked(execFileSync).mockReturnValueOnce(
+    JSON.stringify([
+      { ProcessId: 4, ParentProcessId: 0, CommandLine: null },
+      { ProcessId: 812, ParentProcessId: 700, CommandLine: "stand-in.exe --type=renderer" },
+    ]) + "\r\n",
+  );
+  expect(windowsProcesses()).toEqual([
+    { pid: 4, ppid: 0, command: "" },
+    { pid: 812, ppid: 700, command: "stand-in.exe --type=renderer" },
+  ]);
+  expect(vi.mocked(execFileSync).mock.calls[0]![2]).toMatchObject({
+    timeout: 5_000,
+    killSignal: "SIGKILL",
+  });
+});
+
+it("throws when the process list times out or fails, never returns a list", () => {
+  for (const failure of [
+    Object.assign(new Error("spawnSync powershell.exe ETIMEDOUT"), { code: "ETIMEDOUT" }),
+    Object.assign(new Error("Command failed: powershell.exe"), { status: 1, signal: null }),
+  ]) {
+    vi.mocked(execFileSync).mockImplementationOnce(() => {
+      throw failure;
+    });
+    expect(() => windowsProcesses()).toThrow(failure);
+  }
+});
+
+// A real Windows PowerShell, with Get-CimInstance replaced by a stand-in that
+// lists two made-up processes and then, unless told not to, reports an error.
+it.runIf(process.platform === "win32")(
+  "ends the process list's script with an error, not the part listed, when the query reports one",
+  async () => {
+    vi.mocked(execFileSync).mockReturnValueOnce("[]");
+    windowsProcesses();
+    const script = vi.mocked(execFileSync).mock.calls[0]![1]![3]!;
+    const { spawnSync } = await vi.importActual<typeof ChildProcesses>("node:child_process");
+    const run = (error: string) =>
+      spawnSync(
+        "powershell.exe",
+        [
+          "-NoProfile",
+          "-NonInteractive",
+          "-Command",
+          `function Get-CimInstance { [pscustomobject]@{ ProcessId = 4; ParentProcessId = 0; CommandLine = $null }; [pscustomobject]@{ ProcessId = 8; ParentProcessId = 4; CommandLine = 'stand-in' }; ${error} }\n${script}`,
+        ],
+        { encoding: "utf8", timeout: 30_000 },
+      );
+    const failed = run("Write-Error ('synthetic-cim-' + 'list-failed')");
+    expect(failed.status).toBe(1);
+    expect(failed.stderr.includes("synthetic-cim-list-failed")).toBe(true);
+    expect(failed.stdout).not.toContain("ProcessId");
+    const listed = run("");
+    expect(listed.status).toBe(0);
+    expect(JSON.parse(listed.stdout)).toEqual([
+      { ProcessId: 4, ParentProcessId: 0, CommandLine: null },
+      { ProcessId: 8, ParentProcessId: 4, CommandLine: "stand-in" },
+    ]);
+  },
+  40_000,
+);

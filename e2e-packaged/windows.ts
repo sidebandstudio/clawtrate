@@ -14,10 +14,16 @@ function powershell(script: string, env: NodeJS.ProcessEnv = {}, timeout?: numbe
   });
 }
 
-/** Every process with its parent and full command line, as Windows reports them. */
+/**
+ * Every process with its parent and full command line, as Windows reports them.
+ * Throws if the query reports an error, rather than return the part it listed,
+ * or if it takes longer than 5 seconds.
+ */
 export function windowsProcesses(): WindowsProcess[] {
   const out = powershell(
-    "[Console]::OutputEncoding = [Text.Encoding]::UTF8; Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, CommandLine | ConvertTo-Json -Compress",
+    "$ErrorActionPreference = 'Stop'; [Console]::OutputEncoding = [Text.Encoding]::UTF8; Get-CimInstance Win32_Process | Select-Object ProcessId, ParentProcessId, CommandLine | ConvertTo-Json -Compress",
+    {},
+    5_000,
   );
   const rows = JSON.parse(out) as {
     ProcessId: number;
