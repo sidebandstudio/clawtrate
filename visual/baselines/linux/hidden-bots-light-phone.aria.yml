@@ -21,7 +21,7 @@
         - listitem:
           - button "Show all 14"
     - listitem:
-      - button "Juniper, 3 tasks, unread, research, primary bot": Juniper research
+      - button "Juniper, 3 tasks, unread, research": Juniper research
       - button "More for Juniper"
     - listitem:
       - button "Pip, a run failed, 4 tasks, unread, planning": Pip planning

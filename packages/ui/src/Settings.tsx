@@ -29,6 +29,7 @@ import { flushSync } from "react-dom";
 import type { useDesktopUpdateSnapshot } from "./update-reading.ts";
 import { Updates } from "./Updates.tsx";
 import { BotGuidesPane } from "./BotGuides.tsx";
+import { InfoCard, InfoTip } from "./InfoTip.tsx";
 import { useBridge, useClawtrateState, useCommand } from "./bridge.tsx";
 import { useAccountsSection } from "./bots/AccountsSection.tsx";
 import { useCheckInsSection } from "./check-ins/CheckIns.tsx";
@@ -181,7 +182,10 @@ function DeviceSwitch({
   return (
     <div className="b-field device-switch">
       <span className="device-switch-row">
-        <span id={`${id}-label`}>{label}</span>
+        <span>
+          <span id={`${id}-label`}>{label}</span>
+          <InfoTip id={`${id}-note`} about={label} />
+        </span>
         <button
           type="button"
           className="b-switch"
@@ -196,9 +200,7 @@ function DeviceSwitch({
           }}
         />
       </span>
-      <p className="b-hint" id={`${id}-note`}>
-        {note}
-      </p>
+      <InfoCard id={`${id}-note`}>{note}</InfoCard>
     </div>
   );
 }
@@ -254,7 +256,10 @@ function AdvancedPane({ announce }: { announce: (text: string) => void }) {
         announce={announce}
       />
       <div className="b-field channel-chats-field">
-        <span id="channel-chats-label">Show external channel chats</span>
+        <span>
+          <span id="channel-chats-label">Show external channel chats</span>
+          <InfoTip id="channel-chats-note" about="Show external channel chats" />
+        </span>
         <button
           type="button"
           className="b-switch"
@@ -266,20 +271,22 @@ function AdvancedPane({ announce }: { announce: (text: string) => void }) {
           onClick={toggleChannelChats}
         />
       </div>
-      <p className="b-hint" id="channel-chats-note">
-        Off by default. Chats that reach a bot through Discord, Telegram, Slack, iMessage, WhatsApp,
-        Signal or another channel stay out of the task list, its previews and its unread marks. A
-        bot's main conversation always shows. If the gateway sends a channel's direct messages to
-        it, which it does unless its <code>session.dmScope</code> setting gives each channel
-        conversation its own session, those messages still appear there.
-      </p>
+      <InfoCard id="channel-chats-note">
+        Chats that reach a bot through Discord, Telegram, Slack, iMessage, WhatsApp, Signal or
+        another channel. While it&apos;s off they stay out of the task list, its previews and its
+        unread marks. A bot&apos;s main conversation always shows, with any channel messages the
+        gateway puts in it.
+      </InfoCard>
       {channelError && (
         <div className="form-error" role="alert">
           {channelError}
         </div>
       )}
       <div className="b-field channel-chats-field">
-        <span id="other-tools-label">Show sessions from other tools</span>
+        <span>
+          <span id="other-tools-label">Show sessions from other tools</span>
+          <InfoTip id="other-tools-note" about="Show sessions from other tools" />
+        </span>
         <button
           type="button"
           className="b-switch"
@@ -291,11 +298,12 @@ function AdvancedPane({ announce }: { announce: (text: string) => void }) {
           onClick={toggleOtherTools}
         />
       </div>
-      <p className="b-hint" id="other-tools-note">
-        Off by default. Sessions that an API client, a scheduled routine or another tool started
-        with a bot stay out of the task list, its previews and its unread marks. A routine&apos;s
-        runs open from Routines. One that is waiting for your approval or answer always shows.
-      </p>
+      <InfoCard id="other-tools-note">
+        Sessions an API client, a scheduled routine or another tool started with a bot. While
+        it&apos;s off they stay out of the task list, its previews and its unread marks. A
+        routine&apos;s runs open from Routines, and one waiting for your approval or answer always
+        shows.
+      </InfoCard>
       {otherToolsError && (
         <div className="form-error" role="alert">
           {otherToolsError}
@@ -322,7 +330,10 @@ function GatewayBotSwitch({ announce }: { announce: (text: string) => void }) {
   return (
     <>
       <div className="b-field channel-chats-field">
-        <span id="gateway-bot-label">Show the gateway&apos;s own bot</span>
+        <span>
+          <span id="gateway-bot-label">Show the gateway&apos;s own bot</span>
+          <InfoTip id="gateway-bot-note" about="Show the gateway's own bot" />
+        </span>
         <button
           type="button"
           className="b-switch"
@@ -334,11 +345,11 @@ function GatewayBotSwitch({ announce }: { announce: (text: string) => void }) {
           onClick={toggle}
         />
       </div>
-      <p className="b-hint" id="gateway-bot-note">
-        Off by default. Every gateway has a bot of its own, its default bot: channel messages, other
-        tools&apos; calls and scheduled runs that name no bot land on it. While you have another
-        bot, it stays out of the sidebar unless it is waiting on you.
-      </p>
+      <InfoCard id="gateway-bot-note">
+        Every gateway has a default bot: channel messages, other tools&apos; calls and scheduled
+        runs that name no bot land on it. While it&apos;s off and you have another bot, it stays out
+        of the sidebar unless it is waiting on you.
+      </InfoCard>
       {error && (
         <div className="form-error" role="alert">
           {error}
@@ -384,10 +395,16 @@ function ConversationPane({
   };
   return (
     <>
-      <label className="b-field">
-        <span>Turn time limit</span>
+      <div className="b-field">
+        <span>
+          <label htmlFor="turn-limit-input" id="turn-limit-label">
+            Turn time limit
+          </label>
+          <InfoTip id="turn-limit-note" about="Turn time limit" />
+        </span>
         <span className="turn-limit-field">
           <input
+            id="turn-limit-input"
             className="input"
             type="number"
             inputMode="numeric"
@@ -396,6 +413,8 @@ function ConversationPane({
             step={1}
             value={draft ?? String(minutes)}
             data-testid="turn-limit"
+            // Its unit is part of its name: "minutes" beside it is hidden from a screen reader.
+            aria-labelledby="turn-limit-label turn-limit-unit"
             aria-describedby="turn-limit-note"
             aria-invalid={error ? true : undefined}
             onChange={(event) => setDraft(event.target.value)}
@@ -404,14 +423,16 @@ function ConversationPane({
               if (event.key === "Enter") commit();
             }}
           />
-          <span aria-hidden="true">minutes</span>
+          <span aria-hidden="true" id="turn-limit-unit">
+            minutes
+          </span>
         </span>
-      </label>
-      <p className="b-hint" id="turn-limit-note">
-        Minutes. 50 by default. At the limit Clawtrate asks the gateway to stop the turn so it does
-        not hang, and once the gateway confirms, the turn ends with a note naming the limit. Send a
-        message to pick up where it left off. It applies to turns this device starts.
-      </p>
+      </div>
+      <InfoCard id="turn-limit-note">
+        At the limit Clawtrate asks the gateway to stop the turn, so it doesn&apos;t hang. Once the
+        gateway confirms, the turn ends with a note naming the limit. Send a message to pick up
+        where it left off. It applies to turns this device starts.
+      </InfoCard>
       {error && (
         <div className="form-error" role="alert">
           {error}
@@ -680,7 +701,10 @@ function BotVoicePane({
       <div className="facts">
         <div className="b-row">
           <span className="b-row-main">
-            <span id="bot-voice-label">Bot voice</span>
+            <span>
+              <span id="bot-voice-label">Bot voice</span>
+              <InfoTip id="bot-voice-note" about="Bot voice" />
+            </span>
             <small data-testid="bot-voice-state">
               {confirmed
                 ? `${onOff}, as the gateway reads it${voice.changedAt === null ? ", by default" : ""}.`
@@ -695,7 +719,7 @@ function BotVoicePane({
             role="switch"
             aria-checked={voice.on}
             aria-labelledby="bot-voice-label"
-            aria-describedby="bot-voice-note"
+            aria-describedby={canWrite ? "bot-voice-note" : "bot-voice-note bot-voice-write"}
             aria-busy={saving || undefined}
             // Unavailable while its own save is on its way, and still focused.
             aria-disabled={saving || undefined}
@@ -707,12 +731,17 @@ function BotVoicePane({
           />
         </div>
       </div>
-      <p className="b-hint" id="bot-voice-note">
-        While it's on, a voice guide is added to a bot's system prompt each time the gateway runs
-        the plugin's hook, if its config permits the hook. The guide asks the bots to talk plainly
-        and kindly, with no em dashes. Turned off, each bot talks the way its own instructions say.
-        {!canWrite && " Changing it needs write access."}
-      </p>
+      <InfoCard id="bot-voice-note">
+        While it&apos;s on, a voice guide is added to a bot&apos;s system prompt each time the
+        gateway runs the plugin&apos;s hook, if its config permits the hook. The guide asks the bots
+        to talk plainly and kindly, with no em dashes.
+      </InfoCard>
+      {/* Why the switch can't be pressed: status, so it stays in view. */}
+      {!canWrite && (
+        <p className="b-hint" id="bot-voice-write">
+          Changing it needs write access.
+        </p>
+      )}
       <dl className="facts bot-voice-hook">
         <div>
           <dt>Prompt hook permitted</dt>

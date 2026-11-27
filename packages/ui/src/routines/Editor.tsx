@@ -522,8 +522,7 @@ export function Editor({
             </>
           ) : (
             <>
-              <strong>The gateway didn&apos;t answer.</strong> This may or may not have saved (
-              {save.error}).{" "}
+              <strong>Not confirmed.</strong> {save.error} This may or may not have saved.{" "}
               {c.status === "failed"
                 ? `Couldn't check: ${c.error}`
                 : "Check what the gateway has before saving again."}

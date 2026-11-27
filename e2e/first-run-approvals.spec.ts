@@ -210,9 +210,12 @@ test("F-002: another computer at a secure address: one approval, for all six, an
     expect(await pendingFor(SHARED, run.deviceId)).toEqual([]);
   } finally {
     run?.done();
-    if (run) await openInstance(SHARED).runner.run(["devices", "remove", run.deviceId]);
     setDefaultCACertificates(getCACertificates("default"));
-    await proxy.close();
+    try {
+      await proxy.close();
+    } finally {
+      if (run) await openInstance(SHARED).runner.run(["devices", "remove", run.deviceId]);
+    }
   }
 });
 

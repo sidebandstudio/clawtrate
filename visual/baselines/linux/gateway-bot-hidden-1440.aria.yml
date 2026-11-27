@@ -23,6 +23,8 @@
         - listitem:
           - button "Show all 14"
     - listitem:
+      - button "Juniper, 3 tasks, unread, research": Juniper research
+    - listitem:
       - button "Marlow, 1 task, editing": Marlow editing
     - listitem:
       - button "Pip, a run failed, 4 tasks, unread, planning": Pip planning

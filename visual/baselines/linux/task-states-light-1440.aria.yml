@@ -23,7 +23,7 @@
         - listitem:
           - button "Show all 14"
     - listitem:
-      - button "Juniper, waiting for you, 3 tasks, unread, research, primary bot": Juniper research
+      - button "Juniper, waiting for you, 3 tasks, unread, research": Juniper research
     - listitem:
       - button "Marlow, blocked, 1 task, editing": Marlow editing
     - listitem:

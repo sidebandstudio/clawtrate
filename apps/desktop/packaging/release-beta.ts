@@ -66,6 +66,7 @@ import {
   type LatestMac,
 } from "./beta-files.ts";
 import { nightlyVersion } from "./candidate-version.ts";
+import { packagedCarried } from "./carried-plugins.ts";
 import { OUTPUT_VARIABLE } from "./output.ts";
 import { RESERVATION_FILE, reserve, reservedBy } from "./reservation.ts";
 import { APP_ID, PRODUCT_NAME } from "./config.ts";
@@ -554,7 +555,32 @@ export function verifyApp(
     gatekeeper.stderr,
   ), "spctl --assess --type execute (notarized Developer ID)", gatekeeper);
   tool("xcrun", ["stapler", "validate", app], "xcrun stapler validate");
+  requireCarried(app, require);
   return { teamId: signature.teamId! };
+}
+
+/**
+ * The plugins the app carries (carried-plugins.ts): the list in its archive names at least
+ * one, and each tarball it names is in the resources' plugins folder with the list's integrity.
+ */
+function requireCarried(app: string, require: (ok: boolean, check: string) => void): void {
+  let carried: ReturnType<typeof packagedCarried> | null = null;
+  try {
+    carried = packagedCarried(join(app, "Contents/Resources"));
+  } catch {
+    // Said by the check below.
+  }
+  require(Array.isArray(carried?.list.plugins), "the carried plugins' list in app.asar");
+  const { list, tarballs } = carried!;
+  require(list.plugins.length > 0, "a carried plugin in app.asar's list");
+  for (const plugin of list.plugins) {
+    const path = join(tarballs, String(plugin.file));
+    const plain = basename(String(plugin.file)) === plugin.file;
+    const bytes = plain && existsSync(path) ? readFileSync(path) : null;
+    require(bytes !== null &&
+      `sha512-${sha("sha512", bytes, "base64")}` ===
+        plugin.integrity, `the carried plugin ${String(plugin.file)} with its integrity`);
+  }
 }
 
 /**

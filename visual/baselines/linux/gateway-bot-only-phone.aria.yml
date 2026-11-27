@@ -6,18 +6,8 @@
   - button "Search"
   - list:
     - listitem:
-      - button "Juniper, 3 tasks, unread, research, primary bot" [expanded]: Juniper research
-      - button "More for Juniper"
-      - list "Juniper's tasks":
-        - listitem:
-          - button "Heat pump vs. gas furnace"
-          - button "More for Heat pump vs. gas furnace"
-        - listitem:
-          - button "Library e-book apps compared, unread": Library e-book apps compared
-          - button "More for Library e-book apps compared"
-        - listitem:
-          - button "Caffeine cutoff time"
-          - button "More for Caffeine cutoff time"
+      - button "main, 1 task, primary bot": main
+      - button "More for main"
   - status
   - button "127.0.0.1:18789, connected. Open the gateway menu."
   - button "Settings"

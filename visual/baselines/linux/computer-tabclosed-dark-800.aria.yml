@@ -9,7 +9,7 @@
     - listitem:
       - button "Otto, working, 14 tasks, unread, home server operations": Otto home server operations
     - listitem:
-      - button "Juniper, 3 tasks, research, primary bot" [expanded]: Juniper research
+      - button "Juniper, 3 tasks, research" [expanded]: Juniper research
       - list "Juniper's tasks":
         - listitem:
           - button "Heat pump vs. gas furnace"

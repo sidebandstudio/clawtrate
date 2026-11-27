@@ -20,7 +20,7 @@
         - listitem:
           - button "Show all 16"
     - listitem:
-      - button "Juniper, 3 tasks, unread, research, primary bot": Juniper research
+      - button "Juniper, 3 tasks, unread, research": Juniper research
       - button "More for Juniper"
     - listitem:
       - button "Marlow, working, 1 task, editing": Marlow editing

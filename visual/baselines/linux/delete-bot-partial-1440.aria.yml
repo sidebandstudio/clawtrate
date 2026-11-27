@@ -9,7 +9,7 @@
     - listitem:
       - button "Otto, working, 14 tasks, unread, home server operations": Otto home server operations
     - listitem:
-      - button "Juniper, 3 tasks, unread, research, primary bot" [expanded]: Juniper research
+      - button "Juniper, 3 tasks, unread, research" [expanded]: Juniper research
       - list "Juniper's tasks":
         - listitem:
           - button "Heat pump vs. gas furnace"
@@ -63,9 +63,9 @@
     - heading "Usage" [level=3]
     - 'button "Usage: This week: 2,239,000 tokens · about $5.92, as of 5:39 PM. Open."': "Usage This week: 2,239,000 tokens · about $5.92, as of 5:39 PM"
     - heading "Runs on" [level=3]
-    - 'button "Where Juniper runs: Command setting: not set · Same setting as Quartermaster of the Family Calendar and Errands. Open."': "Where Juniper runs Command setting: not set · Same setting as Quartermaster of the Family Calendar and Errands"
+    - 'button "Where Juniper runs: Command setting: not set. Open."': "Where Juniper runs Command setting: not set"
     - heading "Manage" [level=3]
-    - paragraph: Juniper is your Main Bot, so it can't be deleted.
+    - button "Delete bot…"
   - status
 - dialog "Pip was deleted, but some of it is left":
   - banner:

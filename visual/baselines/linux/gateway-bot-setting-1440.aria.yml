@@ -15,23 +15,20 @@
     - button "Close settings"
     - heading "Advanced" [level=3]
     - text: Show commands
+    - button "About Show commands"
     - switch "Show commands"
-    - paragraph: Shows each action as its own card with its command or call, in the conversation and the Computer tab.
     - text: Show thinking
+    - button "About Show thinking"
     - switch "Show thinking"
-    - paragraph: "Shows a bot's reasoning: Thought lines in the conversation, and its thinking while it works."
     - text: Show external channel chats
+    - button "About Show external channel chats"
     - switch "Show external channel chats"
-    - paragraph:
-      - text: Off by default. Chats that reach a bot through Discord, Telegram, Slack, iMessage, WhatsApp, Signal or another channel stay out of the task list, its previews and its unread marks. A bot's main conversation always shows. If the gateway sends a channel's direct messages to it, which it does unless its
-      - code: session.dmScope
-      - text: setting gives each channel conversation its own session, those messages still appear there.
     - text: Show sessions from other tools
+    - button "About Show sessions from other tools"
     - switch "Show sessions from other tools"
-    - paragraph: Off by default. Sessions that an API client, a scheduled routine or another tool started with a bot stay out of the task list, its previews and its unread marks. A routine's runs open from Routines. One that is waiting for your approval or answer always shows.
     - text: Show the gateway's own bot
+    - button "About Show the gateway's own bot"
     - switch "Show the gateway's own bot"
-    - paragraph: "Off by default. Every gateway has a bot of its own, its default bot: channel messages, other tools' calls and scheduled runs that name no bot land on it. While you have another bot, it stays out of the sidebar unless it is waiting on you."
   - status
 - navigation "Bots":
   - button "Routines"
@@ -55,6 +52,8 @@
           - button "Printer offline again"
         - listitem:
           - button "Show all 14"
+    - listitem:
+      - button "Juniper, 3 tasks, unread, research": Juniper research
     - listitem:
       - button "Marlow, 1 task, editing": Marlow editing
     - listitem:

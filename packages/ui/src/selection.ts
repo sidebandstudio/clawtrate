@@ -2,6 +2,7 @@ import {
   gatewayBotHidden,
   listedBots,
   mapSessionRow,
+  seenThroughSkillNote,
   seenThroughUpdateNotice,
   updateNoticeScope,
   type Bot,
@@ -200,15 +201,15 @@ export function unreadSeenOf(
 ): SeenMap {
   if (gatewayOwnsUnread) return NOTHING_SEEN;
   const scope = updateNoticeScope(state);
-  if (!scope.updated?.length || scope.mainKey === null) return seen;
+  const updates = Boolean(scope.updated?.length) && scope.mainKey !== null;
   let next: SeenMap | null = null;
   for (const each of Object.values(state.tasksByBot).flat()) {
-    const through = seenThroughUpdateNotice(
-      each,
-      seen[each.key],
-      state.transcripts[each.key],
-      scope,
-    );
+    // A skill note by itself doesn't mark a task unread (F-560), nor does an update line (F-590).
+    const transcript = state.transcripts[each.key];
+    const pastNotes = seenThroughSkillNote(each, seen[each.key], transcript);
+    const through = updates
+      ? seenThroughUpdateNotice(each, pastNotes, transcript, scope)
+      : pastNotes;
     if (through !== undefined && through !== seen[each.key])
       (next ??= { ...seen })[each.key] = through;
   }

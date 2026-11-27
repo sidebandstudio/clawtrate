@@ -28,6 +28,8 @@
         - radio "Never allow"
       - paragraph: "Not set in this file. The gateway reports the defaults it resolved: Allow every command."
       - paragraph: Entries
+      - term: main
+      - definition: No entry of its own
       - term: Juniper
       - definition: No entry of its own
       - term: Marlow
@@ -79,7 +81,7 @@
         - listitem:
           - button "Archived"
     - listitem:
-      - button "Juniper, 3 tasks, unread, research, primary bot": Juniper research
+      - button "Juniper, 3 tasks, unread, research": Juniper research
     - listitem:
       - button "Marlow, 1 task, editing": Marlow editing
     - listitem:

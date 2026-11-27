@@ -6,7 +6,7 @@
     - button "Close search"
   - list:
     - listitem:
-      - button "Juniper, 3 tasks, unread, research, primary bot": Juniper research
+      - button "Juniper, 3 tasks, unread, research": Juniper research
     - listitem:
       - button "Pip, a run failed, 4 tasks, unread, planning": Pip planning
   - status

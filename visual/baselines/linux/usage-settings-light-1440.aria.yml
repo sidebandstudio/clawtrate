@@ -30,6 +30,7 @@
       - radio "30 days"
     - paragraph: From the gateway's usage records this week (Nov 16, your time).
     - list:
+      - 'listitem "main: 0 tokens, as of 5:39 PM"': main
       - 'listitem "Juniper: 2,239,000 tokens, as of 5:39 PM"': Juniper
       - 'listitem "Marlow: 562,000 tokens, as of 5:39 PM"': Marlow
       - 'listitem "Otto: 1,640,000 tokens, as of 5:39 PM"': Otto
@@ -72,7 +73,7 @@
         - listitem:
           - button "Archived"
     - listitem:
-      - button "Juniper, 3 tasks, unread, research, primary bot": Juniper research
+      - button "Juniper, 3 tasks, unread, research": Juniper research
     - listitem:
       - button "Marlow, 1 task, editing": Marlow editing
     - listitem:

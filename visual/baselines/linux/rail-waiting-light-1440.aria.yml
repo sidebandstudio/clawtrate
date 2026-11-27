@@ -30,7 +30,7 @@
     - listitem:
       - button "Marlow, waiting for you, 1 task, editing": Marlow editing
     - listitem:
-      - button "Juniper, 3 tasks, unread, research, primary bot": Juniper research
+      - button "Juniper, 3 tasks, unread, research": Juniper research
     - listitem:
       - button "Pip, waiting for you, 4 tasks, unread, planning": Pip planning
     - listitem:

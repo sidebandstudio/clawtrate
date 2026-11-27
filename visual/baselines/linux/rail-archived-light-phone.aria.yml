@@ -37,7 +37,7 @@
             - listitem:
               - button "Flush the DNS cache, archived": Flush the DNS cache
     - listitem:
-      - button "Juniper, 3 tasks, unread, research, primary bot": Juniper research
+      - button "Juniper, 3 tasks, unread, research": Juniper research
       - button "More for Juniper"
     - listitem:
       - paragraph: Home

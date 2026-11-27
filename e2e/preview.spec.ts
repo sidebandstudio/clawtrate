@@ -1,11 +1,16 @@
-import { expect, test, type Page } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
 import type { ChildProcess } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { cpSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { protocolMismatch } from "../packages/core/src/connect-errors.ts";
-import { instanceForm, openInstance, recordedStartOptions } from "../tools/dev-gateway/src/cli.ts";
+import {
+  instanceForm,
+  openInstance,
+  openOperator,
+  recordedStartOptions,
+} from "../tools/dev-gateway/src/cli.ts";
 import { parseJsonOutput } from "../tools/dev-gateway/src/env.ts";
 import {
   devGateway,
@@ -582,6 +587,29 @@ test("F-015 F-017 F-019 F-031 F-425: the rail lists the gateway's bots by recent
   page,
 }) => {
   await openShell(page);
+  // The gateway's own bot, which carries the star, is out of view by default (F-562): shown for
+  // this check, and out of view again afterwards, as the other checks on this host expect.
+  await showGatewayBot(page, true);
+  try {
+    await railOfEveryBot(page);
+  } finally {
+    await showGatewayBot(page, false);
+  }
+});
+
+async function showGatewayBot(page: Page, on: boolean): Promise<void> {
+  await page.keyboard.press("ControlOrMeta+,");
+  const settings = page.getByRole("dialog", { name: "Settings" });
+  await settings.getByRole("button", { name: "Advanced", exact: true }).click();
+  const toggle = settings.getByRole("switch", { name: "Show the gateway's own bot" });
+  if ((await toggle.getAttribute("aria-checked")) !== String(on)) await toggle.click();
+  await expect(toggle).toHaveAttribute("aria-checked", String(on));
+  await page.keyboard.press("Escape");
+  await expect(settings).toHaveCount(0);
+  await expect(page.getByTestId("bot")).toHaveCount(on ? 5 : 4);
+}
+
+async function railOfEveryBot(page: Page): Promise<void> {
   const [{ sessions }, agents] = await Promise.all([
     gatewayCall<{ sessions: SessionRow[] }>("sessions.list", SESSION_LIST),
     gatewayCall<{ defaultId: string; agents: AgentRow[] }>("agents.list", {}),
@@ -608,13 +636,17 @@ test("F-015 F-017 F-019 F-031 F-425: the rail lists the gateway's bots by recent
     await expect(row.getByTestId("primary-star")).toHaveCount(
       agent.id === agents.defaultId ? 1 : 0,
     );
-    // F-019: the label is the agent's identity theme.
-    await expect(row.locator(".bot-label")).toHaveText(agent.identity!.theme!);
+    // F-019: the label is the agent's identity theme; the gateway's own bot has none.
+    if (agent.identity?.theme)
+      await expect(row.locator(".bot-label")).toHaveText(agent.identity.theme);
+    else await expect(row.locator(".bot-label")).toHaveCount(0);
     // F-017: the picture and the name, and no preview of the latest message or time.
     await expect(row.locator(".presence")).toBeVisible();
     await expect(row.locator(".bot-name")).toHaveText(name(agent));
     await expect(row.locator("time")).toHaveCount(0);
-    await expect(row.locator(".bot-line")).toHaveText(`${name(agent)}${agent.identity!.theme!}`);
+    await expect(row.locator(".bot-line")).toHaveText(
+      `${name(agent)}${agent.identity?.theme ?? ""}`,
+    );
   }
   expect(agents.defaultId).toBe("main");
   await expect(page.getByTestId("primary-star")).toHaveCount(1);
@@ -628,9 +660,10 @@ test("F-015 F-017 F-019 F-031 F-425: the rail lists the gateway's bots by recent
   await botRow(page, "Pip").focus();
   await page.keyboard.press("ArrowRight");
   await page.reload();
-  await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 20_000 });
+  // The gateway's own bot is still shown: the switch is kept on this device.
+  await expect(page.getByTestId("bot")).toHaveCount(5, { timeout: 20_000 });
   await expect(botRow(page, "Pip")).toHaveAttribute("aria-expanded", "true");
-});
+}
 
 test("F-013 F-027 F-266: this device keeps its pins and hidden bots under the gateway's own identity", async ({
   page,
@@ -1912,6 +1945,90 @@ test("F-071 F-070: / lists the bot's own skills by name and the gateway's comman
   await composer(page).fill("");
 });
 
+test("F-071: / lists a skill the person saved to their own library, as theirs, in a task started after it; the chosen skill runs on the gateway by its command", async ({
+  page,
+}) => {
+  // The person, on a paired connection as the app is: the CLI's shared token has no profile, so
+  // the gateway keeps no library for it and gives a task it makes no library skills. The
+  // development gateway has one profile, which the app acts for too. Paired before the page
+  // opens, so the app never shows its pairing request.
+  const person = await openOperator(
+    openInstance(INSTANCE),
+    "Clawtrate skill library check",
+    ["operator.read", "operator.write"],
+    [],
+  );
+  await openShell(page);
+  // A task the person starts, as the app's New task does (`sessions.create`), opened in the page.
+  const personTask = async (label: string) => {
+    const { key, title } = newTaskName("otto", label);
+    await person.request("sessions.create", { key, agentId: "otto", label: title });
+    await openNewTask(page, "Otto", title);
+    return { key, title };
+  };
+  const slug = `tide-table-${randomBytes(3).toString("hex")}`;
+  let saved: { entry: { skillId: string; name: string; revision: string } } | null = null;
+  try {
+    // A task that started before the save: the gateway has not given it the skill.
+    const before = await personTask("Before the skill");
+    saved = (await person.request("skills.library.save", {
+      expectedRevision: null,
+      slug,
+      content: `---\nname: ${slug}\ndescription: Use when someone asks when the tide turns at the harbour.\n---\n\nRead the harbour's tide table and give the next high and low water.\n`,
+    })) as { entry: { skillId: string; name: string; revision: string } };
+    const command = saved.entry.name;
+    const listed = (row: Locator) => row.and(page.locator(`[data-name="${slug}"]`));
+    const rows = page.getByRole("listbox", { name: "Skills and commands" }).getByRole("option");
+    // The task made before the save is still the one open.
+    await expect(
+      page.getByRole("button", { name: `Otto, ${before.title}. Show details.` }),
+    ).toBeVisible();
+    await composer(page).click();
+    await page.keyboard.type("/");
+    await expect(rows.first()).toBeVisible({ timeout: 30_000 });
+    await expect(listed(rows)).toHaveCount(0);
+    await page.keyboard.press("Escape");
+    await composer(page).fill("");
+
+    const { key } = await personTask("With the skill");
+    await composer(page).click();
+    await page.keyboard.type("/");
+    await expect(listed(rows)).toHaveCount(1, { timeout: 30_000 });
+    await expect(listed(rows).locator(".composer-menu-tag")).toHaveText("Your skill");
+    await page.keyboard.type(slug);
+    await expect(rows).toHaveCount(1);
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("token-chip")).toHaveText(new RegExp(`Your skill\\s*${slug}`));
+    await page.keyboard.type("for Saturday");
+    await page.keyboard.press("Enter");
+    // The gateway ran the skill: the model was told to read it.
+    await expect
+      .poll(() => gatewayHasMessage(key, `/skill ${command} for Saturday`), {
+        timeout: 30_000,
+      })
+      .toBe(true);
+    await expect.poll(() => gatewayIdle(key), { timeout: 60_000 }).toBe(true);
+    const history = await gatewayCall<{ messages: Array<{ role: string; content?: unknown }> }>(
+      "chat.history",
+      { sessionKey: key, limit: 10 },
+    );
+    const reply = JSON.stringify(history.messages.filter((row) => row.role === "assistant"));
+    expect(reply).toContain("Use the following explicitly referenced skills");
+    expect(reply).toContain(command);
+  } finally {
+    try {
+      if (saved)
+        await person.request("skills.library.mutate", {
+          skillId: saved.entry.skillId,
+          expectedRevision: saved.entry.revision,
+          action: "remove",
+        });
+    } finally {
+      await person.close();
+    }
+  }
+});
+
 test("F-100: with the Turn time limit set to 1 minute, a longer turn is stopped through the gateway, and once it confirms the card names the limit and who stopped it", async ({
   page,
 }) => {
@@ -1921,13 +2038,15 @@ test("F-100: with the Turn time limit set to 1 minute, a longer turn is stopped 
     await page.keyboard.press("ControlOrMeta+,");
     const settings = page.getByRole("dialog", { name: "Settings" });
     await settings.getByRole("button", { name: "Conversation", exact: true }).click();
-    const field = settings.getByLabel("Turn time limit");
+    const field = settings.getByRole("spinbutton", { name: "Turn time limit" });
     await field.fill(minutes);
     await field.press("Enter");
     await page.keyboard.press("Escape");
     await expect(settings).toHaveCount(0);
     await page.keyboard.press("ControlOrMeta+,");
-    await expect(settings.getByLabel("Turn time limit")).toHaveValue(minutes);
+    await expect(settings.getByRole("spinbutton", { name: "Turn time limit" })).toHaveValue(
+      minutes,
+    );
     await page.keyboard.press("Escape");
   };
   // The host is shared by later checks: its limit goes back to the default whatever happens.
@@ -1975,7 +2094,7 @@ test("F-099: a run stuck on a tool call that never returns reaches stopped withi
   await expect.poll(() => gatewayIdle(key), { timeout: 30_000 }).toBe(true);
 });
 
-test("F-296 F-298: Stop also stops the exact run of the bot this run messaged, and the note names it", async ({
+test("F-296 F-298: Stop also stops the exact run of the bot this run messaged, and the turn the gateway then starts by itself, and the notes name them", async ({
   page,
 }) => {
   await openShell(page);
@@ -2029,6 +2148,24 @@ test("F-296 F-298: Stop also stops the exact run of the bot this run messaged, a
     { runId: peer.runId, timeoutMs: 10_000 },
   );
   expect(ended).toMatchObject({ runId: peer.runId, stopReason: "rpc" });
+  // Marlow's run ended without a reply, so the gateway starts a turn of Pip's by itself, sent as
+  // Marlow's: the note that the message failed, which a bot may retry (#645). The scripted bot
+  // works on it for twenty seconds; Clawtrate stops it at once, by its id, and both notes say so.
+  const followUp = page
+    .getByTestId("stop-note")
+    .filter({ hasText: "The gateway started this turn on its own after your Stop" });
+  await expect(followUp).toHaveCount(1, { timeout: 30_000 });
+  await expect(note.getByTestId("stopped-with")).toContainText(
+    "Then stopped: the turn the gateway started here on its own once Marlow's run was stopped.",
+  );
+  const followUpRun = await followUp.getAttribute("data-run");
+  expect(followUpRun).not.toBe(runId);
+  expect(
+    await gatewayCall<{ runId?: string; stopReason?: string }>("agent.wait", {
+      runId: followUpRun,
+      timeoutMs: 10_000,
+    }),
+  ).toMatchObject({ runId: followUpRun, stopReason: "rpc" });
   await expect.poll(() => gatewayIdle(peer.sessionKey), { timeout: 10_000 }).toBe(true);
   await expect.poll(() => gatewayIdle(key), { timeout: 30_000 }).toBe(true);
 });
