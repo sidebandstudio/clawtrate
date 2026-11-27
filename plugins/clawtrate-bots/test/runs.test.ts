@@ -23,7 +23,7 @@ const CONFIG = {
 
 function host({
   version = "2026.10.6",
-  config = CONFIG as Json,
+  config = CONFIG as Json | (() => Json),
   sessions = [] as Json[] | ((agentId: string) => Json[]),
 } = {}) {
   const hooks = new Map<string, Handler>();
@@ -43,7 +43,7 @@ function host({
   };
   const plugin = createHooks(api, {
     slots: {},
-    config: () => config,
+    config: () => (typeof config === "function" ? (config as () => Json)() : config),
     sessions: (agentId: string) => (typeof sessions === "function" ? sessions(agentId) : sessions),
   } as never);
   const fire = (name: string, event: Json, ctx: Json = {}) => hooks.get(name)!(event, ctx);
@@ -122,7 +122,44 @@ describe("the hooks", () => {
   it("an unknown run, and conversation access off, are known as nothing", async () => {
     const off = host({ config: { ...CONFIG, plugins: {} } });
     off.fire("before_tool_call", call("read", { path: "x" }), toolCtx);
-    expect(await off.runGet("r1")).toEqual({ runId: "r1", known: false });
+    expect(await off.runGet("r1")).toEqual({ runId: "r1", known: false, why: "access" });
+  });
+
+  it("a record made before conversation access was turned off isn't known again, off or back on, through the method too", async () => {
+    // A config write replaces the gateway's snapshot object, as here.
+    let current = structuredClone(CONFIG) as Json;
+    const h = host({ config: () => current });
+    h.fire("before_prompt_build", {}, typed);
+    expect(await h.runGet("r1")).toMatchObject({ known: true, kind: "typed" });
+    current = { ...structuredClone(CONFIG), plugins: { entries: {} } };
+    expect(await h.runGet("r1")).toEqual({ runId: "r1", known: false, why: "access" });
+    current = structuredClone(CONFIG) as Json;
+    expect(await h.runGet("r1")).toMatchObject({ runId: "r1", known: false });
+    // A run that starts after access is back is recorded as usual.
+    h.fire("before_prompt_build", {}, { ...typed, runId: "r2" });
+    expect(await h.runGet("r2")).toMatchObject({ known: true, kind: "typed", readOutside: null });
+  });
+
+  it("a spawn whose result reports a failure stops waiting, so the person's next task keeps its origin", async () => {
+    const h = host();
+    h.fire("before_prompt_build", {}, typed);
+    h.fire("before_tool_call", call("sessions_spawn", { task: "t", label: "x" }, "c9"), toolCtx);
+    h.fire(
+      "after_tool_call",
+      {
+        ...call("sessions_spawn", { task: "t", label: "x" }, "c9"),
+        result: {
+          content: [{ type: "text", text: '{"status":"error","error":"label already in use: x"}' }],
+        },
+      },
+      toolCtx,
+    );
+    h.fire(
+      "before_prompt_build",
+      {},
+      { ...typed, runId: "r2", sessionKey: "agent:pip:dashboard:7" },
+    );
+    expect(await h.runGet("r2")).toMatchObject({ kind: "typed" });
   });
 
   it("a routine's run is found by its session, since no client knows its run id", async () => {

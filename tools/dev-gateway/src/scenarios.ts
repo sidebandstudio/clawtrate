@@ -397,6 +397,11 @@ export const HAND_OFF_PARTNER = {
   label: "Review the route",
   task: "Read over the Saturday route and say what you would change. Reply in plain text.",
 } as const;
+/** What `#hand-off-twice` starts twice: the second is refused, since a label is used once. */
+export const HAND_OFF_TWICE = {
+  label: "Pack the day bag",
+  task: "List what goes in the day bag. Reply in plain text.",
+} as const;
 /** What `#follow-up` sends to the task the bot started last. */
 export const FOLLOW_UP_MESSAGE = "Also say which route has more shade. Reply in plain text.";
 
@@ -1252,6 +1257,17 @@ export const SCENARIOS: Scenario[] = [
     summary:
       "A message to the other bot, which then tries to set up a routine (`#keep-routine`): a routine from a run another bot's message started.",
     steps: () => message("#keep-routine", "Could you remind them every morning?", 30),
+  },
+  {
+    name: "hand-off-twice",
+    phrase: "put this in a task twice",
+    bots: "any bot",
+    summary: `Starts a task of the bot's own (\`visible: true\`) labelled "${HAND_OFF_TWICE.label}", then the same again: the gateway refuses the second (a label is used once), with \`status: "error"\` in its result.`,
+    steps: () => [
+      spawn(HAND_OFF_TWICE, { visible: true }),
+      spawn(HAND_OFF_TWICE, { visible: true }),
+      say("I tried to start it twice."),
+    ],
   },
   {
     name: "hand-off-here",

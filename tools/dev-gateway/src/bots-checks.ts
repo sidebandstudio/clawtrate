@@ -393,6 +393,49 @@ export const BOTS_CHECKS: BotsCheck[] = [
     },
   },
   {
+    name: "a spawn the gateway refused leaves no wait behind: the person's next task is typed",
+    covers: ["#hand-off-twice"],
+    async run(ctx, world) {
+      const t = await turn(ctx, await task(ctx, world, "pip", "twice"), "#hand-off-twice");
+      const spawns = t.calls.filter((c) => c.name === "sessions_spawn");
+      expect(
+        spawns.length === 2 && /"status":\s*"error"/.test(spawns[1]!.text),
+        `the second spawn: ${show(spawns.map((c) => c.text.slice(0, 120)))}`,
+      );
+      // Within the minute a spawn waits for its task's first run.
+      const next = await turn(ctx, await task(ctx, world, "pip", "after-twice"), "#text");
+      const run = await runOf(ctx, next.runId);
+      expect(run.kind === "typed", `the person's next task: ${show(run)}`);
+    },
+  },
+  {
+    name: "a run's record isn't vouched for across a change of conversation access, through runs.get too",
+    covers: [],
+    async run(ctx, world) {
+      const t = await turn(ctx, await task(ctx, world, "pip", "access"), "#text");
+      expect((await runOf(ctx, t.runId)).known === true, "the run isn't known with access on");
+      const access = (on: boolean) => ({
+        plugins: { entries: { "clawtrate-bots": { hooks: { allowConversationAccess: on } } } },
+      });
+      try {
+        await patchConfig(ctx, access(false));
+        const off = await runOf(ctx, t.runId);
+        expect(off.known === false, `with access off: ${show(off)}`);
+      } finally {
+        await patchConfig(ctx, access(true));
+      }
+      const back = await runOf(ctx, t.runId);
+      expect(back.known === false, `with access back on: ${show(back)}`);
+      // A run that starts now is recorded as usual.
+      const fresh = await turn(ctx, await task(ctx, world, "pip", "access-back"), "#text");
+      const run = await runOf(ctx, fresh.runId);
+      expect(
+        run.known === true && run.kind === "typed",
+        `a run after access is back: ${show(run)}`,
+      );
+    },
+  },
+  {
     name: "after a web search, the bot's own hidden task is a task, and carries what its starter read",
     covers: ["#hand-off-hidden-here"],
     async run(ctx, world) {
