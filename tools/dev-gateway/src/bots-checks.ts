@@ -197,8 +197,24 @@ async function withSetting<T>(
     await patchConfig(ctx, { tools: { [key]: value } });
     return await body();
   } finally {
-    await patchConfig(ctx, { tools: { [key]: before } });
+    await patchConfig(ctx, { tools: { [key]: restorePatch(before, value) } });
   }
+}
+
+const isRecord = (v: unknown): v is JsonRecord =>
+  v !== null && typeof v === "object" && !Array.isArray(v);
+
+/**
+ * The merge patch that puts back `before` after `set` was merged over it: a key `set` added
+ * is removed (null), one it changed gets its old value, and an absent setting is removed.
+ */
+export function restorePatch(before: unknown, set: unknown): unknown {
+  if (before === null || before === undefined) return null;
+  if (!isRecord(before) || !isRecord(set)) return before;
+  const out: JsonRecord = {};
+  for (const key of Object.keys(set))
+    out[key] = Object.hasOwn(before, key) ? restorePatch(before[key], set[key]) : null;
+  return out;
 }
 
 /** The gateway's routines, disabled ones included. */

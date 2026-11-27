@@ -117,15 +117,21 @@ export function reachOf(config, agentId) {
     : [];
 }
 
-/** Every other bot on the gateway (not itself, not the gateway's own), with whether it is in reach. */
-export function botsFacts(config, agentId) {
-  const reach = reachOf(config, agentId);
+/** Every other bot's id on the gateway: not itself, not the gateway's own. */
+export function otherBots(config, agentId) {
   const system = config?.agents?.defaults?.systemAgent?.agentId;
   const ids = Object.keys(config?.agents?.entries ?? {}).concat(
     (config?.agents?.list ?? []).map?.((a) => a?.id) ?? [],
   );
-  return [...new Set(ids)]
-    .filter((id) => typeof id === "string" && id !== agentId && id !== system)
+  return [...new Set(ids)].filter(
+    (id) => typeof id === "string" && id !== agentId && id !== system,
+  );
+}
+
+/** The other bots as clawtrate_bots lists them (at most 50), with whether each is in reach. */
+export function botsFacts(config, agentId) {
+  const reach = reachOf(config, agentId);
+  return otherBots(config, agentId)
     .slice(0, 50)
     .map((id) => {
       const other = botEntry(config, id) ?? {};
@@ -264,7 +270,8 @@ export function createRuns(api, options = {}) {
         throw new Error("state must be working, done or failed.");
       const agentId = toolCtx?.agentId;
       // Its own tasks, and the tasks it started under other bots (design section 8).
-      const others = botsFacts(config(), agentId).map((b) => b.id);
+      // Every other bot, not only the 50 clawtrate_bots lists: a task may be under any of them.
+      const others = otherBots(config(), agentId);
       const mine = (s) =>
         typeof s?.sessionKey === "string" && s.sessionKey.startsWith(`agent:${agentId}:`);
       const startedByMe = (s) =>
