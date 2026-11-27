@@ -1334,6 +1334,13 @@ export const SCENARIOS: Scenario[] = [
     steps: () => message("#keep-routine", "Could you remind them every morning?", 30),
   },
   {
+    name: "hand-off-same",
+    phrase: "put that in a task again",
+    bots: "any bot",
+    summary: `Starts a task of the bot's own labelled "${HAND_OFF_TWICE.label}", once: after \`#hand-off-twice\`, the gateway refuses it, and nothing else follows in the run.`,
+    steps: () => [spawn(HAND_OFF_TWICE, { visible: true }), say("I tried to start it.")],
+  },
+  {
     name: "hand-off-twice",
     phrase: "put this in a task twice",
     bots: "any bot",
