@@ -67,7 +67,10 @@ beforeAll(() => {
   chmodSync(scratch, 0o700);
   if (mac) {
     helper = join(scratch, "helper");
-    execFileSync("/usr/bin/xcrun", localGatewayBuild(helper));
+    // clang's two-architecture build leaves empty folders in TMPDIR: the scratch folder takes them.
+    execFileSync("/usr/bin/xcrun", localGatewayBuild(helper), {
+      env: { ...process.env, TMPDIR: scratch },
+    });
   }
 });
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
