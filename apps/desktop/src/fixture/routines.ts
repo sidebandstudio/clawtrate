@@ -311,7 +311,7 @@ export function fixtureRoutineList(now: number, params: RoutineParams): Routine[
     }),
     base({
       id: "routine-stretch",
-      botId: "main",
+      botId: "clawtrate-main-bot",
       name: "Stretch break",
       schedule: schedule({ kind: "every", everyMs: 2 * HOUR }),
       payload: "systemEvent",

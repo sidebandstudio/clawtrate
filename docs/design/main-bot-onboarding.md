@@ -7,7 +7,7 @@ Issue #292, revised for #434. A new person's first minute in Clawtrate is a conv
 It stands on:
 
 - **Connecting** (`docs/design/setup-effortless.md`): local connect for OpenClaw on this computer, whose pieces are on `main` and off in every host _(on `main`: `apps/desktop/src/setup/local-connect.ts:12`)_, the next setup pull request; #653, a first pairing asking once for everything (on `main`); #658 and #665, approving a waiting device from inside Clawtrate (in build).
-- **Bots know Clawtrate by default** (#643, draft): Clawtrate's guide in every bot's instructions with nothing asked, one switch in Settings. #666, a bot knowing that _this_ conversation is in Clawtrate.
+- **Bots know Clawtrate by default** (#643; always on since #795, with no switch): Clawtrate's guide in every bot's instructions with nothing asked. #666, a bot knowing that _this_ conversation is in Clawtrate.
 - **Tasks a bot starts** (#532, on `main`): a task the bot starts under itself (F-565), the card where it was asked (F-587), and the guide that tells it how (F-566). **Files and pictures in the conversation** (F-115, F-535, on `main`, on both versions since #661).
 - **What stays out of view** (#490, #491, on `main`; #314, #433): the gateway's own bot, other tools' sessions and channel chats.
 - **"Doing, not asking"** (`docs/decisions.md`, and its inventory `docs/design/doing-not-asking.md`, #673, on `main`): the rule this design follows, and the one rule for a bot taking a name.
