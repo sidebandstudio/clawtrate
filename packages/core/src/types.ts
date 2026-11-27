@@ -629,6 +629,11 @@ export type ClawtrateState = {
    */
   showGatewayBot?: boolean;
   /**
+   * The gateway's own bot's id when the last read of its files on this connection said it is
+   * untouched (`gateway-bot-files.ts`), otherwise null: only then may F-562 leave it out of view.
+   */
+  untouchedGatewayBot?: string | null;
+  /**
    * The rail's arrangement as the gateway keeps it for this user (`sidebar.ts`):
    * pinned bots, sections, hidden bots and the manual order. Absent where a host
    * does not read it.

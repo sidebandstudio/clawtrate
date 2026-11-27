@@ -1463,6 +1463,7 @@ export const STATE: Bound = flagged<ClawtrateState>()({
   voiceChanges: NUMBER,
   showOtherToolSessions: FLAG,
   showGatewayBot: FLAG,
+  untouchedGatewayBot: ID,
   usage: USAGE,
   botNames: list(MAX_BOTS, nameProposal),
   openclawUpdating,

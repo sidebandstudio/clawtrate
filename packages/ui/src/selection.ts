@@ -236,8 +236,14 @@ export function useSelection(
   const showGatewayBot = state.showGatewayBot === true;
   /** The bots the rule lists: the gateway's own bot only when shown or waiting (F-562). */
   const byRule = useMemo(
-    () => listedBots({ bots: state.bots, tasksByBot: state.tasksByBot, showGatewayBot }),
-    [state.bots, state.tasksByBot, showGatewayBot],
+    () =>
+      listedBots({
+        bots: state.bots,
+        tasksByBot: state.tasksByBot,
+        showGatewayBot,
+        untouchedGatewayBot: state.untouchedGatewayBot,
+      }),
+    [state.bots, state.tasksByBot, showGatewayBot, state.untouchedGatewayBot],
   );
   // The gateway's own bot, while out of view by the rule, is open only when the person opened it:
   // from a link or a search result, or from the rail while it waited. A bot starting to wait never
@@ -262,7 +268,8 @@ export function useSelection(
   );
   const keptHere = here(keptOpen);
   const onScreenHere = here(onScreen);
-  const shownByRule = (each: Bot) => !gatewayBotHidden(each, state.bots, showGatewayBot);
+  const shownByRule = (each: Bot) =>
+    !gatewayBotHidden(each, state.bots, showGatewayBot, state.untouchedGatewayBot);
   const chosen = state.bots.find((b) => b.id === botId);
   // On screen and still listed because it waits, though the rule now leaves it out (the switch
   // was turned off): the person's choice, kept.
@@ -277,7 +284,15 @@ export function useSelection(
   const listed =
     kept === null
       ? byRule
-      : listedBots({ bots: state.bots, tasksByBot: state.tasksByBot, showGatewayBot }, kept);
+      : listedBots(
+          {
+            bots: state.bots,
+            tasksByBot: state.tasksByBot,
+            showGatewayBot,
+            untouchedGatewayBot: state.untouchedGatewayBot,
+          },
+          kept,
+        );
   const bot =
     chosen && (kept === chosen.id || (shownByRule(chosen) && listed.includes(chosen)))
       ? chosen
@@ -295,12 +310,13 @@ export function useSelection(
       // Another task of the bot kept open keeps it, whatever the switch says now; only opening
       // another bot lets it go.
       setKeptOpen((kept) =>
-        here(kept) === id || (opened && gatewayBotHidden(opened, state.bots, showGatewayBot))
+        here(kept) === id ||
+        (opened && gatewayBotHidden(opened, state.bots, showGatewayBot, state.untouchedGatewayBot))
           ? { id, gatewayId, target }
           : null,
       );
     },
-    [state.bots, showGatewayBot, gatewayId, target, here],
+    [state.bots, showGatewayBot, state.untouchedGatewayBot, gatewayId, target, here],
   );
   const { openclawUpdating, tasksByBot, transcripts, bots, connection } = state;
   const unreadSeen = useMemo(
