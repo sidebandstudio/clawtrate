@@ -844,7 +844,8 @@
     const shared = session || r.payload.kind !== "agentTurn" || (!x.sessionKey && r.sessionTarget !== "isolated");
     const where = r.payload.kind === "command" ? "command" : shared ? "main" : "";
     const rs = S.runstate || (x.running ? "running" : where || (x.history ? "" : "none"));
-    const returned = () => `<p class="r-returned-head">What the run returned:</p><p data-testid="returned">${esc(x.summary || outcome(x).text)}</p>`;
+    // A run with no summary returned nothing the gateway kept; its outcome is not offered as its result.
+    const returned = () => (x.summary ? `<p class="r-returned-head">What the run returned:</p><p data-testid="returned">${esc(x.summary)}</p>` : `<p data-testid="returned">The gateway recorded nothing this run returned.</p>`);
     let body = "";
     if (rs === "loading") body = `<div class="r-convo" aria-busy="true"><span class="skeleton" style="display:block;width:70%;height:16px;margin:24px 0"></span><span class="skeleton" style="display:block;width:50%;height:16px"></span></div>`;
     else if (rs === "error") body = `<div class="work-empty" data-testid="run-error"><span class="empty-mark">${icon("warning")}</span><h4>Couldn't load this run.</h4><p>The gateway didn't answer in time.</p>${button("Try again", 'data-r="run-retry"')}</div>`;
