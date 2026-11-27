@@ -11295,13 +11295,11 @@ export class ClawtrateClient {
   }
 
   /**
-   * Name a task from its first message (`task-names.ts`), once, on this connection, with the write
-   * access it holds: nothing is asked of the person, and nothing that goes wrong is shown.
+   * Name a task from its first message (`task-names.ts`), on the connection that just created it or
+   * sent that message, so with the write access they had: nothing is asked of the person, and
+   * nothing that goes wrong is shown.
    */
   private startNaming(key: string, botId: string, text: string): void {
-    if (this.taskNames.get(key) === "naming") return;
-    this.taskNames.delete(key);
-    if (this.options.readOnly || !this.holds(WRITE_SCOPE)) return;
     this.keepTaskName(key, "naming");
     const ctx = this.actionContext(null, this.epoch);
     const botModel = this.state.bots.find((bot) => bot.id === botId)?.model ?? null;

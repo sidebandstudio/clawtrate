@@ -60,6 +60,7 @@ type Row = {
   key: string;
   sessionId?: string;
   label?: string;
+  autoLabel?: string;
   pinned?: boolean;
   archived?: boolean;
   unread?: boolean;
@@ -384,6 +385,90 @@ test("F-054 F-012: New task from the + at the top right creates an empty task on
   await expect(second.locator(`.task[data-key="${created!.key}"]`)).toBeVisible({
     timeout: 20_000,
   });
+});
+
+test("F-054: a small model names a new task, the same name on every device (#750)", async () => {
+  test.setTimeout(180_000);
+  // The gateway writes titles with its small model (`agents.defaults.utilityModel`): here a second
+  // scripted model, so the bots' own differs from it. Put back afterwards.
+  type Config = { hash: string; config: { models: { providers: Record<string, Provider> } } };
+  type Provider = { models: Record<string, unknown>[] };
+  const got = await gatewayCall<Config>("config.get", {});
+  const own = got.config.models.providers.scripted!.models;
+  const small = { ...own[0]!, id: "dev-2", name: "Scripted small model" };
+  await gatewayCall("config.patch", {
+    raw: JSON.stringify({
+      models: { providers: { scripted: { models: [...own, small] } } },
+      agents: { defaults: { utilityModel: "scripted/dev-2" } },
+    }),
+    baseHash: got.hash,
+  });
+  try {
+    const before = new Set((await listed("pip")).map((row) => row.key));
+    await botRow(page, "Pip").first().click();
+    await page.locator(".rail-top").getByRole("button", { name: "New", exact: true }).click();
+    await page.getByRole("menuitem", { name: "New task for Pip" }).click();
+    await expect(page.getByTestId("composer-input")).toBeFocused({ timeout: 20_000 });
+    const words = `Plan the spring garden beds ${STAMP}`;
+    await page.getByTestId("composer-input").fill(words);
+    await page.getByTestId("composer-input").press("Enter");
+    let key = "";
+    await gateway
+      .poll(
+        async () => {
+          key = (await listed("pip")).find((row) => !before.has(row.key))?.key ?? "";
+          return key;
+        },
+        { timeout: 20_000 },
+      )
+      .toMatch(/^agent:pip:dashboard:/);
+    made.add(key);
+    // The name the small model wrote, kept on the gateway where every device reads it.
+    let name = "";
+    await gateway
+      .poll(
+        async () => {
+          const row = (await listed("pip")).find((each) => each.key === key);
+          name = row?.autoLabel ?? "";
+          return name !== "" && row?.label === undefined;
+        },
+        { timeout: 60_000, intervals: [1_000] },
+      )
+      .toBe(true);
+    const row = page.locator(`.task[data-key="${key}"]`);
+    await expect(page.locator(".title-pill-task")).toHaveText(name, { timeout: 20_000 });
+    await expect(row).toContainText(name);
+    // The call that made it is nothing a person sees: no other new task, and the task holds the
+    // person's message and the bot's reply, nothing else of the person's.
+    expect((await listed("pip")).filter((each) => !before.has(each.key)).map((r) => r.key)).toEqual(
+      [key],
+    );
+    const history = await gatewayCall<{ messages?: { role?: string }[] }>("chat.history", {
+      sessionKey: key,
+      limit: 50,
+    });
+    expect((history.messages ?? []).filter((each) => each.role === "user")).toHaveLength(1);
+    await reload(page);
+    await unfold(page, "Pip");
+    await expect(page.locator(`.task[data-key="${key}"]`)).toContainText(name, {
+      timeout: 20_000,
+    });
+    // The other device, which only reads, shows the same name and made none of its own.
+    await unfold(second, "Pip");
+    await expect(second.locator(`.task[data-key="${key}"]`)).toContainText(name, {
+      timeout: 20_000,
+    });
+  } finally {
+    const now = await gatewayCall<Config>("config.get", {});
+    await gatewayCall("config.patch", {
+      raw: JSON.stringify({
+        models: { providers: { scripted: { models: own } } },
+        agents: { defaults: { utilityModel: null } },
+      }),
+      baseHash: now.hash,
+      replacePaths: ["models.providers.scripted.models"],
+    });
+  }
 });
 
 test("F-055: two tasks of one bot never show each other's messages", async () => {
