@@ -1,6 +1,6 @@
 {
   "openclaw": "2026.11.10",
-  "captured": "A development gateway of this version, started --no-seed, reached by a paired admin operator connection; the gateway's state folder written /gateway-state and the instance name replaced. The config answer keeps its own top-level fields but the config's other copies (`raw`, `parsed`, `sourceConfig`, `resolved`, `runtimeConfig`), and of the config `plugins` and `meta`; the plugin list keeps three other plugins.",
+  "captured": "A development gateway of this version, started --no-seed, reached by a paired admin operator connection; the gateway's state folder written /gateway-state, the instance name replaced, and the inspect's review token written as a placeholder. The config answer keeps its own top-level fields but the config's other copies (`raw`, `parsed`, `sourceConfig`, `resolved`, `runtimeConfig`), and of the config `plugins` and `meta`; the plugin list keeps three other plugins.",
   "config": {
     "path": "/gateway-state/openclaw.json",
     "includedPaths": [],
@@ -456,7 +456,7 @@
       }
     },
     "credentials": [],
-    "reviewToken": "e9ee055fdf3a7d0f5c8f4db342886ceca40fecac78cbd94febb73acd562e45fd",
+    "reviewToken": "review-token-of-the-captured-inspect",
     "runtimeRetention": null,
     "decisions": []
   },

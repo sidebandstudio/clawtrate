@@ -123,7 +123,7 @@ export class FakeGateway {
   /** Sessions served a page at a time, as the gateway pages `sessions.list`; one page when null. */
   sessionPages: Json[][] | null = null;
   hash = 0;
-  token = "e9ee055fdf3a7d0f5c8f4db342886ceca40fecac78cbd94febb73acd562e45fd";
+  token = "review-token-of-the-captured-inspect";
   readonly calls: Call[] = [];
   readonly hooks: Hook[] = [];
   private seen = new Map<string, number>();
