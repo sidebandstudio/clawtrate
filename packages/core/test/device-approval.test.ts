@@ -1334,6 +1334,24 @@ describe("the waiting requests", () => {
     expect(t.delays()).toHaveLength(1);
   });
 
+  it("keeps a failed event read's retry when Machines' older list with none waiting arrives after it", async () => {
+    const t = await listed([]);
+    let machines: (value: unknown) => void = () => {};
+    t.answers["device.pair.list"] = () => new Promise((resolve) => (machines = resolve));
+    // Machines' read is out when a device asks to pair, and the event's read fails.
+    const opened = t.engine.listDevices();
+    t.answers["device.pair.list"] = () => {
+      throw new Error("timed out");
+    };
+    t.engine.onEvent("device.pair.requested", { requestId: "new" });
+    await t.fire();
+    expect(t.delays()).toEqual([1_000]);
+    // Machines' list, sent before the request, finds none waiting: the retry stays to show it.
+    machines({ pending: [], paired: [] });
+    await opened;
+    expect(t.delays()).toEqual([1_000]);
+  });
+
   it("stops after four retries, keeping the last list read, though requests were waiting", async () => {
     const row = pendingRow();
     const t = await listed([row]);

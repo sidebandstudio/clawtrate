@@ -381,8 +381,12 @@ export class DeviceApprovals {
   private cancelRead: (() => void) | null = null;
   /** When the scheduled read is due. */
   private readDue = Infinity;
-  /** The scheduled read is for an event: an applied list, perhaps sent before it, never ends it. */
-  private eventRead = false;
+  /**
+   * The scheduled read is only the re-read of a list shown (`REREAD_MS`), which a list applied with
+   * none waiting ends. An event's read, or a failed read's retry, outlives such a list: the request
+   * it is for may be newer than that list.
+   */
+  private rereadOnly = false;
   private lastReadAt = -Infinity;
   /** Ends the earliest notice when its five minutes are up, with no event needed. */
   private cancelNotice: (() => void) | null = null;
@@ -540,13 +544,13 @@ export class DeviceApprovals {
     const now = this.ctx.now();
     const due = Math.max(now + ms, this.lastReadAt + READ_GAP_MS);
     if (this.cancelRead && this.readDue <= due) {
-      // An event's read joins the one armed: an empty list applied later no longer ends it.
-      if (ms === 0) this.eventRead = true;
+      // Another read joins the one armed: an empty list applied later no longer ends it.
+      if (ms !== REREAD_MS) this.rereadOnly = false;
       return;
     }
     this.clearTimer();
     this.readDue = due;
-    this.eventRead = ms === 0;
+    this.rereadOnly = ms === REREAD_MS;
     this.cancelRead = this.ctx.later(() => {
       this.cancelRead = null;
       this.readDue = Infinity;
@@ -608,7 +612,7 @@ export class DeviceApprovals {
     this.apply(rows);
     // The re-read follows the list applied last, whichever path read it.
     if (this.state.requests.length > 0) this.arm(REREAD_MS);
-    else if (!this.eventRead) this.clearTimer();
+    else if (this.rereadOnly) this.clearTimer();
     return true;
   }
 
