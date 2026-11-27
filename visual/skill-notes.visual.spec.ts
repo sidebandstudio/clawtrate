@@ -1,8 +1,8 @@
 // A row of the gateway's skill-note shape in the mounted conversation and rail,
 // fed to the fixture as the host's next snapshot would bring it (docs/parity.md
 // F-560): with "Show commands" off it is drawn, it is new activity for "Jump to
-// latest", the view at the end follows it, and the bot's preview is the one the
-// gateway lists. A bot can write such a row, so it is shown as any message.
+// latest" and the view at the end follows it. A bot can write such a row, so it is
+// shown as any message.
 // After a stopped or failed run, a row with no run is not that run's reply: it
 // takes neither its "Incomplete" nor its error. Every name and text is invented.
 import { test, type Page } from "@playwright/test";
@@ -87,7 +87,7 @@ async function update(
             ? {
                 tasksByBot: {
                   ...state.tasksByBot,
-                  // This task is Otto's latest, so its preview is the bot's.
+                  // This task is Otto's latest.
                   otto: state.tasksByBot.otto!.map((task) =>
                     task.key === key ? { ...task, ...row } : { ...task, updatedAt: 1 },
                   ),

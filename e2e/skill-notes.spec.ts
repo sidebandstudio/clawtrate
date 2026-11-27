@@ -3,9 +3,8 @@
 // `--with-skill-review`), where a `#learn` turn makes the gateway review the
 // task in the background, save a skill and append its note ("Learned: …") to
 // the task about 30 seconds later. With "Show commands" off, the default, the
-// note shows as any message does, in the conversation and as the bot's preview
-// (docs/parity.md F-560). The unread mark is the gateway's own, which the note
-// does not raise.
+// note shows as any message does, in the conversation (docs/parity.md F-560).
+// The unread mark is the gateway's own, which the note does not raise.
 //
 // The instance is this file's own (`INSTANCE`), started and removed here, so a
 // shard that does not run this file starts none.
@@ -225,7 +224,7 @@ test.afterAll(async () => {
   expect(problems).toEqual([]);
 });
 
-test("F-560: a real skill note shows in the default conversation and as the bot's preview", async () => {
+test("F-560: a real skill note shows in the default conversation", async () => {
   test.setTimeout(300_000);
   const key = `agent:main:skill-note-${Date.now()}`;
   const send = { sessionKey: key, message: "#learn", idempotencyKey: key };
