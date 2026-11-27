@@ -224,17 +224,18 @@ test("F-088: text the bot writes beside an action is beside that action from the
   }
 });
 
-test("#872: while a run still draws its reply, history's row of that reply is known as the reply's", async () => {
-  const { client, close } = await engine("reply drawn once check");
-  const reply = "That file does not exist, so the step failed. I will carry on without it.";
-  let key = "";
-  // Each state in which the run still draws its reply and history already holds that reply's
-  // row (found here by its words, which the app never compares): the block the engine ties it to.
+/**
+ * Each state in which a run still draws its reply and history already holds that reply's row:
+ * the row is found here by its words, which the app never compares, and each such state records
+ * whether the engine ties the reply to it (`replyRow`): null when it does, the rows otherwise.
+ */
+function heldReplies(client: ClawtrateClient, key: () => string) {
   const held: Array<string | null> = [];
   const stop = client.store.subscribe((state) => {
-    const transcript = state.transcripts[key];
+    const transcript = state.transcripts[key()];
     for (const run of transcript?.runs ?? []) {
-      if (run.state !== "running" || run.text.trim() !== reply || textPlaced(run)) continue;
+      const reply = run.text.trim();
+      if (run.state !== "running" || !reply || textPlaced(run)) continue;
       const rows = transcript!.items.flatMap((item) =>
         item.blocks.flatMap((block, i) =>
           block.kind === "text" && block.text.trim() === reply ? [`${item.id}#${i}`] : [],
@@ -245,12 +246,46 @@ test("#872: while a run still draws its reply, history's row of that reply is kn
       held.push(tied && rows.includes(`${tied.itemId}#${tied.block}`) ? null : rows.join());
     }
   });
+  return { held, stop };
+}
+
+test("#872: while a run still draws its reply, history's row of that reply is known as the reply's", async () => {
+  const { client, close } = await engine("reply drawn once check");
+  let key = "";
+  const { held, stop } = heldReplies(client, () => key);
   try {
     key = await openNewTask(client, "reply-once");
     // The scripted model thinks, its call fails, and it answers in a message of its own: F-551's run.
     client.sendMessage(key, "Look for my old notes. #think #tool-fail");
     await expect.poll(() => runs(client, key)[0]?.state, { timeout: 60_000 }).toBe("completed");
     await expect.poll(() => gatewayIdle(op, key), { timeout: 15_000 }).toBe(true);
+    expect(held.filter((row) => row !== null)).toEqual([]);
+  } finally {
+    stop();
+    await close();
+  }
+});
+
+test("#872 #738: an answer a steer kept going is known by its row while the steered message's tool runs", async () => {
+  const { client, close } = await engine("answer before a steer check");
+  let key = "";
+  const { held, stop } = heldReplies(client, () => key);
+  try {
+    key = await openNewTask(client, "steered-answer");
+    // A text-only answer streamed slowly; a steer joins after it, and the model's next message is
+    // reasoning and a slow call with no text. All the while the answer is the run's reply, and
+    // history holds its row.
+    const id = client.sendMessage(key, "Answer slowly. #slow 3");
+    await expect
+      .poll(() => runs(client, key)[0]?.text ?? "", { timeout: 60_000 })
+      .toContain("part 1");
+    client.sendMessage(key, "Then run the slow tool. #slow-tool 8");
+    await expect
+      .poll(() => runs(client, key).find((run) => run.id === id)?.state, { timeout: 90_000 })
+      .toBe("completed");
+    await expect.poll(() => gatewayIdle(op, key), { timeout: 15_000 }).toBe(true);
+    // The moment happened, and in every state of it the row was the reply's.
+    expect(held.length).toBeGreaterThan(0);
     expect(held.filter((row) => row !== null)).toEqual([]);
   } finally {
     stop();
