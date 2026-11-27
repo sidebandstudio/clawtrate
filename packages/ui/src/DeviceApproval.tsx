@@ -6,6 +6,7 @@
 import {
   gatewayStamp,
   HostReplyLost,
+  MAX_DEVICE_REQUESTS,
   spokenCode,
   type DeviceDecision,
   type DeviceRequest,
@@ -89,6 +90,8 @@ export function decisionWords(decision: SheetOutcome, act: DecisionAct = "approv
       return "Denied. The device can ask again.";
     case "gone":
       return "This request is no longer pending.";
+    case "not-shown":
+      return `This request isn't among the newest ${MAX_DEVICE_REQUESTS} Clawtrate shows, so it can't be decided here.`;
     case "changed":
       return `The request changed after it was shown (its ${listWords(decision.what)}). Nothing was approved.`;
     case "undone":
@@ -270,7 +273,12 @@ export function DeviceRequestView({
   const ended =
     !outcome && !pending && !rereading && (current === null || (fresh && admin && !live));
   const result: SheetOutcome | null =
-    outcome?.shown ?? (ended ? (admin ? { kind: "gone" } : { kind: "not-allowed" }) : null);
+    outcome?.shown ??
+    (ended
+      ? admin
+        ? { kind: deviceRequests.omitted > 0 ? "not-shown" : "gone" }
+        : { kind: "not-allowed" }
+      : null);
   const note =
     check === null
       ? null

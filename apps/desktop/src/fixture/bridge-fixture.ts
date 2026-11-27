@@ -1470,7 +1470,7 @@ export function createFixtureBridge(
     const shown = listed?.requests.find((each) => each.requestId === command.requestId);
     if (!listed || listed.access !== "admin" || command.listedOn !== listed.listedOn)
       return Promise.resolve({ kind: "not-allowed" });
-    if (!shown) return Promise.resolve({ kind: "gone" });
+    if (!shown) return Promise.resolve({ kind: listed.omitted > 0 ? "not-shown" : "gone" });
     if (deciding.has(shown.requestId)) return Promise.resolve({ kind: "not-allowed" });
     const pick = command.type === "approveDevice" || command.why === "none-match";
     if (pick && (shown.blocked !== null || shown.spent))

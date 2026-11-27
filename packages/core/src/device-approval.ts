@@ -199,6 +199,8 @@ export type DeviceDecision =
   | { kind: "denied" }
   /** Decided elsewhere, expired or superseded: the gateway no longer lists it. */
   | { kind: "gone" }
+  /** Not among the requests shown, while more wait than are shown: it may be one of those. */
+  | { kind: "not-shown" }
   /** The request read again has another key, roles or scopes than shown: nothing approved. */
   | { kind: "changed"; what: string[] }
   /** Approved, then the paired device had other access than shown: its pairing was removed. */
@@ -734,6 +736,11 @@ export class DeviceApprovals {
     });
   }
 
+  /** Not in the list shown: gone, unless more wait than are shown and it may be one of those. */
+  private unlisted(): DeviceDecision {
+    return this.state.omitted > 0 ? { kind: "not-shown" } : { kind: "gone" };
+  }
+
   /**
    * The person picked `code` for `requestId`, whose sheet showed `scopes`. The request's own
    * code approves it, after it is read again; any other approves nothing.
@@ -748,7 +755,7 @@ export class DeviceApprovals {
     if (!this.ctx.admin()) return { kind: "not-allowed" };
     // A sheet an earlier connection showed decides nothing here; this one read its own list.
     if (listedOn !== this.epoch) return { kind: "not-allowed" };
-    if (!shown) return { kind: "gone" };
+    if (!shown) return this.unlisted();
     const token = this.reserve(requestId);
     if (token === null) return { kind: "not-allowed" };
     const decision = await this.approveReserved(shown, code, scopes);
@@ -936,7 +943,7 @@ export class DeviceApprovals {
     const shown = this.shown(requestId);
     if (!this.ctx.admin()) return { kind: "not-allowed" };
     if (listedOn !== this.epoch) return { kind: "not-allowed" };
-    if (!shown) return { kind: "gone" };
+    if (!shown) return this.unlisted();
     // A decision under way on this request (an approval being sent) takes no refusal.
     if (this.deciding.has(requestId)) return { kind: "not-allowed" };
     if (why === "none-match") {

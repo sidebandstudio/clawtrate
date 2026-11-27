@@ -830,6 +830,22 @@ describe("approving a waiting device", () => {
     expect(await t.engine.refuse(row.requestId as string, "not-mine")).toEqual({ kind: "gone" });
   });
 
+  it("says a request past the sixteen shown isn't among them, not that it is gone", async () => {
+    const old = pendingRow(newKey(), { ts: 0 });
+    const t = await listed([
+      old,
+      ...Array.from({ length: 16 }, (_, i) => pendingRow(newKey(), { ts: i + 1 })),
+    ]);
+    const id = old.requestId as string;
+    expect(t.state().omitted).toBe(1);
+    expect(await t.engine.approve(id, codeOf(old), [...FULL_SCOPES])).toEqual({
+      kind: "not-shown",
+    });
+    expect(await t.engine.refuse(id, "not-mine")).toEqual({ kind: "not-shown" });
+    expect(t.calls).not.toContain("device.pair.approve");
+    expect(t.calls).not.toContain("device.pair.reject");
+  });
+
   it("says the gateway's unknown requestId as no longer pending, and another refusal as it is", async () => {
     const row = pendingRow();
     const t = await listed([row]);

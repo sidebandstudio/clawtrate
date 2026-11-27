@@ -149,6 +149,18 @@ describe("the sheet", () => {
     expect(buttons(html)).toEqual(["Close"]);
   });
 
+  it("F-550: says a request past the newest sixteen isn't among those shown, not that it is gone", () => {
+    const html = render(
+      createElement(DeviceRequestView, { requestId: "hidden", onClose: () => {} }),
+      { requests: [request()], omitted: 1 },
+    );
+    expect(html).toContain(
+      "This request isn't among the newest 16 Clawtrate shows, so it can't be decided here.",
+    );
+    expect(html).not.toContain("no longer pending");
+    expect(buttons(html)).toEqual(["Close"]);
+  });
+
   it("F-550: says what each outcome did, and only an approval says approved", () => {
     const words: Array<[DeviceDecision, string]> = [
       [{ kind: "approved", deviceId: "d" }, "Approved. The device connects in a moment."],
