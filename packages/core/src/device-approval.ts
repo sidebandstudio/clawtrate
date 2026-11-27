@@ -381,6 +381,8 @@ export class DeviceApprovals {
   private cancelRead: (() => void) | null = null;
   /** When the scheduled read is due. */
   private readDue = Infinity;
+  /** The scheduled read is for an event: an applied list, perhaps sent before it, never ends it. */
+  private eventRead = false;
   private lastReadAt = -Infinity;
   /** Ends the earliest notice when its five minutes are up, with no event needed. */
   private cancelNotice: (() => void) | null = null;
@@ -530,11 +532,17 @@ export class DeviceApprovals {
       this.again = true;
       return;
     }
+    this.arm(ms);
+  }
+
+  /** `schedule` without waiting for a read under way: a list applied during one arms its re-read. */
+  private arm(ms: number): void {
     const now = this.ctx.now();
     const due = Math.max(now + ms, this.lastReadAt + READ_GAP_MS);
     if (this.cancelRead && this.readDue <= due) return;
     this.clearTimer();
     this.readDue = due;
+    this.eventRead = ms === 0;
     this.cancelRead = this.ctx.later(() => {
       this.cancelRead = null;
       this.readDue = Infinity;
@@ -594,6 +602,9 @@ export class DeviceApprovals {
     // Any list applied, whoever read it, ends a run of failed reads.
     this.failures = 0;
     this.apply(rows);
+    // The re-read follows the list applied last, whichever path read it.
+    if (this.state.requests.length > 0) this.arm(REREAD_MS);
+    else if (!this.eventRead) this.clearTimer();
     return true;
   }
 
@@ -612,17 +623,19 @@ export class DeviceApprovals {
     this.lastReadAt = this.ctx.now();
     // `list()` numbers this send, before its first await: the next number.
     const seq = this.sent + 1;
-    let outcome: "read" | "failed" | "older" = "read";
+    let failed = false;
     try {
-      await this.list();
+      const { applied } = await this.list();
       if (epoch !== this.epoch) return;
+      // A reply without a pending list changes nothing, but is retried like a failure.
+      failed = !applied && seq > this.applied;
     } catch (error) {
       // A failure is ordered like a reply: one older than a list already applied (a decision's
       // read, Machines') publishes nothing and is tried again by nothing.
       if (epoch === this.epoch && seq > this.applied) {
         this.patch({ error: errorText(error) });
-        outcome = "failed";
-      } else outcome = "older";
+        failed = true;
+      }
     } finally {
       if (this.current === current) this.current = null;
       ended();
@@ -631,12 +644,12 @@ export class DeviceApprovals {
         if (this.again) {
           this.again = false;
           this.schedule();
-        } else if (outcome === "failed") {
+        } else if (failed) {
           // A request may be waiting that no read has shown yet: try again, a few times. Then the
           // last list read stays shown, with the error, until an event, a hello or a refresh.
           if (this.failures < READ_RETRIES) this.schedule(READ_GAP_MS * 4 ** this.failures);
           this.failures += 1;
-        } else if (outcome === "read" && this.state.requests.length > 0) this.schedule(REREAD_MS);
+        }
       }
     }
   }

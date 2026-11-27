@@ -1265,7 +1265,7 @@ describe("the waiting requests", () => {
     }
   });
 
-  it("publishes no failure older than a list a decision read, and tries it again never", async () => {
+  it("publishes no failure older than a list a decision read, and reads that list again in 30 seconds", async () => {
     const row = pendingRow();
     const t = await listed([row]);
     const id = row.requestId as string;
@@ -1288,7 +1288,36 @@ describe("the waiting requests", () => {
     await t.settle();
     expect(t.state()).toBe(shown);
     expect(t.state().error).toBeNull();
+    // Not the failure's retry: the re-read of the list the decision applied, so none expires shown.
+    expect(t.delays()).toEqual([30_000]);
+  });
+
+  it("tries a reply without a pending list again like a failed read, keeping the list shown", async () => {
+    const row = pendingRow();
+    const t = await listed([row]);
+    const shown = t.state();
+    t.answers["device.pair.list"] = () => ({ paired: [] });
+    const waits: Array<number | undefined> = [];
+    for (let i = 0; i < 8; i += 1) {
+      waits.push(...t.delays());
+      await t.fire();
+    }
+    expect(waits).toEqual([30_000, 1_000, 4_000, 16_000, 64_000]);
+    expect(t.state()).toBe(shown);
+  });
+
+  it("drops the 30-second read when Machines' read finds none waiting, never an event's", async () => {
+    const t = await listed([pendingRow()]);
+    expect(t.delays()).toEqual([30_000]);
+    t.gw.pending = [];
+    await t.engine.listDevices();
+    expect(t.state().requests).toEqual([]);
     expect(t.delays()).toEqual([]);
+    // An event's read stays: the empty list may have been sent before the event.
+    t.advance(5_000);
+    t.engine.onEvent("device.pair.requested", { requestId: "new" });
+    await t.engine.listDevices();
+    expect(t.delays()).toEqual([0]);
   });
 
   it("stops after four retries, keeping the last list read, though requests were waiting", async () => {
