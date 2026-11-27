@@ -1241,20 +1241,24 @@ describe("Settings, Machines: the engine", () => {
 describe("#848: a machine write whose answer was lost is never said as the gateway's answer", () => {
   /**
    * The gateway as a lost answer leaves it: `method` applied or not, then the client rejects it
-   * with `error`. After a dropped connection or a stopped client nothing more is sent.
+   * with `error`. After a dropped connection or a stopped client nothing more is sent. `reads`:
+   * how many requests still get through after it on a flaky connection, before each times out.
    */
   const cutOff = (
     gw: ReturnType<typeof gateway>,
     method: string,
     error: Error,
-    { applied = false, down = false } = {},
+    { applied = false, down = false, reads = Infinity } = {},
   ): ReturnType<typeof gateway> => {
     let gone = false;
+    let cut = false;
     const request = async (asked: string, params: unknown) => {
       if (gone) throw new NotSentError();
+      if (cut && reads-- <= 0) throw timedOut(asked);
       if (asked !== method) return gw.request(asked, params);
       if (applied) await gw.request(asked, params);
       gone = down;
+      cut = true;
       throw error;
     };
     return { ...gw, request };
@@ -1345,6 +1349,15 @@ describe("#848: a machine write whose answer was lost is never said as the gatew
         await said(cutOff(landed, write.method, timedOut(write.method), { applied: true })),
       ).toBe("saved");
       expect(write.took(landed)).toBe(true);
+      // The read back that showed it is the last read: on a connection flaky enough to have lost
+      // the answer, a further one could fail, and the save it confirmed stays saved.
+      const flaky = gateway();
+      expect(
+        await said(
+          cutOff(flaky, write.method, timedOut(write.method), { applied: true, reads: 1 }),
+        ),
+      ).toBe("saved");
+      expect(write.took(flaky)).toBe(true);
       expect(await said(cutOff(gateway(), write.method, refused()))).toBe(
         `Couldn't save ${write.what}. The gateway answered: node busy`,
       );

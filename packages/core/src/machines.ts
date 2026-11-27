@@ -615,8 +615,11 @@ const neverSent = (error: unknown) =>
 /** How a write is named in what is said of it. */
 type WriteWords = { what: string; whether: string; sent: string };
 
-/** A write read back after its answer was lost: taken, or what the gateway shows (null: unread). */
-type ReadBack = { took: true } | { took: false; found: string | null };
+/**
+ * A write read back after its answer was lost: taken, with what the read gave, or what the gateway
+ * shows instead (null: unread).
+ */
+type ReadBack<T = void> = { took: true; value: T } | { took: false; found: string | null };
 
 const NAME: WriteWords = { what: "the name", whether: "the name was saved", sent: "the name" };
 const removal = (kind: "machine" | "device"): WriteWords => ({
@@ -632,7 +635,7 @@ const readBackName = (
   kind: "machine" | "device",
 ): ReadBack =>
   name === label
-    ? { took: true }
+    ? { took: true, value: undefined }
     : {
         took: false,
         found:
@@ -651,7 +654,7 @@ const readBackRemoval = (rows: unknown, key: "nodeId" | "deviceId", id: string):
         took: false,
         found: `the gateway still lists this ${key === "nodeId" ? "machine" : "device"}`,
       }
-    : { took: true };
+    : { took: true, value: undefined };
 };
 
 /** A change the gateway refused or did not read back. Its message is for the person. */
@@ -965,13 +968,14 @@ export class MachinesEngine {
    * Only the gateway's own answer is a refusal, in its words. A request that never left changed
    * nothing. Any other failure (a dropped connection, a stopped client, a timeout) lost the answer:
    * the change may have landed, so `readBack` reads it, and a read that shows it taken is the save
-   * an answer would have confirmed (this returns). Otherwise it throws what was found.
+   * an answer would have confirmed: this returns what that read gave, and the caller ends there,
+   * with no further read that a flaky connection could fail. Otherwise it throws what was found.
    */
-  private async failedWrite(
+  private async failedWrite<T>(
     words: WriteWords,
     error: unknown,
-    readBack: () => Promise<ReadBack>,
-  ): Promise<void> {
+    readBack: () => Promise<ReadBack<T>>,
+  ): Promise<T> {
     if (error instanceof GatewayProtocolRequestError)
       throw new PlacementWriteError(
         `Couldn't save ${words.what}. The gateway answered: ${errorText(error)}`,
@@ -981,13 +985,13 @@ export class MachinesEngine {
         `Clawtrate isn't connected to the gateway, so ${words.sent} wasn't sent. Nothing changed.`,
       );
     const lost = `Clawtrate didn't get the gateway's answer, so it can't say whether ${words.whether}.`;
-    let found: ReadBack;
+    let found: ReadBack<T>;
     try {
       found = await readBack();
     } catch {
       found = { took: false, found: null };
     }
-    if (found.took) return;
+    if (found.took) return found.value;
     throw new PlacementWriteError(
       found.found === null
         ? `${lost} Reading it back failed too. Look again once Clawtrate is connected.`
@@ -1157,17 +1161,19 @@ export class MachinesEngine {
         ...(hash ? { baseHash: hash } : {}),
       });
     } catch (error) {
-      await this.failedWrite(
+      return await this.failedWrite(
         {
           what: "the machine's approvals",
           whether: "the machine's approvals were saved",
           sent: "the change",
         },
         error,
-        async () =>
-          choiceOf(readApprovalsFile(await get()).defaults) === choice
-            ? { took: true }
-            : { took: false, found: "its approvals file shows other defaults" },
+        async () => {
+          const file = readApprovalsFile(await get());
+          return choiceOf(file.defaults) === choice
+            ? { took: true, value: file }
+            : { took: false, found: "its approvals file shows other defaults" };
+        },
       );
     }
     const after = readApprovalsFile(await get());
@@ -1191,7 +1197,7 @@ export class MachinesEngine {
     try {
       await this.ctx.request("node.rename", { nodeId, displayName: label });
     } catch (error) {
-      await this.failedWrite(NAME, error, async () => {
+      return await this.failedWrite(NAME, error, async () => {
         const rows = list(rec(await this.ctx.request("node.list", {})).nodes);
         const row = rows.find((each) => rec(each).nodeId === nodeId);
         return readBackName(row === undefined ? undefined : readNode(row)?.name, label, "machine");
@@ -1211,7 +1217,7 @@ export class MachinesEngine {
     try {
       await this.ctx.request("node.pair.remove", { nodeId });
     } catch (error) {
-      await this.failedWrite(removal("machine"), error, async () =>
+      return await this.failedWrite(removal("machine"), error, async () =>
         readBackRemoval(rec(await this.ctx.request("node.list", {})).nodes, "nodeId", nodeId),
       );
     }
@@ -1245,7 +1251,7 @@ export class MachinesEngine {
     try {
       await this.ctx.request("device.pair.rename", { deviceId, label });
     } catch (error) {
-      await this.failedWrite(NAME, error, async () => {
+      return await this.failedWrite(NAME, error, async () => {
         const rows = list(rec(await this.ctx.listDevices()).paired);
         const row = rows.find((each) => rec(each).deviceId === deviceId);
         return readBackName(
@@ -1273,7 +1279,7 @@ export class MachinesEngine {
     try {
       await this.ctx.request("device.pair.remove", { deviceId });
     } catch (error) {
-      await this.failedWrite(removal("device"), error, async () =>
+      return await this.failedWrite(removal("device"), error, async () =>
         readBackRemoval(rec(await this.ctx.listDevices()).paired, "deviceId", deviceId),
       );
     }
