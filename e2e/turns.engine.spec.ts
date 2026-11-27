@@ -27,35 +27,13 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 type Engine = { client: ClawtrateClient; close: () => Promise<void> };
 
-/** A run's end in the task, as the gateway sends it: a lifecycle end or error, or a terminal chat event. */
-function endsRun(data: unknown, key: string): boolean {
-  if (typeof data !== "string") return false;
-  const frame = JSON.parse(data) as {
-    type?: string;
-    event?: string;
-    payload?: { sessionKey?: string; stream?: string; state?: string; data?: { phase?: string } };
-  };
-  if (frame.type !== "event") return false;
-  const p = frame.payload;
-  if (p?.sessionKey !== key) return false;
-  return (
-    (frame.event === "agent" &&
-      p?.stream === "lifecycle" &&
-      (p.data?.phase === "end" || p.data?.phase === "error")) ||
-    (frame.event === "chat" && ["final", "error", "aborted"].includes(p?.state ?? ""))
-  );
-}
-
 /**
- * Sockets on which the end of a run in the task `key()` names, and every event after it, reach the
- * client `ms` late and in their order, while answers to its requests come at once: a loaded
- * machine's slow end, made sure. A history read the gateway answers in that time is answered while
- * the client still draws the run.
+ * Sockets that tell `seen` of every event frame the client takes in, right after the client has
+ * it, in their order: a check can act at a moment of the gateway's own sending.
  */
-function slowEnds(create: WebSocketFactory, ms: number, key: () => string): WebSocketFactory {
+function watching(create: WebSocketFactory, seen: (frame: unknown) => void): WebSocketFactory {
   return (url) => {
     const socket = create(url);
-    let held: Array<{ data: unknown }> | null = null;
     const wrapper: WebSocketLike = {
       get readyState() {
         return socket.readyState;
@@ -71,20 +49,8 @@ function slowEnds(create: WebSocketFactory, ms: number, key: () => string): WebS
     socket.onclose = (event) => wrapper.onclose?.(event);
     socket.onerror = (event) => wrapper.onerror?.(event);
     socket.onmessage = (event) => {
-      const isEvent =
-        typeof event.data === "string" &&
-        (JSON.parse(event.data) as { type?: string }).type === "event";
-      if (held && isEvent) return void held.push(event);
-      if (!held && endsRun(event.data, key())) {
-        held = [event];
-        setTimeout(() => {
-          const out = held ?? [];
-          held = null;
-          for (const each of out) wrapper.onmessage?.(each);
-        }, ms);
-        return;
-      }
       wrapper.onmessage?.(event);
+      if (typeof event.data === "string") seen(JSON.parse(event.data));
     };
     return wrapper;
   };
@@ -93,7 +59,7 @@ function slowEnds(create: WebSocketFactory, ms: number, key: () => string): WebS
 /** A client paired with this run's instance, with write access. */
 async function engine(
   name: string,
-  options: { slowEnd?: { ms: number; key: () => string } } = {},
+  options: { seen?: (frame: unknown) => void } = {},
 ): Promise<Engine> {
   const inst = openInstance(INSTANCE);
   const connection = readDevConnection(inst.connectionFile)!;
@@ -102,9 +68,8 @@ async function engine(
     dataDir,
     client: { displayName: `Clawtrate ${name}`, version: "0.0.0", platform: process.platform },
   });
-  const slow = options.slowEnd;
-  const host = slow
-    ? { ...node, createWebSocket: slowEnds(node.createWebSocket, slow.ms, slow.key) }
+  const host = options.seen
+    ? { ...node, createWebSocket: watching(node.createWebSocket, options.seen) }
     : node;
   const client = new ClawtrateClient(host, {});
   await client.start();
@@ -321,19 +286,42 @@ function heldReplies(client: ClawtrateClient, key: () => string) {
 }
 
 test("#872: while a run still draws its reply, history's row of that reply is known as the reply's", async () => {
-  // The run's end reaches this client three seconds late, so the history read the answer's row
-  // brings is answered while the run is still drawn: the moment F-551 met on loaded runners.
+  test.setTimeout(240_000);
+  // The gateway writes the answer's row 30 to 60 ms before the run's end, and the app reads
+  // history 150 ms after it hears of a row: the read lands in between only on a loaded machine,
+  // where F-551 met it. Here history is read again the moment the answer's row is announced, on a
+  // new task each time, until a read has landed in between (a history read that comes after the
+  // end ends the run itself, so nothing on this side can hold that moment open).
   let key = "";
-  const { client, close } = await engine("reply drawn once check", {
-    slowEnd: { ms: 3_000, key: () => key },
+  let client: ClawtrateClient | null = null;
+  const { client: engineClient, close } = await engine("reply drawn once check", {
+    seen: (frame) => {
+      const f = frame as {
+        event?: string;
+        payload?: { sessionKey?: string; message?: { role?: string } };
+      };
+      if (
+        f.event === "session.message" &&
+        f.payload?.sessionKey === key &&
+        f.payload.message?.role === "assistant"
+      )
+        client?.reloadSession(key);
+    },
   });
-  const { held, stop } = heldReplies(client, () => key);
+  client = engineClient;
+  const { held, stop } = heldReplies(engineClient, () => key);
   try {
-    key = await openNewTask(client, "reply-once");
-    // The scripted model thinks, its call fails, and it answers in a message of its own: F-551's run.
-    client.sendMessage(key, "Look for my old notes. #think #tool-fail");
-    await expect.poll(() => runs(client, key)[0]?.state, { timeout: 60_000 }).toBe("completed");
-    await expect.poll(() => gatewayIdle(op, key), { timeout: 15_000 }).toBe(true);
+    for (let attempt = 0; attempt < 8 && held.length === 0; attempt++) {
+      key = await openNewTask(engineClient, `reply-once-${attempt}`);
+      // The scripted model thinks, its call fails, and it answers in a message of its own: F-551's run.
+      engineClient.sendMessage(key, "Look for my old notes. #think #tool-fail");
+      await expect
+        .poll(() => runs(engineClient, key)[0]?.state, { timeout: 60_000 })
+        .toBe("completed");
+      await expect.poll(() => gatewayIdle(op, key), { timeout: 15_000 }).toBe(true);
+      // Within the client's bound of open tasks.
+      if (held.length === 0) engineClient.closeSession(key);
+    }
     // The moment happened, and in every state of it the row was the reply's.
     expect(held.length).toBeGreaterThan(0);
     expect(held.filter((row) => row !== null)).toEqual([]);
