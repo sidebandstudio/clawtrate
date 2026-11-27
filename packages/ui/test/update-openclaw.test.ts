@@ -284,6 +284,28 @@ describe("F-589: the progress and how it ends", () => {
     }
   });
 
+  it("F-589: on a device that only reads, a failed run says where Update is offered, blocked or not", () => {
+    const readOnly = { ...info, readOnly: true };
+    const failed = run({
+      phase: "finished",
+      outcome: "failed",
+      reason: "container-image-install",
+      note: null,
+    });
+    for (const blocked of [null, { reason: "container-image-install", note: null }]) {
+      const html = part({ openclawUpdating: updating({ run: failed, blocked }) }, readOnly);
+      expect(text(html)).toContain(
+        "Dismiss this. Clawtrate offers Update on a device that can change the gateway.",
+      );
+      expect(text(html)).not.toContain("Update is offered again");
+      expect(text(html)).not.toContain("see why the gateway can't update itself");
+      expect(html).not.toContain("href=");
+    }
+    expect(nextStep({ outcome: "failed" } as Parameters<typeof nextStep>[0], true, true)).toBe(
+      "Dismiss this. Clawtrate offers Update on a device that can change the gateway.",
+    );
+  });
+
   it("F-589: after a failure that says the gateway can't update itself, no Update is promised", () => {
     const failed = { outcome: "failed" } as Parameters<typeof nextStep>[0];
     expect(nextStep(failed)).toBe("Dismiss this, and Update is offered again.");

@@ -1671,6 +1671,16 @@ export class ClawtrateClient {
   private readonly spawnedBy = new Map<string, string>();
   /** The last guide change in line (`oneGuidesChangeAtATime`). */
   private guidesChanges: Promise<unknown> = Promise.resolve();
+  /**
+   * The connection whose guide change after its connect didn't know the gateway's identity: it
+   * runs again once, when that connection learns it (`confirmGatewayIdentity`).
+   */
+  private guidesUnnamed: { generation: number; epoch: number } | null = null;
+  /**
+   * Settled once the change after this connection's connect is in line (or won't be): a read of
+   * the guides made before then waits for it, so it shows what that change leaves.
+   */
+  private guidesConnectPass: { epoch: number; queued: Promise<void> } | null = null;
   /** Bots of this connection whose `AGENTS.md` didn't exist yet at its guide change (`keepGuides`). */
   private readonly guidesMissing = new Set<string>();
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -6880,13 +6890,15 @@ export class ClawtrateClient {
     const target = this.target;
     // Checked there: both known and current. The whole write stays bound to them.
     const created = await this.accounts.createBot(input, bound);
+    const gatewayId = bound?.gatewayId ?? this.state.connection.gatewayId;
     const request = (method: string, params: unknown) =>
       protocol && this.protocol === protocol && this.epoch === epoch && this.target === target
         ? this.request(method, params)
         : Promise.reject(new Error(CONNECTION_CHANGED));
     // A bot made in Clawtrate gets the guides right away, as every bot does, on the connection it
-    // was made on. It never fails the creation.
-    if (this.guidesWritable())
+    // was made on, once the gateway is known to be the one it was made on. It never fails the
+    // creation.
+    if (gatewayId !== null && this.routeIdentityHolds(gatewayId) && this.guidesWritable())
       await this.guidesByThemselves(request, created.botId).catch((error: unknown) =>
         this.logFailure("warn", "guides for a new bot", error),
       );
@@ -7609,6 +7621,10 @@ export class ClawtrateClient {
    * what is shown is what it left. Reads need `operator.read`.
    */
   async readBotGuides(): Promise<BotGuidesAnswer> {
+    // The change after this connection's connect is put in line only once its first reads are
+    // done: a read made before then waits for it to be in line, then for it to finish.
+    const pass = this.guidesConnectPass;
+    if (pass?.epoch === this.epoch) await pass.queued;
     await this.guidesChanges;
     const protocol = this.protocol;
     const epoch = this.epoch;
@@ -7655,12 +7671,16 @@ export class ClawtrateClient {
   private async guidesByThemselves(
     request: (method: string, params: unknown) => Promise<unknown>,
     bot?: string,
+    /** Decided in line, just before: whether to write at all. */
+    ready: () => Promise<boolean> = async () => true,
   ): Promise<string[]> {
-    const { errors, missing } = await this.oneGuidesChangeAtATime(() =>
-      keepGuidesCurrent(request, bot).catch((error: unknown) => ({
-        errors: [error instanceof Error ? error.message : String(error)],
-        missing: [] as string[],
-      })),
+    const { errors, missing } = await this.oneGuidesChangeAtATime(async () =>
+      (await ready())
+        ? keepGuidesCurrent(request, bot).catch((error: unknown) => ({
+            errors: [error instanceof Error ? error.message : String(error)],
+            missing: [] as string[],
+          }))
+        : { errors: [] as string[], missing: [] as string[] },
     );
     for (const error of errors) this.logFailure("warn", "guides", error);
     return missing;
@@ -7676,7 +7696,7 @@ export class ClawtrateClient {
   private async keepGuides(
     generation: number,
     epoch: number,
-    options: { bot?: string; afterRun?: boolean } = {},
+    options: { bot?: string; afterRun?: boolean; gatewayId?: string } = {},
   ): Promise<void> {
     const current = () =>
       generation === this.generation &&
@@ -7690,15 +7710,39 @@ export class ClawtrateClient {
       for (const key of oldGuidesKeys(this.state.connection.gatewayId))
         void this.host.storage.delete(key).catch(() => undefined);
     }
-    // In line at once, so a read of the guides made meanwhile waits for what it leaves.
+    // In line at once, so a read of the guides made meanwhile waits for what it leaves. Nothing
+    // is written until the gateway has named itself, as the saved route's gateway when the
+    // connection has one: while it hasn't, the change waits for the name (`guidesUnnamed`).
+    const known = options.gatewayId;
     const missing = await this.guidesByThemselves(
       (method, params) =>
         current() ? this.request(method, params) : Promise.reject(new Error(CONNECTION_CHANGED)),
       options.bot,
+      async () => {
+        // Named meanwhile by another read on this connection: that name, confirmed.
+        const id = known ?? (await this.readGatewayIdentity()) ?? this.state.connection.gatewayId;
+        if (!current()) return false;
+        if (id === null) {
+          this.guidesUnnamed = { generation, epoch };
+          return false;
+        }
+        return this.routeIdentityHolds(id);
+      },
     );
     if (!current()) return;
     // Read again once each: not after the read a run's end asked for.
     if (!options.afterRun) this.armGuidesMissing(missing, this.target);
+  }
+
+  /**
+   * Whether `id` can be this connection's gateway as its saved route knows it: a route that has
+   * bound an identity accepts only that one; no route, or one not bound yet, accepts any.
+   */
+  private routeIdentityHolds(id: string): boolean {
+    const settings = this.settings;
+    return (
+      settings?.route === undefined || settings.gatewayId === undefined || settings.gatewayId === id
+    );
   }
 
   /**
@@ -9853,15 +9897,20 @@ export class ClawtrateClient {
     this.pendingResync = null;
     this.quietReconnect = false;
     const epoch = this.epoch;
-    void this.bootstrap(generation, reason).then(() => {
-      if (generation !== this.generation || epoch !== this.epoch) return;
-      this.accounts.onHello();
-      // Every connect reads the list again: runs that started or ended while away are in it.
-      if (this.state.connection.status === "connected") void this.routines.load();
-      this.usage.onHello();
-      if (!this.isSetup(this.settings?.url)) void this.openclawUpdates.onHello();
-      void this.keepGuides(generation, epoch);
-    });
+    let passQueued = () => {};
+    this.guidesConnectPass = { epoch, queued: new Promise<void>((done) => (passQueued = done)) };
+    void this.bootstrap(generation, reason)
+      .then(() => {
+        if (generation !== this.generation || epoch !== this.epoch) return;
+        this.accounts.onHello();
+        // Every connect reads the list again: runs that started or ended while away are in it.
+        if (this.state.connection.status === "connected") void this.routines.load();
+        this.usage.onHello();
+        if (!this.isSetup(this.settings?.url)) void this.openclawUpdates.onHello();
+        void this.keepGuides(generation, epoch);
+      })
+      // The change is in line by now (keepGuides puts it there before its first await), or won't be.
+      .finally(passQueued);
   }
 
   /** After a connect, read back every approval whose last decision got no answer. */
@@ -9892,6 +9941,12 @@ export class ClawtrateClient {
     // Clearing another gateway's creation can notify a host that stops the connection.
     if (current() && this.state.connection.gatewayId !== id) this.setConnection({ gatewayId: id });
     if (current()) this.settleReadStamps(id);
+    // The guide change after this connection's connect found it unnamed: once, now it is named.
+    const unnamed = this.guidesUnnamed;
+    if (current() && unnamed?.generation === this.generation && unnamed.epoch === this.epoch) {
+      this.guidesUnnamed = null;
+      void this.keepGuides(unnamed.generation, unnamed.epoch, { gatewayId: id });
+    }
   }
 
   /** The host's words for why it refused the latest socket of this gateway's route: setup's or saved. */

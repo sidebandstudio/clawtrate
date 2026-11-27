@@ -19,15 +19,18 @@ import {
   MAX_SECTION_SPAN_CHARS,
   oldGuidesKeys,
   readGuideFolders,
+  SECTION_FIRST_LINES,
+  SECTION_LAST_LINES,
   withSection,
 } from "../src/guides.ts";
 import { ADMIN_SCOPES, INTERACTIVE_SCOPES } from "../src/scopes.ts";
 import { parseBridgeCommand } from "../src/bridge.ts";
-import { agentEvent, openTask } from "./client-harness.ts";
-import { GatewayError, memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
+import { agentEvent, grantingGateway, openTask } from "./client-harness.ts";
+import { GatewayError, memoryStorage, sleep, testHost, tokenKey, until } from "./fake-gateway.ts";
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
-import { ClawtrateClient, CONNECTION_CHANGED } from "../src/client.ts";
+import { ClawtrateClient, CONNECTION_CHANGED, ROUTE_IDENTITY_CHANGED } from "../src/client.ts";
 import { PUBLISHED_SECTIONS } from "./guides-published.ts";
+import { V2_SECTION, v2Pass } from "./guides-build-v2.ts";
 import { FAST, URL_A } from "./client-harness.ts";
 
 const hash = (text: string) => sha256Hex(utf8Bytes(text));
@@ -227,6 +230,37 @@ describe("the section", () => {
     expect(findSection("See `<!-- clawtrate:guides begin` in the docs.\n").kind).toBe("none");
   });
 
+  it("writes nothing when it can't tell where its section ends, the person's text below included", () => {
+    const rules = "# My own rules\n- Never book anything on Fridays.\n- Ask before spending.\n";
+    // The real end marker deleted; the person keeps a literal one further down, in an HTML block.
+    const noEnd = edited().replace(END_LINE, "");
+    const cases = {
+      "a later end marker in a <pre> block": `${noEnd}\n${rules}\n<pre>\n${END_LINE}</pre>\n`,
+      "a later end marker on a line of its own": `${noEnd}\n${rules}\n${END_LINE}\nMore of mine.\n`,
+      "a quoted end marker, which isn't a marker line": `${noEnd}\n${rules}\n> ${END_LINE}`,
+      "a start marker with no end": `${noEnd}\n${rules}`,
+      "its first line edited": edited().replace(GUIDES_NOTICE, "<!-- mine now -->") + rules,
+      "its last line edited":
+        edited().replace("anyone else never does.", "anyone else does.") + rules,
+    };
+    for (const [name, file] of Object.entries(cases)) {
+      expect(findSection(file), name).toMatchObject({ kind: "changed", replaceable: false });
+      expect(withSection(file), name).toBe(file);
+      expect(file.endsWith(rules) || file.includes(rules), name).toBe(true);
+    }
+    // Edited in its middle, with its own first and last lines: Clawtrate's, and written over.
+    expect(findSection(edited() + rules)).toMatchObject({ kind: "changed", replaceable: true });
+    expect(withSection(edited() + rules)).toBe(`${GUIDES_SECTION}\n${BOT_FILE}${rules}`);
+  });
+
+  it("knows the first and last line of every section a build has written", () => {
+    for (const section of [GUIDES_SECTION, ...PUBLISHED_SECTIONS.map((each) => each.section)]) {
+      const inner = section.split("\n").slice(1, -2);
+      expect(SECTION_FIRST_LINES).toContain(inner[0]);
+      expect(SECTION_LAST_LINES).toContain(inner.at(-1));
+    }
+  });
+
   it("pins the text to its version: changing the text means a new version", () => {
     expect(GUIDES_SECTION.split("\n")[0]).toMatch(
       new RegExp(
@@ -345,6 +379,39 @@ describe("keeping the section current", () => {
     expect(older.sets).toHaveLength(1);
   });
 
+  it("version 2's build and this one, taking turns on one file, write at most twice and then leave it", async () => {
+    // The released version 2 build's own parser and rule (guides-build-v2.ts), as it shipped.
+    const v2 = PUBLISHED_SECTIONS.find((each) => each.version === 2)!.section;
+    expect(V2_SECTION).toBe(v2);
+    const starts = {
+      "no section": BOT_FILE,
+      "version 2's": `${v2}\n${BOT_FILE}`,
+      "version 2's, edited": `${v2.replace("Be warm", "Be bold")}\n${BOT_FILE}`,
+      "this version's": withSection(BOT_FILE),
+      "this version's, edited": edited(),
+    };
+    for (const [name, start] of Object.entries(starts)) {
+      const files = fakeFiles({ pip: start });
+      let v2Writes = 0;
+      for (let round = 0; round < 4; round += 1) {
+        // The older build's device, then this build's, on the same file.
+        const written = v2Pass(files.store.get("pip")!);
+        if (written !== null) {
+          files.store.set("pip", written);
+          v2Writes += 1;
+        }
+        await keepGuidesCurrent(files.request);
+      }
+      expect(v2Writes + files.sets.length, name).toBeLessThanOrEqual(2);
+      // Settled: this version, and neither build writes it again.
+      expect(files.store.get("pip"), name).toBe(withSection(BOT_FILE));
+      expect(v2Pass(files.store.get("pip")!), name).toBeNull();
+      const before = files.sets.length;
+      await keepGuidesCurrent(files.request);
+      expect(files.sets, name).toHaveLength(before);
+    }
+  });
+
   it("one writer at a time: a write held to a hash another device changed reads again, once", async () => {
     // Another device adds the section between this pass's read and its write.
     const files = fakeFiles({ pip: BOT_FILE });
@@ -432,6 +499,7 @@ describe("keeping the section current", () => {
 
   it("writes nothing to a file whose markers are out of shape, or whose section moved", async () => {
     for (const file of [
+      `${edited().replace(END_LINE, "")}\n# Mine\n- keep\n\n<pre>\n${END_LINE}</pre>\n`,
       edited().replace(END_LINE, ""),
       `# Mine\nmy rules\n\n${GUIDES_SECTION}\nMore.\n`,
       `# Mine\n\n\`\`\`\n${olderSection()}\`\`\`\nMore.\n`,
@@ -814,6 +882,108 @@ describe("the guides in the client", () => {
       expect(read.stamp.gatewayId).toBeNull();
       expect(read.folders.every((f) => f.error === CONNECTION_CHANGED)).toBe(true);
       expect(files.asked.slice(asked).length).toBeLessThanOrEqual(2);
+    } finally {
+      client.stop();
+    }
+  });
+
+  /** A client on a saved route bound to `gw-a`, whose gateway names itself as `named` gives. */
+  async function routed(files: ReturnType<typeof fakeFiles>, named: () => string) {
+    const gateway = withFiles(grantingGateway(), files);
+    const ROUTE = ".openclaw-guides-check";
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL_A, token: null, route: ROUTE, gatewayId: "gw-a" }),
+      [tokenKey(URL_A)]: JSON.stringify({
+        token: "device-token",
+        grantedScopes: ADMIN_SCOPES,
+        heldScopes: INTERACTIVE_SCOPES,
+        adminHeld: true,
+        route: ROUTE,
+      }),
+    });
+    // The connect's reads of the gateway's name fail, as on a gateway still starting: the
+    // client's own retry, half a second on, is the first to get it.
+    let reads = 0;
+    gateway.handlers["gateway.identity.get"] = () => {
+      reads += 1;
+      if (reads <= 2) throw new Error("not ready");
+      return { deviceId: named() };
+    };
+    const client = new ClawtrateClient(testHost(gateway, storage), {
+      ...FAST,
+      localConnect: () => ({
+        createSocket: (url) => gateway.createWebSocket(url),
+        verify: async () => true,
+      }),
+    });
+    await client.start();
+    return { client, gateway, reads: () => reads };
+  }
+
+  it("on a saved route, writes nothing while the gateway's name is unknown, and nothing ever when it names another gateway", async () => {
+    const files = fakeFiles({ pip: BOT_FILE });
+    const { client, reads } = await routed(files, () => "gw-other");
+    try {
+      await until(() => client.state.connection.error?.code === ROUTE_IDENTITY_CHANGED, 8_000);
+      expect(reads()).toBeGreaterThanOrEqual(2);
+      await sleep(600);
+      expect(files.sets).toEqual([]);
+      expect(files.store.get("pip")).toBe(BOT_FILE);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("on a saved route, keeps the section current once the gateway names itself as that route's, once", async () => {
+    const files = fakeFiles({ pip: BOT_FILE });
+    const { client, reads } = await routed(files, () => "gw-a");
+    try {
+      await until(() => client.state.connection.status === "connected" && reads() >= 2);
+      // Nothing while the name is unknown.
+      await sleep(100);
+      expect(client.state.connection.gatewayId).toBeNull();
+      expect(files.sets).toEqual([]);
+      // The retry names it: the change runs then, with no reconnect, and only once.
+      await until(() => files.sets.length === 1, 8_000);
+      expect(files.store.get("pip")).toBe(withSection(BOT_FILE));
+      await sleep(600);
+      expect(files.sets).toHaveLength(1);
+      // One pass: one read of Pip's file, and one write.
+      expect(files.asked).toEqual(["pip", "pip"]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("a read made while the connect's own reads are still under way shows what the change after them leaves", async () => {
+    const files = fakeFiles({ pip: BOT_FILE });
+    const { client, gateway } = await openTask({ storage: adminStorage() });
+    withFiles(gateway, files);
+    // The connect's read of the bots waits until Settings has asked.
+    let release = () => {};
+    const held = new Promise<void>((done) => (release = done));
+    const list = gateway.handlers["agents.list"]!;
+    let lists = 0;
+    gateway.handlers["agents.list"] = async (params) => {
+      lists += 1;
+      if (lists === 1) await held;
+      return list(params);
+    };
+    try {
+      const was = client.state.connection.connectedAt;
+      gateway.dropAll();
+      await until(
+        () =>
+          client.state.connection.status === "connected" &&
+          client.state.connection.connectedAt !== was &&
+          lists === 1,
+      );
+      // Settings is open, and reads now, before the connect's change is in line.
+      const read = client.readBotGuides();
+      await sleep(50);
+      release();
+      expect((await read).folders[0]?.state).toBe("current");
+      expect(files.sets).toHaveLength(1);
     } finally {
       client.stop();
     }

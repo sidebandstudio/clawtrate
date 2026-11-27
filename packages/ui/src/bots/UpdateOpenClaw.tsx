@@ -144,7 +144,15 @@ function useUpdatePart(state: ClawtrateState, place: RefObject<HTMLDivElement | 
   const [confirming, setConfirming] = useState<GatewayStamp | null>(null);
   const update = connection.openclawUpdate;
   const connected = connection.status === "connected";
-  if (run) return <UpdateLine run={run} waiting={!connected} blocked={updating.blocked != null} />;
+  if (run)
+    return (
+      <UpdateLine
+        run={run}
+        waiting={!connected}
+        blocked={updating.blocked != null}
+        readOnly={info.readOnly === true}
+      />
+    );
   // A press whose answer was lost: no second one until the gateway's record settles it.
   if (updating.looking && updating.error)
     return (
@@ -399,17 +407,20 @@ function UpdateLine({
   run,
   waiting,
   blocked = false,
+  readOnly = false,
 }: {
   run: UpdateRunView;
   waiting: boolean;
   /** The gateway said it can't update itself: no Update is offered after this run. */
   blocked?: boolean;
+  /** This device only reads: it never offers Update. */
+  readOnly?: boolean;
 }) {
   const send = useCommand();
   const line = runLine(run);
   const heading = runHeading(run);
   const words = gatewayWords(run);
-  const next = nextStep(run, blocked);
+  const next = nextStep(run, blocked, readOnly);
   const finished = run.outcome !== "running" && run.outcome !== "late" && run.outcome !== "away";
   return (
     <div className="b-update" data-testid="update-run-settings" data-outcome={run.outcome}>

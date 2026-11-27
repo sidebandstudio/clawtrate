@@ -97,11 +97,15 @@ export function runHeading(run: UpdateRunView): string {
 }
 
 /** What the person can do after an outcome, or null while it runs or when it worked. */
-export function nextStep(run: UpdateRunView, blocked = false): string | null {
+export function nextStep(run: UpdateRunView, blocked = false, readOnly = false): string | null {
   switch (run.outcome) {
     case "failed":
     case "rolled-back":
     case "skipped":
+      // A device that only reads offers no Update, and shows no reason the gateway gave for not
+      // updating itself: it says where the update is offered.
+      if (readOnly)
+        return "Dismiss this. Clawtrate offers Update on a device that can change the gateway.";
       // A failure that says the gateway can't update itself leaves no Update to offer.
       return blocked
         ? "Dismiss this to see why the gateway can't update itself."
