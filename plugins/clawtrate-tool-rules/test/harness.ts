@@ -2,9 +2,8 @@
 // code, hook and method handlers run against it, with its store in a
 // temporary folder; nothing here touches a gateway.
 
-import { mkdtempSync, rmSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { rmSync } from "node:fs";
+import { tempDir } from "../../../test/temp-dir.ts";
 import { createToolRules } from "../index.js";
 
 type Json = Record<string, unknown>;
@@ -33,7 +32,7 @@ export const running = new Set<object>();
 
 /** A temporary state folder, removed by `done`. */
 export function tempState() {
-  const dir = mkdtempSync(join(tmpdir(), "clawtrate-tool-rules-"));
+  const dir = tempDir("clawtrate-tool-rules-");
   return { dir, done: () => rmSync(dir, { recursive: true, force: true }) };
 }
 

@@ -127,6 +127,15 @@ export const PauseIcon = (props: IconProps) => (
   </Icon>
 );
 
+/** A setting's explanation, behind it (InfoTip.tsx). */
+export const InfoIcon = (props: IconProps) => (
+  <Icon {...props}>
+    <circle cx="8" cy="8" r="6" />
+    <path d="M8 7.2V11" />
+    <path d="M8 5v.1" />
+  </Icon>
+);
+
 export const WarnIcon = (props: IconProps) => (
   <Icon {...props}>
     <path d="M8 2.5 14 13H2L8 2.5Z" />

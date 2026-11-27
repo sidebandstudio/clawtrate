@@ -335,6 +335,13 @@ export const startedTaskReply = ({ label, visible }: { label: string; visible: b
 export const IMAGE_READY_REPLY = "Here is the picture you asked for.";
 export const IMAGE_FAILED_REPLY = "The picture could not be made.";
 
+/**
+ * The gateway's note that a `sessions_send` delivery failed, which it sends in the recipient's name
+ * (OpenClaw 2026.10.6 and 2026.11.10, `runSessionsSendA2AFlow`), and how long a bot works on it.
+ */
+const DELIVERY_FAILED = /(?:^|[\n"])sessions_send (?:delivery to|target run for) \S+ failed/;
+export const DELIVERY_FAILED_SECONDS = 20;
+
 export const isGatewayTurn = (prompt: string) =>
   GATEWAY_TURN_PROMPTS.some((start) => prompt.startsWith(start));
 
@@ -508,6 +515,19 @@ export function planReply(
   if (forwarded) {
     const from = /sourceSession=agent:([A-Za-z0-9_-]+):/.exec(forwarded)?.[1] ?? "another bot";
     const name = SEED_BOTS.find((bot) => bot.id === from)?.name ?? from;
+    // The gateway's own note that a message to another bot failed, sent in that bot's name once
+    // its run ended without a reply (a Stop of it, say): a bot works on it for a while, as one that
+    // retries would, so the turn is still going when a client means to stop it (#645).
+    if (DELIVERY_FAILED.test(prompt) || DELIVERY_FAILED.test(forwarded)) {
+      const parts = Array.from(
+        { length: DELIVERY_FAILED_SECONDS * 4 },
+        (_, i) => `Still working on it, part ${i + 1} of ${DELIVERY_FAILED_SECONDS * 4}. `,
+      );
+      return [
+        { kind: "reasoning", text: `The message to ${name} failed. I will look into it.` },
+        { kind: "text", text: `${parts.join("")}\n\nDone.`, delayMs: 250 },
+      ];
+    }
     return [{ kind: "text", text: `${name}'s reply arrived. It is shown above.` }];
   }
 
