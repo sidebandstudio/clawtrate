@@ -450,6 +450,21 @@ test.describe("the folded skill note's undo, preview and activity", () => {
     await expect(alone.locator(".skill-note-text")).toHaveText(SKILL_TEXT);
   });
 
+  test("F-560: a note at the top of a history page, after no run, is a line of its own", async ({
+    page,
+  }) => {
+    await openFixture(page, `scene=main&${OTTO_DISK}&panel=closed&access=admin`);
+    await showRows(page, [skillNote(true, 0), ...workedRun()]);
+    const alone = page.getByTestId("skill-note-line");
+    await expect(alone).toHaveCount(1);
+    await expect(alone.locator(":scope > summary")).toHaveAccessibleName(
+      "Saved a skill: disk-check",
+    );
+    await expect(page.getByTestId("transcript-turn").filter({ hasText: "Learned" })).toHaveCount(0);
+    // The run after it keeps its own line, without the note.
+    await expect(runLine(page).locator(":scope > summary")).not.toContainText("Saved a skill");
+  });
+
   test("F-560: the bot's preview is the reply before the note the gateway lists", async ({
     page,
   }) => {
