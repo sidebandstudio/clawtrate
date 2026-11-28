@@ -1371,6 +1371,19 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
       expect(outcome).toMatchObject({ kind: "stopped", mayBeRunning: true });
     });
 
+    it("an enable the owner's deny refused ends its attempt, and the person's Turn on starts afresh", async () => {
+      const g = at(version, "fresh");
+      g.hooks.push({ method: "plugins.setEnabled", nth: 1, before: (gw) => gw.deny.push(ID) });
+      const ctx = contextFor(g);
+      const engine = new PluginInstaller(ctx);
+      expect(await engine.install(PIN)).toMatchObject({ stop: "owner-settings" });
+      expect(ctx.records.get(ID)).toBeNull();
+      // The owner lifts the deny, which moves the config hash; Turn on is the person's own.
+      g.deny = [];
+      g.hash += 1;
+      expect(await engine.turnOn(PIN)).toEqual({ kind: "enabled" });
+    });
+
     // 3. The stage sends the archive it just checked.
     it("a tarball changed during the stage's idle wait is refused before the send", async () => {
       const g = at(version, "fresh");

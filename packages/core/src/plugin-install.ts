@@ -1308,8 +1308,10 @@ export class PluginInstaller {
           const read = await this.readGateway(epoch, pin);
           const off = read.disabled && !read.listed?.loaded;
           if (!off) await disable(reason, undefined, text);
+          // Off, and the attempt ends here for good: the person's Turn on picks it up from this
+          // state, with a record of its own (3.3, "The device's record").
           running(false);
-          await save({ pending: null });
+          await drop();
           throw new Stop(reason, text);
         }
         const got = str(rec(rec(answer.runtime).sourceDigests)[id]);
