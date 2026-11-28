@@ -46,8 +46,6 @@ Windows builds are not published yet. The iPhone app is in development in `apps/
 - Watch a gateway in read-only mode.
 - Run the same interface from a checkout as a desktop app on macOS and Windows, or in a browser through the web preview host.
 
-Some actions need a permission on the gateway or a plugin.
-
 ## Where it is going
 
 Work in progress, not yet in the beta:
