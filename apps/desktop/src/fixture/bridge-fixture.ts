@@ -154,6 +154,8 @@ export const SCENES = [
   "empty",
   "partial",
   "zero-tasks",
+  "first-bot",
+  "first-bot-zero",
   "task-states",
   "protocol-mismatch",
   "pairing-ended",
@@ -596,6 +598,17 @@ function scene(name: SceneName, now: number): { initial: ClawtrateState; steps: 
       return { initial: { ...base, discovery: { ...base.discovery, partial: true } }, steps: [] };
     case "zero-tasks":
       return { initial: { ...base, tasksByBot: { ...base.tasksByBot, marlow: [] } }, steps: [] };
+    case "first-bot":
+    case "first-bot-zero":
+      return {
+        initial: {
+          ...base,
+          bots: name === "first-bot" ? base.bots.filter((bot) => bot.id === "main") : [],
+          tasksByBot: name === "first-bot" ? { main: [] } : {},
+          transcripts: {},
+        },
+        steps: [],
+      };
     case "protocol-mismatch":
       return {
         initial: withConnection(base, {
@@ -815,16 +828,28 @@ export function createFixtureBridge(
   const sentPictureAnswer = sentPictureAnswers(name);
   const accountParams = options.accounts ?? NO_ACCOUNT_PARAMS;
   const routineParams = options.routines ?? { state: "none" };
+  const firstBotScene = name === "first-bot" || name === "first-bot-zero";
   let state =
     fileParams.state === null
       ? initial
       : { ...initial, transcripts: withFileRuns(initial.transcripts, now, fileParams) };
   // Every scene with bots has the gateway's accounts; the address can give it more access.
-  if (state.bots.length > 0)
+  if (state.bots.length > 0 || firstBotScene)
     state = withAccess(
       {
         ...state,
-        accounts: fixtureAccounts(now, accountParams),
+        accounts: {
+          ...fixtureAccounts(now, accountParams),
+          ...(firstBotScene
+            ? {
+                modelsStatus: "ready",
+                readOn: {
+                  ...gatewayStamp(state.connection),
+                  connectedAt: state.connection.connectedAt,
+                },
+              }
+            : {}),
+        },
         routines: fixtureRoutines(now, routineParams),
       },
       accountParams,
@@ -1066,6 +1091,13 @@ export function createFixtureBridge(
     const account = accountCommand(command, () => state, setAnswer, accountParams, deferred);
     if (account) {
       sent.push(command);
+      if (firstBotScene && command.type === "createBot")
+        return account.then(async (result) => {
+          const created = result as BridgeResultFor<typeof command>;
+          if (created.missing.length === 0)
+            await railCommand({ type: "newMainTask", botId: created.botId }, () => state, set);
+          return created;
+        });
       return account;
     }
     const rail = railCommand(

@@ -384,7 +384,7 @@ export type BridgeCommand =
     }
   | { type: "dismissBotCreation" }
   /** Finish a bot whose creation is partial, by its id, on the gateway New bot was showing. */
-  | { type: "finishBot"; botId: string; stamp: GatewayStamp }
+  | { type: "finishBot"; botId: string; stamp: GatewayStamp; account?: string }
   /** A bot's account, model and fallbacks: `stamp` is where its settings were read. */
   | {
       type: "changeBotAccount";
@@ -1408,6 +1408,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         type: "finishBot",
         botId: botId(command.botId),
         stamp: gatewayStampOf(command.stamp),
+        ...(command.account === undefined ? {} : { account: profileId(command.account) }),
       };
     case "startSignIn":
       return {
@@ -2351,7 +2352,7 @@ class ViewerSession implements BridgeSession {
       case "dismissBotCreation":
         return client.dismissBotCreation();
       case "finishBot":
-        return client.finishBot(command.botId, command.stamp);
+        return client.finishBot(command.botId, command.stamp, command.account);
       case "changeBotAccount":
         return client.changeBotAccount(
           command.botId,

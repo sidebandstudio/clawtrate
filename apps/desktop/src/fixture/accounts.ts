@@ -1140,7 +1140,9 @@ export function accountCommand(
         provider: method.provider,
         label: method.label,
         flow: method.flow,
-        forBot: params.kept ? (command.botId ?? "otto") : "main",
+        forBot: params.kept
+          ? (command.botId ?? (get().bots.length === 1 ? get().bots[0]?.id : null) ?? "otto")
+          : "main",
         keptOnly: params.kept,
         stage: "starting",
         step: null,
@@ -1162,7 +1164,7 @@ export function accountCommand(
             error: "OpenClaw setup is already in progress; try again when it finishes.",
           });
         if (stage === "starting") return;
-        if (stage === "connected") {
+        if (stage === "connected" || stage === "reconnected") {
           // The person approves on the provider's page a moment later.
           signIn({
             stage: "waiting",
@@ -1178,7 +1180,25 @@ export function accountCommand(
               sensitive: false,
             },
           });
-          later(500, () => connected());
+          later(500, () => {
+            if (stage === "connected") return connected();
+            const connection = get().connection;
+            set({ ...get(), connection: { ...connection, status: "reconnecting" } });
+            signIn({ stage: "ended", step: null });
+            later(1_000, () => {
+              const connectedAt = (connection.connectedAt ?? Date.now()) + 1;
+              const state = get();
+              set({
+                ...state,
+                connection: { ...connection, connectedAt },
+                accounts: {
+                  ...state.accounts,
+                  readOn: { ...gatewayStamp(connection), connectedAt },
+                },
+              });
+              connected(true);
+            });
+          });
           return;
         }
         if (stage === "several") {
@@ -1445,6 +1465,13 @@ export function accountCommand(
           new Error("This change was made for another gateway, so nothing was sent."),
         );
       const name = command.name.trim() || "New bot";
+      const check =
+        command.account?.endsWith(":second") &&
+        (params.create === "account-unusable" || params.create === "account-unchecked")
+          ? params.create === "account-unusable"
+            ? "unusable"
+            : "unchecked"
+          : null;
       put((a) => ({
         ...a,
         creation: {
@@ -1455,6 +1482,7 @@ export function accountCommand(
           error: null,
           missing: [],
           uncertain: false,
+          ...(check ? { accountCheck: "checking" as const } : {}),
         },
       }));
       if (params.create === "slow") {
@@ -1478,10 +1506,26 @@ export function accountCommand(
             else resolve({ botId: "made-elsewhere", missing: [] });
             return;
           }
-          if (params.create === "failed" || params.create === "release-failed") {
+          if (
+            check ||
+            params.create === "failed" ||
+            params.create === "release-failed" ||
+            params.create === "uncertain"
+          ) {
             put((a) =>
               a.creation
-                ? { ...a, creation: { ...a.creation, status: "failed", error: "refused" } }
+                ? {
+                    ...a,
+                    creation: {
+                      ...a.creation,
+                      status: "failed",
+                      error: "refused",
+                      uncertain: params.create === "uncertain",
+                      ...(check && command.account
+                        ? { accountCheck: check, accountChecked: command.account }
+                        : {}),
+                    },
+                  }
                 : a,
             );
             reject(new Error("Could not create the bot."));
@@ -1728,7 +1772,7 @@ export function accountCommand(
       return undefined;
   }
 
-  function connected() {
+  function connected(recovered = false) {
     const current = accounts().signIn;
     if (!current) return;
     const id = `${current.provider}:second`;
@@ -1747,7 +1791,12 @@ export function accountCommand(
             ),
           ],
       signIn: a.signIn
-        ? { ...a.signIn, stage: "connected", step: null, result: result([id]) }
+        ? {
+            ...a.signIn,
+            stage: recovered ? "ended" : "connected",
+            step: null,
+            result: result([id]),
+          }
         : null,
     }));
   }
