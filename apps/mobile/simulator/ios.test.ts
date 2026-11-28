@@ -2116,15 +2116,22 @@ describe("the iOS app", () => {
       const farSince = Date.now();
       // The picture didn't load: what the front was asked and answered, and the app's reason.
       const whyNotLoaded = () => {
-        const reasons = appLog(Math.ceil((Date.now() - farSince) / 1000) + 30)
-          .split("\n")
-          .filter((line) => line.includes("[picture]"))
-          .map((line) => line.slice(line.indexOf("[picture]")));
+        let reasons: string[];
+        try {
+          reasons = appLog(Math.ceil((Date.now() - farSince) / 1000) + 30)
+            .split("\n")
+            .filter((line) => line.includes("[picture]"))
+            .map((line) => line.slice(line.indexOf("[picture]")));
+          if (reasons.length === 0) reasons = ["(none in the app's log)"];
+        } catch {
+          // A log that can't be read takes nothing from the failure or the front's requests.
+          reasons = ["(the app's log couldn't be read)"];
+        }
         return [
           "The protected front's requests:",
           describeFrontRequests(front!.requests),
           "The app's reason:",
-          ...(reasons.length > 0 ? reasons : ["(none in the app's log)"]),
+          ...reasons,
         ].join("\n");
       };
       try {
@@ -2134,7 +2141,9 @@ describe("the iOS app", () => {
           see({ id: "sent-picture", text: lineFor("moved.png") }),
         ]);
       } catch (error) {
-        if (!(await screenText()).includes(SENT_PICTURE_LINES.failed)) throw error;
+        // A driver that has stopped can't read the screen; the failure above still stands.
+        const shown = await screenText().catch(() => "");
+        if (!shown.includes(SENT_PICTURE_LINES.failed)) throw error;
         const why = whyNotLoaded();
         console.log(`F-557: the picture didn't load.\n${why}`);
         throw new Error(`${(error as Error).message}\n${why}`, { cause: error });
