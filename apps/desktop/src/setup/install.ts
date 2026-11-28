@@ -123,6 +123,12 @@ const STATUS_EVERY_MS = 2_000;
 const STATUS_RUN_MS = 30_000;
 const MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024;
 const DOWNLOAD_STALL_MS = 60_000;
+/**
+ * A download's whole time, which its chunks don't extend, as the app's own updates allow: the
+ * 512 MiB cap at about 300 KB/s, or this version's two archives together (OpenClaw's 111 MB and
+ * Node.js's 54 MB, fetched at once) over a link of about 0.75 Mbit/s.
+ */
+const DOWNLOAD_DEADLINE_MS = 30 * 60_000;
 /** `launchctl print` for a service its domain doesn't have. */
 const LAUNCHD_NO_SUCH_SERVICE = 113;
 
@@ -882,8 +888,8 @@ const SPACE_CODES = new Set(["ENOSPC", "EDQUOT"]);
 
 /**
  * Downloads `url` into a new private file, hashing as it goes: exactly the
- * pinned URL (a redirect is an error), status 200 only, within a size limit
- * and a stall limit, and exactly the length the response declared.
+ * pinned URL (a redirect is an error), status 200 only, within a size limit,
+ * a stall limit and a total deadline, and exactly the length the response declared.
  */
 export async function download(
   url: string,
@@ -891,6 +897,7 @@ export async function download(
   algorithm: "sha512" | "sha256",
   encoding: "base64" | "hex",
   signal?: AbortSignal,
+  deadlineMs = DOWNLOAD_DEADLINE_MS,
 ): Promise<Downloaded> {
   // A quit that came first: nothing is asked or written.
   if (signal?.aborted) return { ok: false, why: "network" };
@@ -903,11 +910,14 @@ export async function download(
     stall = setTimeout(stop, DOWNLOAD_STALL_MS);
   };
   touch();
+  // A body that trickles in under the stall limit still ends here.
+  const deadline = setTimeout(stop, deadlineMs);
   let response: Response;
   try {
     response = await fetch(url, { signal: abort.signal, redirect: "error" });
   } catch {
     if (stall) clearTimeout(stall);
+    clearTimeout(deadline);
     signal?.removeEventListener("abort", stop);
     return { ok: false, why: "network" };
   }
@@ -948,6 +958,7 @@ export async function download(
     return { ok: true, digest: hash.digest(encoding) };
   } finally {
     if (stall) clearTimeout(stall);
+    clearTimeout(deadline);
     signal?.removeEventListener("abort", stop);
   }
 }

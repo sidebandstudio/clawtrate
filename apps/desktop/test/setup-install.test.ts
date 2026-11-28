@@ -1366,6 +1366,28 @@ describe("F-502 F-503: downloads", () => {
       await new Promise<void>((done) => server.close(() => done()));
     }
   });
+
+  it("F-502: a download that keeps trickling in ends at its total deadline", async () => {
+    const dir = (await make()).root;
+    // A byte every 50 ms, without end: the stall timer is reset each time and never fires.
+    const server = createServer((_request, response) => {
+      response.writeHead(200);
+      const drip = setInterval(() => response.write("b"), 50);
+      response.on("close", () => clearInterval(drip));
+    });
+    await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+    const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/slow`;
+    try {
+      const result = await Promise.race([
+        download(url, join(dir, "slow"), "sha256", "hex", undefined, 400),
+        pause(5_000).then(() => "unsettled" as const),
+      ]);
+      expect(result).toEqual({ ok: false, why: "network" });
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((done) => server.close(() => done()));
+    }
+  }, 20_000);
 });
 
 describe("F-502: the runner ends what it started", () => {
