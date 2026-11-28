@@ -60,15 +60,13 @@ export async function scriptedProvider(
       const next = {
         ...current,
         proxy: { proxyUrl: base },
+        update: { ...current.update, checkOnStart: false },
         models: {
-          mode: "replace",
-          providers: { [account.provider]: accountProviders(port)[account.provider] },
-        },
-        agents: {
-          ...current.agents,
-          defaults: {
-            ...current.agents?.defaults,
-            model: { primary: `${account.provider}/${MODEL_ID}` },
+          ...current.models,
+          mode: "merge",
+          providers: {
+            ...current.models?.providers,
+            [account.provider]: accountProviders(port)[account.provider],
           },
         },
       };
@@ -77,7 +75,7 @@ export async function scriptedProvider(
       writeFileSync(staged, JSON.stringify(next, null, 2) + "\n", { flag: "wx", mode: 0o600 });
       renameSync(staged, configFile);
       note(
-        `Set the clawtrate profile's only model provider to ${account.provider}, with ${account.provider}/${MODEL_ID} as the default and the scripted server as its proxy.`,
+        `Advertised the scripted ${account.provider}/${MODEL_ID} model and set its loopback proxy. Kept the existing default model through the restart.`,
       );
     }
 
