@@ -56,7 +56,7 @@ export function gatewayProblem(
   };
 }
 
-/** The Gateway pane's words, then the Conversation section's (F-519). */
+/** The Gateway, Conversation and Advanced sections' words. */
 export const SETTINGS_WORDS = {
   title: "Settings",
   close: "Close settings",
@@ -74,6 +74,8 @@ export const SETTINGS_WORDS = {
   useAnother: "Use another gateway",
   conversation: "Conversation",
   channelChats: "Show external channel chats",
+  advanced: "Advanced",
+  gatewayBot: "Show the gateway's own bot",
 } as const;
 
 /** The desktop's note under the switch, in three parts; the middle one names a gateway setting. */
@@ -82,6 +84,30 @@ export const CHANNEL_CHATS_NOTE = [
   "session.dmScope",
   " setting gives each channel conversation its own session, those messages still appear there.",
 ] as const;
+
+/** Settings binds these device preferences to core state and bridge commands. */
+export const DEVICE_SWITCHES = [
+  {
+    id: "channel-chats",
+    heading: SETTINGS_WORDS.conversation,
+    headingId: "settings-conversation",
+    label: SETTINGS_WORDS.channelChats,
+    note: CHANNEL_CHATS_NOTE,
+    stateKey: "showChannelChats",
+    command: "setShowChannelChats",
+  },
+  {
+    id: "gateway-bot",
+    heading: SETTINGS_WORDS.advanced,
+    headingId: "settings-advanced",
+    label: SETTINGS_WORDS.gatewayBot,
+    note: "The gateway's own bot handles channel messages, other tools' calls and scheduled runs that name no bot. While the switch is off and you have another bot, the gateway's own bot stays off Home unless it is waiting on you.",
+    stateKey: "showGatewayBot",
+    command: "setShowGatewayBot",
+  },
+] as const;
+
+export type DeviceSwitch = (typeof DEVICE_SWITCHES)[number];
 
 /**
  * What the pane offers: Reconnect from Offline or Disconnected, Disconnect

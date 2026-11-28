@@ -165,8 +165,7 @@ function Screens() {
       ]}
       {show.list === "home" && (
         <Settings
-          connection={state.connection}
-          showChannelChats={state.showChannelChats === true}
+          state={state}
           visible={settingsOpen}
           onClose={() => setSettingsOpen(false)}
           onForget={another}

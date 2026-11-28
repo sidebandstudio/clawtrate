@@ -21,6 +21,7 @@ export const JOBS: readonly (readonly string[])[] = [
   ],
   [
     "F-015 F-017 F-019 F-562:", // 5
+    "F-562:",
     "F-427:", // 6
     "F-063 F-065:", // 24, waits ten minutes after its first message for a stamp
     "F-020 F-323:", // 18

@@ -754,6 +754,35 @@ describe("the iOS app", () => {
     await shoot("home");
   });
 
+  it("F-562: on iPhone, Settings Advanced shows and hides the gateway's own bot on Home on a read-only connection", async () => {
+    const { defaultId } = await gatewayCall<{ defaultId: string }>("agents.list", {});
+    const own = { id: `bot-${lit(defaultId)}` };
+    const setting = { id: "gateway-bot", text: lit(SETTINGS_WORDS.gatewayBot) };
+    const set = (on: boolean): Step[] => [
+      tap({ id: "settings-button" }),
+      waitFor({ id: "settings" }, 20_000),
+      scrollTo({ id: "gateway-bot-note" }, "DOWN"),
+      see({ id: "settings-advanced", text: lit(SETTINGS_WORDS.advanced) }),
+      see({ ...setting, checked: !on }),
+      tap(setting),
+      waitFor({ ...setting, checked: on }, 20_000),
+      notSee({ id: "gateway-bot-error" }),
+      tap({ id: "settings-close" }),
+      waitFor({ id: "home" }, 20_000),
+    ];
+
+    const connections = proxy.connections;
+    await steps("gateway-bot-show", [
+      waitFor({ id: "home" }),
+      notSee(own),
+      ...set(true),
+      waitFor(own),
+    ]);
+    await shoot("home-with-gateway-bot");
+    await steps("gateway-bot-hide", [...set(false), waitGone(own)]);
+    expect(proxy.connections).toBe(connections);
+  });
+
   it("F-427: on iPhone, tapping a bot opens its task list, tapping a task opens its chat, Back returns to the task list, and Back again returns to Home, for a bot with one task as for one with many", async () => {
     const otto = (await sessions()).filter((r) => r.agentId === "otto");
     await steps("bot-tasks", [
@@ -1361,7 +1390,7 @@ describe("the iOS app", () => {
     const settings = (on: boolean, to?: boolean): Step[] => [
       tap({ id: "settings-button" }),
       waitFor({ id: "settings" }, 20_000),
-      scrollTo({ id: "licenses-open" }, "DOWN"),
+      scrollTo({ id: "channel-chats-note" }, "DOWN"),
       see({ id: "settings-conversation", text: lit(SETTINGS_WORDS.conversation) }),
       see({ id: "channel-chats", text: lit(SETTINGS_WORDS.channelChats), checked: on }),
       see({ id: "channel-chats-note", text: `${lit("Off by default.")} .*` }),
@@ -1387,7 +1416,7 @@ describe("the iOS app", () => {
     await steps("channel-chats-settings", [
       tap({ id: "settings-button" }),
       waitFor({ id: "settings" }, 20_000),
-      scrollTo({ id: "licenses-open" }, "DOWN"),
+      scrollTo({ id: "channel-chats-note" }, "DOWN"),
       see({ id: "channel-chats", checked: false }),
     ]);
     await shoot("settings-channel-chats");
