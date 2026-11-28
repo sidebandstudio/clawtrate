@@ -52,6 +52,7 @@ let active = stepResults[0]!;
 let latest: Element[] = [];
 let screenKey = "";
 let child: ChildProcess | undefined;
+let appData: string | undefined;
 let launchError: Error | undefined;
 let provider: Server | undefined;
 
@@ -200,6 +201,7 @@ function launch() {
   const scratch = mkdtempSync(join(process.env.RUNNER_TEMP!, "first-run-data-"));
   const data = join(scratch, "Clawtrate App Data");
   mkdirSync(data, { mode: 0o700 });
+  appData = data;
   const env = appEnv();
   // CI and debugger switches classify an app launch as sandboxed. Drive its
   // production window via the OS, with no debugging port and no setup stand-ins.
@@ -285,7 +287,8 @@ try {
     return "OpenClaw granted all six operator scopes.";
   });
   await step(4, async () => {
-    provider = await scriptedProvider(profile);
+    if (!appData) throw new Error("The packaged app has no data folder for this run.");
+    provider = await scriptedProvider(profile, appData);
     await readWindow();
     return heading() ?? "The scripted model is configured on loopback.";
   });
@@ -297,15 +300,23 @@ try {
     const firstBotAction = () =>
       buttons().find(
         ({ role, text }) =>
-          role === "AXButton" && /^(?:Make|Create|Start) (?:your )?first bot[.…]?$/i.test(text),
+          role === "AXButton" &&
+          /^(?:Create bot|(?:Make|Create|Start) (?:your )?first bot)[.…]?$/i.test(text),
       );
+    const getStarted = () => hasText(/^Set up your first bot$/) && hasButton("Get started");
     await waitFor(
       "a first conversation or a first-bot button",
-      () => composer() || !!firstBotAction(),
+      () => composer() || !!firstBotAction() || getStarted(),
       60,
     );
+    if (getStarted()) {
+      await screenshot("06-first-bot-welcome.png");
+      await press("Get started");
+      await waitFor("the first-bot creation button", () => !!firstBotAction());
+    }
     const action = firstBotAction();
     if (action) {
+      await screenshot("06-first-bot-setup.png");
       await press(action.text);
       await waitFor("the first conversation's composer", composer);
     }

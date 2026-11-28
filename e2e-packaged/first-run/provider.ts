@@ -1,14 +1,20 @@
+import { spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { lstatSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import type { AddressInfo } from "node:net";
-import { join } from "node:path";
-import { MODEL_ID, MODEL_REF, PROVIDER_ID } from "../../tools/dev-gateway/src/env.ts";
+import { dirname, join } from "node:path";
+import {
+  accountProviders,
+  saveAccountCommand,
+  SCRIPTED_ACCOUNTS,
+} from "../../tools/dev-gateway/src/accounts.ts";
+import { MODEL_ID } from "../../tools/dev-gateway/src/env.ts";
 import { startFakeProvider } from "../../tools/dev-gateway/src/fake-provider.ts";
 
 export const FIRST_MESSAGE = "Hello from the packaged first-run check.";
 export const SCRIPTED_REPLY = "This is the scripted development model.";
 
-export async function scriptedProvider(profile: string) {
+export async function scriptedProvider(profile: string, appData: string) {
   const configFile = join(profile, "openclaw.json");
   if (!lstatSync(profile).isDirectory() || !lstatSync(configFile).isFile()) {
     throw new Error("The installed profile has no regular gateway config.");
@@ -17,6 +23,7 @@ export async function scriptedProvider(profile: string) {
   if (config.gateway?.mode !== "local" || config.gateway?.bind !== "loopback") {
     throw new Error("The installed gateway is not configured for loopback.");
   }
+  const account = SCRIPTED_ACCOUNTS[0]!;
 
   const server = startFakeProvider({ port: 0 });
   try {
@@ -30,30 +37,13 @@ export async function scriptedProvider(profile: string) {
       proxy: { proxyUrl: base },
       models: {
         mode: "replace",
-        providers: {
-          [PROVIDER_ID]: {
-            baseUrl: `${base}/v1`,
-            api: "openai-completions",
-            apiKey: "scripted-dev-provider",
-            models: [
-              {
-                id: MODEL_ID,
-                name: "Scripted dev model",
-                reasoning: true,
-                input: ["text"],
-                cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                contextWindow: 128000,
-                maxTokens: 8192,
-              },
-            ],
-          },
-        },
+        providers: { [account.provider]: accountProviders(port)[account.provider] },
       },
       agents: {
         ...config.agents,
         defaults: {
           ...config.agents?.defaults,
-          model: { primary: MODEL_REF },
+          model: { primary: `${account.provider}/${MODEL_ID}` },
         },
       },
     };
@@ -61,6 +51,18 @@ export async function scriptedProvider(profile: string) {
     const staged = join(profile, ".first-run-config.json");
     writeFileSync(staged, JSON.stringify(next, null, 2) + "\n", { flag: "wx", mode: 0o600 });
     renameSync(staged, configFile);
+
+    // Use the same fake account as the development gateway. Its key takes
+    // the gateway's normal save path, so a new bot sees the shared account.
+    const { args, stdin } = saveAccountCommand(account);
+    const installed = join(appData, "openclaw", "bin", "openclaw");
+    const saved = spawnSync(installed, ["--profile", "clawtrate", ...args], {
+      env: { HOME: dirname(profile), PATH: "/usr/bin:/bin:/usr/sbin:/sbin" },
+      input: stdin,
+      stdio: ["pipe", "ignore", "ignore"],
+      timeout: 60_000,
+    });
+    if (saved.status !== 0) throw new Error("OpenClaw did not save the scripted account.");
     return server;
   } catch (error) {
     server.close();
