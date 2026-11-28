@@ -26,6 +26,7 @@ import { callGateway, openInstance, openOperator } from "../../../tools/dev-gate
 import { IOS_STREAM_HOLD_FILE, parseJsonOutput } from "../../../tools/dev-gateway/src/env.ts";
 import type { OperatorSession } from "../../../tools/dev-gateway/src/operator.ts";
 import { decodePng } from "../../../tools/brand/src/png.ts";
+import { stampTime } from "../../../packages/ui/src/format.ts";
 
 const run = promisify(execFile);
 const REPO = join(import.meta.dirname, "../../..");
@@ -130,6 +131,8 @@ export type Selector = { id?: string; text?: string; [key: string]: unknown };
 
 /** Regular expression for a literal text: Maestro matches text as a pattern. */
 export const lit = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/** A stamp's words as a pattern: the clock's space may be any space. */
+export const stampPattern = (at: number) => lit(stampTime(at)).replace(/\s/g, ".");
 
 export const see = (selector: Selector | string): Step => ({ assertVisible: selector });
 export const notSee = (selector: Selector | string): Step => ({ assertNotVisible: selector });

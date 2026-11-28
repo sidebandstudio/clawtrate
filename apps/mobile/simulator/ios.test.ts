@@ -43,7 +43,7 @@ import { ENSEMBLE } from "../src/presentation/ensemble.ts";
 import { noTasksBody, TASK_WORDS } from "../src/presentation/summary.ts";
 import { CONVERSATION_WORDS } from "../src/presentation/conversation-words.ts";
 import { SENT_PICTURE_LINES, sentPictureAlt } from "../src/presentation/sent-files.ts";
-import { rowTime, stampTime } from "../../../packages/ui/src/format.ts";
+import { rowTime } from "../../../packages/ui/src/format.ts";
 import { addressWords, SETTINGS_WORDS } from "../src/presentation/gateway-state.ts";
 import { WebSocket, WebSocketServer } from "ws";
 import { decodePng, encodePng } from "../../../tools/brand/src/png.ts";
@@ -92,6 +92,7 @@ import {
   scrollTo,
   see,
   shoot,
+  stampPattern,
   steps,
   switcherSnapshot,
   tap,
@@ -188,8 +189,6 @@ async function creaturesAtFoot(screenId: string): Promise<boolean> {
 }
 
 const hostOf = (url: string) => url.replace(/^ws:\/\//, "");
-/** A stamp's words as a pattern: the clock's space may be any space. */
-const stampPattern = (at: number) => lit(stampTime(at)).replace(/\s/g, ".");
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function expectSwitcherCover({
