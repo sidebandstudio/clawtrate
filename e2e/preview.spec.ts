@@ -1969,7 +1969,8 @@ test("F-071: / lists a skill the person saved to their own library, as theirs, i
   const slug = `tide-table-${randomBytes(3).toString("hex")}`;
   let saved: { entry: { skillId: string; name: string; revision: string } } | null = null;
   try {
-    // A task that started before the save: the gateway has not given it the skill.
+    // A task that started before the save: the gateway has not given it the skill, so it is
+    // offered there to add (#889).
     const before = await personTask("Before the skill");
     saved = (await person.request("skills.library.save", {
       expectedRevision: null,
@@ -1986,7 +1987,7 @@ test("F-071: / lists a skill the person saved to their own library, as theirs, i
     await composer(page).click();
     await page.keyboard.type("/");
     await expect(rows.first()).toBeVisible({ timeout: 30_000 });
-    await expect(listed(rows)).toHaveCount(0);
+    await expect(listed(rows).locator(".composer-menu-tag")).toHaveText("Add your skill");
     await page.keyboard.press("Escape");
     await composer(page).fill("");
 

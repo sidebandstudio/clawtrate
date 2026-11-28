@@ -245,9 +245,9 @@ test.describe("the composer's menus", () => {
     await field(page).click();
     await page.keyboard.type("/moon");
     await expect(row.locator(".composer-menu-tag")).toHaveText("Add your skill");
-    // Undo again does nothing more.
+    // Undo again does nothing more: a press on the spent button sends nothing.
     await page.keyboard.press("Escape");
-    await line.getByRole("button", { name: /^Undo/ }).click();
+    await line.getByRole("button", { name: /^Undo/ }).click({ force: true });
     expect((await commands()).filter((type) => type === "detachLibrarySkill")).toHaveLength(1);
   });
 
@@ -277,6 +277,54 @@ test.describe("the composer's menus", () => {
     );
     await expect(page.getByTestId("token-chip")).toHaveCount(0);
     await expect(page.getByTestId("library-skill-line")).toHaveCount(0);
+  });
+
+  test("F-071: Undo before the message is sent takes the added skill's chip out with it (#889)", async ({
+    page,
+  }) => {
+    await open(page);
+    await field(page).click();
+    await page.keyboard.type("/moon");
+    await page.keyboard.press("Enter");
+    const line = page.getByTestId("library-skill-line");
+    await expect(line).toContainText("Added moon-phase to this task.");
+    await expect(page.getByTestId("token-chip")).toHaveText(/Your skill\s*moon-phase/);
+    await line.getByRole("button", { name: "Undo: Added moon-phase to this task" }).click();
+    await expect(line.getByRole("status")).toHaveText("Undone. moon-phase is out of this task.");
+    // Its chip would ask for a skill the task no longer has.
+    await expect(page.getByTestId("token-chip")).toHaveCount(0);
+  });
+
+  test("F-071: a command chosen while the skill is being added keeps its place; the skill is still added (#889)", async ({
+    page,
+  }) => {
+    await open(page);
+    await page.evaluate(() => {
+      const w = window as unknown as {
+        clawtrateFixture: { invoke: (c: unknown) => Promise<unknown> };
+        releaseAttach: () => void;
+      };
+      const fixture = w.clawtrateFixture;
+      const invoke = fixture.invoke.bind(fixture);
+      const held = new Promise<void>((resolve) => (w.releaseAttach = resolve));
+      fixture.invoke = (command: unknown) =>
+        (command as { type: string }).type === "attachLibrarySkill"
+          ? held.then(() => invoke(command))
+          : invoke(command);
+    });
+    await field(page).click();
+    await page.keyboard.type("/moon");
+    await page.keyboard.press("Enter");
+    const line = page.getByTestId("library-skill-line");
+    await expect(line).toContainText("Adding moon-phase to this task…");
+    await page.keyboard.type("/stat");
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("token-chip")).toHaveText(/\/status/);
+    await page.evaluate(() => (window as unknown as { releaseAttach: () => void }).releaseAttach());
+    await expect(line).toContainText("Added moon-phase to this task.");
+    // One skill or command goes with a message: the one chosen meanwhile stays.
+    await expect(page.getByTestId("token-chip")).toHaveCount(1);
+    await expect(page.getByTestId("token-chip")).toHaveText(/\/status/);
   });
 
   test("F-070: typing @ lists the bots and the gateway's routines, tagged, and puts the chosen name where it was typed", async ({

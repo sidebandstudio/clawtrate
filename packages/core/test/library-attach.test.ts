@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { createBridgeSession } from "../src/bridge.ts";
+import { createBridgeSession, parseBridgeCommand } from "../src/bridge.ts";
 import type { LibrarySkill } from "../src/library-attach.ts";
 import { KEY, openTask, stampOn } from "./client-harness.ts";
 import { deferred, GatewayError, until, type FakeGateway } from "./fake-gateway.ts";
@@ -354,6 +354,32 @@ describe("Undo of an added library skill (#889)", () => {
       );
     } finally {
       client.stop();
+    }
+  });
+});
+
+describe("the bridge's add and Undo commands (#889)", () => {
+  it("F-071: carry only a library entry's id, a revision and a slug of the menu's length", () => {
+    const stamp = { gatewayId: "gw-1", target: 3 };
+    for (const type of ["attachLibrarySkill", "detachLibrarySkill"] as const) {
+      expect(parseBridgeCommand({ type, key: KEY, skill: { ...moon, extra: 1 }, stamp })).toEqual({
+        type,
+        key: KEY,
+        skill: moon,
+        stamp,
+      });
+      for (const skill of [
+        { ...moon, skillId: "not-an-id" },
+        { ...moon, revision: "abc" },
+        { ...moon, slug: " " },
+        { ...moon, slug: "m".repeat(121) },
+        { skillId: SKILL_ID, revision: SHOWN },
+        null,
+      ])
+        expect(() => parseBridgeCommand({ type, key: KEY, skill, stamp })).toThrow(
+          /invalid library skill|library skill/,
+        );
+      expect(() => parseBridgeCommand({ type, key: KEY, skill: moon })).toThrow();
     }
   });
 });
