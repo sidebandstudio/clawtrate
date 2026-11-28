@@ -721,6 +721,15 @@ const SYSTEM_ROW_TEXT: Record<string, string> = {
   reset: "Session was reset",
 };
 
+/** The system line and disclosure copy for a turn the gateway started. */
+export const GATEWAY_EVENT_WORDS = {
+  started: "The gateway started a turn by itself",
+  resumed: "The gateway resumed an earlier turn by itself",
+  label: "Text that came with it",
+  attribution:
+    "Written by whatever started this turn (a command, a bot or another app), not by the gateway or Clawtrate.",
+} as const;
+
 /**
  * A turn the gateway wrote itself: a user row whose `provenance.kind` is
  * `internal_system` (OpenClaw 2026.10.6 and 2026.11.10, `input-provenance`). It shows
@@ -740,9 +749,9 @@ function gatewayTurn(
   if (provenance?.kind !== "internal_system") return null;
   const source = str(provenance.sourceTool)?.toLowerCase();
   if (source === "main_session_restart_recovery" || (events && source === "restart"))
-    return { line: "The gateway resumed an earlier turn by itself", event: null };
+    return { line: GATEWAY_EVENT_WORDS.resumed, event: null };
   return {
-    line: "The gateway started a turn by itself",
+    line: GATEWAY_EVENT_WORDS.started,
     event: events && isSessionEventRow(message) ? eventText(textOf(message.content)) : null,
   };
 }
