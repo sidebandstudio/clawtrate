@@ -250,6 +250,26 @@ async function createAndReply(page: Page, dialog: Locator, provider: string, acc
 }
 
 /**
+ * The gateway has said the sheet's sign-in is done (its credential is saved), or the account is
+ * already read back: the stages can go by between two looks.
+ */
+async function signInDone(run: FirstRun) {
+  await expect
+    .poll(
+      () => {
+        const accounts = run.latest()?.accounts;
+        return (
+          /^(checking|connected|several|refreshed|unverified)$/.test(
+            accounts?.signIn?.stage ?? "",
+          ) || (accounts?.accounts.length ?? 0) > 0
+        );
+      },
+      { timeout: 60_000 },
+    )
+    .toBe(true);
+}
+
+/**
  * Restart the gateway for real while the sheet watches, optionally saving an account by the
  * gateway's own command while it is down. The sheet shows its waiting line, the gateway comes back
  * as a new process, and the app reconnects as soon as it can, during the gateway's startup, as the
@@ -395,7 +415,10 @@ test("F-504: an account saved on the gateway while first setup is open moves it 
       timeout: 45_000,
     });
     await expect(dialog.getByRole("button", { name: "Show more" })).toHaveCount(0);
-    await expect(dialog.getByRole("button", { name: "Create bot" })).toBeEnabled();
+    // A gateway still starting may take a while to answer the account read.
+    await expect(dialog.getByRole("button", { name: "Create bot" })).toBeEnabled({
+      timeout: 45_000,
+    });
     await createAndReply(page, dialog, provider, "acme:work");
   } finally {
     expect(cleanUp(RECORDS, record, resetInstance)).toEqual([]);
@@ -412,11 +435,16 @@ test("F-504: first setup reaches its bot when the gateway restarts right after a
     const { dialog, provider } = run;
     await chooseAcmeDeviceCode(dialog);
     await answerCode(dialog, provider, "approve", "first");
+    // Right after the gateway finishes the sign-in, before or while the sheet reads it back.
+    await signInDone(run);
     await restartWhileOpen(run, page);
     await expect(dialog.getByRole("heading", { name: "Make your first bot" })).toBeVisible({
       timeout: 45_000,
     });
-    await expect(dialog.getByRole("button", { name: "Create bot" })).toBeEnabled();
+    // A gateway still starting may take a while to answer the account read.
+    await expect(dialog.getByRole("button", { name: "Create bot" })).toBeEnabled({
+      timeout: 45_000,
+    });
     await createAndReply(page, dialog, provider, "acme:first");
   } finally {
     expect(cleanUp(RECORDS, record, resetInstance)).toEqual([]);
@@ -436,11 +464,15 @@ test("F-504: first setup reaches its bot when the gateway restarts right after a
     await dialog.getByTestId("api-key").fill("clawtrate-dev-key.acme.typed");
     await dialog.getByRole("button", { name: "Save key" }).click();
     await expect(dialog.getByTestId("api-key")).toHaveCount(0, { timeout: 30_000 });
+    await signInDone(run);
     await restartWhileOpen(run, page);
     await expect(dialog.getByRole("heading", { name: "Make your first bot" })).toBeVisible({
       timeout: 45_000,
     });
-    await expect(dialog.getByRole("button", { name: "Create bot" })).toBeEnabled();
+    // A gateway still starting may take a while to answer the account read.
+    await expect(dialog.getByRole("button", { name: "Create bot" })).toBeEnabled({
+      timeout: 45_000,
+    });
     await createAndReply(page, dialog, provider, "acme:typed");
   } finally {
     expect(cleanUp(RECORDS, record, resetInstance)).toEqual([]);
