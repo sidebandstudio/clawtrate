@@ -1,4 +1,14 @@
-import { describe, expect, it } from "vitest";
+import {
+  mkdtempSync,
+  readdirSync,
+  readlinkSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   ALLOWED_TOOLS,
   CODING_AGENT_SCRIPT,
@@ -8,7 +18,15 @@ import {
   expectedFinalText,
   sandboxProblems,
 } from "../src/cli.ts";
-import { openclawEnv, PASSTHROUGH_ENV, providerEnv } from "../src/env.ts";
+import {
+  gatewayPath,
+  nodeLinkDir,
+  openclawEnv,
+  PASSTHROUGH_ENV,
+  providerEnv,
+  STAND_INS_ENV,
+  SYSTEM_PATH,
+} from "../src/env.ts";
 import { SEED_BOTS } from "../src/seed-data.ts";
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
@@ -269,6 +287,7 @@ describe("child process environment", () => {
     const env = openclawEnv(shell);
     const allowed = new Set<string>([
       ...PASSTHROUGH_ENV,
+      "PATH",
       "HOME",
       "OPENCLAW_PROFILE",
       "OPENCLAW_STATE_DIR",
@@ -304,7 +323,54 @@ describe("child process environment", () => {
   });
 
   it("gives the scripted provider nothing beyond the allowlist", () => {
-    expect(providerEnv(shell)).toEqual({ PATH: "/usr/bin", LANG: "en_US.UTF-8" });
+    expect(providerEnv(shell)).toEqual({ PATH: SYSTEM_PATH.join(":"), LANG: "en_US.UTF-8" });
+  });
+});
+
+describe("a gateway's PATH (#933)", () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+  const temp = () => {
+    const dir = mkdtempSync(join(tmpdir(), "clawtrate-path-"));
+    dirs.push(dir);
+    return dir;
+  };
+  const shell = { PATH: "/Users/someone/.local/bin:/opt/homebrew/bin:/usr/bin", LANG: "C" };
+
+  it("is the system's folders and the gateway's Node, never the caller's PATH", () => {
+    expect(openclawEnv(shell).PATH).toBe(SYSTEM_PATH.join(":"));
+    expect(providerEnv(shell).PATH).toBe(SYSTEM_PATH.join(":"));
+    const instance = { name: "alpha", stateDir: "/h/.x", gatewayPort: 19240 };
+    expect(openclawEnv(shell, instance, "/tool/.run/path/abc").PATH).toBe(
+      ["/tool/.run/path/abc", ...SYSTEM_PATH].join(":"),
+    );
+    expect(openclawEnv({ LANG: "C" }).PATH).toBe(SYSTEM_PATH.join(":"));
+  });
+
+  it("puts a test's stand-ins first, only from a folder inside the temporary folder", () => {
+    const standIns = temp();
+    expect(gatewayPath({ ...shell, [STAND_INS_ENV]: standIns }, "/n")).toBe(
+      [realpathSync(standIns), "/n", ...SYSTEM_PATH].join(":"),
+    );
+    expect(() => gatewayPath({ [STAND_INS_ENV]: "/usr/local/bin" })).toThrow(
+      /must name a folder inside/,
+    );
+    expect(() => gatewayPath({ [STAND_INS_ENV]: tmpdir() })).toThrow(/must name a folder inside/);
+  });
+
+  it("gives the gateway its Node through a folder that holds nothing else", () => {
+    const root = temp();
+    const bin = temp();
+    const node = join(bin, "node");
+    writeFileSync(node, "");
+    writeFileSync(join(bin, "claude"), "");
+    const dir = nodeLinkDir(node, root);
+    expect(readdirSync(dir)).toEqual(["node"]);
+    expect(readlinkSync(join(dir, "node"))).toBe(realpathSync(node));
+    // The same Node again keeps its folder.
+    expect(nodeLinkDir(node, root)).toBe(dir);
   });
 });
 

@@ -11,9 +11,10 @@ import {
   type StdioOptions,
 } from "node:child_process";
 import type { Writable } from "node:stream";
-import { realpathSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { createHash } from "node:crypto";
+import { mkdirSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync } from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { OPENCLAW_VERSION, openclawProgram, type Program } from "./pinned.ts";
 import type { OpenclawVersion } from "./versions.ts";
@@ -76,15 +77,66 @@ export function assertDevStateDir(path: string, home: string = homedir()): void 
 }
 
 /** Variables passed through from the caller's shell. Everything else is dropped. */
-export const PASSTHROUGH_ENV = ["PATH", "TMPDIR", "LANG", "LC_ALL", "TZ", "USER"] as const;
+export const PASSTHROUGH_ENV = ["TMPDIR", "LANG", "LC_ALL", "TZ", "USER"] as const;
 
-function passthrough(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+/**
+ * The computer's own program folders: the only part of its `PATH` a gateway gets (#933). OpenClaw
+ * asks an agent tool it finds on `PATH` for its sign-in, so a folder a person installs tools into
+ * (`~/.local/bin`, Homebrew's) never reaches a gateway, nor anything the gateway starts.
+ */
+export const SYSTEM_PATH = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"] as const;
+
+/**
+ * The one way a folder of the caller's reaches a gateway's `PATH`: a test's stand-in programs. It
+ * must be a folder inside the computer's temporary folder.
+ */
+export const STAND_INS_ENV = "DEV_GATEWAY_STAND_INS";
+
+/** The stand-ins folder a test asked for, checked; or null. */
+export function standInsDir(source: NodeJS.ProcessEnv): string | null {
+  const asked = source[STAND_INS_ENV];
+  if (!asked) return null;
+  const dir = realpathSync(resolve(asked));
+  const temp = realpathSync(tmpdir());
+  if (!dir.startsWith(temp + sep) || !statSync(dir).isDirectory())
+    throw new Error(`${STAND_INS_ENV} must name a folder inside ${temp}`);
+  return dir;
+}
+
+/**
+ * A folder holding one link, `node`, to the Node a gateway runs on: for a program that finds Node
+ * by name, without the rest of the folder Node is installed in.
+ */
+export function nodeLinkDir(node: string, root: string = RUN_DIR): string {
+  const target = realpathSync(node);
+  const dir = join(root, "path", createHash("sha256").update(target).digest("hex").slice(0, 12));
+  const link = join(dir, "node");
+  mkdirSync(dir, { recursive: true });
+  let current: string | null = null;
+  try {
+    current = readlinkSync(link);
+  } catch {
+    // No link yet.
+  }
+  if (current !== target) {
+    if (current !== null) rmSync(link, { force: true });
+    symlinkSync(target, link);
+  }
+  return dir;
+}
+
+/** A gateway's `PATH`: a test's stand-ins, the folder with its Node, the system's folders. */
+export function gatewayPath(source: NodeJS.ProcessEnv, nodeDir: string | null = null): string {
+  return [standInsDir(source), nodeDir, ...SYSTEM_PATH].filter(Boolean).join(":");
+}
+
+function passthrough(source: NodeJS.ProcessEnv, nodeDir: string | null): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const key of PASSTHROUGH_ENV) {
     const value = source[key];
     if (value) env[key] = value;
   }
-  env.PATH ??= "/usr/bin:/bin";
+  env.PATH = gatewayPath(source, nodeDir);
   return env;
 }
 
@@ -100,9 +152,10 @@ export function openclawEnv(
     stateDir: devStateDir(),
     gatewayPort: GATEWAY_PORT,
   },
+  nodeDir: string | null = null,
 ): NodeJS.ProcessEnv {
   return {
-    ...passthrough(source),
+    ...passthrough(source, nodeDir),
     ...(instance.name !== null && source.FS_SAFE_NATIVE_MODE === "require"
       ? { FS_SAFE_NATIVE_MODE: "require" }
       : {}),
@@ -121,8 +174,8 @@ export function providerEnv(
   port?: number,
 ): NodeJS.ProcessEnv {
   return port === undefined
-    ? passthrough(source)
-    : { ...passthrough(source), SCRIPTED_PROVIDER_PORT: String(port) };
+    ? passthrough(source, null)
+    : { ...passthrough(source, null), SCRIPTED_PROVIDER_PORT: String(port) };
 }
 
 /** The instance's profile options first; callers may never choose a profile themselves. */
@@ -202,6 +255,17 @@ export class OpenclawRunner {
     return this.program;
   }
 
+  /**
+   * The folder with the Node the gateway runs on: the pinned program's own Node, or, for an
+   * `OPENCLAW_BIN` program that may find Node by name, `OPENCLAW_NODE` or this tool's Node.
+   */
+  private nodeDir(): string {
+    const program = this.openclaw();
+    const node =
+      program.args.length > 0 ? program.command : (process.env.OPENCLAW_NODE ?? process.execPath);
+    return nodeLinkDir(node);
+  }
+
   /** The OpenClaw version this runner's program is, which the gateway it starts runs. */
   openclawVersion(): OpenclawVersion {
     return this.openclaw().version;
@@ -242,7 +306,7 @@ export class OpenclawRunner {
       stateDir: this.stateDir,
       gatewayPort: this.gatewayPort(),
     };
-    return { cwd: this.stateDir, env: openclawEnv(process.env, instance) };
+    return { cwd: this.stateDir, env: openclawEnv(process.env, instance, this.nodeDir()) };
   }
 
   /** Run an OpenClaw CLI command and wait for it. `input` is written to its stdin. */

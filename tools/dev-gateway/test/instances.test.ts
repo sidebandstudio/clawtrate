@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { join } from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { devConfig, list, prune, reset, sandboxProblems, start, stop } from "../src/cli.ts";
-import { guardArgs, OpenclawRunner, openclawEnv, providerEnv } from "../src/env.ts";
+import { guardArgs, OpenclawRunner, openclawEnv, providerEnv, SYSTEM_PATH } from "../src/env.ts";
 import {
   INSTANCE_ENV,
   instanceFromStateDirName,
@@ -290,7 +290,7 @@ describe("per-instance folders, markers and the spawn boundary", () => {
     );
     expect(env.OPENCLAW_PROFILE).toBe("clawtrate-dev-alpha");
     expect(providerEnv(shell, 19250)).toEqual({
-      PATH: "/usr/bin",
+      PATH: SYSTEM_PATH.join(":"),
       SCRIPTED_PROVIDER_PORT: "19250",
     });
   });
