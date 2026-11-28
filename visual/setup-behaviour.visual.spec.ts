@@ -229,14 +229,49 @@ test("Another computer leads to Advanced until reaching it over SSH is built", a
   await expect(page.getByPlaceholder("Gateway address")).toBeVisible();
 });
 
-test("On Windows, This computer leads to the Windows card, which runs nothing and offers Advanced", async ({
-  page,
-}) => {
-  await openFixture(page, "setup=windows", "light");
-  await expect(page.getByRole("heading", { name: "Use Advanced on Windows" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Use Advanced" })).toBeVisible();
-  await expect(page.getByRole("button", { name: "Use another computer" })).toBeVisible();
-});
+// No trace for F-517: a failing run's trace keeps the full address of each refused request.
+const untraced = test.extend({ trace: "off" });
+
+untraced(
+  "F-517: until Clawtrate sets OpenClaw up on Windows, the Windows card offers no install, says why, links OpenClaw's own instructions, and its Advanced starts nothing",
+  async ({ page, context, baseURL }) => {
+    // The first hop of any HTTP request from this context to an origin other than the fixture's
+    // (scheme, host and port) is refused and counted. Routing doesn't see a redirect's next hop or
+    // WebSockets, nor anything the host does. What the host is asked to do shows in its commands.
+    const fixture = new URL(baseURL!).origin;
+    let refused = 0;
+    await context.route(
+      (url) => url.origin !== fixture,
+      (route) => {
+        refused += 1;
+        return route.abort();
+      },
+    );
+    await openFixture(page, "setup=windows", "light");
+    const panel = page.getByTestId("setup");
+    await expect(panel.getByRole("heading", { name: "Use Advanced on Windows" })).toBeVisible();
+    await expect(panel.getByRole("button")).toHaveText([
+      "Back",
+      "Use Advanced",
+      "Use another computer",
+    ]);
+    const why = panel.getByText(/doesn't set OpenClaw up on Windows/);
+    await expect(why).toBeVisible();
+    await expect(why).toContainText("Node.js");
+    await expect(why).toContainText("PATH");
+    await expect(why).toContainText(/global/);
+    // The one link, read and not followed.
+    await expect(panel.getByRole("link")).toHaveCount(1);
+    await expect(
+      panel.getByRole("link", { name: "OpenClaw's own install instructions" }),
+    ).toHaveAttribute("href", "https://docs.openclaw.ai/install");
+    expect(await sent(page)).toEqual([]);
+    await panel.getByRole("button", { name: "Use Advanced" }).click();
+    await expect(page.getByPlaceholder("Gateway address")).toHaveValue("");
+    expect(await sent(page)).toEqual(["setupReset"]);
+    expect(refused).toBe(0);
+  },
+);
 
 test("F-492: a device with a saved pairing is told it has one for this address, and Connect still asks for read", async ({
   page,
