@@ -6,7 +6,7 @@
     <title>Clawtrate — Your OpenClaw bots, in one app</title>
     <meta
       name="description"
-      content="Clawtrate is a free, open-source desktop app for OpenClaw. Find your bots and tasks in the sidebar. Read what each bot says and answer its approvals in the conversation. Beta for Mac."
+      content="Clawtrate is a free, open-source desktop app for OpenClaw. Your bots work without stopping to ask, with every step in plain words. Bring your own model provider. Beta for Mac."
     />
     <meta name="color-scheme" content="dark light" />
     <meta name="theme-color" content="#101112" />
@@ -17,7 +17,7 @@
     <meta property="og:title" content="Your OpenClaw bots, in one app" />
     <meta
       property="og:description"
-      content="Clawtrate is a free, open-source desktop app for OpenClaw. Find your bots and tasks in the sidebar. Read what each bot says and answer its approvals in the conversation. Beta for Mac."
+      content="Clawtrate is a free, open-source desktop app for OpenClaw. Your bots work without stopping to ask, with every step in plain words. Bring your own model provider. Beta for Mac."
     />
     <meta property="og:image" content="https://clawtrate.dev/social.png" />
     <meta property="og:image:type" content="image/png" />
@@ -92,8 +92,8 @@
         <div class="hero-copy">
           <h1 id="hero-title" class="rise">Your OpenClaw bots, in one app.</h1>
           <p class="lede rise">
-            A free, open-source desktop app for OpenClaw. Find your bots and tasks in the sidebar.
-            Read what each bot says and answer its approvals in the conversation.
+            A free, open-source desktop app for OpenClaw. Your bots work without stopping to ask,
+            with every step in plain words. Bring your own model provider.
           </p>
           <div class="get rise">
             <a class="btn btn-primary" href="download/mac/" data-claw-cue="hero-claw">
@@ -134,9 +134,9 @@
           </div>
         </div>
 
-        <!-- The live thing: an approval card from the app's own sample conversation. -->
-        <figure class="demo rise" aria-label="Try an approval" data-state="pending">
-          <!-- A Clawling on the window's ledge. It cheers an allowed request and droops at a denied one. -->
+        <!-- The launch film: one message, 23 actions, and a look around the app. Nothing loads until it is played. -->
+        <figure class="film rise" data-film data-state="idle">
+          <!-- A Clawling on the window's ledge. It leans in while the film plays and cheers when it ends. -->
           <button
             id="hero-claw"
             class="claw claw-perch"
@@ -655,481 +655,30 @@
               </g>
             </svg>
           </button>
-          <div class="win" data-ui>
-            <div class="pill">
-              <svg
-                class="claw-art pill-claw"
-                viewBox="0 0 40 40"
-                width="22"
-                height="22"
-                data-state="waiting"
-                data-gaze="0.58 0.57"
-                aria-hidden="true"
-                focusable="false"
-              >
-                <g data-s="waiting">
-                  <g
-                    data-part="creature"
-                    style="
-                      transform-box: view-box;
-                      transform-origin: 20px 35px;
-                      animation: av-lean 2600ms cubic-bezier(0.45, 0, 0.55, 1) 0ms infinite;
-                    "
-                  >
-                    <g
-                      data-part="arm"
-                      style="transform-box: view-box; transform-origin: 10.1px 27.5px"
-                    >
-                      <path
-                        stroke="#5b8dff"
-                        stroke-width="2.5"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        d="M10.1 27.5L5.3 22.9"
-                      />
-                      <circle
-                        data-part="claw"
-                        fill="none"
-                        stroke="#5b8dff"
-                        stroke-width="3.4"
-                        pathLength="100"
-                        stroke-dasharray="78 22"
-                        transform="rotate(-92.4 5.3 22.9)"
-                        cx="5.3"
-                        cy="22.9"
-                        r="3.2"
-                      />
-                    </g>
-                    <g
-                      class="av-still"
-                      data-part="arm"
-                      style="
-                        transform-box: view-box;
-                        transform-origin: 29.9px 27.5px;
-                        animation: av-wave 900ms cubic-bezier(0.45, 0, 0.55, 1) 0ms infinite;
-                        --av-still: -54deg;
-                      "
-                    >
-                      <path
-                        stroke="#5b8dff"
-                        stroke-width="2.5"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        d="M29.9 27.5L34.7 22.9"
-                      />
-                      <circle
-                        data-part="claw"
-                        fill="none"
-                        stroke="#5b8dff"
-                        stroke-width="3.4"
-                        pathLength="100"
-                        stroke-dasharray="78 22"
-                        transform="rotate(-8.4 34.7 22.9)"
-                        cx="34.7"
-                        cy="22.9"
-                        r="3.2"
-                      />
-                    </g>
-                    <path
-                      data-part="stalk"
-                      fill="none"
-                      stroke="#5b8dff"
-                      stroke-width="2.4"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      d="M16.6 21.5Q15.8 14.95 15 8.4"
-                    />
-                    <path
-                      data-part="stalk"
-                      fill="none"
-                      stroke="#5b8dff"
-                      stroke-width="2.4"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      d="M23.4 21.5Q24.2 14.95 25 8.4"
-                    />
-                    <g data-part="body" fill="#5b8dff">
-                      <path
-                        d="M8.5 30.5C8.5 22 13.5 17.5 20 17.5S31.5 22 31.5 30.5C31.5 32.7 30.2 34 28 34H12C9.8 34 8.5 32.7 8.5 30.5Z"
-                      />
-                    </g>
-                    <path
-                      data-part="mouth"
-                      fill="#16181b"
-                      d="M17.8 27.2H22.2Q22.2 30.2 20 30.2Q17.8 30.2 17.8 27.2Z"
-                    />
-                    <g data-part="eye" transform="translate(15 8.4) scale(1.1)">
-                      <circle fill="#5b8dff" cx="0" cy="0" r="4.35" />
-                      <circle fill="#ffffff" cx="0" cy="0" r="3.1" />
-                      <circle data-part="pupil" fill="#16181b" cx="0" cy="0.07" r="1.67" />
-                      <circle data-part="glint" fill="#ffffff" cx="-0.64" cy="-0.63" r="0.57" />
-                      <g fill="#5b8dff" clip-path="url(#claw-eye)">
-                        <rect
-                          data-part="lid"
-                          style="
-                            transform-box: view-box;
-                            transform-origin: 0px 0px;
-                            animation: av-blink 5600ms cubic-bezier(0.25, 0.1, 0.25, 1) 4000ms
-                              infinite;
-                          "
-                          x="-6"
-                          y="-10.1"
-                          width="12"
-                          height="7"
-                        />
-                      </g>
-                    </g>
-                    <g data-part="eye" transform="translate(25 8.4) scale(1.1)">
-                      <circle fill="#5b8dff" cx="0" cy="0" r="4.35" />
-                      <circle fill="#ffffff" cx="0" cy="0" r="3.1" />
-                      <circle data-part="pupil" fill="#16181b" cx="0" cy="0.07" r="1.67" />
-                      <circle data-part="glint" fill="#ffffff" cx="-0.64" cy="-0.63" r="0.57" />
-                      <g fill="#5b8dff" clip-path="url(#claw-eye)">
-                        <rect
-                          data-part="lid"
-                          style="
-                            transform-box: view-box;
-                            transform-origin: 0px 0px;
-                            animation: av-blink 5600ms cubic-bezier(0.25, 0.1, 0.25, 1) 4050ms
-                              infinite;
-                          "
-                          x="-6"
-                          y="-10.1"
-                          width="12"
-                          height="7"
-                        />
-                      </g>
-                    </g>
-                  </g>
-                </g>
-                <g data-s="done">
-                  <g
-                    data-part="creature"
-                    style="
-                      transform-box: view-box;
-                      transform-origin: 20px 35px;
-                      animation: av-hop 3200ms cubic-bezier(0.3, 0, 0.2, 1) 0ms infinite;
-                    "
-                  >
-                    <g
-                      data-part="arm"
-                      style="
-                        transform-box: view-box;
-                        transform-origin: 10.1px 27.5px;
-                        rotate: 42deg;
-                      "
-                    >
-                      <path
-                        stroke="#5b8dff"
-                        stroke-width="2.5"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        d="M10.1 27.5L5.3 22.9"
-                      />
-                      <circle
-                        data-part="claw"
-                        fill="none"
-                        stroke="#5b8dff"
-                        stroke-width="3.4"
-                        pathLength="100"
-                        stroke-dasharray="78 22"
-                        transform="rotate(-92.4 5.3 22.9)"
-                        cx="5.3"
-                        cy="22.9"
-                        r="3.2"
-                      />
-                    </g>
-                    <g
-                      data-part="arm"
-                      style="
-                        transform-box: view-box;
-                        transform-origin: 29.9px 27.5px;
-                        rotate: -42deg;
-                      "
-                    >
-                      <path
-                        stroke="#5b8dff"
-                        stroke-width="2.5"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        d="M29.9 27.5L34.7 22.9"
-                      />
-                      <circle
-                        data-part="claw"
-                        fill="none"
-                        stroke="#5b8dff"
-                        stroke-width="3.4"
-                        pathLength="100"
-                        stroke-dasharray="78 22"
-                        transform="rotate(-8.4 34.7 22.9)"
-                        cx="34.7"
-                        cy="22.9"
-                        r="3.2"
-                      />
-                      <circle
-                        data-part="ball"
-                        fill="#f6f5f2"
-                        stroke="#c9c6bf"
-                        stroke-width="0.7"
-                        cx="36.73"
-                        cy="20.64"
-                        r="2.7"
-                      />
-                    </g>
-                    <path
-                      data-part="stalk"
-                      fill="none"
-                      stroke="#5b8dff"
-                      stroke-width="2.4"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      d="M16.6 21.5Q15.8 15.25 15 9"
-                    />
-                    <path
-                      data-part="stalk"
-                      fill="none"
-                      stroke="#5b8dff"
-                      stroke-width="2.4"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      d="M23.4 21.5Q24.2 15.25 25 9"
-                    />
-                    <g data-part="body" fill="#5b8dff">
-                      <path
-                        d="M8.5 30.5C8.5 22 13.5 17.5 20 17.5S31.5 22 31.5 30.5C31.5 32.7 30.2 34 28 34H12C9.8 34 8.5 32.7 8.5 30.5Z"
-                      />
-                    </g>
-                    <path
-                      data-part="mouth"
-                      fill="none"
-                      stroke="#16181b"
-                      stroke-width="1.4"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      d="M17.4 27Q20 30.4 22.6 27"
-                    />
-                    <g data-part="eye" transform="translate(15 9)">
-                      <circle fill="#5b8dff" cx="0" cy="0" r="4.35" />
-                      <circle fill="#ffffff" cx="0" cy="0" r="3.1" />
-                      <path
-                        fill="none"
-                        stroke="#16181b"
-                        stroke-width="1.3"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        d="M-1.92 0.93Q0 -2.23 1.92 0.93"
-                      />
-                    </g>
-                    <g data-part="eye" transform="translate(25 9)">
-                      <circle fill="#5b8dff" cx="0" cy="0" r="4.35" />
-                      <circle fill="#ffffff" cx="0" cy="0" r="3.1" />
-                      <path
-                        fill="none"
-                        stroke="#16181b"
-                        stroke-width="1.3"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        d="M-1.92 0.93Q0 -2.23 1.92 0.93"
-                      />
-                    </g>
-                  </g>
-                </g>
-                <g data-s="blocked" data-muted>
-                  <g
-                    data-part="creature"
-                    style="transform-box: view-box; transform-origin: 20px 35px; rotate: 6deg"
-                  >
-                    <g
-                      data-part="arm"
-                      style="
-                        transform-box: view-box;
-                        transform-origin: 10.1px 27.5px;
-                        rotate: -62deg;
-                      "
-                    >
-                      <path
-                        stroke="#5b8dff"
-                        stroke-width="2.5"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        d="M10.1 27.5L5.3 22.9"
-                      />
-                      <circle
-                        data-part="claw"
-                        fill="none"
-                        stroke="#5b8dff"
-                        stroke-width="3.4"
-                        pathLength="100"
-                        stroke-dasharray="78 22"
-                        transform="rotate(-92.4 5.3 22.9)"
-                        cx="5.3"
-                        cy="22.9"
-                        r="3.2"
-                      />
-                    </g>
-                    <g
-                      data-part="arm"
-                      style="
-                        transform-box: view-box;
-                        transform-origin: 29.9px 27.5px;
-                        rotate: 62deg;
-                      "
-                    >
-                      <path
-                        stroke="#5b8dff"
-                        stroke-width="2.5"
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        d="M29.9 27.5L34.7 22.9"
-                      />
-                      <circle
-                        data-part="claw"
-                        fill="none"
-                        stroke="#5b8dff"
-                        stroke-width="3.4"
-                        pathLength="100"
-                        stroke-dasharray="78 22"
-                        transform="rotate(-8.4 34.7 22.9)"
-                        cx="34.7"
-                        cy="22.9"
-                        r="3.2"
-                      />
-                    </g>
-                    <path
-                      data-part="stalk"
-                      fill="none"
-                      stroke="#5b8dff"
-                      stroke-width="2.4"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      d="M16.6 21.5Q13 16.15 12.6 13.6"
-                    />
-                    <path
-                      data-part="stalk"
-                      fill="none"
-                      stroke="#5b8dff"
-                      stroke-width="2.4"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      d="M23.4 21.5Q27 16.15 27.4 13.6"
-                    />
-                    <g data-part="body" fill="#5b8dff">
-                      <path
-                        d="M8.5 30.5C8.5 22 13.5 17.5 20 17.5S31.5 22 31.5 30.5C31.5 32.7 30.2 34 28 34H12C9.8 34 8.5 32.7 8.5 30.5Z"
-                      />
-                    </g>
-                    <path
-                      data-part="mouth"
-                      fill="none"
-                      stroke="#16181b"
-                      stroke-width="1.3"
-                      stroke-linecap="round"
-                      stroke-linejoin="round"
-                      d="M18.2 28.6Q20 27 21.8 28.6"
-                    />
-                    <g data-part="eye" transform="translate(12.6 13.6)">
-                      <circle fill="#5b8dff" cx="0" cy="0" r="4.35" />
-                      <circle fill="#ffffff" cx="0" cy="0" r="3.1" />
-                      <circle data-part="pupil" fill="#16181b" cx="0.25" cy="1.02" r="1.67" />
-                      <g fill="#5b8dff" clip-path="url(#claw-eye)">
-                        <rect
-                          data-part="lid"
-                          transform="rotate(-12)"
-                          x="-6"
-                          y="-5.1"
-                          width="12"
-                          height="5.26"
-                        />
-                      </g>
-                    </g>
-                    <g data-part="eye" transform="translate(27.4 13.6)">
-                      <circle fill="#5b8dff" cx="0" cy="0" r="4.35" />
-                      <circle fill="#ffffff" cx="0" cy="0" r="3.1" />
-                      <circle data-part="pupil" fill="#16181b" cx="0.25" cy="1.02" r="1.67" />
-                      <g fill="#5b8dff" clip-path="url(#claw-eye)">
-                        <rect
-                          data-part="lid"
-                          transform="rotate(12)"
-                          x="-6"
-                          y="-5.1"
-                          width="12"
-                          height="5.26"
-                        />
-                      </g>
-                    </g>
-                  </g>
-                </g>
-              </svg>
-              <b>Otto</b><span aria-hidden="true">·</span
-              ><span class="pill-task">Disk almost full on the media box</span>
-            </div>
-            <div class="talk">
-              <p class="bubble bot">
-                The media box is at 94%. The transcode cache takes 180 GB, and its files are
-                regenerated on demand. Should I clear it? I'll move it aside first so it can be
-                restored.
-              </p>
-              <p class="bubble me">Yes, clear the transcode cache.</p>
-              <div class="card" role="group" aria-labelledby="ask-title">
-                <div class="card-head">
-                  <b id="ask-title">Otto wants to run a command</b>
-                  <span class="tag" data-tag>Needs approval</span>
-                </div>
-                <p class="card-body">
-                  Run <code>mv /srv/media/transcode-cache /srv/scratch/transcode-cache</code> on
-                  <b>media-box</b>.
-                </p>
-                <div class="card-actions" data-when="pending">
-                  <button type="button" class="ui-btn ui-primary" data-answer="allow">
-                    Allow once
-                  </button>
-                  <button type="button" class="ui-btn ui-quiet" data-answer="deny">Deny</button>
-                </div>
-                <p class="card-foot" data-when="pending">Example expiry: 28 minutes.</p>
-              </div>
-              <p class="bubble bot" data-when="allowed">
-                Done. The disk is now at 61%, and the cache is in <code>/srv/scratch</code> if you
-                want it back.
-              </p>
-              <details class="run" data-when="allowed">
-                <summary class="event">
-                  Worked for 4s <span aria-hidden="true">·</span> 1 action
-                  <svg class="run-chevron" viewBox="0 0 16 16" aria-hidden="true">
-                    <path d="m6 3.5 4.5 4.5L6 12.5" />
-                  </svg>
-                </summary>
-                <p class="run-card">
-                  <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m3.25 8.5 3 3 6.5-7" /></svg>
-                  Ran a command
-                </p>
-              </details>
-              <p class="bubble bot" data-when="denied">
-                Understood. I left the cache where it is and changed nothing.
-              </p>
-              <details class="run" data-when="denied">
-                <summary class="event">
-                  Worked for 3s <span aria-hidden="true">·</span> 1 action
-                  <span aria-hidden="true">·</span> <span class="run-failed">1 failed</span>
-                  <svg class="run-chevron" viewBox="0 0 16 16" aria-hidden="true">
-                    <path d="m6 3.5 4.5 4.5L6 12.5" />
-                  </svg>
-                </summary>
-                <p class="run-card">
-                  Didn't run a command
-                  <span class="run-state">Denied</span>
-                </p>
-              </details>
-            </div>
-            <p class="demo-live" aria-live="polite"></p>
-          </div>
-          <figcaption>
-            <span data-when="pending"
-              >Try Allow once or Deny. An approval card shows a request from your gateway.</span
+          <div class="win">
+            <video
+              class="film-video"
+              controls
+              preload="none"
+              playsinline
+              poster="media/clawtrate-launch-poster.jpg"
+              width="1920"
+              height="1080"
+              aria-label="After one message, Otto runs 23 actions listed in plain words with no approval step, followed by the whole app, the sidebar, a message between bots, a call to T3 Code, provider accounts, routines and usage."
             >
-            <button type="button" class="link-btn" data-when="answered" data-reset>
-              Reset demo
+              <source src="media/clawtrate-launch.mp4" type="video/mp4" />
+            </video>
+            <button
+              class="film-play"
+              type="button"
+              aria-label="Play the Clawtrate walkthrough video"
+              data-film-play
+              hidden
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M8.5 5.5v13l10.5-6.5z" /></svg>
             </button>
-          </figcaption>
+          </div>
+          <figcaption>30 seconds, silent. All titles appear on screen.</figcaption>
         </figure>
       </section>
 
