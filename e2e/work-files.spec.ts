@@ -67,7 +67,11 @@ async function openTask(page: Page, bot: string, task: string) {
   const back = page.getByRole("button", { name: "Back to bots" });
   if (await back.isVisible()) await back.click();
   const row = botRow(page, bot);
-  if ((await row.getAttribute("aria-expanded")) !== "true") await row.click();
+  if ((await row.getAttribute("aria-expanded")) !== "true") {
+    // The row opens the bot's main conversation; on a phone, Back shows its tasks under it.
+    await row.click();
+    if (await back.isVisible()) await back.click();
+  }
   const list = page.getByRole("list", { name: `${bot}'s tasks` });
   const rows = list.getByTestId("task");
   const all = list.getByRole("button", { name: /^Show all/ });

@@ -97,7 +97,9 @@ function afterReload(): { reason: string; changeAccount: boolean } {
 
 /** The task's line on a page, its words as the gateway's history rebuilds them. */
 async function lineFromHistory(on: Page): Promise<void> {
+  // The bot's row opens its main conversation; its one task is listed under it.
   await botRow(on).click();
+  await on.getByRole("list", { name: "Wren's tasks" }).getByTestId("task").first().click();
   const line = on.getByTestId("turn-error");
   await expect(line).toContainText("The gateway couldn't run this message", { timeout: 60_000 });
   const { reason, changeAccount } = afterReload();

@@ -295,7 +295,7 @@ test("F-563: an API client's session and a scheduled run stay out of a bot's tas
   await setOthersShown(true);
   await expect(botRow("pip")).toHaveAccessibleName(/, 2 tasks\b/, { timeout: 30_000 });
   await setOthersShown(false);
-  await expect(botRow("pip")).toHaveAccessibleName(/, 0 tasks\b/);
+  await expect(botRow("pip")).toHaveAccessibleName(/^pip(?!.*\d+ tasks?\b)/i);
   await expect(botRow("pip").locator(".unread-dot")).toHaveCount(0);
   await expect(taskRow(api)).toHaveCount(0);
   await expect(taskRow(scheduled)).toHaveCount(0);
@@ -311,7 +311,7 @@ test("F-563: an API client's session and a scheduled run stay out of a bot's tas
   const order = await botOrder();
   expect(order.indexOf("marlow")).toBeLessThan(order.indexOf("pip"));
   await expect(botRow("marlow")).toHaveAccessibleName(/, 1 task\b/);
-  await expect(botRow("pip")).toHaveAccessibleName(/, 0 tasks\b/);
+  await expect(botRow("pip")).toHaveAccessibleName(/^pip(?!.*\d+ tasks?\b)/i);
   await expect(taskRow(api)).toHaveCount(0);
   await expect(taskRow(scheduled)).toHaveCount(0);
   await shots("after-hidden");
@@ -346,7 +346,7 @@ test("F-563: an API client's session and a scheduled run stay out of a bot's tas
   // once a person continues it from another device: an operator's turn there asks.
   await setOthersShown(false);
   await expect(taskRow(api)).toHaveCount(0);
-  await expect(botRow("otto")).toHaveAccessibleName(/^otto, 0 tasks\b/i);
+  await expect(botRow("otto")).toHaveAccessibleName(/^otto(?!.*\d+ tasks?\b)/i);
   const waiting = "agent:otto:openai-user:e2e-approver";
   expect((await apiTurn("otto", "e2e-approver", "#text")).status).toBe(200);
   const before = approver!.lastSeq;
@@ -359,13 +359,15 @@ test("F-563: an API client's session and a scheduled run stay out of a bot's tas
     90_000,
     before,
   );
-  // Otto's one task while it waits: his row says so, and opens it.
+  // Otto's one task while it waits: his row says so, and it is listed under him.
   await expect(botRow("otto")).toHaveAccessibleName(/^otto, waiting for you, 1 task\b/i, {
     timeout: 30_000,
   });
   await shots("waiting");
-  // Open while it is answered, it stays listed until the person opens another task.
+  // Open while it is answered, it stays listed until the person opens another task. Otto's row
+  // opens his main conversation, and the task is listed under it.
   await botRow("otto").click();
+  await taskRow(waiting).click();
   await expect(page.getByTestId("transcript")).toContainText("#approve", { timeout: 30_000 });
   await approver!.request("exec.approval.resolve", {
     id: String((asked.payload as { id: unknown }).id),
@@ -375,7 +377,9 @@ test("F-563: an API client's session and a scheduled run stay out of a bot's tas
   await expect(botRow("otto")).toHaveAccessibleName(/^otto, 1 task\b/i, { timeout: 30_000 });
   await expect(page.getByTestId("transcript")).toContainText("#approve");
   await botRow("marlow").click();
-  await expect(botRow("otto")).toHaveAccessibleName(/^otto, 0 tasks\b/i, { timeout: 30_000 });
+  await expect(botRow("otto")).toHaveAccessibleName(/^otto(?!.*\d+ tasks?\b)/i, {
+    timeout: 30_000,
+  });
   // The task started in Clawtrate was there throughout.
   await expect(botRow("marlow")).toHaveAccessibleName(/, 1 task\b/);
 });

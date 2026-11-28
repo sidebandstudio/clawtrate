@@ -707,7 +707,7 @@ test("F-278: Delete asks first, with Cancel focused; Delete removes the task and
   await expect(page.getByRole("dialog")).toContainText("Its run is stopped first.");
 });
 
-test("F-424: archiving or deleting a bot's last task creates and selects a new Main; a bot's main session offers neither", async ({
+test("F-424: archiving a bot's last task makes its main conversation and opens it; a bot's main session offers neither", async ({
   page,
 }) => {
   // Juniper has no main session in the fixture: three tasks of its own.
@@ -717,21 +717,23 @@ test("F-424: archiving or deleting a bot's last task creates and selects a new M
     await page.getByRole("menuitem", { name: "Archive" }).click();
     await expect(taskRow(page, title)).toHaveCount(0);
   }
-  // One left: the bot's own menu archives it, and a new Main takes its place, selected.
+  // One left: the bot's own menu archives it, and its main conversation is made and opens.
   await expect(bot(page, "Juniper")).toHaveAccessibleName(/^Juniper, 1 task/);
   await bot(page, "Juniper").focus();
   await page.keyboard.press("Shift+F10");
   await page.getByRole("menuitem", { name: "Archive task" }).click();
   await expect.poll(async () => (await sent(page, "newMainTask")).length).toBe(1);
-  await expect(page.locator(".title-pill-task")).toHaveText("Main");
-  await expect(bot(page, "Juniper")).toHaveAccessibleName(/^Juniper, 1 task/);
+  await expect(page.locator(".title-pill")).toHaveAccessibleName("Juniper. Show details.");
+  await expect(page.locator(".title-pill-task")).toHaveCount(0);
+  // No task is listed under it now, so its name gives no count.
+  await expect(bot(page, "Juniper")).not.toHaveAccessibleName(/\d+ tasks?\b/);
   await expect(bot(page, "Juniper")).toBeFocused();
-  // Deleting that one makes another.
+  // The main conversation is the gateway's own: the bot's menu offers neither for it.
   await page.keyboard.press("Shift+F10");
-  await page.getByRole("menuitem", { name: "Delete task…" }).click();
-  await page.getByRole("dialog").getByRole("button", { name: "Delete" }).click();
-  await expect.poll(async () => (await sent(page, "newMainTask")).length).toBe(2);
-  await expect(bot(page, "Juniper")).toHaveAccessibleName(/^Juniper, 1 task/);
+  const mainItems = await page.getByRole("menu").getByRole("menuitem").allTextContents();
+  expect(mainItems).not.toContain("Archive task");
+  expect(mainItems).not.toContain("Delete task…");
+  await page.keyboard.press("Escape");
 
   // Marlow's one task is its main session, which the gateway never archives or deletes.
   await bot(page, "Marlow").focus();
@@ -747,6 +749,78 @@ test("F-424: archiving or deleting a bot's last task creates and selects a new M
   await page.keyboard.press("Escape");
   expect(items).not.toContain("Archive task");
   expect(items).not.toContain("Delete task…");
+});
+
+test("removing a bot's last listed task leaves its main conversation open and focus on the bot's row", async ({
+  page,
+}) => {
+  await openFixture(page, "scene=rail-write&bot=marlow", "light");
+  // Marlow has its main conversation; one task of its own is added beside it.
+  await page.evaluate(() => {
+    const fixture = (
+      window as unknown as {
+        clawtrateFixture: {
+          setState(change: (state: Record<string, unknown>) => Record<string, unknown>): void;
+        };
+      }
+    ).clawtrateFixture;
+    fixture.setState((state) => {
+      const tasksByBot = state.tasksByBot as Record<string, Array<Record<string, unknown>>>;
+      const transcripts = state.transcripts as Record<string, Record<string, unknown>>;
+      const main = tasksByBot.marlow![0]!;
+      const extra = {
+        ...main,
+        key: "agent:marlow:extra",
+        sessionId: "marlow-extra",
+        title: "Extra notes",
+        isMain: undefined,
+        updatedAt: (main.updatedAt as number) + 60_000,
+      };
+      return {
+        ...state,
+        tasksByBot: { ...tasksByBot, marlow: [extra, main] },
+        transcripts: {
+          ...transcripts,
+          "agent:marlow:extra": {
+            ...transcripts["agent:marlow:main"],
+            sessionKey: "agent:marlow:extra",
+          },
+        },
+      };
+    });
+  });
+  await taskRow(page, "Extra notes").click();
+  await expect(page.locator(".title-pill")).toHaveAccessibleName(
+    "Marlow, Extra notes. Show details.",
+  );
+  await taskMenu(page, "Extra notes");
+  await page.getByRole("menuitem", { name: "Archive" }).click();
+  await expect(taskRow(page, "Extra notes")).toHaveCount(0);
+  // No task is listed under Marlow now: its main conversation opens, and its row takes focus.
+  await expect(page.locator(".title-pill")).toHaveAccessibleName("Marlow. Show details.");
+  await expect(bot(page, "Marlow")).toBeFocused();
+  expect(await sent(page, "newMainTask")).toHaveLength(0);
+});
+
+test("a message sent from a main conversation the gateway has no session for yet lands there", async ({
+  page,
+}) => {
+  await openFixture(page, `scene=rail-write&${OTTO}`, "light");
+  await bot(page, "Pip").click();
+  await expect(page.locator(".title-pill")).toHaveAccessibleName("Pip. Show details.");
+  const field = page.getByTestId("composer-input");
+  await field.fill("Is Saturday still free?");
+  await field.press("Enter");
+  await expect
+    .poll(
+      async () => ((await sent(page, "sendMessage")).at(-1) as { key?: string } | undefined)?.key,
+    )
+    .toBe("agent:pip:main");
+  await expect(page.getByTestId("transcript")).toContainText("Is Saturday still free?");
+  // Not in the task that was open before.
+  await bot(page, "Otto").click();
+  await taskRow(page, "Disk almost full").click();
+  await expect(page.getByTestId("transcript")).not.toContainText("Is Saturday still free?");
 });
 
 test("F-022: Mark as unread and Mark as read in a task's menu, sent to the host; opening a task reads it", async ({

@@ -38,6 +38,7 @@ export {
   type CreatedBot,
 } from "./accounts-engine.ts";
 export * from "./sidebar.ts";
+export * from "./main-conversation.ts";
 export * from "./usage.ts";
 export {
   COUNT_AFTER_RUN_MS,

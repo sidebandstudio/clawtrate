@@ -117,6 +117,12 @@ async function hostCommand(command: Json): Promise<void> {
 }
 
 const botRow = (bot: string) => page.locator(`[data-testid="bot"][data-bot="${bot}"]`);
+
+/** The task the note's turn ran in: the bot's row opens its main conversation, the task is under it. */
+async function openNoteTask(key: string): Promise<void> {
+  await botRow("clawtrate-main-bot").click();
+  await page.locator(`[data-testid="task"][data-key="${key}"]`).click({ timeout: 30_000 });
+}
 const transcript = () => page.getByTestId("transcript");
 
 /** Screenshots of the page as it is, at 1440 and 390, when asked for. */
@@ -243,7 +249,7 @@ test("F-560: a real skill note folds into its run's line, and its undo works", a
   await expect(page.getByTestId("device-request")).toHaveCount(0);
 
   // The person reads the bot's reply, then goes to another bot before the review ends.
-  await botRow("clawtrate-main-bot").click();
+  await openNoteTask(key);
   await expect(transcript()).toContainText(REPLY, { timeout: 60_000 });
   const other = page.locator('[data-testid="bot"]:not([data-bot="clawtrate-main-bot"])').first();
   await other.click();
@@ -294,7 +300,7 @@ test("F-560: a real skill note folds into its run's line, and its undo works", a
   await expect(botRow("clawtrate-main-bot")).not.toHaveAccessibleName(/, unread/);
 
   // The note is no bubble: it folds into the run's line.
-  await botRow("clawtrate-main-bot").click();
+  await openNoteTask(key);
   await expect(transcript()).toContainText(REPLY, { timeout: 60_000 });
   await expect(page.getByTestId("transcript-turn").filter({ hasText: "Learned" })).toHaveCount(0);
   const line = transcript().getByTestId("run-line").filter({ hasText: "Saved a skill" });

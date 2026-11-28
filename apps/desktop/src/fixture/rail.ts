@@ -183,7 +183,7 @@ function initialArchive(now: number): Map<string, ArchivedTask[]> {
 }
 
 /** An empty task's transcript, as the engine keeps one it has just created. */
-function emptyTranscript(key: string, now: number) {
+export function emptyTranscript(key: string, now: number) {
   return {
     ...emptyActivity,
     linkedRuns: {},
@@ -228,9 +228,13 @@ export function railCommands(
       }
       return null;
     };
-    const create = (botId: string, title: string) => {
+    // A new task's key is the gateway's for a task Clawtrate makes; the bot's main conversation
+    // (F-424's replacement) has the bot's own main key, marked main as the engine marks it.
+    const create = (botId: string, title: string, main = false) => {
       created += 1;
-      const key = `agent:${botId}:dashboard:${String(created).padStart(8, "0")}-0000-4000-8000-000000000000`;
+      const key = main
+        ? `agent:${botId}:main`
+        : `agent:${botId}:dashboard:${String(created).padStart(8, "0")}-0000-4000-8000-000000000000`;
       const state = get();
       const task: Task = {
         key,
@@ -241,6 +245,7 @@ export function railCommands(
         updatedAt: Date.now(),
         status: "idle",
         unread: false,
+        ...(main ? { isMain: true } : {}),
       };
       set({
         ...state,
@@ -271,7 +276,7 @@ export function railCommands(
       case "newTask":
         return later(() => create(command.botId, command.label ?? "New task"));
       case "newMainTask":
-        return later(() => create(command.botId, "Main"));
+        return later(() => create(command.botId, "Main", true));
       case "renameTask":
         return later(() => {
           const found = find(command.key);

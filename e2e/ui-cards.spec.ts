@@ -151,6 +151,15 @@ async function requestAccess(on: Page): Promise<void> {
 }
 
 /** Open a bot's task in the rail. */
+/** A bot's main conversation: its own row opens it, with its name alone in the header. */
+async function openMain(on: Page, bot: string): Promise<void> {
+  await on
+    .getByTestId("bot-list")
+    .getByRole("button", { name: new RegExp(`^${bot}\\b`) })
+    .click();
+  await expect(on.getByRole("heading", { level: 1, name: bot })).toBeAttached({ timeout: 20_000 });
+}
+
 async function openTask(on: Page, bot: string, title: string): Promise<void> {
   const row = on.getByTestId("bot-list").getByRole("button", { name: new RegExp(`^${bot}\\b`) });
   if ((await row.getAttribute("aria-expanded")) !== "true") await row.click();
@@ -657,7 +666,7 @@ test.describe("Messaged cards on a real gateway", () => {
     // events arrive. Each of these is right.
     await expect(state(page)).toHaveText(/^(Sent|Working|Recipient waiting|No reply yet)$/);
     await shot(card(page, "messaged-card"), "messaged-recipient-asked");
-    await openTask(page, "Marlow", "Notes for Pip");
+    await openMain(page, "Marlow");
     // Marlow's main task is shared by every check that messages Marlow: this check's question is
     // the one the gateway lists for the recipient's run, and its card is found by that id.
     let questionId = "";
@@ -735,7 +744,7 @@ test.describe("Messaged cards sent from this app on a real gateway", () => {
     const states = await seen(/^Recipient waiting$/);
     expect(states.at(-1)).toBe("Recipient waiting");
     await shot(card(page, "messaged-card"), "messaged-recipient-waiting");
-    await openTask(page, "Marlow", "Notes for Pip");
+    await openMain(page, "Marlow");
     // Marlow's main task is shared: this check's question is the one the gateway lists as
     // pending there, asked since this check began, and its card is found by that id.
     let questionId = "";
@@ -788,7 +797,7 @@ test.describe("Messaged cards' actions on a real gateway", () => {
     // The card's own line: its body may hold the Thought line of the reasoning that led to it.
     await sender.locator(":scope > summary").click();
     await sender.getByRole("button", { name: "Open this message in Marlow's task" }).click();
-    await expect(page.locator(".title-pill")).toContainText("Notes for Pip");
+    await expect(page.locator(".title-pill")).toHaveAccessibleName("Marlow. Show details.");
     // Marlow's task, at the Message from Pip card of the run this message started, open and
     // focused: that card by its run, among the cards other checks left in this shared task.
     const received = page.locator(`[data-testid="received-card"][data-run-id="${recipientRunId}"]`);

@@ -1,6 +1,16 @@
 import type { Bot, Task } from "@clawtrate/core";
 import { describe, expect, it } from "vitest";
-import { botLabel, linkTarget, summarize, taskState, visibleTasks } from "../src/selection.ts";
+import {
+  botLabel,
+  botOpening,
+  botRowLabel,
+  canUnfold,
+  linkTarget,
+  shownConversation,
+  summarize,
+  taskState,
+  visibleTasks,
+} from "../src/selection.ts";
 
 const bot: Bot = {
   id: "otto",
@@ -29,7 +39,7 @@ function task(key: string, updatedAt: number, extra: Partial<Task> = {}): Task {
 describe("a bot's summary of all its tasks", () => {
   it("is empty for a bot with no tasks", () => {
     expect(summarize([], {}, null)).toEqual({ latest: null, unread: false, state: null });
-    expect(botLabel(bot, 0, summarize([], {}, null))).toBe("Otto, 0 tasks");
+    expect(botLabel(bot, 0, summarize([], {}, null))).toBe("Otto");
     // #790: the row has no words for it, so its name says its tasks are still being read.
     expect(botLabel(bot, 0, summarize([], {}, null), { loading: true })).toBe(
       "Otto, loading tasks",
@@ -154,5 +164,61 @@ describe("F-563: a link to a task", () => {
     expect(linkTarget(listed, "otto", "agent:otto:dashboard:a", null)).toBeNull();
     const given = task(hidden, 5, { title: "From the routine" });
     expect(linkTarget(listed, "otto", hidden, given)).toBe(given);
+  });
+});
+
+describe("a bot's row opens its main conversation (docs/design/bot-opens-main.md)", () => {
+  const main = task("agent:otto:main", 50, { isMain: true });
+  const disk = task("agent:otto:disk", 300);
+  const logs = task("agent:otto:logs", 200);
+
+  it("opens the main conversation of another bot, not the task it last had open", () => {
+    expect(botOpening("otto", [disk, main], { botId: "pip", key: "agent:pip:main" })).toEqual({
+      key: "agent:otto:main",
+      otherBot: true,
+    });
+  });
+
+  it("opens the main conversation of the open bot from one of its tasks", () => {
+    expect(botOpening("otto", [disk, main], { botId: "otto", key: disk.key })).toEqual({
+      key: "agent:otto:main",
+      otherBot: false,
+    });
+  });
+
+  it("changes nothing when that main conversation is on screen", () => {
+    expect(botOpening("otto", [disk, main], { botId: "otto", key: main.key })).toBeNull();
+  });
+
+  it("opens a bot with no main conversation yet at its own key", () => {
+    expect(botOpening("otto", [disk], { botId: null, key: null })).toEqual({
+      key: "agent:otto:main",
+      otherBot: true,
+    });
+  });
+
+  it("shows what the bot last had open while its list holds it, else its main conversation", () => {
+    expect(shownConversation([disk, main], disk.key, null, main)).toBe(disk);
+    expect(shownConversation([disk, main], "agent:otto:archived", null, main)).toBe(main);
+    expect(shownConversation([disk, main], undefined, null, main)).toBe(main);
+    // A linked task the list doesn't hold, while it is the one remembered.
+    const linked = task("agent:otto:hidden", 10);
+    expect(shownConversation([disk, main], linked.key, linked, main)).toBe(linked);
+    expect(shownConversation([disk, main], disk.key, linked, main)).toBe(disk);
+  });
+
+  it("counts the tasks under the bot without its main conversation, and keeps its unread", () => {
+    const unreadMain = { ...main, unread: true };
+    const all = [disk, logs, unreadMain];
+    expect(botRowLabel(bot, all, summarize(all, {}, null))).toBe("Otto, 2 tasks, unread");
+    expect(botRowLabel(bot, [main], summarize([main], {}, null))).toBe("Otto");
+  });
+
+  it("unfolds a bot with one task under it, but not a bot with only its main conversation", () => {
+    expect(canUnfold([disk, main])).toBe(true);
+    expect(canUnfold([disk])).toBe(true);
+    expect(canUnfold([main])).toBe(false);
+    expect(canUnfold([])).toBe(false);
+    expect(canUnfold([main], true)).toBe(true);
   });
 });

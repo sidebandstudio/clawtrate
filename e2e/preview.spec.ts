@@ -50,6 +50,7 @@ type SessionRow = {
   agentId?: string;
   updatedAt?: number | null;
   archived?: boolean;
+  isMain?: boolean;
   lastMessagePreview?: string;
   totalTokens?: number;
   contextTokens?: number;
@@ -83,30 +84,23 @@ function botRow(page: Page, bot: string) {
 }
 
 /**
- * Open a bot without folding it: the open bot's row folds and unfolds, so it is
- * clicked only when its tasks are not showing and it is not a single-task row
- * that is already current.
+ * Open a bot: its row opens its main conversation and lists its tasks under it. A click never
+ * folds it (docs/design/bot-opens-main.md).
  */
 async function openBot(page: Page, bot: string) {
-  const row = botRow(page, bot);
-  const expanded = await row.getAttribute("aria-expanded");
-  const current = await row.getAttribute("aria-current");
-  if (expanded === "true" || (expanded === null && current === "true")) return;
-  await row.click();
+  await botRow(page, bot).click();
 }
 
 async function openTask(page: Page, bot: string, task: string) {
   await openBot(page, bot);
-  // A bot with one task shows no task rows: opening the bot is the whole action.
   const list = page.getByRole("list", { name: `${bot}'s tasks` });
   const rows = list.getByTestId("task");
-  if ((await rows.count()) > 0) {
-    // Past six tasks the rail lists the most recent; the rest are behind "Show all".
-    const showAll = list.getByRole("button", { name: /^Show all/ });
-    if ((await rows.filter({ hasText: task }).count()) === 0 && (await showAll.count()) > 0)
-      await showAll.click();
-    await rows.filter({ hasText: task }).first().click({ timeout: 20_000 });
-  }
+  // Past six tasks the rail lists the most recent; the rest are behind "Show all".
+  await expect(rows.first()).toBeVisible({ timeout: 20_000 });
+  const showAll = list.getByRole("button", { name: /^Show all/ });
+  if ((await rows.filter({ hasText: task }).count()) === 0 && (await showAll.count()) > 0)
+    await showAll.click();
+  await rows.filter({ hasText: task }).first().click({ timeout: 20_000 });
   await expect(page.getByRole("heading", { level: 1, name: task })).toBeVisible({
     timeout: 20_000,
   });
@@ -183,22 +177,33 @@ async function runOnGateway(botId: string, key: string, message: string): Promis
   ]);
 }
 
-/** A bot's task rows, all of them: past six the rail lists the newest, the rest behind Show all. */
+/**
+ * A bot's task rows, all of them: past six the rail lists the newest, the rest behind Show all.
+ * The bot is unfolded without being opened, so the conversation on screen stays.
+ */
 async function allTasks(page: Page, bot: string) {
-  await openBot(page, bot);
+  const row = botRow(page, bot);
+  if ((await row.getAttribute("aria-expanded")) === "false") {
+    await row.focus();
+    await page.keyboard.press("ArrowRight");
+  }
   const list = page.getByRole("list", { name: `${bot}'s tasks` });
   const showAll = list.getByRole("button", { name: /^Show all/ });
   if ((await showAll.count()) > 0) await showAll.click();
   return list.getByTestId("task");
 }
 
-/** How many tasks the gateway lists for a bot now, as the rail counts them. */
+/**
+ * How many tasks the gateway lists for a bot now, as the rail counts them: its main conversation
+ * is the bot's own row, not one of them.
+ */
 async function gatewayTaskCount(botId: string): Promise<number> {
   const { sessions } = await gatewayCall<{ sessions: SessionRow[] }>("sessions.list", {
     ...SESSION_LIST,
     limit: 500,
   });
-  return sessions.filter((row) => row.agentId === botId && !row.archived).length;
+  return sessions.filter((row) => row.agentId === botId && !row.archived && row.isMain !== true)
+    .length;
 }
 
 /**
@@ -578,7 +583,7 @@ test("a task stays read after it was opened", async ({ page }) => {
   await expect(backup).toHaveAttribute("data-unread", "false");
   await page.reload();
   await expect(page.getByTestId("bot")).toHaveCount(4, { timeout: 20_000 });
-  // Otto is restored as the open bot and is already unfolded; a click would fold it.
+  // Otto is restored as the open bot, unfolded; its row opens its main conversation.
   await openBot(page, "Otto");
   await expect(backup).toHaveAttribute("data-unread", "false");
 });
@@ -874,7 +879,7 @@ test("the rail names every bot", async ({ page }) => {
   await expect(page.getByTestId("rail-tooltip")).toHaveCount(0);
 });
 
-test("on one pane a bot unfolds in place, and folding never changes the conversation", async ({
+test("on one pane a bot opens its main conversation and Back shows its tasks; folding never changes the conversation", async ({
   page,
 }) => {
   await openShell(page);
@@ -883,18 +888,21 @@ test("on one pane a bot unfolds in place, and folding never changes the conversa
   await page.setViewportSize({ width: 600, height: 700 });
   await page.getByRole("button", { name: "Back to bots" }).click();
   await openBot(page, "Juniper");
-  await expect(botRow(page, "Juniper")).toHaveAttribute("aria-expanded", "true");
-  await expect(page.locator(".conversation")).toBeHidden();
+  await expect(page.locator(".conversation")).toBeVisible();
+  await expect(page.locator(".title-pill-task")).toHaveCount(0);
+  await page.getByRole("button", { name: "Back to bots" }).click();
   const juniperTasks = page.getByRole("list", { name: "Juniper's tasks" }).getByTestId("task");
   await juniperTasks.first().click();
   await expect(page.locator(".conversation")).toBeVisible();
   await page.getByRole("button", { name: "Back to bots" }).click();
-  await expect(botRow(page, "Juniper")).toHaveAttribute("aria-expanded", "true");
+  await expect(juniperTasks.first()).toBeVisible();
 
   // Two panes: folding the open bot keeps its conversation.
   await page.setViewportSize({ width: 1440, height: 900 });
   await openTask(page, "Otto", "Weekly backup check");
-  await botRow(page, "Otto").click();
+  // The fold shows while the pointer is over the bot.
+  await botRow(page, "Otto").hover();
+  await page.getByRole("button", { name: "Hide Otto's tasks" }).click();
   await expect(botRow(page, "Otto")).toHaveAttribute("aria-expanded", "false");
   await expect(page.getByRole("heading", { level: 1, name: "Weekly backup check" })).toBeVisible();
 });
