@@ -1226,11 +1226,21 @@ describe("F-501 F-503: what may run, and where", () => {
   it("F-503: the pins are OpenClaw 2026.11.10's published integrity and Node.js 24.22.1's published SHA-256", () => {
     expect(PINS.version).toBe("2026.11.10");
     expect(PINS.openclaw.url).toBe("https://registry.npmjs.org/openclaw/-/openclaw-2026.11.10.tgz");
-    expect(PINS.openclaw.integrity).toMatch(/^sha512-\/FKDjxY1[A-Za-z0-9+/]+WFaQ==$/);
+    // Written out in full here, from the registry's dist.integrity and nodejs.org's SHASUMS256.txt.
+    expect(PINS.openclaw.integrity).toBe(
+      "sha512-/FKDjxY1ZdUSXHx1a9b4EUpPRZywM3uv4181g22XImJfp/5+h+fFUZ7B7HthNrdYzq//05zH0Yf7mefzIlWFaQ==",
+    );
     expect(PINS.nodeVersion).toBe("24.22.1");
+    const published: Record<string, string> = {
+      "darwin-arm64": "89c682593d76cd44233fa53b1563264e7de9cbb189cad169135c5b4fadfbc0a7",
+      "darwin-x64": "d132557e7ee2b85af08b0c8c34338e65c6430f2238d01f727728ef42dc83b035",
+      "linux-arm64": "33c37be234ba8bee041961047b19160f4d7d0f164e8e246f78bdd10feff148b3",
+      "linux-x64": "eb6728e77c576a35162c122c45ccadf224d89ff00abc8dae46cc2897c6002d7c",
+    };
+    expect(Object.keys(PINS.node).sort()).toEqual(Object.keys(published).sort());
     for (const [target, node] of Object.entries(PINS.node)) {
       expect(node.url).toBe(`https://nodejs.org/dist/v24.22.1/node-v24.22.1-${target}.tar.gz`);
-      expect(node.sha256).toMatch(/^[0-9a-f]{64}$/);
+      expect(node.sha256).toBe(published[target]);
     }
   });
 
