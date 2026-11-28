@@ -297,6 +297,81 @@ test.describe("1440", () => {
     await expect(view(page)).toContainText("By default the gateway keeps 7 days of runs");
   });
 
+  test("F-355: an older page that fails after the person left that routine is not announced", async ({
+    page,
+  }) => {
+    await open(page, "scene=main&routines=many");
+    await page.evaluate(() => {
+      const w = window as unknown as {
+        clawtrateFixture: { invoke: (command: unknown) => Promise<unknown> };
+        failOlder?: () => void;
+      };
+      const invoke = w.clawtrateFixture.invoke.bind(w.clawtrateFixture);
+      w.clawtrateFixture.invoke = (command) => {
+        const each = command as { type: string; offset?: number };
+        if (each.type === "readRoutineRuns" && (each.offset ?? 0) > 0)
+          return new Promise((_, reject) => (w.failOlder = () => reject(new Error("busy"))));
+        return invoke(command);
+      };
+    });
+    await view(page).getByTestId("routine-row").filter({ hasText: "Morning digest" }).click();
+    await view(page).getByRole("button", { name: "Load older runs" }).click();
+    await view(page).getByRole("button", { name: "Back to routines" }).click();
+    await view(page)
+      .getByTestId("routine-row")
+      .filter({ hasNotText: "Morning digest" })
+      .first()
+      .click();
+    await page.evaluate(() => (window as unknown as { failOlder: () => void }).failOlder());
+    await page.waitForTimeout(300);
+    await expect(page.getByTestId("b-announcer")).not.toHaveText("Couldn't load older runs.");
+  });
+
+  test("F-355: Load older runs shows only while the gateway has another page, puts the older runs under the first 20, and a failed page keeps them with Try again", async ({
+    page,
+  }) => {
+    const older = view(page).getByRole("button", { name: "Load older runs" });
+    const rows = view(page).locator("[data-run-at]");
+    const times = () =>
+      rows.evaluateAll((each) => each.map((row) => Number(row.getAttribute("data-run-at"))));
+    // Six runs: one page, nothing older.
+    await open(page);
+    await view(page).getByTestId("routine-row").filter({ hasText: "Morning digest" }).click();
+    await expect(rows).toHaveCount(6);
+    await expect(older).toHaveCount(0);
+
+    await open(page, "scene=main&routines=many&olderruns=fail");
+    await view(page).getByTestId("routine-row").filter({ hasText: "Morning digest" }).click();
+    await expect(rows).toHaveCount(20);
+    const first = await times();
+    await older.click();
+    const error = view(page).getByTestId("read-error");
+    await expect(error).toContainText(
+      "Couldn't load older runs. The gateway didn't answer in time.",
+    );
+    await expect(rows).toHaveCount(20);
+    // Said aloud, and focus stays where the person can try again.
+    await expect(page.getByTestId("b-announcer")).toHaveText("Couldn't load older runs.");
+    await expect(error.getByRole("button", { name: "Try again" })).toBeFocused();
+    await error.getByRole("button", { name: "Try again" }).click();
+    await expect(rows).toHaveCount(27);
+    await expect(error).toHaveCount(0);
+    await expect(older).toHaveCount(0);
+    await expect(rows.nth(20)).toBeFocused();
+    const all = await times();
+    expect(all.slice(0, 20)).toEqual(first);
+    expect(all).toEqual([...all].sort((a, b) => b - a));
+
+    // An older run whose conversation the gateway no longer keeps still shows what it recorded.
+    await rows.last().click();
+    await expect(view(page).getByTestId("run-not-kept")).toContainText(
+      "Clawtrate can't show this run's conversation.",
+    );
+    await expect(view(page).getByTestId("run-summary")).toBeVisible();
+    await view(page).getByRole("button", { name: "Back to Morning digest, all runs" }).click();
+    await expect(rows).toHaveCount(27);
+  });
+
   test("F-024: a bot whose routine is running shows the working ring, and the run under it", async ({
     page,
   }) => {

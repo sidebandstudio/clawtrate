@@ -63,13 +63,13 @@ import {
   RoutinesEngine,
   type BotRoutines,
   type CalendarRuns,
+  type RoutineRuns,
   type GatewayHooks,
   type NewRoutine,
   type Routine,
   type RoutineFields,
   type RoutineRevision,
   type RoutineRemove,
-  type RoutineRun,
   type RoutineRunNow,
   type RoutineSaveCheck,
   type RoutineWrite,
@@ -7149,9 +7149,9 @@ export class ClawtrateClient {
     return this.routines.botRoutines(botId);
   }
 
-  /** A routine's runs, newest finished first, at most `MAX_ROUTINE_RUNS`; returned, not kept. */
-  readRoutineRuns(id: string): Promise<RoutineRun[]> {
-    return this.routines.runs(id);
+  /** A page of a routine's runs, newest finished first, from `offset`; returned, not kept. */
+  readRoutineRuns(id: string, offset: number): Promise<RoutineRuns> {
+    return this.routines.runs(id, offset);
   }
 
   /** Every routine's runs that started from `from` to `to`, for the calendar; returned, not kept. */

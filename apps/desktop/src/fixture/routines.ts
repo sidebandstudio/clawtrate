@@ -11,6 +11,7 @@
 //     and one of Pip's that only Pip's own read or a search finds
 //   routinehold=<id>   a routine's read, runs and conversations wait for releaseRoutineReads()
 //   routinefail=<id>   a routine's read, runs and conversations fail
+//   olderruns=fail     a routine's first read of older runs fails; reading it again answers
 //   botomitted=<n>     a bot's own routine read counts n more it did not list
 //   calendar=fail|partial   the calendar's read fails, or says it is partial
 // With `access=admin` (accounts.ts) the routines can be changed, and:
@@ -55,6 +56,7 @@ export type RoutineParams = {
     | "truncated";
   hold?: string | null;
   fail?: string | null;
+  olderFail?: boolean;
   calendar?: "fail" | "partial" | null;
   save?: "refused" | "noanswer" | "conflict" | "changed" | null;
   pause?: "fail" | null;
@@ -85,6 +87,7 @@ export function routineParams(params: URLSearchParams): RoutineParams {
           : "none",
     hold: params.get("routinehold"),
     fail: params.get("routinefail"),
+    olderFail: params.get("olderruns") === "fail",
     calendar: calendar === "fail" || calendar === "partial" ? calendar : null,
     save: oneOf(params.get("save"), ["refused", "noanswer", "conflict", "changed"] as const),
     pause: oneOf(params.get("pause"), ["fail"] as const),
@@ -513,6 +516,7 @@ export function routineCommands(now: number, params: RoutineParams) {
   const recorded = new Map<string, RoutineRun[]>();
   /** The instruction given to each run whose conversation the gateway keeps, by run id. */
   const transcripts = new Map<RoutineRun["runId"], string>();
+  let olderFail = params.olderFail === true;
   /** Manual runs started here: the `<n>` of the gateway's `manual:<id>:<ms>:<n>`. */
   let manualRuns = 0;
   /** Each id's removals: a removed routine's run never lands on one made again with its id. */
@@ -762,10 +766,21 @@ export function routineCommands(now: number, params: RoutineParams) {
           omitted: params.botOmitted ?? 0,
         }));
       case "readRoutineRuns": {
+        if (command.offset > 0 && olderFail) {
+          olderFail = false;
+          return new Promise((_, reject) =>
+            setTimeout(() => reject(new Error("The gateway didn't answer in time.")), 300),
+          );
+        }
         // The routine as it is when a held read resumes: one removed and made again since is another.
         return answer(command.id, () => {
           const routine = find(command.id);
-          return routine ? runsOf(routine).slice(0, 20) : [];
+          const runs = routine ? runsOf(routine) : [];
+          const next = command.offset + 20;
+          return {
+            runs: runs.slice(command.offset, next),
+            nextOffset: next < runs.length ? next : null,
+          };
         });
       }
       case "readCalendarRuns":

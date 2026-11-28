@@ -19,13 +19,17 @@ import {
   MAX_ROUTINE_RUNS,
   MAX_ROUTINES,
   MAX_RUN_MESSAGE_CHARS,
+  MAX_SHOWN_RUNS,
   parseRoutine,
+  parseRun,
   patchOf,
   RETRY_MS,
   RoutinesEngine,
   RUNNING_RECHECK_MS,
   type RoutineFields,
+  type RoutineRuns,
   type RoutinesState,
+  withOlderRuns,
 } from "../src/routines.ts";
 import { FAST, grantingGateway, stampOn, URL_A } from "./client-harness.ts";
 import { memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
@@ -1337,11 +1341,63 @@ describe("F-355: a routine's runs", () => {
   it("are at most 20, in the gateway's order: newest finished first", async () => {
     const entries = Array.from({ length: 27 }, (_, index) => runEntry(1_000_000 - index * 60_000));
     const { routines, requests } = engine({ "cron.runs": () => ({ entries, total: 27 }) });
-    const runs = await routines.runs(JOB);
-    expect(requests[0]!.params).toEqual({ id: JOB, limit: MAX_ROUTINE_RUNS });
+    const { runs } = await routines.runs(JOB);
+    expect(requests[0]!.params).toEqual({ id: JOB, limit: MAX_ROUTINE_RUNS, offset: 0 });
     expect(runs.map((run) => run.runAt)).toEqual(
       entries.slice(0, 20).map((entry) => entry.runAtMs),
     );
+  });
+
+  it("load older pages on request under the first, without repeating a run, through a failed page, until the gateway has no more", async () => {
+    let entries = Array.from({ length: 45 }, (_, index) =>
+      runEntry(1_000_000 - index * 60_000, { runId: `r${index}` }),
+    );
+    let fail = false;
+    const { routines, requests } = engine({
+      "cron.runs": (params) => {
+        if (fail) {
+          fail = false;
+          throw new Error("request timed out");
+        }
+        const offset = params.offset as number;
+        const page = entries.slice(offset, offset + (params.limit as number));
+        const next = offset + page.length;
+        const hasMore = next < entries.length;
+        return { entries: page, total: entries.length, hasMore, nextOffset: hasMore ? next : null };
+      },
+    });
+    const ids = (shown: RoutineRuns) => shown.runs.map((run) => run.runId);
+    const first = await routines.runs(JOB);
+    expect(first.nextOffset).toBe(20);
+    // A run finishes before the next page is read: the gateway's list moves down by one.
+    entries = [runEntry(2_000_000, { runId: "new" }), ...entries];
+    fail = true;
+    await expect(routines.runs(JOB, first.nextOffset!)).rejects.toThrow("request timed out");
+    // The runs shown stay as they were, and the same page is read again.
+    const second = withOlderRuns(first, await routines.runs(JOB, first.nextOffset!));
+    expect(ids(second)).toEqual(entries.slice(1, 40).map((entry) => entry.runId));
+    expect(second.nextOffset).toBe(40);
+    const last = withOlderRuns(second, await routines.runs(JOB, second.nextOffset!));
+    expect(ids(last)).toEqual(entries.slice(1).map((entry) => entry.runId));
+    expect(last.nextOffset).toBeNull();
+    expect(requests.map((request) => request.params)).toEqual(
+      [0, 20, 20, 40].map((offset) => ({ id: JOB, limit: MAX_ROUTINE_RUNS, offset })),
+    );
+  });
+
+  it(`offer no older page past ${MAX_SHOWN_RUNS} runs shown`, () => {
+    const page = (from: number, count: number, nextOffset: number | null): RoutineRuns => ({
+      runs: Array.from({ length: count }, (_, index) =>
+        parseRun(runEntry(10_000_000 - from - index, { runId: `r${from + index}` }))!,
+      ),
+      nextOffset,
+    });
+    const shown = withOlderRuns(
+      page(0, MAX_SHOWN_RUNS - 10, MAX_SHOWN_RUNS - 10),
+      page(MAX_SHOWN_RUNS - 10, 20, MAX_SHOWN_RUNS + 10),
+    );
+    expect(shown.runs).toHaveLength(MAX_SHOWN_RUNS);
+    expect(shown.nextOffset).toBeNull();
   });
 
   it("keep a run that started earlier but finished later above one that started after it", async () => {
@@ -1351,7 +1407,7 @@ describe("F-355: a routine's runs", () => {
       runEntry(200, { ts: 300, runId: "B" }),
     ];
     const { routines } = engine({ "cron.runs": () => ({ entries }) });
-    expect((await routines.runs(JOB)).map((run) => run.runId)).toEqual(["A", "B"]);
+    expect((await routines.runs(JOB)).runs.map((run) => run.runId)).toEqual(["A", "B"]);
   });
 
   it("F-190: carry how each ended, its usage and whether it was started by hand", async () => {
@@ -1368,7 +1424,7 @@ describe("F-355: a routine's runs", () => {
         ],
       }),
     });
-    expect(await routines.runs(JOB)).toMatchObject([
+    expect((await routines.runs(JOB)).runs).toMatchObject([
       {
         status: "error",
         error: "Channel is required (no configured channels detected).",
@@ -1407,9 +1463,9 @@ describe("F-355: a routine's runs", () => {
         entries: ids.map(([runId], index) => runEntry(index + 1, { runId })),
       }),
     });
-    expect((await routines.runs(JOB)).map((run) => [run.runId ?? undefined, run.manual])).toEqual(
-      ids.map(([runId, manual]) => [runId || undefined, manual]),
-    );
+    expect(
+      (await routines.runs(JOB)).runs.map((run) => [run.runId ?? undefined, run.manual]),
+    ).toEqual(ids.map(([runId, manual]) => [runId || undefined, manual]));
   });
 
   it("F-024: a run's id that isn't text is not started by hand", async () => {
@@ -1418,7 +1474,7 @@ describe("F-355: a routine's runs", () => {
         entries: [runEntry(1, { runId: 7 }), runEntry(2, { runId: { manual: true } })],
       }),
     });
-    expect((await routines.runs(JOB)).map((run) => run.manual)).toEqual([false, false]);
+    expect((await routines.runs(JOB)).runs.map((run) => run.manual)).toEqual([false, false]);
   });
 });
 

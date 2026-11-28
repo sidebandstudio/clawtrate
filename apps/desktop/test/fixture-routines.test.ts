@@ -6,6 +6,7 @@ import {
   type Routine,
   type RoutineFields,
   type RoutineRun,
+  type RoutineRuns,
 } from "@clawtrate/core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -155,7 +156,8 @@ describe("the fixture's routine host", () => {
   it("Run now records the run under the id it returned, and the runs before it keep theirs", async () => {
     vi.useFakeTimers();
     const { ask } = host();
-    const runs = () => ask<RoutineRun[]>({ type: "readRoutineRuns", id: DIGEST } as BridgeCommand);
+    const runs = () =>
+      ask<RoutineRuns>({ type: "readRoutineRuns", id: DIGEST, offset: 0 }).then(({ runs }) => runs);
     const before = await runs();
     const started = await ask<{ status: string; runId: string }>({
       type: "runRoutineNow",
@@ -171,7 +173,8 @@ describe("the fixture's routine host", () => {
     vi.useFakeTimers();
     const { ask, routines } = host();
     const BACKUP = "routine-backup";
-    const runs = () => ask<RoutineRun[]>({ type: "readRoutineRuns", id: BACKUP } as BridgeCommand);
+    const runs = () =>
+      ask<RoutineRuns>({ type: "readRoutineRuns", id: BACKUP, offset: 0 }).then(({ runs }) => runs);
     const before = await runs();
     expect(before[0]).toMatchObject({ status: "error" });
     await ask({ type: "runRoutineNow", id: BACKUP } as BridgeCommand);
@@ -266,10 +269,11 @@ describe("the fixture's routine host", () => {
     const first = await runNow();
     const second = await runNow();
     expect(second.runId).not.toBe(first.runId);
-    const [newest, previous] = await ask<RoutineRun[]>({
+    const [newest, previous] = await ask<RoutineRuns>({
       type: "readRoutineRuns",
       id: DIGEST,
-    } as BridgeCommand);
+      offset: 0,
+    }).then(({ runs }) => runs);
     expect([newest!.runId, previous!.runId]).toEqual([second.runId, first.runId]);
     expect(newest!.sessionKey).not.toBe(previous!.sessionKey);
   });
@@ -290,7 +294,9 @@ describe("the fixture's routine host", () => {
     await ask({ type: "runRoutineNow", id: DIGEST } as BridgeCommand);
     const digest = routines().find((each) => each.id === DIGEST)!;
     await ask(editOf(digest, { text: "Only list what needs an answer today." }));
-    const [ran] = await ask<RoutineRun[]>({ type: "readRoutineRuns", id: DIGEST } as BridgeCommand);
+    const [ran] = await ask<RoutineRuns>({ type: "readRoutineRuns", id: DIGEST, offset: 0 }).then(
+      ({ runs }) => runs,
+    );
     expect(await ask(conversationOf(ran!))).toMatchObject({
       status: "kept",
       message: expect.stringMatching(/^Summarise the notes I added yesterday/u),
@@ -312,7 +318,9 @@ describe("the fixture's routine host", () => {
     await vi.advanceTimersByTimeAsync(400);
     expect(await update).toMatchObject({ status: "saved", routine: { target: "main" } });
     await vi.runAllTimersAsync();
-    const [ran] = await ask<RoutineRun[]>({ type: "readRoutineRuns", id: DIGEST });
+    const [ran] = await ask<RoutineRuns>({ type: "readRoutineRuns", id: DIGEST, offset: 0 }).then(
+      ({ runs }) => runs,
+    );
     expect(ran).toMatchObject({
       runId: (await started).runId,
       sessionKey: expect.stringContaining(`:cron:${DIGEST}:run:`),
@@ -323,7 +331,8 @@ describe("the fixture's routine host", () => {
   it("the newest scheduled run's conversation stays readable after Run now", async () => {
     vi.useFakeTimers();
     const { ask } = host();
-    const runs = () => ask<RoutineRun[]>({ type: "readRoutineRuns", id: DIGEST } as BridgeCommand);
+    const runs = () =>
+      ask<RoutineRuns>({ type: "readRoutineRuns", id: DIGEST, offset: 0 }).then(({ runs }) => runs);
     const [scheduled] = await runs();
     expect(await ask(conversationOf(scheduled!))).toMatchObject({ status: "kept" });
     await ask({ type: "runRoutineNow", id: DIGEST } as BridgeCommand);
@@ -362,7 +371,9 @@ describe("the fixture's routine host", () => {
     await vi.advanceTimersByTimeAsync(310);
     const second = runNow();
     await vi.runAllTimersAsync();
-    const runs = await ask<RoutineRun[]>({ type: "readRoutineRuns", id: DIGEST } as BridgeCommand);
+    const runs = await ask<RoutineRuns>({ type: "readRoutineRuns", id: DIGEST, offset: 0 }).then(
+      ({ runs }) => runs,
+    );
     expect(runs.slice(0, 2).map((each) => each.runId)).toEqual([
       (await second).runId,
       (await first).runId,
@@ -375,10 +386,11 @@ describe("the fixture's routine host", () => {
     const BACKUP = "routine-backup";
     const backup = routines().find((each) => each.id === BACKUP)!;
     await ask(editOf(backup, { schedule: { ...backup.schedule, expr: "0 5 * * 1" } }));
-    const [last, before] = await ask<RoutineRun[]>({
+    const [last, before] = await ask<RoutineRuns>({
       type: "readRoutineRuns",
       id: BACKUP,
-    } as BridgeCommand);
+      offset: 0,
+    }).then(({ runs }) => runs);
     // Daily, as it was scheduled when they ran, not weekly as it is now.
     expect(last!.runAt - before!.runAt).toBe(24 * 60 * 60_000);
   });
@@ -405,7 +417,10 @@ describe("the fixture's routine host", () => {
       lastRunAt: null,
       runningAt: null,
     });
-    expect(await ask({ type: "readRoutineRuns", id: routine.id } as BridgeCommand)).toEqual([]);
+    expect(await ask({ type: "readRoutineRuns", id: routine.id, offset: 0 })).toEqual({
+      runs: [],
+      nextOffset: null,
+    });
   });
 
   it("a queued manual run does not start on a recreated routine", async () => {
@@ -442,7 +457,9 @@ describe("the fixture's routine host", () => {
       } as BridgeCommand);
     await create("First");
     await ask({ type: "runRoutineNow", id } as BridgeCommand);
-    const read = send<RoutineRun[]>({ type: "readRoutineRuns", id } as BridgeCommand);
+    const read = send<RoutineRuns>({ type: "readRoutineRuns", id, offset: 0 }).then(
+      ({ runs }) => runs,
+    );
     await ask({ type: "removeRoutine", id } as BridgeCommand);
     await create("Second");
     releaseRoutineReads();
@@ -476,7 +493,9 @@ describe("the fixture's routine host", () => {
     releaseRoutineReads();
     await vi.runAllTimersAsync();
     await read;
-    const after = send<RoutineRun[]>({ type: "readRoutineRuns", id } as BridgeCommand);
+    const after = send<RoutineRuns>({ type: "readRoutineRuns", id, offset: 0 }).then(
+      ({ runs }) => runs,
+    );
     releaseRoutineReads();
     await vi.runAllTimersAsync();
     expect(await after).toEqual([]);
@@ -486,23 +505,30 @@ describe("the fixture's routine host", () => {
     vi.useFakeTimers();
     const { ask } = host();
     await ask({ type: "removeRoutine", id: DIGEST } as BridgeCommand);
-    expect(await ask({ type: "readRoutineRuns", id: DIGEST } as BridgeCommand)).toEqual([]);
+    expect(await ask({ type: "readRoutineRuns", id: DIGEST, offset: 0 })).toEqual({
+      runs: [],
+      nextOffset: null,
+    });
     await ask({
       type: "createRoutine",
       input: { ...fields("Morning digest again"), botId: "marlow" },
       key: DIGEST.replace(/^routine-/u, ""),
       stamp: STAMP,
     } as BridgeCommand);
-    expect(await ask({ type: "readRoutineRuns", id: DIGEST } as BridgeCommand)).toEqual([]);
+    expect(await ask({ type: "readRoutineRuns", id: DIGEST, offset: 0 })).toEqual({
+      runs: [],
+      nextOffset: null,
+    });
   });
 
   it("a conversation asked for by its run's time, with no run id, is found", async () => {
     vi.useFakeTimers();
     const { ask } = host();
-    const [newest] = await ask<RoutineRun[]>({
+    const [newest] = await ask<RoutineRuns>({
       type: "readRoutineRuns",
       id: DIGEST,
-    } as BridgeCommand);
+      offset: 0,
+    }).then(({ runs }) => runs);
     const read = (runId: string | null) =>
       ask<{ status: string }>({
         type: "readRunConversation",

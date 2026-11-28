@@ -30,8 +30,10 @@ export const MAX_ROUTINE_UPDATES = 128;
 export const MAX_ROUTINE_READS = 32;
 /** A routine's instruction or reminder text as kept and shown. */
 export const MAX_ROUTINE_TEXT_CHARS = 4_096;
-/** Runs read for a routine's page, newest first: older runs drop out of the list (F-355). */
+/** Runs read for a routine's page at a time, newest first; older ones are read on request (F-355). */
 export const MAX_ROUTINE_RUNS = 20;
+/** Runs a routine's page shows across the pages read; past it no older page is offered. */
+export const MAX_SHOWN_RUNS = 1_000;
 /** Past runs across routines read for the calendar's dates; past it the read says it is partial. */
 export const MAX_CALENDAR_RUNS = 1_000;
 /**
@@ -207,6 +209,9 @@ export type RunSelector = { runId: string | null; runAt: number; sessionKey: str
 /** One bot's routines as `cron.list` filtered to it gives them. */
 export type BotRoutines = { routines: Routine[]; omitted: number };
 
+/** A routine's runs as shown, and where the gateway's next older page starts, null when it has none. */
+export type RoutineRuns = { runs: RoutineRun[]; nextOffset: number | null };
+
 /** The calendar's recorded runs for its dates, and whether older ones in them were left unread. */
 export type CalendarRuns = { runs: RoutineRun[]; partial: boolean };
 
@@ -370,6 +375,21 @@ export function parseRuns(result: unknown, max: number): RoutineRun[] {
     .map(parseRun)
     .filter((run): run is RoutineRun => run !== null)
     .slice(0, max);
+}
+
+/**
+ * `older`, the page read at `shown.nextOffset`, under the runs shown. A run
+ * that finished between the reads moves the gateway's list down, so a run
+ * already shown is not repeated; past `MAX_SHOWN_RUNS` no further page is offered.
+ */
+export function withOlderRuns(shown: RoutineRuns, older: RoutineRuns): RoutineRuns {
+  const key = (run: RoutineRun) => JSON.stringify(run.runId ?? run.runAt);
+  const seen = new Set(shown.runs.map(key));
+  const runs = [...shown.runs, ...older.runs.filter((run) => !seen.has(key(run)))].slice(
+    0,
+    MAX_SHOWN_RUNS,
+  );
+  return { runs, nextOffset: runs.length < MAX_SHOWN_RUNS ? older.nextOffset : null };
 }
 
 /** `cron.history`'s messages for one run, oldest first, read as a conversation only on positive evidence. */
@@ -1548,12 +1568,20 @@ export class RoutinesEngine {
     return { enabled: hooks?.enabled === true, path: str(hooks?.path) ?? "/hooks" };
   }
 
-  /** A routine's runs in the gateway's order (newest finished first), at most `MAX_ROUTINE_RUNS`. */
-  async runs(id: string): Promise<RoutineRun[]> {
-    return parseRuns(
-      await this.ctx.request("cron.runs", { id, limit: MAX_ROUTINE_RUNS }),
-      MAX_ROUTINE_RUNS,
+  /**
+   * A page of a routine's runs in the gateway's order (newest finished first),
+   * at most `MAX_ROUTINE_RUNS` from `offset`, and where the next one starts.
+   */
+  async runs(id: string, offset = 0): Promise<RoutineRuns> {
+    const result = asRecord(
+      await this.ctx.request("cron.runs", { id, limit: MAX_ROUTINE_RUNS, offset }),
     );
+    const nextOffset = num(result?.nextOffset);
+    return {
+      runs: parseRuns(result, MAX_ROUTINE_RUNS),
+      nextOffset:
+        result?.hasMore === true && nextOffset !== null && nextOffset > offset ? nextOffset : null,
+    };
   }
 
   /**

@@ -50,13 +50,13 @@ import {
   MAX_ROUTINE_TEXT_CHARS,
   type BotRoutines,
   type CalendarRuns,
+  type RoutineRuns,
   type GatewayHooks,
   type NewRoutine,
   type Routine,
   type RoutineFields,
   type RoutineRevision,
   type RoutineRemove,
-  type RoutineRun,
   type RoutineRunNow,
   type RoutineSchedule,
   type RoutineSaveCheck,
@@ -282,8 +282,8 @@ export type BridgeCommand =
   | { type: "refreshRoutines" }
   /** One bot's routines, when the kept list is missing some of the gateway's. */
   | { type: "readBotRoutines"; botId: string }
-  /** A routine's runs in the gateway's order, newest finished first, at most `MAX_ROUTINE_RUNS`. */
-  | { type: "readRoutineRuns"; id: string }
+  /** A page of a routine's runs in the gateway's order, newest finished first, from `offset`. */
+  | { type: "readRoutineRuns"; id: string; offset: number }
   /** Every routine's runs that started from `from` to `to` (epoch ms), for the calendar. */
   | { type: "readCalendarRuns"; from: number; to: number }
   /** One run's conversation, when the gateway keeps it; the run by its id, else its start. */
@@ -655,7 +655,7 @@ type BridgeResultRest<C extends BridgeCommand> = C extends { type: "sendMessage"
                             : C extends { type: "readBotRoutines" }
                               ? BotRoutines
                               : C extends { type: "readRoutineRuns" }
-                                ? RoutineRun[]
+                                ? RoutineRuns
                                 : C extends { type: "readCalendarRuns" }
                                   ? CalendarRuns
                                   : C extends { type: "readRunConversation" }
@@ -1306,7 +1306,11 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "readBotRoutines":
       return { type: "readBotRoutines", botId: botId(command.botId) };
     case "readRoutineRuns":
-      return { type: "readRoutineRuns", id: id(command.id, "routine id") };
+      return {
+        type: "readRoutineRuns",
+        id: id(command.id, "routine id"),
+        offset: count(command.offset, Number.MAX_SAFE_INTEGER, "offset"),
+      };
     case "readRunConversation":
       return {
         type: "readRunConversation",
@@ -2257,7 +2261,7 @@ class ViewerSession implements BridgeSession {
     return { ...list, models };
   }
 
-  private routineResult(result: BotRoutines | RoutineRun[] | CalendarRuns | RunConversation) {
+  private routineResult(result: BotRoutines | RoutineRuns | CalendarRuns | RunConversation) {
     const max = this.policy.maxResultChars;
     if (max !== undefined && JSON.stringify(result).length > max)
       throw new RangeError("The gateway returned more routine data than this view can receive.");
@@ -2326,7 +2330,7 @@ class ViewerSession implements BridgeSession {
       case "readBotRoutines":
         return this.routineResult(await client.readBotRoutines(command.botId));
       case "readRoutineRuns":
-        return this.routineResult(await client.readRoutineRuns(command.id));
+        return this.routineResult(await client.readRoutineRuns(command.id, command.offset));
       case "readCalendarRuns":
         return this.routineResult(await client.readCalendarRuns(command.from, command.to));
       case "readRunConversation":

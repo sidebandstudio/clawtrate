@@ -15,6 +15,9 @@ import {
   type HostInfo,
   type Routine,
   type RoutineRun,
+  type RoutineRuns,
+  MAX_SHOWN_RUNS,
+  withOlderRuns,
 } from "@clawtrate/core";
 import {
   useEffect,
@@ -23,6 +26,7 @@ import {
   type KeyboardEvent,
   type MouseEvent,
   type ReactNode,
+  type Ref,
 } from "react";
 import { Menu, type MenuEntry } from "../Menu.tsx";
 import { AdminBar, GrantedBar, useAnnouncer, useGranted } from "../bots/parts.tsx";
@@ -46,7 +50,7 @@ import { BackIcon, ChevronIcon, ClockIcon, MoreIcon, PlusIcon } from "../icons.t
 import { Markdown } from "../Markdown.tsx";
 import { Note } from "../bots/parts.tsx";
 import { Calendar } from "./Calendar.tsx";
-import { useKeyedRead } from "./read.ts";
+import { useKeyedRead, type Read } from "./read.ts";
 import { shownStamp } from "../stamp.ts";
 import {
   fullWhen,
@@ -341,25 +345,77 @@ function owners(bots: Bot[], routines: Routine[]): Bot[] {
   return [...bots, ...absent.map((id) => ownerOf(bots, id))];
 }
 
+/** Older pages of a routine's runs, read on request under the first. */
+type OlderRuns = { reading: boolean; error: string | null; load: () => void };
+
 /**
- * A routine's runs, for one gateway, read again whenever its last run or
- * running state changes (the `cron` event's `started` and `finished` move
- * those). An answer for another routine or revision is never shown.
+ * A routine's runs, for one gateway: the first page read again whenever its
+ * last run or running state changes (the `cron` event's `started` and
+ * `finished` move those), and older pages under it on request. An answer for
+ * another routine or revision is never shown, and a new first page starts the
+ * list over from it.
  */
-function useRuns(gateway: string, routine: Routine | undefined) {
+function useRuns(
+  gateway: string,
+  routine: Routine | undefined,
+  announce: (text: string) => void,
+): [Read<RoutineRuns>, () => void, OlderRuns] {
   const bridge = useBridge();
   const id = routine?.id ?? null;
-  return useKeyedRead(
+  const [first, retry] = useKeyedRead(
     id === null ? null : `${gateway}:${id}:${routine?.lastRunAt ?? ""}:${routine?.runningAt ?? ""}`,
-    () => bridge.invoke({ type: "readRoutineRuns", id: id! }),
+    () => bridge.invoke({ type: "readRoutineRuns", id: id!, offset: 0 }),
   );
+  // Older pages hold only under the first page they were read after.
+  const [older, setOlder] = useState<{
+    after: RoutineRuns;
+    shown: RoutineRuns;
+    reading: boolean;
+    error: string | null;
+  } | null>(null);
+  const after = first.status === "ready" ? first.value : null;
+  // The history on screen now, for an answer that comes after the person moved on.
+  const shownAfter = useRef(after);
+  useEffect(() => {
+    shownAfter.current = after;
+  }, [after]);
+  const current = older !== null && older.after === after ? older : null;
+  const load = () => {
+    const shown = current?.shown ?? after;
+    if (after === null || shown === null || shown.nextOffset === null || current?.reading) return;
+    setOlder({ after, shown, reading: true, error: null });
+    const settle = (next: Partial<NonNullable<typeof older>>) =>
+      setOlder((now) => (now?.after === after ? { ...now, reading: false, ...next } : now));
+    bridge.invoke({ type: "readRoutineRuns", id: id!, offset: shown.nextOffset }).then(
+      (page) => settle({ shown: withOlderRuns(shown, page), error: null }),
+      (error: unknown) => {
+        settle({ error: error instanceof Error ? error.message : String(error) });
+        if (shownAfter.current === after) announce("Couldn't load older runs.");
+      },
+    );
+  };
+  return [
+    current ? { status: "ready", value: current.shown } : first,
+    retry,
+    { reading: current?.reading ?? false, error: current?.error ?? null, load },
+  ];
 }
 
-function Retry({ text, error, onRetry }: { text: string; error: string; onRetry: () => void }) {
+function Retry({
+  text,
+  error,
+  onRetry,
+  buttonRef,
+}: {
+  text: string;
+  error: string;
+  onRetry: () => void;
+  buttonRef?: Ref<HTMLButtonElement>;
+}) {
   return (
     <p className="r-hint" data-testid="read-error">
       {text} {error}{" "}
-      <button type="button" className="button" data-size="sm" onClick={onRetry}>
+      <button type="button" className="button" data-size="sm" onClick={onRetry} ref={buttonRef}>
         Try again
       </button>
     </p>
@@ -401,22 +457,41 @@ function Instruction({ routine, bot }: { routine: Routine; bot: string }) {
 }
 
 function Page({
-  gateway,
   routine,
+  runs,
+  onRetry,
+  older,
   bot,
   now,
   onRun,
   hooks,
 }: {
-  gateway: string;
   routine: Routine;
+  runs: Read<RoutineRuns>;
+  onRetry: () => void;
+  older: OlderRuns;
   bot: Bot;
   now: number;
   onRun: (run: RoutineRun) => void;
   /** With admin: the gateway's hook address, under Triggers (F-349). */
   hooks: ReactNode;
 }) {
-  const [runs, retry] = useRuns(gateway, routine);
+  const listRef = useRef<HTMLUListElement>(null);
+  // The row a finished "Load older runs" moves focus to: the first one it added.
+  const focusFrom = useRef<number | null>(null);
+  const count = runs.status === "ready" ? runs.value.runs.length : 0;
+  useEffect(() => {
+    if (focusFrom.current === null || count <= focusFrom.current) return;
+    listRef.current?.querySelectorAll<HTMLElement>("[data-run-at]")[focusFrom.current]?.focus();
+    focusFrom.current = null;
+  }, [count]);
+  // A load the person asked for that failed leaves focus on its Try again, not on nothing.
+  const retryRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (older.error === null || focusFrom.current === null) return;
+    retryRef.current?.focus();
+    focusFrom.current = null;
+  }, [older.error]);
   const tz = routineZone(routine.schedule);
   const viewer = viewerZone();
   const schedule = scheduleLine(routine);
@@ -537,15 +612,15 @@ function Page({
         {runs.status === "loading" ? (
           <p className="r-hint">Loading runs…</p>
         ) : runs.status === "error" ? (
-          <Retry text="Couldn't load runs." error={runs.error} onRetry={retry} />
-        ) : runs.value.length === 0 && routine.runningAt === null ? (
+          <Retry text="Couldn't load runs." error={runs.error} onRetry={onRetry} />
+        ) : runs.value.runs.length === 0 && routine.runningAt === null ? (
           <p className="r-hint" data-testid="no-runs">
             {routine.enabled && routine.nextRunAt !== null
               ? `No runs yet. The first is due ${when(routine.nextRunAt, now, zoneOf(routine))}.`
               : "No runs yet."}
           </p>
         ) : (
-          <ul className="r-rows" aria-label="Runs" data-testid="run-list">
+          <ul ref={listRef} className="r-rows" aria-label="Runs" data-testid="run-list">
             {routine.runningAt !== null && (
               <li>
                 <div className="r-run" data-testid="run-row" data-running="true">
@@ -559,7 +634,7 @@ function Page({
                 </div>
               </li>
             )}
-            {runs.value.map((run) => {
+            {runs.value.runs.map((run) => {
               const outcome = runOutcome(run);
               const at = when(run.runAt, now, viewer);
               return (
@@ -595,6 +670,40 @@ function Page({
               );
             })}
           </ul>
+        )}
+        {runs.status === "ready" &&
+          (older.error !== null ? (
+            <Retry
+              text="Couldn't load older runs."
+              error={older.error}
+              buttonRef={retryRef}
+              onRetry={() => {
+                focusFrom.current = count;
+                older.load();
+              }}
+            />
+          ) : (
+            runs.value.nextOffset !== null && (
+              <button
+                type="button"
+                className="button r-older"
+                data-size="sm"
+                aria-busy={older.reading}
+                disabled={older.reading}
+                onClick={() => {
+                  focusFrom.current = count;
+                  older.load();
+                }}
+              >
+                {older.reading ? "Loading older runs…" : "Load older runs"}
+              </button>
+            )
+          ))}
+        {runs.status === "ready" && runs.value.runs.length >= MAX_SHOWN_RUNS && (
+          <p className="r-hint">
+            Clawtrate shows at most {MAX_SHOWN_RUNS.toLocaleString("en-US")} of a routine&apos;s
+            runs.
+          </p>
         )}
         <p className="r-foot-note">
           Clawtrate shows the 20 runs that finished most recently. By default the gateway keeps 7
@@ -873,12 +982,12 @@ export function RoutinesView({
         ? kept
         : null;
   const running = named !== null && named === routine?.runningAt;
-  const [found, retryFound] = useRuns(
-    gateway,
-    named === null || running ? undefined : (routine ?? shown?.routine),
-  );
+  // A rail row's run still in progress is not among the runs yet: they are read once it finishes.
+  const [runs, retryRuns, older] = useRuns(gateway, running ? undefined : shown?.routine, announce);
   const match =
-    found.status === "ready" ? found.value.find((each) => each.runAt === named) : undefined;
+    named !== null && runs.status === "ready"
+      ? runs.value.runs.find((each) => each.runAt === named)
+      : undefined;
   useEffect(() => {
     if (match) onNav({ ...nav, run: match });
   }, [match, nav, onNav]);
@@ -1108,9 +1217,9 @@ export function RoutinesView({
               <p className="r-hint" role="status" data-testid="run-starting">
                 Running…
               </p>
-            ) : found.status === "error" ? (
-              <Retry text="Couldn't load this run." error={found.error} onRetry={retryFound} />
-            ) : found.status === "ready" && !match ? (
+            ) : runs.status === "error" ? (
+              <Retry text="Couldn't load this run." error={runs.error} onRetry={retryRuns} />
+            ) : runs.status === "ready" && !match ? (
               <p className="r-hint" data-testid="run-gone">
                 This run isn&apos;t among the 20 the gateway lists for this routine now.
               </p>
@@ -1121,8 +1230,10 @@ export function RoutinesView({
             <>
               {live && <RunNoteLine note={actions.runs[live.id]} paused={!live.enabled} />}
               <Page
-                gateway={gateway}
                 routine={shown.routine}
+                runs={runs}
+                onRetry={retryRuns}
+                older={older}
                 bot={shown.bot}
                 now={now}
                 onRun={(each) => onNav({ ...nav, run: each })}
