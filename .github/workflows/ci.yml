@@ -442,12 +442,20 @@ jobs:
           node-version: 26
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: Check the settings reader on Windows
-        run: pnpm exec vitest run apps/desktop/test/settings-reader.test.ts -t "reads nothing on Windows|in a production run"
+      - name: Check the settings reader and the local proof on Windows
+        run: pnpm exec vitest run apps/desktop/test/settings-reader.test.ts apps/desktop/test/local-connect.test.ts -t "reads nothing on Windows|in a production run|on Windows the proof refuses"
       # The whole file. Its two Windows-only checks run each script in Windows PowerShell with a
       # stand-in for one command, never reading the real taskbar or the machine's processes.
       - name: Check the taskbar overlay and process list scripts in Windows PowerShell
         run: pnpm exec vitest run ./test/windows.test.ts
+      # Electron's install script is declined (pnpm-workspace.yaml); requiring the package fetches its binary.
+      - run: node -e "require('electron')"
+        working-directory: apps/desktop
+      # The variable makes a missing binary fail the check instead of skipping it.
+      - name: Check Electron's secure storage across a restart on Windows
+        run: pnpm exec vitest run apps/desktop/test/windows-secure-storage.test.ts
+        env:
+          CLAWTRATE_WINDOWS_SAFE_STORAGE_TESTS: "1"
       # Unsigned: no signing variables are set.
       - run: pnpm test:desktop-updates
       - run: pnpm package:win

@@ -2,12 +2,17 @@
 // check (f)): a consistency check where the app has a pin, which authenticates
 // nothing (docs/decisions.md, "Local connect's proof"). OpenClaw 2026.10.6 depends on exactly `@openclaw/fs-safe@0.25.0`
 // and its per-platform packages, 2026.11.10 on exactly `@openclaw/fs-safe@0.27.1`
-// (each `package.json`'s `dependencies` and `optionalDependencies`). Each module is ad-hoc signed with no team,
+// (each `package.json`'s `dependencies` and `optionalDependencies`). Each macOS module is ad-hoc signed with no team,
 // so its code signature proves nothing; the SHA-256 of
-// `node_modules/@openclaw/fs-safe-<platform>-<arch>/fs-safe-native.node` is
-// what binds it. The hashes are of the files in the packages published to
-// npm, fetched with `npm pack` (which checks each tarball against the
-// registry's integrity) and extracted without running anything.
+// `node_modules/@openclaw/fs-safe-<suffix>/fs-safe-native.node` is
+// what binds it. The macOS and Linux hashes are of the files in the packages
+// published to npm, fetched with `npm pack` (which checks each tarball against
+// the registry's integrity) and extracted without running anything. Windows
+// x64's is of that file in the package published to npm, read without running
+// anything from a tarball that matched the registry's `dist.integrity`. There
+// is no pin for Windows on Arm. On Windows only a test checks a pin, against
+// an installed package's bytes on disk and never a running gateway, because
+// the proof refuses there (local-prove.ts).
 
 export const PINNED_OPENCLAW_VERSION = "2026.10.6";
 export const PINNED_FS_SAFE_VERSION = "0.25.0";
@@ -20,6 +25,7 @@ export const FS_SAFE_NATIVE_SHA256: Readonly<Record<string, string>> = {
   "linux-arm64-musl": "0b898908bf020dfd284a65093bfe17b96591e732dbdab7bc9b67587abf347791",
   "linux-x64-gnu": "46eae38fbca2c67fb712cc198cbb42645527f6c1236df49a253b721d337b56b1",
   "linux-x64-musl": "c0f507b9c22778decbdda17298098526e484669e9c13150e0633c0920726a93c",
+  "win32-x64-msvc": "5d90ece5908fe7e0326c6f50aca43e1e5712958cfdfc2f249858ab519eec31f9",
 };
 
 /** OpenClaw 2026.11.10's modules, `@openclaw/fs-safe-<suffix>@0.27.1`: macOS only, where the proof runs. */

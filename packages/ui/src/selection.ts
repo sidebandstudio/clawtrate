@@ -121,18 +121,21 @@ export const STATE_WORDS: Record<RunState, string> = {
 /**
  * A bot's accessible name: its name and state first, as assistive tools read a
  * busy bot ("Otto, working"), then its tasks and what else is true: "Otto,
- * working, 14 tasks, unread".
+ * working, 14 tasks, unread". While its tasks are still being read, "loading
+ * tasks" in place of the count (the row has no words of its own for it, #790).
  */
 export function botLabel(
   bot: Bot,
   count: number,
   summary: BotSummary,
-  extra: { primary?: boolean; label?: string | null } = {},
+  extra: { primary?: boolean; label?: string | null; loading?: boolean } = {},
 ): string {
   return (
     bot.name +
     (summary.state ? `, ${STATE_WORDS[summary.state]}` : "") +
-    `, ${count} ${count === 1 ? "task" : "tasks"}` +
+    (extra.loading && count === 0
+      ? ", loading tasks"
+      : `, ${count} ${count === 1 ? "task" : "tasks"}`) +
     (summary.unread ? ", unread" : "") +
     (extra.label ? `, ${extra.label}` : "") +
     (extra.primary ? ", primary bot" : "")
@@ -203,7 +206,7 @@ export function unreadSeenOf(
   for (const each of Object.values(state.tasksByBot).flat()) {
     // A skill note by itself doesn't mark a task unread (F-560), nor does an update line (F-590).
     const transcript = state.transcripts[each.key];
-    const pastNotes = seenThroughSkillNote(each, seen[each.key], transcript);
+    const pastNotes = seenThroughSkillNote(each, seen[each.key], transcript, scope);
     const through = updates
       ? seenThroughUpdateNotice(each, pastNotes, transcript, scope)
       : pastNotes;

@@ -90,8 +90,9 @@ test("F-003: the app opens, read-only, as soon as the bots have loaded, before t
   });
   await expect(page.getByTestId("setup-steps")).toHaveCount(0);
   await expect(page.getByTestId("bot")).toHaveCount(1);
-  // Its tasks are still on their way, and it says so.
-  await expect(page.getByTestId("bot")).toContainText("Loading tasks");
+  // Its tasks are still on their way, and its name says so; the row itself is its picture and name.
+  await expect(page.getByTestId("bot")).toHaveAccessibleName("Otto, loading tasks, primary bot");
+  await expect(page.getByTestId("bot").locator(".bot-line")).toHaveText("Otto");
 });
 
 test("F-009: unreachable, and a pairing request that was rejected or expired, each show a titled message with a retry", async ({

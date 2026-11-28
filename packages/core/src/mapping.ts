@@ -470,9 +470,6 @@ function assistantPictures(content: unknown): ChatPicture[] {
   });
 }
 
-/** The longest preview of a file-only message kept (`TranscriptItem.filesPreview`): two sidebar lines. */
-const MAX_FILES_PREVIEW_CHARS = 200;
-
 /** The longest file name shown or offered for saving, in UTF-8 bytes: what macOS, Linux and Windows file systems all take. */
 export const MAX_FILE_NAME_BYTES = 255;
 
@@ -1006,14 +1003,6 @@ export function mapHistory(
           return true;
         });
         if (more.length > 0) item.files = [...(item.files ?? []), ...more];
-        // When the item's last row with text or files had files only: their names, for the sidebar.
-        if (blocks.some((block) => block.kind === "text" && block.text.trim()))
-          delete item.filesPreview;
-        else if (files.length > 0)
-          item.filesPreview = files
-            .map((file) => file.name)
-            .join(", ")
-            .slice(0, MAX_FILES_PREVIEW_CHARS);
         if (cutByGateway) item.truncated = true;
         if (rowId) {
           for (const block of blocks)
@@ -1028,6 +1017,16 @@ export function mapHistory(
         if (answers) {
           for (const block of blocks)
             if (block.kind === "text" && block.text.trim()) block.replyToId = answers;
+        }
+        // A row the gateway wrote itself, never a model's streamed message (`replyRow`).
+        if (message.provider === "openclaw") {
+          for (const block of blocks) if (block.kind === "text") block.gatewayRow = true;
+        }
+        // Text after a call in its own row is that message's, not a later one's (`replyRow`).
+        let called = false;
+        for (const block of blocks) {
+          if (block.kind === "tool-call") called = true;
+          else if (block.kind === "text" && called) block.afterCall = true;
         }
         for (const block of blocks) {
           if (block.kind === "tool-call" && block.callId) callItems.set(block.callId, item);
@@ -1108,47 +1107,6 @@ function historyFacts(details: unknown): Record<string, unknown> | null {
   return Object.keys(out).length ? out : null;
 }
 
-/** The start of a message read for a preview in place of the gateway's: more than two lines show. */
-const MAX_PREVIEW_SOURCE_CHARS = 400;
-
-/**
- * A task's preview when its loaded history ends with a bot's message that is only files (F-115):
- * that message's files' names. The gateway lists the last row with text, the one before it, so
- * only that preview, or none, is replaced; any other is the gateway's.
- */
-export function taskWithFilePreview(task: Task, transcript: Transcript | undefined): Task {
-  const items = transcript?.items ?? [];
-  const last = items.at(-1);
-  const preview = last?.role === "assistant" ? last.filesPreview : undefined;
-  if (!preview) return task;
-  let before: string | null = null;
-  for (let index = items.length - 1; index >= 0 && before === null; index -= 1) {
-    const text = items[index]!.blocks.findLast(
-      (block) => block.kind === "text" && block.text.trim(),
-    );
-    if (text?.kind === "text") before = plainPreview(text.text.slice(0, MAX_PREVIEW_SOURCE_CHARS));
-  }
-  if (task.preview !== null && task.preview !== before) return task;
-  return preview === task.preview ? task : { ...task, preview };
-}
-
-/** Every listed task as `taskWithFilePreview` shows it, by bot. */
-export function tasksWithFilePreviews(
-  tasksByBot: Record<string, Task[]>,
-  transcripts: Record<string, Transcript>,
-): Record<string, Task[]> {
-  let changed = false;
-  const shown: Record<string, Task[]> = {};
-  for (const [botId, tasks] of Object.entries(tasksByBot)) {
-    shown[botId] = tasks.map((task) => {
-      const named = taskWithFilePreview(task, transcripts[task.key]);
-      if (named !== task) changed = true;
-      return named;
-    });
-  }
-  return changed ? shown : tasksByBot;
-}
-
 /**
  * When a task's loaded history ends with an update line (`updateNoticeLine`) and its listed
  * preview is the one the gateway makes of that notice (`gatewayPreviewOf`): the item before the line, or null when there is none. Undefined otherwise:
@@ -1169,60 +1127,12 @@ function beforeUpdateNotice(
 }
 
 /**
- * A task's preview in the sidebar when its listed preview is the update notice its loaded history
- * ends with (F-590): the text of the last item before it (null when none has text, so the title
- * shows). The notice is not what the bot last said.
- * No time is changed, so the order is the gateway's.
- */
-export function taskWithoutUpdateNotice(
-  task: Task,
-  transcript: Transcript | undefined,
-  scope: UpdateNoticeScope,
-): Task {
-  if (beforeUpdateNotice(task, transcript, scope) === undefined) return task;
-  const items = transcript!.items;
-  let preview: string | null = null;
-  for (let index = items.length - 2; index >= 0 && preview === null; index -= 1) {
-    const item = items[index]!;
-    // An earlier update line, or a skill note (F-560), is not what the bot said either.
-    if (item.role === "system" || item.skillNote || updateNoticeLine(item, task.key, scope))
-      continue;
-    // A bot's message that is only files reads as their names, as the rail shows it (F-115).
-    if (item.role === "assistant" && item.filesPreview) {
-      preview = item.filesPreview;
-      continue;
-    }
-    const text = item.blocks.findLast((block) => block.kind === "text" && block.text.trim());
-    if (text?.kind === "text") preview = plainPreview(text.text.slice(0, MAX_PREVIEW_SOURCE_CHARS));
-  }
-  return preview === task.preview ? task : { ...task, preview };
-}
-
-/** Every listed task as `taskWithoutUpdateNotice` shows it, by bot. */
-export function tasksWithoutUpdateNotices(
-  tasksByBot: Record<string, Task[]>,
-  transcripts: Record<string, Transcript>,
-  scope: UpdateNoticeScope,
-): Record<string, Task[]> {
-  if (!scope.updated?.length || scope.mainKey === null) return tasksByBot;
-  let changed = false;
-  const shown: Record<string, Task[]> = {};
-  for (const [botId, tasks] of Object.entries(tasksByBot)) {
-    shown[botId] = tasks.map((task) => {
-      const quiet = taskWithoutUpdateNotice(task, transcripts[task.key], scope);
-      if (quiet !== task) changed = true;
-      return quiet;
-    });
-  }
-  return changed ? shown : tasksByBot;
-}
-
-/**
  * For a viewer that keeps its own memory of what it read (a read-only connection), when it read a
  * task through, past an update notice that is all that came since: when the task's listed preview
  * is the notice its loaded history ends with, and the viewer read the task at or after the latest
- * row before it (`updateNoticeAfter`, so every row of a merged turn; both are the gateway's times),
- * the task's own time. Otherwise `seenAt`. On a
+ * row before it, or before the first of the quiet lines it ends a run of (skill notes included,
+ * `readThroughQuietLines`; so every row of a merged turn; both are the gateway's times), the
+ * task's own time. Otherwise `seenAt`. On a
  * connection that writes, the gateway keeps unread, and the notice doesn't raise it: writing it
  * moves only the row's `updatedAt` (OpenClaw 2026.10.6, `deriveSessionUnread`).
  */
@@ -1234,16 +1144,40 @@ export function seenThroughUpdateNotice(
 ): number | undefined {
   if (seenAt === undefined || task.updatedAt === null || task.updatedAt <= seenAt) return seenAt;
   if (beforeUpdateNotice(task, transcript, scope) === undefined) return seenAt;
-  // Back through earlier update lines (two updates with nothing between them) to the first: what
-  // came before it is what the viewer must have read.
-  const items = transcript!.items;
+  return readThroughQuietLines({ ...task, updatedAt: task.updatedAt }, seenAt, transcript!, scope);
+}
+
+/**
+ * Past the quiet lines a loaded history ends with, whose last one the listed preview is: back
+ * through every earlier one to the first. Quiet is only what the gateway vouches for: a skill note
+ * it marks (OpenClaw 2026.11.10, `SkillNote.agentId`) and an update line this device followed
+ * (F-560, F-590). An unmarked note, which a bot's message can imitate (2026.10.6), a row the
+ * gateway cut, and anything else is what the viewer must have read: it stops the walk, and as the
+ * last line it isn't passed.
+ * The viewer read the task through when it read at or after the latest row before the first quiet
+ * line (`updateNoticeAfter` or `SkillNote.after`, both the gateway's times): then the task's own
+ * time.
+ */
+function readThroughQuietLines(
+  task: Task & { updatedAt: number },
+  seenAt: number,
+  transcript: Transcript,
+  scope: UpdateNoticeScope,
+): number {
+  const items = transcript.items;
+  // A row the gateway cut is still to read: a real notice is never that long (the gateway cuts at
+  // 8,000 characters; a note folds only up to `MAX_SKILL_NOTE_CHARS`).
+  const quiet = (item: TranscriptItem | undefined) =>
+    item?.truncated !== true &&
+    ((item?.skillNote !== undefined && item.skillNote.agentId !== null) ||
+      updateNoticeLine(item, task.key, scope) !== null);
+  if (!quiet(items.at(-1))) return seenAt;
   let first = items.length - 1;
-  while (first > 0 && updateNoticeLine(items[first - 1], task.key, scope)) first -= 1;
-  if (first === 0) {
-    // Nothing loaded before the line: the conversation had nothing else only if it is all loaded.
-    return transcript!.hasMore ? seenAt : task.updatedAt;
-  }
-  const after = items[first]!.updateNoticeAfter;
+  while (first > 0 && quiet(items[first - 1])) first -= 1;
+  // Nothing loaded before the lines: the conversation had nothing else only if it is all loaded.
+  if (first === 0) return transcript.hasMore ? seenAt : task.updatedAt;
+  const head = items[first]!;
+  const after = head.skillNote ? head.skillNote.after : head.updateNoticeAfter;
   if (after === undefined || seenAt < after) return seenAt;
   return task.updatedAt;
 }
@@ -1265,73 +1199,21 @@ function trailingSkillNotes(task: Task, transcript: Transcript | undefined): num
 }
 
 /**
- * A task's preview in the sidebar when its listed preview is the skill note its loaded history
- * ends with (F-560): the text of the last item before the notes (null when none has text, so the
- * title shows). The note is not what the bot said. No time is changed, so the order is the
- * gateway's.
- */
-export function taskWithoutSkillNote(
-  task: Task,
-  transcript: Transcript | undefined,
-  scope: UpdateNoticeScope,
-): Task {
-  const first = trailingSkillNotes(task, transcript);
-  if (first === undefined) return task;
-  const items = transcript!.items;
-  let preview: string | null = null;
-  for (let index = first - 1; index >= 0 && preview === null; index -= 1) {
-    const item = items[index]!;
-    // The gateway's update line is not what the bot said either (F-590).
-    if (item.role === "system" || item.skillNote || updateNoticeLine(item, task.key, scope))
-      continue;
-    // A bot's message that is only files reads as their names, as the rail shows it (F-115).
-    if (item.role === "assistant" && item.filesPreview) {
-      preview = item.filesPreview;
-      continue;
-    }
-    const text = item.blocks.findLast((block) => block.kind === "text" && block.text.trim());
-    if (text?.kind === "text") preview = plainPreview(text.text.slice(0, MAX_PREVIEW_SOURCE_CHARS));
-  }
-  return preview === task.preview ? task : { ...task, preview };
-}
-
-/** Every listed task as `taskWithoutSkillNote` shows it, by bot. */
-export function tasksWithoutSkillNotes(
-  tasksByBot: Record<string, Task[]>,
-  transcripts: Record<string, Transcript>,
-  scope: UpdateNoticeScope,
-): Record<string, Task[]> {
-  let changed = false;
-  const shown: Record<string, Task[]> = {};
-  for (const [botId, tasks] of Object.entries(tasksByBot)) {
-    shown[botId] = tasks.map((task) => {
-      const quiet = taskWithoutSkillNote(task, transcripts[task.key], scope);
-      if (quiet !== task) changed = true;
-      return quiet;
-    });
-  }
-  return changed ? shown : tasksByBot;
-}
-
-/**
  * For a viewer that keeps its own memory of what it read (a read-only connection), when it read a
- * task through, past skill notes that are all that came since: when the task's listed preview is
- * the note its loaded history ends with, and the viewer read the task at or after the latest row
- * before the first of them (`SkillNote.after`; both are the gateway's times), the task's own
- * time. Otherwise `seenAt`. On a connection that writes, the gateway keeps unread, and the note
+ * task through, past quiet lines that are all that came since: when the task's listed preview is
+ * the skill note its loaded history ends with, the gateway marks that note, and the viewer read the
+ * task at or after the latest row before the first of the quiet lines there, update lines this
+ * device vouches for included (`readThroughQuietLines`), the task's own time. Otherwise `seenAt`:
+ * an unmarked note (2026.10.6), which a bot can imitate, is still to read. On a connection that writes, the gateway keeps unread, and the note
  * doesn't raise it (OpenClaw 2026.10.6 and 2026.11.10: writing it moves only `updatedAt`).
  */
 export function seenThroughSkillNote(
   task: Task,
   seenAt: number | undefined,
   transcript: Transcript | undefined,
+  scope: UpdateNoticeScope,
 ): number | undefined {
   if (seenAt === undefined || task.updatedAt === null || task.updatedAt <= seenAt) return seenAt;
-  const first = trailingSkillNotes(task, transcript);
-  if (first === undefined) return seenAt;
-  // Nothing loaded before the notes: the conversation had nothing else only if it is all loaded.
-  if (first === 0) return transcript!.hasMore ? seenAt : task.updatedAt;
-  const after = transcript!.items[first]!.skillNote!.after;
-  if (after === undefined || seenAt < after) return seenAt;
-  return task.updatedAt;
+  if (trailingSkillNotes(task, transcript) === undefined) return seenAt;
+  return readThroughQuietLines({ ...task, updatedAt: task.updatedAt }, seenAt, transcript!, scope);
 }

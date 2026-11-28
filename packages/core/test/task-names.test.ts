@@ -18,7 +18,7 @@ import {
   namingSource,
 } from "../src/task-names.ts";
 import { grantingGateway, openTask } from "./client-harness.ts";
-import { GatewayError, sleep, until, type FakeGateway } from "./fake-gateway.ts";
+import { deferred, GatewayError, sleep, until, type FakeGateway } from "./fake-gateway.ts";
 
 const KEY = "agent:main:dashboard:3f2a9c1e-6b7d-4e8f-a0b1-c2d3e4f5a6b7";
 const MESSAGE = "Help me plan a four-day trip to Lisbon in May with a small budget";
@@ -105,10 +105,14 @@ describe("which model writes a name", () => {
 /** A gateway for `nameTask`: answers each title call in turn, records every request. */
 function namingGateway(answers: Array<unknown | Error>, row: Record<string, unknown> = {}) {
   const asked: Array<{ method: string; params: Record<string, unknown> }> = [];
-  const state = { row: { key: KEY, ...row } as Record<string, unknown> };
+  const state = {
+    row: { key: KEY, ...row } as Record<string, unknown>,
+    botModel: "anthropic/claude-sonnet-5-5" as string | null,
+  };
   let call = 0;
   const ctx = {
     row: () => state.row,
+    botModel: () => state.botModel,
     request: async (method: string, params: unknown) => {
       asked.push({ method, params: params as Record<string, unknown> });
       if (method === "models.list")
@@ -131,7 +135,6 @@ const TASK = {
   key: KEY,
   sessionId: SESSION,
   botId: "main",
-  botModel: "anthropic/claude-sonnet-5-5",
   text: MESSAGE,
 };
 
@@ -147,38 +150,53 @@ describe("making a name", () => {
     ]);
   });
 
-  it("is bound to the task's session: from its row when the creation gave none, else not kept", async () => {
+  it("is bound to the session the creation gave; without one, nothing is asked or kept", async () => {
     // A patch by key alone made a deleted task again (2026.10.6); with the session the
-    // gateway refuses it ("changed before patch").
-    const fromRow = namingGateway([{ title: "Lisbon" }], { sessionId: "row-session" });
-    expect(await nameTask(fromRow.ctx, { ...TASK, sessionId: null })).toBe("Lisbon");
-    expect(fromRow.patches()).toEqual([
-      { key: KEY, autoLabel: "Lisbon", expectedSessionId: "row-session" },
-    ]);
-    const gone = namingGateway([{ title: "Lisbon" }]);
-    gone.state.row = null as unknown as Record<string, unknown>;
-    expect(await nameTask(gone.ctx, { ...TASK, sessionId: null })).toBeNull();
-    expect(gone.patches()).toEqual([]);
+    // gateway refuses it ("changed before patch"). The row's session isn't taken instead: by the
+    // time the name is made, the row can be a task made again under the same key.
+    const g = namingGateway([{ title: "Lisbon" }], { sessionId: "replacing-session" });
+    expect(await nameTask(g.ctx, { ...TASK, sessionId: null })).toBeNull();
+    expect(g.titleCalls()).toEqual([]);
+    expect(g.patches()).toEqual([]);
   });
 
-  it("keeps no name for a task whose session changed while the name was made", async () => {
-    // A reset, or a delete and a new task under the same key, during the title call: the key's
-    // new session S2 is not the task the first message was sent to (S1). Whether S1 came from the
-    // creation's answer or from the row before the call.
-    for (const sessionId of [null, "s1"]) {
-      const g = namingGateway([{ title: "Lisbon" }], { sessionId: "s1" });
+  it("names no other provider once the bot has moved to one outside the list", async () => {
+    // To Ollama while the person's models are read (from Anthropic: OpenAI is no longer asked),
+    // or during the bot's own call that gave no title (from OpenAI: Anthropic is not asked next).
+    for (const [from, during, answers] of [
+      ["anthropic/claude-sonnet-5-5", "models.list", [{ title: "Lisbon" }]],
+      ["openai/gpt-6-sol", "sessions.title.prepare", [{ title: null }, { title: "Lisbon" }]],
+    ] as const) {
+      const g = namingGateway([...answers]);
+      g.state.botModel = from;
       const ctx = {
         ...g.ctx,
         request: async (method: string, params: unknown) => {
           const answer = await g.ctx.request(method, params);
-          if (method === "sessions.title.prepare") g.state.row = { key: KEY, sessionId: "s2" };
+          if (method === during) g.state.botModel = "ollama/llama-4";
           return answer;
         },
       };
-      expect(await nameTask(ctx, { ...TASK, sessionId })).toBeNull();
-      expect(g.titleCalls()).toHaveLength(1);
-      expect(g.patches()).toEqual([]);
+      await nameTask(ctx, TASK);
+      expect(g.titleCalls()).toEqual([{ agentId: "main", message: MESSAGE }]);
     }
+  });
+
+  it("keeps no name for a task whose session changed while the name was made", async () => {
+    // A reset, or a delete and a new task under the same key, during the title call: the key's
+    // new session S2 is not the task the first message was sent to (S1).
+    const g = namingGateway([{ title: "Lisbon" }], { sessionId: "s1" });
+    const ctx = {
+      ...g.ctx,
+      request: async (method: string, params: unknown) => {
+        const answer = await g.ctx.request(method, params);
+        if (method === "sessions.title.prepare") g.state.row = { key: KEY, sessionId: "s2" };
+        return answer;
+      },
+    };
+    expect(await nameTask(ctx, { ...TASK, sessionId: "s1" })).toBeNull();
+    expect(g.titleCalls()).toHaveLength(1);
+    expect(g.patches()).toEqual([]);
   });
 
   it("goes on past a refusal, an empty answer or a timeout, to the bot's own provider", async () => {
@@ -200,7 +218,8 @@ describe("making a name", () => {
     // OpenAI and Anthropic are both connected (`models.list` would list them): no call names either.
     for (const botModel of ["ollama/llama-4", null]) {
       const g = namingGateway([{ title: null }, { title: "z" }]);
-      expect(await nameTask(g.ctx, { ...TASK, botModel })).toBeNull();
+      g.state.botModel = botModel;
+      expect(await nameTask(g.ctx, TASK)).toBeNull();
       expect(g.titleCalls()).toEqual([{ agentId: "main", message: MESSAGE }]);
       expect(g.asked.some((each) => each.method === "models.list")).toBe(false);
     }
@@ -399,6 +418,383 @@ describe("the device that sends the first message", () => {
           client.stop();
         }
       }
+    }
+  });
+
+  it("names a task from the next message when its refused first message is deleted", async () => {
+    // A refused, A deleted, B sent and accepted: named from B. For a task created with A and for
+    // an empty one.
+    for (const empty of [false, true]) {
+      const { gateway } = creatingGateway(["Garden plan"]);
+      const { client } = await openTask({ gateway });
+      try {
+        const accept = gateway.handlers["chat.send"]!;
+        let refuse = true;
+        gateway.handlers["chat.send"] = (params) => {
+          if (refuse) throw new GatewayError({ code: "UNAVAILABLE", message: "the bot is busy" });
+          return accept(params);
+        };
+        let key = KEY;
+        if (empty) {
+          key = await client.newTask("main");
+          client.openSession(key);
+          await until(() => client.state.transcripts[key]?.status === "ready");
+          client.sendMessage(key, "Plan the spring beds");
+        } else {
+          await client.createTask("main", "Plan the spring beds");
+        }
+        const failed = () =>
+          client.state.transcripts[key]?.outbox.find((each) => each.status === "failed");
+        await until(() => failed() !== undefined);
+        client.deleteMessage(key, failed()!.id);
+        refuse = false;
+        client.sendMessage(key, MESSAGE);
+        await until(() => patches(gateway).length === 1);
+        expect(titleCalls(gateway)).toEqual([{ agentId: "main", message: MESSAGE }]);
+      } finally {
+        client.stop();
+      }
+    }
+  });
+
+  it("names a task from the next message when its refused first message is deleted while that one is on its way", async () => {
+    // A refused, B sent, A deleted before the gateway answers B, then B accepted: named from B.
+    const { gateway } = creatingGateway(["Garden plan"]);
+    const { client } = await openTask({ gateway });
+    try {
+      const accept = gateway.handlers["chat.send"]!;
+      const answer = deferred<void>();
+      let sends = 0;
+      gateway.handlers["chat.send"] = async (params) => {
+        sends += 1;
+        if (sends === 1)
+          throw new GatewayError({ code: "UNAVAILABLE", message: "the bot is busy" });
+        await answer.promise;
+        return accept(params);
+      };
+      await client.createTask("main", "Plan the spring beds");
+      const failed = () =>
+        client.state.transcripts[KEY]?.outbox.find((each) => each.status === "failed");
+      await until(() => failed() !== undefined);
+      const first = failed()!.id;
+      client.sendMessage(KEY, MESSAGE);
+      await until(() => sends === 2);
+      client.deleteMessage(KEY, first);
+      answer.resolve();
+      await until(() => patches(gateway).length === 1);
+      expect(titleCalls(gateway)).toEqual([{ agentId: "main", message: MESSAGE }]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("names a task from the next message with text when a picture alone took its refused first message's place", async () => {
+    // A refused, a picture B sent, A deleted before the gateway answers B, then B accepted: B
+    // names nothing and is one of this client's own, so C, with text, names the task.
+    const picture = { type: "image", fileName: "dot.png", mimeType: "image/png", content: PNG };
+    const { gateway } = creatingGateway(["Garden plan"]);
+    const { client } = await openTask({ gateway });
+    try {
+      const accept = gateway.handlers["chat.send"]!;
+      const answer = deferred<void>();
+      let sends = 0;
+      gateway.handlers["chat.send"] = async (params) => {
+        sends += 1;
+        if (sends === 1)
+          throw new GatewayError({ code: "UNAVAILABLE", message: "the bot is busy" });
+        if (sends === 2) await answer.promise;
+        return accept(params);
+      };
+      await client.createTask("main", "Plan the spring beds");
+      const failed = () =>
+        client.state.transcripts[KEY]?.outbox.find((each) => each.status === "failed");
+      await until(() => failed() !== undefined);
+      const first = failed()!.id;
+      const pictureId = client.sendMessage(KEY, "", { attachments: [picture] });
+      await until(() => sends === 2);
+      client.deleteMessage(KEY, first);
+      gateway.handlers["chat.history"] = () => ({
+        messages: [ownPicture(pictureId)],
+        hasMore: false,
+      });
+      answer.resolve();
+      const sent = () =>
+        client.state.transcripts[KEY]?.outbox.find((each) => each.id === pictureId);
+      await until(() => sent()?.status !== "sending");
+      client.sendMessage(KEY, MESSAGE);
+      await until(() => patches(gateway).length === 1);
+      expect(titleCalls(gateway)).toEqual([{ agentId: "main", message: MESSAGE }]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("names a task from the next message history holds when its refused first message is deleted", async () => {
+    // A refused, B sent; history holds B, so it leaves the outbox; then A deleted. B's answer
+    // comes before the delete, or after it: named from B either way.
+    for (const answerFirst of [true, false]) {
+      const { gateway } = creatingGateway(["Garden plan"]);
+      gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gw-a" });
+      const { client } = await openTask({ gateway });
+      try {
+        await until(() => client.state.connection.gatewayId === "gw-a");
+        const accept = gateway.handlers["chat.send"]!;
+        const answer = deferred<void>();
+        let sends = 0;
+        gateway.handlers["chat.send"] = async (params) => {
+          sends += 1;
+          if (sends === 1)
+            throw new GatewayError({ code: "UNAVAILABLE", message: "the bot is busy" });
+          if (!answerFirst) await answer.promise;
+          return accept(params);
+        };
+        await client.createTask("main", "Plan the spring beds");
+        const failed = () =>
+          client.state.transcripts[KEY]?.outbox.find((each) => each.status === "failed");
+        await until(() => failed() !== undefined);
+        const first = failed()!.id;
+        const next = client.sendMessage(KEY, MESSAGE);
+        await until(() => sends === 2);
+        if (answerFirst)
+          await until(
+            () =>
+              client.state.transcripts[KEY]?.outbox.find((each) => each.id === next)?.status ===
+              "sent",
+          );
+        gateway.handlers["chat.history"] = () => ({
+          messages: [
+            {
+              role: "user",
+              content: [{ type: "text", text: MESSAGE }],
+              timestamp: 1,
+              __openclaw: { id: "row-b", idempotencyKey: `${next}:user` },
+            },
+          ],
+          hasMore: false,
+        });
+        client.closeSession(KEY);
+        client.openSession(KEY);
+        await until(
+          () => client.state.transcripts[KEY]?.outbox.some((each) => each.id === next) === false,
+        );
+        client.deleteMessage(KEY, first);
+        answer.resolve();
+        await until(() => patches(gateway).length === 1);
+        expect(titleCalls(gateway)).toEqual([{ agentId: "main", message: MESSAGE }]);
+      } finally {
+        client.stop();
+      }
+    }
+  });
+
+  it("doesn't send a task's next message for its name to another gateway at the same address", async () => {
+    // Gateway A refuses A and accepts B; gateway B answers at the same address; A is deleted
+    // while B is still in the outbox: nothing goes to gateway B.
+    const { gateway } = creatingGateway(["Garden plan"]);
+    let identity = "gw-a";
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: identity });
+    const { client } = await openTask({ gateway });
+    try {
+      await until(() => client.state.connection.gatewayId === "gw-a");
+      const accept = gateway.handlers["chat.send"]!;
+      let sends = 0;
+      gateway.handlers["chat.send"] = (params) => {
+        sends += 1;
+        if (sends === 1)
+          throw new GatewayError({ code: "UNAVAILABLE", message: "the bot is busy" });
+        return accept(params);
+      };
+      await client.createTask("main", "Plan the spring beds");
+      const failed = () =>
+        client.state.transcripts[KEY]?.outbox.find((each) => each.status === "failed");
+      await until(() => failed() !== undefined);
+      const first = failed()!.id;
+      const next = client.sendMessage(KEY, MESSAGE);
+      const sent = () => client.state.transcripts[KEY]?.outbox.find((each) => each.id === next);
+      await until(() => sent()?.status === "sent");
+      identity = "gw-b";
+      // Gateway B's history isn't read yet, so B is still sent, not unconfirmed.
+      const history = deferred<unknown>();
+      gateway.handlers["chat.history"] = () => history.promise;
+      const was = client.state.connection.connectedAt;
+      gateway.dropAll();
+      await until(
+        () =>
+          client.state.connection.status === "connected" &&
+          client.state.connection.connectedAt !== was &&
+          client.state.connection.gatewayId === "gw-b",
+      );
+      expect(sent()?.status).toBe("sent");
+      client.deleteMessage(KEY, first);
+      history.resolve({ messages: [], hasMore: false });
+      await sleep(50);
+      expect(titleCalls(gateway)).toEqual([]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("doesn't name a task made again under its key from a message the one before sent", async () => {
+    // S1's first message is on its way; the key is made again as S2, whose first message, queued
+    // behind it, is cancelled; then the gateway accepts S1's message.
+    const { gateway } = creatingGateway(["Garden plan"]);
+    const accept = gateway.handlers["chat.send"]!;
+    const answer = deferred<void>();
+    gateway.handlers["chat.send"] = async (params) => {
+      await answer.promise;
+      return accept(params);
+    };
+    const { client } = await openTask({ gateway });
+    try {
+      await client.createTask("main", "Plan the spring beds");
+      await until(() => gateway.calls("chat.send").length === 1);
+      const create = gateway.handlers["sessions.create"]!;
+      gateway.handlers["sessions.create"] = (params) => ({
+        ...(create(params) as Record<string, unknown>),
+        sessionId: "session-2",
+      });
+      expect(await client.newTask("main")).toBe(KEY);
+      const queued = client.sendMessage(KEY, MESSAGE, { mode: "queue" });
+      client.cancelQueued(KEY, queued);
+      answer.resolve();
+      await until(
+        () =>
+          client.state.transcripts[KEY]?.outbox.every((each) => each.status !== "sending") === true,
+      );
+      await sleep(50);
+      expect(titleCalls(gateway)).toEqual([]);
+      expect(patches(gateway)).toEqual([]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("names a task from its first message when history confirms it before the gateway answers its send", async () => {
+    // A on its way; history holds A, so it leaves the outbox; B sent; then A accepted: named from A.
+    const { gateway } = creatingGateway(["Garden plan"]);
+    const accept = gateway.handlers["chat.send"]!;
+    const answer = deferred<void>();
+    gateway.handlers["chat.send"] = async (params) => {
+      if (gateway.calls("chat.send").length === 1) await answer.promise;
+      return accept(params);
+    };
+    const { client } = await openTask({ gateway });
+    try {
+      await client.createTask("main", MESSAGE);
+      await until(() => gateway.calls("chat.send").length === 1);
+      const first = client.state.transcripts[KEY]!.outbox[0]!.id;
+      gateway.handlers["chat.history"] = () => ({
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "text", text: MESSAGE }],
+            timestamp: 1,
+            __openclaw: { id: "row-a", idempotencyKey: `${first}:user` },
+          },
+        ],
+        hasMore: false,
+      });
+      client.closeSession(KEY);
+      client.openSession(KEY);
+      await until(
+        () => client.state.transcripts[KEY]?.outbox.some((each) => each.id === first) === false,
+      );
+      client.sendMessage(KEY, "and a day in Sintra");
+      answer.resolve();
+      await until(() => patches(gateway).length === 1);
+      expect(titleCalls(gateway)).toEqual([{ agentId: "main", message: MESSAGE }]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("names a task from the message after a command the gateway handled", async () => {
+    const { gateway } = creatingGateway(["Lisbon"]);
+    const send = gateway.handlers["chat.send"]!;
+    // `/stop` is answered as a command: handled, with no run and no row in history.
+    gateway.handlers["chat.send"] = (params) =>
+      (params as { message: string }).message === "/stop"
+        ? { ok: true, aborted: false, runIds: [] }
+        : send(params);
+    const { client } = await openTask({ gateway });
+    try {
+      const key = await client.newTask("main");
+      client.openSession(key);
+      await until(() => client.state.transcripts[key]?.status === "ready");
+      const stop = client.sendMessage(key, "/stop");
+      await until(
+        () =>
+          client.state.transcripts[key]?.outbox.find((each) => each.id === stop)?.status ===
+          "handled",
+      );
+      const id = client.sendMessage(key, MESSAGE);
+      gateway.handlers["chat.history"] = () => ({
+        messages: [
+          {
+            role: "user",
+            content: [{ type: "text", text: MESSAGE }],
+            timestamp: 1,
+            __openclaw: { id: "row-a", idempotencyKey: `${id}:user` },
+          },
+        ],
+        hasMore: false,
+      });
+      await until(() => patches(gateway).length === 1);
+      expect(titleCalls(gateway)).toEqual([{ agentId: "main", message: MESSAGE }]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("names a task when another device's message came after its first one", async () => {
+    const { gateway } = creatingGateway(["Lisbon"]);
+    const { client } = await openTask({ gateway });
+    try {
+      const key = await client.newTask("main");
+      client.openSession(key);
+      await until(() => client.state.transcripts[key]?.status === "ready");
+      const id = client.sendMessage(key, MESSAGE);
+      const own = {
+        role: "user",
+        content: [{ type: "text", text: MESSAGE }],
+        timestamp: 1,
+        __openclaw: { id: "row-a", idempotencyKey: `${id}:user` },
+      };
+      const fromB = {
+        role: "user",
+        content: "and a day in Sintra",
+        timestamp: 2,
+        __openclaw: { id: "row-b", idempotencyKey: "device-b:user" },
+      };
+      gateway.handlers["chat.history"] = () => ({ messages: [own, fromB], hasMore: false });
+      await until(() => patches(gateway).length === 1);
+      expect(titleCalls(gateway)).toEqual([{ agentId: "main", message: MESSAGE }]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("doesn't name a task it created when another device sent in it first", async () => {
+    // Between `sessions.create` and this client's `chat.send`, another device's message reached
+    // the new task: the gateway's history holds it before this client's.
+    const { gateway } = creatingGateway();
+    const fromB = {
+      role: "user",
+      content: "Plan the spring beds",
+      timestamp: 1,
+      __openclaw: { id: "row-b", idempotencyKey: "device-b:user" },
+    };
+    gateway.handlers["chat.history"] = () => ({ messages: [fromB], hasMore: false });
+    const { client } = await openTask({ gateway });
+    try {
+      const reads = gateway.calls("chat.history").length;
+      await client.createTask("main", MESSAGE);
+      await until(() => gateway.calls("chat.history").length > reads);
+      await sleep(50);
+      expect(titleCalls(gateway)).toEqual([]);
+      expect(patches(gateway)).toEqual([]);
+    } finally {
+      client.stop();
     }
   });
 
