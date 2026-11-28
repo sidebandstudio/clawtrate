@@ -86,44 +86,52 @@ function Steps({
   /** A line under a step, such as what the installer reported. */
   details?: Array<string | null>;
 }) {
-  // Seconds on the running step, counted from when it started.
+  // Seconds on the running step, measured from when it started: time the window spent
+  // suspended counts too, which counting the timer's calls would miss.
   const [timed, setTimed] = useState({ step: current, seconds: 0 });
   if (timed.step !== current) setTimed({ step: current, seconds: 0 });
   useEffect(() => {
     if (failed) return;
+    const at = Date.now();
     const timer = setInterval(
-      () => setTimed((value) => ({ ...value, seconds: value.seconds + 1 })),
+      () => setTimed({ step: current, seconds: Math.floor((Date.now() - at) / 1000) }),
       1000,
     );
     return () => clearInterval(timer);
-  }, [failed]);
-  const elapsed = timed.seconds;
+  }, [current, failed]);
+  const elapsed = timed.step === current ? timed.seconds : 0;
   return (
-    <ol className="s-steps" aria-label="Steps" data-testid="setup-step-list">
-      {steps.map((text, index) => {
-        const state: StepState =
-          index < current ? "done" : index > current ? "waiting" : failed ? "failed" : "running";
-        return (
-          <li
-            key={text}
-            data-state={state}
-            aria-current={state === "running" ? "step" : undefined}
-            aria-label={`${text}, ${state}`}
-          >
-            <span className="s-step-mark" aria-hidden="true">
-              {state === "done" ? <CheckIcon /> : state === "failed" ? <CloseIcon /> : null}
-            </span>
-            <span>
-              {text}
-              {details?.[index] && <span className="s-step-detail">{details[index]}</span>}
-            </span>
-            <span className="s-step-time">
-              {state === "running" && elapsed >= 10 ? `${elapsed} s` : ""}
-            </span>
-          </li>
-        );
-      })}
-    </ol>
+    <>
+      {/* The step under way, said when it changes; never its seconds. */}
+      <p className="visually-hidden" aria-live="polite" data-testid="setup-step-live">
+        {failed ? "" : (steps[current] ?? "")}
+      </p>
+      <ol className="s-steps" aria-label="Steps" data-testid="setup-step-list">
+        {steps.map((text, index) => {
+          const state: StepState =
+            index < current ? "done" : index > current ? "waiting" : failed ? "failed" : "running";
+          return (
+            <li
+              key={text}
+              data-state={state}
+              aria-current={state === "running" ? "step" : undefined}
+              aria-label={`${text}, ${state}`}
+            >
+              <span className="s-step-mark" aria-hidden="true">
+                {state === "done" ? <CheckIcon /> : state === "failed" ? <CloseIcon /> : null}
+              </span>
+              <span>
+                {text}
+                {details?.[index] && <span className="s-step-detail">{details[index]}</span>}
+              </span>
+              <span className="s-step-time">
+                {state === "running" && elapsed >= 10 ? `${elapsed} s` : ""}
+              </span>
+            </li>
+          );
+        })}
+      </ol>
+    </>
   );
 }
 
