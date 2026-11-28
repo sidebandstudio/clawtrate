@@ -8,12 +8,14 @@ import {
   type Transcript,
   type TranscriptItem,
 } from "@clawtrate/core";
+import type * as ReactModule from "react";
 import { Children, isValidElement, type ReactElement, type ReactNode } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { grantingGateway, KEY, openTask } from "../../../packages/core/test/client-harness.ts";
 import { helloOk, until } from "../../../packages/core/test/fake-gateway.ts";
 import { GatewayEvent } from "../src/components/GatewayEvent.tsx";
 import { Txt } from "../src/components/ui.tsx";
+import type * as ThemeModule from "../src/theme/index.ts";
 import { chatRows, type ChatRow } from "../src/transcript.ts";
 
 const LINE = "The gateway started a turn by itself";
@@ -30,13 +32,13 @@ const useOpen = vi.hoisted(() =>
   vi.fn<(initial: boolean) => [boolean, (update: (open: boolean) => boolean) => void]>(),
 );
 vi.mock("react", async (load) => ({
-  ...(await load<typeof import("react")>()),
+  ...(await load<typeof ReactModule>()),
   useState: useOpen,
 }));
 vi.mock("react-native", () => ({ Pressable: "Pressable", Text: "Text", View: "View" }));
 vi.mock("../src/components/icons.tsx", () => ({ ChevronIcon: "ChevronIcon" }));
 vi.mock("../src/theme/index.ts", async (load) => {
-  const theme = await load<typeof import("../src/theme/index.ts")>();
+  const theme = await load<typeof ThemeModule>();
   return { ...theme, useTheme: () => theme.themeFor("light") };
 });
 
