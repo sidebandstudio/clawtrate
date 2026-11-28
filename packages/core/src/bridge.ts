@@ -8,6 +8,7 @@ import { MAX_MEMORY_BYTES, type MemoryDocument, type MemoryList } from "./memory
 import type { BotVoiceAnswer } from "./voice.ts";
 import type { BotGuidesAnswer } from "./guides.ts";
 import type { DesktopUpdates } from "./desktop-updates.ts";
+import type { ChatLinkDelivery } from "./chat-link.ts";
 import {
   MAX_ATTACHMENTS_PER_MESSAGE,
   type AttachmentInfo,
@@ -866,6 +867,12 @@ export type ClawtrateBridge = {
    * Absent where a bridge never reopens tasks itself (the desktop's IPC).
    */
   onReopenRefused?(listener: (key: string, error: string) => void): () => void;
+  /**
+   * Each Clawtrate link the host receives from the system, as validated values or
+   * as invalid, never the raw link (docs/design/links.md). Absent where the host
+   * receives none: the web preview and the fixture mode.
+   */
+  onChatLink?(listener: (link: ChatLinkDelivery) => void): () => void;
 };
 
 /**
