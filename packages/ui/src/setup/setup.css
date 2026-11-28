@@ -87,6 +87,17 @@
   margin-top: var(--space-4);
 }
 
+.s-install-actions {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+}
+
+.s-install-actions .info-tip-button {
+  width: 44px;
+  height: 44px;
+  margin: 0;
+}
+
 .setup .b-choices {
   text-align: left;
 }
@@ -256,4 +267,10 @@
   .setup .s-actions .button[data-size="lg"] {
     min-height: 48px;
   }
+}
+
+.s-step-detail {
+  display: block;
+  font-size: var(--text-sm);
+  color: var(--text-faint);
 }

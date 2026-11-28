@@ -1,0 +1,10 @@
+- status
+- main:
+  - button "Back"
+  - heading "On this computer" [level=2]
+  - heading "Clawtrate didn't find OpenClaw here" [level=3]
+  - button "Set up OpenClaw here"
+  - button "About setting up OpenClaw"
+  - paragraph:
+    - button "Advanced"
+  - paragraph: On this computer

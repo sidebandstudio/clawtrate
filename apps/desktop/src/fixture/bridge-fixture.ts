@@ -15,6 +15,7 @@ import {
   endReadback,
   defaultApprovalInstructions,
   FULL_SCOPES,
+  INSTALL_OPENCLAW_VERSION,
   SETUP_TOKEN_METHOD,
   initialState,
   MAX_RAW_ENTRY_CHARS,
@@ -1170,7 +1171,15 @@ export function createFixtureBridge(
         command,
         () => state,
         set,
-        () => loaded(Date.now()),
+        () => {
+          const at = Date.now();
+          if (command.type !== "setupInstall") return loaded(at);
+          return withConnection(scene("empty", at).initial, {
+            scopes: [...FULL_SCOPES],
+            fullPairing: true,
+            serverVersion: INSTALL_OPENCLAW_VERSION,
+          });
+        },
         (ms, run) => deferred(run, ms),
         setupName === "found-protocol" ? "protocol" : refusedToken ? "token-refused" : "connected",
       )

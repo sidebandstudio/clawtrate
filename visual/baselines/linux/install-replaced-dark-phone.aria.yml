@@ -1,0 +1,11 @@
+- status
+- main:
+  - heading "Setting up OpenClaw" [level=2]
+  - paragraph: The unfinished setup folders are in the Trash.
+  - paragraph: Download and check OpenClaw 2026.11.10
+  - list "Steps":
+    - listitem "Download and check OpenClaw 2026.11.10, running": Download and check OpenClaw 2026.11.10
+    - listitem "Install Node.js and OpenClaw, waiting": Install Node.js and OpenClaw
+    - listitem "Set up the gateway, waiting": Set up the gateway
+    - listitem "Start and check, waiting": Start and check
+  - paragraph: Setting up OpenClaw
