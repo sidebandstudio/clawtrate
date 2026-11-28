@@ -207,14 +207,10 @@ export function chatRows(
     if (at !== null) previous = at;
     if (item.role === "system") {
       const texts = item.blocks.map((block) => (block.kind === "text" ? block.text : ""));
-      // The gateway's line, and the text its event came with kept apart from it (#699).
-      if (item.gatewayEvent) {
-        const [line = "", eventText = ""] = texts;
-        rows.push({ kind: "event", id: item.id, text: line, eventText });
-      } else {
-        const text = texts.join(" ").trim();
-        if (text) rows.push({ kind: "event", id: item.id, text });
-      }
+      const text = (item.gatewayEvent ? (texts[0] ?? "") : texts.join(" ")).trim();
+      const eventText = item.gatewayEvent ? texts[1] : undefined;
+      if (text)
+        rows.push({ kind: "event", id: item.id, text, ...(eventText ? { eventText } : {}) });
       rows.push(...noteRow(item));
       continue;
     }

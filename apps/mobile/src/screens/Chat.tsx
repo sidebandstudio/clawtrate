@@ -175,17 +175,7 @@ function RowView({
         </Txt>
       );
     case "event":
-      if (row.eventText !== undefined) return <GatewayEvent line={row.text} text={row.eventText} />;
-      return (
-        <Txt
-          testID="event-line"
-          size={S["text-sm"]}
-          color="text-faint"
-          style={{ textAlign: "center" }}
-        >
-          {row.text}
-        </Txt>
-      );
+      return <GatewayEvent line={row.text} text={row.eventText} />;
     case "running":
       return (
         <View

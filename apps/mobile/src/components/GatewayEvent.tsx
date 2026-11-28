@@ -1,33 +1,32 @@
-// A turn the gateway started itself (presentation/gateway-event.ts): the gateway's line,
-// centred, then "Text that came with it", a button that opens the note and the event's
-// text as text. Both wrap at any text size.
-
 import { useState } from "react";
 import { Pressable, View } from "react-native";
-import { gatewayEventView } from "../presentation/gateway-event.ts";
 import { S, TOUCH, useTheme } from "../theme/index.ts";
 import { ChevronIcon } from "./icons.tsx";
 import { Txt } from "./ui.tsx";
 
-export function GatewayEvent({ line, text }: { line: string; text: string }) {
+// Keep the disclosure copy in step with packages/ui/src/GatewayEventLine.tsx.
+const LABEL = "Text that came with it";
+const ATTRIBUTION =
+  "Written by whatever started this turn (a command, a bot or another app), not by the gateway or Clawtrate.";
+
+export function GatewayEvent({ line, text }: { line: string; text: string | undefined }) {
   const { c } = useTheme();
   const [open, setOpen] = useState(false);
-  const view = gatewayEventView(text, open);
+  const systemLine = (
+    <Txt testID="event-line" size={S["text-sm"]} color="text-faint" style={{ textAlign: "center" }}>
+      {line}
+    </Txt>
+  );
+  if (text === undefined) return systemLine;
+
   return (
     <View testID="gateway-event" style={{ alignItems: "center" }}>
-      <Txt
-        testID="event-line"
-        size={S["text-sm"]}
-        color="text-faint"
-        style={{ textAlign: "center" }}
-      >
-        {line}
-      </Txt>
+      {systemLine}
       <Pressable
         testID="event-text-toggle"
         accessibilityRole="button"
-        accessibilityLabel={view.toggle.label}
-        accessibilityState={{ expanded: view.toggle.expanded }}
+        accessibilityLabel={LABEL}
+        accessibilityState={{ expanded: open }}
         onPress={() => setOpen((was) => !was)}
         style={({ pressed }) => ({
           flexDirection: "row",
@@ -41,15 +40,17 @@ export function GatewayEvent({ line, text }: { line: string; text: string }) {
         })}
       >
         <Txt size={S["text-sm"]} color="text-faint" style={{ flexShrink: 1 }}>
-          {view.toggle.label}
+          {LABEL}
         </Txt>
-        <ChevronIcon color={c["text-faint"]} size={13} />
+        <View style={{ transform: [{ rotate: open ? "90deg" : "0deg" }] }}>
+          <ChevronIcon color={c["text-faint"]} size={13} />
+        </View>
       </Pressable>
-      {view.body && (
+      {open && (
         <View
           testID="event-text"
           accessible
-          accessibilityLabel={view.body.spoken}
+          accessibilityLabel={`${ATTRIBUTION} ${text}`}
           style={{
             alignSelf: "stretch",
             gap: S["space-2"],
@@ -60,9 +61,9 @@ export function GatewayEvent({ line, text }: { line: string; text: string }) {
           }}
         >
           <Txt size={S["text-sm"]} color="text-muted">
-            {view.body.note}
+            {ATTRIBUTION}
           </Txt>
-          <Txt color="text-muted">{view.body.text}</Txt>
+          <Txt color="text-muted">{text}</Txt>
         </View>
       )}
     </View>
