@@ -706,13 +706,14 @@ export function helloWatcher(): (chunk: Buffer) => boolean {
 
 /**
  * Whether the WebSockets opened since Reconnect was tapped are one connection that stayed up (#611).
- * One that got hello passes. So do two, when the first closed without hello and the second got it and
- * is still open: on a slow hosted runner the app can give up on a first connect that hasn't answered
- * and open another. Two that each got hello are a drop and a reconnect, and fail, as does anything else.
+ * One that got hello and is still open passes. So do two, when the first closed without hello and
+ * the second got it and is still open: on a slow hosted runner the app can give up on a first
+ * connect that hasn't answered and open another. One that got hello and then closed has dropped,
+ * and two that each got hello are a drop and a reconnect: both fail, as does anything else.
  */
 export function reconnectedOnce(since: readonly ProxiedConnection[]): boolean {
   const [first, second] = since;
-  if (since.length === 1) return first!.hello;
+  if (since.length === 1) return first!.hello && !first!.closed;
   if (since.length === 2) return !first!.hello && first!.closed && second!.hello && !second!.closed;
   return false;
 }

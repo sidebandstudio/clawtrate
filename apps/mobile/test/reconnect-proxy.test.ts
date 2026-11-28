@@ -25,6 +25,10 @@ describe("reconnectedOnce", () => {
     expect(reconnectedOnce([at(true, false)])).toBe(true);
   });
 
+  it("fails one connection that got hello and has since closed: it dropped", () => {
+    expect(reconnectedOnce([at(true, true)])).toBe(false);
+  });
+
   it("passes a first connect closed without hello, then one with hello still open", () => {
     expect(reconnectedOnce([at(false, true), at(true, false)])).toBe(true);
   });
