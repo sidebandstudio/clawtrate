@@ -355,7 +355,7 @@ const UNCHECKABLE = {
   changed:
     "another plugin's policy changed the call after this plugin looked at it, so an answer could not be checked again before the call runs",
   codex:
-    "the gateway runs the Codex harness, whose native tool approvals are answered where the plugin cannot check the answer again before the call runs",
+    "the gateway may run the Codex harness, whose native tool approvals are answered where the plugin cannot check the answer again before the call runs",
 };
 
 /** The refusal of an Ask whose answer the plugin could not check again before the call runs. */
@@ -522,8 +522,8 @@ export function codexInFolder(folder) {
         readFileSync(join(folder, item.name, "openclaw.plugin.json"), "utf8"),
       );
       if (policyId(manifest?.id) === CODEX) return true;
-    } catch {
-      // No manifest, or none that names Codex.
+    } catch (error) {
+      if (error?.code && error.code !== "ENOENT" && error.code !== "ENOTDIR") return true;
     }
   }
   return names.length > CODEX_SCAN_LIMIT;

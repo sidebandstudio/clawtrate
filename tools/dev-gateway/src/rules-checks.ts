@@ -560,6 +560,8 @@ export function denyAsTheyCome(
   return async () => {
     stopped = true;
     await loop;
+    // The loop can stop during its sleep, after a new card was received.
+    await pass();
     // A card whose denial failed is tried again until it is denied, no longer waits, or its
     // deadline passes, so stopping early never leaves it unreported.
     while ([...firstTried.keys()].some((id) => !done.has(id))) {

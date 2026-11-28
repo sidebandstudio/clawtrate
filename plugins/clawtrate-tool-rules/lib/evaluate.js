@@ -81,22 +81,23 @@ export function evaluate(scopes, call) {
 
 /**
  * Whether what a call acts on could change its decision from running without
- * a card: a Never or an Ask about what the tool acts on, or, with "Ask when
- * nothing else decides" on, an Allow about it. A call another plugin rewrites
- * after the decision could reach such a rule unseen.
+ * a card: a Never or an Ask about the target, or an Allow about the target
+ * that prevents the fallback from asking. A tool-wide Allow prevents the
+ * fallback from asking whatever the target is.
  */
 export function targetDecides(scopes, call) {
   const order = [call.agentId, EVERY_BOT]
     .filter((id, i, all) => typeof id === "string" && all.indexOf(id) === i)
     .map((id) => scopes.get(id))
     .filter(Boolean);
-  const fallback = order.some((scope) => scope.fallback);
-  return order.some((scope) =>
-    scope.rules.some(
-      (rule) =>
-        rule.target &&
-        rule.tools.some((entry) => toolMatches(entry, call.tool)) &&
-        (rule.action !== "allow" || fallback),
-    ),
+  const matching = order
+    .flatMap((scope) => scope.rules)
+    .filter((rule) => rule.tools.some((entry) => toolMatches(entry, call.tool)));
+  if (matching.some((rule) => rule.target && rule.action !== "allow")) return true;
+  const allows = matching.filter((rule) => rule.action === "allow");
+  return (
+    order.some((scope) => scope.fallback) &&
+    allows.length > 0 &&
+    allows.every((rule) => rule.target)
   );
 }

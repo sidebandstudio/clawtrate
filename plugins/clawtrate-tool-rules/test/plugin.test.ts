@@ -1367,16 +1367,14 @@ describe("a card answered after its rule changed (#606)", () => {
     expect(h.answer(card, "deny", ...call)).toBeUndefined();
     expect(h.handle.shared.approved.size).toBe(0);
     // A call the policy decided, then let run: the hook leaves it alone.
-    await h.save("main", [{ action: "allow", tools: ["write"] }]);
-    const free = ["main", "write", { path: "x" }, { runId: "run-2", toolCallId: "c2" }] as const;
-    expect(h.before(...free)).toBeUndefined();
+    await h.save("main", [{ action: "allow", tools: ["write"] }], true);
+    const event = { toolName: "write", params: { path: "x" }, runId: "run-2", toolCallId: "c2" };
+    const context = { agentId: "main" };
+    expect(h.policies[0]!.evaluate(event, context)).toBeUndefined();
     const hook = h.hooks.find((x) => x.name === "before_tool_call")!;
-    expect(
-      hook.fn(
-        { toolName: "write", params: { path: "x" }, runId: "run-2", toolCallId: "c2" },
-        { agentId: "main" },
-      ),
-    ).toBeUndefined();
+    expect(hook.fn(event, context)).toBeUndefined();
+    const { records } = (await h.call("decisions.list", { runId: "run-2" })).payload!;
+    expect(records).toEqual([expect.objectContaining({ decision: "allow" })]);
     // A call the policy never saw, the hook decides itself.
     await h.save("main", [{ action: "never", tools: ["write"] }]);
     expect(
@@ -1609,6 +1607,26 @@ describe("another plugin's hook can change a call after the rules decided it (#6
     expect(h.before("main", "web_fetch", { url: "x" })).toBeUndefined();
   });
 
+  it("lets a whole-tool Allow cover a call regardless of a target-specific Allow", async () => {
+    const h = host({ toolHooks: () => ["notes-rewriter"] });
+    await h.save(
+      "main",
+      [{ action: "allow", tools: ["write"], target: { kind: "path", pattern: "notes/**" } }],
+      true,
+    );
+    await h.save("*", [{ action: "allow", tools: ["write"] }]);
+    expect(h.before("main", "write", { path: "notes/a" })).toBeUndefined();
+    expect(h.before("main", "write", { path: "tmp/a" })).toBeUndefined();
+
+    await h.save("*", [
+      { action: "allow", tools: ["write"] },
+      { action: "never", tools: ["write"], target: { kind: "path", pattern: "archive/**" } },
+    ]);
+    expect(h.before("main", "write", { path: "notes/a" })?.blockReason).toMatch(
+      /depends on what it acts on/,
+    );
+  });
+
   it("reads which plugins hold a before_tool_call hook from the registries both versions keep", () => {
     const HOOKS = Symbol.for("openclaw.plugins.hook-runner-global-state");
     const ACTIVE = Symbol.for("openclaw.pluginRegistryState");
@@ -1669,7 +1687,7 @@ describe("another plugin's hook can change a call after the rules decided it (#6
 
 describe("where the Codex harness may answer a card (#606)", () => {
   const CODEX_REFUSAL =
-    /asks first, and the gateway runs the Codex harness, whose native tool approvals are answered where the plugin cannot check the answer again before the call runs\. The call did not run\.$/;
+    /asks first, and the gateway may run the Codex harness, whose native tool approvals are answered where the plugin cannot check the answer again before the call runs\. The call did not run\.$/;
   const refuses = (h: ReturnType<typeof load>) => {
     const result = h.before("main", "write", { path: "a" });
     expect(result?.requireApproval).toBeUndefined();
@@ -1751,6 +1769,19 @@ describe("where the Codex harness may answer a card (#606)", () => {
       mkdirSync(locked, { mode: 0o000 });
       expect(codexInFolder(locked)).toBe(true);
       chmodSync(locked, 0o700);
+    }
+  });
+
+  it("refuses an Ask when a child plugin manifest cannot be read", async () => {
+    const h = host();
+    await h.save("main", rules);
+    const child = join(h.stateDir, "extensions", "notes");
+    mkdirSync(child, { recursive: true });
+    io.failPath = join(child, "openclaw.plugin.json");
+    try {
+      refuses(h);
+    } finally {
+      io.failPath = "";
     }
   });
 

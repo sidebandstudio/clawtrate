@@ -610,6 +610,15 @@ describe("denying the cards a bot-message check raises", () => {
     await expect(stop()).rejects.toThrow("cards the check could not deny");
   });
 
+  it("denies a card received after the helper's last pass", async () => {
+    const op = admin(0);
+    const [event] = op.events.splice(0);
+    const stop = denyAsTheyCome(ctxOf(op), since);
+    op.events.push(event!);
+    await stop();
+    expect(await op.request("plugin.approval.list", {})).toEqual([]);
+  });
+
   it("stopping early waits for a retried denial that then succeeds", async () => {
     const op = admin(2);
     const stop = denyAsTheyCome(ctxOf(op), since, 5_000);
