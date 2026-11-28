@@ -76,7 +76,7 @@
       - paragraph: The gateway couldn't run this message
       - button "Dismiss this error"
       - paragraph: Codex couldn't finish checking Computer Use, so your message didn't run.
-      - status: Computer Use is off on this gateway.
+      - status: The Computer Use startup check is off on this gateway.
       - button "Try again"
       - button "Put back"
       - button "Details"

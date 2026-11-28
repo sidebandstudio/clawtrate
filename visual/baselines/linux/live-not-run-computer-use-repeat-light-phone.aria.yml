@@ -77,7 +77,7 @@
       - button "Dismiss this error"
       - paragraph: Codex couldn't finish checking Computer Use, so your message didn't run.
       - paragraph: This happened on the previous attempt too. Sending again is unlikely to help.
-      - paragraph: Codex bots on this gateway won't be able to use the computer until you turn it back on.
+      - paragraph: This skips the Computer Use check at startup and automatic installation. Native tools set up separately can still work.
       - button "Turn off Computer Use on this gateway"
       - button "Try again"
       - button "Details"
