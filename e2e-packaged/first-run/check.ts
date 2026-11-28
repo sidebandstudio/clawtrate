@@ -83,6 +83,7 @@ let accountPickerClosedForInspection = false;
 let accountPickerBeforeSave = false;
 let accountSheet: AccountSheetResult | null = null;
 let accountProbe: { checkingScreenObserved: boolean; scriptedResponses: number } | null = null;
+let notFoundAdvancedCount: number | null = null;
 
 mkdirSync(out, { recursive: true });
 const system = observeMac(out);
@@ -401,11 +402,20 @@ try {
       60,
     );
     await ax("focus");
-    if (notFound()) return "Clawtrate didn't find OpenClaw here (opened automatically)";
-    await screenshot("02-where-openclaw-runs.png");
-    await press("This computer");
-    await waitFor("the card for a Mac without OpenClaw", notFound);
-    return 'Clawtrate didn\'t find OpenClaw here (after pressing "This computer")';
+    const openedAutomatically = notFound();
+    if (!openedAutomatically) {
+      await screenshot("02-where-openclaw-runs.png");
+      await press("This computer");
+      await waitFor("the card for a Mac without OpenClaw", notFound);
+    }
+    notFoundAdvancedCount = buttons().filter(({ text }) => text === "Advanced").length;
+    if (notFoundAdvancedCount !== 1) {
+      throw new Error(
+        `The OpenClaw not-found card exposes ${notFoundAdvancedCount} Advanced controls in Accessibility. Expected one.`,
+      );
+    }
+    const path = openedAutomatically ? "opened automatically" : 'after pressing "This computer"';
+    return `Clawtrate didn't find OpenClaw here (${path}). Accessibility exposes one Advanced control.`;
   });
   await step(2, async () => {
     if (!hasButton("Set up OpenClaw here")) {
@@ -567,6 +577,7 @@ try {
   const observed = await system.finish();
   const diagnostics = {
     developerTools: { ...developerTools, ...observed },
+    notFoundAdvancedCount,
     afterConnectionSeconds,
     accountHomeMode: homeInfo && (homeInfo.mode & 0o777).toString(8),
     accountHomeOwnedByAppUser: homeInfo?.uid === process.geteuid?.(),
