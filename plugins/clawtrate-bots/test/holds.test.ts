@@ -676,3 +676,28 @@ describe("fix round 2", () => {
     expect(on(rearm, origin("C", "web", "routine"))).toMatchObject({ block: true });
   });
 });
+
+describe("fix round 3", () => {
+  it("a workspace file whose literal name starts with @ is that file, as the file tools resolve it; without one, @ is dropped", () => {
+    const ws = tempDir("clawtrate-bots-at-");
+    writeFileSync(join(ws, "AGENTS.md"), "");
+    mkdirSync(join(ws, "@drafts"));
+    const own = (p: string) => heldFile(p, "pip", { pip: ws });
+    const write = (path: string) =>
+      on(call("write", { path }), B, { workspaces: { pip: ws } }) as Json;
+    // No literal entry: the @ is a reference prefix, so this is AGENTS.md, held.
+    expect(expandPath("@AGENTS.md", ws)).toBe(join(ws, "AGENTS.md"));
+    expect(own("@AGENTS.md")).toEqual({ file: "agents.md", bot: "pip" });
+    expect(write("@AGENTS.md")).toMatchObject({ block: true });
+    // Both files: the literal one is the target, an ordinary file.
+    writeFileSync(join(ws, "@AGENTS.md"), "");
+    expect(expandPath("@AGENTS.md", ws)).toBe(join(ws, "@AGENTS.md"));
+    expect(own("@AGENTS.md")).toBeNull();
+    expect(write("@AGENTS.md")).toEqual({ pass: true });
+    expect(own("AGENTS.md")).toEqual({ file: "agents.md", bot: "pip" });
+    expect(write("AGENTS.md")).toMatchObject({ block: true });
+    // A literal first folder keeps the @ for what is under it; absolute and ~ forms never do.
+    expect(expandPath("@drafts/AGENTS.md", ws)).toBe(join(ws, "@drafts", "AGENTS.md"));
+    expect(expandPath(`@${join(ws, "AGENTS.md")}`, ws)).toBe(join(ws, "AGENTS.md"));
+  });
+});

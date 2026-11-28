@@ -216,9 +216,11 @@ export function createRuns(api, options = {}) {
     observe();
     const run = origins.sawPrompt(ctx);
     // A check-in's notes as its prompt shows them, for the holds (lib/hooks.js).
-    if (run && run.kind === "check-in" && run.checkInNotes === undefined && options.notesOf)
+    if (run && run.kind === "check-in" && run.checkInNotes === undefined && options.notesOf) {
       run.checkInNotes =
         typeof event?.prompt === "string" ? options.notesOf(event.prompt) : undefined;
+      if (run.checkInNotes !== undefined) options.sawCheckInNotes?.(run);
+    }
   });
   api.on("before_message_write", (event, ctx) => {
     observe();

@@ -18,7 +18,7 @@
 //   { block: true, reason }                      not done, said to the bot
 // Any error while deciding a held call is a refusal (lib/hooks.js).
 
-import { realpathSync } from "node:fs";
+import { existsSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import nodePath from "node:path";
 import { fileURLToPath } from "node:url";
@@ -131,21 +131,65 @@ export function driveAlias(path) {
 }
 
 /**
- * A path as the file tools expand it (2026.10.6 dist/path-utils-S10YpSZj.mjs:27-43,
+ * Whether a leading `@` is part of a file's name, as both versions' file tools
+ * decide it (2026.10.6 dist/path-policy-BaXoyN15.mjs:67-89,
+ * `preserveAtPrefixedRelativePath`, called by dist/path-utils-S10YpSZj.mjs:44-46;
+ * 2026.11.10 dist/path-policy-o7rDw-ei.mjs, the same): a relative name (not
+ * `~`, a file URL or absolute) is taken literally when that entry, or its
+ * first folder with the `@`, exists under the workspace.
+ */
+function literalAt(path, cwd, pathApi, exists) {
+  const stripped = path.slice(1);
+  if (
+    !stripped ||
+    stripped === "~" ||
+    stripped.startsWith("~/") ||
+    stripped.startsWith("~\\") ||
+    /^file:\/\//i.test(stripped) ||
+    nodePath.posix.isAbsolute(stripped) ||
+    nodePath.win32.isAbsolute(stripped)
+  )
+    return false;
+  let ancestor = path;
+  for (;;) {
+    const parent = pathApi.dirname(ancestor);
+    if (parent === "." || parent === ancestor) break;
+    ancestor = parent;
+  }
+  const base = cwd ?? ".";
+  return (
+    exists(pathApi.resolve(base, `./${path}`)) ||
+    (ancestor !== path && exists(pathApi.resolve(base, `./${ancestor}`)))
+  );
+}
+
+/**
+ * A path as the file tools expand it (2026.10.6 dist/path-utils-S10YpSZj.mjs:27-46,
  * dist/sandbox-paths-B9nRw-P0.mjs:20-28, dist/agent-tools.before-tool-call.decision-C9Brjb-Y.mjs:75-81;
  * the same in 2026.11.10): a malformed `</arg_value>` suffix cut, one leading
- * `@` dropped, `file://` read as a file URL, `~` as the home folder, and a
- * relative path taken from the bot's workspace. With `drive`, a Windows drive
- * alias is mapped first, as 2026.11.10 does on Windows.
- * @param {{ drive?: boolean, pathApi?: typeof nodePath }} [options]
+ * `@` dropped unless the workspace has that literal name (literalAt), `file://`
+ * read as a file URL, `~` as the home folder, and a relative path taken from
+ * the bot's workspace. With `drive`, a Windows drive alias is mapped first, as
+ * 2026.11.10 does on Windows. `exists` looks at the disk (none for another
+ * platform's paths).
+ * @param {{ drive?: boolean, pathApi?: typeof nodePath, exists?: (path: string) => boolean }} [options]
  */
-export function expandPath(raw, cwd, { drive = false, pathApi = nodePath } = {}) {
+export function expandPath(
+  raw,
+  cwd,
+  {
+    drive = false,
+    pathApi = nodePath,
+    exists = pathApi === nodePath ? existsSync : () => false,
+  } = {},
+) {
   let path = String(raw);
   const xml = path.indexOf("</arg_value>");
   if (xml !== -1) path = path.slice(0, xml);
   path = path.trim();
   if (drive) path = driveAlias(path);
-  if (path.startsWith("@")) path = path.slice(1);
+  if (path.startsWith("@"))
+    path = literalAt(path, cwd, pathApi, exists) ? `./${path}` : path.slice(1);
   if (path.toLowerCase().startsWith("file://")) {
     try {
       path = fileURLToPath(path);

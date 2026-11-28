@@ -918,22 +918,37 @@ export const BOTS_CHECKS: BotsCheck[] = [
       const own = await routineRun(ctx, world, "#notes-set first notes");
       const said = String(rec(await routineFinished(ctx, own)).summary ?? "");
       expect(!said.includes(NOT_DONE), `its first notes: ${said}`);
-      const scratch = async () =>
-        rec(rec(await ctx.clients.admin.request("cron.scratch.get", { id: own })).scratch);
+      const read = async () =>
+        rec(await ctx.clients.admin.request("cron.scratch.get", { id: own }));
+      const scratch = async () => rec((await read()).scratch);
       expect((await scratch()).content === "first notes", `the notes: ${show(await scratch())}`);
+      const again = async (count: number) => {
+        await ctx.clients.admin.request("cron.run", { id: own, mode: "force" });
+        return String(rec(await routineFinishedAgain(ctx, own, count)).summary ?? "");
+      };
+      // Its own notes, at the revision its write made: it may replace them.
+      const second = await again(2);
+      expect(!second.includes(NOT_DONE), `over its own notes: ${second}`);
+      const personWrites = async (content: string) =>
+        ctx.clients.admin.request("cron.scratch.set", {
+          id: own,
+          content,
+          expectedRevision: (await read()).currentRevision,
+        });
       // A person's notes: not replaced by the routine's run.
-      const rev = rec(
-        await ctx.clients.admin.request("cron.scratch.get", { id: own }),
-      ).currentRevision;
-      await ctx.clients.admin.request("cron.scratch.set", {
-        id: own,
-        content: "my own list",
-        expectedRevision: rev,
-      });
-      await ctx.clients.admin.request("cron.run", { id: own, mode: "force" });
-      const second = String(rec(await routineFinishedAgain(ctx, own, 2)).summary ?? "");
-      expect(second.includes(NOT_DONE), `over a person's notes: ${second}`);
+      await personWrites("my own list");
+      const third = await again(3);
+      expect(third.includes(NOT_DONE), `over a person's notes: ${third}`);
       expect((await scratch()).content === "my own list", `the notes: ${show(await scratch())}`);
+      // The person puts the routine's text back: a revision the bot didn't write is the person's.
+      await personWrites("first notes");
+      const restored = (await read()).currentRevision;
+      const fourth = await again(4);
+      expect(fourth.includes(NOT_DONE), `over the person's restored notes: ${fourth}`);
+      expect(
+        (await read()).currentRevision === restored,
+        `the notes moved on: ${show(await read())}`,
+      );
     },
   },
   {

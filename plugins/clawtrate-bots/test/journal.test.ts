@@ -129,6 +129,7 @@ describe("on OpenClaw 2026.10.6", () => {
           "ended",
           "notes",
           "notesOf",
+          "sawCheckInNotes",
           "sessions",
           "slots",
           "version",

@@ -2,7 +2,7 @@
 // records what the plugin registers. The read tools' are test/runs.test.ts.
 
 import { describe, expect, it } from "vitest";
-import { DEFINITION_MAX_BYTES, createHooks } from "../lib/hooks.js";
+import { DEFINITION_MAX_BYTES, createHooks, rosterIds } from "../lib/hooks.js";
 import { SAID } from "../lib/holds.js";
 import { memoryStore } from "./harness.ts";
 
@@ -444,8 +444,10 @@ describe("fix round 2", () => {
       { ...write("h1", "- water plants", "n1"), result: ok({ ok: true }) },
       toolCtx,
     );
-    const journal = [...h.notes.rows.keys()].filter((k) => k.startsWith("journal:check-in:pip:"));
-    expect(journal).toHaveLength(1);
+    const journal = () =>
+      [...h.notes.rows.keys()].filter((k) => k.startsWith("journal:check-in:pip:"));
+    // Accepted, not yet saved: nothing is journaled until a check-in shows it.
+    expect(journal()).toHaveLength(0);
     // Its own notes, as the next check-in's prompt shows them: it may replace them.
     await h.fire(
       "before_prompt_build",
@@ -455,6 +457,7 @@ describe("fix round 2", () => {
     expect(
       await h.fire("before_tool_call", write("h2", "- feed cat", "n2"), toolCtx),
     ).toBeUndefined();
+    expect(journal()).toHaveLength(1);
     // A person's notes: not replaced.
     await h.fire(
       "before_prompt_build",
@@ -514,5 +517,171 @@ describe("fix round 2", () => {
       blockReason: SAID.notesUnseen,
     });
     expect(await h.fire("before_tool_call", set(0, "s2"), ctx)).toBeUndefined();
+  });
+
+  it("round 3: a check-in's accepted notes are journaled only once a check-in shows them saved; a lost save leaves the journal and the owner as they were", async () => {
+    const h = host();
+    const checkIn = (runId: string, notes: string | null) =>
+      h.fire(
+        "before_prompt_build",
+        {
+          prompt:
+            notes === null
+              ? "Follow the notes."
+              : `Follow the notes.\n\nHeartbeat monitor scratch:\n${notes}`,
+        },
+        { ...typed, runId, trigger: "heartbeat" },
+      );
+    const write = (runId: string, scratch: string, id: string) => ({
+      ...call("heartbeat_respond", { status: "ok", scratch }, id),
+      runId,
+    });
+    const accept = async (runId: string, scratch: string, id: string) => {
+      expect(await h.fire("before_tool_call", write(runId, scratch, id), toolCtx)).toBeUndefined();
+      await h.fire(
+        "after_tool_call",
+        { ...write(runId, scratch, id), result: ok({ ok: true }) },
+        toolCtx,
+      );
+    };
+    const journal = () =>
+      [...h.notes.rows.keys()].filter((k) => k.startsWith("journal:check-in:pip:"));
+    const owner = async () => h.notes.lookup("owner:check-in:pip");
+    await checkIn("h1", null);
+    await accept("h1", "- water plants", "n1");
+    await checkIn("h2", "- water plants");
+    await accept("h2", "- feed cat", "n2");
+    expect(journal()).toHaveLength(1);
+    const before = await owner();
+    // The runner's save lost its revision race: the next check-in still shows the old notes.
+    await checkIn("h3", "- water plants");
+    expect(journal()).toHaveLength(1);
+    expect(await owner()).toEqual(before);
+    // Still its own notes, so it may propose again; a person's in their place stay theirs.
+    await accept("h3", "- feed cat", "n4");
+    await checkIn("h4", "- my list");
+    expect(await h.fire("before_tool_call", write("h4", "- y", "n5"), toolCtx)).toMatchObject({
+      blockReason: SAID.notesTheirs,
+    });
+    expect(journal()).toHaveLength(1);
+    expect(await owner()).toEqual(before);
+  });
+
+  it("round 3: a check-in proposal the tool refused is never the bot's, even when its text later shows", async () => {
+    const h = host();
+    const checkIn = (runId: string, prompt: string) =>
+      h.fire("before_prompt_build", { prompt }, { ...typed, runId, trigger: "heartbeat" });
+    const write = (runId: string, id: string) => ({
+      ...call("heartbeat_respond", { status: "ok", scratch: "- my list" }, id),
+      runId,
+    });
+    await checkIn("h1", "Follow the notes.");
+    expect(await h.fire("before_tool_call", write("h1", "n1"), toolCtx)).toBeUndefined();
+    await h.fire("after_tool_call", { ...write("h1", "n1"), error: "refused" }, toolCtx);
+    // The person wrote the same words themselves.
+    await checkIn("h2", "Follow the notes.\n\nHeartbeat monitor scratch:\n- my list");
+    expect(await h.fire("before_tool_call", write("h2", "n2"), toolCtx)).toMatchObject({
+      blockReason: SAID.notesTheirs,
+    });
+    expect([...h.notes.rows.keys()]).toEqual([]);
+  });
+
+  it("round 3: a routine's notes are its own only at the revision its write made, whatever the text", async () => {
+    const h = host({ version: "2026.11.10" });
+    const routine = (runId: string) => ({
+      ...typed,
+      runId,
+      sessionKey: `agent:pip:cron:j9:run:${runId}`,
+      trigger: "cron",
+      jobId: "j9",
+    });
+    const ctxOf = (runId: string) => ({ ...toolCtx, sessionKey: routine(runId).sessionKey });
+    const read = async (runId: string, content: string | null, revision: number) => {
+      await h.fire("before_prompt_build", {}, routine(runId));
+      const get = { ...call("automations", { action: "scratch_get" }, `g-${runId}`), runId };
+      await h.fire("before_tool_call", get, ctxOf(runId));
+      await h.fire(
+        "after_tool_call",
+        {
+          ...get,
+          result: ok({
+            scratch: content === null ? null : { content, revision },
+            currentRevision: revision,
+          }),
+        },
+        ctxOf(runId),
+      );
+    };
+    const set = (runId: string, rev: number, id: string) => ({
+      ...call(
+        "automations",
+        { action: "scratch_set", content: "- step two", expectedRevision: rev },
+        id,
+      ),
+      runId,
+    });
+    const owner = async () => h.notes.lookup("owner:routine:j9");
+    await read("r1", null, 0);
+    expect(await h.fire("before_tool_call", set("r1", 0, "s1"), ctxOf("r1"))).toBeUndefined();
+    await h.fire(
+      "after_tool_call",
+      {
+        ...set("r1", 0, "s1"),
+        result: ok({
+          ok: true,
+          scratch: { content: "- step two", revision: 1 },
+          currentRevision: 1,
+        }),
+      },
+      ctxOf("r1"),
+    );
+    expect(await owner()).toMatchObject({ agentId: "pip", revision: 1 });
+    // Its own write, at its revision: it may replace it.
+    await read("r2", "- step two", 1);
+    expect(await h.fire("before_tool_call", set("r2", 1, "s2"), ctxOf("r2"))).toBeUndefined();
+    // A save the gateway refused (a revision race) is no write: nothing journaled.
+    await h.fire(
+      "after_tool_call",
+      { ...set("r2", 1, "s2"), result: ok({ ok: false, reason: "revision" }) },
+      ctxOf("r2"),
+    );
+    expect([...h.notes.rows.keys()].filter((k) => k.startsWith("journal:"))).toHaveLength(1);
+    expect(await owner()).toMatchObject({ revision: 1 });
+    // The operator replaced the notes (revision 2), then put the same text back (3).
+    await read("r3", "- step two", 3);
+    expect(await h.fire("before_tool_call", set("r3", 3, "s3"), ctxOf("r3"))).toMatchObject({
+      blockReason: SAID.notesTheirs,
+    });
+  });
+
+  it("round 3: with no roster in the config, the implicit default bot sends to its own session by label", async () => {
+    const config = {
+      agents: { defaults: { model: { primary: "scripted/dev" } } },
+      plugins: CONFIG.plugins,
+    };
+    const rows: Record<string, Json[]> = {
+      main: [{ sessionKey: "agent:main:dashboard:1", entry: { label: "Compare trail maps" } }],
+    };
+    const h = host({ config, sessions: (id) => rows[id] ?? [] });
+    const run = { ...typed, runId: "m1", sessionKey: "agent:main:main", agentId: "main" };
+    await h.fire("before_prompt_build", {}, run);
+    const send = {
+      ...call("sessions_send", { label: "Compare trail maps", message: "m" }, "m1c"),
+      runId: "m1",
+    };
+    expect(
+      await h.fire("before_tool_call", send, {
+        ...toolCtx,
+        sessionKey: run.sessionKey,
+        agentId: "main",
+      }),
+    ).toBeUndefined();
+    expect(rosterIds(config)).toEqual(["main"]);
+    // The gateway lists `entries` when that key is set, else `list`; either one, even empty, has no implicit bot.
+    expect(rosterIds({ agents: { entries: {} } })).toEqual([]);
+    expect(rosterIds({ agents: { list: [{ id: "pip" }] } })).toEqual(["pip"]);
+    expect(rosterIds({ agents: { entries: { pip: {} }, list: [{ id: "otto" }] } })).toEqual([
+      "pip",
+    ]);
   });
 });

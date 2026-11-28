@@ -28,8 +28,9 @@ export const NOT_REPORTED = Object.freeze([
 ]);
 /**
  * Notes a bot wrote itself, through a held and journaled write: per notes
- * (`check-in:<bot>`, `routine:<job>`), who wrote them last and their hash, and
- * one journal entry per write with the notes before and after (design 3.2, 9).
+ * (`check-in:<bot>`, `routine:<job>`), who wrote them last, their hash and, for
+ * a routine's, the revision the gateway gave that write; and one journal entry
+ * per write with the notes before and after (design 3.2, 9).
  */
 export const NOTES = Object.freeze({
   namespace: "notes-written",
@@ -102,6 +103,23 @@ function resultJson(result) {
   return null;
 }
 
+/**
+ * The gateway's bots, as it lists them (2026.10.6 dist/agent-roster-CIplRONg.mjs:48-76,
+ * `listAgentIds`; 2026.11.10 dist/agent-roster-Cq57wKEj.mjs, the same): the
+ * entries of `agents.entries` when that key is set, else of `agents.list`, and
+ * with neither key the implicit default bot, `main`.
+ */
+export function rosterIds(cfg) {
+  const agents = isRecord(cfg?.agents) ? cfg.agents : {};
+  if (Object.hasOwn(agents, "entries") && agents.entries !== undefined)
+    return isRecord(agents.entries)
+      ? Object.keys(agents.entries).filter((id) => isRecord(agents.entries[id]))
+      : [];
+  if (Object.hasOwn(agents, "list") && agents.list !== undefined)
+    return Array.isArray(agents.list) ? agents.list.filter(isRecord).map((a) => a.id) : [];
+  return ["main"];
+}
+
 /** Whether a scheduler call's result says it failed. */
 const failedResult = (event) =>
   Boolean(event?.error) ||
@@ -112,7 +130,9 @@ export function createHooks(api, options = {}) {
   const slots = options.slots ?? globalThis;
   slots[DEFINITIONS_KEY] ??= { definitions: new Map(), ending: new Map(), noting: new Map() };
   slots[DEFINITIONS_KEY].noting ??= new Map();
-  const { definitions, ending, noting } = slots[DEFINITIONS_KEY];
+  slots[DEFINITIONS_KEY].proposed ??= new Map();
+  slots[DEFINITIONS_KEY].settling ??= new Map();
+  const { definitions, ending, noting, proposed, settling } = slots[DEFINITIONS_KEY];
   const ended = options.ended ?? api.runtime?.state?.openKeyedStore?.(ENDED);
   const notesStore = options.notes ?? api.runtime?.state?.openKeyedStore?.(NOTES);
   const now = options.now ?? Date.now;
@@ -148,10 +168,13 @@ export function createHooks(api, options = {}) {
     });
   }
 
-  /** A notes write let through, journaled once it succeeded, and its writer kept. */
-  async function settleNotes(pending) {
+  /**
+   * A notes write let through, journaled once it is seen to have happened, and
+   * its writer kept: with the revision the gateway gave it, for a routine's.
+   */
+  async function settleNotes(pending, revision = null) {
     const at = now();
-    const entry = { ...pending, nextHash: notesHash(pending.next), at };
+    const entry = { ...pending, nextHash: notesHash(pending.next), revision, at };
     await notesStore?.register(
       `journal:${pending.scope}:${String(at).padStart(16, "0")}:${pending.runId}`,
       entry,
@@ -159,8 +182,30 @@ export function createHooks(api, options = {}) {
     await notesStore?.register(`owner:${pending.scope}`, {
       agentId: pending.agentId,
       nextHash: entry.nextHash,
+      revision,
       at,
     });
+  }
+
+  /**
+   * A check-in's accepted proposal, settled only when a later check-in's prompt
+   * shows the notes holding it: 2026.10.6's heartbeat runner saves them after
+   * the tool accepted them (dist/heartbeat-runner-run-PCcyazhe.mjs:702-716), and
+   * a save that lost a revision race or failed leaves the journal and the owner
+   * record as they were. Until then the proposal is pending.
+   */
+  function sawCheckInNotes(run) {
+    const scope = `check-in:${String(run?.agentId ?? "").toLowerCase()}`;
+    const wrote = proposed.get(scope);
+    if (!wrote) return;
+    proposed.delete(scope);
+    if (notesHash(run.checkInNotes) !== notesHash(wrote.next)) return;
+    const done = settleNotes(wrote)
+      .catch(() => {})
+      .finally(() => {
+        if (settling.get(scope) === done) settling.delete(scope);
+      });
+    settling.set(scope, done);
   }
 
   /** What a notes write would replace, and whether this bot wrote it: see holds.js "notes". */
@@ -171,6 +216,8 @@ export function createHooks(api, options = {}) {
     if (name === "heartbeat_respond") {
       scope = caller ? `check-in:${caller}` : null;
       current = run?.checkInNotes;
+      // The proposal this prompt showed saved, settled first.
+      if (scope) await settling.get(scope);
     } else {
       // 2026.11.10's scratch_set needs the revision its run's scratch_get read.
       const job = run?.jobId ?? null;
@@ -182,11 +229,14 @@ export function createHooks(api, options = {}) {
     if (!scope || typeof current !== "string") return { scope, current: undefined };
     if (current.trim() === "") return { scope, current, owned: false };
     const owner = await notesStore?.lookup(`owner:${scope}`);
-    return {
-      scope,
-      current,
-      owned: owner?.agentId === caller && owner?.nextHash === notesHash(current),
-    };
+    // A routine's notes are the bot's only at the revision its own write made:
+    // a person's edit moves the revision, whatever text it leaves. A check-in's
+    // prompt shows no revision (2026.10.6), so its notes are compared by text.
+    const same =
+      name === "heartbeat_respond"
+        ? owner?.nextHash === notesHash(current)
+        : typeof owner?.revision === "number" && owner.revision === run?.routineNotes?.revision;
+    return { scope, current, owned: owner?.agentId === caller && same };
   }
 
   async function afterToolCall(event, _ctx, run) {
@@ -196,7 +246,20 @@ export function createHooks(api, options = {}) {
     const wrote = noting.get(callId);
     if (wrote) {
       noting.delete(callId);
-      if (!failed) await settleNotes(wrote);
+      if (failed) {
+        // not written
+      } else if (wrote.scope.startsWith("check-in:")) {
+        // Accepted, not yet saved: pending until a check-in's prompt shows it.
+        proposed.delete(wrote.scope);
+        proposed.set(wrote.scope, wrote);
+        while (proposed.size > ENDING_MAX) proposed.delete(proposed.keys().next().value);
+      } else {
+        // 2026.11.10's scratch_set answers with the revision it wrote
+        // (dist/cron-8fPzZKdn.mjs:37, `cron.scratch.set`), or ok: false.
+        const read = resultJson(event.result);
+        if (read?.ok === true && typeof read.currentRevision === "number")
+          await settleNotes(wrote, read.currentRevision);
+      }
     }
     if (!SCHEDULER.has(name)) return;
     const action = String(event?.params?.action ?? "").toLowerCase();
@@ -233,6 +296,7 @@ export function createHooks(api, options = {}) {
     describeHolds,
     afterToolCall,
     notesOf: checkInNotesOf,
+    sawCheckInNotes,
   });
 
   api.on("cron_changed", async (event) => {
@@ -289,10 +353,7 @@ export function createHooks(api, options = {}) {
    */
   function labelBot(cfg, label) {
     const want = String(label).trim();
-    const ids = new Set([
-      ...Object.keys(cfg?.agents?.entries ?? {}),
-      ...(Array.isArray(cfg?.agents?.list) ? cfg.agents.list.map((a) => a?.id) : []),
-    ]);
+    const ids = new Set(rosterIds(cfg));
     const keys = new Set();
     for (const id of ids) {
       if (typeof id !== "string" || !id) continue;
@@ -389,5 +450,5 @@ export function createHooks(api, options = {}) {
     return undefined;
   });
 
-  return { ...runs, definitions, ending, noting };
+  return { ...runs, definitions, ending, noting, proposed };
 }
