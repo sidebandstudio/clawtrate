@@ -33,6 +33,10 @@ describe("Packaged first run verdict", () => {
 describe("Packaged first run forbidden screens", () => {
   it.each([
     ["AXHeading", "Approve this device"],
+    [
+      "AXSystemDialog",
+      "The git command requires the command line developer tools. Would you like to install the tools now?",
+    ],
     ["AXStaticText", "A pairing request is waiting for the gateway owner."],
     ["AXHeading", "Approval required"],
     ["AXButton", "Allow once"],

@@ -30,16 +30,41 @@ on labelOf(itemRef, roleName)
   end tell
 end labelOf
 
+-- The command line tools prompt belongs to macOS, outside Clawtrate's process.
+on developerToolDialogs()
+  set dialogRows to ""
+  tell application "System Events"
+    set installers to every application process whose name contains "Developer Tools" or name is "CoreServicesUIAgent" or name is "Software Update" or name is "SoftwareUpdateNotificationManager" or name is "UserNotificationCenter" or bundle identifier is "com.apple.dt.CommandLineTools.installondemand"
+    repeat with installer in installers
+      try
+        set issuerName to name of installer
+        repeat with promptWindow in windows of installer
+          set promptText to my labelOf(contents of promptWindow, "AXWindow")
+          repeat with promptItem in entire contents of promptWindow
+            set promptElement to contents of promptItem
+            if value of attribute "AXRole" of promptElement is "AXStaticText" then
+              set promptText to promptText & " " & my labelOf(promptElement, "AXStaticText")
+            end if
+          end repeat
+          set dialogRows to dialogRows & "AXSystemDialog" & tab & issuerName & " " & my flat(promptText) & linefeed
+        end repeat
+      end try
+    end repeat
+  end tell
+  return dialogRows
+end developerToolDialogs
+
 on run argv
   set pid to item 1 of argv as integer
   set mode to item 2 of argv
   set target to item 3 of argv
   set output to ""
+  if mode is "read" then set output to my developerToolDialogs()
   tell application "System Events"
     set matches to application processes whose unix id is pid
-    if (count of matches) is 0 then return ""
+    if (count of matches) is 0 then return output
     set appProcess to item 1 of matches
-    if (count of windows of appProcess) is 0 then return ""
+    if (count of windows of appProcess) is 0 then return output
     if mode is "focus" then
       set frontmost of appProcess to true
       return "ok"

@@ -1,4 +1,4 @@
-import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { execFile, execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import {
   closeSync,
   existsSync,
@@ -36,6 +36,7 @@ if (
 
 const home = userInfo().homedir;
 const profile = join(home, ".openclaw-clawtrate");
+const SYSTEM_PATH = "/usr/bin:/bin:/usr/sbin:/sbin";
 const run = promisify(execFile);
 const show = (error: unknown) => (error instanceof Error ? error.message : String(error));
 const stepResults: StepResult[] = STEPS.map((step) => ({
@@ -54,6 +55,8 @@ let screenKey = "";
 let child: ChildProcess | undefined;
 let appData: string | undefined;
 let launchError: Error | undefined;
+let developerTools: { activeDirectory: string | null; git: string } | undefined;
+let systemPromptVisible = false;
 let provider: Server | undefined;
 
 mkdirSync(out, { recursive: true });
@@ -69,7 +72,7 @@ function record(kind: Event["kind"], text: string) {
 
 async function ax(mode: string, target = ""): Promise<string> {
   if (launchError) throw launchError;
-  if (child?.exitCode != null || child?.signalCode != null)
+  if (mode !== "read" && (child?.exitCode != null || child?.signalCode != null))
     throw new Error("Clawtrate quit before the check finished.");
   if (!child?.pid) return "";
   try {
@@ -113,7 +116,16 @@ async function readWindow() {
     screenKey = text;
   }
   const forbidden = forbiddenScreen(latest);
-  if (forbidden) throw new Error(`The app asks for a step outside first run: ${forbidden}`);
+  if (forbidden) {
+    systemPromptVisible = latest.some(
+      ({ role, text }) => role === "AXSystemDialog" && text === forbidden,
+    );
+    throw new Error(
+      `${systemPromptVisible ? "macOS" : "The app"} asks for a step outside first run: ${forbidden}`,
+    );
+  }
+  if (child?.exitCode != null || child?.signalCode != null)
+    throw new Error("Clawtrate quit before the check finished.");
 }
 
 async function waitFor(label: string, ready: () => boolean, seconds = 30) {
@@ -146,7 +158,7 @@ async function screenshot(file: string) {
   const path = join(out!, file);
   // Capture the window's screen rectangle so the native sheet is also in the picture.
   // Before the app has a window, show the desktop.
-  const bounds = await ax("bounds").catch(() => "");
+  const bounds = systemPromptVisible ? "" : await ax("bounds").catch(() => "");
   const region = /^-?\d+,-?\d+,\d+,\d+$/.test(bounds) ? ["-R", bounds] : [];
   await run("/usr/sbin/screencapture", ["-x", ...region, path], { timeout: 10_000 });
   if (!existsSync(path)) throw new Error("macOS did not save the screenshot.");
@@ -173,6 +185,30 @@ async function step(index: number, action: () => Promise<string>) {
   }
   console.log(`${active.step} ${active.status} (${active.seconds}s) ${active.text}`);
   if (active.status === "failed") throw new Error(active.text);
+}
+
+function noDeveloperTools() {
+  const env = { PATH: SYSTEM_PATH, LC_ALL: "C" };
+  const git = execFileSync("/bin/sh", ["-c", "command -v git || true"], {
+    encoding: "utf8",
+    env,
+  }).trim();
+  const selection = spawnSync("/usr/bin/xcode-select", ["--print-path"], {
+    encoding: "utf8",
+    env,
+  });
+  developerTools = { activeDirectory: selection.stdout?.trim() || null, git };
+  if (
+    selection.error ||
+    selection.status === null ||
+    selection.status === 0 ||
+    !/unable to get active developer directory/i.test(selection.stderr) ||
+    existsSync("/Library/Developer/CommandLineTools") ||
+    readdirSync("/Applications").some((name) => /^Xcode.*\.app$/.test(name)) ||
+    git !== "/usr/bin/git"
+  ) {
+    throw new Error("The runner does not have a clean developer-tools state.");
+  }
 }
 
 function cleanMac() {
@@ -207,6 +243,9 @@ function launch() {
   // production window via the OS, with no debugging port and no setup stand-ins.
   delete env.CI;
   delete env.VITEST;
+  delete env.DEVELOPER_DIR;
+  delete env.SDKROOT;
+  env.PATH = SYSTEM_PATH;
   const log = openSync(join(out!, "app-output.txt"), "wx");
   try {
     child = spawn(
@@ -227,8 +266,9 @@ const shellVisible = () =>
 
 try {
   await step(0, async () => {
+    noDeveloperTools();
     cleanMac();
-    return "No OpenClaw profile, executable on PATH or service.";
+    return "No OpenClaw profile, executable or service. No Apple developer tools. The app can only find Apple's git stub.";
   });
   await step(1, async () => {
     launch();
@@ -336,6 +376,7 @@ try {
 } finally {
   const homeInfo = lstatSync(home, { throwIfNoEntry: false });
   const diagnostics = {
+    developerTools,
     accountHomeMode: homeInfo && (homeInfo.mode & 0o777).toString(8),
     accountHomeOwnedByAppUser: homeInfo?.uid === process.geteuid?.(),
     accountHomeIsDirectory: homeInfo?.isDirectory() === true,

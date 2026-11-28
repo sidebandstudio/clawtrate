@@ -29,6 +29,12 @@ export type Element = { role: string; text: string };
 
 export function forbiddenScreen(elements: readonly Element[]): string | null {
   const forbidden = elements.find(({ role, text }) => {
+    if (role === "AXSystemDialog") {
+      return (
+        /\bcommand line (?:developer )?tools\b/i.test(text) &&
+        /\b(?:install|download|required|requires)\b/i.test(text)
+      );
+    }
     if (/^AX(?:TextField|TextArea|SecureTextField|ComboBox)$/.test(role)) {
       return /\b(?:gateway address|(?:gateway |pairing |bootstrap )?token)\b/i.test(text);
     }

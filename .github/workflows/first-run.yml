@@ -76,6 +76,8 @@ jobs:
           # shellcheck disable=SC2046
           security list-keychains -d user -s "$path" $(security list-keychains -d user | tr -d '"')
           security default-keychain -d user -s "$path"
+      - name: Move Apple developer tools aside
+        run: bash e2e-packaged/first-run/without-developer-tools.sh
       - name: Drive the packaged app
         run: node e2e-packaged/first-run/check.ts "$APP" "$RUNNER_TEMP/first-run"
       - name: Upload the result and screenshots
@@ -86,3 +88,6 @@ jobs:
           if-no-files-found: error
           path: ${{ runner.temp }}/first-run/
           retention-days: 7
+      - name: Restore Apple developer tools
+        if: always()
+        run: bash e2e-packaged/first-run/without-developer-tools.sh restore
