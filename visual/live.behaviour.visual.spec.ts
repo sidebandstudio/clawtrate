@@ -1054,6 +1054,30 @@ test.describe("Stop", () => {
     await expect(announcer(page)).toHaveText("Stopped");
   });
 
+  test("F-097: after a stop, Up in the empty field brings back the last message; in a draft or an open menu it moves as before", async ({
+    page,
+  }) => {
+    await open(page, "run-stopped");
+    const field = page.getByTestId("composer-input");
+    const said = (await page.locator('.msg[data-role="user"]').last().innerText()).trim();
+    expect(said).not.toBe("");
+    await field.click();
+    await page.keyboard.press("ArrowUp");
+    await expect(field).toHaveValue(said);
+    // The caret is at the end, ready to edit.
+    expect(await field.evaluate((el: HTMLTextAreaElement) => el.selectionStart)).toBe(said.length);
+    // In a draft, Up only moves the caret.
+    await field.fill("a draft");
+    await page.keyboard.press("ArrowUp");
+    await expect(field).toHaveValue("a draft");
+    // In an open menu, Up moves through its rows.
+    await field.fill("");
+    await page.keyboard.type("/");
+    await expect(page.getByRole("listbox")).toBeVisible();
+    await page.keyboard.press("ArrowUp");
+    await expect(field).toHaveValue("/");
+  });
+
   test("F-299: the stop note says how long the run took and that completed actions are not undone", async ({
     page,
   }) => {
