@@ -23,6 +23,7 @@ const STATES = [
   "install-installer",
   "install-node",
   "install-unproven",
+  "install-running",
   "install-onboard",
   "install-service",
   "install-service-removed",
@@ -223,6 +224,17 @@ test.describe("behaviour", () => {
       "Check the clawtrate profile and Clawtrate’s app data. Some setup files may still be there.",
     );
     await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
+  });
+
+  test("F-502: a program a step started that is still running keeps the attempt's files, and Try again looks", async ({
+    page,
+  }) => {
+    await openFixture(page, "setup=install-running", "dark");
+    await expect(page.getByRole("alert")).toHaveText(
+      "Install Node.js and OpenClaw failed. The installer didn't finish successfully. A program this step started is still running, so Clawtrate left this attempt’s files where they are.",
+    );
+    await page.getByRole("button", { name: "Try again" }).click();
+    expect(await sent(page)).toEqual(["setupLook"]);
   });
 
   test("F-501: a confirmation answered too late says it expired, and offers Try again", async ({
