@@ -2,6 +2,7 @@
 accounts.spec.ts
 model-refresh.spec.ts
 not-run.spec.ts
+task-model.spec.ts
 machines.spec.ts
 check-ins.spec.ts
 scenarios.spec.ts

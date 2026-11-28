@@ -152,7 +152,11 @@ describe("the Keychain through safeStorage", () => {
       allowed.sort(),
     );
     expect(reads.every((line) => line.startsWith("packages/core/src/client.ts "))).toBe(true);
-    const client = readFileSync(join(ROOT, "packages/core/src/client.ts"), "utf8");
+    // Read as LF, whatever line endings the checkout wrote.
+    const client = readFileSync(join(ROOT, "packages/core/src/client.ts"), "utf8").replaceAll(
+      "\r\n",
+      "\n",
+    );
     expect(client).toContain("const full = !this.options.readOnly;");
     // A protected address, or this computer's gateway when every socket of the connection is
     // proved, for a plain connect's token; a first pairing there needs the person's consent
