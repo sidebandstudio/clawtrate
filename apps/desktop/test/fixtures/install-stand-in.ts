@@ -296,6 +296,10 @@ SCENARIO="@SCENARIO@"
 printf 'manager %s\\n' "$*" >> "$HOME/stand-in-manager.log"
 loaded=false
 [[ -e "$HOME/stand-in-loaded" || "$SCENARIO" == "loaded-elsewhere" ]] && loaded=true
+if [[ "$1" == "bootstrap" || "$1 $2" == "--user start" ]]; then
+  : > "$HOME/stand-in-loaded"
+  exit 0
+fi
 if [[ "$1" == "print" ]]; then
   $loaded && { echo "state = running"; exit 0; }
   echo "Could not find service"

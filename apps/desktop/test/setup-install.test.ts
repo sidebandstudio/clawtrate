@@ -526,14 +526,14 @@ describe("F-502 F-503: each failure, named, with what the attempt left", () => {
     },
   );
 
-  it("F-505: Continue waits on an existing owned service after an inconclusive install result", async () => {
+  it("F-505: Continue loads an existing owned service without rewriting it", async () => {
     const stand = await make();
     const interrupted = installer(stand, {
       run: async (request, check) => {
         const result = await runner.run(request, check);
-        return request.args.slice(2, 4).join(" ") === "gateway install"
-          ? { ...result, exitCode: 1 }
-          : result;
+        if (request.args.slice(2, 4).join(" ") !== "gateway install") return result;
+        unlinkSync(join(stand.home, "stand-in-loaded"));
+        return { ...result, exitCode: 1 };
       },
     });
     expect((await runAll(interrupted)).outcome).toMatchObject({
@@ -546,6 +546,7 @@ describe("F-502 F-503: each failure, named, with what the attempt left", () => {
     expect(await awake.run(() => {}, "replace", pending?.id)).toMatchObject({ ok: false });
     expect(await awake.run(() => {}, "continue", "different-attempt")).toMatchObject({ ok: false });
     expect(await awake.run(() => {}, "continue", pending?.id)).toMatchObject({ ok: true });
+    expect(stand.manager().filter((line) => line.includes("bootstrap"))).toHaveLength(1);
     expect(stand.calls().filter((line) => line.includes("gateway install"))).toHaveLength(1);
   });
 

@@ -513,6 +513,13 @@ function supervisorArgs(place: InstallPlace): string[] {
     : ["--user", "show", place.service, "--property=LoadState", "--value"];
 }
 
+/** Load an already verified definition without asking the installer to rewrite it. */
+function resumeServiceArgs(place: InstallPlace): string[] {
+  return place.platform === "darwin"
+    ? ["bootstrap", `gui/${place.uid}`, place.serviceFile]
+    : ["--user", "start", place.service];
+}
+
 /** Linux: the user manager's own version, which only a reachable manager answers. */
 const USER_MANAGER_ARGS = ["--user", "show", "--property=Version", "--value"];
 
@@ -576,6 +583,7 @@ export function commands(
     list.push({ program: at.openclaw, args: onboardArgs(port) });
     list.push({ program: at.openclaw, args: QUIET_DISCOVERY_ARGS });
     list.push({ program: at.openclaw, args: serviceInstallArgs(port) });
+    list.push({ program: place.serviceManager, args: resumeServiceArgs(place) });
   }
   return list;
 }
@@ -1783,6 +1791,21 @@ export class Installer {
     if (checkExisting) {
       if ((await this.writtenService(port)) !== "ours" || !(await this.discoveryOff()))
         return kept("changed");
+      const loaded = await this.supervisor();
+      if (loaded === "unreadable") return kept("service");
+      if (loaded === "absent") {
+        if (this.closing || (await this.writtenService(port)) !== "ours") return kept("changed");
+        const started = await this.exec(
+          {
+            program: place.serviceManager,
+            args: resumeServiceArgs(place),
+            env: this.env(),
+            ...this.quick(),
+          },
+          port,
+        );
+        if (!ok(started)) return kept("service", { exitCode: started.exitCode });
+      }
     } else {
       if (!(await this.serviceAbsent())) return kept("changed");
       if (!(await this.discoveryOff())) {
