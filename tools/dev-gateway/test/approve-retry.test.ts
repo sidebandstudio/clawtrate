@@ -62,8 +62,23 @@ function testClock(log: Log) {
 }
 
 /** Waits for something the test's stand-ins do, not for any length of time. */
-async function until(happened: () => boolean): Promise<void> {
-  while (!happened()) await new Promise((resolve) => setImmediate(resolve));
+/**
+ * Waits for something the test's stand-ins do, not for any length of time. Stops when `call`, the
+ * work it waits on, settles first: with that call's own error when it failed.
+ */
+async function until(happened: () => boolean, call: Promise<unknown>): Promise<void> {
+  let settled = false;
+  const done = call.then(
+    () => (settled = true),
+    () => (settled = true),
+  );
+  while (!happened()) {
+    if (settled) {
+      await call;
+      throw new Error("the call settled before what the test waited for happened");
+    }
+    await Promise.race([done, new Promise((resolve) => setImmediate(resolve))]);
+  }
 }
 
 /** A gateway that refuses every connect with PAIRING_REQUIRED until its one device is paired. */
@@ -350,21 +365,19 @@ describe("the seed client's pairing approval (#907)", () => {
 
   it("stops when a call would get under 3 s, naming the wait, the calls and the last output", async () => {
     const { clock, take } = testClock(log);
-    const { inst, calls } = instance(log, () => {
-      take(50_000);
+    // Each call takes all the time its `--timeout` allows a CLI: two gateway calls of that length
+    // and the 3 s start-up.
+    const { inst, calls } = instance(log, (args) => {
+      take(2 * Number(args[4]) + 3_000);
       return TOO_LONG;
     });
     const error = await failureOf(open(inst, clock));
-    // Each call takes 50 s and a 1 s pause, and gets half of what is left less 3 s: 60, 60, 37.5
-    // and 12 s. Then 24 s past the limit.
-    expect(approveCalls(calls).map((args) => args[4])).toEqual([
-      "60000",
-      "60000",
-      "37500",
-      "12000",
-    ]);
+    // A call gets half of what is left less 3 s, at most a minute: 60 s, which takes 123 s; after
+    // the 1 s pause 56 s are left, so 26.5 s, which takes 56 s and ends at the 180 s limit. The
+    // pause after that give-up is the one second past it, and no call fits.
+    expect(approveCalls(calls).map((args) => args[4])).toEqual(["60000", "26500"]);
     expect(error.message).toBe(
-      `Clawtrate seed's pairing request req-1: not settled after 204 s and 4 approve calls; the last printed:\n${PREFIX} devices approve req-1 --timeout 12000 failed:\nOpenClaw took too long to respond.\n${CHECK.trim()}`,
+      `Clawtrate seed's pairing request req-1: not settled after 181 s and 2 approve calls; the last printed:\n${PREFIX} devices approve req-1 --timeout 26500 failed:\nOpenClaw took too long to respond.\n${CHECK.trim()}`,
     );
   });
 
@@ -475,13 +488,28 @@ describe("the seed client's pairing approval (#907)", () => {
     const { clock, take, at, waiting } = testClock(log);
     const started = at();
     const { inst } = instance(log, () => APPROVED);
-    const opening = failureOf(open(inst, clock));
-    await until(() => log.includes("connect"));
+    const opening = open(inst, clock);
+    await until(() => log.includes("connect"), opening);
     expect(waiting()).toEqual([started + 180_000]);
     take(179_999);
     expect(waiting()).toHaveLength(1);
     take(1);
-    expect((await opening).message).toBe("Clawtrate seed: no hello before the time limit");
+    expect((await failureOf(opening)).message).toBe(
+      "Clawtrate seed: no hello before the time limit",
+    );
+  });
+});
+
+describe("the tests' wait for a stand-in", () => {
+  it("stops with the call's own error when the call fails before it happens", async () => {
+    const failed = Promise.reject(new Error("no connection file"));
+    expect((await failureOf(until(() => false, failed))).message).toBe("no connection file");
+  });
+
+  it("stops when the call ends before it happens", async () => {
+    expect((await failureOf(until(() => false, Promise.resolve()))).message).toBe(
+      "the call settled before what the test waited for happened",
+    );
   });
 });
 
@@ -636,7 +664,7 @@ describe("approving a request by id, with a look between calls (#907)", () => {
     // 25 s, then looks of 5 s with a 1 s pause before each after the first: 30, 36, ..., 60.
     expect(calls.filter((args) => args[1] === "list")).toHaveLength(6);
     expect(settled.approved ? "" : settled.why).toMatch(
-      /^devices request req-1: not settled after 60 s and 1 approve call; the last printed:\n.*devices approve req-1 --timeout 10000 failed:\nLost the connection to OpenClaw\./,
+      /^devices request req-1: not settled after 60 s and 1 approve call; the last printed:\n.*devices approve req-1 --timeout 10000 failed:\nLost the connection to OpenClaw\.[^]*\nThe last look printed:\n.*devices list --json --timeout 3000 failed:\n[^]*gateway closed \(1006 abnormal closure/,
     );
   });
 
@@ -894,6 +922,42 @@ describe("the `approve` command (#907)", () => {
     expect(error.message).toContain("Not approved: Clawtrate web (req-1)");
     expect(error.message).toContain("The request is no longer pending and was not approved.");
     expect(approveCalls(calls).map((args) => args[2])).toEqual(["req-1"]);
+  });
+
+  it("counts a request another caller approved after the list showed it pending", async () => {
+    // Two requests pending. While the command approves the first, someone else approves the
+    // second; the command's own call for it then says it isn't pending, and the look finds it
+    // paired since the list.
+    const log: Log = [];
+    const { clock, take, at } = testClock(log);
+    let phoneApprovedAt: number | null = null;
+    const { inst } = instance(log, (args) => {
+      if (args[1] === "list") {
+        return listed(
+          phoneApprovedAt === null
+            ? { pending: [web, phone] }
+            : { pending: [], paired: [{ deviceId: "dev-2", approvedAtMs: phoneApprovedAt }] },
+        );
+      }
+      if (args[2] === "req-1") {
+        take(2_000);
+        phoneApprovedAt = at();
+        take(3_000);
+        return APPROVED;
+      }
+      return fail(
+        "No pending device request matches req-2. Run openclaw devices list and retry with the current request ID.\n",
+      );
+    });
+    const { lines, done } = run(inst, clock);
+    expect(await done).toEqual(["req-1", "req-2"]);
+    expect(lines).toEqual(["Approved Clawtrate web (req-1)", "Approved Clawtrate iPhone (req-2)"]);
+    expect(log).toEqual([
+      LIST,
+      "devices approve req-1 --timeout 10000",
+      "devices approve req-2 --timeout 10000",
+      DEVICE_LOOK(),
+    ]);
   });
 
   it("prints Approved for each request approved and fails on one not approved or refused", async () => {

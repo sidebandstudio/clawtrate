@@ -1018,6 +1018,16 @@ export function mapHistory(
           for (const block of blocks)
             if (block.kind === "text" && block.text.trim()) block.replyToId = answers;
         }
+        // A row the gateway wrote itself, never a model's streamed message (`replyRow`).
+        if (message.provider === "openclaw") {
+          for (const block of blocks) if (block.kind === "text") block.gatewayRow = true;
+        }
+        // Text after a call in its own row is that message's, not a later one's (`replyRow`).
+        let called = false;
+        for (const block of blocks) {
+          if (block.kind === "tool-call") called = true;
+          else if (block.kind === "text" && called) block.afterCall = true;
+        }
         for (const block of blocks) {
           if (block.kind === "tool-call" && block.callId) callItems.set(block.callId, item);
         }
