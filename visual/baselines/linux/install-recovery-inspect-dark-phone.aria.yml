@@ -1,0 +1,8 @@
+- status
+- main:
+  - button "Back"
+  - heading "Finish setting up OpenClaw" [level=2]
+  - paragraph: Clawtrate can't tell what an earlier setup left at the .openclaw-clawtrate folder in your home folder.
+  - button "Look again"
+  - button "Advanced"
+  - paragraph: Finish setting up OpenClaw

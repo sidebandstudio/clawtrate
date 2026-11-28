@@ -63,7 +63,8 @@ export type Step = Record<string, unknown> | string;
  * Run Maestro commands on the checks' device as one flow. A flow is YAML, and
  * JSON is YAML, so each command is written as JSON. Every wait is for a
  * condition (`extendedWaitUntil`, Maestro's own retrying assertions), never a
- * fixed sleep.
+ * fixed sleep. Resolves with Maestro's output, which names each command that
+ * ran as "<description>... COMPLETED", a command's `label` as its description.
  */
 export async function steps(
   name: string,
@@ -74,7 +75,7 @@ export async function steps(
     /** The whole run's bound, past which the driver is stopped and the steps fail. */
     timeoutMs?: number;
   } = {},
-): Promise<void> {
+): Promise<string> {
   const dir = join(OUTPUT, name);
   mkdirSync(dir, { recursive: true });
   const file = join(dir, "flow.yaml");
@@ -88,7 +89,7 @@ export async function steps(
   // flow is run once more, with the runner installed afresh.
   for (let attempt = 1; ; attempt += 1) {
     try {
-      await run(
+      const { stdout } = await run(
         need("CLAWTRATE_IOS_MAESTRO"),
         [
           "--device",
@@ -106,7 +107,7 @@ export async function steps(
           killSignal: "SIGKILL",
         },
       );
-      return;
+      return stdout;
     } catch (error) {
       const { stdout = "", stderr = "" } = error as { stdout?: string; stderr?: string };
       const output = `${stdout}${stderr}`;

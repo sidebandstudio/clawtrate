@@ -23,7 +23,7 @@ const escape = (text: string) => text.replaceAll("'", "&#x27;");
 import { ConnectScreen } from "../src/ConnectScreen.tsx";
 import { gatewayProblem, thisComputerWayOn } from "../src/Settings.tsx";
 import { CONSENT_LINE } from "../src/FullControl.tsx";
-import { LOCAL_FOUND_HEADING, LOCAL_FOUND_LINE } from "../src/setup/Setup.tsx";
+import { LOCAL_FOUND_HEADING, LOCAL_FOUND_LINE, SetupFlow } from "../src/setup/Setup.tsx";
 
 const PORT = 19940;
 const local = (full = true): HostInfo => ({
@@ -130,6 +130,17 @@ describe("the first screen on a Mac whose OpenClaw profile the host found and ma
         expect(html).toContain(">Advanced</button>");
         expect(html).not.toContain(">Back</button>");
       }
+    }
+  });
+
+  it("F-501 F-602: the card that offers Set up OpenClaw here shows Advanced once, first or after a look", () => {
+    const info = local();
+    const installs: HostInfo = { ...info, setup: { ...info.setup!, install: true } };
+    for (const unasked of [true, false]) {
+      const html = render(installs, found({ outcome: "not-found", access: null }, unasked));
+      expect(html).toContain(escape("Clawtrate didn't find OpenClaw here"));
+      expect(html).toContain(">Set up OpenClaw here</button>");
+      expect(html.match(/>Advanced<\/button>/g)).toHaveLength(1);
     }
   });
 
@@ -469,5 +480,83 @@ describe("a reconnect refused after setup finished", () => {
     expect(back).toContain(escape(refusal));
     expect(back).toContain(">Try again</button>");
     expect(back).toContain(">Use This computer</button>");
+  });
+});
+
+describe("removing an unfinished OpenClaw setup", () => {
+  function recovery(install: NonNullable<SetupState["install"]>): string {
+    const info: HostInfo = { ...local(), setup: { ...local().setup!, install: true } };
+    return renderToStaticMarkup(
+      createElement(BridgeProvider, {
+        bridge: { info } as ClawtrateBridge,
+        children: createElement(SetupFlow, {
+          view: "here",
+          onView: () => {},
+          info,
+          connection: initialState.connection,
+          setup: {
+            ...initialSetupState,
+            phase: install.failure || install.recovery ? "install-failed" : "installing",
+            install,
+          },
+        }),
+      }),
+    );
+  }
+
+  it("F-505: says the unfinished setup folder went to the Trash", () => {
+    const html = recovery({ step: 0, nodeChecked: false, failure: null, foldersTrashed: true });
+    expect(html).toContain("The unfinished setup folders are in the Trash.");
+  });
+
+  it("F-505: names the staged folder and offers both ways to finish recovery", () => {
+    const html = recovery({
+      step: 2,
+      nodeChecked: true,
+      failure: null,
+      recovery: "staged",
+      recoveryLocation: "staging",
+    });
+    expect(html).toContain(".openclaw-removing");
+    expect(html).toMatch(/<button[^>]*>Continue<\/button>/);
+    expect(html).toContain("Finish moving to Trash");
+  });
+
+  it("F-505: names the unproven folder and offers Advanced beside Look again", () => {
+    const html = recovery({
+      step: 2,
+      nodeChecked: true,
+      failure: null,
+      recovery: "inspect",
+      recoveryLocation: "profile",
+    });
+    expect(html).toContain(".openclaw-clawtrate folder in your home folder");
+    expect(html).toMatch(/<button[^>]*>Look again<\/button>/);
+    expect(html).toMatch(/<button[^>]*>Advanced<\/button>/);
+    expect(html).not.toContain("Remove and start again");
+    expect(html).not.toContain('data-testid="setup-step-list"');
+    expect(html).not.toContain(", checked");
+  });
+
+  it("F-505: when Trash refuses the profile, explains the refusal and still offers Continue", () => {
+    const html = recovery({
+      step: 2,
+      nodeChecked: true,
+      recovery: "replace",
+      failure: {
+        kind: "trash",
+        step: -1,
+        exitCode: null,
+        classification: null,
+        retry: false,
+        cleanup: "none",
+      },
+    });
+    expect(html).toContain("Clawtrate couldn’t move the unfinished setup folders to the Trash.");
+    expect(html).toMatch(/<button[^>]*>Continue<\/button>/);
+    expect(html).not.toContain("The unfinished setup folders are in the Trash.");
+    // The saved attempt's steps stay as it left them, beside its checked Node.js.
+    expect(html).toContain('aria-label="Install Node.js and OpenClaw, done"');
+    expect(html).toContain('aria-label="Set up the gateway, waiting"');
   });
 });

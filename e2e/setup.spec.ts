@@ -413,3 +413,32 @@ test("F-602: a gateway that is stopped is installed but not running, with nothin
   await expect(launched.page.getByRole("button", { name: "Connect" })).toHaveCount(0);
   await close(launched);
 });
+
+test("F-501: a sandboxed app gets no installer: no install is offered, and the install command is refused before anything runs", async () => {
+  const launched = await launch({ scenario: "not-found" });
+  const { page } = launched;
+  await thisComputer(page).click();
+  await expect(
+    page.getByRole("heading", { name: "Clawtrate didn't find OpenClaw here" }),
+  ).toBeVisible({
+    timeout: 60_000,
+  });
+  await expect(page.getByRole("button", { name: "Set up OpenClaw here" })).toHaveCount(0);
+  // The page asks anyway, through the host's own bridge: refused, with no dialog and nothing run.
+  const answer = await page.evaluate(() =>
+    (
+      window as unknown as {
+        clawtrateHost: { send: (command: { type: string }) => Promise<unknown> };
+      }
+    ).clawtrateHost
+      .send({ type: "setupInstall" })
+      .then(
+        () => "ran",
+        (error: unknown) => (error instanceof Error ? error.message : String(error)),
+      ),
+  );
+  expect(answer).toMatch(/doesn't set OpenClaw up/);
+  expect(await asked(launched.app)).toEqual([]);
+  expect(launched.log()).not.toContain("[install]");
+  await close(launched);
+});

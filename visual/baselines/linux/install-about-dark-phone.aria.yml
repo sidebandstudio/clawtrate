@@ -1,0 +1,14 @@
+- status
+- main:
+  - button "Back"
+  - heading "On this computer" [level=2]
+  - heading "Clawtrate didn't find OpenClaw here" [level=3]
+  - button "Set up OpenClaw here"
+  - button "About setting up OpenClaw" [expanded]
+  - note:
+    - text: Clawtrate downloads OpenClaw 2026.11.10 from npm and Node.js 24.22.1 from nodejs.org. It checks both against fingerprints built into this version. OpenClaw's installer then fetches dependencies from npm. Clawtrate doesn't verify those downloads. Their code runs with your account's permissions. The program goes in the openclaw folder in Clawtrate's app data. The gateway uses the clawtrate profile in your home folder and starts when you log in. Clawtrate connects this Mac with full control. The gateway listens only on this Mac, with network discovery and Tailscale access off. Other devices won't find it automatically unless you enable discovery. To remove OpenClaw, run
+    - code: bin/openclaw --profile clawtrate uninstall
+    - text: from the openclaw folder in Clawtrate's app data. By default, the command removes only the gateway service. Your bots' files stay in the .openclaw-clawtrate folder in your home folder, and the program stays in the openclaw folder in Clawtrate's app data. You can move those folders and the openclaw-install.json file in Clawtrate's app data to the Trash yourself.
+  - paragraph:
+    - button "Advanced"
+  - paragraph: On this computer

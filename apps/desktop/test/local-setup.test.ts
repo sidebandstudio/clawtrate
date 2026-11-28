@@ -15,6 +15,7 @@
 import { execFileSync } from "node:child_process";
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -49,11 +50,12 @@ import {
 } from "../../../packages/core/test/fake-gateway.ts";
 import { leaveLook, thisComputer } from "../../../packages/ui/src/this-computer.ts";
 import { localGatewayBuild } from "../packaging/config.ts";
+import type { Installer } from "../src/setup/install.ts";
 import { SetupController } from "../src/setup/controller.ts";
 import { localPortAllowed, provedRouteFor, type LocalConnect } from "../src/setup/local-connect.ts";
 import { OPENCLAW_PINS } from "../src/setup/openclaw-pins.ts";
 import { HeldToken } from "../src/setup/settings-reader.ts";
-import { SetupRefusedError } from "../src/setup/world.ts";
+import { productionWorld, SetupRefusedError } from "../src/setup/world.ts";
 import {
   FOLDER,
   freePort,
@@ -118,6 +120,8 @@ function standInHelper(dir: string): string {
       `: > "${dir}/ran"`,
       `echo "$1" >> "${dir}/commands"`,
       `f="${dir}/answer-$1-$2"`,
+      'if [ -f "$f.timeout-once" ]; then /bin/rm -f "$f.timeout-once"; : > "$f.timed-out"; exec /bin/sleep 25; fi',
+      'if [ -f "$f.timeout-after" ]; then /bin/mv "$f.timeout-after" "$f.timeout-once"; fi',
       `id="1 1"; [ -f "${dir}/identity-$2" ] && id=$(/bin/cat "${dir}/identity-$2")`,
       'case "$1" in prove*) [ "$5 $6" = "$id" ] || { printf \'refused replaced\\n\'; exit 0; };; esac',
       "answer() {",
@@ -254,7 +258,13 @@ function silentGateway(): FakeGateway {
  */
 function localApp(
   local: LocalConnect,
-  options: { secure?: boolean; dataDir?: string; startWaitMs?: number; worker?: URL } = {},
+  options: {
+    secure?: boolean;
+    dataDir?: string;
+    startWaitMs?: number;
+    worker?: URL;
+    installer?: () => Installer;
+  } = {},
 ) {
   const dataDir = options.dataDir ?? mkdtempSync(join(scratch, "app-"));
   const host = createNodeHost({
@@ -299,7 +309,20 @@ function localApp(
   const dialog = vi.fn(async () => true);
   const setup = new SetupController({
     client,
-    open: async () => new SetupRefusedError("missing"),
+    open: async () =>
+      options.installer
+        ? {
+            world: {
+              ...productionWorld({ home: local.home, appData: dataDir, platform }),
+              candidates: [],
+            },
+            run: async () => {
+              throw new Error("Setup cannot run a discovered program.");
+            },
+            identify: () => ({ state: "exited", how: "absent" }),
+          }
+        : new SetupRefusedError("missing"),
+    ...(options.installer ? { installer: options.installer } : {}),
     stopPrograms: () => {},
     confirm: dialog,
     log: (line) => lines.push(line),
@@ -411,6 +434,57 @@ describe.skipIf(!mac)(
         await server.close();
       }
     });
+
+    it.each(["none", "look", "pairing"] as const)(
+      "F-505: install pairs with all six scopes and no second confirmation (helper timeout: %s)",
+      async (slowAt) => {
+        const home = newHome();
+        const gateway = silentGateway();
+        const server = await bridged(gateway);
+        const local: LocalConnect = {
+          home,
+          helper: standInHelper(home),
+          platform,
+          sandboxed: true,
+          deadlineMs: slowAt === "none" ? SLOW : 2_000,
+        };
+        const folder = ".openclaw-clawtrate";
+        const marker = join(home, `answer-prove-private-${folder}.timeout-once`);
+        const installer = () =>
+          ({
+            leftoverProgram: async () => null,
+            run: async () => {
+              settingsFile(home, folder, tokenSettings(server.port, "new-gateway-token"));
+              proofFile(home, folder, provedAnswer(home, folder, server.port, "2026.11.10"));
+              if (slowAt === "look") writeFileSync(marker, "");
+              if (slowAt === "pairing")
+                writeFileSync(join(home, `answer-prove-private-${folder}.timeout-after`), "");
+              return { ok: true, port: server.port, env: {}, program: join(home, "stand-in") };
+            },
+          }) as unknown as Installer;
+        const { client, setup, dialog } = localApp(local, { installer });
+        try {
+          await client.start({ resume: false });
+          await setup.lookAtStart();
+          expect(setup.current.look?.outcome).toBe("not-found");
+          await setup.install();
+          await until(() => setup.current.phase === "done", 60_000);
+          expect(existsSync(marker)).toBe(false);
+          expect(existsSync(join(home, `answer-prove-private-${folder}.timed-out`))).toBe(
+            slowAt !== "none",
+          );
+          expect(dialog).toHaveBeenCalledTimes(1);
+          expect(gateway.connects).toHaveLength(1);
+          expect(gateway.connects[0]).toMatchObject({ auth: { token: "new-gateway-token" } });
+          const { scopes } = gateway.connects[0] as { scopes: string[] };
+          expect([...scopes].sort()).toEqual([...FULL_SCOPES].sort());
+          expect(client.state.connection).toMatchObject({ status: "connected", fullPairing: true });
+        } finally {
+          client.stop();
+          await server.close();
+        }
+      },
+    );
 
     it("F-602: without secure storage, the same Connect asks for read only", async () => {
       const home = newHome();
