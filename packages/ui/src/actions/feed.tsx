@@ -27,6 +27,7 @@ import {
   staysInView,
   type Thought,
   segmentFromStep,
+  replyRow,
   textPlaced,
   type FeedEntry,
   type FeedGroup,
@@ -195,9 +196,10 @@ function callEntries(
 /**
  * Whether the engine's run already draws text block `i` of its history item: the text right before
  * a call the engine places text beside, known by that call's id, never by its words. No history
- * row names an item of the `assistant` stream, so every other text of the run is drawn from
- * history, even while the engine still streams it as the reply: drawn twice until the run ends,
- * rather than text the person already read disappearing.
+ * row names an item of the `assistant` stream. The reply's own row is known only by where it
+ * stands (`replyRow`); every other text of the run is drawn from history, even while the engine
+ * still streams it as the reply: drawn twice until the run ends, rather than text the person
+ * already read disappearing.
  */
 function shownByEngine(run: Run, blocks: TranscriptItem["blocks"], i: number): boolean {
   const next = blocks.slice(i + 1).find((block) => block.kind !== "reasoning");
@@ -324,6 +326,8 @@ function itemEntries(
   tally: Tally,
   fromEngine = false,
   record: EngineRecord | null = null,
+  /** The text block that holds the reply the engine still draws (`replyRow`), or -1. */
+  reply = -1,
 ): FeedEntry<FeedRef>[] {
   const reasoningSteps = run ? run.steps.filter((s) => s.kind === "reasoning") : [];
   const reasoningBlocks = item.blocks.filter((b) => b.kind === "reasoning").length;
@@ -335,8 +339,9 @@ function itemEntries(
   const seen = new Map<string, number>();
   item.blocks.forEach((block, i) => {
     if (block.kind === "text") {
-      // The engine already shows this text for its run, before the call it came with.
-      if (fromEngine && run && shownByEngine(run, item.blocks, i)) return;
+      // The engine already shows this text for its run, before the call it came with, or as its
+      // reply.
+      if (fromEngine && run && (i === reply || shownByEngine(run, item.blocks, i))) return;
       const head = block.text.slice(0, 64);
       const n = (seen.get(head) ?? 0) + 1;
       seen.set(head, n);
@@ -698,6 +703,12 @@ export function ActionScope({
       engineRuns.flatMap((run) => run.steps.flatMap((s) => (s.toolCallId ? [s.toolCallId] : []))),
     );
     const engineRunIds = new Set(engineRuns.map((run) => run.id));
+    // The block history holds an engine run's reply in, known by where it stands (`replyRow`).
+    const replies = new Map<string, { run: string; block: number }>();
+    for (const run of engineRuns) {
+      const row = replyRow(run, transcript.items);
+      if (row) replies.set(row.itemId, { run: run.id, block: row.block });
+    }
     // Each assistant item's run, and each run's last item, in one pass.
     const runOf = new Map<string, Run | undefined>();
     const lastItem = new Map<string, string>();
@@ -735,7 +746,18 @@ export function ActionScope({
         run && drawn && !fromEngine
           ? engineRecord(run, inRows, drawn, lastItem.get(run.id) === item.id, tally)
           : null;
-      const entries = itemEntries(item, run, index, skip, cards, tally, fromEngine, record);
+      const reply = replies.get(item.id);
+      const entries = itemEntries(
+        item,
+        run,
+        index,
+        skip,
+        cards,
+        tally,
+        fromEngine,
+        record,
+        reply && reply.run === run?.id ? reply.block : -1,
+      );
       const placed = { pictures: placePictures(item, entries), files: placeFiles(item, entries) };
       built.push({ id: item.id, entries, revision: run?.reasoningRevision ?? 0, placed });
     }
