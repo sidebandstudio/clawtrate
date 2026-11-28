@@ -54,6 +54,7 @@ Every document in the repository, by what you want to do.
 - [Provider accounts and T3 Code](research/provider-accounts-and-t3-code.md): how OpenClaw handles provider accounts, and how a bot can work with T3 Code.
 - [The setup flow](research/setup-flow.md): first pairing, setup codes, the gateway's identity, installing and removing OpenClaw, SSH from a shipped app, and Tailscale, from OpenClaw's source and live runs.
 - `research/setup-flow/`: the probe behind the setup flow note.
+- [Connect on this Windows computer](research/setup-flow/windows-local-connect.md): why one-click Connect stays off on Windows, the evidence a gateway started by hand or by a Scheduled Task needs first, and why a gateway inside WSL stays on the address-and-token form.
 - `research/setup-effortless/`: the probe behind the effortless setup design.
 - [Search](research/search.md): what the gateway's message search matches, its order and limits, what a narrower search finds, its cost, and the file and routine lists, from OpenClaw's source and a development instance.
 - `research/search/`: the probe behind the search note.
