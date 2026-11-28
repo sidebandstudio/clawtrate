@@ -78,15 +78,16 @@ describe("the development gateway's OpenClaw (#597)", () => {
       args: [],
       version: OPENCLAW_VERSION,
     });
-    // npm's newest, which the OpenClaw latest workflow runs (#609).
-    const latest = installed("2026.11.10");
-    expect(openclawProgram({ OPENCLAW_BIN: latest }, temp())).toEqual({
-      command: latest,
-      args: [],
-      version: "2026.11.10",
-    });
+    for (const version of ["2026.11.10", "2026.11.11"]) {
+      const bin = installed(version);
+      expect(openclawProgram({ OPENCLAW_BIN: bin }, temp())).toEqual({
+        command: bin,
+        args: [],
+        version,
+      });
+    }
     expect(() => openclawProgram({ OPENCLAW_BIN: installed("2026.10.33") }, temp())).toThrow(
-      "OPENCLAW_BIN is OpenClaw 2026.10.33; the development gateway runs only 2026.10.6 or 2026.11.10.",
+      "OPENCLAW_BIN is OpenClaw 2026.10.33; the development gateway runs only 2026.10.6 or 2026.11.10 or 2026.11.11.",
     );
     expect(() => openclawProgram({ OPENCLAW_BIN: installed("1.0.0", "other") }, temp())).toThrow(
       /OPENCLAW_BIN is OpenClaw of a version this tool cannot read/,

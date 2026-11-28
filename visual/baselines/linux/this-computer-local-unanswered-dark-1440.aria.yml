@@ -1,0 +1,14 @@
+- status
+- main:
+  - button "Back"
+  - heading "Connecting" [level=2]
+  - paragraph
+  - list "Steps":
+    - listitem "Checking it matches OpenClaw's settings, done": Checking it matches OpenClaw's settings
+    - listitem "Pairing this Mac, failed": Pairing this Mac
+    - listitem "Loading your bots, waiting": Loading your bots
+  - alert:
+    - paragraph: The gateway at port 18789 didn't finish connecting. It may have stopped or started with different settings.
+  - button "Use Advanced"
+  - button "Look again"
+  - paragraph: Connecting

@@ -1405,6 +1405,7 @@ const setupLook = object<SetupLook>()({
   profile: NAME,
   listens: ENUM,
   service: ENUM,
+  canStart: FLAG,
   port: NUMBER,
   authMode: ENUM,
   access: ENUM,
