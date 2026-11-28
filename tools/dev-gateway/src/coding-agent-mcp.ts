@@ -14,6 +14,14 @@
 import { createInterface } from "node:readline";
 
 export const CODING_AGENT_SERVER = "coder";
+/**
+ * How long the gateway gives a task's server to start: its `connectionTimeoutMs` (#1036). A turn
+ * waits that long for the server before the model's request, and gets no `coder__` tools when it
+ * runs out. OpenClaw's own 30 s ran out on a loaded hosted runner, where one turn spent 39 s in
+ * preparation, and the next turn of the same bot within 30 s gets no tools either: OpenClaw then
+ * holds that bot's starts back without starting the server again.
+ */
+export const CODING_AGENT_START_MS = 120_000;
 export const THREAD_URL_BASE = "https://coding-agent.example/threads/";
 /** The text send_message returns beside its structured content. */
 export const SEND_MESSAGE_TEXT = "Opened a branch and drafted the change.";
