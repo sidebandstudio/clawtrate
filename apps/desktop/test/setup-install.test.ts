@@ -9,7 +9,7 @@
 // says what it would catch.
 
 import type { SetupInstall } from "@clawtrate/core";
-import { spawnSync } from "node:child_process";
+import { spawn as nodeSpawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import {
@@ -690,62 +690,102 @@ describe("F-502 F-503: each failure, named, with what the attempt left", () => {
     },
   );
 
-  it.each(["before receipt", "after restoring", "unknown contents"] as const)(
-    "F-505: a look handles unfinished removal bookkeeping (%s)",
-    async (window) => {
-      const stand = await make();
-      const stop = new AbortController();
-      const interrupted = installer(stand, {
+  it.each([
+    "before receipt",
+    "empty receipt",
+    "before the first move",
+    "after restoring",
+    "unknown contents",
+    "empty receipt, unknown contents",
+  ] as const)("F-505: a look handles unfinished removal bookkeeping (%s)", async (window) => {
+    const stand = await make();
+    const stop = new AbortController();
+    const interrupted = installer(stand, {
+      signal: stop.signal,
+      run: async (request, check) => {
+        const result = await runner.run(request, check);
+        if (request.args.includes("onboard")) stop.abort();
+        return result;
+      },
+    });
+    await runAll(interrupted);
+    const awake = installer(stand);
+    const pending = await awake.recovery();
+    const root = join(dirname(stand.place.programDir), ".openclaw-removing");
+    const bundle = join(root, "Unfinished OpenClaw setup");
+    mkdirSync(root, { mode: 0o700 });
+    mkdirSync(bundle, { mode: 0o700 });
+    const identity = (path: string) => {
+      const { dev, ino } = statSync(path);
+      return `${dev}:${ino}`;
+    };
+    const program = identity(stand.place.programDir);
+    const profile = identity(stand.place.stateDir);
+    if (window === "after restoring" || window === "before the first move") {
+      writeFileSync(
+        join(root, "receipt.json"),
+        JSON.stringify({
+          id: pending?.id,
+          record: identity(stand.place.recordFile),
+          program,
+          marker: identity(join(stand.place.programDir, ".clawtrate-install.json")),
+          bundle: identity(bundle),
+        }),
+        { mode: 0o600 },
+      );
+      if (window === "after restoring") rmdirSync(bundle);
+    } else if (window.endsWith("unknown contents")) {
+      writeFileSync(join(bundle, "notes.txt"), "don't touch");
+    }
+    // Quit after the receipt's exclusive open and before its write: zero bytes.
+    if (window.startsWith("empty receipt"))
+      writeFileSync(join(root, "receipt.json"), "", { mode: 0o600 });
+    const unknown = window.endsWith("unknown contents");
+    if (unknown) {
+      expect(await awake.recovery()).toEqual({ action: "inspect", location: "staging" });
+      expect(await awake.run(() => {}, "continue", pending?.id)).toMatchObject({ ok: false });
+      expect(readFileSync(join(bundle, "notes.txt"), "utf8")).toBe("don't touch");
+      expect(existsSync(join(root, "receipt.json"))).toBe(window.startsWith("empty receipt"));
+    } else {
+      expect(await awake.recovery()).toEqual(pending);
+      expect(existsSync(root)).toBe(false);
+    }
+    expect(identity(stand.place.programDir)).toBe(program);
+    expect(identity(stand.place.stateDir)).toBe(profile);
+    if (!unknown)
+      expect(await awake.run(() => {}, "continue", pending?.id)).toMatchObject({ ok: true });
+  });
+
+  it("F-505: a removal stopped after its receipt went, before its folder did, starts clean", async () => {
+    const stand = await make();
+    const stop = new AbortController();
+    await runAll(
+      installer(stand, {
         signal: stop.signal,
         run: async (request, check) => {
           const result = await runner.run(request, check);
           if (request.args.includes("onboard")) stop.abort();
           return result;
         },
-      });
-      await runAll(interrupted);
-      const awake = installer(stand);
-      const pending = await awake.recovery();
-      const root = join(dirname(stand.place.programDir), ".openclaw-removing");
-      const bundle = join(root, "Unfinished OpenClaw setup");
-      mkdirSync(root, { mode: 0o700 });
-      mkdirSync(bundle, { mode: 0o700 });
-      const identity = (path: string) => {
-        const { dev, ino } = statSync(path);
-        return `${dev}:${ino}`;
-      };
-      const program = identity(stand.place.programDir);
-      const profile = identity(stand.place.stateDir);
-      if (window === "after restoring") {
-        writeFileSync(
-          join(root, "receipt.json"),
-          JSON.stringify({
-            id: pending?.id,
-            record: identity(stand.place.recordFile),
-            program,
-            marker: identity(join(stand.place.programDir, ".clawtrate-install.json")),
-            bundle: identity(bundle),
-          }),
-          { mode: 0o600 },
-        );
-        rmdirSync(bundle);
-      } else if (window === "unknown contents") {
-        writeFileSync(join(bundle, "notes.txt"), "don't touch");
-      }
-      if (window === "unknown contents") {
-        expect(await awake.recovery()).toEqual({ action: "inspect", location: "staging" });
-        expect(await awake.run(() => {}, "continue", pending?.id)).toMatchObject({ ok: false });
-        expect(readFileSync(join(bundle, "notes.txt"), "utf8")).toBe("don't touch");
-      } else {
-        expect(await awake.recovery()).toEqual(pending);
-        expect(existsSync(root)).toBe(false);
-      }
-      expect(identity(stand.place.programDir)).toBe(program);
-      expect(identity(stand.place.stateDir)).toBe(profile);
-      if (window !== "unknown contents")
-        expect(await awake.run(() => {}, "continue", pending?.id)).toMatchObject({ ok: true });
-    },
-  );
+      }),
+    );
+    // What the Trash move and the record's and receipt's unlinks leave: an empty removal folder.
+    const trash = join(stand.root, "Trash");
+    mkdirSync(trash, { recursive: true });
+    renameSync(stand.place.programDir, join(trash, "program"));
+    renameSync(stand.place.stateDir, join(trash, "profile"));
+    unlinkSync(stand.place.recordFile);
+    const root = join(dirname(stand.place.programDir), ".openclaw-removing");
+    mkdirSync(root, { mode: 0o700 });
+    const awake = installer(stand);
+    expect(await awake.recovery()).toBeNull();
+    expect(existsSync(root)).toBe(false);
+    // Anything inside keeps it named and left alone.
+    mkdirSync(root, { mode: 0o700 });
+    writeFileSync(join(root, "notes.txt"), "don't touch");
+    expect(await awake.recovery()).toEqual({ action: "inspect", location: "staging" });
+    expect(readFileSync(join(root, "notes.txt"), "utf8")).toBe("don't touch");
+  });
 
   it("F-505: an orphaned profile and service are reported and left as they are", async () => {
     const stand = await make();
@@ -781,6 +821,29 @@ describe("F-502 F-503: each failure, named, with what the attempt left", () => {
     expect(await awake.run(() => {}, "continue", "different-attempt")).toMatchObject({ ok: false });
     expect(await awake.run(() => {}, "continue", pending?.id)).toMatchObject({ ok: true });
     expect(stand.manager().filter((line) => line.includes("bootstrap"))).toHaveLength(1);
+    expect(stand.calls().filter((line) => line.includes("gateway install"))).toHaveLength(1);
+  });
+
+  it("F-505: on Linux, Continue starts its own unit that is loaded and not running", async () => {
+    const stand = await make({ platform: "linux" });
+    const interrupted = installer(stand, {
+      run: async (request, check) => {
+        const result = await runner.run(request, check);
+        if (request.args.slice(2, 4).join(" ") !== "gateway install") return result;
+        // The unit is written and loaded, and stopped before the app saw it answer.
+        writeFileSync(join(stand.home, "stand-in-stopped"), "");
+        return { ...result, exitCode: 1 };
+      },
+    });
+    expect((await runAll(interrupted)).outcome).toMatchObject({
+      ok: false,
+      failure: { kind: "service", cleanup: "kept" },
+    });
+    const awake = installer(stand);
+    const pending = await awake.recovery();
+    expect(pending?.action).toBe("continue");
+    expect(await awake.run(() => {}, "continue", pending?.id)).toMatchObject({ ok: true });
+    expect(stand.manager().filter((line) => line.includes("--user start"))).toHaveLength(1);
     expect(stand.calls().filter((line) => line.includes("gateway install"))).toHaveLength(1);
   });
 
@@ -1186,11 +1249,21 @@ describe("F-501 F-503: what may run, and where", () => {
   it("F-503: the pins are OpenClaw 2026.11.10's published integrity and Node.js 24.22.1's published SHA-256", () => {
     expect(PINS.version).toBe("2026.11.10");
     expect(PINS.openclaw.url).toBe("https://registry.npmjs.org/openclaw/-/openclaw-2026.11.10.tgz");
-    expect(PINS.openclaw.integrity).toMatch(/^sha512-\/FKDjxY1[A-Za-z0-9+/]+WFaQ==$/);
+    // Written out in full here, from the registry's dist.integrity and nodejs.org's SHASUMS256.txt.
+    expect(PINS.openclaw.integrity).toBe(
+      "sha512-/FKDjxY1ZdUSXHx1a9b4EUpPRZywM3uv4181g22XImJfp/5+h+fFUZ7B7HthNrdYzq//05zH0Yf7mefzIlWFaQ==",
+    );
     expect(PINS.nodeVersion).toBe("24.22.1");
+    const published: Record<string, string> = {
+      "darwin-arm64": "89c682593d76cd44233fa53b1563264e7de9cbb189cad169135c5b4fadfbc0a7",
+      "darwin-x64": "d132557e7ee2b85af08b0c8c34338e65c6430f2238d01f727728ef42dc83b035",
+      "linux-arm64": "33c37be234ba8bee041961047b19160f4d7d0f164e8e246f78bdd10feff148b3",
+      "linux-x64": "eb6728e77c576a35162c122c45ccadf224d89ff00abc8dae46cc2897c6002d7c",
+    };
+    expect(Object.keys(PINS.node).sort()).toEqual(Object.keys(published).sort());
     for (const [target, node] of Object.entries(PINS.node)) {
       expect(node.url).toBe(`https://nodejs.org/dist/v24.22.1/node-v24.22.1-${target}.tar.gz`);
-      expect(node.sha256).toMatch(/^[0-9a-f]{64}$/);
+      expect(node.sha256).toBe(published[target]);
     }
   });
 
@@ -1316,15 +1389,39 @@ describe("F-502 F-503: downloads", () => {
       await new Promise<void>((done) => server.close(() => done()));
     }
   });
+
+  it("F-502: a download that keeps trickling in ends at its total deadline", async () => {
+    const dir = (await make()).root;
+    // A byte every 50 ms, without end: the stall timer is reset each time and never fires.
+    const server = createServer((_request, response) => {
+      response.writeHead(200);
+      const drip = setInterval(() => response.write("b"), 50);
+      response.on("close", () => clearInterval(drip));
+    });
+    await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
+    const url = `http://127.0.0.1:${(server.address() as { port: number }).port}/slow`;
+    try {
+      const result = await Promise.race([
+        download(url, join(dir, "slow"), "sha256", "hex", undefined, 400),
+        pause(5_000).then(() => "unsettled" as const),
+      ]);
+      expect(result).toEqual({ ok: false, why: "network" });
+    } finally {
+      server.closeAllConnections();
+      await new Promise<void>((done) => server.close(() => done()));
+    }
+  }, 20_000);
 });
 
 describe("F-502: the runner ends what it started", () => {
   it("F-502: stopping a program ends its whole process group and waits for it", async () => {
     const stand = await make();
     const marker = join(stand.root, "late");
+    const ready = join(stand.root, "ready");
+    // The descendant says it runs before it waits to write: a stop of the leader alone fails then.
     const request: InstallRequest = {
       program: "/bin/bash",
-      args: ["-c", 'set -- "$1"; ( sleep 1; : > "$1" ) & sleep 30', "x", marker],
+      args: ["-c", '( : > "$1"; sleep 1; : > "$2" ) & sleep 30', "x", ready, marker],
       env: { PATH: "/usr/bin:/bin" },
       cwd: stand.root,
       timeoutMs: 60_000,
@@ -1332,7 +1429,10 @@ describe("F-502: the runner ends what it started", () => {
     };
     const own = new InstallRunner();
     const running = own.run(request, () => {});
-    await pause(200);
+    for (let waited = 0; !existsSync(ready); waited += 25) {
+      expect(waited, "the descendant runs").toBeLessThan(10_000);
+      await pause(25);
+    }
     expect(own.running()).toHaveLength(1);
     own.stopAll();
     await running;
@@ -1680,6 +1780,134 @@ describe("F-502 F-503: the CodeRabbit round's cases", () => {
     expect(result.lingering).toBe(true);
   }, 20_000);
 
+  it("F-502: a step whose leader survives being stopped still settles, as still running", async () => {
+    const stand = await make();
+    // The leader is the test's own sleep; its exit and close never reach the runner, as with a
+    // leader the kernel can't end. The signals go to that sleep's own group alone.
+    const deaf = ((program: string, args: string[], options: object) => {
+      const child = nodeSpawn(program, args, options);
+      const once = child.once.bind(child);
+      child.once = ((event: string, listener: (...args: unknown[]) => void) =>
+        event === "exit" || event === "close" ? child : once(event, listener)) as typeof child.once;
+      return child;
+    }) as unknown as typeof nodeSpawn;
+    const own = new InstallRunner({
+      spawn: deaf,
+      alive: () => true,
+      graceMs: 100,
+      killWaitMs: 200,
+    });
+    const result = await Promise.race([
+      own.run(
+        {
+          program: "/bin/sleep",
+          args: ["30"],
+          env: { PATH: "/usr/bin:/bin" },
+          cwd: stand.root,
+          timeoutMs: 200,
+          maxBytes: 1024,
+        },
+        () => {},
+      ),
+      new Promise<"unsettled">((done) => setTimeout(() => done("unsettled"), 4_000)),
+    ]);
+    expect(result).toMatchObject({ timedOut: true, lingering: true, exitCode: null });
+    expect(own.running()).toHaveLength(1);
+  }, 20_000);
+
+  it("F-502: a group whose end couldn't be confirmed counts as running until a signal 0 finds it gone", async () => {
+    const stand = await make();
+    let up = true;
+    const own = new InstallRunner({ alive: () => up, graceMs: 100, killWaitMs: 200 });
+    expect(own.stillRunning()).toBe(false);
+    const result = await own.run(
+      {
+        program: "/bin/sleep",
+        args: ["30"],
+        env: { PATH: "/usr/bin:/bin" },
+        cwd: stand.root,
+        timeoutMs: 200,
+        maxBytes: 1024,
+      },
+      () => {},
+    );
+    expect(result).toMatchObject({ timedOut: true, lingering: true });
+    // Its step is over and the runner no longer tracks it as one; it is still reported.
+    for (let waited = 0; own.running().length > 0; waited += 50) {
+      expect(waited, "the group's step ends").toBeLessThan(10_000);
+      await pause(50);
+    }
+    expect(own.stillRunning()).toBe(true);
+    up = false;
+    expect(own.stillRunning()).toBe(false);
+  }, 20_000);
+
+  it("F-502: while an earlier attempt's program may still run, Try again moves nothing, and once it ends the leftover goes and setup proceeds", async () => {
+    const stand = await make();
+    let left = false;
+    const programsLeft = () => left;
+    const { outcome } = await runAll(
+      installer(stand, {
+        programsLeft,
+        run: async (request, check) => {
+          const result = await runner.run(request, check);
+          if (!request.args.includes("--runtime-only")) return result;
+          left = true;
+          return { ...result, lingering: true };
+        },
+      }),
+    );
+    expect(outcome).toMatchObject({
+      ok: false,
+      failure: { kind: "installer", step: 1, retry: false, cleanup: "running" },
+    });
+    const identity = (path: string) => {
+      const { dev, ino } = statSync(path);
+      return `${dev}:${ino}`;
+    };
+    const program = identity(stand.place.programDir);
+    const record = identity(stand.place.recordFile);
+    // A new attempt, as Try again makes: refused before anything is made or moved.
+    expect((await runAll(installer(stand, { programsLeft }))).outcome).toMatchObject({
+      ok: false,
+      failure: { kind: "running", step: -1, cleanup: "none" },
+    });
+    expect(identity(stand.place.programDir)).toBe(program);
+    expect(identity(stand.place.recordFile)).toBe(record);
+    // The earlier group has ended: the leftover is removed and the install goes on.
+    left = false;
+    expect((await runAll(installer(stand, { programsLeft }))).outcome).toMatchObject({ ok: true });
+  });
+
+  it.each(["continue", "replace"] as const)(
+    "F-502: while an earlier attempt's program may still run, %s after onboarding moves nothing",
+    async (action) => {
+      const stand = await make();
+      const stop = new AbortController();
+      await runAll(
+        installer(stand, {
+          signal: stop.signal,
+          run: async (request, check) => {
+            const result = await runner.run(request, check);
+            if (request.args.includes("onboard")) stop.abort();
+            return result;
+          },
+        }),
+      );
+      const pending = await installer(stand).recovery();
+      expect(pending).not.toBeNull();
+      const held = installer(stand, { programsLeft: () => true });
+      expect(await held.run(() => {}, action, pending?.id)).toMatchObject({
+        ok: false,
+        failure: { kind: "running", step: -1 },
+      });
+      expect(existsSync(stand.place.stateDir)).toBe(true);
+      expect(existsSync(stand.place.programDir)).toBe(true);
+      expect(existsSync(stand.place.recordFile)).toBe(true);
+      expect(stand.calls().filter((line) => line.includes("gateway install"))).toHaveLength(0);
+    },
+  );
+
   it("F-502: an attempt one of whose programs may still be running keeps its files: the cleanup is unproven", async () => {
     const stand = await make({ scenario: "installer-fails" });
     const { outcome } = await runAll(
@@ -1693,8 +1921,28 @@ describe("F-502 F-503: the CodeRabbit round's cases", () => {
     );
     expect(outcome).toMatchObject({
       ok: false,
-      failure: { kind: "installer", retry: false, cleanup: "unproven" },
+      failure: { kind: "installer", retry: false, cleanup: "running" },
     });
+    expect(existsSync(stand.place.programDir)).toBe(true);
+  });
+
+  it("F-502: a step that exits 0 while its process group lives on doesn't lead to onboarding", async () => {
+    const stand = await make();
+    const { outcome } = await runAll(
+      installer(stand, {
+        run: async (request, check) => {
+          check(request);
+          const result = await runner.run(request, check);
+          return request.args.includes("--runtime-only") ? { ...result, lingering: true } : result;
+        },
+      }),
+    );
+    expect(outcome).toMatchObject({
+      ok: false,
+      failure: { kind: "installer", step: 1, retry: false, cleanup: "running" },
+    });
+    expect(stand.calls().some((line) => line.includes("onboard"))).toBe(false);
+    expect(existsSync(stand.place.stateDir)).toBe(false);
     expect(existsSync(stand.place.programDir)).toBe(true);
   });
 

@@ -895,6 +895,8 @@ function installCause(failure: InstallFailure): string {
     case "changed":
     case "unchecked":
       return "Look again.";
+    case "running":
+      return "Clawtrate left that attempt’s files where they are.";
   }
 }
 
@@ -905,6 +907,8 @@ const CLEANUP: Record<InstallFailure["cleanup"], string> = {
   unproven:
     " Check the clawtrate profile and Clawtrate’s app data. Some setup files may still be there.",
   kept: " Clawtrate kept the gateway files in the clawtrate profile and its app data.",
+  running:
+    " A program this step started is still running, so Clawtrate left this attempt’s files where they are.",
 };
 
 /** A failure before the first step: its own lead, and no step drawn as failed. */
@@ -917,6 +921,7 @@ const BEFORE: Partial<Record<InstallFailure["kind"], string>> = {
   expired: "This setup confirmation expired.",
   trash: "Clawtrate couldn’t move the unfinished setup folders to the Trash.",
   restore: "Clawtrate couldn’t put the setup files back in their original folders.",
+  running: "A program an earlier setup started is still running.",
 };
 
 /** The typed record of a failed step (§10): the step, the error category, the exit code. */
@@ -942,6 +947,7 @@ const CATEGORY: Record<InstallFailure["kind"], string> = {
   expired: "Expired",
   trash: "Trash",
   restore: "Restore setup",
+  running: "Still running",
 };
 
 const RECOVERY_LOCATION: Record<InstallLocation, string> = {

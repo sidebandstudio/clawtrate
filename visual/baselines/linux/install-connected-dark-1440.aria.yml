@@ -4,6 +4,7 @@
   - button "Routines"
   - 'button "Sort bots: Recent activity"'
   - button "Search"
+  - button "New"
   - list:
     - listitem:
       - strong: No bots

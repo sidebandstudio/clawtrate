@@ -123,6 +123,12 @@ const STATUS_EVERY_MS = 2_000;
 const STATUS_RUN_MS = 30_000;
 const MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024;
 const DOWNLOAD_STALL_MS = 60_000;
+/**
+ * A download's whole time, which its chunks don't extend, as the app's own updates allow: the
+ * 512 MiB cap at about 300 KB/s, or this version's two archives together (OpenClaw's 111 MB and
+ * Node.js's 54 MB, fetched at once) over a link of about 0.75 Mbit/s.
+ */
+const DOWNLOAD_DEADLINE_MS = 30 * 60_000;
 /** `launchctl print` for a service its domain doesn't have. */
 const LAUNCHD_NO_SUCH_SERVICE = 113;
 
@@ -524,6 +530,15 @@ function resumeServiceArgs(place: InstallPlace): string[] {
 /** Linux: the user manager's own version, which only a reachable manager answers. */
 const USER_MANAGER_ARGS = ["--user", "show", "--property=Version", "--value"];
 
+/** Linux: whether the unit runs; a loaded unit can also be `inactive` or `failed`. */
+const unitStateArgs = (place: InstallPlace) => [
+  "--user",
+  "show",
+  place.service,
+  "--property=ActiveState",
+  "--value",
+];
+
 /** Every command an install of this place runs, given its port: the only ones the runner starts. */
 export function commands(
   place: InstallPlace,
@@ -534,7 +549,10 @@ export function commands(
   const list = [
     { program: place.serviceManager, args: supervisorArgs(place) },
     ...(place.platform === "linux"
-      ? [{ program: place.serviceManager, args: USER_MANAGER_ARGS }]
+      ? [
+          { program: place.serviceManager, args: USER_MANAGER_ARGS },
+          { program: place.serviceManager, args: unitStateArgs(place) },
+        ]
       : []),
     {
       program: place.tar,
@@ -882,8 +900,8 @@ const SPACE_CODES = new Set(["ENOSPC", "EDQUOT"]);
 
 /**
  * Downloads `url` into a new private file, hashing as it goes: exactly the
- * pinned URL (a redirect is an error), status 200 only, within a size limit
- * and a stall limit, and exactly the length the response declared.
+ * pinned URL (a redirect is an error), status 200 only, within a size limit,
+ * a stall limit and a total deadline, and exactly the length the response declared.
  */
 export async function download(
   url: string,
@@ -891,6 +909,7 @@ export async function download(
   algorithm: "sha512" | "sha256",
   encoding: "base64" | "hex",
   signal?: AbortSignal,
+  deadlineMs = DOWNLOAD_DEADLINE_MS,
 ): Promise<Downloaded> {
   // A quit that came first: nothing is asked or written.
   if (signal?.aborted) return { ok: false, why: "network" };
@@ -903,11 +922,14 @@ export async function download(
     stall = setTimeout(stop, DOWNLOAD_STALL_MS);
   };
   touch();
+  // A body that trickles in under the stall limit still ends here.
+  const deadline = setTimeout(stop, deadlineMs);
   let response: Response;
   try {
     response = await fetch(url, { signal: abort.signal, redirect: "error" });
   } catch {
     if (stall) clearTimeout(stall);
+    clearTimeout(deadline);
     signal?.removeEventListener("abort", stop);
     return { ok: false, why: "network" };
   }
@@ -948,6 +970,7 @@ export async function download(
     return { ok: true, digest: hash.digest(encoding) };
   } finally {
     if (stall) clearTimeout(stall);
+    clearTimeout(deadline);
     signal?.removeEventListener("abort", stop);
   }
 }
@@ -1108,6 +1131,12 @@ export type InstallOptions = {
   signal?: AbortSignal;
   /** Moves the staged setup folders as one item to the system Trash. */
   trashSetup?: (path: string) => Promise<void>;
+  /**
+   * Whether a program an install started, this attempt's or an earlier one's, may still be
+   * running: the app's one runner (`InstallRunner.stillRunning`). Without it, only this
+   * attempt's own steps count.
+   */
+  programsLeft?: () => boolean;
   /** For the host's tests: asked before each file the install makes is opened, then before it is written; may throw. */
   beforeWrite?: (path: string, at: "open" | "write") => void | Promise<void>;
   log?: (line: string) => void;
@@ -1138,8 +1167,13 @@ const failure = (
   ...extra,
 });
 
+/** Ran to its end within its limits, exited 0, and its whole process group is confirmed ended. */
 const ok = (result: InstallResult) =>
-  result.exitCode === 0 && !result.timedOut && !result.tooLarge && !result.failed;
+  result.exitCode === 0 &&
+  !result.timedOut &&
+  !result.tooLarge &&
+  !result.failed &&
+  !result.lingering;
 
 export class Installer {
   private readonly options: InstallOptions;
@@ -1257,6 +1291,22 @@ export class Installer {
     return result.stdout.trim() === "not-found" ? "absent" : "there";
   }
 
+  /** Linux: a loaded unit that isn't running (`inactive`, `failed`), which Continue starts. */
+  private async unitStopped(): Promise<boolean> {
+    const { place } = this.options;
+    if (place.platform !== "linux") return false;
+    const result = await this.exec(
+      {
+        program: place.serviceManager,
+        args: unitStateArgs(place),
+        env: this.env(),
+        ...this.quick(),
+      },
+      null,
+    );
+    return ok(result) && ["inactive", "failed"].includes(result.stdout.trim());
+  }
+
   /** The profile's service: its file and the service manager's job or unit, the one predicate of every check. */
   private async serviceAbsent(): Promise<boolean> {
     if ((await presence(this.options.place.serviceFile)) !== "absent") return false;
@@ -1350,6 +1400,16 @@ export class Installer {
     return (
       owner !== null && same(owner.stat, profile.owner) && owner.text === JSON.stringify({ id })
     );
+  }
+
+  /** Whether a program an attempt started may still be running; nothing of any attempt is moved then. */
+  running(): boolean {
+    return this.programsLeft();
+  }
+
+  /** The app's runner when there is one, so a group found ended clears it; else this attempt's steps. */
+  private programsLeft(): boolean {
+    return this.options.programsLeft ? this.options.programsLeft() : this.lingering;
   }
 
   /** Removes an early attempt, before any profile was created. */
@@ -1538,20 +1598,23 @@ export class Installer {
     const paths = this.removalPaths;
     if (!(await lstat(paths.root).catch(() => null))?.isDirectory()) return false;
     const receipt = await readOwn(paths.receipt);
-    if (receipt) {
+    const saved = receipt ? parsed(receipt.text) : null;
+    // An empty or unparseable receipt was opened but never written: nothing was moved yet.
+    // clearRemoval takes the bundle with rmdir, so one holding anything stays where it is.
+    if (receipt && saved) {
       if ((await presence(paths.bundle)) !== "absent") return false;
-      const saved = parsed(receipt.text);
       const proof = await this.prove("onboarded");
       if (
         !proof ||
         proof.id !== id ||
-        saved?.id !== id ||
+        saved.id !== id ||
         saved.record !== identity(proof.record.stat) ||
         saved.program !== identity(proof.dir) ||
         saved.marker !== identity(proof.marker.stat)
       )
         return false;
-    } else if ((await presence(paths.receipt)) !== "absent") {
+    } else if (!receipt && (await presence(paths.receipt)) !== "absent") {
+      // A receipt that can't be read as the app's own file (a link, a folder) is left alone.
       return false;
     }
     return this.clearRemoval(receipt);
@@ -1578,7 +1641,7 @@ export class Installer {
       !proof ||
       proof.id !== id ||
       proof.staging ||
-      this.lingering ||
+      this.programsLeft() ||
       !trashSetup ||
       !(await this.serviceAbsent()) ||
       !(await this.sameProfile(place.stateDir, id, profile))
@@ -1619,7 +1682,7 @@ export class Installer {
     const { place, trashSetup } = this.options;
     const { bundle } = this.removalPaths;
     let removal = await this.removal();
-    if (!removal || removal.id !== id || !(await this.serviceAbsent()) || this.lingering)
+    if (!removal || removal.id !== id || !(await this.serviceAbsent()) || this.programsLeft())
       return "kept";
     if (removal.bundleGone) {
       if (
@@ -1644,7 +1707,7 @@ export class Installer {
         removal.bundleGone ||
         removal.moves.some((move) => !move.staged) ||
         !(await this.serviceAbsent()) ||
-        this.lingering
+        this.programsLeft()
       )
         throw new Error("setup changed");
       await trashSetup(bundle);
@@ -1826,13 +1889,24 @@ export class Installer {
   } | null> {
     const { place } = this.options;
     const staged = await this.removal();
-    if (staged && (await this.serviceAbsent()))
+    if (
+      staged &&
+      (await this.serviceAbsent()) &&
+      // Neither folder was moved yet, or both were put back: they are in their usual places, and
+      // only empty bookkeeping is left. rmdir keeps a bundle that holds anything.
+      (staged.bundleGone ||
+        staged.moves.some((move) => move.staged) ||
+        !(await this.clearRemoval(staged.receipt)))
+    )
       return {
         id: staged.id,
         action: staged.bundleGone ? "finish" : "staged",
         location: "staging",
       };
     const pending = await this.pending();
+    // A removal ends by unlinking its receipt, then the folder that held it. An empty folder is
+    // what a stop between the two leaves: nothing is under way, and rmdir takes only an empty one.
+    if (!pending) await rmdir(this.removalPaths.root).catch(() => {});
     if (
       (await presence(this.removalPaths.root)) !== "absent" &&
       (!pending || !(await this.clearUnusedRemoval(pending.id)))
@@ -1883,7 +1957,9 @@ export class Installer {
       failure: failure(kind, step, extra),
     });
 
-    // Before anything is made: the user manager, then the place again.
+    // Before anything is made or moved: no program an earlier attempt started may still write.
+    if (this.programsLeft()) return stopped("running", -1);
+    // Then the user manager, then the place again.
     if (!(await this.userManager())) return stopped("user-service", -1);
     if (action) {
       if (!expectedId || this.closing) return stopped("changed", -1);
@@ -1937,8 +2013,9 @@ export class Installer {
       extra: Partial<InstallFailure> = {},
     ) => {
       // A program that may still write there: nothing of the attempt is removed under it.
-      const removed = !this.lingering && (await this.discard(id));
-      const cleanup: InstallCleanup = removed ? "removed" : "unproven";
+      const running = this.programsLeft();
+      const removed = !running && (await this.discard(id));
+      const cleanup: InstallCleanup = running ? "running" : removed ? "removed" : "unproven";
       return stopped(kind, step, {
         ...extra,
         cleanup,
@@ -2071,7 +2148,7 @@ export class Installer {
         return kept("changed");
       const loaded = await this.supervisor();
       if (loaded === "unreadable") return kept("service");
-      if (loaded === "absent") {
+      if (loaded === "absent" || (await this.unitStopped())) {
         if (this.closing || (await this.writtenService(port)) !== "ours") return kept("changed");
         const started = await this.exec(
           {
@@ -2125,7 +2202,7 @@ export class Installer {
         this.log(
           `the service wasn't confirmed installed: exit=${installed.exitCode} timedOut=${installed.timedOut} definition=${written}`,
         );
-        if (written === "absent" && !this.lingering) {
+        if (written === "absent" && !this.programsLeft()) {
           const discarded = (await this.prepareRemoval(id, profile))
             ? await this.finishRemoval(id)
             : "kept";

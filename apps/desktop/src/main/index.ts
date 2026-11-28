@@ -282,6 +282,7 @@ function setupInstaller(): (() => Installer) | null {
       run: (request, check) => installPrograms.run(request, check),
       signal: installStop.signal,
       trashSetup: (path) => shell.trashItem(path),
+      programsLeft: () => installPrograms.stillRunning(),
       personsApp: true,
       accountHome: home,
       log: (line) => console.log(line),

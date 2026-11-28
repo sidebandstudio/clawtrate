@@ -274,7 +274,7 @@ case "$1" in
       exit 0
     fi
     ok=true
-    [[ "$SCENARIO" == "not-answering" ]] && ok=false
+    [[ "$SCENARIO" == "not-answering" || -e "$HOME/stand-in-stopped" ]] && ok=false
     printf '{"service":{"label":"LaunchAgent","loaded":true},"gateway":{"version":"2026.10.6","bindMode":"loopback","port":%s},"rpc":{"ok":%s}}\\n' "$port" "$ok"
     ;;
   *) exit 64 ;;
@@ -298,6 +298,7 @@ loaded=false
 [[ -e "$HOME/stand-in-loaded" || "$SCENARIO" == "loaded-elsewhere" ]] && loaded=true
 if [[ "$1" == "bootstrap" || "$1 $2" == "--user start" ]]; then
   : > "$HOME/stand-in-loaded"
+  rm -f "$HOME/stand-in-stopped"
   exit 0
 fi
 if [[ "$1" == "print" ]]; then
@@ -308,6 +309,11 @@ fi
 if [[ "$1 $2" == "--user show" ]]; then
   if [[ "$SCENARIO" == "no-user-manager" ]]; then echo "Failed to connect to bus" >&2; exit 1; fi
   if [[ "$3" == "--property=Version" ]]; then echo "255"; exit 0; fi
+  # A test's stand-in-stopped is a unit that is loaded and not running.
+  if [[ "$4" == "--property=ActiveState" ]]; then
+    $loaded && [[ ! -e "$HOME/stand-in-stopped" ]] && echo active || echo inactive
+    exit 0
+  fi
   $loaded && echo loaded || echo not-found
   exit 0
 fi

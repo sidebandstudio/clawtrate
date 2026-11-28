@@ -538,6 +538,26 @@ describe("removing an unfinished OpenClaw setup", () => {
     expect(html).not.toContain(", checked");
   });
 
+  it("F-505: says where the setup folders are: in their usual places, or saved in the hidden folder", () => {
+    // The installer offers `replace` once nothing is moved or both are put back (its bookkeeping
+    // test), and `staged` only while a folder is in the hidden folder.
+    const usual = recovery({ step: 2, nodeChecked: true, failure: null, recovery: "replace" });
+    expect(usual).toContain(
+      "Clawtrate set up the gateway profile. Continue to finish setting up its service.",
+    );
+    expect(usual).not.toContain(".openclaw-removing");
+    const saved = recovery({
+      step: 2,
+      nodeChecked: true,
+      failure: null,
+      recovery: "staged",
+      recoveryLocation: "staging",
+    });
+    expect(saved).toContain(
+      "Removal stopped. Clawtrate saved setup files in the hidden .openclaw-removing folder in Clawtrate’s app data.",
+    );
+  });
+
   it("F-505: when Trash refuses the profile, explains the refusal and still offers Continue", () => {
     const html = recovery({
       step: 2,

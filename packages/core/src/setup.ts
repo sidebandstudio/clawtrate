@@ -246,14 +246,17 @@ export type InstallFailureKind =
   /** The unfinished profile could not be moved to the Trash. */
   | "trash"
   /** A saved setup could not be restored to its original folders. */
-  | "restore";
+  | "restore"
+  /** A program an earlier attempt started may still be running: nothing is made or moved yet. */
+  | "running";
 
 /**
  * What a failed attempt left: nothing made (`none`); removed and proven
- * removed (`removed`); a cleanup that couldn't be proven (`unproven`); or files
- * intentionally kept after onboarding (`kept`).
+ * removed (`removed`); a cleanup that couldn't be proven (`unproven`); files
+ * intentionally kept after onboarding (`kept`); or a program the step started
+ * that couldn't be ended, so nothing of the attempt was removed (`running`).
  */
-export type InstallCleanup = "none" | "removed" | "unproven" | "kept";
+export type InstallCleanup = "none" | "removed" | "unproven" | "kept" | "running";
 
 /** Onboarding's failure class, as its JSON names it, or the service it couldn't install. */
 export type OnboardClassification =

@@ -273,6 +273,10 @@ export const SETUP_STATES: Record<string, SetupState> = {
   "install-installer": installFailed("installer", 1, { exitCode: 1, cleanup: "removed" }),
   "install-node": installFailed("node-not-checked", 1, { cleanup: "removed" }),
   "install-unproven": installFailed("write", 1, { cleanup: "unproven" }),
+  /** A program the step started that couldn't be ended: nothing of the attempt is removed. */
+  "install-running": installFailed("installer", 1, { cleanup: "running" }),
+  /** A look while an earlier attempt's program may still be running: no setup is offered. */
+  "install-still-running": installFailed("running", -1),
   "install-onboard": installFailed("onboard", 2, {
     exitCode: 1,
     classification: "startup-blocked",

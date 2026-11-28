@@ -23,6 +23,8 @@ const STATES = [
   "install-installer",
   "install-node",
   "install-unproven",
+  "install-running",
+  "install-still-running",
   "install-onboard",
   "install-service",
   "install-service-removed",
@@ -130,6 +132,22 @@ test.describe("behaviour", () => {
     await expect(page.getByTestId("setup")).toHaveCount(0);
     expect(await sent(page)).toContain("setupInstall");
     expect(await sent(page)).not.toContain("setupConnect");
+    // Full control: what the six scopes allow is allowed in the app.
+    const connection = await page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            clawtrateFixture: { getState(): { connection: Record<string, unknown> } };
+          }
+        ).clawtrateFixture.getState().connection,
+    );
+    expect(connection).toMatchObject({
+      canWrite: true,
+      canAnswer: true,
+      canApprove: true,
+      canAdmin: true,
+      fullPairing: true,
+    });
   });
 
   test("F-505: the recovery panel offers the recorded setup actions", async ({ page }) => {
@@ -207,6 +225,28 @@ test.describe("behaviour", () => {
       "Check the clawtrate profile and Clawtrate’s app data. Some setup files may still be there.",
     );
     await expect(page.getByRole("button", { name: "Try again" })).toBeVisible();
+  });
+
+  test("F-502: a program a step started that is still running keeps the attempt's files, and Try again looks", async ({
+    page,
+  }) => {
+    await openFixture(page, "setup=install-running", "dark");
+    await expect(page.getByRole("alert")).toHaveText(
+      "Install Node.js and OpenClaw failed. The installer didn't finish successfully. A program this step started is still running, so Clawtrate left this attempt’s files where they are.",
+    );
+    await page.getByRole("button", { name: "Try again" }).click();
+    expect(await sent(page)).toEqual(["setupLook"]);
+  });
+
+  test("F-502: a program an earlier setup started that is still running is said before any step, and Try again looks", async ({
+    page,
+  }) => {
+    await openFixture(page, "setup=install-still-running", "dark");
+    await expect(page.getByRole("alert")).toHaveText(
+      "A program an earlier setup started is still running. Clawtrate left that attempt’s files where they are.",
+    );
+    await page.getByRole("button", { name: "Try again" }).click();
+    expect(await sent(page)).toEqual(["setupLook"]);
   });
 
   test("F-501: a confirmation answered too late says it expired, and offers Try again", async ({
