@@ -233,6 +233,8 @@ export function RunEnding({
   const [retrying, setRetrying] = useState(false);
   const [computerUseResult, setComputerUseResult] = useState<ComputerUseChange | null>(null);
   const [changingComputerUse, setChangingComputerUse] = useState(false);
+  // Whether the latest Computer Use press was Put back: its failure shows while the undo stays.
+  const [restorePressed, setRestorePressed] = useState(false);
   const [undoClock, setUndoClock] = useState(Date.now);
   const undoExpiresAt =
     computerUseUndo?.taskKey === taskKey && computerUseUndo.runId === run.id
@@ -373,6 +375,7 @@ export function RunEnding({
       document.activeElement === (restore ? undoRef.current : recoveryRef.current);
     setChangingComputerUse(true);
     setComputerUseResult(null);
+    setRestorePressed(restore);
     void bridge
       .invoke({
         type: "changeNotRunComputerUse",
@@ -521,7 +524,7 @@ export function RunEnding({
       )}
       {computerUse &&
         !run.retryGatewayChanged &&
-        !computerUseOff &&
+        (!computerUseOff || (undo && restorePressed)) &&
         readback &&
         COMPUTER_USE_RESULT[readback] && (
           <p className="turn-error-reason" role="status">

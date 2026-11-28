@@ -2438,6 +2438,34 @@ test("F-480 #988: Put back leaves at its expiry, and a read-back after a lost re
   await expect(card.getByRole("button", { name: "Try again" })).toBeVisible();
 });
 
+test("F-480 #988: a Put back the gateway refuses says so, and Put back stays", async ({ page }) => {
+  await open(page, "not-run-computer-use-off");
+  const card = page.locator('[data-testid="turn-error"][data-run="run-live"]');
+  const putBack = card.getByRole("button", { name: "Put back" });
+  await expect(putBack).toBeVisible();
+  // The host answers `refused` and keeps the undo, as it does for CONFLICT or FORBIDDEN.
+  await page.evaluate(() => {
+    const fixture = (
+      window as unknown as {
+        clawtrateFixture: { invoke: (command: { type: string; restore?: boolean }) => unknown };
+      }
+    ).clawtrateFixture;
+    const invoke = fixture.invoke.bind(fixture);
+    fixture.invoke = (command) =>
+      command.type === "changeNotRunComputerUse" && command.restore
+        ? Promise.resolve("refused")
+        : invoke(command);
+  });
+  await putBack.click();
+  await expect(
+    card.getByText("The gateway refused the Computer Use change.", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    card.getByText("The Computer Use startup check is off on this gateway.", { exact: true }),
+  ).toBeVisible();
+  await expect(putBack).toBeVisible();
+});
+
 test("F-480 #988: after a repeated Computer Use timeout the card can turn it off and put it back", async ({
   page,
 }) => {
