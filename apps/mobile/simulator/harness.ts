@@ -406,8 +406,9 @@ export function near(a: number[], b: number[], tolerance = 6): boolean {
 /** How one `xcrun simctl` run ended. */
 export type SimctlResult = { status: number | null; stdout: string; stderr: string };
 
+// The device's unified log (`appLog`) can run past spawnSync's 1 MB default.
 const xcrunSimctl = (args: string[]): SimctlResult =>
-  spawnSync("xcrun", ["simctl", ...args], { encoding: "utf8" });
+  spawnSync("xcrun", ["simctl", ...args], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
 
 /** A run's output, or an error that names the command and holds what simctl said. */
 function simctlOutput(args: string[], result: SimctlResult): string {
@@ -1293,25 +1294,18 @@ export function sharedFolders(): string[] {
 
 /** The app's own log lines since a time, from the device's unified log. */
 export function appLog(sinceSeconds: number): string {
-  const result = spawnSync(
-    "xcrun",
-    [
-      "simctl",
-      "spawn",
-      env.device,
-      "log",
-      "show",
-      "--last",
-      `${sinceSeconds}s`,
-      "--style",
-      "compact",
-      "--predicate",
-      'process == "Clawtrate"',
-    ],
-    { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
-  );
-  if (result.status !== 0) throw new Error(`log show: ${result.stderr}`);
-  return result.stdout;
+  return simctlRead([
+    "spawn",
+    env.device,
+    "log",
+    "show",
+    "--last",
+    `${sinceSeconds}s`,
+    "--style",
+    "compact",
+    "--predicate",
+    'process == "Clawtrate"',
+  ]);
 }
 
 /** One of the device's built-in displays, as CoreDevice reports it, in points. */
