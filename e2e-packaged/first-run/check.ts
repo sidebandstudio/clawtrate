@@ -46,7 +46,12 @@ const stepResults: StepResult[] = STEPS.map((step) => ({
   text: null,
   screenshot: null,
 }));
-type Event = { seconds: number; step: string; kind: "screen" | "press" | "type"; text: string };
+type Event = {
+  seconds: number;
+  step: string;
+  kind: "screen" | "press" | "type" | "fixture";
+  text: string;
+};
 const trace: Event[] = [];
 const start = performance.now();
 let active = stepResults[0]!;
@@ -259,6 +264,9 @@ function launch() {
   }
 }
 
+const firstBotWelcome = () => hasText(/^Set up your first bot$/) && hasButton("Get started");
+const accountPicker = () => hasText(/^Connect an account$/) && hasButton("Close");
+
 const shellVisible = () =>
   latest.some(({ role, text }) => role === "AXLandmarkNavigation" && text === "Bots") ||
   hasButton("Settings") ||
@@ -328,8 +336,16 @@ try {
   });
   await step(4, async () => {
     if (!appData) throw new Error("The packaged app has no data folder for this run.");
-    provider = await scriptedProvider(profile, appData);
+    await waitFor("the connected app before provider setup", shellVisible);
+    await screenshot("05-before-scripted-account.png");
+    if (firstBotWelcome()) {
+      await press("Get started");
+      await waitFor("Connect an account on the fresh gateway", accountPicker);
+      await screenshot("05-account-picker.png");
+    }
+    provider = await scriptedProvider(profile, appData, (text) => record("fixture", text));
     await readWindow();
+    await screenshot("05-after-scripted-account.png");
     return heading() ?? "The scripted model is configured on loopback.";
   });
   await step(5, async () => {
@@ -343,13 +359,17 @@ try {
           role === "AXButton" &&
           /^(?:Create bot|(?:Make|Create|Start) (?:your )?first bot)[.…]?$/i.test(text),
       );
-    const getStarted = () => hasText(/^Set up your first bot$/) && hasButton("Get started");
+    if (accountPicker()) {
+      record("fixture", "The account picker stayed open after the synthetic account was saved.");
+      await press("Close");
+      await waitFor("the first-bot screen after closing account setup", firstBotWelcome);
+    }
     await waitFor(
       "a first conversation or a first-bot button",
-      () => composer() || !!firstBotAction() || getStarted(),
+      () => composer() || !!firstBotAction() || firstBotWelcome(),
       60,
     );
-    if (getStarted()) {
+    if (firstBotWelcome()) {
       await screenshot("06-first-bot-welcome.png");
       await press("Get started");
       await waitFor("the first-bot creation button", () => !!firstBotAction());

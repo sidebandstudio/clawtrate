@@ -14,7 +14,11 @@ import { startFakeProvider } from "../../tools/dev-gateway/src/fake-provider.ts"
 export const FIRST_MESSAGE = "Hello from the packaged first-run check.";
 export const SCRIPTED_REPLY = "This is the scripted development model.";
 
-export async function scriptedProvider(profile: string, appData: string) {
+export async function scriptedProvider(
+  profile: string,
+  appData: string,
+  note: (text: string) => void,
+) {
   const configFile = join(profile, "openclaw.json");
   if (!lstatSync(profile).isDirectory() || !lstatSync(configFile).isFile()) {
     throw new Error("The installed profile has no regular gateway config.");
@@ -32,6 +36,7 @@ export async function scriptedProvider(profile: string, appData: string) {
     const base = `http://127.0.0.1:${port}`;
     const health = await fetch(`${base}/health`, { signal: AbortSignal.timeout(3000) });
     if (!health.ok) throw new Error("The scripted provider did not answer its health check.");
+    note(`Started the scripted development provider on ${base}.`);
     const next = {
       ...config,
       proxy: { proxyUrl: base },
@@ -51,6 +56,9 @@ export async function scriptedProvider(profile: string, appData: string) {
     const staged = join(profile, ".first-run-config.json");
     writeFileSync(staged, JSON.stringify(next, null, 2) + "\n", { flag: "wx", mode: 0o600 });
     renameSync(staged, configFile);
+    note(
+      `Set the clawtrate profile's only model provider to ${account.provider}, with ${account.provider}/${MODEL_ID} as the default and the scripted server as its proxy.`,
+    );
 
     // Use the same fake account as the development gateway. Its key takes
     // the gateway's normal save path, so a new bot sees the shared account.
@@ -63,6 +71,9 @@ export async function scriptedProvider(profile: string, appData: string) {
       timeout: 60_000,
     });
     if (saved.status !== 0) throw new Error("OpenClaw did not save the scripted account.");
+    note(
+      `Saved the synthetic ${account.id} account to the shared main store with the gateway's own account command.`,
+    );
     return server;
   } catch (error) {
     server.close();
