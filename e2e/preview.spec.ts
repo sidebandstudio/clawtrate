@@ -2029,6 +2029,86 @@ test("F-071: / lists a skill the person saved to their own library, as theirs, i
   }
 });
 
+test("F-071: a skill saved while a task is open is offered there to add; choosing it adds it to the task, the gateway runs it, and Undo takes it out (#889)", async ({
+  page,
+}) => {
+  // The person on a paired connection, as in the test above; the app's own connection may write.
+  const person = await openOperator(
+    openInstance(INSTANCE),
+    "Clawtrate skill attach check",
+    ["operator.read", "operator.write"],
+    [],
+  );
+  await openShell(page);
+  const slug = `moon-phase-${randomBytes(3).toString("hex")}`;
+  let saved: { entry: { skillId: string; name: string; revision: string } } | null = null;
+  try {
+    const { key, title } = newTaskName("otto", "Open during the save");
+    await person.request("sessions.create", { key, agentId: "otto", label: title });
+    await openNewTask(page, "Otto", title);
+    // Saved while the task is open: the gateway doesn't give this task the skill by itself.
+    saved = (await person.request("skills.library.save", {
+      expectedRevision: null,
+      slug,
+      content: `---\nname: ${slug}\ndescription: Use when someone asks for the moon's phase tonight.\n---\n\nGive tonight's moon phase.\n`,
+    })) as { entry: { skillId: string; name: string; revision: string } };
+    const { skillId, name: command } = saved.entry;
+    const selected = async () => {
+      const listed = (await person.request("skills.library.list", { sessionKey: key })) as {
+        session: { selections: Array<{ skillId: string }> };
+      };
+      return listed.session.selections.some((each) => each.skillId === skillId);
+    };
+    expect(await selected()).toBe(false);
+    const rows = page.getByRole("listbox", { name: "Skills and commands" }).getByRole("option");
+    const row = rows.and(page.locator(`[data-name="${slug}"]`));
+    await composer(page).click();
+    await page.keyboard.type("/");
+    await expect(row.locator(".composer-menu-tag")).toHaveText("Add your skill", {
+      timeout: 30_000,
+    });
+    await page.keyboard.type(slug);
+    await expect(rows).toHaveCount(1);
+    await page.keyboard.press("Enter");
+    // Added, without a question, then used: the line says so and the chip runs it.
+    const line = page.getByTestId("library-skill-line");
+    await expect(line).toContainText(`Added ${slug} to this task.`, { timeout: 30_000 });
+    await expect(page.getByTestId("token-chip")).toHaveText(new RegExp(`Your skill\\s*${slug}`));
+    expect(await selected()).toBe(true);
+    await page.keyboard.type("for tonight");
+    await page.keyboard.press("Enter");
+    await expect
+      .poll(() => gatewayHasMessage(key, `/skill ${command} for tonight`), { timeout: 30_000 })
+      .toBe(true);
+    await expect.poll(() => gatewayIdle(key), { timeout: 60_000 }).toBe(true);
+    // The gateway ran the skill in this task: the model was told to read it.
+    const history = await gatewayCall<{ messages: Array<{ role: string; content?: unknown }> }>(
+      "chat.history",
+      { sessionKey: key, limit: 10 },
+    );
+    const reply = JSON.stringify(history.messages.filter((each) => each.role === "assistant"));
+    expect(reply).toContain("Use the following explicitly referenced skills");
+    expect(reply).toContain(command);
+    // Undo takes it out of the task, and says so.
+    await line.getByRole("button", { name: `Undo: Added ${slug} to this task` }).click();
+    await expect(line.getByRole("status")).toHaveText(`Undone. ${slug} is out of this task.`, {
+      timeout: 30_000,
+    });
+    expect(await selected()).toBe(false);
+  } finally {
+    try {
+      if (saved)
+        await person.request("skills.library.mutate", {
+          skillId: saved.entry.skillId,
+          expectedRevision: saved.entry.revision,
+          action: "remove",
+        });
+    } finally {
+      await person.close();
+    }
+  }
+});
+
 test("F-100: with the Turn time limit set to 1 minute, a longer turn is stopped through the gateway, and once it confirms the card names the limit and who stopped it", async ({
   page,
 }) => {

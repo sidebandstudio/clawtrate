@@ -32,6 +32,7 @@ import {
   HostReplyLost,
   type ClawtrateState,
   type ConnectionState,
+  type MenuRow,
   type DeviceDecision,
   type DeviceListRead,
   type DeviceRequest,
@@ -73,6 +74,7 @@ import {
 import { machineCommands, NO_MACHINE_PARAMS, type MachineParams } from "./machines.ts";
 import { botDeleteCommands, NO_BOT_DELETE_PARAMS, type BotDeleteParams } from "./bot-delete.ts";
 import { FAILED_EVENT, LIVE_SCENES, liveCommand, liveScene, type LiveScene } from "./live.ts";
+import { librarySkillCommands, moonRow } from "./library-skills.ts";
 import { isRailScene, RAIL_SCENES, railCommands, railScene } from "./rail.ts";
 import { ACTION_SCENES, actionScene, isActionScene } from "./actions.ts";
 import {
@@ -995,6 +997,7 @@ export function createFixtureBridge(
   );
   const guides = guidesCommands(options.guides ?? null, () => gatewayStamp(state.connection));
   const routineCommand = routineCommands(now, routineParams);
+  const librarySkills = librarySkillCommands();
   let latestAccessRequest = 0;
   async function apply(command: BridgeCommand, view = PAGE_VIEW): Promise<unknown> {
     const searched = searchCommand(command, () => state);
@@ -1097,8 +1100,20 @@ export function createFixtureBridge(
       sent.push(command);
       return updated;
     }
+    const added = librarySkills.answer(command);
+    if (added) {
+      sent.push(command);
+      return added;
+    }
     const live = liveCommand(command, () => state, setAnswer, files, deferred);
     sent.push(command);
+    // The skill saved after the task started follows the task's own library skills (#889).
+    if (live && command.type === "readComposerMenu" && command.trigger === "/")
+      return live.then((rows) => {
+        const listed = rows as MenuRow[];
+        const own = listed.filter((row) => row.kind === "your-skill" || row.kind === "team-skill");
+        return [...own, moonRow(librarySkills.inTask()), ...listed.slice(own.length)];
+      });
     if (live) return live;
     if (FILE_COMMANDS.has(command.type)) return fileAnswer(command);
     if (command.type === "readChatPicture") return pictureAnswer();
