@@ -32,6 +32,7 @@ import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
 import { ClawtrateClient, CONNECTION_CHANGED, ROUTE_IDENTITY_CHANGED } from "../src/client.ts";
 import { PUBLISHED_SECTIONS } from "./guides-published.ts";
 import { V2_SECTION, v2Pass } from "./guides-build-v2.ts";
+import { V3_SECTION, v3Pass } from "./guides-build-v3.ts";
 import { FAST, URL_A } from "./client-harness.ts";
 
 const hash = (text: string) => sha256Hex(utf8Bytes(text));
@@ -135,7 +136,7 @@ function fakeFiles(
 describe("the section", () => {
   it("is the two guides between Clawtrate's markers, says changes inside it are replaced, and is bounded", () => {
     const lines = GUIDES_SECTION.split("\n");
-    expect(lines[0]).toMatch(/^<!-- clawtrate:guides begin v3 sha256=[a-f0-9]{64} -->$/);
+    expect(lines[0]).toMatch(/^<!-- clawtrate:guides begin v4 sha256=[a-f0-9]{64} -->$/);
     expect(lines[1]).toBe(GUIDES_NOTICE);
     expect(GUIDES_NOTICE).toBe(
       "<!-- Added by Clawtrate, which keeps it current. Changes inside this section are replaced, so edit outside it. -->",
@@ -147,8 +148,8 @@ describe("the section", () => {
     expect(GUIDES_SECTION.split(VOICE_GUIDE)).toHaveLength(2);
     expect(GUIDES_SECTION.split(WHERE_GUIDE)).toHaveLength(2);
     // It is in every run's prompt: bounded.
-    expect(GUIDES_SIZE).toBe(3_978);
-    expect(GUIDES_SIZE).toBeLessThanOrEqual(4_000);
+    expect(GUIDES_SIZE).toBe(4_078);
+    expect(GUIDES_SIZE).toBeLessThanOrEqual(4_100);
   });
 
   it("is added at the top, and every other byte of the file stays as it was", () => {
@@ -280,7 +281,7 @@ describe("the section", () => {
         `^<!-- clawtrate:guides begin v${GUIDES_VERSION} sha256=${GUIDES_PINNED_SHA256}[a-f0-9]{48} -->$`,
       ),
     );
-    expect(GUIDES_VERSION).toBe(3);
+    expect(GUIDES_VERSION).toBe(4);
   });
 });
 
@@ -419,6 +420,39 @@ describe("keeping the section current", () => {
       // Settled: this version, and neither build writes it again.
       expect(files.store.get("pip"), name).toBe(withSection(BOT_FILE));
       expect(v2Pass(files.store.get("pip")!), name).toBeNull();
+      const before = files.sets.length;
+      await keepGuidesCurrent(files.request);
+      expect(files.sets, name).toHaveLength(before);
+    }
+  });
+
+  it("version 3's build and this one, taking turns on one file, write at most twice and then leave it", async () => {
+    // The released version 3 build's own parser and rule (guides-build-v3.ts), as it shipped.
+    const v3 = PUBLISHED_SECTIONS.find((each) => each.version === 3)!.section;
+    expect(V3_SECTION).toBe(v3);
+    const starts = {
+      "no section": BOT_FILE,
+      "version 3's": `${v3}\n${BOT_FILE}`,
+      "version 3's, edited": `${v3.replace("Be warm", "Be bold")}\n${BOT_FILE}`,
+      "this version's": withSection(BOT_FILE),
+      "this version's, edited": edited(),
+    };
+    for (const [name, start] of Object.entries(starts)) {
+      const files = fakeFiles({ pip: start });
+      let v3Writes = 0;
+      for (let round = 0; round < 4; round += 1) {
+        // The older build's device, then this build's, on the same file.
+        const written = v3Pass(files.store.get("pip")!);
+        if (written !== null) {
+          files.store.set("pip", written);
+          v3Writes += 1;
+        }
+        await keepGuidesCurrent(files.request);
+      }
+      expect(v3Writes + files.sets.length, name).toBeLessThanOrEqual(2);
+      // Settled: this version, and neither build writes it again.
+      expect(files.store.get("pip"), name).toBe(withSection(BOT_FILE));
+      expect(v3Pass(files.store.get("pip")!), name).toBeNull();
       const before = files.sets.length;
       await keepGuidesCurrent(files.request);
       expect(files.sets, name).toHaveLength(before);
@@ -1004,6 +1038,134 @@ describe("the guides in the client", () => {
     }
   });
 
+  it("F-566 on a route loaded unbound, writes nothing while the saved record that another client bound is checked", async () => {
+    const files = fakeFiles({ pip: BOT_FILE });
+    const gateway = withFiles(grantingGateway(), files);
+    const ROUTE = ".openclaw-guides-check";
+    const unbound = { url: URL_A, token: null, route: ROUTE };
+    const storage = memoryStorage({
+      connection: JSON.stringify(unbound),
+      [tokenKey(URL_A)]: JSON.stringify({
+        token: "device-token",
+        grantedScopes: ADMIN_SCOPES,
+        heldScopes: INTERACTIVE_SCOPES,
+        adminHeld: true,
+        route: ROUTE,
+      }),
+    });
+    let name = () => {};
+    const naming = new Promise<void>((done) => (name = done));
+    gateway.handlers["gateway.identity.get"] = async () => {
+      await naming;
+      return { deviceId: "gw-other" };
+    };
+    let release = () => {};
+    const held = new Promise<void>((done) => (release = done));
+    let holding = false;
+    let checking = false;
+    const get = storage.get;
+    storage.get = async (key) => {
+      if (holding && key === "connection") {
+        checking = true;
+        await held;
+      }
+      return get(key);
+    };
+    const client = new ClawtrateClient(testHost(gateway, storage), {
+      ...FAST,
+      localConnect: () => ({
+        createSocket: (url) => gateway.createWebSocket(url),
+        verify: async () => true,
+      }),
+    });
+    try {
+      await client.start();
+      await until(() => client.state.connection.status === "connected");
+      // Another client on this store binds the route to gw-a; this one's check of it is held.
+      storage.data.set("connection", JSON.stringify({ ...unbound, gatewayId: "gw-a" }));
+      holding = true;
+      name();
+      await until(() => checking);
+      await sleep(300);
+      expect(files.sets).toEqual([]);
+      release();
+      await until(() => client.state.connection.error?.code === ROUTE_IDENTITY_CHANGED);
+      await sleep(100);
+      expect(files.sets).toEqual([]);
+      expect(files.store.get("pip")).toBe(BOT_FILE);
+    } finally {
+      release();
+      client.stop();
+    }
+  });
+
+  /** A client on a route loaded unbound, whose saved record `record` answers after the load. */
+  const routeClient = (record: (read: number) => Promise<string | null>) => {
+    const files = fakeFiles({ pip: BOT_FILE });
+    const gateway = withFiles(grantingGateway(), files);
+    const ROUTE = ".openclaw-guides-check";
+    const unbound = { url: URL_A, token: null, route: ROUTE };
+    const storage = memoryStorage({
+      connection: JSON.stringify(unbound),
+      [tokenKey(URL_A)]: JSON.stringify({
+        token: "device-token",
+        grantedScopes: ADMIN_SCOPES,
+        heldScopes: INTERACTIVE_SCOPES,
+        adminHeld: true,
+        route: ROUTE,
+      }),
+    });
+    let reads = 0;
+    const get = storage.get;
+    storage.get = async (key) =>
+      key === "connection" && (reads += 1) > 1 ? record(reads) : get(key);
+    const client = new ClawtrateClient(testHost(gateway, storage), {
+      ...FAST,
+      localConnect: () => ({
+        createSocket: (url) => gateway.createWebSocket(url),
+        verify: async () => true,
+      }),
+    });
+    return { client, gateway, files, bound: JSON.stringify({ ...unbound, gatewayId: "gw-a" }) };
+  };
+
+  it("F-566 on a route loaded unbound, writes nothing when the check of its saved record fails", async () => {
+    const { client, gateway, files } = routeClient(async () => {
+      throw new Error("The store is unavailable.");
+    });
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gw-other" });
+    try {
+      await client.start();
+      await until(() => client.state.connection.gatewayId === "gw-other");
+      await sleep(300);
+      expect(files.sets).toEqual([]);
+      expect(files.store.get("pip")).toBe(BOT_FILE);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("F-566 on a route loaded unbound, checks the saved record when the guides are the first to learn the gateway's name", async () => {
+    let bound = "";
+    const { client, gateway, files, bound: record } = routeClient(async () => bound);
+    bound = record;
+    // The connect's own read of the name fails: the guides' read is the first to learn it.
+    let names = 0;
+    gateway.handlers["gateway.identity.get"] = () => {
+      if ((names += 1) === 1) throw new GatewayError({ code: "UNAVAILABLE", message: "not now" });
+      return { deviceId: "gw-other" };
+    };
+    try {
+      await client.start();
+      await until(() => client.state.connection.error?.code === ROUTE_IDENTITY_CHANGED, 3_000);
+      await sleep(100);
+      expect(files.sets).toEqual([]);
+      expect(files.store.get("pip")).toBe(BOT_FILE);
+    } finally {
+      client.stop();
+    }
+  });
+
   it("a read made while the connect's own reads are still under way shows what the change after them leaves", async () => {
     const files = fakeFiles({ pip: BOT_FILE });
     const { client, gateway } = await openTask({ storage: adminStorage() });
@@ -1117,7 +1279,7 @@ describe("the guides in the client", () => {
 // so it is brought up to date by itself under the same rules as any write.
 describe("the sections earlier builds wrote", () => {
   it("each is pinned, of a lower version, and reads as Clawtrate's own, unedited and older", () => {
-    expect(PUBLISHED_SECTIONS.map((each) => each.version)).toEqual([1, 2]);
+    expect(PUBLISHED_SECTIONS.map((each) => each.version)).toEqual([1, 2, 3]);
     for (const { version, pin, section } of PUBLISHED_SECTIONS) {
       expect(section.split("\n")[0]).toMatch(
         new RegExp(`^<!-- clawtrate:guides begin v${version} sha256=${pin}[a-f0-9]{48} -->$`),
@@ -1129,13 +1291,26 @@ describe("the sections earlier builds wrote", () => {
 
   it("version 3 changes only the notice: it names no switch, and says edits inside are replaced", () => {
     const v2 = PUBLISHED_SECTIONS.find((each) => each.version === 2)!.section;
+    const v3 = PUBLISHED_SECTIONS.find((each) => each.version === 3)!.section;
     const body = (section: string) => section.slice(section.indexOf("## How you talk"));
-    expect(body(v2)).toBe(body(GUIDES_SECTION));
+    expect(body(v2)).toBe(body(v3));
     expect(v2).toContain("Turn it off in Clawtrate: Settings, Conversation.");
-    expect(GUIDES_SECTION.length - v2.length).toBe(12);
+    expect(v3).toContain(GUIDES_NOTICE);
+    expect(v3.length - v2.length).toBe(12);
     // Written over only within its bound, and a file with only the section is far from the cut.
     expect(GUIDES_SECTION.length).toBeLessThanOrEqual(MAX_SECTION_SPAN_CHARS);
     expect(guidesWouldBeCut(withSection(""), GUIDES_LONG_CHARS)).toBe(false);
+  });
+
+  it("version 4 adds only one sentence: a start refused for its model is started again on an allowed one", () => {
+    const v3 = PUBLISHED_SECTIONS.find((each) => each.version === 3)!.section;
+    const sentence =
+      " If it's refused because its model isn't allowed, start it again with `model` set to an allowed one.";
+    expect(WHERE_GUIDE).toContain(
+      `so don't send a link.${sentence} If you only think a task would help, ask first and wait for a yes.`,
+    );
+    const inner = (section: string) => section.split("\n").slice(1).join("\n");
+    expect(inner(GUIDES_SECTION).replace(sentence, "")).toBe(inner(v3));
   });
 
   it("an unedited one is brought up to date, and nothing else in the file changes", async () => {

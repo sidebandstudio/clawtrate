@@ -476,6 +476,10 @@ export const CONNECTION_CHANGED =
   "The connection changed since this screen was read, so nothing was sent. Look again, then try again.";
 /** Why a write stamped with one gateway's identity is not sent to another (`requireSameGateway`). */
 const ANOTHER_GATEWAY = "This change was made for another gateway, so nothing was sent.";
+const UNNAMED_GATEWAY = "The gateway hasn't said which gateway it is, so nothing was sent.";
+/** The identity read failed or named none: a retry may read it, unlike another gateway's. */
+const IDENTITY_UNREAD =
+  "Clawtrate couldn't confirm which gateway this is, so nothing was sent. Try again.";
 /** Why a file a bot handed over isn't read: its row came from another gateway (`readChatFile`). */
 export const FILE_FROM_ANOTHER_GATEWAY =
   "This file was listed by another gateway, so it wasn't read. Look again, then try again.";
@@ -554,16 +558,21 @@ function sessionOf(value: unknown): string | null {
  * A task this client names (`taskNames`): `waiting` for the gateway to accept the message it is
  * named from (`first`: the creation's message, or an empty task's first with text), with the ids of
  * the messages it sent there before with no text (a picture or a file alone), or `naming` while its
- * name is made. With the session the task was created as, when known.
+ * name is made. With the session the task was created as, when known, and the gateway it was made
+ * on, when its identity was read.
  */
 type TaskNaming = {
   stage: "waiting" | "naming";
   sessionId: string | null;
+  gatewayId: string | null;
   textless: string[];
   /** The message it is named from, once the gateway accepts its `chat.send`; null until chosen. */
   first: string | null;
-  /** Created with that message (`createTask`): no other message can come before it. */
-  withMessage: boolean;
+  /**
+   * This client's messages with text sent there after `first`, oldest first, up to
+   * `MAX_TEXTLESS_SENDS`: the next takes its place if it is deleted or taken back (`releaseFirst`).
+   */
+  later: string[];
 };
 /** Titles made from tasks' first messages the client keeps (`firstMessageTitles`); the oldest goes past it. */
 export const MAX_FIRST_MESSAGE_TITLES = 200;
@@ -1211,6 +1220,8 @@ type Waiter = {
   reject: (error: Error) => void;
   /** Who asked: a viewer's operations are withdrawn with `withdraw` when it goes away. */
   owner: object | null;
+  /** The gateway a task change's stamp named: after a reconnect, its access is asked of it only. */
+  gatewayId: string | null;
 };
 
 /** The approval kinds' list methods and readers. */
@@ -1713,6 +1724,12 @@ export class ClawtrateClient {
    * the guides made before then waits for it, so it shows what that change leaves.
    */
   private guidesConnectPass: { epoch: number; queued: Promise<void> } | null = null;
+  /**
+   * Settled once this connection's route has decided its binding from the saved record
+   * (`bindRouteIdentity`): until then an upkeep write can't know which gateway the route is for.
+   * True only when the record was read and the route may go on as this connection's gateway.
+   */
+  private routeBinding: { epoch: number; decided: Promise<boolean> } | null = null;
   /** Bots of this connection whose `AGENTS.md` didn't exist yet at its guide change (`keepGuides`). */
   private readonly guidesMissing = new Set<string>();
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1746,6 +1763,14 @@ export class ClawtrateClient {
   private quietReconnect = false;
   /** The user asked for write access and it is not settled yet. */
   private upgradeWanted = false;
+  /**
+   * What the person asked for themselves within the ask wanted, or null when it was raised only
+   * for operations waiting on it: what is left once those are withdrawn (#782).
+   */
+  private directAsk: { tier: "interactive" | "admin" | "held" | "full"; pairing: boolean } | null =
+    null;
+  /** The connection whose identity `resumeUpgrade` reads before its waiters' access is asked. */
+  private resumeRead: number | null = null;
   /**
    * What the request under way asks for: the interactive tier, admin with it,
    * (`held`) the scopes the connection held when device access was asked for, or (`full`)
@@ -3193,7 +3218,10 @@ export class ClawtrateClient {
    * When it is approved the client stores the rotated device token and
    * reconnects asking for exactly what was granted of that set.
    */
-  async requestAccess(tier: "interactive" | "admin" | "pairing" = "interactive"): Promise<void> {
+  async requestAccess(
+    tier: "interactive" | "admin" | "pairing" = "interactive",
+    forWaiter = false,
+  ): Promise<void> {
     if (this.options.readOnly)
       throw new Error("This host only reads; it does not ask for more access.");
     // A full pairing's grant is the gateway's limit, a narrower one too: nothing asks again,
@@ -3204,14 +3232,25 @@ export class ClawtrateClient {
     // A request for admin is never narrowed by a later one for less, and device access
     // (`operator.pairing`) is asked for only by name, added to the scopes the connection
     // holds and nothing else: from a read connection it asks for no power to send or answer.
-    const pairing = tier === "pairing" || (this.upgradeWanted && this.pairingWanted);
+    const raise = (base: { tier: string; pairing: boolean } | null) => ({
+      tier:
+        tier === "admin" || base?.tier === "admin"
+          ? ("admin" as const)
+          : tier === "interactive" || base?.tier === "interactive"
+            ? ("interactive" as const)
+            : ("held" as const),
+      pairing: tier === "pairing" || !!base?.pairing,
+    });
     const waiting = this.upgradeWanted ? this.upgradeTier : null;
-    const wanted =
-      tier === "admin" || waiting === "admin"
-        ? "admin"
-        : tier === "interactive" || waiting === "interactive"
-          ? "interactive"
-          : "held";
+    // While the reconnect's identity is read, the waiters' gateway is unknown: the person's ask
+    // goes with its own tier, and theirs joins it once the read names their gateway.
+    const { tier: wanted, pairing } = raise(
+      !this.upgradeWanted
+        ? null
+        : this.resumeRead === this.epoch
+          ? this.directAsk
+          : { tier: this.upgradeTier, pairing: this.pairingWanted },
+    );
     if (wanted === "held" && waiting !== "held")
       this.heldBase = ADMIN_SCOPES.filter((scope) => this.state.connection.scopes.includes(scope));
     const target = [...this.tierScopes(wanted), ...(pairing ? [PAIRING_SCOPE] : [])];
@@ -3224,6 +3263,8 @@ export class ClawtrateClient {
     }
     this.upgradeTier = wanted;
     this.pairingWanted = pairing;
+    const direct = this.upgradeWanted ? this.directAsk : null;
+    this.directAsk = forWaiter ? direct : raise(direct);
     this.upgradeWanted = true;
     if (this.state.connection.status === "connected") this.startUpgrade();
   }
@@ -3279,6 +3320,7 @@ export class ClawtrateClient {
       this.upgradeTier = "full";
       this.pairingWanted = false;
       this.upgradeWanted = true;
+      this.directAsk = { tier: "full", pairing: false };
       this.startUpgrade();
     })();
     this.fullAttempt = attempt;
@@ -3554,6 +3596,78 @@ export class ClawtrateClient {
       );
   }
 
+  /**
+   * After a hello, access queued for a task change is asked only of the gateway its stamp named
+   * (#782): the request waits for this connection's identity, and a change whose gateway this
+   * isn't is refused, rather than asking a gateway that answered the reconnect at the same address.
+   */
+  private resumeUpgrade(): void {
+    // A waiter this hello grants (`settleAccessWaiters`) is gone by the read, but still named
+    // its gateway. One withdrawn meanwhile names none.
+    const granted = new Set(
+      this.accessWaiters
+        .filter((waiter) => this.holds(waiter.scope))
+        .map((waiter) => waiter.gatewayId),
+    );
+    granted.delete(null);
+    if (this.accessWaiters.every((waiter) => waiter.gatewayId === null)) {
+      if (this.accessWaiters.length === 0) {
+        // Operations all withdrawn since asked for nothing: no gateway is asked for them, and
+        // what the person asked for goes on as they asked it.
+        if (!this.directAsk) return this.dropAsk();
+        this.upgradeTier = this.directAsk.tier;
+        this.pairingWanted = this.directAsk.pairing;
+        // The hello kept the withdrawn changes' tier, so it didn't take what this one holds.
+        if (this.upgradeTier === "held")
+          this.heldBase = ADMIN_SCOPES.filter((scope) =>
+            this.state.connection.scopes.includes(scope),
+          );
+      }
+      return this.startUpgrade();
+    }
+    const epoch = this.epoch;
+    this.resumeRead = epoch;
+    void this.readGatewayIdentity().then((id) => {
+      if (this.resumeRead === epoch) this.resumeRead = null;
+      if (epoch !== this.epoch || !this.upgradeWanted) return;
+      const waiters = this.accessWaiters;
+      this.accessWaiters = waiters.filter(
+        (waiter) => waiter.gatewayId === null || waiter.gatewayId === id,
+      );
+      for (const waiter of waiters)
+        if (!this.accessWaiters.includes(waiter))
+          waiter.reject(new Error(id === null ? IDENTITY_UNREAD : ANOTHER_GATEWAY));
+      // A device-access ask sent during the read went alone: the changes on this gateway need write.
+      if (this.accessWaiters.length > 0 && this.upgradeTier === "held") {
+        this.upgradeTier = "interactive";
+        this.scopeUpgrade?.cancelScopeUpgrade();
+        this.scopeUpgrade = null;
+      }
+      if (this.accessWaiters.length > 0 || (id !== null && granted.has(id)))
+        return this.startUpgrade();
+      // A request asked for on this connection meanwhile is under way: its answer settles it.
+      if (this.scopeUpgrade) return;
+      // Beside changes refused here, the person's accept of full control ends as a failure they
+      // can try again from Settings, never quietly; an accept still being saved keeps its place.
+      if (this.upgradeTier === "full" && (waiters.length > 0 || granted.size > 0)) {
+        this.fullAttempt = null;
+        this.failAccess(
+          new AccessRequestError("error", id === null ? IDENTITY_UNREAD : ANOTHER_GATEWAY),
+        );
+        return;
+      }
+      // No waiter is left: as if none had waited.
+      this.resumeUpgrade();
+    });
+  }
+
+  /** A queued ask no one waits on any more goes, and the access state with it. */
+  private dropAsk(): void {
+    this.upgradeWanted = false;
+    this.pairingWanted = false;
+    this.setUpgrade(initialScopeUpgrade);
+  }
+
   private failAccess(error: AccessRequestError): void {
     this.upgradeWanted = false;
     this.pairingWanted = false;
@@ -3593,7 +3707,11 @@ export class ClawtrateClient {
    * will not bring one, so the operation fails at once and stays retryable.
    * `owner` names the viewer that asked, so its operations can be withdrawn.
    */
-  private ensureScope(scope: string, owner: object | null = null): Promise<void> {
+  private ensureScope(
+    scope: string,
+    owner: object | null = null,
+    gatewayId: string | null = null,
+  ): Promise<void> {
     if (this.holds(scope)) return Promise.resolve();
     const connection = this.state.connection;
     if (connection.status === "error" || connection.status === "idle" || !this.protocol) {
@@ -3616,7 +3734,7 @@ export class ClawtrateClient {
       );
     }
     const waiting = new Promise<void>((resolve, reject) => {
-      this.accessWaiters.push({ scope, resolve, reject, owner });
+      this.accessWaiters.push({ scope, resolve, reject, owner, gatewayId });
     });
     // Not meant to be held yet, or held and then lost (capped or revoked) on a
     // live connection: ask the gateway's owner. Otherwise the connection is
@@ -3625,7 +3743,7 @@ export class ClawtrateClient {
       !this.state.connection.requestedScopes.includes(scope) ||
       this.state.connection.status === "connected"
     ) {
-      this.requestAccess().catch((error: unknown) => {
+      this.requestAccess("interactive", true).catch((error: unknown) => {
         this.failAccess(new AccessRequestError("error", errorMessage(error)));
       });
     }
@@ -4056,6 +4174,8 @@ export class ClawtrateClient {
       // The message a task waits to be named from goes under its new key.
       const naming = this.taskNames.get(key);
       if (naming?.first === messageId) naming.first = id;
+      if (naming?.later.includes(messageId))
+        naming.later = naming.later.map((each) => (each === messageId ? id : each));
       const kept = this.attachmentContent.get(messageId);
       if (kept) {
         this.attachmentContent.delete(messageId);
@@ -4137,6 +4257,7 @@ export class ClawtrateClient {
         message.status !== "handled")
     )
       return;
+    this.releaseFirst(key, messageId);
     this.dropAttachments(messageId);
     this.updateActivity(key, (activity) => ({
       ...removeMessage(activity, messageId),
@@ -4150,6 +4271,7 @@ export class ClawtrateClient {
   cancelQueued(key: string, messageId: string): void {
     const message = this.outgoing(key, messageId);
     if (!message || (message.status !== "queued" && message.status !== "held")) return;
+    this.releaseFirst(key, messageId);
     // A cancelled message is never sent: its files are not kept.
     this.dropAttachments(messageId);
     this.updateActivity(key, (activity) =>
@@ -4184,6 +4306,7 @@ export class ClawtrateClient {
 
   takeBack(key: string, messageId: string): { text: string; attachments: OutgoingAttachment[] } {
     const { text, attachments: files } = this.peekTakeBack(key, messageId);
+    this.releaseFirst(key, messageId);
     this.dropAttachments(messageId);
     this.updateActivity(key, (activity) =>
       updateMessage(cancelQueuedRun(activity, messageId, this.now()), messageId, {
@@ -4407,9 +4530,10 @@ export class ClawtrateClient {
       this.keepTaskName(key, {
         stage: "waiting",
         sessionId,
+        gatewayId: this.state.connection.gatewayId,
         textless: [],
         first: id,
-        withMessage: true,
+        later: [],
       });
     }
     // A caller holds one interest in the new task; one settled later is kept for its message.
@@ -4861,7 +4985,11 @@ export class ClawtrateClient {
       }
     }
     // Accepted is not confirmed: the files stay until history holds the message or the user deletes it.
-    if (command) this.dropAttachments(messageId);
+    if (command) {
+      this.dropAttachments(messageId);
+      // A command names no task: one waiting to be named from it waits for the next message.
+      this.releaseFirst(key, messageId);
+    }
     // Accepted: the message a task waits to be named from may be shown to a model now.
     else this.nameAccepted(key, messageId, message.text);
     this.scheduleHistory(key);
@@ -7227,7 +7355,7 @@ export class ClawtrateClient {
     // A bot made in Clawtrate gets the guides right away, as every bot does, on the connection it
     // was made on, once the gateway is known to be the one it was made on. It never fails the
     // creation.
-    if (gatewayId !== null && this.routeIdentityHolds(gatewayId) && this.guidesWritable())
+    if (gatewayId !== null && (await this.routeIdentityHolds(gatewayId)) && this.guidesWritable())
       await this.guidesByThemselves(request, created.botId).catch((error: unknown) =>
         this.logFailure("warn", "guides for a new bot", error),
       );
@@ -7443,13 +7571,13 @@ export class ClawtrateClient {
     this.requireSameTarget(stamp);
     if (!alive()) throw new Error("Not connected to the gateway.");
     const gatewayId = stamp.gatewayId;
-    if (gatewayId === null)
-      throw new Error("The gateway hasn't said which gateway it is, so nothing was sent.");
+    if (gatewayId === null) throw new Error(UNNAMED_GATEWAY);
     const here = await this.readGatewayIdentity();
     // A bot command can be the first to identify this connection after discovery got no ID.
     this.confirmGatewayIdentity(here, alive);
     if (!alive()) throw new Error(CONNECTION_CHANGED);
-    // `gatewayId` is known here, so a gateway that names none (null) never matches it.
+    // An identity that wasn't read never matches, but it isn't known to be another gateway's.
+    if (here === null) throw new Error(IDENTITY_UNREAD);
     if (here !== gatewayId) throw new Error(ANOTHER_GATEWAY);
     return { gatewayId, target: stamp.target };
   }
@@ -8062,6 +8190,10 @@ export class ClawtrateClient {
           this.guidesUnnamed = { generation, epoch };
           return false;
         }
+        // Learned here first, the route's saved record is checked for it before anything is
+        // written; publishing the name stays with the connection's own reads.
+        if (known === undefined && this.bindRouteIdentity(id, current) === "changed") return false;
+        if (!current()) return false;
         return this.routeIdentityHolds(id);
       },
     );
@@ -8074,7 +8206,10 @@ export class ClawtrateClient {
    * Whether `id` can be this connection's gateway as its saved route knows it: a route that has
    * bound an identity accepts only that one; no route, or one not bound yet, accepts any.
    */
-  private routeIdentityHolds(id: string): boolean {
+  private async routeIdentityHolds(id: string): Promise<boolean> {
+    // Another client on this store may have bound the route since this one loaded it.
+    const binding = this.routeBinding;
+    if (binding?.epoch === this.epoch && !(await binding.decided)) return false;
     const settings = this.settings;
     return (
       settings?.route === undefined || settings.gatewayId === undefined || settings.gatewayId === id
@@ -8431,6 +8566,10 @@ export class ClawtrateClient {
   /** The next part of a file on its way to this viewer. */
   readFileChunk(id: string, index: number, owner: object = DIRECT_CALLER): { data: string } {
     return this.fileTransfers.chunk(owner, id, index);
+  }
+
+  holdsFile(id: string, owner: object): boolean {
+    return this.fileTransfers.holds(owner, id);
   }
 
   /** Drop a file's transfer before its last part was read. */
@@ -10257,7 +10396,7 @@ export class ClawtrateClient {
       this.upgradeTier = "interactive";
       this.pairingWanted = false;
     } else if (this.upgradeWanted) {
-      this.startUpgrade();
+      this.resumeUpgrade();
     }
     this.settleAccessWaiters();
     this.checkCreations();
@@ -10363,24 +10502,31 @@ export class ClawtrateClient {
       void this.changeConnection(() => this.dropRouteToken(url, deviceId, used));
       return "changed";
     }
-    void this.changeConnection(async () => {
+    const decided = this.changeConnection(async () => {
       const now = this.settings;
-      if (!current() || now?.url !== url || now.route !== route) return;
+      if (!current() || now?.url !== url || now.route !== route) return false;
       // Decided from the record as it is now: another client on this store may have saved the
       // route's identity since this one read it.
       const saved = await this.savedSettings();
-      if (!current() || saved?.url !== url || saved.route !== route) return;
+      if (!current() || saved?.url !== url || saved.route !== route) return false;
       const bound = now.gatewayId ?? saved.gatewayId;
       if (bound === undefined) {
         await this.writeRecord({ ...saved, gatewayId: id });
         if (this.settings === now) this.settings = { ...now, gatewayId: id };
-        return;
+        return true;
       }
       if (this.settings === now) this.settings = { ...now, gatewayId: bound };
-      if (bound === id) return;
+      if (bound === id) return true;
       this.stopChangedRoute(url);
       await this.dropRouteToken(url, deviceId, used);
-    }).catch(() => this.log("warn", "Could not check which gateway answers on this route."));
+      return false;
+    }).catch(() => {
+      // A record that couldn't be read says nothing of which gateway the route is for: no upkeep
+      // write goes until another check reads it.
+      this.log("warn", "Could not check which gateway answers on this route.");
+      return false;
+    });
+    this.routeBinding = { epoch: this.epoch, decided };
   }
 
   /**
@@ -11851,6 +11997,7 @@ export class ClawtrateClient {
   private actionContext(
     owner: object | null,
     bound: number | null = null,
+    gatewayId: string | null = null,
   ): TaskActionContext & SidebarContext {
     const generation = this.generation;
     // The connection the action's first request went on, and whether it has sent a write yet.
@@ -11877,7 +12024,10 @@ export class ClawtrateClient {
       ensureWrite: async () => {
         if (this.options.readOnly)
           throw new Error("This host only reads; it does not change tasks.");
-        await this.ensureScope(WRITE_SCOPE, owner);
+        // Bound to a connection that has gone, it asks none that replaced it, as `request` sends none.
+        if (epoch !== null && epoch !== this.epoch)
+          throw new Error(wrote ? CONNECTION_CHANGED_AFTER_SEND : CONNECTION_CHANGED);
+        await this.ensureScope(WRITE_SCOPE, owner, gatewayId);
         this.checkNotWithdrawn(owner);
       },
       now: () => this.now(),
@@ -11943,9 +12093,10 @@ export class ClawtrateClient {
       this.keepTaskName(key, {
         stage: "waiting",
         sessionId,
+        gatewayId: this.state.connection.gatewayId,
         textless: [],
         first: null,
-        withMessage: false,
+        later: [],
       });
     }
     return key;
@@ -11962,8 +12113,14 @@ export class ClawtrateClient {
    */
   private noteFirstSend(key: string, message: OutgoingMessage): void {
     const kept = this.taskNames.get(key);
-    // Its message is chosen already: only that one, once accepted, names the task.
-    if (kept?.stage !== "waiting" || kept.first !== null) return;
+    if (kept?.stage !== "waiting") return;
+    if (kept.first !== null) {
+      // Its message is chosen already: only that one, once accepted, names the task. One with no
+      // text is still this client's own row (`onlyOwnRows`), if that one is deleted or taken back.
+      const sent = message.text ? kept.later : kept.textless;
+      if (sent.length < MAX_TEXTLESS_SENDS) sent.push(message.id);
+      return;
+    }
     const row = this.rows.get(capId(key, MAX_ID_CHARS));
     if (!this.taskBot(key) || (kept.textless.length === 0 && row?.lastMessagePreview)) {
       this.taskNames.delete(key);
@@ -11980,8 +12137,8 @@ export class ClawtrateClient {
 
   /**
    * The gateway accepted a message's `chat.send`: the one a task this client names waits for starts
-   * its name, once. For an empty task it is checked again against the task's history as the gateway
-   * has it then (`onlyOwnRows`), which this client's copy can be behind.
+   * its name, once. It is checked again against the task's history as the gateway has it then
+   * (`onlyOwnRows`), which this client's copy can be behind.
    */
   private nameAccepted(key: string, messageId: string, text: string): void {
     const kept = this.taskNames.get(key);
@@ -11991,8 +12148,47 @@ export class ClawtrateClient {
       this.taskNames.delete(key);
       return;
     }
-    const ownSends = kept.withMessage ? undefined : [...kept.textless, messageId];
-    this.startNaming(key, bot, text, kept.sessionId, ownSends);
+    // A task created with its message too: another device can send in it before this one does.
+    this.startNaming(key, bot, text, kept.sessionId, [...kept.textless, messageId]);
+  }
+
+  /**
+   * The person deleted or took back a message before the gateway accepted it, or the gateway
+   * handled it as a command. If it was the one a task waits to be named from, the next with text
+   * this client sent after it there (`later`) takes its place: one still in the outbox, or one
+   * history holds, which has left it. Only those free the place: a message history confirmed
+   * still names the task once its answer comes.
+   */
+  private releaseFirst(key: string, messageId: string): void {
+    const kept = this.taskNames.get(key);
+    if (kept?.stage !== "waiting" || kept.first !== messageId) return;
+    const transcript = this.state.transcripts[key];
+    const sent = (id: string) => transcript?.outbox.find((each) => each.id === id);
+    const held = (id: string) =>
+      transcript?.items.find((item) => item.idempotencyKey === `${id}:user`);
+    // Those before it were deleted, taken back, cancelled or a command: they name nothing.
+    const at = kept.later.findIndex((id) => {
+      const message = sent(id);
+      if (message) return message.status !== "cancelled" && message.status !== "handled";
+      return held(id) !== undefined;
+    });
+    const next = at < 0 ? null : kept.later[at]!;
+    kept.first = next;
+    kept.later = at < 0 ? [] : kept.later.slice(at + 1);
+    // Accepted already: its text goes only to the gateway the task was made on, which another can
+    // have replaced at the same address since.
+    if (
+      next === null ||
+      kept.gatewayId === null ||
+      kept.gatewayId !== this.state.connection.gatewayId
+    )
+      return;
+    const message = sent(next);
+    if (message?.status === "sent") this.nameAccepted(key, next, message.text);
+    else if (!message) {
+      const text = held(next)?.blocks.find((block) => block.kind === "text")?.text ?? "";
+      this.nameAccepted(key, next, text);
+    }
   }
 
   /** Note a task this client names; the oldest goes past `MAX_NAMED_TASKS`. */
@@ -12017,20 +12213,24 @@ export class ClawtrateClient {
     botId: string,
     text: string,
     sessionId: string | null,
-    ownSends?: string[],
+    ownSends: string[],
   ): void {
     this.keepTaskName(key, {
       stage: "naming",
       sessionId,
+      gatewayId: null,
       textless: [],
       first: null,
-      withMessage: false,
+      later: [],
     });
     const ctx = this.actionContext(null, this.epoch);
-    const botModel = this.state.bots.find((bot) => bot.id === botId)?.model ?? null;
     void nameTask(
-      { request: ctx.request, row: () => this.rows.get(capId(key, MAX_ID_CHARS)) ?? null },
-      { key, sessionId, botId, botModel, text, ...(ownSends ? { ownSends } : {}) },
+      {
+        request: ctx.request,
+        row: () => this.rows.get(capId(key, MAX_ID_CHARS)) ?? null,
+        botModel: () => this.state.bots.find((bot) => bot.id === botId)?.model ?? null,
+      },
+      { key, sessionId, botId, text, ownSends },
     )
       .catch(() => null)
       .finally(() => {
@@ -12060,13 +12260,17 @@ export class ClawtrateClient {
     // screen wasn't read on is never asked for it. A connected host runs the guard itself first:
     // right after a hello the identity is still being read, and the guard waits for it.
     this.requireSameTarget(stamp);
+    // No gateway answers to a stamp that names none, so none is asked, connected or not.
+    if (stamp.gatewayId === null) throw new Error(UNNAMED_GATEWAY);
     if (this.state.connection.status === "connected") await this.requireSameGateway(stamp);
     // A viewer that closed during that wait had no access waiter to withdraw yet.
     this.checkNotWithdrawn(owner);
-    await this.actionContext(owner).ensureWrite();
+    // Asked while reconnecting, the access waits for the next gateway to name itself
+    // (`resumeUpgrade`).
+    await this.actionContext(owner, null, stamp.gatewayId).ensureWrite();
     const epoch = this.epoch;
     await this.requireSameGateway(stamp);
-    return this.actionContext(owner, epoch);
+    return this.actionContext(owner, epoch, stamp.gatewayId);
   }
 
   /** With `stamp`, as for `archiveTask`. */

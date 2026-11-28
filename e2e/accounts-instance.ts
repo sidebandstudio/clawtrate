@@ -1,7 +1,8 @@
 // The accounts instance, for accounts.spec.ts, machines.spec.ts, check-ins.spec.ts,
-// model-refresh.spec.ts and not-run.spec.ts: unseeded, with the scripted provider accounts and
-// sign-ins (docs/design/bots.md), so nothing they create reaches the seeded instance's checks, and
-// a paired machine (`--with-node`) for Settings, Machines and "Where a bot runs".
+// model-refresh.spec.ts, not-run.spec.ts and task-model.spec.ts: unseeded, with the scripted
+// provider accounts and sign-ins (docs/design/bots.md), so nothing they create reaches the
+// seeded instance's checks, and a paired machine (`--with-node`) for Settings, Machines and
+// "Where a bot runs".
 //
 // It is a worker fixture: the first of those specs a worker runs starts it, the others reuse it,
 // and it is reset when the worker ends. So only a runner whose list has one of them starts it. It

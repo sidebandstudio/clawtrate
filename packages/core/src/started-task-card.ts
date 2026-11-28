@@ -1,16 +1,18 @@
 // The "Started a task" card (F-587): each task a bot starts with the gateway's `sessions_spawn`
-// (`visible: true`), in the conversation it was started from. A typed view over that call's step
+// (`visible: true`), or on OpenClaw 2026.11.10 with `sessions_create`, in the conversation it was
+// started from. A typed view over that call's step
 // and the task list; nothing is kept. What the bot wrote, its label and its brief, is content,
 // cleaned and bounded like any title. Which task the card opens, and that it was started from
 // here, come only from the gateway's own fields: the call's result names the task
 // (`childSessionKey`), and the task list of this connection lists that task as started from this
 // conversation (`Task.startedBy.fromKey`).
 
+import { providerName } from "./accounts.ts";
 import { BOT_MESSAGE_TOOL, callArgs, resultBody, sendDetails } from "./cards.ts";
 import { cleanLine } from "./gateway-names.ts";
 import { asRecord, botIdFromSessionKey, REPORT_RUN_PREFIX } from "./mapping.ts";
 import { isOpenStep, type Run, type Step, type StepRaw } from "./runs.ts";
-import { START_TASK_TOOL } from "./start-tasks.ts";
+import { CREATE_TASK_TOOL, START_TASK_TOOL } from "./start-tasks.ts";
 import { MAX_TITLE_CHARS } from "./state-bounds.ts";
 import type { ClawtrateState, Task, TaskStatus, TranscriptItem } from "./types.ts";
 
@@ -80,8 +82,22 @@ export type StartedTaskCard = {
   /** What the card calls the task: its listed title, or the bot's label. */
   title: string | null;
   state: StartedTaskState;
-  /** The gateway's reason, as it gave it, when the start was refused or failed. */
+  /**
+   * The gateway's reason, as it gave it, when the start was refused or failed, or when a task it
+   * made never ran its first message (`firstRunFailed`).
+   */
   reason: string | null;
+  /**
+   * The gateway made the task but its first run didn't start (OpenClaw 2026.11.10's
+   * `sessions_create` answering `runStarted: false` with its `runError`): the card keeps the task
+   * and says the brief didn't run, with `reason`.
+   */
+  firstRunFailed: boolean;
+  /**
+   * The model the gateway's model allowlist refused the start for (`modelRefusal`), when that is
+   * the reason: the card says so in plain words instead of the gateway's.
+   */
+  refusedModel: RefusedModel | null;
   /** `result.status` exactly as sent. */
   resultStatus: string | null;
   /** The transcript item of the bot's report after the task ended (`REPORT_RUN_PREFIX`). */
@@ -90,6 +106,42 @@ export type StartedTaskCard = {
   endedAt: number | null;
   correction: number;
 };
+
+/** A model as the gateway names it, `<provider>/<model>`, split at its first slash. */
+export type RefusedModel = { provider: string; model: string };
+
+/**
+ * The model a refused start names, when the gateway refused it because its model allowlist
+ * (`modelPolicy.allow`) doesn't allow that model; null for any other reason. Read from the
+ * gateway's own words, on both versions (docs/research, #799):
+ * - a start with no `model`, whose task would run on the conversation's model:
+ *   `model not allowed: <provider/model>` (2026.10.6 and 2026.11.10);
+ * - a start naming a `model`: `sessions_spawn model "<asked>" is not usable: model not allowed:
+ *   <provider/model>`, to which 2026.11.10 adds `. Rejected by <list>. Add the model or its
+ *   provider wildcard to <list>, or choose an allowed model.`
+ */
+export function modelRefusal(error: string | null): RefusedModel | null {
+  // Checked before trimming, which would drop a leading or trailing U+FEFF and keep the rest.
+  if (UNSHOWABLE.test(error ?? "")) return null;
+  const text = error?.trim() ?? "";
+  // The model's name echoes what the bot asked for. One with a control or format character (a
+  // bidirectional override or isolate, a zero-width character) could be drawn as another name,
+  // and cleaning it would show a name the gateway didn't give: so it is no recognised refusal,
+  // and the card keeps the gateway's words, cleaned and quoted, as for any other. A text past the
+  // card's bound for those words is not read either.
+  if (text.length > MAX_REFUSAL_CHARS) return null;
+  const found = MODEL_REFUSAL.exec(text);
+  return found ? { provider: found[1]!, model: found[2]! } : null;
+}
+/** Control, format (bidirectional overrides and isolates, zero-width), private-use or unassigned. */
+const UNSHOWABLE = /\p{C}/u;
+const MODEL_REFUSAL =
+  /^(?:sessions_spawn model "[^"\r\n]*" is not usable: )?model not allowed: ([^\s/]+)\/(\S+?)(?:\. Rejected by \S+\. Add the model or its provider wildcard to \S+, or choose an allowed model\.)?$/;
+
+/** What the card says of a start refused for its model (`refusedModel`). */
+export function refusedModelLine(ref: RefusedModel): string {
+  return `This gateway doesn't allow tasks on ${providerName(ref.provider)}'s ${ref.model}.`;
+}
 
 export type StartedTaskInput = {
   runs: Run[];
@@ -125,21 +177,50 @@ function argsOf(step: Step, raw: StepRaw | null): Record<string, unknown> | null
  * it whole; a payload that could not be read, or was let go, then leaves the card what it knew.
  */
 function resultOf(step: Step, raw: StepRaw | null): Record<string, unknown> | null {
+  if (step.toolName === CREATE_TASK_TOOL) return createdOf(step, raw);
   const details = sendDetails(resultBody(raw));
+  if (details) return details;
+  const kept = keptResult(step);
+  return kept && str(kept.status) ? kept : null;
+}
+
+/** The tool's JSON object as the step keeps its result text, when it keeps all of it. */
+function keptResult(step: Step): Record<string, unknown> | null {
   // Kept whole by this app, and not cut by the gateway when it stored the row (`resultCut`).
-  if (
-    details ||
-    !step.result ||
-    step.resultCut === true ||
-    step.result.text.length < step.result.totalChars
-  )
-    return details;
+  if (!step.result || step.resultCut === true || step.result.text.length < step.result.totalChars)
+    return null;
+  return jsonObject(step.result.text);
+}
+
+function jsonObject(text: unknown): Record<string, unknown> | null {
+  if (typeof text !== "string") return null;
   try {
-    const kept = asRecord(JSON.parse(step.result.text));
-    return kept && !Array.isArray(kept) && str(kept.status) ? kept : null;
+    const parsed = asRecord(JSON.parse(text));
+    return parsed && !Array.isArray(parsed) ? parsed : null;
   } catch {
     return null;
   }
+}
+
+/**
+ * A `sessions_create` result read as a start's. A refusal is the gateway's `{status, tool, error}`,
+ * as `sessions_spawn`'s; a task it made is `{sessionKey, sessionId, runStarted, runId}`, with no
+ * status, whose `details` carry the same in the run's events and only `sessionKey` in history
+ * (its display projection; OpenClaw 2026.11.10): it reads as
+ * `{status: "accepted", childSessionKey}` with the rest of what the text says.
+ */
+function createdOf(step: Step, raw: StepRaw | null): Record<string, unknown> | null {
+  const body = resultBody(raw);
+  const blocks = Array.isArray(body?.content) ? body.content : [];
+  const texts = blocks.map((block) => asRecord(block)).filter((block) => block?.type === "text");
+  const fromText = texts.length === 1 ? jsonObject(texts[0]!.text) : null;
+  const details = asRecord(body?.details);
+  const result =
+    fromText || details ? { ...fromText, ...(details ?? {}) } : body ? null : keptResult(step);
+  if (!result) return null;
+  if (str(result.status)) return result;
+  const key = str(result.sessionKey);
+  return key ? { ...result, status: "accepted", childSessionKey: key } : null;
 }
 
 /** A hidden helper's key (`agent:<bot>:subagent:<id>`): the task list leaves it out. */
@@ -148,10 +229,14 @@ const HIDDEN_KEY = /^agent:[^:]+:subagent:/;
 /**
  * Whether a call is a task started for the person to see: the gateway's `sessions_spawn`, whose
  * result names a task outside the hidden helpers, or, before a result and for a refusal, whose
- * call asked for one (`visible: true`). A hidden helper stays a step line.
+ * call asked for one (`visible: true`); or 2026.11.10's `sessions_create`, which makes nothing
+ * else. A hidden helper stays a step line.
  */
 export function isTaskStart(step: Step, raw: StepRaw | null): boolean {
-  if (step.kind !== "tool" || step.toolName !== START_TASK_TOOL) return false;
+  if (step.kind !== "tool") return false;
+  // `sessions_create` makes only tasks the person sees.
+  if (step.toolName === CREATE_TASK_TOOL) return true;
+  if (step.toolName !== START_TASK_TOOL) return false;
   const details = resultOf(step, raw);
   const key = details?.status === "accepted" ? str(details.childSessionKey) : null;
   if (key) return !HIDDEN_KEY.test(key);
@@ -252,7 +337,12 @@ function reportCandidates(runs: Run[], rawOf: (step: Step) => StepRaw | null): s
   for (const run of runs) {
     for (const step of run.steps) {
       if (step.kind !== "tool") continue;
-      if (step.toolName !== START_TASK_TOOL && step.toolName !== BOT_MESSAGE_TOOL) continue;
+      if (
+        step.toolName !== START_TASK_TOOL &&
+        step.toolName !== CREATE_TASK_TOOL &&
+        step.toolName !== BOT_MESSAGE_TOOL
+      )
+        continue;
       const result = resultOf(step, rawOf(step));
       const key = str(result?.childSessionKey) ?? str(result?.sessionKey);
       const child = str(result?.runId);
@@ -276,17 +366,28 @@ function startedTaskCard(
   const taskKey = accepted ? str(details?.childSessionKey) : null;
   const childRun = accepted ? str(details?.runId) : null;
   const task = startedTaskOf(input.tasks, taskKey, input.taskKey);
+  // A task made whose first run didn't start (only `sessions_create` says so): `runStarted: false`
+  // with the gateway's `runError`. Without one it is a task made with no message, idle by design
+  // (`createSessionsCreateTool` adds `runError` only when a message was given).
+  const firstRunFailed =
+    accepted && details?.runStarted === false && str(details?.runError) !== null;
   const labelText = str(args?.label);
   const label = labelText ? cleanLine(labelText, MAX_TITLE_CHARS) || null : null;
   const hasResult = (raw?.result !== null && raw?.result !== undefined) || step.result !== null;
 
   let state: StartedTaskState;
   let reason: string | null = null;
+  let given: string | null = null;
   if (isOpenStep(step)) state = "starting";
-  else if (accepted) state = task ? FROM_STATUS[task.status] : "started";
-  else if (status === "forbidden" || status === "error") {
+  else if (accepted) {
+    state = task ? FROM_STATUS[task.status] : "started";
+    // Its brief never ran: failed, until its row says a run of its own (the person wrote in it).
+    if (firstRunFailed && (state === "started" || state === "idle")) state = "failed";
+    if (firstRunFailed) reason = str(details?.runError);
+  } else if (status === "forbidden" || status === "error") {
     state = "couldnt-start";
-    reason = str(details?.error) ?? step.error;
+    given = str(details?.error);
+    reason = given ?? step.error;
   } else if (hasResult && step.status === "failed") {
     // A result that is not the gateway's object (an exception's text): still a refusal, in its words.
     state = "couldnt-start";
@@ -300,13 +401,17 @@ function startedTaskCard(
     runId: run.id,
     agentId: (taskKey ? botIdFromSessionKey(taskKey) : null) ?? str(args?.agentId),
     label,
-    brief: firstLine(args?.task, MAX_BRIEF_LINE_CHARS),
+    // `sessions_create` calls the brief `message`.
+    brief: firstLine(args?.task ?? args?.message, MAX_BRIEF_LINE_CHARS),
     taskKey,
     task,
     // The listed title is the gateway's copy of a label a bot or person wrote: cleaned the same way.
     title: (task ? cleanLine(task.title, MAX_TITLE_CHARS) : "") || label,
     state,
     reason: reason === null ? null : cleanLine(reason, MAX_REFUSAL_CHARS) || null,
+    firstRunFailed,
+    // Only from the gateway's own result object, never an exception's text.
+    refusedModel: modelRefusal(given),
     resultStatus: status,
     reportedBack: reportOf(input.items, taskKey, childRun, candidates),
     requestedAt: step.startedAt,

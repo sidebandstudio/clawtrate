@@ -416,6 +416,8 @@ const TABLE: Record<string, ActionKind> = {
   session_status: "tasks",
   agents_list: "tasks",
   sessions_spawn: "helper",
+  // OpenClaw 2026.11.10's tool for a task a person asks for: a visible task, drawn as its card.
+  sessions_create: "helper",
   agents_wait: "helper",
   subagents: "helper",
   ask_user: "question",
@@ -1084,7 +1086,10 @@ const ADAPTERS: Partial<Record<ActionKind, Adapter>> = {
   },
   tasks: (c) => (carries(c) ? "done" : "made"),
   helper: (c) => {
-    if (c.name === "sessions_spawn") {
+    // A task `sessions_create` made says so with its key and no status (2026.11.10).
+    if (c.name === "sessions_create" && !c.details?.status && str(c.details?.sessionKey))
+      return "started";
+    if (c.name === "sessions_spawn" || c.name === "sessions_create") {
       const s = c.details?.status;
       return s === "accepted"
         ? "started"
@@ -1243,7 +1248,7 @@ export const DONE_EVIDENCE: Readonly<Record<ActionKind, { done: string; lesser: 
     lesser: 'Not run: `status: "forbidden"`. Failed: `status: "error"`',
   },
   helper: {
-    done: '`sessions_spawn`: Started on `status: "accepted"`; `subagents` list: a result that carries text or details',
+    done: '`sessions_spawn`: Started on `status: "accepted"`; `sessions_create`: Started on a `sessionKey` with no status; `subagents` list: a result that carries text or details',
     lesser:
       'Not run: `status: "forbidden"`. Failed: `status: "error"`. Call made: a wait, kill or steer',
   },
@@ -1713,7 +1718,7 @@ function wordsOf(call: ActionCall, kind: ActionKind, ctx: ReadingContext): Words
       }
       const label = str(a.label);
       return {
-        ...three(VERBS.startHelper, label || OBJECTS.aHelper, firstWords(a.task, 8)),
+        ...three(VERBS.startHelper, label || OBJECTS.aHelper, firstWords(a.task ?? a.message, 8)),
         run: [VERBS.startHelper[0], label || OBJECTS.aHelper],
         fail: [VERBS.startHelper[2], label || OBJECTS.aHelper],
         noun: [NOUNS.helper, label || NOUNS.forATask],
