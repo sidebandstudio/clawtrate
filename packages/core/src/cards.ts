@@ -42,6 +42,11 @@ export type InterSessionMessage = {
   senderLabel: string | null;
   senderAgentId: string | null;
   timestamp: number | null;
+  /**
+   * The run the gateway's row is keyed to (`<runId>:user`, with no run id of its own): the turn it
+   * started, shown by this row even when that turn wrote none of its own (#842).
+   */
+  runId?: string;
   /** Paths of fields cut to their bound. */
   cut?: string[];
 };
@@ -684,6 +689,11 @@ export function interSessionMessages(
     const itemId = `${str(meta.id) ?? `row-${index}`}:${index}`;
     if (briefs.has(itemId)) return;
     const senderSession = asRecord(row.senderSession) ?? asRecord(meta.senderSession);
+    // As `runsFromHistory` reads a turn's start: a row of the gateway's, not a user row.
+    const key =
+      row.role === "user" || str(meta.runId)
+        ? null
+        : (str(meta.idempotencyKey) ?? str(row.idempotencyKey));
     const content = row.content;
     const text =
       typeof content === "string"
@@ -702,6 +712,7 @@ export function interSessionMessages(
       senderLabel: str(row.senderLabel) ?? str(meta.senderLabel),
       senderAgentId: str(senderSession?.agentId),
       timestamp: typeof row.timestamp === "number" ? row.timestamp : null,
+      ...(key?.endsWith(":user") ? { runId: key.slice(0, -":user".length) } : {}),
     });
   });
   return out;

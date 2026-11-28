@@ -463,8 +463,10 @@ describe("the gateway's own turn after a Stop that stopped a recipient (#645)", 
     const { client, gateway } = opened;
     aborting(gateway);
     await stopTheExchange(opened);
-    const later = Date.now() + FOLLOW_UP_WAIT_MS + 1;
-    vi.spyOn(Date, "now").mockReturnValue(later);
+    // The wall clock set back meanwhile doesn't stretch the wait (#842).
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() - 10 * 60_000);
+    const clock = (globalThis as unknown as { performance: { now(): number } }).performance;
+    vi.spyOn(clock, "now").mockReturnValue(clock.now() + FOLLOW_UP_WAIT_MS + 1);
     await turnStarts(gateway, "run-f", [startedRow("run-f", fromPeer)]);
     await until(() => run(opened, "run-f") !== undefined);
     await sleep(50);
@@ -932,6 +934,127 @@ describe("the gateway's own turn: what the automated review found at 201f4b060 (
     await stopTheExchange(opened);
     await turnStarts(gateway, "run-f", [startedRow("run-f", fromPeer)]);
     await until(() => abortsOf(gateway).some((each) => each.runId === "run-f"));
+    client.stop();
+  });
+});
+
+describe("the gateway's own turn at the edges (#842)", () => {
+  /** The client reads the task's history, with no run in flight. */
+  async function read(gateway: FakeGateway, rows: unknown[]) {
+    const before = gateway.calls("chat.history").length;
+    gateway.handlers["chat.history"] = () => ({ messages: rows, hasMore: false });
+    gateway.emit("session.message", { sessionKey: KEY });
+    await until(() => gateway.calls("chat.history").length > before);
+    await sleep(30);
+  }
+
+  it.each([
+    ["missed", false],
+    ["seen live", true],
+  ])(
+    "#842: the gateway's turn that ended unread with no reply row is the awaited one by its row: the bot's own later message runs (its events %s)",
+    async (_, seen) => {
+      const opened = await openTask();
+      const { client, gateway } = opened;
+      aborting(gateway);
+      await stopTheExchange(opened);
+      // The model answered the gateway's note with nothing, and the turn ended before any read.
+      if (seen) {
+        gateway.emit("agent", {
+          ...agentEvent("run-f", 1, "lifecycle", { phase: "start" }),
+          ts: 1_500,
+        });
+        gateway.emit("agent", {
+          ...agentEvent("run-f", 2, "lifecycle", { phase: "end", status: "completed" }),
+          ts: 1_600,
+        });
+        await until(() => run(opened, "run-f")?.state === "completed");
+      }
+      await read(gateway, [startedRow("run-f", fromPeer)]);
+      // No run of its own keyed to its row.
+      expect(run(opened, "run-f")?.anchorKeyed).toBeUndefined();
+      // Then Marlow, asked again in its own task, messages this one.
+      await turnStarts(
+        gateway,
+        "run-m",
+        [startedRow("run-f", fromPeer), startedRow("run-m", fromPeer, "Here is the plan.")],
+        1_900,
+      );
+      await until(() => run(opened, "run-m") !== undefined);
+      await sleep(50);
+      expect(abortsOf(gateway).map((each) => each.runId)).toEqual(["run-s", "run-r"]);
+      client.stop();
+    },
+  );
+
+  it("#842: a turn the gateway gave no start time for is not placed after the Stop, and runs", async () => {
+    const opened = await openTask();
+    const { client, gateway } = opened;
+    aborting(gateway);
+    await stopTheExchange(opened);
+    // History only: no start event, and a snapshot without `startedAt`.
+    const before = gateway.calls("chat.history").length;
+    gateway.handlers["chat.history"] = () => ({
+      messages: [startedRow("run-f", fromPeer)],
+      inFlightRun: { runId: "run-f", status: "running", events: [] },
+      hasMore: false,
+    });
+    gateway.emit("session.message", { sessionKey: KEY });
+    await until(() => gateway.calls("chat.history").length > before);
+    await until(() => run(opened, "run-f")?.state === "running");
+    await sleep(50);
+    expect(run(opened, "run-f")!.reportedStartAt).toBeNull();
+    expect(abortsOf(gateway).map((each) => each.runId)).toEqual(["run-s", "run-r"]);
+    client.stop();
+  });
+
+  it("#842: the wall clock set forward doesn't end the wait: the gateway's turn is still stopped", async () => {
+    const opened = await openTask();
+    const { client, gateway } = opened;
+    aborting(gateway);
+    await stopTheExchange(opened);
+    vi.spyOn(Date, "now").mockReturnValue(Date.now() + FOLLOW_UP_WAIT_MS + 60_000);
+    await turnStarts(gateway, "run-f", [startedRow("run-f", fromPeer)]);
+    await until(() => abortsOf(gateway).some((each) => each.runId === "run-f"));
+    client.stop();
+  });
+
+  it("#842: a message the person sends while the wait is open is never stopped, before or after the gateway's unread turn", async () => {
+    const opened = await openTask();
+    const { client, gateway } = opened;
+    aborting(gateway);
+    await stopTheExchange(opened);
+    const mine = (id: string, text: string) => ({
+      role: "user",
+      content: [{ type: "text", text }],
+      timestamp: 2_000,
+      idempotencyKey: `${id}:user`,
+      __openclaw: { id: `row-${id}`, idempotencyKey: `${id}:user` },
+    });
+    gateway.handlers["chat.send"] = () => ({ runId: "run-mine", status: "started" });
+    client.sendMessage(KEY, "Go on with the plan.");
+    await until(() => gateway.calls("chat.send").length === 1);
+    const first = mine("run-mine", "Go on with the plan.");
+    await turnStarts(gateway, "run-mine", [first], 1_400);
+    await until(() => run(opened, "run-mine") !== undefined);
+    gateway.emit(
+      "agent",
+      agentEvent("run-mine", 80, "lifecycle", { phase: "end", status: "completed" }),
+    );
+    await until(() => run(opened, "run-mine")?.state === "completed");
+    await read(gateway, [first, startedRow("run-f", fromPeer)]);
+    gateway.handlers["chat.send"] = () => ({ runId: "run-mine-2", status: "started" });
+    client.sendMessage(KEY, "And check the tests.");
+    await until(() => gateway.calls("chat.send").length === 2);
+    await turnStarts(
+      gateway,
+      "run-mine-2",
+      [first, startedRow("run-f", fromPeer), mine("run-mine-2", "And check the tests.")],
+      1_900,
+    );
+    await until(() => run(opened, "run-mine-2") !== undefined);
+    await sleep(50);
+    expect(abortsOf(gateway).map((each) => each.runId)).toEqual(["run-s", "run-r"]);
     client.stop();
   });
 });

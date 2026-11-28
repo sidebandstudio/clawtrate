@@ -5328,7 +5328,7 @@ export class ClawtrateClient {
     recipientRunId: string,
     stoppedRunId: string,
   ): void {
-    const now = this.now();
+    const now = monotonic();
     // Expired waits, and waits of an earlier connection (a reconnect to the same address keeps
     // them), give way before the bound is checked: neither can stop anything any more.
     for (const [held, each] of this.followUps)
@@ -5351,22 +5351,25 @@ export class ClawtrateClient {
   /**
    * Stop the turn the gateway started by itself in `key` after a Stop of this client's (#645), as
    * that Stop would have: the person stopped the exchange, and that turn may redo it. It is found
-   * by what the gateway sends, never by its words: the first run of the task after the stopped
-   * one that was started by an inter-session message (its keyed row) from the stopped recipient's
-   * session through `sessions_send`, and not already another awaited turn. That run claims the
-   * wait whatever its state: one that ended before it was seen leaves a later message from that
-   * bot alone. It is stopped only while still active, and only on the gateway the wait was made
-   * on. Where the turn can't be told from a wanted one it runs: the gateway's relay of a reply,
-   * and its note for another send, have the same form, so nothing is stopped when the
-   * recipient's run is known to have finished well (the abort came too late: this is its reply),
-   * or when another send of this task to that session could be the one answered (`mayBeAnswer`).
-   * A claimed turn whose stop was withheld (no write access yet, or not yet the task's current
-   * run) is looked at again on later passes; its stop is asked once. A turn the person has
-   * steered is theirs, and runs (`steeredByPerson`).
+   * by what the gateway sends, never by its words: the first turn of the task that started after
+   * the stopped one, by the gateway's times, by an inter-session message (its keyed row) from the
+   * stopped recipient's session through `sessions_send`, and not already another awaited turn.
+   * That turn claims the wait whatever its state, even when only its row shows it: one that ended
+   * before it was seen leaves a later message from that bot alone. A turn without a gateway time
+   * to place it by claims nothing, so when it ends unread, a later timed turn of that bot's within
+   * the wait is taken for it and stopped (a limit, #842: the bot's turn, never the person's). It
+   * is stopped only while still active, and only on the gateway
+   * the wait was made on. Where the turn can't be told from a wanted one it runs: the gateway's
+   * relay of a reply, and its note for another send, have the same form, so nothing is stopped
+   * when the recipient's run is known to have finished well (the abort came too late: this is its
+   * reply), or when another send of this task to that session could be the one answered
+   * (`mayBeAnswer`). A claimed turn whose stop was withheld (no write access yet, or not yet the
+   * task's current run) is looked at again on later passes; its stop is asked once. A turn the
+   * person has steered is theirs, and runs (`steeredByPerson`).
    */
   private stopFollowUps(key: string, transcript: Transcript): void {
     if (this.followUps.size === 0) return;
-    const now = this.now();
+    const now = monotonic();
     const claimed = new Set<string>();
     for (const [held, expected] of this.followUps)
       if (held.startsWith(`${key}\u0000`) && expected.claimedBy) claimed.add(expected.claimedBy);
@@ -5385,20 +5388,32 @@ export class ClawtrateClient {
       let run: Run | undefined;
       if (expected.claimedBy) run = findRun(transcript, expected.claimedBy);
       else {
-        const stopped = findRun(transcript, expected.stopped);
-        run = transcript.runs.find(
-          (each) =>
-            each.id !== expected.stopped &&
-            !claimed.has(each.id) &&
-            startedAfter(each, stopped) &&
-            startedBySend(transcript, each, sessionKey),
-        );
-        if (!run) continue;
-        this.followUps.set(held, { ...expected, claimedBy: run.id });
-        claimed.add(run.id);
+        const from = findRun(transcript, expected.stopped)?.reportedStartAt ?? null;
+        // Found by its keyed row, in the task's order: a turn that ended before it was read, with
+        // no reply row, is no run, and only that row shows it (#842).
+        const row = transcript.interSession.find((message) => {
+          if (
+            !message.runId ||
+            message.runId === expected.stopped ||
+            claimed.has(message.runId) ||
+            message.sourceTool !== BOT_MESSAGE_TOOL ||
+            message.sourceSessionKey !== sessionKey
+          )
+            return false;
+          const each = findRun(transcript, message.runId);
+          // With no run, the row's own time is the only one the gateway gave for that turn.
+          const at = each ? each.reportedStartAt : message.timestamp;
+          return at !== null && from !== null && at > from;
+        });
+        if (!row?.runId) continue;
+        this.followUps.set(held, { ...expected, claimedBy: row.runId });
+        claimed.add(row.runId);
+        run = findRun(transcript, row.runId);
       }
       if (!run || !isActive(run.state) || run.state === "stopping" || run.stopRequestedAt !== null)
         continue;
+      // Stopped only as the run its row started, so `steeredByPerson` reads what came after it.
+      if (!startedBySend(transcript, run, sessionKey)) continue;
       if (transcript.linkedRuns[recipientRunId]?.state === "completed") continue;
       if (steeredByPerson(transcript, run)) continue;
       if (this.mayBeAnswer(transcript, key, sessionKey, recipientRunId, run)) continue;
@@ -13165,11 +13180,18 @@ export function hostLimit(value: number | undefined, max: number, name: string):
   return value;
 }
 
+/**
+ * The clock a follow-up's wait is counted on. The gateway gives no time for when the wait opens,
+ * and a wall clock set forward or back would cut or stretch it (#842). Every host has
+ * `performance.now()`, though React Native's types don't declare it.
+ */
+const monotonic = () => (globalThis as { performance?: { now(): number } }).performance!.now();
+
 /** A turn the gateway owes a task after a Stop of this client's stopped a recipient (#645). */
 type FollowUp = {
   /** The task's run whose Stop stopped the recipient. */
   stopped: string;
-  /** When the wait ends, by this client's clock. */
+  /** When the wait ends, by `monotonic()`. */
   until: number;
   /** The run found to be that turn, once found. */
   claimedBy: string | null;
@@ -13192,17 +13214,6 @@ function steeredByPerson(transcript: Transcript, run: Run): boolean {
   if (Object.values(transcript.steerAliases).includes(run.id)) return true;
   const at = transcript.items.findIndex((item) => item.id === run.anchorItemId);
   return at >= 0 && transcript.items.slice(at + 1).some((item) => item.role === "user");
-}
-
-/**
- * `run` started after `stopped`, by the gateway's own start times (one task's turns run one after
- * another). Without both times, only a run still going and not being stopped counts (#645).
- */
-function startedAfter(run: Run, stopped: Run | undefined): boolean {
-  const at = run.reportedStartAt;
-  const from = stopped?.reportedStartAt ?? null;
-  if (at !== null && from !== null) return at > from;
-  return isActive(run.state) && run.state !== "stopping" && run.stopRequestedAt === null;
 }
 
 /**
