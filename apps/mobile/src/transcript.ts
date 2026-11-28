@@ -1,5 +1,6 @@
 // What a task's chat shows, from its transcript: the task's title first, the
-// centred stamps, your messages with the files they carried, the bot's, and each
+// centred stamps, your messages with the files they carried, the bot's with the
+// files it handed over under the row that carried them, and each
 // of the bot's actions as one line in the engine's own words (`lineOf`, `foldLineOf`, grouped by
 // `groupFeed` as the desktop groups them). Reasoning stays folded away, as the
 // design says; it is not drawn here. A run that is going on shows its streaming
@@ -16,6 +17,7 @@ import {
   lineOf,
   readingContextOf,
   type FeedEntry,
+  type ChatFile,
   type Run,
   type SentAttachment,
   type Step,
@@ -41,6 +43,8 @@ export type ChatRow =
       files: readonly SentAttachment[];
     }
   | { kind: "bot"; id: string; text: string }
+  /** The files a bot handed over that aren't pictures, under the message that carried them (F-115). */
+  | { kind: "files"; id: string; files: readonly ChatFile[] }
   | {
       kind: "action";
       id: string;
@@ -63,7 +67,8 @@ export type ChatRow =
 /** How the connection stands, for what a run is said to be doing. */
 export type Link = { connected: boolean; closed: boolean };
 
-type Ref = { text: string };
+/** A bubble's text, and the gateway's id of the row it came from: its files go under it. */
+type Ref = { text: string; messageId?: string | undefined };
 
 /** Every tool step of the task's runs, by tool call id: history's block reads better with it. */
 function stepIndex(runs: Run[]): Map<string, { step: Step; run: Run }> {
@@ -83,7 +88,11 @@ function entriesOf(
   item.blocks.forEach((block, i) => {
     if (block.kind === "text") {
       if (block.text.trim())
-        entries.push({ type: "bubble", id: `${item.id}:t${i}`, ref: { text: block.text } });
+        entries.push({
+          type: "bubble",
+          id: `${item.id}:t${i}`,
+          ref: { text: block.text, messageId: block.messageId },
+        });
     } else if (block.kind === "reasoning") {
       entries.push({
         type: "reasoning",
@@ -147,6 +156,28 @@ function noteRow(item: TranscriptItem): ChatRow[] {
   return text ? [{ kind: "note", id: `shortened:${item.id}`, text }] : [];
 }
 
+/** A bot's turn with each of its files under the bubble of the row that carried it, the rest at its end. */
+function placeFiles(
+  item: TranscriptItem,
+  turn: readonly ChatRow[],
+  rowOf: ReadonlyMap<string, number>,
+): ChatRow[] {
+  // By the place in the turn each goes after; `turn.length` is its end.
+  const under = new Map<number, ChatFile[]>();
+  for (const file of item.files ?? []) {
+    const at =
+      (file.messageId === undefined ? undefined : rowOf.get(file.messageId)) ?? turn.length;
+    under.set(at, [...(under.get(at) ?? []), file]);
+  }
+  const placed: ChatRow[] = [];
+  for (let at = 0; at <= turn.length; at += 1) {
+    if (at < turn.length) placed.push(turn[at]!);
+    const files = under.get(at);
+    if (files) placed.push({ kind: "files", id: `files:${item.id}:${at}`, files });
+  }
+  return placed;
+}
+
 export function chatRows(
   task: Task,
   transcript: Transcript,
@@ -191,11 +222,17 @@ export function chatRows(
       rows.push(...noteRow(item));
       continue;
     }
+    // Each file goes under the last bubble of the row that carried it, as on the desktop
+    // (`placeFiles`); the rest go under the turn.
+    const turn: ChatRow[] = [];
+    const rowOf = new Map<string, number>();
     for (const group of groupFeed(entriesOf(item, index), ctx)) {
-      if (group.type === "bubble") rows.push({ kind: "bot", id: group.key, text: group.ref.text });
-      else if (group.type === "action") {
+      if (group.type === "bubble") {
+        if (group.ref.messageId) rowOf.set(group.ref.messageId, turn.length);
+        turn.push({ kind: "bot", id: group.key, text: group.ref.text });
+      } else if (group.type === "action") {
         const line = lineOf(group.call, ctx);
-        rows.push({
+        turn.push({
           kind: "action",
           id: group.key,
           text: line.title,
@@ -207,7 +244,7 @@ export function chatRows(
           group.members.map((member) => member.call),
           ctx,
         );
-        rows.push({
+        turn.push({
           kind: "action",
           id: group.key,
           text: line.title,
@@ -216,6 +253,7 @@ export function chatRows(
         });
       }
     }
+    rows.push(...placeFiles(item, turn, rowOf));
     rows.push(...noteRow(item));
   }
   const active = activeRun(transcript);
