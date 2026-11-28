@@ -1671,6 +1671,22 @@ describe("a plan as the gateway answered it", () => {
       "Clearing the plan",
     );
   });
+  it("F-615: an MCP App's view id is kept whole however large the rest of the details are", () => {
+    const viewId = "v".repeat(128);
+    const big = "x".repeat(1_000);
+    const kept = projectDetails({
+      mcpAppPreview: { mcpApp: { serverName: "coder", toolName: "show_board", viewId } },
+      // Enough kept fields that only the 96-character attempt fits.
+      ...Object.fromEntries(
+        ["title", "message", "text", "error", "warning", "outcome", "result", "content"].map(
+          (key) => [key, big],
+        ),
+      ),
+    });
+    expect(kept?.mcpApp).toEqual({ serverName: "coder", toolName: "show_board", viewId });
+    expect(JSON.stringify(kept).length).toBeLessThanOrEqual(MAX_ACTION_FACTS_CHARS);
+  });
+
   it("the projection keeps the revision and the step counts", () => {
     const kept = projectDetails({ revision: 4, steps: { completed: 1, total: 2 } });
     expect(kept).toMatchObject({ revision: 4, steps: { completed: 1, total: 2 } });

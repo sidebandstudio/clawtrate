@@ -2570,10 +2570,14 @@ function prune(value: unknown, chars: number, items: number, depth: number): unk
   return out;
 }
 
-function fit(value: Rec, attempts: Array<[number, number, number]>): Rec | null {
+function fit(
+  value: Rec,
+  attempts: Array<[number, number, number]>,
+  max = MAX_ACTION_FACTS_CHARS,
+): Rec | null {
   for (const [chars, items, depth] of attempts) {
     const pruned = prune(value, chars, items, depth) as Rec;
-    if (JSON.stringify(pruned).length <= MAX_ACTION_FACTS_CHARS) return pruned;
+    if (JSON.stringify(pruned).length <= max) return pruned;
   }
   return null;
 }
@@ -2639,7 +2643,6 @@ export function projectDetails(details: unknown): Rec | null {
     kept.diff = d.diff.slice(0, 600);
   }
   const app = mcpAppOf(d);
-  if (app) kept.mcpApp = app;
   if (Array.isArray(d.results))
     kept.results = d.results.map((r) => {
       const each = rec(r);
@@ -2647,12 +2650,20 @@ export function projectDetails(details: unknown): Rec | null {
         ? { title: each.title, url: each.url, path: each.path, snippet: each.snippet }
         : r;
     });
-  return fit(kept, [
-    [256, 24, 4],
-    [96, 12, 3],
-    [48, 8, 2],
-    [24, 4, 2],
-  ]);
+  // The app's marker is bounded already and is never cut: a view id is whole or absent. The rest
+  // is fitted into the room it leaves.
+  const room = app ? MAX_ACTION_FACTS_CHARS - JSON.stringify({ mcpApp: app }).length : undefined;
+  const fitted = fit(
+    kept,
+    [
+      [256, 24, 4],
+      [96, 12, 3],
+      [48, 8, 2],
+      [24, 4, 2],
+    ],
+    room,
+  );
+  return app ? { ...fitted, mcpApp: app } : fitted;
 }
 
 // The readable view ---------------------------------------------------------------------
