@@ -6,30 +6,63 @@
 
 Your OpenClaw agents, orchestrated.
 
-Clawtrate is a desktop and iOS app for [OpenClaw](https://github.com/openclaw/openclaw). It connects to a gateway you already run and puts your bots in a sidebar, with tasks under each bot, the conversation in the middle and the bot's work beside it. Each thing a bot does shows up as a short card in plain words, and the raw tool call is one click further.
+Clawtrate is a free, open-source desktop app for [OpenClaw](https://github.com/openclaw/openclaw). It connects to a gateway you already run and puts your bots in a sidebar, with tasks under each bot, the conversation in the middle and the bot's work beside it. A run's actions sit behind one line under the reply and open to plain-words cards, while approvals, questions and messages to other bots stay in view.
 
 Clawtrate is an independent project and is not affiliated with OpenClaw.
 
-> [!NOTE]
-> Clawtrate is in early development and has no release yet. The desktop app works against a development gateway, and the iOS app is not on `main` yet.
+## Install the Mac beta
+
+Clawtrate is in beta on macOS 13 or later, for Apple silicon and Intel. Builds are signed with a Developer ID and notarized by Apple. Download it from [clawtrate.dev](https://clawtrate.dev), or install from Terminal:
+
+```bash
+brew install --cask sidebandstudio/tap/clawtrate
+```
+
+Or use the installer script:
+
+```bash
+curl -fsSL https://clawtrate.dev/install.sh | sh
+```
+
+This beta connects to an OpenClaw gateway you already run. Choose **Advanced**, enter your gateway's address and token, and approve the device if the gateway asks. If you are new to OpenClaw, [install OpenClaw](https://docs.openclaw.ai/install) first. You bring your own gateway and model provider. In Settings, check for Beta updates to download verified builds and restart into them.
+
+Windows builds are not published yet. The iPhone app is in development in `apps/mobile` and has no release yet.
 
 ## What works today
 
-- Pair with a gateway as a new device and see every bot, with its picture, its latest activity and what is unread.
-- Start, rename, pin, archive and delete tasks under each bot, and arrange the sidebar in sections.
-- Send messages, watch the reply stream in, and stop a run.
-- Read what a bot did as plain-words cards, and answer its approvals and questions in place.
-- See messages between bots, and calls to T3 Code, as cards you can open.
+- Connect to an OpenClaw gateway you already run, through Advanced with its address and token.
+- See your bots with their avatars and unread activity.
+- Start, rename, pin, archive and delete tasks under each bot.
+- Send messages, watch replies stream in, and ask the gateway to steer or stop a run.
+- Open a run's actions from one line under the reply as plain-words cards, while approvals, questions and messages to other bots stay in view. Turn on commands and raw calls in Settings, Advanced.
+- Answer approvals and questions in place.
+- Read cards for bot-to-bot messages and for T3 Code calls that the gateway reports.
 - Browse a task's files in the Work pane beside the conversation.
-- Create a bot on the provider account you pick. Sign-ins stay on the gateway, and Clawtrate never sees the credentials.
-- Watch a gateway without being able to change anything, in read-only mode.
-- Run the same interface as a desktop app on macOS and Windows, or in a browser through the web preview host.
+- Create a bot on an available provider account. Sign-ins stay on the gateway, and Clawtrate never sees the credentials.
+- Read and edit a bot's root memory.
+- Track per-bot usage with weekly budget warnings.
+- View, create, edit, pause and run routines, with run history and a week calendar.
+- Choose where each bot runs commands.
+- Watch a gateway in read-only mode.
+- Run the same interface from a checkout as a desktop app on macOS and Windows, or in a browser through the web preview host.
+
+Some actions need a permission on the gateway or a plugin.
 
 ## Where it is going
 
-The next big piece is fine-grained control over each bot: its model and reasoning effort, which tools it may use and when it has to ask, its memory, and which machine it works on. After that come a live view of a bot's browser that you can take over, and the iOS app. The plan is in [docs/roadmap.md](docs/roadmap.md), and every part of it has an issue.
+Work in progress, not yet in the beta:
 
-## Try it
+- Built-in OpenClaw setup, and pairing with OpenClaw on the same Mac without typing a token.
+- Connecting to another computer over SSH in read-only mode.
+- Per-bot tool permissions (allow, ask or never).
+- A model and reasoning effort for each bot and each task.
+- Watching a bot's browser and taking control. Its plugin only runs on development gateways so far.
+- The iPhone app.
+- Plans for notifications, search and voice.
+
+The plan is in [docs/roadmap.md](docs/roadmap.md), and every part of it has an issue.
+
+## Run from a checkout
 
 You need Node.js 26, pnpm 11 and the OpenClaw CLI, version 2026.10.6.
 
