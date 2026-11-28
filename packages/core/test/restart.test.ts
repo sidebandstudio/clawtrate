@@ -183,6 +183,39 @@ describe("the wait for a restart (#913)", () => {
     client.stop();
   });
 
+  it("covers a gateway silent for over a minute while it closes its skill watchers, its closed port and one reconnect gap", () => {
+    // Measured on OpenClaw 2026.10.6 on macOS (#914): the watcher step up to 104 s with the event
+    // loop blocked, the port closed up to 16 s, and the client's longest reconnect gap 30 s.
+    expect(RESTART_WAIT_MS).toBeGreaterThanOrEqual(104_000 + 16_000 + 30_000);
+  });
+
+  it("holds through a gateway that answers nothing after its announcement, then closes late, until it is back", async () => {
+    const gateway = grantingGateway();
+    // The stand-in for a blocked event loop: the gateway's answers are held back.
+    const held = deferred<unknown>();
+    gateway.handlers["status"] = () => held.promise;
+    const { client } = await openTask({ gateway, client: { restartWaitMs: 3_000 } });
+    gateway.emit("shutdown", RESTARTING);
+    await until(() => restartOf(client) !== null);
+    const first = restartOf(client)!;
+    const asked = write(client, "status").catch(() => null);
+    // Silent, still connected, for a good part of the wait: still restarting.
+    await sleep(800);
+    expect(client.state.connection.status).toBe("connected");
+    expect(restartOf(client)).toEqual(first);
+    // The late close, a port shut for a while, then back.
+    gateway.refuseConnections = true;
+    gateway.dropAll();
+    await until(() => client.state.connection.status === "reconnecting");
+    await sleep(300);
+    expect(restartOf(client)).toEqual(first);
+    gateway.refuseConnections = false;
+    await until(() => client.state.connection.status === "connected");
+    expect(restartOf(client)).toBeNull();
+    await asked;
+    client.stop();
+  });
+
   it("a second announcement on the same connection doesn't extend it; a restart after the gateway is back starts its own", async () => {
     let clock = 5_000_000;
     const gateway = grantingGateway();
