@@ -1430,6 +1430,10 @@ describe("a pending call when the gateway comes to deny a group that holds its t
     ["automations", "cron"],
     ["coder__deploy", "group:plugins"],
     ["coder__deploy", "bundle-mcp"],
+    // A catalogued tool a plugin registers (memory-core's memory_search): the gateway expands
+    // group:plugins by owner, and the hook is not told the owner.
+    ["memory_search", "group:plugins"],
+    ["code_execution", "group:plugins"],
     // The names both versions read a deny entry as: a renamed tool, an alias, a family.
     ["progress_card", "update_plan"],
     ["dispatch_action", "tool_call"],

@@ -158,6 +158,21 @@ const CORE_TOOLS = new Set(Object.values(GROUPS).flat());
  */
 const PLUGIN_GROUPS = new Set(["group:plugins", "bundle-mcp"]);
 /**
+ * Catalogued tools a bundled plugin registers, in either version (each plugin
+ * manifest's `contracts.tools` in `dist/extensions`): the gateway expands
+ * `group:plugins` by the tool's owner (`expandPluginGroups`, from each tool's
+ * plugin), and the hook is not told the owner, so these count as covered too.
+ */
+const PLUGIN_CATALOGUED = new Set([
+  "browser",
+  "canvas",
+  "code_execution",
+  "memory_get",
+  "memory_search",
+  "skill_workshop",
+  "x_search",
+]);
+/**
  * The names a deny or allow entry is read as, in both versions: their tool-name aliases
  * (`TOOL_NAME_ALIASES`; `tool_call` is 2026.11.10's) and a shipped tool's rename
  * (`SHIPPED_CORE_POLICY_RENAMES`, `update_plan` to `progress_card`).
@@ -185,6 +200,7 @@ function covers(entry, tool) {
   if (groupOf(name)?.includes(tool)) return true;
   if (FAMILIES.get(name)?.includes(tool)) return true;
   if (PLUGIN_GROUPS.has(name) && !CORE_TOOLS.has(tool)) return true;
+  if (name === "group:plugins" && PLUGIN_CATALOGUED.has(tool)) return true;
   if (name.includes("*")) {
     const pattern = new RegExp(
       `^${name
