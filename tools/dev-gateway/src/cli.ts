@@ -3388,7 +3388,8 @@ export async function restartGateway(inst: DevInstance, account?: string): Promi
   if (saving) {
     const store = "bot" in saving.store ? saving.store.bot : "main";
     const problems = accountStoreProblems(inst.stateDir, readConfigForLock(inst), store);
-    if (problems.length > 0) throw new Error(`refusing to save ${saving.id}: ${problems.join("; ")}`);
+    if (problems.length > 0)
+      throw new Error(`refusing to save ${saving.id}: ${problems.join("; ")}`);
   }
   if (!(await gatewayHealthy(inst))) throw new Error(`${label(inst)} is not running`);
   await withGatewayStopped(inst, async () => {
