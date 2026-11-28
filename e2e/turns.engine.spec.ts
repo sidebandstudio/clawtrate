@@ -12,10 +12,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ClawtrateClient } from "../packages/core/src/client.ts";
 import { replyRow, runningRunId, textPlaced } from "../packages/core/src/runs.ts";
-import type { WebSocketFactory, WebSocketLike } from "../packages/core/src/host.ts";
 import { createNodeHost } from "../packages/core/src/node/index.ts";
+import { HOLD_PATH } from "../tools/dev-gateway/src/fake-provider.ts";
 import {
   instanceForm,
+  instancePorts,
   openInstance,
   openOperator,
   readDevConnection,
@@ -27,50 +28,15 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 type Engine = { client: ClawtrateClient; close: () => Promise<void> };
 
-/**
- * Sockets that tell `seen` of every event frame the client takes in, right after the client has
- * it, in their order: a check can act at a moment of the gateway's own sending.
- */
-function watching(create: WebSocketFactory, seen: (frame: unknown) => void): WebSocketFactory {
-  return (url) => {
-    const socket = create(url);
-    const wrapper: WebSocketLike = {
-      get readyState() {
-        return socket.readyState;
-      },
-      send: (data) => socket.send(data),
-      close: (code, reason) => socket.close(code, reason),
-      onopen: null,
-      onmessage: null,
-      onclose: null,
-      onerror: null,
-    };
-    socket.onopen = (event) => wrapper.onopen?.(event);
-    socket.onclose = (event) => wrapper.onclose?.(event);
-    socket.onerror = (event) => wrapper.onerror?.(event);
-    socket.onmessage = (event) => {
-      wrapper.onmessage?.(event);
-      if (typeof event.data === "string") seen(JSON.parse(event.data));
-    };
-    return wrapper;
-  };
-}
-
 /** A client paired with this run's instance, with write access. */
-async function engine(
-  name: string,
-  options: { seen?: (frame: unknown) => void } = {},
-): Promise<Engine> {
+async function engine(name: string): Promise<Engine> {
   const inst = openInstance(INSTANCE);
   const connection = readDevConnection(inst.connectionFile)!;
   const dataDir = mkdtempSync(join(tmpdir(), "clawtrate-e2e-engine-"));
-  const node = createNodeHost({
+  const host = createNodeHost({
     dataDir,
     client: { displayName: `Clawtrate ${name}`, version: "0.0.0", platform: process.platform },
   });
-  const host = options.seen
-    ? { ...node, createWebSocket: watching(node.createWebSocket, options.seen) }
-    : node;
   const client = new ClawtrateClient(host, {});
   await client.start();
   await client.connect({ url: connection.url, token: connection.token });
@@ -145,6 +111,34 @@ async function gatewayIdle(op: OperatorSession, key: string): Promise<boolean> {
 }
 
 const runs = (client: ClawtrateClient, key: string) => client.state.transcripts[key]?.runs ?? [];
+
+/** The scripted model's holds on a task's replies (`ReplyHolds` in the development tool). */
+function replyHolds() {
+  const url = `http://127.0.0.1:${instancePorts(openInstance(INSTANCE)).providerPort}${HOLD_PATH}`;
+  return {
+    post: async (session: string, action: "hold" | "next" | "release") => {
+      const response = await fetch(url, {
+        method: "POST",
+        body: JSON.stringify({ session, action }),
+      });
+      if (!response.ok)
+        throw new Error(`hold ${action}: ${response.status} ${await response.text()}`);
+    },
+    /** Until the task's `n`th reply since the hold waits before its end. */
+    reached: (session: string, n: number) =>
+      expect
+        .poll(
+          async () => {
+            const state = (await (
+              await fetch(`${url}?session=${encodeURIComponent(session)}`)
+            ).json()) as { reached: number; waiting: number };
+            return state.waiting > 0 ? state.reached : 0;
+          },
+          { message: `the task's reply ${n} waits before its end`, timeout: 60_000 },
+        )
+        .toBe(n),
+  };
+}
 
 let op: OperatorSession;
 test.beforeAll(async () => {
@@ -286,62 +280,61 @@ function heldReplies(client: ClawtrateClient, key: () => string) {
 }
 
 test("#872: while a run still draws its reply, history's row of that reply is known as the reply's", async () => {
-  test.setTimeout(240_000);
-  // The gateway writes the answer's row 30 to 60 ms before the run's end, and the app reads
-  // history 150 ms after it hears of a row: the read lands in between only on a loaded machine,
-  // where F-551 met it. Here history is read again the moment the answer's row is announced, on a
-  // new task each time, until a read has landed in between (a history read that comes after the
-  // end ends the run itself, so nothing on this side can hold that moment open).
+  test.setTimeout(180_000);
+  // The gateway writes the answer's row when its message ends and ends the run right after: a
+  // moment of 30 to 60 ms on 2026.10.6, often over before a read can land on 2026.11.10 and later,
+  // where the row is announced and history read through the task's session actor. So the check
+  // holds that moment open. The scripted model holds each reply in the task before its end until
+  // the check lets it end, and a steer the gateway keeps for the answer's end makes the run ask
+  // the model once more: that reply stays held, with the answer's row written, while history is
+  // read.
+  const { client, close } = await engine("reply drawn once check");
   let key = "";
-  let client: ClawtrateClient | null = null;
-  const { client: engineClient, close } = await engine("reply drawn once check", {
-    seen: (frame) => {
-      // The answer's own row: the bot's, with text and no call (the call's row comes first).
-      const f = frame as {
-        event?: string;
-        payload?: { sessionKey?: string; message?: { role?: string; content?: unknown } };
-      };
-      const message = f.payload?.message;
-      const parts = Array.isArray(message?.content)
-        ? (message.content as Array<{ type?: string }>)
-        : [];
-      if (
-        f.event === "session.message" &&
-        f.payload?.sessionKey === key &&
-        message?.role === "assistant" &&
-        parts.some((part) => part.type === "text") &&
-        !parts.some((part) => part.type === "toolCall")
-      )
-        client?.reloadSession(key);
-    },
-  });
-  client = engineClient;
-  const { held, stop } = heldReplies(engineClient, () => key);
-  const TRIES = 12;
-  let tries = 0;
+  const { held, stop } = heldReplies(client, () => key);
+  const hold = replyHolds();
   try {
-    while (tries < TRIES && held.length === 0) {
-      tries += 1;
-      key = await openNewTask(engineClient, `reply-once-${tries}`);
-      // The scripted model thinks, its call fails, and it answers in a message of its own: F-551's run.
-      engineClient.sendMessage(key, "Look for my old notes. #think #tool-fail");
-      await expect
-        .poll(() => runs(engineClient, key)[0]?.state, { timeout: 60_000 })
-        .toBe("completed");
-      await expect.poll(() => gatewayIdle(op, key), { timeout: 15_000 }).toBe(true);
-      // Within the client's bound of open tasks.
-      if (held.length === 0) engineClient.closeSession(key);
-    }
-    console.log(`#872: the read landed between the answer's row and the run's end on try ${tries}`);
-    // The moment happened, and in every state of it the row was the reply's. Both versions write
-    // the answer's row at its message's end, when the provider's stream is done, and end the run
-    // right after unless a steer waits (OpenClaw's agent loop): no fixture holds that moment open.
+    key = await openNewTask(client, "reply-once");
+    await hold.post(key, "hold");
+    // The scripted model thinks, writes beside a call that fails, and answers in a message of its
+    // own: F-551's run.
+    const id = client.sendMessage(key, "Look for my old notes. #think #tool-fail");
+    await hold.reached(key, 1);
+    await hold.post(key, "next");
+    // The answer has streamed and waits before its end: its row is not written yet.
+    await hold.reached(key, 2);
+    await expect
+      .poll(() => runs(client, key).find((run) => run.id === id)?.text ?? "")
+      .toContain("That file does not exist");
+    const steer = client.sendMessage(key, "Then run the slow tool. #slow-tool 1");
+    await expect
+      .poll(async () => (await gatewayWork(op, key)).pending.map(([runId]) => runId), {
+        timeout: 30_000,
+      })
+      .toContain(steer);
+    await hold.post(key, "next");
+    // The answer's message ends and its row is written; the steer joins the run at that end, and
+    // the model's next reply (reasoning and a call, no text) waits before its end. Until the check
+    // lets it go, the run still draws the answer, and history holds the answer's row.
+    await hold.reached(key, 3);
     expect(
-      held.length,
-      `no history read landed in the 30 to 60 ms between the answer's row and the run's end in ${TRIES} tries`,
-    ).toBeGreaterThan(0);
+      runs(client, key).find((run) => run.id === id)?.state,
+      "the steer joined the answer's run",
+    ).toBe("running");
+    client.reloadSession(key);
+    await expect
+      .poll(() => held.length, {
+        message: "history held the answer's row while the run still drew it",
+        timeout: 30_000,
+      })
+      .toBeGreaterThan(0);
     expect(held.filter((row) => row !== null)).toEqual([]);
+    await hold.post(key, "release");
+    await expect
+      .poll(() => runs(client, key).find((run) => run.id === id)?.state, { timeout: 60_000 })
+      .toBe("completed");
+    await expect.poll(() => gatewayIdle(op, key), { timeout: 15_000 }).toBe(true);
   } finally {
+    if (key) await hold.post(key, "release");
     stop();
     await close();
   }
