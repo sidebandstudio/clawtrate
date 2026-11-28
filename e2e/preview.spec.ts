@@ -1986,7 +1986,14 @@ test("F-071: / lists a skill the person saved to their own library, as theirs, i
     await composer(page).click();
     await page.keyboard.type("/");
     await expect(rows.first()).toBeVisible({ timeout: 30_000 });
-    await expect(listed(rows)).toHaveCount(0);
+    // Offered only to attach first (the next check covers choosing it): the task doesn't have it.
+    await expect(listed(rows)).toHaveCount(1);
+    const library = (await person.request("skills.library.list", { sessionKey: before.key })) as {
+      session: { selections: Array<{ skillId: string }> };
+    };
+    expect(library.session.selections.map((each) => each.skillId)).not.toContain(
+      saved.entry.skillId,
+    );
     await page.keyboard.press("Escape");
     await composer(page).fill("");
 
@@ -2015,6 +2022,82 @@ test("F-071: / lists a skill the person saved to their own library, as theirs, i
     const reply = JSON.stringify(history.messages.filter((row) => row.role === "assistant"));
     expect(reply).toContain("Use the following explicitly referenced skills");
     expect(reply).toContain(command);
+  } finally {
+    try {
+      if (saved)
+        await person.request("skills.library.mutate", {
+          skillId: saved.entry.skillId,
+          expectedRevision: saved.entry.revision,
+          action: "remove",
+        });
+    } finally {
+      await person.close();
+    }
+  }
+});
+
+test("F-071: a skill the person saves while a task is open is offered by / in that task; choosing it attaches it, the bot has it, and Undo takes it off", async ({
+  page,
+}) => {
+  // Paired as the person before the page opens, as the check above is.
+  const person = await openOperator(
+    openInstance(INSTANCE),
+    "Clawtrate skill attach check",
+    ["operator.read", "operator.write"],
+    [],
+  );
+  await openShell(page);
+  const slug = `moon-phase-${randomBytes(3).toString("hex")}`;
+  let saved: { entry: { skillId: string; name: string; revision: string } } | null = null;
+  type Library = { session: { selections: Array<{ skillId: string }> } };
+  const selected = async (key: string) =>
+    (
+      (await person.request("skills.library.list", { sessionKey: key })) as Library
+    ).session.selections.map((each) => each.skillId);
+  try {
+    const { key, title } = newTaskName("otto", "Attach a skill");
+    await person.request("sessions.create", { key, agentId: "otto", label: title });
+    await openNewTask(page, "Otto", title);
+    saved = (await person.request("skills.library.save", {
+      expectedRevision: null,
+      slug,
+      content: `---\nname: ${slug}\ndescription: Use when someone asks about tonight's moon.\n---\n\nGive tonight's moon phase and when it rises.\n`,
+    })) as { entry: { skillId: string; name: string; revision: string } };
+    const { skillId, name: command } = saved.entry;
+    // Saved while the task was open: the gateway hasn't given the task the skill.
+    expect(await selected(key)).not.toContain(skillId);
+    const rows = page.getByRole("listbox", { name: "Skills and commands" }).getByRole("option");
+    const listed = rows.and(page.locator(`[data-name="${slug}"]`));
+    await composer(page).click();
+    await page.keyboard.type("/");
+    await expect(listed).toHaveCount(1, { timeout: 30_000 });
+    await expect(listed.locator(".composer-menu-tag")).toHaveText("Your skill");
+    await page.keyboard.type(slug);
+    await expect(rows).toHaveCount(1);
+    await page.keyboard.press("Enter");
+    const line = page.getByTestId("skill-attached");
+    await expect(line).toContainText(`Attached ${slug} to this task.`, { timeout: 30_000 });
+    await expect(page.getByTestId("token-chip")).toHaveText(new RegExp(`Your skill\\s*${slug}`));
+    await expect(page.getByTestId("token-chip")).not.toHaveAttribute("aria-busy");
+    expect(await selected(key)).toContain(skillId);
+    await page.keyboard.type("for tonight");
+    await page.keyboard.press("Enter");
+    // The gateway ran the skill in this task: the model was told to read it.
+    await expect
+      .poll(() => gatewayHasMessage(key, `/skill ${command} for tonight`), { timeout: 30_000 })
+      .toBe(true);
+    await expect.poll(() => gatewayIdle(key), { timeout: 60_000 }).toBe(true);
+    const history = await gatewayCall<{ messages: Array<{ role: string; content?: unknown }> }>(
+      "chat.history",
+      { sessionKey: key, limit: 10 },
+    );
+    const reply = JSON.stringify(history.messages.filter((row) => row.role === "assistant"));
+    expect(reply).toContain("Use the following explicitly referenced skills");
+    expect(reply).toContain(command);
+
+    await line.getByRole("button", { name: `Undo: attached ${slug} to this task` }).click();
+    await expect(line).toContainText(`Detached ${slug} from this task.`, { timeout: 30_000 });
+    expect(await selected(key)).not.toContain(skillId);
   } finally {
     try {
       if (saved)

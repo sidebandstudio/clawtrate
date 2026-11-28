@@ -223,8 +223,16 @@ export function Composer({
     [draftKey],
   );
   const [files, setFiles] = useState<Attached[]>([]);
-  // The skill or command chosen from the "/" menu: a chip sent before the words.
+  // The skill or command chosen from the "/" menu: a chip sent before the words. A chip that still
+  // carries `attach` is a library skill on its way onto the task.
   const [tokens, setTokens] = useState<MenuRow[]>([]);
+  /** The library skill this composer attached to the task, for its line and Undo (F-071). */
+  const [attached, setAttached] = useState<{
+    name: string;
+    skillId: string;
+    insert: string;
+    phase: "ready" | "busy" | "done";
+  } | null>(null);
   /** The menu the words before the caret open: its trigger, what follows it, and where it starts. */
   const [picker, setPicker] = useState<{ trigger: "/" | "@"; query: string; start: number } | null>(
     null,
@@ -297,8 +305,9 @@ export function Composer({
   // A file the limits admit is on its way to the host until the host holds it.
   const pending = (file: Attached) => !file.info && refusalOf(file) === null;
   const uploading = files.some(pending);
+  const attaching = tokens.some((token) => token.attach);
   const hasContent = text.trim().length > 0 || files.length > 0 || tokens.length > 0;
-  const canSend = hasContent && !refused && !uploading;
+  const canSend = hasContent && !refused && !uploading && !attaching;
   const refusalReason = refused ? (whole ?? "Remove the files that are too large to send.") : null;
 
   const stop = useCallback(
@@ -326,6 +335,11 @@ export function Composer({
           onNotice({
             title: "This message is still in the composer.",
             reason: "Its files are still being added. Send it again when they finish.",
+          });
+        else if (attaching && !refused)
+          onNotice({
+            title: "This message is still in the composer.",
+            reason: "Its skill is still being attached to this task. Send it again when it is.",
           });
         return;
       }
@@ -413,6 +427,7 @@ export function Composer({
       canSend,
       hasContent,
       uploading,
+      attaching,
       refused,
       text,
       files,
@@ -538,10 +553,59 @@ export function Composer({
       // The typed trigger and query leave the words; the skill or command becomes a chip.
       setText((text.slice(0, picker.start) + text.slice(caret)).replace(/^\s+/, ""));
       setTokens((current) => [...current, row]);
+      if (row.attach) attach(row, row.attach);
     }
     setPicker(null);
     onAnnounce(`${shown(row)} added`);
     focusRef.current?.focus();
+  };
+  // The person chose the skill, so it is attached without asking; its chip sends the command the
+  // gateway's answer gives, and its line offers Undo.
+  const attach = (row: MenuRow, { skillId, revision }: NonNullable<MenuRow["attach"]>) => {
+    void bridge.invoke({ type: "attachLibrarySkill", key: taskKey, skillId, revision }).then(
+      ({ command }) => {
+        const insert = `/skill ${command}`;
+        const ready: MenuRow = {
+          kind: row.kind,
+          name: row.name,
+          description: row.description,
+          insert,
+        };
+        setTokens((current) => current.map((token) => (token === row ? ready : token)));
+        setAttached({ name: row.name, skillId, insert, phase: "ready" });
+        // The task has it now: the next "/" reads the list again.
+        setMenuRows(null);
+      },
+      (error: unknown) => {
+        setTokens((current) => current.filter((token) => token !== row));
+        onNotice({
+          title: `Couldn't attach ${row.name} to this task.`,
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      },
+    );
+  };
+  const detach = () => {
+    if (!attached || attached.phase !== "ready" || !connected) return;
+    const { skillId, insert } = attached;
+    const settle = (phase: "ready" | "busy" | "done") =>
+      setAttached((current) => (current?.skillId === skillId ? { ...current, phase } : current));
+    settle("busy");
+    void bridge.invoke({ type: "detachLibrarySkill", key: taskKey, skillId }).then(
+      () => {
+        settle("done");
+        // A chip still waiting to send it would run nothing now.
+        setTokens((current) => current.filter((token) => token.insert !== insert));
+        setMenuRows(null);
+      },
+      (error: unknown) => {
+        settle("ready");
+        onNotice({
+          title: `Couldn't detach ${attached.name}.`,
+          reason: error instanceof Error ? error.message : String(error),
+        });
+      },
+    );
   };
 
   const onFieldKey = (event: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -706,6 +770,44 @@ export function Composer({
         </span>
         <button type="button" className="button" data-size="sm" onClick={onReview}>
           Review
+        </button>
+      </div>,
+    );
+  }
+  if (attached) {
+    rows.push(
+      <div className="shelf-row" key="skill-attached" data-testid="skill-attached">
+        <span className="shelf-text" role="status">
+          {attached.phase === "done" ? (
+            <>
+              <b>Detached</b> <span>{attached.name} from this task.</span>
+            </>
+          ) : (
+            <>
+              <b>Attached</b> <span>{attached.name} to this task.</span>
+            </>
+          )}
+        </span>
+        <button
+          type="button"
+          className="button"
+          data-size="sm"
+          onClick={detach}
+          aria-disabled={!connected || attached.phase !== "ready" || undefined}
+          aria-busy={attached.phase === "busy" || undefined}
+          aria-label={`Undo: attached ${attached.name} to this task`}
+        >
+          Undo
+        </button>
+        <button
+          type="button"
+          className="icon-button"
+          data-variant="quiet"
+          aria-label="Dismiss"
+          title="Dismiss"
+          onClick={() => act(() => setAttached(null))}
+        >
+          <CloseIcon />
         </button>
       </div>,
     );
@@ -876,6 +978,7 @@ export function Composer({
                   className="chip"
                   data-kind={token.kind}
                   data-testid="token-chip"
+                  aria-busy={token.attach ? true : undefined}
                 >
                   <span className="chip-tag">{TAG[token.kind]}</span>
                   <b>{shown(token)}</b>

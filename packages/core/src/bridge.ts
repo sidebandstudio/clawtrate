@@ -169,6 +169,10 @@ export type BridgeCommand =
   | { type: "setShowGatewayBot"; on: boolean }
   /** What the composer's "/" or "@" menu lists for a task: read now, kept nowhere (F-071, F-070). */
   | { type: "readComposerMenu"; key: string; trigger: "/" | "@" }
+  /** Attach the person's own library skill a "/" row offers to the task, at that revision (F-071). */
+  | { type: "attachLibrarySkill"; key: string; skillId: string; revision: string }
+  /** Take a library skill off the task again: the attach line's Undo (F-071). */
+  | { type: "detachLibrarySkill"; key: string; skillId: string }
   | { type: "retryMessage"; key: string; messageId: string }
   | { type: "deleteMessage"; key: string; messageId: string }
   | { type: "cancelQueued"; key: string; messageId: string }
@@ -599,7 +603,9 @@ type BridgeResultStart<C extends BridgeCommand> = C extends { type: "readBotDele
       ? { declined: boolean }
       : C extends { type: "undoSkillChange" }
         ? { undone: boolean }
-        : BridgeResultRest<C>;
+        : C extends { type: "attachLibrarySkill" }
+          ? { command: string }
+          : BridgeResultRest<C>;
 
 type BridgeResultRest<C extends BridgeCommand> = C extends { type: "sendMessage" }
   ? { messageId: string }
@@ -1592,6 +1598,19 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "readComposerMenu":
       if (command.trigger !== "/" && command.trigger !== "@") throw new Error("invalid menu");
       return { type: "readComposerMenu", key: sessionKey(command.key), trigger: command.trigger };
+    case "attachLibrarySkill":
+      return {
+        type: "attachLibrarySkill",
+        key: sessionKey(command.key),
+        skillId: id(command.skillId, "skill id"),
+        revision: id(command.revision, "skill revision"),
+      };
+    case "detachLibrarySkill":
+      return {
+        type: "detachLibrarySkill",
+        key: sessionKey(command.key),
+        skillId: id(command.skillId, "skill id"),
+      };
     case "setReaction": {
       const emoji = command.emoji;
       if (typeof emoji !== "string" || emoji.length === 0 || emoji.length > 64)
@@ -2477,6 +2496,15 @@ class ViewerSession implements BridgeSession {
         return client.setShowGatewayBot(command.on);
       case "readComposerMenu":
         return client.readComposerMenu(this.mine(command.key), command.trigger);
+      case "attachLibrarySkill":
+        return client.attachLibrarySkill(
+          this.mine(command.key),
+          command.skillId,
+          command.revision,
+          owner,
+        );
+      case "detachLibrarySkill":
+        return client.detachLibrarySkill(this.mine(command.key), command.skillId, owner);
       case "setReaction":
         return client.setReaction(
           this.mine(command.key),

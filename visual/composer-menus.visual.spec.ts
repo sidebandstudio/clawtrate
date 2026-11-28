@@ -23,6 +23,39 @@ async function record(page: Page): Promise<void> {
     fixture.invoke = (command) => (w.sent.push(command), invoke(command));
   });
 }
+/**
+ * The fixture's "/" list with the person's own skill saved after the task started, which the
+ * task could attach, and the gateway's answers to attaching and detaching it.
+ */
+async function offerAttach(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const fixture = (
+      window as unknown as { clawtrateFixture: { invoke: (c: unknown) => Promise<unknown> } }
+    ).clawtrateFixture;
+    const invoke = fixture.invoke.bind(fixture);
+    fixture.invoke = async (command: unknown) => {
+      const each = command as { type: string; trigger?: string };
+      if (each.type === "attachLibrarySkill")
+        return { command: "s_moon_phas_e65dd9b102714cd6a01b" };
+      if (each.type === "detachLibrarySkill") return undefined;
+      const answer = await invoke(command);
+      if (each.type !== "readComposerMenu" || each.trigger !== "/") return answer;
+      const rows = [...(answer as unknown[])];
+      rows.splice(2, 0, {
+        kind: "your-skill",
+        name: "moon-phase",
+        description: "Use when someone asks about tonight's moon.",
+        insert: "/skill s_moon_phas_e65dd9b102714cd6a01b",
+        attach: { skillId: "e65dd9b1-0271-4cd6-a01b-ca53f774a07a", revision: "0123456789abcdef" },
+      });
+      return rows;
+    };
+  });
+}
+const sent = (page: Page) =>
+  page.evaluate(() =>
+    (window as unknown as { sent: Array<{ type: string }> }).sent.map((each) => each.type),
+  );
 const sends = (page: Page) =>
   page.evaluate(() =>
     (window as unknown as { sent: Array<{ type: string; text?: string }> }).sent.filter(
@@ -197,6 +230,36 @@ test.describe("the composer's menus", () => {
     ]);
   });
 
+  test("F-071: choosing a skill the task doesn't have yet attaches it before it is sent, says so in one line, and Undo takes it off", async ({
+    page,
+  }) => {
+    await open(page);
+    await offerAttach(page);
+    await record(page);
+    await field(page).click();
+    await page.keyboard.type("/moon");
+    const row = page.getByRole("option", { name: /moon-phase/ });
+    await expect(row.locator(".composer-menu-tag")).toHaveText("Your skill");
+    await page.keyboard.press("Enter");
+    const line = page.getByTestId("skill-attached");
+    await expect(line).toHaveText(/Attached moon-phase to this task\./);
+    await expect(page.getByTestId("token-chip")).toHaveText(/Your skill\s*moon-phase/);
+    await page.keyboard.type("for tonight");
+    await page.keyboard.press("Enter");
+    expect(await sends(page)).toMatchObject([
+      { text: "/skill s_moon_phas_e65dd9b102714cd6a01b for tonight" },
+    ]);
+    expect((await sent(page)).filter((type) => type !== "readComposerMenu")).toEqual([
+      "attachLibrarySkill",
+      "sendMessage",
+    ]);
+    await line.getByRole("button", { name: "Undo: attached moon-phase to this task" }).click();
+    await expect(line).toHaveText(/Detached moon-phase from this task\./);
+    expect(await sent(page)).toContain("detachLibrarySkill");
+    await line.getByRole("button", { name: "Dismiss" }).click();
+    await expect(line).toHaveCount(0);
+  });
+
   test("F-070: typing @ lists the bots and the gateway's routines, tagged, and puts the chosen name where it was typed", async ({
     page,
   }) => {
@@ -230,6 +293,18 @@ for (const size of SIZES) {
         await expect(page.getByRole("option")).toHaveCount(6);
         await settle(page);
         await expect(page).toHaveScreenshot(`composer-menu-${theme}-${size.name}.png`);
+      });
+      test("F-071: a skill attached to the task from the / menu, its chip and its line with Undo", async ({
+        page,
+      }) => {
+        await open(page, theme);
+        await offerAttach(page);
+        await field(page).click();
+        await page.keyboard.type("/moon");
+        await page.keyboard.press("Enter");
+        await expect(page.getByTestId("skill-attached")).toBeVisible();
+        await settle(page);
+        await expect(page).toHaveScreenshot(`composer-skill-attached-${theme}-${size.name}.png`);
       });
     });
   }
