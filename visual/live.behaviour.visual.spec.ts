@@ -2353,6 +2353,50 @@ test("F-480 #988: the card says its retry and setting belong to the previous gat
   ).toHaveCount(0);
 });
 
+test("F-480 #988: Put back leaves at its expiry, and a read-back after a lost reply offers none", async ({
+  page,
+}) => {
+  await open(page, "not-run-computer-use-off");
+  const card = page.locator('[data-testid="turn-error"][data-run="run-live"]');
+  const putBack = card.getByRole("button", { name: "Put back" });
+  await expect(putBack).toBeVisible();
+  type Fixture = {
+    clawtrateFixture: { setState: (update: (state: ClawtrateState) => ClawtrateState) => void };
+  };
+  // The host refuses Put back after its week; the card stops offering it then too.
+  await page.evaluate(() =>
+    (window as unknown as Fixture).clawtrateFixture.setState((state) => ({
+      ...state,
+      computerUseUndo: { ...state.computerUseUndo!, expiresAt: Date.now() + 1000 },
+    })),
+  );
+  await expect(putBack).toHaveCount(0);
+  // A disable whose reply was lost, read back as off: what is true, and no Put back.
+  await page.evaluate(() =>
+    (window as unknown as Fixture).clawtrateFixture.setState(({ computerUseUndo: _, ...state }) => {
+      const key = "agent:otto:disk-space";
+      const transcript = state.transcripts[key]!;
+      return {
+        ...state,
+        transcripts: {
+          ...state.transcripts,
+          [key]: {
+            ...transcript,
+            runs: transcript.runs.map((run) =>
+              run.id === "run-live" ? { ...run, computerUseReadback: "already-off" as const } : run,
+            ),
+          },
+        },
+      };
+    }),
+  );
+  await expect(
+    card.getByText("The Computer Use startup check is off on this gateway.", { exact: true }),
+  ).toBeVisible();
+  await expect(card.getByRole("button", { name: /Put back|Turn off Computer Use/ })).toHaveCount(0);
+  await expect(card.getByRole("button", { name: "Try again" })).toBeVisible();
+});
+
 test("F-480 #988: after a repeated Computer Use timeout the card can turn it off and put it back", async ({
   page,
 }) => {
