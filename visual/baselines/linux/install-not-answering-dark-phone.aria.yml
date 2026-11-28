@@ -1,0 +1,15 @@
+- status
+- main:
+  - button "Back"
+  - heading "Setting up OpenClaw" [level=2]
+  - paragraph
+  - list "Steps":
+    - listitem "Download and check OpenClaw 2026.11.10, done": Download and check OpenClaw 2026.11.10
+    - listitem "Install Node.js and OpenClaw, done": Install Node.js and OpenClaw Node.js 24.22.1, checked
+    - listitem "Set up the gateway, done": Set up the gateway
+    - listitem "Start and check, failed": Start and check
+  - alert:
+    - paragraph: Start and check failed. Clawtrate couldn't confirm the new gateway was running on its chosen port. Clawtrate kept the gateway files in the clawtrate profile and its app data.
+  - group: Show details
+  - button "Try again"
+  - paragraph: Setting up OpenClaw
