@@ -1485,9 +1485,11 @@ describe("the iOS app", () => {
     // app has caught up and shown Synced for four seconds without a drop, but those states can
     // pass between two of Maestro's looks, so they aren't asserted on their own. Reconnect opened
     // one socket that got the gateway's hello, and no other since, so nothing dropped and
-    // reconnected. On a slow hosted runner the app can give up on a first connect the gateway
-    // hasn't answered and open another (#611), so one such abandoned connect before it is allowed;
-    // two that each got hello are a drop and a reconnect, and fail. The list is logged either way.
+    // reconnected. On a slow hosted runner the app can give up on several connects the gateway
+    // hasn't answered and open another each time (#611, #1032), so any number of such abandoned
+    // connects before it are allowed: none of them dropped, and the 180 s wait above bounds how
+    // many. Two that each got hello are a drop and a reconnect, and fail. The list is logged either
+    // way.
     await steps("reconnect-settles", [
       waitGone({ id: "status-strip" }, 120_000),
       see({ id: "connection-dot-connected" }),
