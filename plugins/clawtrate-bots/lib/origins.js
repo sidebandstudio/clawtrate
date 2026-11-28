@@ -14,7 +14,7 @@
 //                         made: every run in it is a task (C), and carries
 //                         what the run that started it had read
 
-export const KNOWN_VERSIONS = Object.freeze(["2026.10.6", "2026.11.10"]);
+export const KNOWN_VERSIONS = Object.freeze(["2026.10.6", "2026.11.10", "2026.11.11"]);
 
 export const LIMITS = Object.freeze({
   /** Runs held at once. When full, ended runs leave first; a new run past the bound isn't held. */
