@@ -37,6 +37,7 @@ import type {
   InstallCleanup,
   InstallFailure,
   InstallFailureKind,
+  InstallLocation,
   InstallRecovery,
   OnboardClassification,
   SetupInstall,
@@ -1065,6 +1066,12 @@ type PendingInstall = {
   canRemove: boolean;
 };
 
+type RemovalMove = { from: string; to: string; staged: boolean };
+type Removal = { id: string; receipt: Owned } & (
+  | { record: Owned; moves: RemovalMove[]; bundleGone: false }
+  | { record: Owned | null; moves: []; bundleGone: true }
+);
+
 type Proof = {
   id: string;
   dir: Stats;
@@ -1099,8 +1106,8 @@ export type InstallOptions = {
   statusWaitMs?: number;
   /** Aborted when the app quits: no download goes on, and no step after it starts. */
   signal?: AbortSignal;
-  /** Moves a proven profile folder to the system Trash. */
-  trashProfile?: (path: string) => Promise<void>;
+  /** Moves the staged setup folders as one item to the system Trash. */
+  trashSetup?: (path: string) => Promise<void>;
   /** For the host's tests: asked before each file the install makes is opened, then before it is written; may throw. */
   beforeWrite?: (path: string, at: "open" | "write") => void | Promise<void>;
   log?: (line: string) => void;
@@ -1263,14 +1270,21 @@ export class Installer {
    */
   async site(): Promise<InstallSite> {
     const { place } = this.options;
-    const [program, record, state, service] = await Promise.all(
-      [place.programDir, place.recordFile, place.stateDir, place.serviceFile].map(presence),
+    const [program, record, state, service, removal] = await Promise.all(
+      [
+        place.programDir,
+        place.recordFile,
+        place.stateDir,
+        place.serviceFile,
+        this.removalPaths.root,
+      ].map(presence),
     );
-    const all = [program, record, state, service];
+    const all = [program, record, state, service, removal];
     if (all.includes("unreadable")) return "unreadable";
     const loaded = await this.supervisor();
     if (loaded === "unreadable") return "unreadable";
-    if (state === "there" || service === "there" || loaded === "there") return "exists";
+    if (state === "there" || service === "there" || removal === "there" || loaded === "there")
+      return "exists";
     if (program === "absent" && record === "absent") return "clear";
     return (await this.prove()) !== null ? "leftover" : "exists";
   }
@@ -1338,117 +1352,290 @@ export class Installer {
     );
   }
 
-  /**
-   * Quarantines and removes an early attempt. A profile that reached onboarding goes to the Trash
-   * after we prove ownership and confirm that no service was left behind.
-   */
-  async discard(
-    id: string | null = null,
-    profile?: ProfileProof,
-  ): Promise<"removed" | "kept" | "trash-failed"> {
-    const { place, trashProfile } = this.options;
-    if (profile && !trashProfile) return "trash-failed";
-    if (profile) {
-      if (
-        !id ||
-        this.lingering ||
-        !(await this.serviceAbsent()) ||
-        this.lingering ||
-        !(await this.sameProfile(place.stateDir, id, profile))
-      )
-        return "kept";
-    } else if (id === null) {
-      if ((await presence(place.stateDir)) !== "absent" || !(await this.serviceAbsent()))
-        return "kept";
-    }
-    const stage = profile ? "onboarded" : "installing";
-    const proof = await this.prove(stage);
-    if (!proof || (id !== null && proof.id !== id)) return "kept";
-    const name = `.openclaw-removing-${randomUUID()}`;
-    const quarantine = join(dirname(place.programDir), name);
-    // Rename within the profile's own parent, which can be on another volume than app data.
-    const profileQuarantine = profile ? join(dirname(place.stateDir), name) : null;
+  /** Removes an early attempt, before any profile was created. */
+  async discard(id: string | null = null): Promise<boolean> {
+    const { place } = this.options;
+    if (
+      id === null &&
+      ((await presence(place.stateDir)) !== "absent" || !(await this.serviceAbsent()))
+    )
+      return false;
+    const proof = await this.prove();
+    if (!proof || (id !== null && proof.id !== id)) return false;
+    const quarantine = join(dirname(place.programDir), `.openclaw-removing-${randomUUID()}`);
     try {
       await mkdir(quarantine, { mode: 0o700 });
     } catch {
-      return "kept";
-    }
-    if (profileQuarantine) {
-      try {
-        await mkdir(profileQuarantine, { mode: 0o700 });
-      } catch {
-        await rmdir(quarantine).catch(() => {});
-        return "trash-failed";
-      }
+      return false;
     }
     const staging = stagingDir(place, proof.id);
     const ownStaging = proof.staging !== null && (id === null || this.stagingMade === id);
-    const movedProfile = profileQuarantine
-      ? join(profileQuarantine, "Unfinished OpenClaw setup")
-      : null;
-    const moves: Array<{ from: string; to: string }> = [
-      ...(movedProfile ? [{ from: place.stateDir, to: movedProfile }] : []),
+    const moves = [
       { from: place.programDir, to: join(quarantine, "program") },
       { from: place.recordFile, to: join(quarantine, "record") },
       ...(ownStaging ? [{ from: staging, to: join(quarantine, "staging") }] : []),
     ];
-    const moved: typeof moves = [];
-    let intact = true;
-    let trashFailed = false;
+    const moved = [];
     for (const move of moves) {
       try {
         await rename(move.from, move.to);
         moved.push(move);
       } catch {
-        intact = false;
-        trashFailed = move.to === movedProfile;
         break;
       }
     }
-    if (intact && profile && movedProfile) {
-      intact =
-        (await this.serviceAbsent()) &&
-        !this.lingering &&
-        (await this.sameProfile(movedProfile, proof.id, profile));
-    }
-    if (intact) intact = await this.stillProven(quarantine, proof);
-    if (intact && movedProfile && trashProfile) {
-      try {
-        await trashProfile(movedProfile);
-        trashFailed = (await presence(movedProfile)) !== "absent";
-      } catch {
-        trashFailed = true;
-      }
-    }
-    if (!intact || trashFailed) {
-      for (const move of moved.reverse())
-        if ((await presence(move.from)) === "absent")
-          await rename(move.to, move.from).catch(() => {});
-      if (profileQuarantine) await rmdir(profileQuarantine).catch(() => {});
+    if (moved.length !== moves.length || !(await this.stillProven(quarantine, proof))) {
+      await this.putBack(moved);
       await rmdir(quarantine).catch(() => {});
-      this.log(
-        trashFailed
-          ? "could not move the profile to the Trash"
-          : "an attempt changed while it was being removed",
-      );
-      return trashFailed ? "trash-failed" : "kept";
+      this.log("an early attempt changed while it was being removed");
+      return false;
     }
-    if (profileQuarantine) await rmdir(profileQuarantine).catch(() => {});
     await rm(quarantine, { recursive: true, force: true }).catch(() => {});
-    await unlinkIfSame(this.scratch(proof.id, stage), proof.record.stat);
+    await unlinkIfSame(this.scratch(proof.id, "installing"), proof.record.stat);
     const left = await Promise.all(
       [
         place.programDir,
         place.recordFile,
         staging,
         quarantine,
-        this.scratch(proof.id, stage),
-        ...(profileQuarantine ? [place.stateDir, profileQuarantine] : []),
+        this.scratch(proof.id, "installing"),
       ].map(presence),
     );
-    if (left.some((state) => state !== "absent")) return "kept";
-    this.log("removed the failed attempt");
-    return "removed";
+    return left.every((state) => state === "absent");
+  }
+
+  private get removalPaths() {
+    const root = join(dirname(this.options.place.programDir), ".openclaw-removing");
+    return {
+      root,
+      receipt: join(root, "receipt.json"),
+      bundle: join(root, "Unfinished OpenClaw setup"),
+    };
+  }
+
+  private async putBack(moves: Array<{ from: string; to: string }>): Promise<boolean> {
+    let restored = true;
+    for (const { from, to } of moves.slice().reverse()) {
+      if ((await presence(from)) !== "absent") {
+        restored = false;
+        continue;
+      }
+      try {
+        await rename(to, from);
+      } catch {
+        restored = false;
+      }
+    }
+    return restored;
+  }
+
+  /** A receipt stays outside the one bundle moved into the Trash, so reopening can finish it. */
+  private async removal(): Promise<Removal | null> {
+    const { place, pins } = this.options;
+    const paths = this.removalPaths;
+    const root = await lstat(paths.root).catch(() => null);
+    if (!root?.isDirectory()) return null;
+    const receipt = await readOwn(paths.receipt);
+    const saved = receipt ? parsed(receipt.text) : null;
+    if (
+      !receipt ||
+      !saved ||
+      typeof saved.id !== "string" ||
+      !ATTEMPT_ID.test(saved.id) ||
+      typeof saved.record !== "string" ||
+      typeof saved.program !== "string" ||
+      typeof saved.marker !== "string" ||
+      typeof saved.bundle !== "string"
+    )
+      return null;
+    const record = await readOwn(place.recordFile);
+    const installed = record ? parsed(record.text) : null;
+    const state = await presence(paths.bundle);
+    const matching =
+      record &&
+      installed &&
+      saved.id === installed.id &&
+      saved.record === identity(record.stat) &&
+      installed.stage === "onboarded" &&
+      installed.version === pins.version &&
+      installed.profile === INSTALL_PROFILE &&
+      installed.programDir === place.programDir &&
+      installed.stateDir === place.stateDir;
+    if (state === "absent") {
+      // After the Trash move, only the app's receipt and perhaps its old record are left.
+      // Do not infer a Trash outcome after an interruption or touch a replacement record.
+      if (
+        (!matching && (await presence(place.recordFile)) !== "absent") ||
+        (await presence(place.programDir)) !== "absent" ||
+        (await presence(place.stateDir)) !== "absent"
+      )
+        return null;
+      return {
+        id: saved.id,
+        receipt,
+        record: matching ? record : null,
+        moves: [],
+        bundleGone: true,
+      };
+    }
+    if (!matching || !record || !installed) return null;
+    const bundle = await lstat(paths.bundle).catch(() => null);
+    if (!bundle?.isDirectory() || identity(bundle) !== saved.bundle) return null;
+    const moves: RemovalMove[] = [];
+    for (const { from, name, marker, dirId, markerId, text } of [
+      {
+        from: place.programDir,
+        name: "Program",
+        marker: ".clawtrate-install.json",
+        dirId: saved.program,
+        markerId: saved.marker,
+        text: (body: Record<string, unknown> | null) =>
+          body !== null &&
+          body.id === saved.id &&
+          body.version === pins.version &&
+          body.profile === INSTALL_PROFILE,
+      },
+      {
+        from: place.stateDir,
+        name: "Gateway profile",
+        marker: ".clawtrate-owner.json",
+        dirId: installed.profileIdentity,
+        markerId: installed.ownerIdentity,
+        text: (body: Record<string, unknown> | null) =>
+          body !== null && body.id === saved.id && Object.keys(body).length === 1,
+      },
+    ]) {
+      const to = join(paths.bundle, name);
+      const where = await presence(to);
+      if (where === "unreadable") return null;
+      const staged = where === "there";
+      const source = staged ? to : from;
+      const dir = await lstat(source).catch(() => null);
+      if (!dir?.isDirectory() || identity(dir) !== dirId) return null;
+      const own = await readOwn(join(source, marker));
+      if (!own || identity(own.stat) !== markerId || !text(parsed(own.text))) return null;
+      moves.push({ from, to, staged });
+    }
+    return { id: saved.id, receipt, record, moves, bundleGone: false };
+  }
+
+  private async clearRemoval(receipt: Owned): Promise<boolean> {
+    const { root, receipt: file, bundle } = this.removalPaths;
+    if ((await presence(bundle)) !== "absent") {
+      try {
+        await rmdir(bundle);
+      } catch {
+        return false;
+      }
+    }
+    if (!(await unlinkIfSame(file, receipt.stat))) return false;
+    await rmdir(root).catch(() => {});
+    return (await presence(root)) === "absent";
+  }
+
+  private async restoreRemoval(removal: Removal): Promise<boolean> {
+    if (removal.bundleGone || !(await this.serviceAbsent())) return false;
+    const staged = removal.moves.filter((move) => move.staged);
+    if (
+      (await Promise.all(staged.map(({ from }) => presence(from)))).some(
+        (state) => state !== "absent",
+      )
+    )
+      return false;
+    if (!(await this.putBack(staged))) return false;
+    return this.clearRemoval(removal.receipt);
+  }
+
+  private async prepareRemoval(id: string, profile: ProfileProof): Promise<boolean> {
+    const { place, trashSetup } = this.options;
+    const { root, receipt, bundle } = this.removalPaths;
+    const proof = await this.prove("onboarded");
+    if (
+      !proof ||
+      proof.id !== id ||
+      proof.staging ||
+      this.lingering ||
+      !trashSetup ||
+      !(await this.serviceAbsent()) ||
+      !(await this.sameProfile(place.stateDir, id, profile))
+    )
+      return false;
+    // Moving both folders as one Trash item is atomic on this volume. Leave both where they are
+    // when a rename would cross volumes. Two separate Trash calls could strand one on refusal.
+    if (proof.dir.dev !== profile.dir.dev) return false;
+    try {
+      await mkdir(root, { mode: 0o700 });
+    } catch {
+      return false;
+    }
+    try {
+      await mkdir(bundle, { mode: 0o700 });
+      await this.writeNew(
+        receipt,
+        JSON.stringify({
+          id,
+          record: identity(proof.record.stat),
+          program: identity(proof.dir),
+          marker: identity(proof.marker.stat),
+          bundle: identity(await lstat(bundle)),
+        }),
+      );
+      return true;
+    } catch {
+      await rmdir(bundle).catch(() => {});
+      await rmdir(root).catch(() => {});
+      return false;
+    }
+  }
+
+  /** Stages the proven folders and sends the bundle to the Trash in one operation. */
+  private async finishRemoval(
+    id: string,
+  ): Promise<"trashed" | "finished" | "kept" | "trash-failed"> {
+    const { place, trashSetup } = this.options;
+    const { bundle } = this.removalPaths;
+    let removal = await this.removal();
+    if (!removal || removal.id !== id || !(await this.serviceAbsent()) || this.lingering)
+      return "kept";
+    if (removal.bundleGone) {
+      if (
+        (removal.record && !(await unlinkIfSame(place.recordFile, removal.record.stat))) ||
+        !(await this.clearRemoval(removal.receipt))
+      )
+        return "kept";
+      return "finished";
+    }
+    if (!trashSetup) return "trash-failed";
+    try {
+      for (const move of removal.moves) {
+        if (!move.staged) {
+          if ((await presence(move.to)) !== "absent") throw new Error("destination exists");
+          await rename(move.from, move.to);
+        }
+      }
+      removal = await this.removal();
+      if (
+        !removal ||
+        removal.id !== id ||
+        removal.bundleGone ||
+        removal.moves.some((move) => !move.staged) ||
+        !(await this.serviceAbsent()) ||
+        this.lingering
+      )
+        throw new Error("setup changed");
+      await trashSetup(bundle);
+      if ((await presence(bundle)) !== "absent") throw new Error("bundle still there");
+    } catch {
+      const current = await this.removal();
+      if (current?.id === id) await this.restoreRemoval(current);
+      return "trash-failed";
+    }
+    if (
+      !(await unlinkIfSame(place.recordFile, removal.record.stat)) ||
+      !(await this.clearRemoval(removal.receipt))
+    )
+      return "kept";
+    return "trashed";
   }
 
   /** In quarantine: the same folder, staging folder, marker and record, by identity and text. */
@@ -1599,6 +1786,7 @@ export class Installer {
     if (!(await this.checkedProgram(pins.version))) return null;
     const written = await this.writtenService(port);
     if (written !== "absent" && written !== "ours") return null;
+    if (written === "absent" && !(await this.serviceAbsent())) return null;
     return {
       id: proof.id,
       port,
@@ -1607,11 +1795,34 @@ export class Installer {
     };
   }
 
-  async recovery(): Promise<{ id: string; action: InstallRecovery } | null> {
+  async recovery(): Promise<{
+    id?: string;
+    action: InstallRecovery;
+    location?: InstallLocation;
+  } | null> {
+    const { place } = this.options;
+    const staged = await this.removal();
+    if (staged && (await this.serviceAbsent()))
+      return {
+        id: staged.id,
+        action: staged.bundleGone ? "finish" : "staged",
+        location: "staging",
+      };
+    if ((await presence(this.removalPaths.root)) !== "absent")
+      return { action: "inspect", location: "staging" };
     const pending = await this.pending();
     if (pending) return { id: pending.id, action: pending.canRemove ? "replace" : "continue" };
-    const incomplete = (await this.prove("onboarded")) ?? (await this.prove("onboarding"));
-    return incomplete ? { id: incomplete.id, action: "inspect" } : null;
+    if ((await this.prove("installed")) || (await this.leftoverProgram())) return null;
+    const locations = [
+      ["profile", place.stateDir],
+      ["program", place.programDir],
+      ["service", place.serviceFile],
+      ["record", place.recordFile],
+    ] as const;
+    for (const [location, path] of locations) {
+      if ((await presence(path)) !== "absent") return { action: "inspect", location };
+    }
+    return null;
   }
 
   /**
@@ -1648,9 +1859,13 @@ export class Installer {
     // Before anything is made: the user manager, then the place again.
     if (!(await this.userManager())) return stopped("user-service", -1);
     if (action) {
-      const pending = await this.pending();
-      if (!pending || pending.id !== expectedId || this.closing) return stopped("changed", -1);
+      if (!expectedId || this.closing) return stopped("changed", -1);
+      const saved = await this.removal();
+      if (saved && saved.id !== expectedId) return stopped("changed", -1);
       if (action === "continue") {
+        if (saved && !(await this.restoreRemoval(saved))) return stopped("restore", -1);
+        const pending = await this.pending();
+        if (!pending || pending.id !== expectedId) return stopped("changed", -1);
         publish({ step: 2, nodeChecked: true });
         return this.finishProfile(
           publish,
@@ -1660,19 +1875,27 @@ export class Installer {
           !pending.canRemove,
         );
       }
-      if (!pending.canRemove) return stopped("changed", -1);
-      const discarded = await this.discard(pending.id, pending.profile);
+      if (!saved) {
+        const pending = await this.pending();
+        if (!pending || pending.id !== expectedId || !pending.canRemove)
+          return stopped("changed", -1);
+        if (!(await this.prepareRemoval(pending.id, pending.profile))) {
+          publish({ step: 2, nodeChecked: true });
+          return stopped("trash", -1);
+        }
+      }
+      const discarded = await this.finishRemoval(expectedId);
       if (discarded === "trash-failed") {
         publish({ step: 2, nodeChecked: true });
         return stopped("trash", -1);
       }
-      if (discarded !== "removed") return stopped("changed", -1, { cleanup: "unproven" });
-      publish({ step: 0, nodeChecked: false, profileTrashed: true });
+      if (discarded === "kept") return stopped("changed", -1, { cleanup: "unproven" });
+      if (discarded === "trashed") publish({ foldersTrashed: true });
     }
     const site = await this.site();
     if (site === "unreadable") return stopped("write", -1);
     if (site === "exists") return stopped("exists", -1);
-    if (site === "leftover" && (await this.discard()) !== "removed") return stopped("exists", -1);
+    if (site === "leftover" && !(await this.discard())) return stopped("exists", -1);
     if (this.closing) return stopped("download", -1);
 
     const id = (this.options.newId ?? randomUUID)();
@@ -1686,7 +1909,7 @@ export class Installer {
       extra: Partial<InstallFailure> = {},
     ) => {
       // A program that may still write there: nothing of the attempt is removed under it.
-      const removed = !this.lingering && (await this.discard(id)) === "removed";
+      const removed = !this.lingering && (await this.discard(id));
       const cleanup: InstallCleanup = removed ? "removed" : "unproven";
       return stopped(kind, step, {
         ...extra,
@@ -1875,11 +2098,13 @@ export class Installer {
           `the service wasn't confirmed installed: exit=${installed.exitCode} timedOut=${installed.timedOut} definition=${written}`,
         );
         if (written === "absent" && !this.lingering) {
-          const discarded = await this.discard(id, profile);
+          const discarded = (await this.prepareRemoval(id, profile))
+            ? await this.finishRemoval(id)
+            : "kept";
           if (discarded === "trash-failed")
             return kept("service", { exitCode: installed.exitCode });
-          const removed = discarded === "removed";
-          if (removed) publish({ profileTrashed: true });
+          const removed = discarded === "trashed";
+          if (removed) publish({ foldersTrashed: true });
           return stopped("service", 2, {
             exitCode: installed.exitCode,
             cleanup: removed ? "removed" : "unproven",

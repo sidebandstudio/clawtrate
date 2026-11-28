@@ -1389,7 +1389,8 @@ const setup = object<SetupState>()({
   failure: object<SetupFailure>()({ kind: ENUM, exitCode: NUMBER, port: NUMBER, reason: ENUM }),
   install: object<SetupInstall>()({
     recovery: ENUM,
-    profileTrashed: FLAG,
+    foldersTrashed: FLAG,
+    recoveryLocation: ENUM,
     step: NUMBER,
     nodeChecked: FLAG,
     failure: object<InstallFailure>()({

@@ -29,6 +29,7 @@ import {
   type ClawtrateClient,
   type ClawtrateState,
   type InstallAction,
+  type InstallRecovery,
   type SetupFailure,
   type SetupHost,
   type SetupState,
@@ -112,10 +113,16 @@ const RECOVERY_CONFIRMATION: Record<InstallAction, Confirmation> = {
   replace: {
     message: "Remove this setup attempt and start again?",
     detail:
-      "Clawtrate moves the unfinished gateway profile to the Trash and removes this attempt’s program files. It will check new OpenClaw and Node.js downloads. npm also downloads packages Clawtrate hasn't verified. They can run with your account's permissions. Clawtrate connects this Mac with full control.",
+      "Clawtrate moves this attempt’s gateway profile and program folder to the Trash. It will check new OpenClaw and Node.js downloads. npm also downloads packages Clawtrate hasn't verified. They can run with your account's permissions. Clawtrate connects this Mac with full control.",
     confirm: "Remove and Start Again",
   },
 };
+
+function recoveryAllows(recovery: InstallRecovery | undefined, action: InstallAction): boolean {
+  return action === "continue"
+    ? recovery === "continue" || recovery === "replace" || recovery === "staged"
+    : recovery === "replace" || recovery === "staged" || recovery === "finish";
+}
 
 /** Said when a look, a Connect or a second install is asked for while one is under way. */
 const BUSY = "OpenClaw is being set up. Wait until it finishes.";
@@ -397,17 +404,25 @@ export class SetupController implements SetupHost {
       else if (signs !== "nothing") look = { ...look, outcome: "cant-tell", reason: "shape" };
       else if (leftover) look = { ...look, leftover: true };
     }
-    const recovery =
-      look.outcome !== "running" || look.profile === "clawtrate"
-        ? await this.installRecovery()
-        : null;
+    const recovery = await this.installRecovery();
     if (attempt !== this.attempt) return;
-    if (recovery) {
+    if (
+      recovery &&
+      (look.outcome !== "running" ||
+        look.profile === "clawtrate" ||
+        recovery.location === "staging")
+    ) {
       this.publish({
         ...initialSetupState,
         phase: "install-failed",
         look,
-        install: { step: 2, nodeChecked: true, failure: null, recovery: recovery.action },
+        install: {
+          step: 2,
+          nodeChecked: true,
+          failure: null,
+          recovery: recovery.action,
+          ...(recovery.location ? { recoveryLocation: recovery.location } : {}),
+        },
       });
       return;
     }
@@ -551,7 +566,7 @@ export class SetupController implements SetupHost {
     const recovery = phase === "install-failed" ? install?.recovery : undefined;
     if (
       action
-        ? !recovery || recovery === "inspect" || (action === "replace" && recovery !== "replace")
+        ? !recoveryAllows(recovery, action)
         : !retry && !(phase === "found" && look?.outcome === "not-found")
     )
       throw new Error("There is nothing to set up here. Look again.");
@@ -590,12 +605,7 @@ export class SetupController implements SetupHost {
     this.publish({ ...this.state, phase: "confirming", failure: null, unasked: false });
     const pending = action ? await this.installRecovery(make) : null;
     if (attempt !== this.attempt) return false;
-    if (
-      action &&
-      (!pending ||
-        pending.action === "inspect" ||
-        (action === "replace" && pending.action !== "replace"))
-    ) {
+    if (action && (!pending?.id || !recoveryAllows(pending.action, action))) {
       await this.lookNow();
       return false;
     }
@@ -690,6 +700,7 @@ export class SetupController implements SetupHost {
           ...(this.state.install ?? start),
           failure: outcome.failure,
           ...(recovery ? { recovery: recovery.action } : {}),
+          ...(recovery?.location ? { recoveryLocation: recovery.location } : {}),
         },
       });
       return false;

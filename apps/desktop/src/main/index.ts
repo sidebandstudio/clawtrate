@@ -262,7 +262,7 @@ function setupInstaller(): (() => Installer) | null {
       pins: PINS,
       run: (request, check) => installPrograms.run(request, check),
       signal: installStop.signal,
-      trashProfile: (path) => shell.trashItem(path),
+      trashSetup: (path) => shell.trashItem(path),
       personsApp: true,
       accountHome: home,
       log: (line) => console.log(line),
