@@ -13,6 +13,7 @@ import {
   SETUP_PAIRING_APPEARED,
   SETUP_PAIRING_GONE,
   spokenCode,
+  validateGatewayUrl,
 } from "@clawtrate/core";
 import {
   useEffect,
@@ -172,7 +173,13 @@ const SCOPE_WORDS: Record<string, string> = {
   "operator.pairing": "Approve and remove other devices",
 };
 
-function PairingPanel({ connection }: { connection: ConnectionState }) {
+function PairingPanel({
+  connection,
+  onForgot,
+}: {
+  connection: ConnectionState;
+  onForgot: () => void;
+}) {
   const send = useCommand();
   const { forget, failure } = useForget();
   const gatewayUrl = connection.gatewayUrl;
@@ -245,7 +252,11 @@ function PairingPanel({ connection }: { connection: ConnectionState }) {
             className="button"
             data-variant="quiet"
             data-size="lg"
-            onClick={() => void forget(gatewayUrl)}
+            onClick={() =>
+              void forget(gatewayUrl).then((forgot) => {
+                if (forgot) onForgot();
+              })
+            }
           >
             Use another gateway
           </button>
@@ -263,15 +274,21 @@ function PairingPanel({ connection }: { connection: ConnectionState }) {
 /** The errors whose way on is This computer: a route's own pairing, a refused proof. */
 const LOCAL_CODES: ReadonlySet<string> = new Set([LOCAL_ROUTE_ONLY, "LOCAL_UNVERIFIED"]);
 
+type ConnectDraft = { address: string; token: string | null };
+
 function ConnectForm({
   connection,
   info,
   initialAddress,
+  draft,
+  setDraft,
   onThisComputer,
 }: {
   connection: ConnectionState;
   info: HostInfo;
   initialAddress?: string | undefined;
+  draft: ConnectDraft | null;
+  setDraft: (draft: ConnectDraft) => void;
   /**
    * Where This computer (local connect) is offered: its way in, for an address whose pairing
    * belongs to it, or whose socket its proof refused.
@@ -279,10 +296,9 @@ function ConnectForm({
   onThisComputer?: (() => void) | undefined;
 }) {
   const send = useCommand();
-  const [url, setUrl] = useState(
-    initialAddress ?? connection.gatewayUrl ?? info.devGateway?.url ?? "",
-  );
-  const [token, setToken] = useState<{ address: string; value: string } | null>(null);
+  const [seed] = useState(initialAddress ?? connection.gatewayUrl ?? info.devGateway?.url ?? "");
+  const url = draft?.address ?? seed;
+  const token = draft?.token ?? null;
   const [submitError, setSubmitError] = useState<{ title: string; message: string } | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const busy = connection.status === "connecting";
@@ -302,11 +318,9 @@ function ConnectForm({
       return;
     }
     setSubmitError(null);
-    send({
-      type: "connect",
-      url: url.trim(),
-      token: token?.address === url ? token.value || null : null,
-    }).catch((error: unknown) =>
+    const address = url.trim();
+    setDraft({ address, token });
+    send({ type: "connect", url: address, token }).catch((error: unknown) =>
       setSubmitError({
         title: "Could not connect",
         message: error instanceof Error ? error.message : String(error),
@@ -314,8 +328,14 @@ function ConnectForm({
     );
   };
 
-  const gatewayError =
-    initialAddress === undefined || url === connection.gatewayUrl ? connection.error : null;
+  let gatewayError = connection.error;
+  if (initialAddress !== undefined && gatewayError && url !== connection.gatewayUrl) {
+    try {
+      if (validateGatewayUrl(url) !== connection.gatewayUrl) gatewayError = null;
+    } catch {
+      gatewayError = null;
+    }
+  }
   const error = submitError
     ? { ...submitError, hint: null, code: null }
     : gatewayError
@@ -347,8 +367,7 @@ function ConnectForm({
             onChange={(event) => {
               const address = event.target.value;
               if (address !== url) {
-                setUrl(address);
-                setToken(null);
+                setDraft({ address, token: null });
                 setSubmitError(null);
               }
             }}
@@ -364,8 +383,8 @@ function ConnectForm({
             className="input"
             name="token"
             type="password"
-            value={token?.value ?? ""}
-            onChange={(event) => setToken({ address: url, value: event.target.value })}
+            value={token ?? ""}
+            onChange={(event) => setDraft({ address: url, token: event.target.value || null })}
             placeholder="Gateway token, for pairing"
             autoComplete="off"
           />
@@ -440,9 +459,11 @@ function ConnectForm({
 function SetupPanel({
   connection,
   loadingBots,
+  onForgot,
 }: {
   connection: ConnectionState;
   loadingBots: boolean;
+  onForgot: () => void;
 }) {
   const send = useCommand();
   const { forget, failure } = useForget();
@@ -476,7 +497,11 @@ function SetupPanel({
             className="button"
             data-variant="quiet"
             data-size="lg"
-            onClick={() => void forget(gatewayUrl)}
+            onClick={() =>
+              void forget(gatewayUrl).then((forgot) => {
+                if (forgot) onForgot();
+              })
+            }
           >
             Use another gateway
           </button>
@@ -495,9 +520,11 @@ function SetupPanel({
 function ProtocolNotice({
   connection,
   error,
+  onForgot,
 }: {
   connection: ConnectionState;
   error: ConnectionError;
+  onForgot: () => void;
 }) {
   const send = useCommand();
   const { forget, failure } = useForget();
@@ -532,7 +559,11 @@ function ProtocolNotice({
             className="button"
             data-variant="quiet"
             data-size="lg"
-            onClick={() => void forget(gatewayUrl)}
+            onClick={() =>
+              void forget(gatewayUrl).then((forgot) => {
+                if (forgot) onForgot();
+              })
+            }
           >
             Choose another gateway
           </button>
@@ -675,20 +706,28 @@ export function ConnectScreen({
   // A look staged from elsewhere while this screen is open (Settings, over the address form)
   // shows here, whichever view was open; where the person goes from it is theirs.
   const [advancedAddress, setAdvancedAddress] = useState<string>();
+  // The progress screen replaces the form. Keep its address and token together above it.
+  const [draft, setDraft] = useState<ConnectDraft | null>(null);
+  const clearDraft = () => setDraft(null);
   const [stagedSeen, setStagedSeen] = useState(isStaged);
   if (stagedSeen !== isStaged) {
     setStagedSeen(isStaged);
-    if (isStaged) setView("here");
+    if (isStaged) {
+      setDraft(null);
+      setView("here");
+    }
   }
   const command = useCommand();
   // This computer, from the address form: a staged look. The saved gateway stays selected, with
   // this form, until a Connect on the new offer replaces it; Back returns here.
   const stageLook = () => {
+    setDraft(null);
     setView("here");
     void thisComputer(command, stage);
   };
   // Leaving the staged look, by Back or Advanced, returns to the saved gateway's form.
   const onView = (next: SetupView, address?: string) => {
+    setDraft(null);
     setAdvancedAddress(next === "advanced" ? address : undefined);
     if (isStaged && (next === "first" || next === "advanced")) stage(false);
     setView(next);
@@ -715,7 +754,7 @@ export function ConnectScreen({
     (setupOwns || ((noGateway || isStaged) && view !== "advanced"));
   // Advanced: the address-and-token form as it was, with Back to the first question.
   const advancedBack =
-    info.setup !== undefined && view === "advanced" && noGateway ? () => setView("first") : null;
+    info.setup !== undefined && view === "advanced" && noGateway ? () => onView("first") : null;
   // Advanced replaces the setup screens on the same screen, so focus moves here: to the
   // address field going in, to the question's title coming back. Not on launch.
   const card = useRef<HTMLDivElement>(null);
@@ -737,7 +776,7 @@ export function ConnectScreen({
             <header className="connect-brand">
               <img src={logoUrl} alt={PRODUCT_NAME} width={56} height={56} />
             </header>
-            <ProtocolNotice connection={connection} error={mismatch} />
+            <ProtocolNotice connection={connection} error={mismatch} onForgot={clearDraft} />
             <p className="connect-foot">
               {gatewayLabel(connection.gatewayUrl)}
               {connection.serverVersion ? ` · OpenClaw ${connection.serverVersion}` : ""} · {host}
@@ -748,7 +787,7 @@ export function ConnectScreen({
             <header className="connect-brand">
               <img src={logoUrl} alt={PRODUCT_NAME} width={56} height={56} />
             </header>
-            <PairingPanel connection={connection} />
+            <PairingPanel connection={connection} onForgot={clearDraft} />
             <p className="connect-foot">
               Request {pairing.requestId.slice(0, 8)} · this device{" "}
               {(connection.deviceId ?? pairing.deviceId).slice(0, 8)} · {host}
@@ -784,13 +823,15 @@ export function ConnectScreen({
               <p>{SLOGAN}</p>
             </header>
             {settingUp ? (
-              <SetupPanel connection={connection} loadingBots={loadingBots} />
+              <SetupPanel connection={connection} loadingBots={loadingBots} onForgot={clearDraft} />
             ) : (
               <ConnectForm
                 key={advancedAddress ?? "saved"}
                 connection={connection}
                 info={info}
                 initialAddress={advancedAddress}
+                draft={draft}
+                setDraft={setDraft}
                 onThisComputer={info.setup?.local === true ? stageLook : undefined}
               />
             )}

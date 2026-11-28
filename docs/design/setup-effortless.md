@@ -153,7 +153,7 @@ Clawtrate reads where the gateway listens and its token from OpenClaw's own sett
 
 When neither supported profile has settings, Clawtrate checks for other CLI profile folders and their settings file names. It checks file metadata alone. A named profile opens a card naming it and offers Advanced. When both supported profiles have settings, Start and Connect name the profile they will use.
 
-When no gateway answers at the settings’ port, This computer offers Start OpenClaw if it finds an account-owned LaunchAgent definition with the expected label. The label can’t establish which settings that service will use. The press asks macOS to start the job in this account’s session. Clawtrate keeps checking for the gateway after Back and offers Connect when the socket passes the same proof. If the start is refused or the gateway doesn't answer in time, setup offers Try again and Look again.
+When no gateway answers at the settings’ port, This computer offers Start OpenClaw if it finds an account-owned LaunchAgent definition with the expected label. The label can’t establish which settings that service will use. The press asks macOS to start the job in this account’s session. Clawtrate keeps checking for the gateway after Back and offers Connect when the socket passes the same proof. If the start is refused or the gateway doesn't answer in time, the Start screen offers Try again and Look again. After Back, the stopped card offers Start OpenClaw and Look again.
 
 ### The send gate
 

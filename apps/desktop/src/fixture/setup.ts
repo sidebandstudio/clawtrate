@@ -270,9 +270,14 @@ export function setupCommand(
       return true;
     }
     case "setupStart": {
-      setup({ ...localStopped, phase: "starting" });
+      const look = current().look;
+      if (look?.outcome !== "stopped") return true;
+      setup({ ...initialSetupState, phase: "starting", look });
       after(300, () => setup({ ...current(), step: 1 }));
-      after(900, () => setup(looked(localLook)));
+      after(900, () => {
+        const { canStart: _canStart, ...runningLook } = look;
+        setup(looked({ ...runningLook, outcome: "running", reason: null, access: "new" }));
+      });
       return true;
     }
     case "setupConnect": {

@@ -3,7 +3,13 @@
 // keyboard and the screen reader. The same walk runs against a real
 // development gateway in e2e/setup.spec.ts.
 import { expect, test, type Page } from "@playwright/test";
+import type { BridgeCommand, ClawtrateBridge, ClawtrateState } from "../packages/core/src/index.ts";
 import { contextFor, NOW, openFixture, SIZES } from "./fixture.ts";
+
+type SetupFixture = Pick<ClawtrateBridge, "getState" | "send"> & {
+  sent: BridgeCommand[];
+  setState(change: (state: ClawtrateState) => ClawtrateState): void;
+};
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
 test.use(contextFor(WIDE, "light"));
@@ -514,21 +520,39 @@ test("F-602: a startup look without settings opens the local setup card", async 
   await expect(page.getByPlaceholder("Gateway address")).toBeFocused();
 });
 
-test("F-602: Start OpenClaw runs on one press, then the proved gateway offers Connect", async ({
+test("F-602: simulated Start offers Connect for the same selected profile and port", async ({
   page,
 }) => {
   await page.clock.install({ time: NOW });
   await page.clock.pauseAt(new Date(NOW.getTime() + 1_000));
-  await page.goto("/?setup=local-stopped&theme=dark");
+  await page.goto("/?setup=local-stopped-two-profiles&theme=dark");
+  const port = 19321;
+  await expect(page.getByTestId("setup-found").getByText("clawtrate")).toBeVisible();
+  await page.evaluate((port) => {
+    const fixture = (window as unknown as { clawtrateFixture: SetupFixture }).clawtrateFixture;
+    fixture.setState((state) => ({
+      ...state,
+      setup: { ...state.setup!, look: { ...state.setup!.look!, port } },
+    }));
+  }, port);
   await page.getByRole("button", { name: "Start OpenClaw", exact: true }).focus();
   await page.keyboard.press("Enter");
   await expect(page.getByRole("heading", { name: "Starting OpenClaw" })).toBeFocused();
+  const selected = () =>
+    page.evaluate(() => {
+      const fixture = (window as unknown as { clawtrateFixture: SetupFixture }).clawtrateFixture;
+      return fixture.getState().setup?.look;
+    });
+  const facts = { profile: "clawtrate", port, others: ["profile default"] };
+  expect(await selected()).toMatchObject({ ...facts, outcome: "stopped" });
   await page.clock.runFor(900);
   await expect(
     page.getByRole("heading", { name: "Found your OpenClaw settings on this Mac" }),
   ).toBeVisible();
   await expect(page.getByTestId("full-control-consent")).toBeVisible();
   await expect(page.getByRole("button", { name: "Connect", exact: true })).toBeVisible();
+  await expect(page.getByText("Using the clawtrate profile.")).toBeVisible();
+  expect(await selected()).toMatchObject({ ...facts, outcome: "running" });
   expect(await sent(page)).toEqual(["setupStart"]);
 });
 
@@ -543,7 +567,7 @@ test("F-602: Advanced opens after a local token refusal or an unfinished handsha
   }
 });
 
-test("F-602: Advanced after a refused local token keeps the local address even with a remote gateway saved", async ({
+test("F-602: Advanced keeps a failed submission's address, error, and only that address's token", async ({
   page,
 }) => {
   await openFixture(page, "setup=local-refused-token", "dark");
@@ -561,20 +585,61 @@ test("F-602: Advanced after a refused local token keeps the local address even w
   await page.getByRole("button", { name: "Use Advanced" }).click();
   await expect(address).toHaveValue(local);
 
+  const submitted = "wss://another.example.test/";
+  await page.evaluate(() => {
+    const fixture = (window as unknown as { clawtrateFixture: SetupFixture }).clawtrateFixture;
+    const send = fixture.send;
+    fixture.send = async (command) => {
+      if (command.type !== "connect") return send(command);
+      fixture.sent.push(command);
+      fixture.setState((state) => ({
+        ...state,
+        connection: {
+          ...state.connection,
+          status: "connecting",
+          gatewayUrl: command.url.replace(/\/$/, ""),
+          error: null,
+        },
+      }));
+    };
+  });
   await token.fill("a-local-fixture-token");
-  await address.fill(remote);
+  await address.fill(submitted);
   await expect(token).toHaveValue("");
-  await token.fill("a-remote-fixture-token");
+  await token.fill("another-fixture-token");
+  await page.getByRole("button", { name: "Connect a gateway" }).click();
+  await expect(page.getByTestId("setup-steps")).toBeVisible();
+  await expect(address).toHaveCount(0);
+  const connection = await page.evaluate(() => {
+    const fixture = (window as unknown as { clawtrateFixture: SetupFixture }).clawtrateFixture;
+    return fixture.sent.find((command) => command.type === "connect");
+  });
+  expect(connection).toEqual({ type: "connect", url: submitted, token: "another-fixture-token" });
+  await page.evaluate(() => {
+    const fixture = (window as unknown as { clawtrateFixture: SetupFixture }).clawtrateFixture;
+    fixture.setState((state) => ({
+      ...state,
+      connection: {
+        ...state.connection,
+        status: "error",
+        error: {
+          code: "REFUSED",
+          message: "The submitted gateway refused the connection.",
+          hint: null,
+        },
+      },
+    }));
+  });
+  await expect(address).toHaveValue(submitted);
+  await expect(page.getByRole("alert")).toContainText(
+    "The submitted gateway refused the connection.",
+  );
+  await expect(token).toHaveValue("another-fixture-token");
   await address.fill(local);
   await expect(token).toHaveValue("");
-  await token.fill("a-local-fixture-token");
-  await page.getByRole("button", { name: "Connect a gateway" }).click();
-  const connection = await page.evaluate(() =>
-    (
-      window as unknown as { clawtrateFixture: { sent: Array<{ type: string }> } }
-    ).clawtrateFixture.sent.find((command) => command.type === "connect"),
-  );
-  expect(connection).toEqual({ type: "connect", url: local, token: "a-local-fixture-token" });
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await address.fill(submitted);
+  await expect(token).toHaveValue("");
 });
 
 test("F-602: a named profile goes straight to its card and Advanced", async ({ page }) => {
