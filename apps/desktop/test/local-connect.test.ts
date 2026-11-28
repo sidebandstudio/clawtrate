@@ -387,6 +387,23 @@ describe("local connect's connector", () => {
     expect(await fine(new AbortController().signal)).toBe(true);
   });
 
+  it("F-602: only the person's packaged Mac can take the launchd adapter", () => {
+    const launchd = { labelAt: async () => null, run: async () => 1 };
+    const where = { helper: null, platform: "darwin" as const, launchd };
+    const account = () => "/clawtrate-account-home";
+    const person = { packaged: true, env: {}, switches: () => false };
+    expect(localConnectFor(person, where, account)?.launchd).toBe(launchd);
+    const sandbox = localConnectFor(
+      { ...person, packaged: false },
+      { ...where, home: "/tmp/sandbox-home" },
+      account,
+    );
+    expect(sandbox?.launchd).toBeUndefined();
+    expect(
+      localConnectFor(person, { ...where, platform: "linux" }, account)?.launchd,
+    ).toBeUndefined();
+  });
+
   it("takes its home rule from mustSandbox, and has no default home outside a person's app", () => {
     const where = { helper: null, platform: "darwin" as const };
     const none = () => false;
@@ -509,8 +526,9 @@ it("only a person's packaged Mac app turns local connect on", () => {
       "apps/desktop/src/main/index.ts PropertyAssignment localConnect: provedRouteFor(LOCAL_CONNECT, (why) => console.log(\`[setup] couldn't verify what is listening (\${why})\`), )",
       "apps/desktop/src/main/index.ts PropertyAssignment localConnect: { ...LOCAL_CONNECT, worker: new URL("./settings-parse.js", import.meta.url), }",
       "apps/desktop/src/main/index.ts builder localConnectFor",
-      "apps/desktop/src/main/index.ts call localConnectFor( { packaged: app.isPackaged, env: process.env, switches: hasSwitch }, { // packaging/config.ts \`LOCAL_GATEWAY_HELPER\`, built and signed with the app. helper: join(process.resourcesPath, "..", "Helpers", "ClawtrateLocalGateway"), platform: process.platform, }, )",
+      "apps/desktop/src/main/index.ts call localConnectFor( { packaged: app.isPackaged, env: process.env, switches: hasSwitch }, { // packaging/config.ts \`LOCAL_GATEWAY_HELPER\`, built and signed with the app. helper: join(process.resourcesPath, "..", "Helpers", "ClawtrateLocalGateway"), platform: process.platform, launchd: macLaunchd, }, )",
       "apps/desktop/src/setup/controller.ts PropertySignature localConnect?: LocalConnect & { worker: URL };",
+      "apps/desktop/src/setup/controller.ts read this.options.localConnect",
       "apps/desktop/src/setup/controller.ts read this.options.localConnect",
       "apps/desktop/src/setup/controller.ts read this.options.localConnect",
       "apps/desktop/src/setup/controller.ts read this.options.localConnect",
