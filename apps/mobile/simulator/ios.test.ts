@@ -911,6 +911,8 @@ describe("the iOS app", () => {
       waitFor({ id: `bot-tasks-${MAIN_BOT}` }, 20_000),
       tap({ id: `task-${lit(reading.key)}` }),
       waitFor({ id: "task-line", text: lit(reading.title) }, 60_000),
+      // The title shows while the history still loads; the first message shows once it has.
+      waitFor({ id: "turn-bot" }, 60_000),
       see({ id: "stamp", text: stampPattern(firstNoteAt) }),
       see(lit(FIRST_NOTE)),
       // Jump to latest goes to the end, and goes.
