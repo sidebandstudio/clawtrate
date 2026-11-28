@@ -27,7 +27,13 @@ import {
   type SetupState,
 } from "@clawtrate/core";
 import { proveFor, provedSockets, routeOf, type LocalConnect } from "./local-connect.ts";
-import { lookLocally, readToken, type LocalFound } from "./local-look.ts";
+import {
+  lookLocally,
+  readToken,
+  startLocally,
+  type LocalFound,
+  type LocalReport,
+} from "./local-look.ts";
 import { refusalKind, type ProveRefusal } from "./local-prove.ts";
 import { boundedFileIdentity, LIMITS, lookHere, type FoundGateway } from "./look.ts";
 import { parseAuthMode, parseSetupCode, parseStatus } from "./parse.ts";
@@ -40,6 +46,9 @@ import { guardPort, programPath, SetupRefusedError } from "./world.ts";
 export const OPERATION_LIFETIME_MS = 2 * 60_000;
 /** After this long, the look says it is still looking (§4). */
 export const SLOW_LOOK_MS = 8_000;
+/** How long Start OpenClaw waits for its gateway to answer, looking again every `START_POLL_MS`. */
+export const START_WAIT_MS = 30_000;
+export const START_POLL_MS = 1_000;
 const QR_LIMIT = { timeoutMs: 20_000, maxBytes: 16 * 1024 };
 
 /** A program that ran to its end, in time and within its limit, and exited 0. */
@@ -77,6 +86,8 @@ export type SetupControllerOptions = {
    * person's packaged Mac app turns it on (`localConnectFor`).
    */
   localConnect?: LocalConnect & { worker: URL };
+  /** How long Start OpenClaw waits for its gateway: `START_WAIT_MS` unless a test shortens it. */
+  startWaitMs?: number;
 };
 
 /**
@@ -290,6 +301,10 @@ export class SetupController implements SetupHost {
     const unasked = this.unasked;
     this.unasked = false;
     this.publish({ ...initialSetupState, phase: "looking", unasked });
+    this.slowTimer = setTimeout(() => {
+      if (attempt === this.attempt && this.state.phase === "looking")
+        this.publish({ ...this.state, slow: true });
+    }, SLOW_LOOK_MS);
     let report;
     try {
       report = await lookLocally(
@@ -304,8 +319,15 @@ export class SetupController implements SetupHost {
     } catch (error) {
       if (attempt === this.attempt) this.refused(error);
       return;
+    } finally {
+      if (attempt === this.attempt) this.clearSlow();
     }
     if (attempt !== this.attempt || !report) return;
+    await this.foundLocally(report, attempt, unasked);
+  }
+
+  /** What a local look found, on its card, with what this device can already do there. */
+  private async foundLocally(report: LocalReport, attempt: number, unasked: boolean) {
     this.localFound = report.found;
     const access = report.found
       ? await this.options.client.deviceAccess(report.found.url).catch(() => "new" as const)
@@ -319,6 +341,69 @@ export class SetupController implements SetupHost {
     });
   }
 
+  /** Start the stopped Mac gateway the person chose, then offer the proved gateway to Connect. */
+  async start(): Promise<void> {
+    const local = this.options.localConnect;
+    const { phase, look, failure } = this.state;
+    if (
+      !local ||
+      !(phase === "found" || (phase === "failed" && failure?.kind === "not-started")) ||
+      look?.outcome !== "stopped" ||
+      !look.canStart ||
+      (look.profile !== "default" && look.profile !== "clawtrate")
+    )
+      throw new Error("There is nothing to start. Look again.");
+
+    const attempt = (this.attempt += 1);
+    const current = () => attempt === this.attempt;
+    const scan = () => lookLocally(local, local.worker, undefined, () => !current());
+    this.publish({ ...initialSetupState, phase: "starting", look });
+    // The state can change between the offer and the press. Recheck before asking launchd.
+    try {
+      const before = await scan();
+      if (!current() || !before) return;
+      if (
+        before.look.outcome !== "stopped" ||
+        !before.look.canStart ||
+        before.look.profile !== look.profile ||
+        before.look.port !== look.port
+      )
+        return this.foundLocally(before, attempt, false);
+
+      const started = await startLocally(local, look.profile, current).catch(() => false);
+      if (!current()) return;
+      if (started) {
+        this.publish({ ...this.state, step: 1 });
+        const until = this.now() + (this.options.startWaitMs ?? START_WAIT_MS);
+        for (;;) {
+          const report = await scan();
+          if (!current() || !report) return;
+          if (
+            report.look.profile !== look.profile ||
+            report.look.port !== look.port ||
+            report.look.outcome === "running" ||
+            (report.look.outcome === "stopped" && !report.look.canStart)
+          )
+            return this.foundLocally(report, attempt, false);
+          if (this.now() >= until) {
+            if (report.look.outcome !== "stopped") return this.foundLocally(report, attempt, false);
+            break;
+          }
+          await new Promise((done) => setTimeout(done, START_POLL_MS));
+          if (!current()) return;
+        }
+      }
+      this.log(
+        started
+          ? "Started OpenClaw, but its gateway didn't answer."
+          : "macOS didn't start OpenClaw.",
+      );
+      this.fail({ kind: "not-started", port: look.port, reason: started ? "no-answer" : null });
+    } catch (error) {
+      if (current()) this.refused(error);
+    }
+  }
+
   cancel(): void {
     const phase = this.state.phase;
     this.attempt += 1;
@@ -326,6 +411,19 @@ export class SetupController implements SetupHost {
     this.options.stopPrograms();
     if (phase === "looking") {
       this.publish(initialSetupState);
+      return;
+    }
+    // Back from Start OpenClaw, or from its failure: the card it was pressed on. A start launchd
+    // already took goes on; the next look sees it.
+    if (
+      phase === "starting" ||
+      (phase === "failed" && this.state.failure?.kind === "not-started")
+    ) {
+      this.publish(
+        this.state.look
+          ? { ...initialSetupState, phase: "found", look: this.state.look }
+          : initialSetupState,
+      );
       return;
     }
     if (phase === "confirming") {
@@ -828,6 +926,18 @@ export class SetupController implements SetupHost {
         } else if (this.state.step !== 2) this.publish({ ...this.state, step: 2 });
         return;
       }
+      if (
+        local &&
+        this.owned?.attempt === attempt &&
+        this.state.phase === "connecting" &&
+        connection.error?.code === "AUTH_TOKEN_MISMATCH"
+      ) {
+        // Retry would send the same settings token. A new look reads the settings afresh.
+        this.stopWatching();
+        void this.closeOwned();
+        this.fail({ kind: "token-refused", port });
+        return;
+      }
       // Local connect's first socket ended before the gateway answered (`UNREACHABLE`): what the
       // settings file says isn't how the gateway there listens now (it stopped, or runs on
       // settings changed since it started, TLS for one). Not retried for ever behind
@@ -854,6 +964,18 @@ export class SetupController implements SetupHost {
         if (code === SETUP_PAIRING_GONE) return this.pairingGone();
         // One appeared before the code went: back to the card, for consent to reuse it.
         if (code === SETUP_PAIRING_APPEARED) return this.pairingAppeared();
+        if (local && code === "PROTOCOL_MISMATCH") {
+          const protocol = connection.error?.protocol;
+          const gateway = protocol?.gateway;
+          const reason =
+            gateway == null || !protocol
+              ? null
+              : gateway < protocol.client
+                ? "gateway-older"
+                : "client-older";
+          this.fail({ kind: "protocol", port, reason });
+          return;
+        }
         this.fail({
           kind:
             code === "SETUP_GRANT_REFUSED"

@@ -149,7 +149,7 @@ test("F-492: each failure of Connect is its own titled note, with its own next s
   }
 });
 
-test("F-515: another version is named, offers Advanced and how to update, and no Connect", async ({
+test("F-515: another version is named with a route to Advanced and no Terminal command", async ({
   page,
 }) => {
   await openFixture(page, "setup=untested", "light");
@@ -157,8 +157,8 @@ test("F-515: another version is named, offers Advanced and how to update, and no
     "OpenClaw 2026.9.37 isn't the version this Clawtrate is tested with (2026.10.6). Use Advanced to try connecting.",
   );
   await expect(page.getByRole("button", { name: "Connect" })).toHaveCount(0);
-  await page.getByText("How to update").click();
-  await expect(page.locator(".command code")).toHaveText("openclaw update");
+  await expect(page.getByText("How to update")).toHaveCount(0);
+  await expect(page.locator(".command code")).toHaveCount(0);
   await page.getByRole("button", { name: "Use Advanced" }).click();
   await expect(page.getByPlaceholder("Gateway address")).toBeVisible();
   expect(await sent(page)).toEqual(["setupReset"]);
@@ -369,7 +369,7 @@ test("F-516: each card says only what the look established", async ({ page }) =>
   await openFixture(page, "setup=cant-tell-not-set-up", "light");
   await expect(lead("OpenClaw didn't report a config file for this profile.")).toBeVisible();
   await openFixture(page, "setup=cant-tell-no-answer", "light");
-  await expect(lead("Clawtrate couldn't read a gateway answer.")).toBeVisible();
+  await expect(lead("The gateway didn't answer in time.")).toBeVisible();
   await expect(page.getByText(/runs on its port|as its service/)).toHaveCount(0);
   await openFixture(page, "setup=stopped-by-hand", "light");
   const facts = page.getByTestId("setup-found").locator("dl > div");
@@ -498,6 +498,35 @@ test("F-602: on a Mac whose OpenClaw profile the host matched, the first screen 
   await expect(page.getByTestId("bot-list")).toBeVisible();
 });
 
+test("F-602: a startup look without settings opens the local setup card", async ({ page }) => {
+  await openFixture(page, "setup=local-empty-wait", "dark");
+  const card = page.getByTestId("setup-found");
+  await expect(card.getByRole("heading")).toHaveText("Clawtrate didn't find OpenClaw here");
+  await expect(page.getByRole("heading", { name: "Where does OpenClaw run?" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "On this computer" })).toBeFocused();
+  expect(await sent(page)).toEqual([]);
+  await page.getByRole("button", { name: "It runs on another computer" }).click();
+  await expect(page.getByRole("heading", { name: "Another computer" })).toBeFocused();
+  await page.getByRole("button", { name: "Back" }).click();
+  await page.getByRole("button", { name: "Advanced", exact: true }).click();
+  await expect(page.getByPlaceholder("Gateway address")).toBeFocused();
+});
+
+test("F-602: Start OpenClaw runs on one press, then the proved gateway offers Connect", async ({
+  page,
+}) => {
+  await openFixture(page, "setup=local-stopped", "dark");
+  await page.getByRole("button", { name: "Start OpenClaw", exact: true }).focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("heading", { name: "Starting OpenClaw" })).toBeFocused();
+  await expect(
+    page.getByRole("heading", { name: "Found your OpenClaw settings on this Mac" }),
+  ).toBeVisible();
+  await expect(page.getByTestId("full-control-consent")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Connect", exact: true })).toBeVisible();
+  expect(await sent(page)).toEqual(["setupStart"]);
+});
+
 test("F-602: a gateway local connect couldn't prove isn't offered: it says so, with Advanced and Look again", async ({
   page,
 }) => {
@@ -505,7 +534,7 @@ test("F-602: a gateway local connect couldn't prove isn't offered: it says so, w
   await expect(page.getByRole("heading", { name: "OpenClaw settings found" })).toBeVisible();
   await expect(
     page.getByText(
-      "Clawtrate couldn't match what is listening at port 18789 to this account's OpenClaw profile. Clawtrate doesn't connect to it by itself. Use Advanced, or look again.",
+      "Clawtrate couldn't match what is listening at port 18789 to this account's OpenClaw profile.",
     ),
   ).toBeVisible();
   await expect(page.getByRole("button", { name: "Connect", exact: true })).toHaveCount(0);

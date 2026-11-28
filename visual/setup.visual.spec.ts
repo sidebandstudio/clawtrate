@@ -43,6 +43,18 @@ const STATES = [
   "local-unverified",
   "local-tls",
   "local-failed",
+  "local-not-found",
+  "local-stopped",
+  "local-stopped-without-service",
+  "local-starting",
+  "local-start-refused",
+  "local-start-unanswered",
+  "local-token-refused",
+  "local-unanswered",
+  "local-protocol-older",
+  "local-protocol-newer",
+  "local-unreadable",
+  "local-unfinished",
 ];
 const EVERY_WIDTH = new Set(["first", "found", "connecting", "local-first"]);
 

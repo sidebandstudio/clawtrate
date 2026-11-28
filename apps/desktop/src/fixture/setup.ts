@@ -41,6 +41,8 @@ const failed = (kind: NonNullable<SetupState["failure"]>["kind"], extra = {}): S
   failure: { kind, exitCode: null, port: null, reason: null, ...extra },
 });
 
+const localStopped = looked({ ...localLook, outcome: "stopped", access: null, canStart: true });
+
 /** Every setup state the fixture shows, by the name used in `?setup=`. */
 export const SETUP_STATES: Record<string, SetupState> = {
   first: initialSetupState,
@@ -108,6 +110,44 @@ export const SETUP_STATES: Record<string, SetupState> = {
   "local-waiting": { ...initialSetupState, phase: "looking", unasked: true },
   "local-start": { ...initialSetupState, phase: "looking", unasked: true },
   "local-start-slow": { ...initialSetupState, phase: "looking", unasked: true },
+  "local-empty-wait": { ...initialSetupState, phase: "looking", unasked: true },
+  "local-not-found": {
+    ...looked({ ...localLook, outcome: "not-found", access: null, port: null, profile: null }),
+    unasked: true,
+  },
+  "local-stopped": localStopped,
+  "local-stopped-without-service": {
+    ...localStopped,
+    look: { ...localStopped.look!, canStart: false },
+  },
+  "local-starting": { ...localStopped, phase: "starting", step: 1 },
+  "local-start-refused": { ...failed("not-started"), look: localStopped.look },
+  "local-start-unanswered": {
+    ...failed("not-started", { reason: "no-answer" }),
+    look: localStopped.look,
+  },
+  "local-token-refused": { ...failed("token-refused"), look: looked(localLook).look },
+  "local-unanswered": { ...failed("unanswered", { port: 18789 }), look: looked(localLook).look },
+  "local-protocol-older": {
+    ...failed("protocol", { reason: "gateway-older" }),
+    look: looked(localLook).look,
+  },
+  "local-protocol-newer": {
+    ...failed("protocol", { reason: "client-older" }),
+    look: looked(localLook).look,
+  },
+  "local-unreadable": looked({
+    ...localLook,
+    outcome: "cant-tell",
+    reason: "settings",
+    access: null,
+  }),
+  "local-unfinished": looked({
+    ...localLook,
+    outcome: "cant-tell",
+    reason: "settings-unfinished",
+    access: null,
+  }),
   "local-unverified": looked({
     ...localLook,
     outcome: "unverified",
@@ -143,6 +183,7 @@ export const REFUSED_RECONNECT = {
 export const SETUP_STEPS: Record<string, Array<{ after: number; setup: SetupState }>> = {
   "local-start": [{ after: 1_000, setup: { ...looked({ ...localLook }), unasked: true } }],
   "local-start-slow": [{ after: 4_500, setup: { ...looked({ ...localLook }), unasked: true } }],
+  "local-empty-wait": [{ after: 1_000, setup: SETUP_STATES["local-not-found"]! }],
 };
 
 export function isSetupState(name: string | null): name is string {
@@ -204,6 +245,12 @@ export function setupCommand(
       after(300, () => current().phase === "looking" && setup({ ...current(), step: 1 }));
       after(600, () => current().phase === "looking" && setup({ ...current(), step: 2 }));
       after(900, () => current().phase === "looking" && setup(looked({})));
+      return true;
+    }
+    case "setupStart": {
+      setup({ ...localStopped, phase: "starting" });
+      after(300, () => setup({ ...current(), step: 1 }));
+      after(900, () => setup(looked(localLook)));
       return true;
     }
     case "setupConnect": {

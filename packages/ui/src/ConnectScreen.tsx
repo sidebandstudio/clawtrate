@@ -688,6 +688,7 @@ export function ConnectScreen({
       (setup.phase === "found" &&
         (connection.error?.code === SETUP_PAIRING_GONE ||
           connection.error?.code === SETUP_PAIRING_APPEARED)));
+  const localProtocolFailure = info.setup?.local === true && setup?.failure?.kind === "protocol";
   const noGateway = connection.status === "idle" && connection.gatewayUrl === null;
   const showSetup =
     info.setup !== undefined &&
@@ -712,7 +713,7 @@ export function ConnectScreen({
     <main className="connect" inert={inert}>
       <div className="connect-drag" />
       <div className="connect-card" ref={card}>
-        {mismatch ? (
+        {mismatch && !localProtocolFailure ? (
           <>
             <header className="connect-brand">
               <img src={logoUrl} alt={PRODUCT_NAME} width={56} height={56} />
