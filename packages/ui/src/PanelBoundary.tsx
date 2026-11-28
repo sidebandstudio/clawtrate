@@ -1,4 +1,4 @@
-import { Component, type ReactNode } from "react";
+import { Component, createRef, type ReactNode, type RefObject } from "react";
 
 type Props = {
   children: ReactNode;
@@ -6,11 +6,19 @@ type Props = {
   className?: string;
   /** Told when the panel fails and when it draws again, for what the shell does only while it shows. */
   onFailed?: (failed: boolean) => void;
+  /** A way out that doesn't run through the failed panel: on a phone it may be the only one. */
+  back?: { label: string; onClick: () => void };
+  /**
+   * The element the shell keeps focus in while this panel shows (the Work drawer's): the fallback
+   * takes it over, and its Try again takes focus when the panel fails.
+   */
+  rootRef?: RefObject<HTMLElement | null>;
 };
 
 /** One panel that throws shows this in its place; the rail and the other panels stay. */
 export class PanelBoundary extends Component<Props, { failed: boolean }> {
   override state = { failed: false };
+  private readonly tryAgain = createRef<HTMLButtonElement>();
 
   static getDerivedStateFromError(): { failed: boolean } {
     return { failed: true };
@@ -18,6 +26,10 @@ export class PanelBoundary extends Component<Props, { failed: boolean }> {
 
   override componentDidCatch(): void {
     this.props.onFailed?.(true);
+  }
+
+  override componentDidUpdate(_: Props, before: { failed: boolean }): void {
+    if (!before.failed && this.state.failed && this.props.rootRef) this.tryAgain.current?.focus();
   }
 
   override componentWillUnmount(): void {
@@ -31,6 +43,7 @@ export class PanelBoundary extends Component<Props, { failed: boolean }> {
         className={this.props.className ? `empty ${this.props.className}` : "empty"}
         role="alert"
         data-testid="panel-failed"
+        ref={this.props.rootRef as RefObject<HTMLDivElement | null> | undefined}
       >
         <div>
           <h1 tabIndex={-1}>Couldn't show this part</h1>
@@ -39,6 +52,7 @@ export class PanelBoundary extends Component<Props, { failed: boolean }> {
             <button
               type="button"
               className="button"
+              ref={this.tryAgain}
               onClick={() => {
                 this.setState({ failed: false });
                 this.props.onFailed?.(false);
@@ -46,6 +60,16 @@ export class PanelBoundary extends Component<Props, { failed: boolean }> {
             >
               Try again
             </button>
+            {this.props.back && (
+              <button
+                type="button"
+                className="button"
+                data-variant="quiet"
+                onClick={this.props.back.onClick}
+              >
+                {this.props.back.label}
+              </button>
+            )}
           </div>
         </div>
       </div>

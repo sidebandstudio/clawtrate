@@ -921,7 +921,10 @@ export function Shell({
         />
         <div className="main-pane" ref={mainRef}>
           {routines ? (
-            <PanelBoundary key="routines">
+            <PanelBoundary
+              key="routines"
+              back={{ label: "Close Routines", onClick: closeRoutines }}
+            >
               <RoutinesView
                 state={state}
                 info={info}
@@ -937,7 +940,11 @@ export function Shell({
               />
             </PanelBoundary>
           ) : (
-            <PanelBoundary key="conversation" onFailed={setConversationFailed}>
+            <PanelBoundary
+              key="conversation"
+              onFailed={setConversationFailed}
+              {...(onePane ? { back: { label: "Back to tasks", onClick: backToList } } : {})}
+            >
               <OpenTaskContext.Provider value={selection.selectTask}>
                 <WorkLinksContext.Provider value={workLinks}>
                   <Conversation
@@ -986,7 +993,7 @@ export function Shell({
             onClick={() => setPanel(false)}
           />
           {panelOpen && !routines && (
-            <PanelBoundary key="work" className="work-panel">
+            <PanelBoundary key="work" className="work-panel" rootRef={panelRef}>
               <WorkPanel
                 bot={bot}
                 task={task}

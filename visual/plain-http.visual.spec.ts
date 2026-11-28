@@ -176,7 +176,25 @@ test("a Work drawer that fails keeps its Try again in reach of the pointer", asy
   // Work's fallback comes after the conversation's and the drawer's scrim.
   const failed = page.getByTestId("panel-failed").last();
   await expect(failed).toBeVisible();
+  // Focus moves to Try again and stays in the drawer.
+  const tryAgain = failed.getByRole("button", { name: "Try again" });
+  await expect(tryAgain).toBeFocused();
+  await page.keyboard.press("Tab");
+  expect(await failed.evaluate((el) => el.contains(document.activeElement))).toBe(true);
   await change(`return { ...state, accounts: window.keptAccounts };`);
   await failed.getByRole("button", { name: "Try again" }).click();
   await expect(page.locator("aside.work-panel")).toBeVisible();
+});
+
+test("on a phone, a failed panel keeps a way back", async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await openFixture(page, "scene=main&routines=on&access=admin", "light");
+  await page.getByRole("button", { name: "Back to bots" }).click();
+  await page.getByRole("button", { name: "Routines", exact: true }).click();
+  await expect(page.getByTestId("routines-view")).toBeVisible();
+  await breakJobs(page, true);
+  const failed = page.getByTestId("panel-failed");
+  await failed.getByRole("button", { name: "Close Routines" }).click();
+  await expect(failed).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Routines", exact: true })).toBeVisible();
 });
