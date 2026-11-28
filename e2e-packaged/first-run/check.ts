@@ -51,7 +51,7 @@ const stepResults: StepResult[] = STEPS.map((step) => ({
 type Event = {
   seconds: number;
   step: string;
-  kind: "screen" | "press" | "type" | "fixture";
+  kind: "screen" | "press" | "type" | "fixture" | "inspection";
   text: string;
 };
 const trace: Event[] = [];
@@ -301,6 +301,8 @@ function launch() {
 
 const firstBotWelcome = () => hasText(/^Set up your first bot$/) && hasButton("Get started");
 const accountPicker = () => hasText(/^Connect an account$/) && hasButton("Close");
+const composer = () =>
+  latest.some(({ role, text }) => /^AXText(?:Area|Field)$/.test(role) && /^Message /.test(text));
 
 const shellVisible = () =>
   latest.some(({ role, text }) => role === "AXLandmarkNavigation" && text === "Bots") ||
@@ -361,6 +363,15 @@ try {
   await step(3, async () => {
     await waitFor("the automatically connected app", shellVisible, 90);
     connectedAt = performance.now();
+    if (accountPicker()) {
+      await screenshot("04-account-picker-before-scopes.png");
+      record(
+        "inspection",
+        "Connect an account opened automatically. Closing it to inspect the grant in Settings.",
+      );
+      await press("Close");
+      await waitFor("Settings after closing the account picker", () => hasButton("Settings"));
+    }
     await press("Settings");
     await waitFor("Gateway settings", () => hasButton("Gateway") || hasText(/^Granted scopes$/));
     if (!hasText(/^Granted scopes$/)) await press("Gateway");
@@ -373,11 +384,16 @@ try {
   });
   await step(4, async () => {
     if (!appData) throw new Error("The packaged app has no data folder for this run.");
-    await waitFor("the connected app before provider setup", shellVisible);
+    await waitFor(
+      "the account picker, first-bot welcome or empty conversation",
+      () => accountPicker() || firstBotWelcome() || composer() || hasText(/^No tasks yet$/),
+    );
     await screenshot("05-before-scripted-account.png");
-    if (firstBotWelcome()) {
+    if (!accountPicker() && firstBotWelcome()) {
       await press("Get started");
       await waitFor("Connect an account on the fresh gateway", accountPicker);
+    }
+    if (accountPicker()) {
       await screenshot("05-account-picker.png");
     }
     provider = await scriptedProvider(profile, appData, (text) => record("fixture", text));
@@ -386,10 +402,6 @@ try {
     return heading() ?? "The scripted model is configured on loopback.";
   });
   await step(5, async () => {
-    const composer = () =>
-      latest.some(
-        ({ role, text }) => /^AXText(?:Area|Field)$/.test(role) && /^Message /.test(text),
-      );
     const firstBotAction = () =>
       buttons().find(
         ({ role, text }) =>
