@@ -25,6 +25,13 @@ export const MAX_SKILL_LIBRARY_ENTRIES = 256;
 
 const MAX_ENTRY_ID_CHARS = 1_024;
 const MAX_ENTRY_NAME_CHARS = 256;
+const MAX_SELECTION_NOTICE_CHARS = 512;
+
+// Fields OpenClaw recovers when an unquoted value contains `: ` (`FREEFORM_TEXT_FIELDS`).
+const isFreeformTextField = (key: string) =>
+  key === "description" || key === "read_when" || key === "summary";
+const TRAILING_YAML_COMMENT = /^(?:[ \t]+#.*)?[ \t]*$/;
+const BLOCK_SCALAR_HEADER = /^([|>])(?:([1-9])([+-])?|([+-])([1-9])?)?(?:[ \t]+#.*)?$/;
 
 const UUID_PATTERN = /^[a-f0-9-]{36}$/;
 const REVISION_PATTERN = /^[a-f0-9]{64}$/;
@@ -49,6 +56,8 @@ export type SkillLibraryList = {
   profileId: string | null;
   multipleProfiles: boolean;
   truncated: boolean;
+  /** Gateway notice when enabled skills exceed the default new-task selection limit (64). */
+  defaultSelectionNotice: string | null;
   stamp: GatewayStamp;
 };
 
@@ -186,23 +195,55 @@ export function skillSlugProblem(slug: string): string | null {
   return null;
 }
 
-function unquoteYaml(raw: string): { ok: true; value: string } | { ok: false; error: string } {
+function unquoteYaml(
+  raw: string,
+  key: string,
+): { ok: true; value: string } | { ok: false; error: string } {
   const quote = raw[0];
   if (quote === "'") {
-    if (raw.length < 2 || raw[raw.length - 1] !== "'")
-      return { ok: false, error: "SKILL.md front matter has an unclosed single quote." };
-    return { ok: true, value: raw.slice(1, -1).replace(/''/g, "'") };
+    let out = "";
+    let closed = false;
+    for (let i = 1; i < raw.length; i += 1) {
+      const ch = raw[i]!;
+      if (ch === "'") {
+        if (raw[i + 1] === "'") {
+          out += "'";
+          i += 1;
+          continue;
+        }
+        if (!TRAILING_YAML_COMMENT.test(raw.slice(i + 1)))
+          return {
+            ok: false,
+            error: `SKILL.md front matter "${key}" has unexpected text after a quote.`,
+          };
+        closed = true;
+        break;
+      }
+      out += ch;
+    }
+    if (!closed)
+      return {
+        ok: false,
+        error: `SKILL.md front matter "${key}" has an unclosed single quote.`,
+      };
+    return { ok: true, value: out };
   }
   if (quote === '"') {
     if (raw.length < 2)
-      return { ok: false, error: "SKILL.md front matter has an unclosed double quote." };
+      return {
+        ok: false,
+        error: `SKILL.md front matter "${key}" has an unclosed double quote.`,
+      };
     let out = "";
     let closed = false;
     for (let i = 1; i < raw.length; i += 1) {
       const ch = raw[i]!;
       if (ch === "\\") {
         if (i + 1 >= raw.length)
-          return { ok: false, error: "SKILL.md front matter has an incomplete escape sequence." };
+          return {
+            ok: false,
+            error: `SKILL.md front matter "${key}" has an incomplete escape sequence.`,
+          };
         const next = raw[++i]!;
         if (next === "n") out += "\n";
         else if (next === "r") out += "\r";
@@ -210,18 +251,173 @@ function unquoteYaml(raw: string): { ok: true; value: string } | { ok: false; er
         else if (next === '"' || next === "\\" || next === "/") out += next;
         else out += next;
       } else if (ch === '"') {
-        if (raw.slice(i + 1).trim() !== "")
-          return { ok: false, error: "SKILL.md front matter has unexpected text after a quote." };
+        if (!TRAILING_YAML_COMMENT.test(raw.slice(i + 1)))
+          return {
+            ok: false,
+            error: `SKILL.md front matter "${key}" has unexpected text after a quote.`,
+          };
         closed = true;
         break;
       } else {
         out += ch;
       }
     }
-    if (!closed) return { ok: false, error: "SKILL.md front matter has an unclosed double quote." };
+    if (!closed)
+      return {
+        ok: false,
+        error: `SKILL.md front matter "${key}" has an unclosed double quote.`,
+      };
     return { ok: true, value: out };
   }
   return { ok: true, value: raw };
+}
+
+function scanFlowValue(
+  lines: string[],
+  startIndex: number,
+  initial: string,
+  key: string,
+): { ok: true; endIndex: number; value: string } | { ok: false; error: string } {
+  const stack: string[] = [];
+  const parts: string[] = [];
+  let inSingle = false;
+  let inDouble = false;
+  let escaped = false;
+  for (let lineIndex = startIndex; lineIndex < lines.length; lineIndex += 1) {
+    const text = lineIndex === startIndex ? initial : lines[lineIndex]!;
+    parts.push(text.trim());
+    for (let j = 0; j < text.length; j += 1) {
+      const ch = text[j]!;
+      if (inSingle) {
+        if (ch === "'") {
+          if (text[j + 1] === "'") j += 1;
+          else inSingle = false;
+        }
+        continue;
+      }
+      if (inDouble) {
+        if (escaped) {
+          escaped = false;
+        } else if (ch === "\\") {
+          escaped = true;
+        } else if (ch === '"') {
+          inDouble = false;
+        }
+        continue;
+      }
+      if (ch === "#" && (j === 0 || text[j - 1] === " " || text[j - 1] === "\t")) break;
+      if (ch === "'") {
+        inSingle = true;
+      } else if (ch === '"') {
+        inDouble = true;
+      } else if (ch === "[") {
+        stack.push("]");
+      } else if (ch === "{") {
+        stack.push("}");
+      } else if (ch === "]" || ch === "}") {
+        if (stack.pop() !== ch)
+          return {
+            ok: false,
+            error: `SKILL.md front matter "${key}" has invalid YAML syntax.`,
+          };
+        if (stack.length === 0) {
+          if (!TRAILING_YAML_COMMENT.test(text.slice(j + 1)))
+            return {
+              ok: false,
+              error: `SKILL.md front matter "${key}" has unexpected text after a closing bracket.`,
+            };
+          return { ok: true, endIndex: lineIndex, value: parts.join(" ").trim() };
+        }
+      }
+    }
+    if (inSingle || inDouble || escaped)
+      return {
+        ok: false,
+        error: `SKILL.md front matter "${key}" has an unclosed quote.`,
+      };
+  }
+  return {
+    ok: false,
+    error: `SKILL.md front matter "${key}" has invalid YAML syntax.`,
+  };
+}
+
+function parsePlainYamlValue(
+  rest: string,
+  key: string,
+  allowFreeformColon: boolean,
+): { ok: true; value: string } | { ok: false; error: string } {
+  const plain = rest.replace(/[ \t]+#.*$/, "").trim();
+  if (/^[\]},@`%*&!]/.test(plain))
+    return { ok: false, error: `SKILL.md front matter "${key}" has invalid YAML syntax.` };
+  if (!allowFreeformColon && /(?:^|[^\\]):(?:[ \t]|$)/.test(plain))
+    return { ok: false, error: `SKILL.md front matter "${key}" has invalid YAML syntax.` };
+  return { ok: true, value: plain };
+}
+
+function validateNestedYamlLines(
+  nested: string[],
+  parentKey: string,
+): { ok: true } | { ok: false; error: string } {
+  for (let idx = 0; idx < nested.length; idx += 1) {
+    const raw = nested[idx]!;
+    if (raw.trim() === "" || /^\s*#/.test(raw)) continue;
+    if (raw.startsWith("\t"))
+      return {
+        ok: false,
+        error: `SKILL.md front matter "${parentKey}" cannot use tabs for indentation.`,
+      };
+    const indent = /^([ ]+)/.exec(raw)?.[1]?.length ?? 0;
+    const trimmed = raw.trim();
+    const seqMatch = /^-(?:[ \t]+(.*))?$/.exec(trimmed);
+    const body = seqMatch ? (seqMatch[1]?.trim() ?? "") : trimmed;
+    if (body === "" || body.startsWith("#")) continue;
+
+    const mapMatch = /^(?:([A-Za-z0-9_-]+)|"([A-Za-z0-9_-]+)"|'([A-Za-z0-9_-]+)'):[ \t]*(.*)$/.exec(
+      body,
+    );
+    const itemKey = mapMatch
+      ? `${parentKey}.${(mapMatch[1] ?? mapMatch[2] ?? mapMatch[3])!}`
+      : parentKey;
+    const value = mapMatch ? mapMatch[4]!.trim() : body;
+    if (value === "" || value.startsWith("#")) continue;
+
+    if (value[0] === "|" || value[0] === ">") {
+      if (!BLOCK_SCALAR_HEADER.test(value))
+        return {
+          ok: false,
+          error: `SKILL.md front matter "${itemKey}" has an invalid block scalar header.`,
+        };
+      while (idx + 1 < nested.length) {
+        const next = nested[idx + 1]!;
+        if (next.trim() === "") {
+          idx += 1;
+          continue;
+        }
+        const nextIndent = /^([ ]+)/.exec(next)?.[1]?.length ?? 0;
+        if (nextIndent <= indent) break;
+        idx += 1;
+      }
+      continue;
+    }
+
+    if (value[0] === "'" || value[0] === '"') {
+      const parsed = unquoteYaml(value, itemKey);
+      if (!parsed.ok) return parsed;
+      continue;
+    }
+
+    if (value[0] === "[" || value[0] === "{") {
+      const scanned = scanFlowValue(nested, idx, value, itemKey);
+      if (!scanned.ok) return scanned;
+      idx = scanned.endIndex;
+      continue;
+    }
+
+    const plain = parsePlainYamlValue(value, itemKey, false);
+    if (!plain.ok) return plain;
+  }
+  return { ok: true };
 }
 
 function parseFrontmatterBlock(
@@ -243,12 +439,18 @@ function parseFrontmatterBlock(
     const key = (match[1] ?? match[2] ?? match[3])!;
     const rest = match[4]!.trim();
 
-    // YAML block scalar (`|`, `|-`, `|+`, `>`, `>-`, `>+`).
-    const blockHeader = /^([|>])([1-9])?([+-])?(?:[ \t]+#.*)?$/.exec(rest);
-    if (blockHeader) {
+    // YAML block scalar (`|`, `|-`, `|+`, `>`, `>-`, `>+`, with optional explicit indent).
+    if (rest[0] === "|" || rest[0] === ">") {
+      const blockHeader = BLOCK_SCALAR_HEADER.exec(rest);
+      if (!blockHeader)
+        return {
+          ok: false,
+          error: `SKILL.md front matter "${key}" has an invalid block scalar header.`,
+        };
       const style = blockHeader[1]!;
-      const explicitIndent = blockHeader[2] ? Number(blockHeader[2]) : null;
-      const chomp = blockHeader[3] ?? "";
+      const indentStr = blockHeader[2] ?? blockHeader[5];
+      const explicitIndent = indentStr ? Number(indentStr) : null;
+      const chomp = blockHeader[3] ?? blockHeader[4] ?? "";
       const collected: string[] = [];
       let indent = explicitIndent;
       while (i + 1 < lines.length) {
@@ -284,8 +486,8 @@ function parseFrontmatterBlock(
       continue;
     }
 
-    if (rest === "") {
-      // Nested mapping or indented multi-line value.
+    if (rest === "" || rest.startsWith("#")) {
+      // Nested mapping, sequence, or indented multi-line value.
       const nested: string[] = [];
       while (i + 1 < lines.length) {
         const next = lines[i + 1]!;
@@ -298,8 +500,13 @@ function parseFrontmatterBlock(
         nested.push(next);
         i += 1;
       }
-      const nonEmpty = nested.filter((entry) => entry.trim() !== "");
-      if (nonEmpty.length > 0 && !nonEmpty.every((entry) => /^\s*[\w-]+\s*:/.test(entry))) {
+      const checked = validateNestedYamlLines(nested, key);
+      if (!checked.ok) return checked;
+      const nonEmpty = nested.filter((entry) => entry.trim() !== "" && !/^\s*#/.test(entry));
+      if (
+        nonEmpty.length > 0 &&
+        !nonEmpty.every((entry) => /^\s*(?:[\w-]+\s*:|-(?:\s|$))/.test(entry))
+      ) {
         fields[key] = nested
           .map((entry) => entry.trim())
           .join("\n")
@@ -309,13 +516,23 @@ function parseFrontmatterBlock(
     }
 
     if (rest[0] === '"' || rest[0] === "'") {
-      const parsed = unquoteYaml(rest);
+      const parsed = unquoteYaml(rest, key);
       if (!parsed.ok) return parsed;
       fields[key] = parsed.value.trim();
       continue;
     }
 
-    fields[key] = rest;
+    if (rest[0] === "[" || rest[0] === "{") {
+      const scanned = scanFlowValue(lines, i, rest, key);
+      if (!scanned.ok) return scanned;
+      i = scanned.endIndex;
+      fields[key] = scanned.value;
+      continue;
+    }
+
+    const plain = parsePlainYamlValue(rest, key, isFreeformTextField(key));
+    if (!plain.ok) return plain;
+    fields[key] = plain.value;
   }
   return { ok: true, fields };
 }
@@ -444,11 +661,13 @@ export async function listSkillLibrary(
     }
     entries.push(parsed);
   }
+  const notice = str(answer.defaultSelectionNotice, MAX_SELECTION_NOTICE_CHARS)?.trim() ?? "";
   return {
     entries,
     profileId: str(answer.profileId, MAX_ENTRY_ID_CHARS),
     multipleProfiles: answer.multipleProfiles === true,
     truncated,
+    defaultSelectionNotice: notice || null,
     stamp,
   };
 }

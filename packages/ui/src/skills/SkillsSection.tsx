@@ -24,12 +24,13 @@ import type { SectionView } from "../bots/AccountsSection.tsx";
 import { CheckIcon, WarnIcon } from "../icons.tsx";
 import "./skills.css";
 
-type LoadState =
+export type SkillsLoadState =
   | { status: "idle" }
   | { status: "error"; message: string; key: string }
   | { status: "ready"; list: SkillLibraryList; key: string };
 
-type ImportDraft = {
+export type ImportDraft = {
+  id: number;
   fileName: string;
   bytes: Uint8Array;
   preview: SkillImportPreview;
@@ -42,6 +43,118 @@ type ImportDraft = {
   error: string | null;
 };
 
+export type SkillsLoadView = {
+  list: SkillLibraryList | null;
+  error: string | null;
+  loading: boolean;
+  refreshing: boolean;
+  unidentified: boolean;
+};
+
+/** Resolve the current load state against the active gateway identity. */
+export function skillsLoadView(
+  load: SkillsLoadState,
+  currentStamp: GatewayStamp,
+  readKey: string,
+  connected: boolean,
+  active: boolean,
+): SkillsLoadView {
+  if (!connected || !active)
+    return { list: null, error: null, loading: false, refreshing: false, unidentified: false };
+  const list =
+    load.status === "ready" && sameStamp(load.list.stamp, currentStamp) ? load.list : null;
+  const unidentified =
+    list === null &&
+    load.status === "ready" &&
+    load.key === readKey &&
+    load.list.stamp.gatewayId === null;
+  const error = load.status === "error" && load.key === readKey ? load.message : null;
+  const loading = list === null && error === null && !unidentified;
+  const refreshing = load.status === "idle" || load.key !== readKey;
+  return { list, error, loading, refreshing, unidentified };
+}
+
+export function applyDraftSaveStart(
+  current: ImportDraft | null,
+  draftId: number,
+): ImportDraft | null {
+  return current?.id === draftId
+    ? { ...current, saving: true, conflict: null, error: null }
+    : current;
+}
+
+export function applyDraftSaveConflict(
+  current: ImportDraft | null,
+  draftId: number,
+  message: string,
+): ImportDraft | null {
+  return current?.id === draftId
+    ? { ...current, saving: false, conflict: message, error: null }
+    : current;
+}
+
+export function applyDraftSaveSuccess(
+  current: ImportDraft | null,
+  draftId: number,
+): ImportDraft | null {
+  return current?.id === draftId ? null : current;
+}
+
+export function applyDraftSaveError(
+  current: ImportDraft | null,
+  draftId: number,
+  message: string,
+): ImportDraft | null {
+  return current?.id === draftId
+    ? { ...current, saving: false, error: message, conflict: null }
+    : current;
+}
+
+export type PickReadOutcome =
+  | { status: "stale" }
+  | { status: "error"; message: string }
+  | { status: "ready"; draft: ImportDraft };
+
+/** Read and validate a picked SKILL.md file, dropping stale completions when another pick or Cancel superseded it. */
+export async function readPickedSkillFile(
+  file: Pick<File, "name" | "size" | "arrayBuffer">,
+  id: number,
+  stamp: GatewayStamp,
+  isCurrent: () => boolean,
+): Promise<PickReadOutcome> {
+  if (file.size === 0) return { status: "error", message: "This SKILL.md file is empty." };
+  if (file.size > MAX_SKILL_FILE_BYTES) {
+    return {
+      status: "error",
+      message: `SKILL.md files can be at most 1 MB (${MAX_SKILL_FILE_BYTES.toLocaleString("en-US")} bytes).`,
+    };
+  }
+  try {
+    const buffer = await file.arrayBuffer();
+    if (!isCurrent()) return { status: "stale" };
+    const bytes = new Uint8Array(buffer);
+    const parsed = parseSkillMarkdown(bytes);
+    if (!parsed.ok) return { status: "error", message: parsed.error };
+    return {
+      status: "ready",
+      draft: {
+        id,
+        fileName: file.name || "SKILL.md",
+        bytes,
+        preview: parsed.preview,
+        slug: parsed.preview.slug,
+        stamp,
+        saving: false,
+        conflict: null,
+        error: null,
+      },
+    };
+  } catch {
+    if (!isCurrent()) return { status: "stale" };
+    return { status: "error", message: "That file couldn't be read." };
+  }
+}
+
 type SavedNotice = {
   slug: string;
   nextAction: string | null;
@@ -52,6 +165,108 @@ function formatBytes(size: number): string {
   if (size < 1024) return `${size} B`;
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
   return `${(size / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+function tagFor(entry: SkillLibraryEntry, profileId: string | null) {
+  return profileId !== null && entry.ownerProfileId === profileId ? "Your skill" : "Team skill";
+}
+
+/** Library list area: loading, error, unidentified gateway, notices, and entries. */
+export function SkillLibraryView({
+  list,
+  loadError,
+  loading,
+  unidentified,
+  onRetry,
+}: {
+  list: SkillLibraryList | null;
+  loadError: string | null;
+  loading: boolean;
+  unidentified: boolean;
+  onRetry: () => void;
+}) {
+  return (
+    <>
+      {loading && (
+        <p className="b-hint" data-testid="skills-loading">
+          Reading the skill library from the gateway…
+        </p>
+      )}
+
+      {loadError && !list && (
+        <div className="b-note" data-tone="danger" role="alert" data-testid="skills-load-error">
+          <WarnIcon />
+          <div>
+            <p>Couldn&apos;t read the skill library. {loadError}</p>
+            <div className="b-actions">
+              <button type="button" className="button" data-size="sm" onClick={onRetry}>
+                Try again
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {unidentified && (
+        <div className="b-note" data-tone="warn" role="alert" data-testid="skills-unidentified">
+          <WarnIcon />
+          <div>
+            <p>
+              Couldn&apos;t confirm this gateway&apos;s identity, so its skill library can&apos;t be
+              shown or imported into yet.
+            </p>
+            <div className="b-actions">
+              <button type="button" className="button" data-size="sm" onClick={onRetry}>
+                Try again
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {list && (
+        <>
+          <p className="b-group">Library</p>
+          {list.defaultSelectionNotice && (
+            <div className="b-note" role="status" data-testid="skills-selection-notice">
+              <WarnIcon />
+              <div>
+                <p>{list.defaultSelectionNotice}</p>
+              </div>
+            </div>
+          )}
+          {list.truncated && (
+            <p className="b-hint" role="status" data-testid="skills-truncated">
+              {list.entries.length > 0
+                ? `Showing the first ${list.entries.length.toLocaleString("en-US")} skills. Other skills may still be in your library.`
+                : "This list was too large to display here. Other skills may still be in your library."}
+            </p>
+          )}
+          {list.entries.length === 0 ? (
+            !list.truncated && (
+              <p className="b-hint" data-testid="skills-empty">
+                No skills in your library yet. Import a <code>SKILL.md</code> file to save a copy
+                here.
+              </p>
+            )
+          ) : (
+            <ul className="sk-list" data-testid="skills-list">
+              {list.entries.map((entry) => (
+                <li key={entry.skillId} className="sk-row" data-testid="skills-row">
+                  <div className="sk-row-head">
+                    <span className="sk-row-slug">{entry.slug}</span>
+                    <span className="sk-tag">{tagFor(entry, list.profileId)}</span>
+                    {!entry.enabled && <span className="sk-tag">Disabled</span>}
+                  </div>
+                  {entry.description && <p className="sk-row-desc">{entry.description}</p>}
+                </li>
+              ))}
+            </ul>
+          )}
+        </>
+      )}
+    </>
+  );
 }
 
 function WriteAccessBar({ connection, info }: { connection: ConnectionState; info: HostInfo }) {
@@ -123,17 +338,26 @@ export function useSkillsSection({
 }): SectionView {
   const bridge = useBridge();
   const fileInput = useRef<HTMLInputElement>(null);
+  const pickSeq = useRef(0);
   const connected = connection.status === "connected";
   const canWrite = connected && connection.canWrite && !info.readOnly;
   const currentStamp = gatewayStamp(connection);
+  const latestStamp = useRef(currentStamp);
 
-  const [load, setLoad] = useState<LoadState>({ status: "idle" });
+  const [load, setLoad] = useState<SkillsLoadState>({ status: "idle" });
   const [readNonce, setReadNonce] = useState(0);
   const [draft, setDraft] = useState<ImportDraft | null>(null);
   const [pickError, setPickError] = useState<string | null>(null);
   const [savedNotice, setSavedNotice] = useState<SavedNotice | null>(null);
 
   const readKey = `${connection.gatewayId ?? ""}:${connection.target}:${connection.connectedAt ?? ""}:${readNonce}`;
+
+  useEffect(() => {
+    latestStamp.current = { gatewayId: currentStamp.gatewayId, target: currentStamp.target };
+    return () => {
+      pickSeq.current += 1;
+    };
+  }, [currentStamp.gatewayId, currentStamp.target]);
 
   useEffect(() => {
     if (!active || !connected) return;
@@ -157,11 +381,13 @@ export function useSkillsSection({
     };
   }, [bridge, active, connected, readKey]);
 
-  const list =
-    load.status === "ready" && sameStamp(load.list.stamp, currentStamp) ? load.list : null;
-  const loadError = load.status === "error" && load.key === readKey ? load.message : null;
-  const loading = connected && active && list === null && loadError === null;
-  const refreshing = connected && active && (load.status === "idle" || load.key !== readKey);
+  const {
+    list,
+    error: loadError,
+    loading,
+    refreshing,
+    unidentified,
+  } = skillsLoadView(load, currentStamp, readKey, connected, active);
   const activeDraft = draft && sameStamp(draft.stamp, currentStamp) ? draft : null;
   const activeSaved =
     savedNotice && sameStamp(savedNotice.stamp, currentStamp) ? savedNotice : null;
@@ -175,53 +401,30 @@ export function useSkillsSection({
     const file = event.target.files?.[0];
     event.target.value = "";
     if (!file) return;
+    const seq = ++pickSeq.current;
     setPickError(null);
     setSavedNotice(null);
-    if (file.size === 0) {
+    const outcome = await readPickedSkillFile(
+      file,
+      seq,
+      list?.stamp ?? currentStamp,
+      () => pickSeq.current === seq,
+    );
+    if (outcome.status === "stale") return;
+    if (outcome.status === "error") {
       setDraft(null);
-      setPickError("This SKILL.md file is empty.");
+      setPickError(outcome.message);
       return;
     }
-    if (file.size > MAX_SKILL_FILE_BYTES) {
-      setDraft(null);
-      setPickError(
-        `SKILL.md files can be at most 1 MB (${MAX_SKILL_FILE_BYTES.toLocaleString("en-US")} bytes).`,
-      );
-      return;
-    }
-    try {
-      const buffer = await file.arrayBuffer();
-      const bytes = new Uint8Array(buffer);
-      const parsed = parseSkillMarkdown(bytes);
-      if (!parsed.ok) {
-        setDraft(null);
-        setPickError(parsed.error);
-        return;
-      }
-      setDraft({
-        fileName: file.name || "SKILL.md",
-        bytes,
-        preview: parsed.preview,
-        slug: parsed.preview.slug,
-        stamp: list?.stamp ?? currentStamp,
-        saving: false,
-        conflict: null,
-        error: null,
-      });
-    } catch {
-      setDraft(null);
-      setPickError("That file couldn't be read.");
-    }
+    setDraft(outcome.draft);
   };
 
   const slugError = activeDraft ? skillSlugProblem(activeDraft.slug) : null;
 
   const saveImport = async () => {
     if (!activeDraft || activeDraft.saving || slugError || !canWrite) return;
-    const { bytes, fileName, slug, stamp } = activeDraft;
-    setDraft((current) =>
-      current ? { ...current, saving: true, conflict: null, error: null } : null,
-    );
+    const { id: draftId, bytes, fileName, slug, stamp } = activeDraft;
+    setDraft((current) => applyDraftSaveStart(current, draftId));
     try {
       const copy = new Uint8Array(bytes.byteLength);
       copy.set(bytes);
@@ -237,18 +440,19 @@ export function useSkillsSection({
         stamp,
       });
       if (result.outcome === "conflict") {
-        setDraft((current) =>
-          current ? { ...current, saving: false, conflict: result.message, error: null } : null,
-        );
+        setDraft((current) => applyDraftSaveConflict(current, draftId, result.message));
         return;
       }
-      setDraft(null);
-      setSavedNotice({
-        slug: result.entry.slug,
-        nextAction: result.nextAction,
-        stamp: result.stamp,
-      });
-      announce(`Saved ${result.entry.slug} to your skill library`);
+      setDraft((current) => applyDraftSaveSuccess(current, draftId));
+      if (sameStamp(result.stamp, latestStamp.current)) {
+        setSavedNotice({
+          slug: result.entry.slug,
+          nextAction: result.nextAction,
+          stamp: result.stamp,
+        });
+        announce(`Saved ${result.entry.slug} to your skill library`);
+        setReadNonce((n) => n + 1);
+      }
       setLoad((current) => {
         if (current.status !== "ready" || !sameStamp(current.list.stamp, result.stamp))
           return current;
@@ -258,17 +462,11 @@ export function useSkillsSection({
         ].sort((a, b) => a.slug.localeCompare(b.slug));
         return { status: "ready", list: { ...current.list, entries: nextEntries }, key: readKey };
       });
-      setReadNonce((n) => n + 1);
     } catch (failure: unknown) {
       const message = failure instanceof Error ? failure.message : String(failure);
-      setDraft((current) =>
-        current ? { ...current, saving: false, error: message, conflict: null } : null,
-      );
+      setDraft((current) => applyDraftSaveError(current, draftId, message));
     }
   };
-
-  const tagFor = (entry: SkillLibraryEntry, profileId: string | null) =>
-    profileId !== null && entry.ownerProfileId === profileId ? "Your skill" : "Team skill";
 
   let body: ReactNode;
   if (!connected) {
@@ -293,7 +491,7 @@ export function useSkillsSection({
                 data-variant="primary"
                 data-size="sm"
                 data-testid="skills-import-button"
-                disabled={activeDraft?.saving === true}
+                disabled={activeDraft?.saving === true || currentStamp.gatewayId === null}
                 onClick={pickFile}
               >
                 Import SKILL.md…
@@ -383,9 +581,9 @@ export function useSkillsSection({
                 aria-invalid={slugError !== null || activeDraft.conflict !== null}
                 onChange={(event) =>
                   setDraft((current) =>
-                    current
+                    current?.id === activeDraft.id
                       ? { ...current, slug: event.target.value, conflict: null, error: null }
-                      : null,
+                      : current,
                   )
                 }
               />
@@ -474,7 +672,10 @@ export function useSkillsSection({
                 data-variant="quiet"
                 data-size="sm"
                 disabled={activeDraft.saving}
-                onClick={() => setDraft(null)}
+                onClick={() => {
+                  pickSeq.current += 1;
+                  setDraft(null);
+                }}
               >
                 Cancel
               </button>
@@ -482,55 +683,13 @@ export function useSkillsSection({
           </section>
         )}
 
-        {loading && (
-          <p className="b-hint" data-testid="skills-loading">
-            Reading the skill library from the gateway…
-          </p>
-        )}
-
-        {loadError && !list && (
-          <div className="b-note" data-tone="danger" role="alert" data-testid="skills-load-error">
-            <WarnIcon />
-            <div>
-              <p>Couldn&apos;t read the skill library. {loadError}</p>
-              <div className="b-actions">
-                <button
-                  type="button"
-                  className="button"
-                  data-size="sm"
-                  onClick={() => setReadNonce((n) => n + 1)}
-                >
-                  Try again
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {list && (
-          <>
-            <p className="b-group">Library</p>
-            {list.entries.length === 0 ? (
-              <p className="b-hint" data-testid="skills-empty">
-                No skills in your library yet. Import a <code>SKILL.md</code> file to save a copy
-                here.
-              </p>
-            ) : (
-              <ul className="sk-list" data-testid="skills-list">
-                {list.entries.map((entry) => (
-                  <li key={entry.skillId} className="sk-row" data-testid="skills-row">
-                    <div className="sk-row-head">
-                      <span className="sk-row-slug">{entry.slug}</span>
-                      <span className="sk-tag">{tagFor(entry, list.profileId)}</span>
-                      {!entry.enabled && <span className="sk-tag">Disabled</span>}
-                    </div>
-                    {entry.description && <p className="sk-row-desc">{entry.description}</p>}
-                  </li>
-                ))}
-              </ul>
-            )}
-          </>
-        )}
+        <SkillLibraryView
+          list={list}
+          loadError={loadError}
+          loading={loading}
+          unidentified={unidentified}
+          onRetry={() => setReadNonce((n) => n + 1)}
+        />
       </>
     );
   }

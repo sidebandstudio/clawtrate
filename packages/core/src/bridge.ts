@@ -2326,6 +2326,21 @@ class ViewerSession implements BridgeSession {
     return { ...list, models };
   }
 
+  /** A skill library list this view can receive: entries past the frame cap are omitted and `truncated` is set. */
+  private fitSkillLibrary(list: SkillLibraryList): SkillLibraryList {
+    const max = this.policy.maxResultChars;
+    if (max === undefined || JSON.stringify(list).length <= max) return list;
+    let lo = 0;
+    let hi = list.entries.length;
+    while (lo < hi) {
+      const mid = Math.ceil((lo + hi) / 2);
+      const candidate = { ...list, entries: list.entries.slice(0, mid), truncated: true };
+      if (JSON.stringify(candidate).length <= max) lo = mid;
+      else hi = mid - 1;
+    }
+    return { ...list, entries: list.entries.slice(0, lo), truncated: true };
+  }
+
   private routineResult(result: BotRoutines | RoutineRun[] | CalendarRuns | RunConversation) {
     const max = this.policy.maxResultChars;
     if (max !== undefined && JSON.stringify(result).length > max)
@@ -2613,7 +2628,7 @@ class ViewerSession implements BridgeSession {
       case "readBotGuides":
         return client.readBotGuides();
       case "listSkillLibrary":
-        return client.listSkillLibrary();
+        return this.fitSkillLibrary(await client.listSkillLibrary());
       case "importLibrarySkill": {
         if (!policy.attachments) throw new Error("This host does not take files.");
         // Consume the uploaded bytes immediately so failed or conflicted imports leave nothing held.
@@ -2622,12 +2637,14 @@ class ViewerSession implements BridgeSession {
         if (!bytes) throw new Error("The uploaded file could not be decoded.");
         return client.importLibrarySkill(command.slug, bytes, command.stamp, owner);
       }
-      case "activateSkillLibrary":
-        return client.activateSkillLibrary(this.mine(command.key), command.action, command.stamp, {
+      case "activateSkillLibrary": {
+        const key = this.mine(command.key);
+        return client.activateSkillLibrary(key, command.action, command.stamp, {
           ...(command.skillId ? { skillId: command.skillId } : {}),
           ...(command.revision ? { revision: command.revision } : {}),
-          owner,
+          owner: this.open.get(key) ?? owner,
         });
+      }
       case "setBotVoice":
         return client.setBotVoice(command.on, command.stamp, owner);
       case "setShowChannelChats":

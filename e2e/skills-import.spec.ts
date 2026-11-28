@@ -48,23 +48,49 @@ test("F-361: importing a local SKILL.md previews it, saves a copy to the gateway
     [],
   );
   const tag = randomBytes(3).toString("hex");
+  const existingSlug = `existing-pin-${tag}`;
+  const existingFile = `---\nname: Existing Pin ${tag}\ndescription: Existing skill pinned before import.\n---\n\nKeep this pinned revision unchanged.\n`;
   const slug = `git-import-${tag}`;
   const skillTitle = `Git Import ${tag}`;
   const description = `Checks release steps for imported skill ${tag}.`;
   const body = `# ${skillTitle}\n\nVerify <b>plain text</b> instructions for ${tag}.\n`;
   const skillFile = `---\nname: ${skillTitle}\ndescription: ${description}\n---\n\n${body}`;
 
-  let savedSkill: { skillId: string; revision: string } | null = null;
+  const cleanupSkills: Array<{ skillId: string; revision: string }> = [];
   try {
-    // A task started before the import must keep its pinned skills unchanged.
+    // Seed an existing skill so the task started before the import has a pinned revision to check.
+    const existingSaved = await person.request<{
+      entry: { skillId: string; slug: string; revision: string };
+    }>("skills.library.save", {
+      expectedRevision: null,
+      slug: existingSlug,
+      content: existingFile,
+    });
+    cleanupSkills.push({
+      skillId: existingSaved.entry.skillId,
+      revision: existingSaved.entry.revision,
+    });
+
+    // A task started before the import must keep its pinned skills and revisions unchanged.
     const beforeTask = await person.request<{ key: string }>("sessions.create", {
       agentId: "otto",
       label: `Before import ${tag}`,
     });
     const beforePins = await person.request<{
-      session?: { selections: Array<{ skillId: string; slug?: string }> };
+      session?: { selections: Array<{ skillId: string; slug?: string; revision: string }> };
     }>("skills.library.list", { sessionKey: beforeTask.key });
-    expect(beforePins.session?.selections.some((s) => s.slug === slug)).toBe(false);
+    const beforeSelections = (beforePins.session?.selections ?? []).map((s) => ({
+      skillId: s.skillId,
+      slug: s.slug,
+      revision: s.revision,
+    }));
+    expect(
+      beforeSelections.some(
+        (s) =>
+          s.skillId === existingSaved.entry.skillId && s.revision === existingSaved.entry.revision,
+      ),
+    ).toBe(true);
+    expect(beforeSelections.some((s) => s.slug === slug)).toBe(false);
 
     await openShell(page);
     await page.keyboard.press("ControlOrMeta+,");
@@ -117,16 +143,21 @@ test("F-361: importing a local SKILL.md previews it, saves a copy to the gateway
     const found = afterSaveList.entries.find((e) => e.slug === slug);
     expect(found).toBeDefined();
     expect(found!.description).toBe(description);
-    savedSkill = { skillId: found!.skillId, revision: found!.revision };
+    cleanupSkills.push({ skillId: found!.skillId, revision: found!.revision });
 
-    // Existing task's pinned selections are untouched by the import.
+    // Existing task's pinned selections and revisions are untouched by the import.
     const afterPins = await person.request<{
       session?: {
-        selections: Array<{ skillId: string; slug?: string }>;
+        selections: Array<{ skillId: string; slug?: string; revision: string }>;
         attachable: Array<{ skillId: string; slug: string }>;
       };
     }>("skills.library.list", { sessionKey: beforeTask.key });
-    expect(afterPins.session?.selections.some((s) => s.skillId === found!.skillId)).toBe(false);
+    const afterSelections = (afterPins.session?.selections ?? []).map((s) => ({
+      skillId: s.skillId,
+      slug: s.slug,
+      revision: s.revision,
+    }));
+    expect(afterSelections).toEqual(beforeSelections);
     expect(afterPins.session?.attachable.some((s) => s.skillId === found!.skillId)).toBe(true);
 
     // A task started after the import receives the skill automatically.
@@ -163,12 +194,14 @@ test("F-361: importing a local SKILL.md previews it, saves a copy to the gateway
     );
   } finally {
     try {
-      if (savedSkill) {
-        await person.request("skills.library.mutate", {
-          skillId: savedSkill.skillId,
-          expectedRevision: savedSkill.revision,
-          action: "remove",
-        });
+      for (const skill of cleanupSkills) {
+        await person
+          .request("skills.library.mutate", {
+            skillId: skill.skillId,
+            expectedRevision: skill.revision,
+            action: "remove",
+          })
+          .catch(() => {});
       }
     } finally {
       await person.close();

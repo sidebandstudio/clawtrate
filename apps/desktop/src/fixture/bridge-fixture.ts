@@ -981,6 +981,7 @@ export function createFixtureBridge(
     string,
     { fileName: string; mimeType: string; sizeBytes: number; bytes?: Uint8Array }
   >();
+  let nextFileId = 0;
   // The rail's task actions, answered as the engine would.
   const railRefused = new Set<string>();
   // Rail commands whose answers wait for the test to let them go (`holdRail`, `releaseRail`).
@@ -1655,7 +1656,7 @@ export function createFixtureBridge(
     savedFiles,
     attach: async (file) => {
       const info = {
-        id: `file-${files.size + 1}`,
+        id: `file-${++nextFileId}`,
         fileName: file.name,
         mimeType: file.type,
         sizeBytes: file.data.byteLength,

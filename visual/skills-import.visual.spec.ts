@@ -139,4 +139,71 @@ test.describe("skills import behaviour", () => {
     await expect(settings.getByTestId("skills-import-button")).toHaveCount(0);
     await expect(settings.getByTestId("skills-access-bar")).toContainText(/Write access needed/i);
   });
+
+  test("F-361: fixture keeps attachment ids unique after importing an earlier attachment", async ({
+    page,
+  }) => {
+    await openSkills(page, "&access=write", "dark");
+    const result = await page.evaluate(async () => {
+      const bridge = (
+        window as unknown as {
+          clawtrateFixture: {
+            getState(): { connection: { gatewayId: string | null; target: number } };
+            attach(file: {
+              name: string;
+              type: string;
+              data: ArrayBuffer;
+            }): Promise<{ id: string }>;
+            invoke(cmd: unknown): Promise<{ outcome: string; entry?: { description: string } }>;
+          };
+        }
+      ).clawtrateFixture;
+      const enc = new TextEncoder();
+      const skill = (name: string, desc: string) =>
+        enc.encode(`---\nname: ${name}\ndescription: ${desc}\n---\n\nRun ${name}.\n`).buffer;
+      const { gatewayId, target } = bridge.getState().connection;
+      const stamp = { gatewayId, target };
+
+      const first = await bridge.attach({
+        name: "first.md",
+        type: "text/markdown",
+        data: skill("Alpha Skill", "First skill description."),
+      });
+      const second = await bridge.attach({
+        name: "second.md",
+        type: "text/markdown",
+        data: skill("Beta Skill", "Second skill description."),
+      });
+      const firstSaved = await bridge.invoke({
+        type: "importLibrarySkill",
+        slug: "alpha-skill",
+        attachmentId: first.id,
+        stamp,
+      });
+      const third = await bridge.attach({
+        name: "third.md",
+        type: "text/markdown",
+        data: skill("Gamma Skill", "Third skill description."),
+      });
+      const secondSaved = await bridge.invoke({
+        type: "importLibrarySkill",
+        slug: "beta-skill",
+        attachmentId: second.id,
+        stamp,
+      });
+      return {
+        firstId: first.id,
+        secondId: second.id,
+        thirdId: third.id,
+        firstOutcome: firstSaved.outcome,
+        secondOutcome: secondSaved.outcome,
+        secondDescription: secondSaved.entry?.description,
+      };
+    });
+    expect(result.firstId).not.toBe(result.secondId);
+    expect(result.thirdId).not.toBe(result.secondId);
+    expect(result.firstOutcome).toBe("saved");
+    expect(result.secondOutcome).toBe("saved");
+    expect(result.secondDescription).toBe("Second skill description.");
+  });
 });

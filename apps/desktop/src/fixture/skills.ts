@@ -88,6 +88,7 @@ export function skillsCommands(
         profileId: "gateway-owner",
         multipleProfiles: true,
         truncated: false,
+        defaultSelectionNotice: null,
         stamp,
       };
     }

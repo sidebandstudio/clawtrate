@@ -164,6 +164,53 @@ describe("SKILL.md validation and preview", () => {
     expect(parsed.preview.instructions).toBe("Check the tide chart.");
   });
 
+  it("F-361: accepts valid YAML comments after quoted and plain values and keeps original content verbatim", () => {
+    const doubleQuoted =
+      "---\nname: \"Tide Table\" # display name\ndescription: 'Harbour O''Brien tides' # note\nmetadata: [wave] # flow list\n---\n\nCheck tides.\n";
+    const parsed = parseSkillMarkdown(utf8Bytes(doubleQuoted));
+    expect(parsed.ok).toBe(true);
+    if (!parsed.ok) return;
+    expect(parsed.preview.name).toBe("Tide Table");
+    expect(parsed.preview.description).toBe("Harbour O'Brien tides");
+    expect(parsed.content).toBe(doubleQuoted);
+
+    const plainComment =
+      "---\nname: Tide Table # plain comment\ndescription: Tide#not-a-comment\n---\n\nBody.\n";
+    const parsedPlain = parseSkillMarkdown(utf8Bytes(plainComment));
+    expect(parsedPlain.ok).toBe(true);
+    if (!parsedPlain.ok) return;
+    expect(parsedPlain.preview.name).toBe("Tide Table");
+    expect(parsedPlain.preview.description).toBe("Tide#not-a-comment");
+
+    // In YAML 1.2 a comment after a quoted value needs preceding whitespace.
+    const noSpaceComment =
+      '---\nname: "Tide Table"#no-space\ndescription: Checks tides.\n---\nBody.\n';
+    expect(parseSkillMarkdown(utf8Bytes(noSpaceComment))).toEqual({
+      ok: false,
+      error: expect.stringMatching(/name/i),
+    });
+  });
+
+  it("F-361: validates every front matter value as YAML and names the offending key", () => {
+    const badFlow =
+      "---\nname: Tide Table\ndescription: Checks tides.\nmetadata: [wave\n---\nBody.";
+    expect(parseSkillMarkdown(utf8Bytes(badFlow))).toEqual({
+      ok: false,
+      error: expect.stringMatching(/metadata/i),
+    });
+
+    const badNestedFlow =
+      "---\nname: Tide Table\ndescription: Checks tides.\nmetadata:\n  tags: [wave\n---\nBody.";
+    expect(parseSkillMarkdown(utf8Bytes(badNestedFlow))).toEqual({
+      ok: false,
+      error: expect.stringMatching(/metadata\.tags/i),
+    });
+
+    const goodFlow =
+      '---\nname: Tide Table\ndescription: Checks tides.\nmetadata: [wave]\nextra: {"openclaw": {"emoji": "wave"}}\n---\nBody.';
+    expect(parseSkillMarkdown(utf8Bytes(goodFlow)).ok).toBe(true);
+  });
+
   it("F-361: rejects empty, oversized, non-UTF-8, binary and invalid front matter files at the trust boundary", () => {
     expect(parseSkillMarkdown(new Uint8Array(0))).toEqual({
       ok: false,
@@ -405,6 +452,114 @@ describe("gateway skill library client and bridge", () => {
         selectionCount: 1,
       });
     } finally {
+      client.stop();
+    }
+  });
+
+  it("F-361: fits listSkillLibrary to the web bridge maxResultChars and reports omitted entries", async () => {
+    const { client, gateway } = await connected();
+    const maxResultChars = 262_144 - 512;
+    const session = createBridgeSession(client, { maxResultChars });
+    try {
+      const largeEntries = Array.from({ length: 256 }, (_, i) =>
+        entry({
+          skillId: `00000000-0000-4000-8000-${String(i + 1).padStart(12, "0")}`,
+          slug: `skill-${String(i + 1).padStart(3, "0")}`,
+          description: "d".repeat(MAX_SKILL_DESCRIPTION_CHARS),
+        }),
+      );
+      gateway.handlers["skills.library.list"] = () => ({
+        multipleProfiles: false,
+        defaultTarget: "personal",
+        canManageWorkspace: false,
+        defaultSelectionLimit: 64,
+        entries: largeEntries,
+        profileId: "gateway-owner",
+      });
+
+      const fitted = await session.apply({ type: "listSkillLibrary" });
+      expect(JSON.stringify(fitted).length).toBeLessThanOrEqual(maxResultChars);
+      expect(fitted.truncated).toBe(true);
+      expect(fitted.entries.length).toBeGreaterThan(0);
+      expect(fitted.entries.length).toBeLessThan(256);
+
+      // Small lists that fit keep their exact entries and truncated: false.
+      gateway.handlers["skills.library.list"] = () => ({
+        multipleProfiles: false,
+        defaultTarget: "personal",
+        canManageWorkspace: false,
+        defaultSelectionLimit: 64,
+        entries: [entry()],
+        profileId: "gateway-owner",
+      });
+      const small = await session.apply({ type: "listSkillLibrary" });
+      expect(small.entries).toHaveLength(1);
+      expect(small.truncated).toBe(false);
+    } finally {
+      session.dispose();
+      client.stop();
+    }
+  });
+
+  it("F-361: keeps the gateway's bounded defaultSelectionNotice alongside truncated", async () => {
+    const { client, gateway } = await connected();
+    try {
+      const notice =
+        "New sessions select up to 64 enabled skills, personal skills first and then stable ID order.";
+      gateway.handlers["skills.library.list"] = () => ({
+        multipleProfiles: false,
+        defaultTarget: "personal",
+        canManageWorkspace: false,
+        defaultSelectionLimit: 64,
+        defaultSelectionNotice: notice,
+        entries: Array.from({ length: 257 }, (_, i) =>
+          entry({
+            skillId: `00000000-0000-4000-8000-${String(i + 1).padStart(12, "0")}`,
+            slug: `skill-${String(i + 1).padStart(3, "0")}`,
+            description: "short",
+          }),
+        ),
+        profileId: "gateway-owner",
+      });
+      const list = await client.listSkillLibrary();
+      expect(list.entries).toHaveLength(256);
+      expect(list.truncated).toBe(true);
+      expect(list.defaultSelectionNotice).toBe(notice);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("F-361: closing a task withdraws a pending activateSkillLibrary waiting on gateway identity", async () => {
+    const { client, gateway } = await openTask();
+    const session = createBridgeSession(client);
+    try {
+      await session.apply({ type: "openSession", key: KEY });
+      let resolveIdentity!: (value: unknown) => void;
+      gateway.handlers["gateway.identity.get"] = () =>
+        new Promise((resolve) => {
+          resolveIdentity = resolve;
+        });
+      gateway.handlers["skills.library.activate"] = () => ({
+        sessionKey: KEY,
+        selections: [],
+        sessionActivation: "next-turn",
+      });
+
+      const pending = session.apply({
+        type: "activateSkillLibrary",
+        key: KEY,
+        action: "refresh",
+        stamp: stampOn("gw-one", client),
+      });
+      await until(() => resolveIdentity !== undefined);
+      await session.apply({ type: "closeSession", key: KEY });
+      resolveIdentity({ deviceId: "gw-one" });
+
+      await expect(pending).rejects.toThrow();
+      expect(gateway.calls("skills.library.activate")).toHaveLength(0);
+    } finally {
+      session.dispose();
       client.stop();
     }
   });
