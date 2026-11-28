@@ -644,6 +644,11 @@ export function startWebHost(options: WebHostOptions) {
       ws.close(1013, "too many viewers");
       return;
     }
+    // A session that expired since it was checked gets nothing of the host's state.
+    if (Date.now() >= until) {
+      ws.close(ACCESS_REFUSED_CLOSE_CODE, "session expired");
+      return;
+    }
     // Each tab is its own viewer: its open transcripts are released when it goes away.
     // A whole value this channel cannot carry is not given, so it is never recorded as read.
     const session = createBridgeSession(runtime.client, {
@@ -658,9 +663,9 @@ export function startWebHost(options: WebHostOptions) {
       options.snapshotDrainTimeoutMs ?? SNAPSHOT_DRAIN_TIMEOUT_MS,
     );
     channel.sendHello(runtime.info, runtime.client.state);
-    const stop = batchSnapshots(runtime.client.store.subscribe, (state) =>
-      channel.sendState(state),
-    );
+    const stop = batchSnapshots(runtime.client.store.subscribe, (state) => {
+      if (Date.now() < until) channel.sendState(state);
+    });
     // A private session admits its socket only until the session expires.
     let expiry: ReturnType<typeof setTimeout> | undefined;
     const watchExpiry = () => {

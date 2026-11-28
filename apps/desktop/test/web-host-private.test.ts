@@ -269,11 +269,15 @@ describe("private web host", () => {
       const socket = new WebSocket(`${base.replace("http", "ws")}/bridge`, {
         headers: { cookie, origin: base },
       });
+      const received: unknown[] = [];
+      socket.on("message", (data) => received.push(data));
       const code = await new Promise<number>((resolve) => {
         socket.once("close", resolve);
         socket.once("unexpected-response", () => resolve(401));
       });
       expect([ACCESS_REFUSED_CLOSE_CODE, 401]).toContain(code);
+      // Not even the hello's snapshot went out after the session expired.
+      expect(received).toEqual([]);
     } finally {
       clock.mockRestore();
     }
