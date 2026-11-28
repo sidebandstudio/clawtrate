@@ -2272,21 +2272,31 @@ describe("the iOS app", () => {
       expect(again).not.toBe(folder);
       // On the Simulator iOS can end Save to Files without a picker; where one shows, it is
       // cancelled, and a sheet left up to choose again is closed with a tap outside it.
-      await steps("file-save-to-files-cancelled", [
-        tap("Save to Files"),
+      const choose = "Choose Save to Files";
+      const cancelPicker = "Cancel the Save to Files picker";
+      const saving = await steps("file-save-to-files-cancelled", [
+        { tapOn: { text: "Save to Files", label: choose } },
         { extendedWaitUntil: { visible: "Cancel", timeout: 15_000, optional: true } },
-      ]);
-      // Which of the two this run tested, said in the run's report (a notice on CI): a look of
-      // its own, so every assertion below holds whichever it was.
-      const picker = (await screenText()).includes('"Cancel"');
-      await annotate(
-        picker ? "the picker was shown and cancelled" : "Save to Files ended without a picker",
-        "notice",
-      );
-      await steps("file-save-to-files-picker", [
-        { runFlow: { when: { visible: "Cancel" }, commands: [tap("Cancel")] } },
+        {
+          runFlow: {
+            when: { visible: "Cancel" },
+            commands: [{ tapOn: { text: "Cancel", label: cancelPicker } }],
+          },
+        },
         { runFlow: { when: { visible: "Save to Files" }, commands: [tapOutside] } },
       ]);
+      // Which of the two this run tested, said in the run's report (a notice on CI). It is read
+      // from the flow that taps, whose output names each command that ran, so a picker that
+      // shows late is still told right. Every assertion below holds whichever it was.
+      const ran = (label: string) => saving.includes(`${label}... COMPLETED`);
+      await annotate(
+        !ran(choose)
+          ? "Maestro's output didn't say which path Save to Files took"
+          : ran(cancelPicker)
+            ? "the picker was shown and cancelled"
+            : "Save to Files ended without a picker",
+        ran(choose) ? "notice" : "warning",
+      );
       await steps("file-save-to-files-closed", [
         waitGone("Save to Files", 30_000),
         see(save),
