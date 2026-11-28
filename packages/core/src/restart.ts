@@ -25,10 +25,12 @@ export type ConnectionRestart = {
 };
 
 /**
- * How long a restart plausibly takes, from its first sign to the connection being back:
- * `docs/decisions.md`, "A restarting gateway", has the measurements behind it. One bound.
+ * How long a restart plausibly takes, from its first sign to the connection being back. A
+ * gateway on macOS can be silent for well over a minute after its announcement while it closes
+ * its skill watchers, with its event loop blocked; `docs/decisions.md`, "A restarting gateway",
+ * has the measurements behind it. One bound.
  */
-export const RESTART_WAIT_MS = 90_000;
+export const RESTART_WAIT_MS = 150_000;
 
 /**
  * How long after a write that restarts the gateway its drop is still that restart: OpenClaw

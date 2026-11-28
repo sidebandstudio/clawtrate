@@ -26,7 +26,7 @@ const restarting = (page: Page, restart: boolean) =>
         status: "reconnecting",
         retryAt: null,
         restart: restart
-          ? { cause: "announced", since: Date.now(), until: Date.now() + 90_000 }
+          ? { cause: "announced", since: Date.now(), until: Date.now() + 150_000 }
           : null,
       },
     }));
