@@ -26,6 +26,7 @@ import {
   type KeyboardEvent,
   type MouseEvent,
   type ReactNode,
+  type Ref,
 } from "react";
 import { Menu, type MenuEntry } from "../Menu.tsx";
 import { AdminBar, GrantedBar, useAnnouncer, useGranted } from "../bots/parts.tsx";
@@ -357,6 +358,7 @@ type OlderRuns = { reading: boolean; error: string | null; load: () => void };
 function useRuns(
   gateway: string,
   routine: Routine | undefined,
+  announce: (text: string) => void,
 ): [Read<RoutineRuns>, () => void, OlderRuns] {
   const bridge = useBridge();
   const id = routine?.id ?? null;
@@ -381,7 +383,10 @@ function useRuns(
       setOlder((now) => (now?.after === after ? { ...now, reading: false, ...next } : now));
     bridge.invoke({ type: "readRoutineRuns", id: id!, offset: shown.nextOffset }).then(
       (page) => settle({ shown: withOlderRuns(shown, page), error: null }),
-      (error: unknown) => settle({ error: error instanceof Error ? error.message : String(error) }),
+      (error: unknown) => {
+        settle({ error: error instanceof Error ? error.message : String(error) });
+        announce("Couldn't load older runs.");
+      },
     );
   };
   return [
@@ -391,11 +396,21 @@ function useRuns(
   ];
 }
 
-function Retry({ text, error, onRetry }: { text: string; error: string; onRetry: () => void }) {
+function Retry({
+  text,
+  error,
+  onRetry,
+  buttonRef,
+}: {
+  text: string;
+  error: string;
+  onRetry: () => void;
+  buttonRef?: Ref<HTMLButtonElement>;
+}) {
   return (
     <p className="r-hint" data-testid="read-error">
       {text} {error}{" "}
-      <button type="button" className="button" data-size="sm" onClick={onRetry}>
+      <button type="button" className="button" data-size="sm" onClick={onRetry} ref={buttonRef}>
         Try again
       </button>
     </p>
@@ -465,6 +480,13 @@ function Page({
     listRef.current?.querySelectorAll<HTMLElement>("[data-run-at]")[focusFrom.current]?.focus();
     focusFrom.current = null;
   }, [count]);
+  // A load the person asked for that failed leaves focus on its Try again, not on nothing.
+  const retryRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (older.error === null || focusFrom.current === null) return;
+    retryRef.current?.focus();
+    focusFrom.current = null;
+  }, [older.error]);
   const tz = routineZone(routine.schedule);
   const viewer = viewerZone();
   const schedule = scheduleLine(routine);
@@ -646,7 +668,15 @@ function Page({
         )}
         {runs.status === "ready" &&
           (older.error !== null ? (
-            <Retry text="Couldn't load older runs." error={older.error} onRetry={older.load} />
+            <Retry
+              text="Couldn't load older runs."
+              error={older.error}
+              buttonRef={retryRef}
+              onRetry={() => {
+                focusFrom.current = count;
+                older.load();
+              }}
+            />
           ) : (
             runs.value.nextOffset !== null && (
               <button
@@ -948,7 +978,7 @@ export function RoutinesView({
         : null;
   const running = named !== null && named === routine?.runningAt;
   // A rail row's run still in progress is not among the runs yet: they are read once it finishes.
-  const [runs, retryRuns, older] = useRuns(gateway, running ? undefined : shown?.routine);
+  const [runs, retryRuns, older] = useRuns(gateway, running ? undefined : shown?.routine, announce);
   const match =
     named !== null && runs.status === "ready"
       ? runs.value.runs.find((each) => each.runAt === named)

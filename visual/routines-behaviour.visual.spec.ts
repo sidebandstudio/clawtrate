@@ -320,6 +320,9 @@ test.describe("1440", () => {
       "Couldn't load older runs. The gateway didn't answer in time.",
     );
     await expect(rows).toHaveCount(20);
+    // Said aloud, and focus stays where the person can try again.
+    await expect(page.getByTestId("b-announcer")).toHaveText("Couldn't load older runs.");
+    await expect(error.getByRole("button", { name: "Try again" })).toBeFocused();
     await error.getByRole("button", { name: "Try again" }).click();
     await expect(rows).toHaveCount(27);
     await expect(error).toHaveCount(0);
