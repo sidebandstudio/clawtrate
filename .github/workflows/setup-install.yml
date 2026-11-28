@@ -1,0 +1,62 @@
+name: Setup install
+
+# A real install of OpenClaw through Clawtrate's own host code (docs/design/setup.md §10, §19).
+# It never runs on a developer's computer: it runs only on GitHub's hosted runners, which are
+# discarded after each job, and the script refuses anywhere else. A decoy default OpenClaw home
+# and a sentinel default service definition stand for a person's own OpenClaw and must come
+# through unchanged.
+
+on:
+  pull_request:
+    paths:
+      - "apps/desktop/src/setup/**"
+      - "apps/desktop/src/main/**"
+      - "apps/desktop/src/host/**"
+      - "apps/desktop/test/hosted/**"
+      - "packages/core/src/setup.ts"
+      - "packages/core/src/bridge.ts"
+      - "packages/core/src/client.ts"
+      - "pnpm-lock.yaml"
+      - ".github/workflows/setup-install.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: setup-install-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  install:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-15, macos-15-intel]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      ELECTRON_SKIP_BINARY_DOWNLOAD: "1"
+    steps:
+      # Downloaded code runs in this job: no git credential is left on the runner for it.
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Nothing of OpenClaw's is there before
+        run: |
+          test ! -e "$HOME/.openclaw"
+          test ! -e "$HOME/.openclaw-clawtrate"
+      - name: Install, pair with full control, and verify the profile is removed
+        run: node apps/desktop/test/hosted/real-install.ts
+      - name: Upload install evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: setup-install-${{ matrix.os }}
+          path: ${{ runner.temp }}/clawtrate-setup-install/
