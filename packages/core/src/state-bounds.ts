@@ -40,7 +40,9 @@ import {
   MAX_SIGNIN_METHODS,
   type AccountsState,
   type AccountWrite,
+  type ModelAllowed,
   type OrderClear,
+  type RefusedBotModel,
   type BotBinding,
   type BotCreationState,
   type CatalogModel,
@@ -1344,6 +1346,25 @@ const orderClear = object<OrderClear>()({
   checkedSeq: NUMBER,
   checkedAt: NUMBER,
 });
+const refusedBotModel = object<RefusedBotModel>()({
+  botId: ID,
+  provider: ID,
+  model: ID,
+  why: ENUM,
+});
+const modelAllowed = object<ModelAllowed>()({
+  id: ID,
+  gatewayId: ID,
+  botId: ID,
+  provider: ID,
+  model: ID,
+  entry: ID,
+  scope: ENUM,
+  revision: ID,
+  status: ENUM,
+  error: text(MAX_MESSAGE_LINE_CHARS),
+  at: NUMBER,
+});
 export const ACCOUNTS: Bound = object<AccountsState>()({
   status: ENUM,
   error: text(MAX_MESSAGE_LINE_CHARS),
@@ -1363,6 +1384,8 @@ export const ACCOUNTS: Bound = object<AccountsState>()({
   creation: botCreation,
   write: accountWrite,
   clear: orderClear,
+  modelsRefused: list(MAX_BOTS, refusedBotModel),
+  allowed: modelAllowed,
 });
 
 /** Setting up on the host's computer (`setup.ts`): fixed facts and a few short names. */
