@@ -53,6 +53,7 @@
 //                             (sending until releaseClear(), then cleared)
 
 import { isUpdateRunScene, type UpdateRunScene } from "./openclaw-update.ts";
+import { GATEWAY_ID } from "./bridge-fixture.ts";
 import {
   ADMIN_SCOPES,
   INTERACTIVE_SCOPES,
@@ -118,6 +119,13 @@ export type AccountParams = {
   version: string | null;
   /** How Unlock or Clear order ends, when the address names it. */
   clear: string | null;
+  /**
+   * The open bot's model and its model list (#799): `refused`, the list doesn't allow the bot's
+   * own model; `added`, Clawtrate has just added it, with Undo.
+   */
+  modellist: "refused" | "added" | null;
+  /** How Undo of that line ends: refused by the host before any write, or its write failed. */
+  undo: "refused" | "failed" | null;
 };
 
 export function accountParams(params: URLSearchParams): AccountParams {
@@ -162,6 +170,14 @@ export function accountParams(params: URLSearchParams): AccountParams {
         : null,
     refresh: params.get("refresh"),
     allowlist: params.get("allowlist") === "1",
+    modellist:
+      params.get("modellist") === "refused" || params.get("modellist") === "added"
+        ? (params.get("modellist") as "refused" | "added")
+        : null,
+    undo:
+      params.get("undo") === "refused" || params.get("undo") === "failed"
+        ? (params.get("undo") as "refused" | "failed")
+        : null,
     openclawRun: isUpdateRunScene(params.get("openclawRun"))
       ? (params.get("openclawRun") as UpdateRunScene)
       : null,
@@ -198,6 +214,8 @@ export const NO_ACCOUNT_PARAMS: AccountParams = {
   openclawRun: null,
   version: null,
   clear: null,
+  modellist: null,
+  undo: null,
 };
 
 /** The fixture's endings of an Unlock or Clear that keep the order, with the words each carries. */
@@ -569,11 +587,43 @@ export function fixtureAccounts(now: number, params: AccountParams): AccountsSta
         ),
       }
     : state;
+  if (params.modellist) {
+    // The bot's model as the rest of the address leaves it.
+    const locked = withLock(own, params, now);
+    const botId = params.bot ?? "otto";
+    const binding = locked.bindings.find((b) => b.botId === botId);
+    const ref = { provider: binding?.provider ?? "openai", model: binding?.model ?? "gpt-5.5" };
+    return params.modellist === "refused"
+      ? { ...locked, modelsRefused: [{ botId, ...ref, why: null }] }
+      : { ...locked, allowed: allowedLine(botId, ref, now) };
+  }
   // The picker arrives after the accounts, when the page calls releasePicker().
   if (params.catalog === "latepicker") return withLock({ ...own, models: [] }, params, now);
   if (params.catalog === "pickercut")
     return withLock({ ...own, modelsCut: [{ provider: "openai", total: 140 }] }, params, now);
   return withLock(own, params, now);
+}
+
+/** The line after a model went on a bot's model list (#799): the gateway's default list. */
+function allowedLine(
+  botId: string,
+  ref: { provider: string; model: string },
+  at: number,
+): AccountsState["allowed"] {
+  const entry = `${ref.provider}/${ref.model}`;
+  return {
+    id: `allowed-${at}`,
+    // The fixture's one gateway: the line is shown only there.
+    gatewayId: GATEWAY_ID,
+    botId,
+    ...ref,
+    entry,
+    scope: "gateway",
+    revision: "0".repeat(64),
+    status: "added",
+    error: null,
+    at,
+  };
 }
 
 /**
@@ -1656,6 +1706,73 @@ export function accountCommand(
           return { ...next, evidence: { ...b.evidence, status, checkedAt: Date.now() } };
         }),
       }));
+      // Under a model list that refuses the bot's model, the model goes on it in the same write.
+      if (params.modellist) {
+        const provider =
+          command.type === "changeBotAccount"
+            ? command.provider
+            : (accounts().bindings.find((b) => b.botId === command.botId)?.provider ?? "openai");
+        put((a) => ({
+          ...a,
+          modelsRefused: a.modelsRefused.filter((each) => each.botId !== command.botId),
+          allowed: allowedLine(command.botId, { provider, model: command.model }, Date.now()),
+        }));
+      }
+      return Promise.resolve();
+    }
+    case "setBotEffort": {
+      // As the engine does: only for the model the menu was drawn for, and only the effort.
+      const binding = accounts().bindings.find((b) => b.botId === command.botId);
+      if (binding?.provider !== command.provider || binding.model !== command.model)
+        return Promise.reject(
+          new Error("The bot's model has changed since this was shown, so nothing was changed."),
+        );
+      put((a) => ({
+        ...a,
+        bindings: a.bindings.map((b) =>
+          b.botId === command.botId ? { ...b, effort: command.effort } : b,
+        ),
+      }));
+      return Promise.resolve();
+    }
+    case "allowBotModel": {
+      const refused = accounts().modelsRefused.find((each) => each.botId === command.botId);
+      // As the engine does: only for the model the button named.
+      if (refused && (refused.provider !== command.provider || refused.model !== command.model))
+        return Promise.reject(
+          new Error("The bot's model has changed since this was shown, so nothing was changed."),
+        );
+      if (refused)
+        put((a) => ({
+          ...a,
+          modelsRefused: a.modelsRefused.filter((each) => each.botId !== command.botId),
+          allowed: allowedLine(command.botId, refused, Date.now()),
+        }));
+      return Promise.resolve();
+    }
+    case "undoModelAllowed": {
+      const allowed = accounts().allowed;
+      // As the engine does: only for the line the screen shows.
+      if (allowed?.botId !== command.botId || allowed.id !== command.id)
+        return Promise.reject(
+          new Error("That change is no longer the latest one here, so nothing was undone."),
+        );
+      if (params.undo === "refused")
+        return Promise.reject(new Error("The gateway this screen showed is no longer connected."));
+      if (params.undo === "failed") {
+        const error = "gateway request timeout for config.patch";
+        put((a) => ({ ...a, allowed: { ...allowed, status: "failed", error, at: Date.now() } }));
+        return Promise.reject(new Error(error));
+      }
+      if (allowed.status === "added" || allowed.status === "failed")
+        put((a) => ({
+          ...a,
+          modelsRefused: [
+            ...a.modelsRefused.filter((each) => each.botId !== allowed.botId),
+            { botId: allowed.botId, provider: allowed.provider, model: allowed.model, why: null },
+          ],
+          allowed: { ...allowed, status: "undone", at: Date.now() },
+        }));
       return Promise.resolve();
     }
     case "setBotPicture": {

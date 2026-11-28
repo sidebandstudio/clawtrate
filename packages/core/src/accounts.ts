@@ -288,13 +288,18 @@ export const MAX_MODEL_ID_CHARS = 512;
  * Why a model id can't be sent, or null when it can: one rule for the field that takes a typed
  * id and for the bridge that carries every model id to the gateway.
  */
-export function modelIdProblem(id: string): "empty" | "long" | "space" | "control" | null {
+export function modelIdProblem(
+  id: string,
+): "empty" | "long" | "space" | "control" | "pattern" | null {
   if (id.length === 0) return "empty";
   if (id.length > MAX_MODEL_ID_CHARS) return "long";
   if ([...id].some((char) => char.charCodeAt(0) < 0x20 || char.charCodeAt(0) === 0x7f))
     return "control";
   // A space would split it, and an `@` would name an account.
   if (/[\s@]/.test(id)) return "space";
+  // A `*` makes a model list's entry a pattern (both versions read a trailing one so, and
+  // 2026.11.10 a prefix): a model chosen by its id never carries one (#799).
+  if (id.includes("*")) return "pattern";
   return null;
 }
 
@@ -593,6 +598,62 @@ export type AccountsState = {
   write: AccountWrite | null;
   /** The last Unlock or Clear, for the line that says how it went. */
   clear: OrderClear | null;
+  /**
+   * The bots whose own model (or the default they run on) their model list doesn't allow, so a
+   * task they start is refused (#799): read with the config, as the version the gateway reports
+   * reads the list. At most one per bot the gateway lists.
+   */
+  modelsRefused: RefusedBotModel[];
+  /** The last model Clawtrate added to a bot's model list, for its line and Undo (#799). */
+  allowed: ModelAllowed | null;
+};
+
+/** A bot whose own model its model list refuses for the tasks it starts (#799). */
+export type RefusedBotModel = {
+  botId: string;
+  provider: string;
+  model: string;
+  /**
+   * Why Clawtrate offers no Allow for it, or null when it does: `full`, the list is past the
+   * entries it writes back whole; `long`, the model id is past what it carries; `layout`, the
+   * list is the old `agents.defaults.models` of a config never migrated, which it doesn't change.
+   */
+  why: "full" | "long" | "layout" | null;
+};
+
+/**
+ * A model Clawtrate put on the model list that governs a bot (#799), in the same write as the
+ * model itself or by "Allow <model>": the line that says so, and its Undo, which takes that one
+ * entry out again while the config is as the addition left it.
+ */
+export type ModelAllowed = {
+  /** This addition's own id: an Undo sent for another addition, even of the same entry, does nothing. */
+  id: string;
+  /** The gateway it was written on, by its identity: Undo acts only there. Null when unnamed. */
+  gatewayId: string | null;
+  botId: string;
+  provider: string;
+  model: string;
+  /** The exact entry written, `<provider>/<model>`. */
+  entry: string;
+  /** The list it went on, which Undo takes it out of: the bot's own, or the gateway's default. */
+  scope: "bot" | "gateway";
+  /**
+   * The config revision (`config.get`'s `hash`) read right after the addition, and what its Undo
+   * is held to: once the config has changed since, by anyone, Undo is no longer offered. Null
+   * until a read shows the addition made.
+   */
+  revision: string | null;
+  /**
+   * `unconfirmed`: sent, and the gateway's answer, or the read after it, didn't come, so whether it
+   * was made isn't known yet; a read that shows the entry there, where it wasn't, makes it `added`.
+   * `added`: made. `undoing`: Undo under way. `undone`: taken out. `changed`: the config has changed
+   * since the addition, so Undo isn't offered. `failed`: Undo's write failed, with `error`; Undo
+   * stays offered. `not-added`: a read after an unconfirmed write found its entry missing.
+   */
+  status: "unconfirmed" | "added" | "undoing" | "undone" | "changed" | "failed" | "not-added";
+  error: string | null;
+  at: number;
 };
 
 export const initialAccountsState: AccountsState = {
@@ -614,6 +675,8 @@ export const initialAccountsState: AccountsState = {
   creation: null,
   write: null,
   clear: null,
+  modelsRefused: [],
+  allowed: null,
 };
 
 export const unreadEvidence: LockEvidence = {
