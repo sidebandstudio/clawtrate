@@ -2834,16 +2834,23 @@ export class AccountsEngine {
   ): Promise<void> {
     const fields = Object.keys(after) as Array<keyof DefaultsValues>;
     const gatewayId = this.ctx.gatewayNow();
-    // The change belongs to the gateway and the target it was asked of: once another is here, or
-    // the client stopped (a new target without a reset), it publishes nothing.
+    // The change belongs to the gateway and the target it was asked of: once another gateway is
+    // confirmed here, or the client stopped (a new target without a reset), it is retired. While a
+    // reconnect reads the identity again, the gateway is unknown: the change waits, and neither
+    // reads nor publishes, so a restart of the same gateway is still read back.
     const resets = this.resets;
     const target = this.ctx.target();
-    const live = () =>
-      this.resets === resets &&
-      this.ctx.target() === target &&
-      (gatewayId === null || this.ctx.gatewayNow() === gatewayId);
+    const retired = () => {
+      const here = this.ctx.gatewayNow();
+      return (
+        this.resets !== resets ||
+        this.ctx.target() !== target ||
+        (gatewayId !== null && here !== null && here !== gatewayId)
+      );
+    };
+    const named = () => gatewayId === null || this.ctx.gatewayNow() === gatewayId;
     const publish = (change: DefaultsChange) => {
-      if (live()) this.setDefaultsChange(change);
+      if (!retired() && named()) this.setDefaultsChange(change);
     };
     const { ctx, check } = this.checked(beforeSend);
     const read = asRecord(await ctx.request("config.get", {}));
@@ -2893,7 +2900,7 @@ export class AccountsEngine {
       throw error;
     }
     if (restart) publish({ ...change, status: "restarting", at: this.ctx.now() });
-    await this.readBackDefaults(change, restart, read?.configRevisionHash, live);
+    await this.readBackDefaults(change, restart, read?.configRevisionHash, retired, named);
   }
 
   /** Whether any setting changed restarts OpenClaw, by `config.schema.lookup`'s `reloadKind`. */
@@ -2927,7 +2934,8 @@ export class AccountsEngine {
     change: DefaultsChange,
     restart: boolean,
     revisionBefore: unknown,
-    live: () => boolean,
+    retired: () => boolean,
+    named: () => boolean,
   ): Promise<void> {
     const ctx = this.ctx;
     const started = ctx.now();
@@ -2941,16 +2949,16 @@ export class AccountsEngine {
       const elapsed = ctx.now() - started;
       if (!restart && elapsed > 20_000) break;
       if (restart && ctx.now() - (goneAt ?? started) > restartMs) break;
-      if (!ctx.connected()) {
+      if (retired()) return;
+      // Away, or back and not yet named: wait for the gateway written to, reading nothing.
+      if (!ctx.connected() || !named()) {
         goneAt ??= ctx.now();
         await pause(restart ? 500 : 200);
         continue;
       }
-      // The change is the connected gateway's only while it is the one written to.
-      if (!live()) return;
       const read = await ctx.request("config.get", {}).then(asRecord, () => null);
-      if (!live()) return;
-      if (read) {
+      if (retired()) return;
+      if (read && named()) {
         // Saved with this device's values, not yet applied: with reload off, 2026.11.10 keeps it
         // so until OpenClaw next restarts, and doesn't restart by itself (2026.10.6 does).
         const saved =
@@ -2988,7 +2996,9 @@ export class AccountsEngine {
       }
       await pause(restart ? 500 : 200);
     }
-    if (!live()) return;
+    // Out of time: said as unconfirmed even while the gateway is still unnamed, so the line never
+    // stays at "restarting"; a gateway confirmed as another retires it first.
+    if (retired()) return;
     this.setDefaultsChange({
       ...change,
       // The gateway never went away and holds the values saved: they wait for its next restart.

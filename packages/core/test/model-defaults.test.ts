@@ -176,6 +176,45 @@ describe("Settings › Models: the defaults every bot uses", () => {
     expect(primaryOf(fake)).toBe("acme/dev-2");
   });
 
+  it("through a restart, the read-back waits while the gateway isn't named yet, then reads it back", async () => {
+    const fake = withLookup(new AccountsGateway());
+    fake.config.gateway = { reload: { mode: "off" } };
+    const run = await accountsClient({ gateway: fake });
+    const stamp = gatewayStamp(run.client.state.connection);
+    const patch = fake.gateway.handlers["config.patch"]!;
+    const get = fake.gateway.handlers["config.get"]!;
+    let restarted = false;
+    let name: (answer: unknown) => void = () => {};
+    let namedAt: number | null = null;
+    fake.gateway.handlers["config.patch"] = (params) => {
+      const answer = patch(params);
+      const applied = fake.revision - 1;
+      // Not applied until the restart: the read-back can't end before the connection drops.
+      fake.gateway.handlers["config.get"] = (p) => {
+        return {
+          ...(get(p) as object),
+          ...(restarted ? {} : { appliedConfigHash: `r${applied}` }),
+        };
+      };
+      // The gateway comes back slow to name itself: its identity is held past several polls.
+      fake.identityReply = new Promise((done) => (name = done));
+      setTimeout(() => {
+        restarted = true;
+        fake.gateway.dropAll();
+        setTimeout(() => {
+          namedAt = Date.now();
+          fake.identityReply = null;
+          name({ deviceId: "gateway-a" });
+        }, 1_500);
+      }, 5);
+      return answer;
+    };
+    await run.client.setModelDefaults({ primary: "acme/dev-2" }, true, stamp);
+    expect(namedAt).not.toBeNull();
+    expect(run.accounts().defaultsChange).toMatchObject({ status: "saved", restart: true });
+    expect(run.client.state.connection.gatewayId).toBe("gateway-a");
+  }, 15_000);
+
   it("with reload off, a gateway that saves without restarting leaves it saved, not applied", async () => {
     const fake = withLookup(new AccountsGateway());
     fake.config.gateway = { reload: { mode: "off" } };
