@@ -1,5 +1,14 @@
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
-import { existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from "node:fs";
+import {
+  closeSync,
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  openSync,
+  readdirSync,
+  writeFileSync,
+} from "node:fs";
 import type { Server } from "node:http";
 import { userInfo } from "node:os";
 import { join } from "node:path";
@@ -82,7 +91,7 @@ const hasButton = (name: string) => buttons().some(({ text }) => text === name);
 const hasText = (pattern: RegExp) => latest.some(({ text }) => pattern.test(text));
 const nativeDialog = () => latest.some(({ role }) => role === "AXSheet" || role === "AXDialog");
 const heading = () =>
-  latest.filter(({ role, text }) => role === "AXHeading" && text !== "Clawtrate").at(-1)?.text ??
+  latest.findLast(({ role, text }) => role === "AXHeading" && text && !/^\d+$/.test(text))?.text ??
   null;
 
 async function readWindow() {
@@ -111,6 +120,12 @@ async function waitFor(label: string, ready: () => boolean, seconds = 30) {
   do {
     await readWindow();
     if (ready()) return;
+    if (hasText(/^Clawtrate couldn't tell what is on this computer$/)) {
+      const reason = latest.find(({ text }) =>
+        text.includes("Clawtrate can't use OpenClaw's settings"),
+      );
+      throw new Error(reason?.text ?? "Clawtrate couldn't tell what is on this computer.");
+    }
     const retry = latest.find(({ role, text }) => role === "AXButton" && text === "Try again");
     if (retry) throw new Error(`${heading() ?? label} offers Try again.`);
     await sleep(600);
@@ -190,12 +205,17 @@ function launch() {
   // production window via the OS, with no debugging port and no setup stand-ins.
   delete env.CI;
   delete env.VITEST;
-  child = spawn(
-    join(app!, "Contents/MacOS/Clawtrate"),
-    [`--user-data-dir=${data}`, "--force-renderer-accessibility"],
-    { env, stdio: "ignore" },
-  );
-  child.once("error", (error) => (launchError = error));
+  const log = openSync(join(out!, "app-output.txt"), "wx");
+  try {
+    child = spawn(
+      join(app!, "Contents/MacOS/Clawtrate"),
+      [`--user-data-dir=${data}`, "--force-renderer-accessibility"],
+      { env, stdio: ["ignore", log, log] },
+    );
+    child.once("error", (error) => (launchError = error));
+  } finally {
+    closeSync(log);
+  }
 }
 
 const shellVisible = () =>
@@ -303,7 +323,18 @@ try {
 } catch {
   // The first failing step retains the error and all later steps stay not reached.
 } finally {
-  const answer = { verdict: verdict(stepResults), steps: stepResults, trace };
+  const homeInfo = lstatSync(home, { throwIfNoEntry: false });
+  const diagnostics = {
+    accountHomeMode: homeInfo && (homeInfo.mode & 0o777).toString(8),
+    accountHomeOwnedByAppUser: homeInfo?.uid === process.geteuid?.(),
+    accountHomeIsDirectory: homeInfo?.isDirectory() === true,
+    accountHomeListing: await run("/bin/ls", ["-lde@", home], { timeout: 3000 }).then(
+      ({ stdout }) => stdout.trim(),
+      () => null,
+    ),
+    localGatewayHelperPresent: existsSync(join(app, "Contents/Helpers/ClawtrateLocalGateway")),
+  };
+  const answer = { verdict: verdict(stepResults), steps: stepResults, trace, diagnostics };
   writeFileSync(join(out, "result.json"), JSON.stringify(answer, null, 2) + "\n");
   provider?.closeAllConnections();
   provider?.close();
