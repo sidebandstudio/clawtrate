@@ -210,6 +210,16 @@ describe("F-042: Undo takes out that one entry, only while its list is as it lef
       ),
     ).toBe("moved");
     expect(allowRemoval(after, "pip", undo)).not.toBeTypeOf("string");
+    // Another list decides now and the entry is already gone from its own: still `moved`, which
+    // says only that its list no longer decides; and with no list deciding at all.
+    expect(
+      allowRemoval(
+        list(["acme/dev-1"], { entries: { pip: { modelPolicy: { allow: ["acme/dev-3"] } } } }),
+        "pip",
+        undo,
+      ),
+    ).toBe("moved");
+    expect(allowRemoval(cfg({}), "pip", undo)).toBe("moved");
     // An addition goes only on a list with an entry already, and Undo needs the list as it left
     // it, so taking it out never empties a list; the guard stays for a list read otherwise.
     const emptied = { ...undo, digest: "" };
@@ -670,6 +680,39 @@ describe("F-042: a gateway's line and refusals stay with it (#799)", () => {
     );
     expect(patches(fake)).toHaveLength(before);
     expect(defaults(fake).modelPolicy).toEqual({ allow: ["acme/dev-2", "acme/dev-1"] });
+  });
+
+  it("an Undo the running gateway hasn't applied yet shows no refusal on the next read, until it has", async () => {
+    const fake = new AccountsGateway();
+    limited(fake, ["acme/dev-2"]);
+    const get = fake.gateway.handlers["config.get"]!;
+    let lagging = false;
+    fake.gateway.handlers["config.get"] = (params) => {
+      const answer = get(params) as Record<string, unknown>;
+      return lagging ? { ...answer, appliedConfigHash: `r${fake.revision - 1}` } : answer;
+    };
+    // A clock that moves on fast, so the wait for the applied revision ends at its bound.
+    let clock = 0;
+    const { engine, state } = engineOn(fake, undefined, undefined, () => (clock += 5_000));
+    await engine.load();
+    await engine.allowModel("otto", DEV1);
+    await engine.load();
+    expect(state().modelsRefused).toEqual([]);
+    // The removal is saved and taken, and the running gateway hasn't applied it yet.
+    const patch = fake.gateway.handlers["config.patch"]!;
+    fake.gateway.handlers["config.patch"] = (params) => {
+      const answer = patch(params);
+      lagging = true;
+      return answer;
+    };
+    await engine.undoAllowed({ botId: "otto", id: state().allowed!.id });
+    expect(state().allowed?.status).toBe("undone");
+    await engine.load();
+    expect(state().modelsRefused).toEqual([]);
+    // Once it runs the removal, the next read shows the refusal.
+    lagging = false;
+    await engine.load();
+    expect(state().modelsRefused).toEqual([{ botId: "otto", ...DEV1, full: false }]);
   });
 
   it("a read of a config the running gateway hasn't applied yet changes no refusal", async () => {

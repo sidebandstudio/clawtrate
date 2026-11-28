@@ -49,7 +49,7 @@ describe("F-042 F-587: the model list's line (#799)", () => {
       "OpenAI's gpt-5.5 is no longer on the models this gateway allows, so nothing was changed.",
     );
     expect(allowedWords({ ...added, status: "kept", error: "moved" }, "Pip")).toBe(
-      "Kept OpenAI's gpt-5.5 on the models this gateway allows: another list now decides Pip's models, so nothing was changed.",
+      "The list that received OpenAI's gpt-5.5 no longer decides Pip's models, so nothing was changed.",
     );
     expect(allowedWords({ ...added, status: "kept", error: "changed" }, "Pip")).toBe(
       "Kept OpenAI's gpt-5.5 on the models this gateway allows: the list has changed since it was added, so nothing was changed.",

@@ -31,7 +31,8 @@ export function allowedWords(allowed: NonNullable<AccountsState["allowed"]>, bot
         case "last":
           return `Kept ${model} on ${list}: it's the only one left there, and taking it out would allow every model.`;
         case "moved":
-          return `Kept ${model} on ${list}: another list now decides ${botName}'s models, so nothing was changed.`;
+          // Whether it is still on that list isn't read: only that the list no longer decides.
+          return `The list that received ${model} no longer decides ${botName}'s models, so nothing was changed.`;
         case "changed":
           return `Kept ${model} on ${list}: the list has changed since it was added, so nothing was changed.`;
         default:

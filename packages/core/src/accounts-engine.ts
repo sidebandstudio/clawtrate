@@ -778,7 +778,11 @@ export class AccountsEngine {
       models: catalog,
       modelAllowlist: readModelAllowlist(config),
       bindings,
-      modelsRefused: this.refusedIn(config, bindings),
+      // Only a config the running gateway has applied says what it refuses now; a saved one it
+      // hasn't applied yet keeps the refusals read before (for the bots still listed).
+      modelsRefused: appliedConfig(config)
+        ? this.refusedIn(config, bindings)
+        : previous.modelsRefused.filter((each) => bindings.some((b) => b.botId === each.botId)),
     };
   }
 
@@ -3032,6 +3036,14 @@ export class AccountsEngine {
  */
 function requireModelId(model: string): void {
   if (modelIdProblem(model) !== null) throw new Error("invalid model");
+}
+
+/** Whether a `config.get` answer is the config the running gateway has applied. */
+function appliedConfig(config: RawRecord | null): boolean {
+  return (
+    config?.configRevisionHash === undefined ||
+    config.appliedConfigHash === config.configRevisionHash
+  );
 }
 
 /** One JSON merge patch made of two: objects merged key by key, anything else from `b`. */
