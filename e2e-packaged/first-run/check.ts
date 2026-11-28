@@ -48,13 +48,20 @@ const stepResults: StepResult[] = STEPS.map((step) => ({
   screenshot: null,
   screenScreenshot: null,
 }));
-type Event = {
-  seconds: number;
-  step: string;
-  kind: "screen" | "press" | "type" | "fixture" | "inspection";
-  text: string;
+type PressPurpose = "person" | "inspection" | "fixture";
+type TraceEntry =
+  | { kind: "press"; text: string; purpose: PressPurpose; performed: boolean }
+  | { kind: "screen" | "type" | "fixture" | "inspection"; text: string };
+type Event = TraceEntry & { seconds: number; step: string };
+type AccountSheetResult = {
+  outcome: "advanced-without-press" | "closed-without-press" | "still-open" | "gateway-unavailable";
+  observedReconnect: boolean;
+  secondsSinceAccountSaved: number;
+  secondsAvailable: number;
+  secondsBeforeClose: number | null;
 };
 const trace: Event[] = [];
+const pressCounts: Record<PressPurpose, number> = { person: 0, inspection: 0, fixture: 0 };
 const start = performance.now();
 let active = stepResults[0]!;
 let latest: Element[] = [];
@@ -67,17 +74,23 @@ let developerTools:
 let systemPromptVisible = false;
 let connectedAt: number | undefined;
 let provider: Server | undefined;
+let accountSavedAt: number | undefined;
+let accountPickerClosedForInspection = false;
+let accountPickerBeforeSave = false;
+let accountSheet: AccountSheetResult | null = null;
 
 mkdirSync(out, { recursive: true });
 const system = observeMac(out);
 
-function record(kind: Event["kind"], text: string) {
+const seconds = (duration: number) => Math.round(duration / 100) / 10;
+
+function record(entry: TraceEntry, at = performance.now()) {
   trace.push({
-    seconds: Math.round((performance.now() - start) / 100) / 10,
+    ...entry,
+    seconds: seconds(at - start),
     step: active.step,
-    kind,
-    text,
   });
+  if (entry.kind === "press" && entry.performed) pressCounts[entry.purpose] += 1;
 }
 
 async function ax(mode: string, target = ""): Promise<string> {
@@ -138,7 +151,7 @@ async function readWindow() {
     .filter((text, index, all) => all.indexOf(text) === index)
     .join("\n");
   if (text && text !== screenKey) {
-    record("screen", text);
+    record({ kind: "screen", text });
     screenKey = text;
   }
   refuseForbidden([...systemWindows, ...latest]);
@@ -171,9 +184,19 @@ async function waitFor(label: string, ready: () => boolean, seconds = 30) {
   );
 }
 
-async function press(name: string) {
-  record("press", name);
-  if ((await ax("press", name)) !== "ok") throw new Error(`Could not press "${name}".`);
+async function press(
+  name: string,
+  purpose: PressPurpose = "person",
+  mode: "press" | "enter" = "press",
+) {
+  const at = performance.now();
+  let performed = false;
+  try {
+    performed = (await ax(mode, name)) === "ok";
+    if (!performed) throw new Error(`Could not press "${name}".`);
+  } finally {
+    record({ kind: "press", text: name, purpose, performed }, at);
+  }
 }
 
 async function screenshot(file: string, wholeDisplay = false) {
@@ -303,11 +326,52 @@ const firstBotWelcome = () => hasText(/^Set up your first bot$/) && hasButton("G
 const accountPicker = () => hasText(/^Connect an account$/) && hasButton("Close");
 const composer = () =>
   latest.some(({ role, text }) => /^AXText(?:Area|Field)$/.test(role) && /^Message /.test(text));
+const firstBotAction = () =>
+  buttons().find(
+    ({ role, text }) =>
+      role === "AXButton" &&
+      /^(?:Create bot|(?:Make|Create|Start) (?:your )?first bot)[.…]?$/i.test(text),
+  );
+const reconnecting = () => hasText(/^(?:Waiting for your gateway to reconnect|Reconnecting\b)/i);
 
 const shellVisible = () =>
   latest.some(({ role, text }) => role === "AXLandmarkNavigation" && text === "Bots") ||
   hasButton("Settings") ||
   hasText(/^Make your first bot$|^Connect an account$/i);
+
+async function observeAccountSheet(savedAt: number): Promise<AccountSheetResult> {
+  const wait = 120_000;
+  const deadline = savedAt + 2 * wait;
+  let observedReconnect = reconnecting();
+  let availableSince: number | undefined;
+  function result(outcome: AccountSheetResult["outcome"], at: number): AccountSheetResult {
+    return {
+      outcome,
+      observedReconnect,
+      secondsSinceAccountSaved: seconds(at - savedAt),
+      secondsAvailable: availableSince === undefined ? 0 : seconds(at - availableSince),
+      secondsBeforeClose: null,
+    };
+  }
+  while (true) {
+    await readWindow();
+    const now = performance.now();
+    const waiting = reconnecting();
+    const sheetOpen = accountPicker();
+    const advanced = !!firstBotAction() || composer();
+    if (waiting || !(sheetOpen || advanced || firstBotWelcome())) {
+      observedReconnect ||= waiting;
+      availableSince = undefined;
+    } else {
+      availableSince ??= now;
+      if (advanced) return result("advanced-without-press", now);
+      if (!sheetOpen) return result("closed-without-press", now);
+      if (now - availableSince >= wait) return result("still-open", now);
+    }
+    if (now >= deadline) return result("gateway-unavailable", now);
+    await sleep(600);
+  }
+}
 
 try {
   await step(0, async () => {
@@ -365,21 +429,22 @@ try {
     connectedAt = performance.now();
     if (accountPicker()) {
       await screenshot("04-account-picker-before-scopes.png");
-      record(
-        "inspection",
-        "Connect an account opened automatically. Closing it to inspect the grant in Settings.",
-      );
-      await press("Close");
+      record({
+        kind: "inspection",
+        text: "Connect an account opened automatically. Closing it to inspect the grant in Settings.",
+      });
+      await press("Close", "inspection");
+      accountPickerClosedForInspection = true;
       await waitFor("Settings after closing the account picker", () => hasButton("Settings"));
     }
-    await press("Settings");
+    await press("Settings", "inspection");
     await waitFor("Gateway settings", () => hasButton("Gateway") || hasText(/^Granted scopes$/));
-    if (!hasText(/^Granted scopes$/)) await press("Gateway");
+    if (!hasText(/^Granted scopes$/)) await press("Gateway", "inspection");
     await waitFor("the six granted scopes", () =>
       FULL_SCOPES.every((scope) => latest.some(({ text }) => text.split(/[, ]+/).includes(scope))),
     );
     await screenshot("04-granted-scopes.png");
-    await press("Close settings");
+    await press("Close settings", "inspection");
     return "OpenClaw granted all six operator scopes.";
   });
   await step(4, async () => {
@@ -390,28 +455,39 @@ try {
     );
     await screenshot("05-before-scripted-account.png");
     if (!accountPicker() && firstBotWelcome()) {
-      await press("Get started");
+      await press("Get started", accountPickerClosedForInspection ? "inspection" : "person");
       await waitFor("Connect an account on the fresh gateway", accountPicker);
     }
-    if (accountPicker()) {
+    accountPickerBeforeSave = accountPicker();
+    if (accountPickerBeforeSave) {
       await screenshot("05-account-picker.png");
     }
-    provider = await scriptedProvider(profile, appData, (text) => record("fixture", text));
+    provider = await scriptedProvider(profile, appData, (text) =>
+      record({ kind: "fixture", text }),
+    );
+    accountSavedAt = performance.now();
     await readWindow();
     await screenshot("05-after-scripted-account.png");
     return heading() ?? "The scripted model is configured on loopback.";
   });
   await step(5, async () => {
-    const firstBotAction = () =>
-      buttons().find(
-        ({ role, text }) =>
-          role === "AXButton" &&
-          /^(?:Create bot|(?:Make|Create|Start) (?:your )?first bot)[.…]?$/i.test(text),
-      );
-    if (accountPicker()) {
-      record("fixture", "The account picker stayed open after the synthetic account was saved.");
-      await press("Close");
-      await waitFor("the first-bot screen after closing account setup", firstBotWelcome);
+    if (accountSavedAt !== undefined && (accountPickerBeforeSave || accountPicker())) {
+      accountSheet = await observeAccountSheet(accountSavedAt);
+      await screenshot("06-account-sheet-after-observation.png");
+      if (accountSheet.outcome === "gateway-unavailable") {
+        throw new Error(
+          "The account sheet did not reach two minutes of available gateway connection.",
+        );
+      }
+      if (accountSheet.outcome === "still-open") {
+        record({
+          kind: "fixture",
+          text: "The account picker stayed open for two minutes after the gateway was available.",
+        });
+        accountSheet.secondsBeforeClose = seconds(performance.now() - accountSavedAt);
+        await press("Close", "fixture");
+        await waitFor("the first-bot screen after closing account setup", firstBotWelcome);
+      }
     }
     await waitFor(
       "a first conversation or a first-bot button",
@@ -420,7 +496,7 @@ try {
     );
     if (firstBotWelcome()) {
       await screenshot("06-first-bot-welcome.png");
-      await press("Get started");
+      await press("Get started", accountSheet?.outcome === "still-open" ? "fixture" : "person");
       await waitFor("the first-bot creation button", () => !!firstBotAction());
     }
     const action = firstBotAction();
@@ -433,10 +509,9 @@ try {
       throw new Error("Could not focus the first conversation's composer.");
     const replies = () => latest.filter(({ text }) => text.includes(SCRIPTED_REPLY)).length;
     const beforeSending = replies();
-    record("type", FIRST_MESSAGE);
+    record({ kind: "type", text: FIRST_MESSAGE });
     await ax("type", FIRST_MESSAGE);
-    record("press", "Return");
-    await ax("enter");
+    await press("Return", "person", "enter");
     await waitFor("the scripted reply", () => replies() > beforeSending, 120);
     return SCRIPTED_REPLY;
   });
@@ -478,7 +553,14 @@ try {
         : "bundled"
       : "missing",
   };
-  const answer = { verdict: verdict(stepResults), steps: stepResults, trace, diagnostics };
+  const answer = {
+    verdict: verdict(stepResults),
+    steps: stepResults,
+    pressCounts,
+    accountSheet,
+    trace,
+    diagnostics,
+  };
   writeFileSync(join(out, "result.json"), JSON.stringify(answer, null, 2) + "\n");
   provider?.closeAllConnections();
   provider?.close();
