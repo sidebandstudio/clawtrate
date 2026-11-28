@@ -1829,7 +1829,15 @@ export class Installer {
   } | null> {
     const { place } = this.options;
     const staged = await this.removal();
-    if (staged && (await this.serviceAbsent()))
+    if (
+      staged &&
+      (await this.serviceAbsent()) &&
+      // Neither folder was moved yet, or both were put back: they are in their usual places, and
+      // only empty bookkeeping is left. rmdir keeps a bundle that holds anything.
+      (staged.bundleGone ||
+        staged.moves.some((move) => move.staged) ||
+        !(await this.clearRemoval(staged.receipt)))
+    )
       return {
         id: staged.id,
         action: staged.bundleGone ? "finish" : "staged",

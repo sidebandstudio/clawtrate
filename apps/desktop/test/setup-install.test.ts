@@ -693,6 +693,7 @@ describe("F-502 F-503: each failure, named, with what the attempt left", () => {
   it.each([
     "before receipt",
     "empty receipt",
+    "before the first move",
     "after restoring",
     "unknown contents",
     "empty receipt, unknown contents",
@@ -720,7 +721,7 @@ describe("F-502 F-503: each failure, named, with what the attempt left", () => {
     };
     const program = identity(stand.place.programDir);
     const profile = identity(stand.place.stateDir);
-    if (window === "after restoring") {
+    if (window === "after restoring" || window === "before the first move") {
       writeFileSync(
         join(root, "receipt.json"),
         JSON.stringify({
@@ -732,7 +733,7 @@ describe("F-502 F-503: each failure, named, with what the attempt left", () => {
         }),
         { mode: 0o600 },
       );
-      rmdirSync(bundle);
+      if (window === "after restoring") rmdirSync(bundle);
     } else if (window.endsWith("unknown contents")) {
       writeFileSync(join(bundle, "notes.txt"), "don't touch");
     }
