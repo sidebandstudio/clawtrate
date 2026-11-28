@@ -38,7 +38,7 @@ import {
 } from "@openclaw/gateway-client/browser";
 import { isRefusedDecision } from "./approval-refusals.ts";
 import { answerKind, readAgain, READ_AGAIN_TRIES } from "./read-again.ts";
-import { fromBase64, toBase64 } from "./bytes.ts";
+import { fromBase64, sha256Hex, toBase64, utf8Bytes } from "./bytes.ts";
 import { goesUnmarked, markerRefusal } from "./send-marker.ts";
 import { chatSendParams, sendRefusal } from "./send-size.ts";
 import { GatewayScopeUpgrade } from "@openclaw/gateway-client/scope-upgrade";
@@ -210,6 +210,7 @@ import {
   reviewNotes,
   SKILL_REVIEW_RUN_PREFIX,
   skillNoteOf,
+  type SkillNote,
 } from "./skill-notes.ts";
 import {
   MAX_SEARCHES_IN_FLIGHT,
@@ -696,6 +697,12 @@ const SESSION_LIST_PARAMS = {
 const HISTORY_LIMIT = 200;
 /** The skill notes one task keeps a verdict for: at most one per row of its history read. */
 export const MAX_SKILL_VERDICTS = HISTORY_LIMIT;
+/**
+ * What a skill note's verdict is kept under: the whole note a review is said to have written, so
+ * a later row naming the same review in other words, or for another bot, isn't taken for it.
+ */
+const verdictKey = (note: SkillNote, text: string) =>
+  sha256Hex(utf8Bytes(`${note.reviewId}\0${note.agentId ?? ""}\0${text}`));
 
 /** Whether a history read lists a turn the gateway holds to run. One it withdrew stays listed as `cancelled`. */
 function holdsInput(history: RawRecord | null): boolean {
@@ -6354,8 +6361,12 @@ export class ClawtrateClient {
     const unsettled =
       Array.isArray(rows) &&
       rows.some((row) => {
-        const note = skillNoteOf(row, marked);
-        return note !== null && verdicts?.get(note.reviewId) === undefined;
+        let unread = false;
+        skillNoteOf(row, marked, (note, text) => {
+          unread = verdicts?.get(verdictKey(note, text)) === undefined;
+          return true;
+        });
+        return unread;
       });
     if (!bot || !unsettled) return undefined;
     try {
@@ -7154,7 +7165,8 @@ export class ClawtrateClient {
         startedAt: startedTaskSince(history),
         gatewayEvents: this.writesEvents(),
         skillNotesMarked: this.marksSkillNotes(),
-        skillNoteConfirmed: (note) => this.skillVerdicts.get(key)?.get(note.reviewId) === true,
+        skillNoteConfirmed: (note, text) =>
+          this.skillVerdicts.get(key)?.get(verdictKey(note, text)) === true,
       }).find((item) => item.id === itemId) ?? null
     );
   }
@@ -11519,12 +11531,12 @@ export class ClawtrateClient {
         skillNotesMarked: this.marksSkillNotes(),
         skillNoteConfirmed: (note, text) => {
           const verdict =
-            verdicts?.get(note.reviewId) ??
+            verdicts?.get(verdictKey(note, text)) ??
             (reviews
               ? reviews.get(note.reviewId) === text &&
                 (note.agentId === null || note.agentId === botIdFromSessionKey(key))
               : undefined);
-          if (verdict !== undefined) settled.set(note.reviewId, verdict);
+          if (verdict !== undefined) settled.set(verdictKey(note, text), verdict);
           return verdict === true;
         },
       });

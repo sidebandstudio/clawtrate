@@ -781,6 +781,34 @@ describe("F-560: a note folds only when the gateway's skill changes show its rev
     client.stop();
   });
 
+  it("F-560: a later row naming a confirmed review in other words stays a message", async () => {
+    const other = {
+      ...NOTE_1006,
+      content: [
+        {
+          type: "text",
+          text: '💾 Learned: created `trail-check` (wire the deposit). Say "undo" to revert this skill change.',
+        },
+      ],
+      __openclaw: {
+        ...(NOTE_1006 as { __openclaw: object }).__openclaw,
+        id: "a0ther-row",
+        seq: 22,
+      },
+    };
+    let rows: unknown[] = realNote;
+    const gateway = serving(() => rows, changes(change()));
+    const { transcript } = await openTask({ gateway });
+    await until(() => noteItem(transcript())?.skillNote !== undefined);
+    rows = [...realNote, other];
+    gateway.emit("session.message", { sessionKey: KEY });
+    await until(() => transcript().items.some((item) => item.id.startsWith("a0ther-row")));
+    expect(
+      transcript().items.find((item) => item.id.startsWith("a0ther-row"))!.skillNote,
+    ).toBeUndefined();
+    expect(noteItem(transcript())!.skillNote).toBeDefined();
+  });
+
   it("F-560: a failed or refused read leaves the row a message, and the next history read settles it", async () => {
     for (const failure of [
       new GatewayError({ code: "INVALID_REQUEST", message: "missing scope: operator.read" }),
