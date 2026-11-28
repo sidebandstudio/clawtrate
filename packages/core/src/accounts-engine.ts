@@ -230,6 +230,7 @@ export const MAX_CREATE_AVATAR_CHARS = MAX_PICTURE_CHARS;
 
 /** The most steps one sign-in is followed through before Clawtrate stops it. */
 export const MAX_SIGNIN_STEPS = 64;
+const MAX_SIGNIN_CANCEL_ID_CHARS = 512;
 
 export class AccountsEngine {
   /** How each account was made, from Clawtrate's own record of the sign-ins it started. */
@@ -302,6 +303,8 @@ export class AccountsEngine {
   } | null = null;
   /** Aborts the sign-in's waiting request when it is cancelled or the connection goes. */
   private signInAbort: AbortController | null = null;
+  /** A viewer can cancel its start request before it has seen the gateway wizard's ID. */
+  private signInCancel: { attempt: string; request: string } | null = null;
   /**
    * The bot's own model when the setup sign-in under way started, by that sign-in's id, and the
    * gateway it was started on: only that gateway's session is ended and its saved token removed.
@@ -1337,7 +1340,7 @@ export class AccountsEngine {
   }
 
   /** Start one of the gateway's sign-ins (`models.authLogin`) and follow it (`wizard.next`). */
-  async startSignIn(methodId: string, botId: string | null, id?: string): Promise<void> {
+  async startSignIn(methodId: string, botId: string | null, cancelId?: string): Promise<void> {
     this.requireAdmin("Connecting an account");
     if (methodId === SETUP_TOKEN_METHOD && !this.setupTokenEnabled())
       throw new Error("Connecting a Claude plan isn't available in this version.");
@@ -1348,7 +1351,7 @@ export class AccountsEngine {
     const forBot = this.signInTarget(botId);
     await this.begin(
       {
-        id: id ?? `clawtrate-${this.ctx.randomId()}`,
+        id: `clawtrate-${this.ctx.randomId()}`,
         method: method.id,
         provider: method.provider,
         label: method.label,
@@ -1368,6 +1371,7 @@ export class AccountsEngine {
       },
       null,
       false,
+      cancelId,
     );
   }
 
@@ -1375,8 +1379,17 @@ export class AccountsEngine {
    * Run a sign-in to its end or to a step that waits for the person. `key`
    * answers the first sensitive step of an API key sign-in, then is dropped.
    */
-  private async begin(signIn: SignInState, key: string | null, untilEnd: boolean): Promise<void> {
+  private async begin(
+    signIn: SignInState,
+    key: string | null,
+    untilEnd: boolean,
+    cancelId?: string,
+  ): Promise<void> {
     const { ctx } = this;
+    this.signInCancel =
+      cancelId && cancelId.length <= MAX_SIGNIN_CANCEL_ID_CHARS
+        ? { attempt: signIn.id, request: cancelId }
+        : null;
     const before = this.accountsOf(signIn.provider);
     this.forgetSecrets();
     if (key !== null) this.holdSecret(key);
@@ -1669,7 +1682,13 @@ export class AccountsEngine {
     if ((setupToken || signIn?.flow === "token") && !this.setupTokenEnabled())
       return { cancelled: false };
     if (setupToken && signIn?.flow !== "token") return { cancelled: false };
-    if (id !== undefined && signIn?.id !== id) return { cancelled: false };
+    const correlation = this.signInCancel;
+    if (
+      id !== undefined &&
+      signIn?.id !== id &&
+      (correlation?.request !== id || correlation.attempt !== signIn?.id)
+    )
+      return { cancelled: false };
     if (!signIn || !isActive(signIn)) return { cancelled: signIn?.stage === "cancelled" };
     if (signIn.cancelling) return { cancelled: false };
     if (
@@ -1774,6 +1793,7 @@ export class AccountsEngine {
       return { dismissed: false };
     if (this.ctx.get().signIn?.id !== signIn?.id) return { dismissed: false };
     if (this.modelBefore?.id === signIn?.id) this.modelBefore = null;
+    this.signInCancel = null;
     this.forgetSecrets();
     this.ctx.update((a) => ({ ...a, signIn: null }));
     return { dismissed: true };
@@ -3498,6 +3518,7 @@ export class AccountsEngine {
     if (signIn?.flow === "token" && !this.setupTokenEnabled()) {
       this.modelBefore = null;
       this.setupStarting = null;
+      this.signInCancel = null;
       this.forgetSecrets();
       this.ctx.update((accounts) => ({ ...accounts, signIn: null }));
     } else if (signIn && isActive(signIn)) {
@@ -3536,6 +3557,7 @@ export class AccountsEngine {
   reset(): void {
     this.modelBefore = null;
     this.setupStarting = null;
+    this.signInCancel = null;
     // A write under way belongs to the gateway it was asked of: retired, it sends nothing more.
     this.resets += 1;
     // An Unlock's line is about the gateway it was pressed for.

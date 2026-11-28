@@ -1580,6 +1580,49 @@ describe("how an account was made", () => {
 });
 
 describe("sign-ins, through the gateway's own methods", () => {
+  it("keeps a reused viewer ID from attaching a failed sign-in's readback to its replacement", async () => {
+    const fake = new AccountsGateway();
+    fake.nextEnding = { outcome: "refuse" };
+    const { client, accounts } = await accountsClient({ gateway: fake, setupTokenSignIn: false });
+    const viewerId = "viewer-reused-request";
+    const { promise: held, resolve: release } = Promise.withResolvers<void>();
+    let reading = false;
+    try {
+      await client.startSignIn(CHOICES.browser, null, viewerId);
+      const first = accounts().signIn!.id;
+      const status = fake.gateway.handlers["models.authStatus"]!;
+      fake.gateway.handlers["models.authStatus"] = (params) => {
+        reading = true;
+        return held.then(() => status(params));
+      };
+      const failure = client.answerSignIn("made-up-refused-code");
+      await until(() => reading && accounts().signIn?.stage === "failed");
+
+      fake.nextEnding = { outcome: "approve", account: "travel" };
+      await client.startSignIn(CHOICES.browser, null, viewerId);
+      const replacement = accounts().signIn;
+      expect(replacement).toMatchObject({ stage: "entering", result: null });
+      release();
+      await failure;
+      expect(accounts().signIn).toMatchObject({
+        id: replacement?.id,
+        stage: "entering",
+        result: null,
+      });
+      expect(replacement?.id).not.toBe(first);
+
+      const code = "made-up-replacement-code";
+      await client.answerSignIn(code);
+      expect(fake.gateway.calls("wizard.next")).toContainEqual({
+        sessionId: replacement?.id,
+        answer: { stepId: "paste", value: code },
+      });
+    } finally {
+      release();
+      client.stop();
+    }
+  });
+
   it("a link and a code: starting, waiting with the code and the link, connected, and where it landed", async () => {
     const fake = new AccountsGateway();
     fake.orders.otto = { acme: ["acme:work"] };

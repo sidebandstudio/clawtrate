@@ -1318,7 +1318,9 @@ export function accountCommand(
               sensitive: true,
             },
           });
-        if (method.flow === "token")
+        if (method.flow === "token") {
+          const current = accounts().signIn;
+          if (current?.id !== base.id || current.stage !== "starting") return;
           return signIn({
             stage: "entering",
             step: {
@@ -1333,6 +1335,7 @@ export function accountCommand(
               sensitive: false,
             },
           });
+        }
         if (method.flow === "domain")
           return signIn({
             stage: "entering",

@@ -52,7 +52,8 @@ function setupGateway(
   };
   const status = g.handlers["models.authStatus"]!;
   g.handlers["models.authStatus"] = (params) => {
-    const answer = status(params) as { providers: Json[]; providerCapabilities: Json[] };
+    const answer = status(params) as { providers: Json[]; providerCapabilities?: Json[] };
+    if (!answer.providerCapabilities) return answer;
     return {
       ...answer,
       providers: [
@@ -384,7 +385,8 @@ describe("a Claude plan's setup token (#932)", () => {
       const id = "clawtrate-close-during-read";
       const started = client.startSignIn(SETUP_TOKEN_METHOD, null, id);
       try {
-        await until(() => accounts().signIn?.id === id);
+        await until(() => accounts().signIn?.stage === "starting");
+        expect(accounts().signIn?.id).not.toBe(id);
         await expect(client.cancelSignIn("a-previous-sign-in")).resolves.toEqual({
           cancelled: false,
         });
@@ -426,7 +428,10 @@ describe("a Claude plan's setup token (#932)", () => {
         release();
         await started;
       }
-      expect(fake.gateway.calls("wizard.cancel")).toEqual([{ sessionId: id }]);
+      expect(fake.gateway.calls("wizard.cancel")).toEqual([
+        { sessionId: (fake.gateway.calls(SETUP_AUTH_START)[0] as Json).sessionId },
+      ]);
+      expect((fake.gateway.calls(SETUP_AUTH_START)[0] as Json).sessionId).not.toBe(id);
       expect(fake.gateway.calls("wizard.next")).toEqual([]);
     } finally {
       client.stop();

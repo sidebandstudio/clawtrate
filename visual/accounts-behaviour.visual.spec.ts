@@ -2492,6 +2492,25 @@ test("#932: without admin access, the plan's way says it needs full control and 
   await expect(ways.getByRole("button", { name: /^API key/ })).toBeVisible();
 });
 
+test("F-474 #932: cancelling fixture setup before token entry keeps it cancelled", async ({
+  page,
+}) => {
+  await page.clock.install({ time: NOW });
+  await openFixture(page, `${ADMIN}&plan=1`, "light");
+  await connectFromNewBot(page);
+  await newBot(page)
+    .getByRole("button", { name: /^Claude\b/ })
+    .click();
+  await page.clock.pauseAt(new Date(NOW.getTime() + 60_000));
+  await newBot(page)
+    .getByRole("button", { name: /^Paste a setup token/ })
+    .click();
+  await newBot(page).getByRole("button", { name: "Cancel", exact: true }).click();
+  await page.clock.runFor(500);
+  await expect(newBot(page).getByRole("heading", { name: "Sign-in cancelled" })).toBeVisible();
+  await expect(page.getByTestId("paste")).toHaveCount(0);
+});
+
 test("F-474 #932: cancelling while the fixture checks a setup token prevents its completion", async ({
   page,
 }) => {
