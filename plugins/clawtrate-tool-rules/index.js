@@ -1034,12 +1034,7 @@ export function createToolRules(api, options = {}) {
     // Once the plugin let go of when runs were noted, a run it does not hold may be the one
     // the steer went into, seen again: it stays the bot's, unless a person's message written
     // after the steer names it.
-    if (
-      steered &&
-      origins.notedLost &&
-      !origin?.bot &&
-      !(origins.people.get(runId) > steered.at)
-    ) {
+    if (steered && origins.notedLost && !origin?.bot && !(origins.people.get(runId) > steered.at)) {
       origin = { bot: steered.bot };
     }
     // A run that starts as a bot's is no person's, though a person's message named it.
