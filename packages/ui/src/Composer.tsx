@@ -523,14 +523,23 @@ export function Composer({
             }
           },
           (error: unknown) => {
-            if (asked === menuRead.current)
-              setMenuRows({
-                trigger,
-                query,
-                rows: [],
-                error: error instanceof Error ? error.message : String(error),
-                loading: false,
-              });
+            if (asked !== menuRead.current) return;
+            setMenuRows({
+              trigger,
+              query,
+              rows: [],
+              error: error instanceof Error ? error.message : String(error),
+              loading: false,
+            });
+            // What was typed while this read was out is asked for; the failed query isn't again.
+            const live = pickerRef.current;
+            if (
+              live &&
+              live.trigger === trigger &&
+              live.query !== query &&
+              live.query.length <= MAX_MENU_QUERY_CHARS
+            )
+              load(trigger, live.query, false);
           },
         );
     },
@@ -580,7 +589,7 @@ export function Composer({
       readMenu(trigger, query, false);
     } else if (
       !menuRows.loading &&
-      menuRows.error === null &&
+      (menuRows.error === null || menuRows.query !== query) &&
       !menuCovered(menuRows, trigger, query)
     ) {
       readMenu(trigger, query, !opening);
