@@ -11,7 +11,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, resolve } from "node:path";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
 import {
@@ -258,14 +258,6 @@ describe("--install-plugin", () => {
     return fake as unknown as OperatorSession;
   }
 
-  // The packed bytes can differ with the runtime's gzip implementation. The stand-in
-  // reports the integrity of this packing alongside the recorded digest of its source.
-  const registerPacking = ({ archive, pin }: Packed) => {
-    const tarball = { ...TARBALLS[ARCHIVE]!, integrity: pin.integrity };
-    TARBALLS[archive] = tarball;
-    return tarball;
-  };
-
   /** The app's packing, in a folder this file keeps to its end. */
   let packing: Packed;
   beforeAll(() => {
@@ -290,7 +282,7 @@ describe("--install-plugin", () => {
   it("resumes an attempt it left, and never turns its stop into a fresh enable", async () => {
     const packed = packedOnce();
     const gateway = FakeGateway.at("2026.10.6", "off");
-    gateway.staged = registerPacking(packed);
+    gateway.staged = { ...TARBALLS[ARCHIVE]!, integrity: packed.pin.integrity };
     const records = new Map<string, PluginRecord | null>([
       [
         ID,
@@ -317,11 +309,23 @@ describe("--install-plugin", () => {
   it("the command run again on the same instance resumes the attempt the first run left", async () => {
     const home = realpathSync(tempDir("install-plugin-instance-"));
     const inst = openInstance("install-check", { home, runRoot: join(home, "run") });
-    registerPacking(packCarried(CHECKOUT, join(inst.runDir, "carried-plugins"), ID));
+    const dir = join(inst.runDir, "carried-plugins");
+    const archive = join(dir, basename(packedOnce().archive));
     const gateway = FakeGateway.at("2026.10.6", "fresh");
     // The enable applies and its reply is lost.
     gateway.hooks.push({ method: "plugins.setEnabled", nth: 1, lose: "after" });
-    const io = { open: async () => session(gateway), unpair: async () => {} };
+    const io = {
+      // The CLI packed the archive before connecting. Gzip can produce different bytes on
+      // different Node builds, so the stand-in reports the integrity of the file just packed.
+      open: async () => {
+        TARBALLS[archive] = {
+          ...TARBALLS[ARCHIVE]!,
+          integrity: verifyPacked({ archive, dir }).integrity,
+        };
+        return session(gateway);
+      },
+      unpair: async () => {},
+    };
     const exit = process.exitCode;
     try {
       const first = await installCarried(inst, ID, io);
@@ -337,8 +341,9 @@ describe("--install-plugin", () => {
       expect(JSON.parse(readFileSync(installRecordsFile(inst), "utf8"))).toEqual({});
     } finally {
       process.exitCode = exit;
+      delete TARBALLS[archive];
     }
-  });
+  }, 40_000);
 
   it("writes only when the gateway's hello granted operator.admin", async () => {
     const gateway = FakeGateway.at("2026.10.6", "fresh");
