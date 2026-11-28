@@ -221,28 +221,38 @@ function renderChild(element: NativeElement): NativeElement {
 /** Drive the real Chat and RowView while native sections are plain elements. */
 function eventInChat(raw: unknown) {
   const useDisclosureState = useState.getMockImplementation()!;
-  useState.mockImplementation((initial) => [
-    typeof initial === "function" ? initial() : initial,
-    () => {},
-  ]);
-  let screen: NativeElement;
-  try {
-    screen = Chat({
-      state: {
-        ...initialState,
-        connection: { ...initialState.connection, status: "connected" },
-        transcripts: { [TASK.key]: transcript(mapHistory([raw], { gatewayEvents: true })) },
-      },
-      bot: BOT,
-      task: TASK,
-      now: 0,
-      onBack: () => {},
-      onRead: () => {},
+  // Chat's state, kept in call order, so a later draw shows what its callbacks set.
+  const states: unknown[] = [];
+  const draw = (): NativeElement => {
+    let slot = 0;
+    useState.mockImplementation((initial) => {
+      const index = slot++;
+      if (!(index in states)) states[index] = typeof initial === "function" ? initial() : initial;
+      return [
+        states[index],
+        (next) => {
+          states[index] = typeof next === "function" ? next(states[index]) : next;
+        },
+      ];
     });
-  } finally {
-    useState.mockImplementation(useDisclosureState);
-  }
-  const [pane] = childrenOf(screen);
+    try {
+      return Chat({
+        state: {
+          ...initialState,
+          connection: { ...initialState.connection, status: "connected" },
+          transcripts: { [TASK.key]: transcript(mapHistory([raw], { gatewayEvents: true })) },
+        },
+        bot: BOT,
+        task: TASK,
+        now: 0,
+        onBack: () => {},
+        onRead: () => {},
+      });
+    } finally {
+      useState.mockImplementation(useDisclosureState);
+    }
+  };
+  const [pane] = childrenOf(draw());
   const [scroller] = childrenOf(pane!) as ReactElement<ScrollProps>[];
   expect(scroller?.props.testID).toBe("transcript");
   const [, body] = childrenOf(scroller!);
@@ -256,7 +266,67 @@ function eventInChat(raw: unknown) {
     body: body!.props,
     row: row.props,
     event: () => renderChild(component),
+    /** Whether Chat's next draw shows Jump to latest. */
+    jumpShown: () =>
+      childrenOf(childrenOf(draw())[0]!).some((overlay) => {
+        if (typeof overlay.type !== "function" || overlay.type.name !== "JumpToLatest")
+          return false;
+        const [button] = childrenOf(renderChild(overlay));
+        expect(button?.props.testID).toBe("jump-to-latest");
+        return true;
+      }),
   };
+}
+
+const VIEW = 500;
+
+/**
+ * In a 500-point view, the reader at `offset` in content `height` points tall
+ * opens the event, whose button sits 1,400 points down the content. Its text
+ * adds `added` points. `resize` lays out new content and runs the next frame,
+ * and the view reports a move as Fabric does, only when the offset changed.
+ */
+function openInChat(raw: unknown, at: { height: number; offset: number; added: number }) {
+  const { scroll, body, row, event, jumpShown } = eventInChat(raw);
+  const frames: FrameRequestCallback[] = [];
+  vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) => frames.push(callback));
+  const scrollTo = vi.fn<ScrollTo>();
+  const scrollToEnd = vi.fn<ScrollToEnd>();
+  scroll.ref.current = { scrollTo, scrollToEnd };
+  const sendScroll = (y: number, height: number) =>
+    scroll.onScroll({
+      nativeEvent: {
+        contentOffset: { y },
+        contentSize: { height },
+        layoutMeasurement: { height: VIEW },
+      },
+    });
+  const resize = (height: number) => {
+    scroll.onContentSizeChange(390, height);
+    for (const frame of frames.splice(0)) frame(0);
+  };
+
+  scroll.onLayout!(layout(0, VIEW));
+  scroll.onContentSizeChange(390, at.height);
+  body.onLayout!(layout(100, at.height - 100));
+  row.onLayout!(layout(1_270, 74));
+  sendScroll(at.offset, at.height);
+  const toggle = childrenOf(event())[1]!;
+  toggle.props.onLayout!(layout(30, 44));
+  toggle.props.onPress!();
+  // A queued event for the old scroll extent still reports where the reader was.
+  sendScroll(at.offset, at.height);
+  row.onLayout!(layout(1_270, 74 + at.added));
+  resize(at.height + at.added);
+  const moved = scrollTo.mock.lastCall?.[0].y;
+  if (moved !== undefined && moved !== at.offset) sendScroll(moved, at.height + at.added);
+
+  const close = () => {
+    childrenOf(event())[1]!.props.onPress!();
+    row.onLayout!(layout(1_270, 74));
+    resize(at.height);
+  };
+  return { scroll, sendScroll, resize, close, scrollTo, scrollToEnd, jumpShown };
 }
 
 function pressEvent(event: () => NativeElement): NativeElement {
@@ -316,38 +386,12 @@ describe("iPhone gateway events (#699)", () => {
   });
 
   it("F-613: opening a long event keeps its button and attribution in view", () => {
-    const { scroll, body, row, event } = eventInChat(eventRow(EXEC.repeat(20)));
-    const frames: FrameRequestCallback[] = [];
-    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) =>
-      frames.push(callback),
-    );
-    const scrollTo = vi.fn<ScrollTo>();
-    const scrollToEnd = vi.fn<ScrollToEnd>();
-    scroll.ref.current = { scrollTo, scrollToEnd };
-    const viewHeight = 500;
-    const sendScroll = (y: number, height: number) =>
-      scroll.onScroll({
-        nativeEvent: {
-          contentOffset: { y },
-          contentSize: { height },
-          layoutMeasurement: { height: viewHeight },
-        },
-      });
-
-    scroll.onLayout!(layout(0, viewHeight));
-    scroll.onContentSizeChange(390, 1_500);
-    body.onLayout!(layout(100, 1_400));
-    row.onLayout!(layout(1_270, 74));
-    sendScroll(1_000, 1_500);
-    const toggle = childrenOf(event())[1]!;
-    toggle.props.onLayout!(layout(30, 44));
-    toggle.props.onPress!();
-    // A queued event for the old scroll extent still reports that the reader is at the end.
-    sendScroll(1_000, 1_500);
-
-    row.onLayout!(layout(1_270, 854));
-    scroll.onContentSizeChange(390, 2_280);
-    for (const frame of frames.splice(0)) frame(0);
+    // The reader is at the end, and the text pushes the end 780 points down.
+    const { scroll, sendScroll, scrollTo, scrollToEnd } = openInChat(eventRow(EXEC.repeat(20)), {
+      height: 1_500,
+      offset: 1_000,
+      added: 780,
+    });
     expect(scrollToEnd).not.toHaveBeenCalled();
     expect(scrollTo).toHaveBeenLastCalledWith({ y: 1_400 - PROTECTED_BAND, animated: false });
 
@@ -355,6 +399,37 @@ describe("iPhone gateway events (#699)", () => {
     sendScroll(1_780, 2_280);
     scroll.onContentSizeChange(390, 2_320);
     expect(scrollToEnd).toHaveBeenCalledWith({ animated: false });
+  });
+
+  it("F-613: a short event opened at the end keeps the next message in view", () => {
+    // The event is the last row, and its text adds 80 points.
+    const { resize, scrollTo, scrollToEnd, jumpShown } = openInChat(eventRow(EXEC), {
+      height: 1_500,
+      offset: 1_000,
+      added: 80,
+    });
+    expect(jumpShown()).toBe(false);
+
+    resize(1_700);
+    expect(scrollToEnd).toHaveBeenLastCalledWith({ animated: false });
+    // Opening went to the end, with the button 222 points below the header.
+    expect(scrollTo).toHaveBeenLastCalledWith({ y: 1_080, animated: false });
+  });
+
+  it.each([
+    // A reply sits under the event, so its text shows without a scroll.
+    ["a short event", EXEC, { height: 1_600, offset: 1_100, added: 80 }, false],
+    // The button is held under the header, and closing leaves the reader 48 points from the end.
+    ["a long event", EXEC.repeat(20), { height: 1_850, offset: 1_290, added: 780 }, true],
+  ])("F-613: %s closed again at the end follows the next message", (_case, text, at, held) => {
+    const { resize, close, scrollToEnd, jumpShown } = openInChat(eventRow(text), at);
+    expect(jumpShown()).toBe(held);
+
+    close();
+    expect(jumpShown()).toBe(false);
+    scrollToEnd.mockClear();
+    resize(at.height + 120);
+    expect(scrollToEnd).toHaveBeenLastCalledWith({ animated: false });
   });
 
   it("#699: keeps the centred gateway line apart from the event text", () => {

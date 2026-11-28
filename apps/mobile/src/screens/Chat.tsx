@@ -68,7 +68,8 @@ const NEAR_END = 96;
 const TASK_LINE = "task-line";
 const rowKey = (row: ChatRow) => `${row.kind}:${row.id}`;
 
-type OpenedEvent = { key: string; toggleY: number | null; positioned: boolean };
+/** An event the reader opened, and whether they were following the end when they did. */
+type OpenedEvent = { key: string; toggleY: number | null; positioned: boolean; following: boolean };
 
 function RowView({
   row,
@@ -377,6 +378,8 @@ export function Chat({
   // once they reach it, as section 18 has it.
   const following = useRef(false);
   const openedEvent = useRef<OpenedEvent | null>(null);
+  // An event was closed: once the content shrinks, a reader left at the end follows it.
+  const closedEvent = useRef(false);
   const [atEnd, setAtEnd] = useState(false);
   const [contentHeight, setContentHeight] = useState(0);
   const [viewHeight, setViewHeight] = useState(0);
@@ -473,11 +476,13 @@ export function Chat({
 
   const eventDisclosureChanged = (key: string, open: boolean, toggleY: number | null) => {
     if (open) {
-      openedEvent.current = { key, toggleY, positioned: false };
+      // Whether the end can still be followed waits for the opened height (`showOpenedEvent`).
+      openedEvent.current = { key, toggleY, positioned: false, following: following.current };
       following.current = false;
       returning.current = null;
-    } else if (openedEvent.current?.key === key) {
-      openedEvent.current = null;
+    } else {
+      if (openedEvent.current?.key === key) openedEvent.current = null;
+      closedEvent.current = true;
     }
   };
 
@@ -489,12 +494,22 @@ export function Chat({
     if (!box || opened.toggleY === null || view <= PROTECTED_BAND) return;
     const top = bodyTop.current + box.y + opened.toggleY;
     const bottom = bodyTop.current + box.y + box.height;
-    // Show as much as fits without moving the button behind the floating header.
+    // At the end, the button and attribution stay below the floating header.
+    const fits = content - view <= top - PROTECTED_BAND;
+    // Otherwise show as much as fits without moving the button behind the header.
     const maxY = Math.min(content - view, top - PROTECTED_BAND);
-    const y = Math.max(0, Math.min(maxY, Math.max(scrollY.current, bottom - view)));
+    const y =
+      opened.following && fits
+        ? Math.max(0, content - view)
+        : Math.max(0, Math.min(maxY, Math.max(scrollY.current, bottom - view)));
+    const end = content - (y + view) < NEAR_END;
+    if (fits && end) {
+      openedEvent.current = null;
+      following.current = true;
+    }
     scroller.current?.scrollTo({ y, animated: false });
     scrollY.current = y;
-    setAtEnd(content - (y + view) < NEAR_END);
+    setAtEnd(end);
   };
 
   let body: ReactNode;
@@ -664,6 +679,16 @@ export function Chat({
           onContentSizeChange={(contentWidth, height) => {
             setContentHeight(height);
             extent.current = { ...extent.current, content: height, contentWidth };
+            // Closing can leave the reader at the end without a scroll event to say so.
+            if (
+              closedEvent.current &&
+              openedEvent.current === null &&
+              height - (scrollY.current + extent.current.view) < NEAR_END
+            ) {
+              following.current = true;
+              setAtEnd(true);
+            }
+            closedEvent.current = false;
             returning.current = nextReturning(returning.current, {
               kind: "content-laid-out",
               width: contentWidth,
