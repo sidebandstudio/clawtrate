@@ -2541,6 +2541,38 @@ test("F-474 #932: cancelling while the fixture checks a setup token prevents its
   );
 });
 
+test("F-474 #932: a setup token answer that arrives after Cancel is ignored", async ({ page }) => {
+  await page.clock.install({ time: NOW });
+  await openFixture(page, `${ADMIN}&plan=1`, "light");
+  await connectFromNewBot(page);
+  await newBot(page)
+    .getByRole("button", { name: /^Claude\b/ })
+    .click();
+  await newBot(page)
+    .getByRole("button", { name: /^Paste a setup token/ })
+    .click();
+  await expect(page.getByTestId("paste")).toBeVisible();
+  await newBot(page).getByRole("button", { name: "Cancel", exact: true }).click();
+  await expect(newBot(page).getByRole("heading", { name: "Sign-in cancelled" })).toBeVisible();
+  // The answer sent before Cancel reaches the fixture only now.
+  await page.evaluate(() =>
+    (window as unknown as { clawtrateFixture: ClawtrateBridge }).clawtrateFixture.send({
+      type: "answerSignIn",
+      value: "made-up-setup-token-for-a-check",
+      setupToken: true,
+    }),
+  );
+  await page.clock.runFor(1_000);
+  const state = await page.evaluate(() =>
+    (window as unknown as { clawtrateFixture: ClawtrateBridge }).clawtrateFixture.getState(),
+  );
+  expect(state.accounts.signIn).toMatchObject({ stage: "cancelled" });
+  expect(state.accounts.accounts.some((account) => account.id === "anthropic:setup-fixture")).toBe(
+    false,
+  );
+  await expect(newBot(page).getByRole("heading", { name: "Sign-in cancelled" })).toBeVisible();
+});
+
 test("F-474 #932: closing Connect while dismissal waits prevents the setup from starting", async ({
   page,
 }) => {

@@ -1407,6 +1407,8 @@ export function accountCommand(
       // A plan's setup token: one too short is refused on the same step; one taken connects the
       // plan and gives the bot an Anthropic model, as the gateway's setup sign-in does.
       if (current?.flow === "token") {
+        // Only the step that waits for it takes it: one arriving after Cancel changes nothing.
+        if (current.stage !== "entering" || !current.step) return Promise.resolve();
         if (command.value.trim().length < 20) {
           signIn({ stage: "entering", error: "refused" });
           return Promise.resolve();
