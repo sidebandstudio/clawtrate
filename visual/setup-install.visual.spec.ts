@@ -70,10 +70,13 @@ for (const size of SHOWN) {
       await settle(page);
       await expect(page).toHaveScreenshot(`install-about-${theme}-${size.name}.png`);
     });
-    test("F-505: the new gateway is connected", async ({ page }) => {
+    test("F-504 F-505: the new gateway is connected and asks for an account", async ({ page }) => {
       await openFixture(page, "setup=install-ready", theme);
       await page.getByRole("button", { name: "Set up OpenClaw here" }).click();
       await expect(page.getByTestId("setup")).toHaveCount(0);
+      await expect(
+        page.getByTestId("new-bot").getByRole("heading", { name: "Connect an account" }),
+      ).toBeVisible();
       await settle(page);
       await expect(page).toHaveScreenshot(`install-connected-${theme}-${size.name}.png`);
     });
@@ -130,6 +133,22 @@ test.describe("behaviour", () => {
     await expect(page.getByTestId("setup")).toHaveCount(0);
     expect(await sent(page)).toContain("setupInstall");
     expect(await sent(page)).not.toContain("setupConnect");
+  });
+
+  test("F-504 F-505: once the install connects, Connect an account opens by itself on a gateway with no account", async ({
+    page,
+  }) => {
+    await openFixture(page, "setup=install-ready", "dark");
+    await page.getByRole("button", { name: "Set up OpenClaw here" }).click();
+    await expect(page.getByTestId("setup")).toHaveCount(0);
+    const dialog = page.getByTestId("new-bot");
+    await expect(dialog.getByRole("heading", { name: "Connect an account" })).toBeVisible();
+    await expect(dialog.getByRole("button", { name: /^OpenAI$/ })).toBeVisible();
+    // Focus moves into the sheet with it.
+    await expect
+      .poll(() => dialog.evaluate((sheet) => sheet.contains(document.activeElement)))
+      .toBe(true);
+    expect(await sent(page)).toContain("refreshAccounts");
   });
 
   test("F-505: the recovery panel offers the recorded setup actions", async ({ page }) => {

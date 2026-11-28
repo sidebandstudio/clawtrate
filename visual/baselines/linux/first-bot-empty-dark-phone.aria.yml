@@ -1,0 +1,9 @@
+- status
+- region "Conversation":
+  - button "Back to bots"
+  - button "main, no task selected. Show details.": main
+  - button "Show work panel"
+  - heading "Set up your first bot" [level=1]
+  - button "Get started"
+  - status
+- status

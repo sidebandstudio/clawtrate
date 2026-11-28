@@ -9,8 +9,11 @@
 import {
   ACCOUNT_READ_CONCURRENCY,
   accountProvider,
+  catalogModel,
   endingOf,
   evaluateOrder,
+  FIRST_BOT_ACCOUNT_CHECK_MS,
+  FIRST_BOT_PROBE_MS,
   formatModelRef,
   INTENT_PREF_PREFIX,
   isBusy,
@@ -25,14 +28,17 @@ import {
   MAX_SECRET_JSON_CHARS,
   modelIdProblem,
   mergeAccounts,
+  modelForAccount,
   normalizeLabel,
   parseModelRef,
   prefBotId,
   prefProfileId,
   providerNotListed,
   readBotView,
+  readAccountProbe,
   unconfirmedOrder,
   readCatalog,
+  readFirstBotModels,
   readPickerCuts,
   readProviderCatalog,
   type ModelList,
@@ -187,7 +193,7 @@ class WriteRetired extends Error {
 }
 
 /** A creation's steps after the bot is made, in the order they are written: one string, not a collection kept. */
-const STEP_ORDER = "identity preference fallbacks listed task";
+const STEP_ORDER = "identity preference fallbacks listed task account-model";
 
 /** A write needs admin; the access bar asks for it (bots.md section 2). */
 export class AdminNeededError extends Error {
@@ -206,6 +212,8 @@ export type CreateBotInput = {
   provider: string;
   model: string;
   effort: string | null;
+  /** First setup confirms a model against the new task's selected shared account. */
+  verifyAccountModel?: boolean;
 };
 
 /** Why a Refresh's answer is not given: it would be another gateway's, or another connection's. */
@@ -216,6 +224,17 @@ const entryOf = (config: RawRecord | null, botId: string) =>
   asRecord(asRecord(asRecord(asRecord(config?.config)?.agents)?.entries)?.[botId]);
 const providerOf = (entry: RawRecord | null) =>
   parseModelRef(readModelConfig(entry?.model).primary)?.provider ?? null;
+
+function declaresSeparateMainStore(config: RawRecord | null, main: RawRecord | null): boolean {
+  if (typeof main?.agentDir !== "string") return false;
+  const path = typeof config?.path === "string" ? config.path.replaceAll("\\", "/") : "";
+  // Onboarding can write the standard main directory explicitly. Check its full path
+  // against this gateway's config directory, so a separate store with the same name stays separate.
+  return (
+    !/^(?:\/|[A-Za-z]:\/).+\/openclaw\.json$/.test(path) ||
+    main.agentDir.replaceAll("\\", "/") !== path.replace(/openclaw\.json$/, "agents/main/agent")
+  );
+}
 
 /** The longest picture New bot sends. */
 export const MAX_CREATE_AVATAR_CHARS = MAX_PICTURE_CHARS;
@@ -241,6 +260,7 @@ export class AccountsEngine {
     botId: string | null;
     ref: ModelRef;
     effort: string | null;
+    verifyAccountModel?: boolean;
     intent: BindingIntent;
     /** A picture was chosen in New bot, and the gateway keeps it with the bot. */
     picture: boolean;
@@ -348,7 +368,12 @@ export class AccountsEngine {
         now.connectedAt === readOn.connectedAt
       );
     };
-    ctx.update((a) => ({ ...a, status: a.status === "ready" ? "ready" : "loading", error: null }));
+    ctx.update((a) => ({
+      ...a,
+      status: a.status === "ready" ? "ready" : "loading",
+      modelsStatus: "loading",
+      error: null,
+    }));
     // Where these reads stand among the engine's reads (`nextSeq`), and when they began.
     const seq = this.nextSeq();
     const startedAt = ctx.now();
@@ -398,7 +423,7 @@ export class AccountsEngine {
         configRead,
         settle(
           this.readViews(
-            bots.map((bot) => bot.id),
+            bots.length > 0 ? bots.map((bot) => bot.id) : [""],
             failed,
             sent,
             configRead,
@@ -466,18 +491,31 @@ export class AccountsEngine {
       // read is awaited for (a new bot's first task): the gateway refuses it alongside the reads
       // above ("Chat metadata access changed while preparing its metadata"). Not published after
       // a reset; a failed read keeps the rows there are.
-      const defaultBot = bots.find((bot) => bot.isDefault)?.id ?? bots[0]?.id ?? "main";
+      const defaultBot = bots.find((bot) => bot.isDefault)?.id ?? bots[0]?.id;
       // Kept while it is out: Create waits for it rather than overlap it (section 4).
       const picker = ctx
-        .readAgain(() => ctx.request("models.list", { agentId: defaultBot }), current)
+        .readAgain(
+          () => ctx.request("models.list", defaultBot ? { agentId: defaultBot } : {}),
+          current,
+        )
         .catch(() => null);
       this.pickerRead = picker;
       const answer = await picker;
       if (this.pickerRead === picker) this.pickerRead = null;
-      if (answer === null || resets !== this.resets) return;
+      if (!current()) return;
+      if (!Array.isArray(asRecord(answer)?.models)) {
+        ctx.update((a) => ({ ...a, modelsStatus: "error" }));
+        return;
+      }
       const models = readCatalog(answer);
       const modelsCut = readPickerCuts(answer);
-      ctx.update((a) => ({ ...a, models, modelsCut }));
+      ctx.update((a) => ({
+        ...a,
+        models,
+        modelsCut,
+        modelsStatus: "ready",
+        firstBotModels: readFirstBotModels(answer, a.accounts, a.defaultModel),
+      }));
     } catch (error) {
       // A failure of a read for another gateway is not this one's to show.
       if (resets !== this.resets) return;
@@ -725,11 +763,11 @@ export class AccountsEngine {
         Promise.allSettled(
           chunk.map((agentId) =>
             this.ctx
-              .request("models.authStatus", { agentId, refresh: true })
+              .request("models.authStatus", { ...(agentId ? { agentId } : {}), refresh: true })
               .then(async (answer) => {
                 // The bot's own provider first, so its account stays within the caps (#823).
                 const view = readBotView(answer, providerOf(entryOf(await config, agentId)));
-                if (!view.unavailable) await arrived(agentId, view, seq);
+                if (agentId && !view.unavailable) await arrived(agentId, view, seq);
                 return view;
               }),
           ),
@@ -804,10 +842,17 @@ export class AccountsEngine {
     const entries = asRecord(agents.entries) ?? {};
     const defaults = asRecord(agents.defaults) ?? {};
     const defaultModel = readModelConfig(defaults.model).primary;
-    const accounts = mergeAccounts(views, this.kinds);
     const main = asRecord(entries.main);
+    const mainShared =
+      (views.has("main") || views.has("")) && !declaresSeparateMainStore(config, main);
+    // With only canonical main, a saved credential is already in the store a new bot inherits.
+    const accounts = mergeAccounts(
+      views,
+      this.kinds,
+      mainShared && views.size === 1 ? (views.has("main") ? "main" : "") : null,
+    );
     const anyView = views.get("main") ?? [...views.values()][0];
-    const bindings = [...views.keys()].map((botId) => {
+    const bindings = [...views.keys()].filter(Boolean).map((botId) => {
       const before = previous.bindings.find((each) => each.botId === botId);
       // Numbered as its own request was sent.
       const own = sent?.get(botId) ?? seq;
@@ -832,8 +877,8 @@ export class AccountsEngine {
       readAt: at,
       labels: this.ctx.admin(),
       defaultModel,
-      // A `main` listed on the gateway, with no folder of its own configured (row 33).
-      mainShared: views.has("main") && (main === null || typeof main.agentDir !== "string"),
+      // A read of the gateway's standard shared store (row 33).
+      mainShared,
       accounts,
       methods: readMethods(anyView?.capabilities ?? []),
       keyProviders: readKeyProviders(anyView),
@@ -1358,9 +1403,18 @@ export class AccountsEngine {
       await ctx.request("models.authLogin", {
         sessionId: signIn.id,
         authChoice: signIn.method,
-        agentId: signIn.forBot,
+        ...(ctx.bots().length > 0 ? { agentId: signIn.forBot } : {}),
       });
     } catch (error) {
+      if (!isRefusal(error)) {
+        this.setSignIn(signIn.id, {
+          stage: "ended",
+          error: ctx.connected() ? "The gateway didn’t confirm that the sign-in started." : null,
+        });
+        if (ctx.connected()) await this.afterSignIn(signIn.id, before);
+        else this.forgetSecrets();
+        return;
+      }
       const message = this.scrub(errorText(error));
       this.setSignIn(signIn.id, { stage: isBusy(message) ? "busy" : "failed", error: message });
       this.forgetSecrets();
@@ -1485,6 +1539,14 @@ export class AccountsEngine {
           this.setSignIn(id, { stage: "ended", step: null, error: null });
           this.forgetSecrets();
           return;
+        }
+        if (!isRefusal(error)) {
+          this.setSignIn(id, {
+            stage: "ended",
+            step: null,
+            error: "The gateway didn’t confirm that the sign-in finished.",
+          });
+          return await this.afterSignIn(id, before);
         }
         const message = this.scrub(errorText(error));
         this.setSignIn(id, { stage: endingOf("error", message), step: null, error: message });
@@ -1684,7 +1746,12 @@ export class AccountsEngine {
       // a failed Check now: a press begun before it sends nothing after it.
       const ids = other ? [signIn.forBot, other] : [signIn.forBot];
       const { seq, out } = this.statusRead(ctx, ids, () =>
-        ids.map((agentId) => ctx.request("models.authStatus", { agentId, refresh: true })),
+        ids.map((agentId) =>
+          ctx.request("models.authStatus", {
+            ...(ctx.bots().length > 0 ? { agentId } : {}),
+            refresh: true,
+          }),
+        ),
       );
       const read = (agentId: string, asked: Promise<unknown>) =>
         asked
@@ -1711,7 +1778,8 @@ export class AccountsEngine {
       const first = result.added.length === 1 ? result.added[0] : undefined;
       if (first) {
         const shared =
-          second?.profiles.some((p) => p.id === first && p.source !== "saved") ?? false;
+          second?.profiles.some((p) => p.id === first && p.source !== "saved") ??
+          (signIn.forBot === "main" && !signIn.keptOnly && ctx.get().mainShared);
         result.landed = shared ? "shared" : "kept";
         result.keptBy = shared ? null : signIn.forBot;
         if (signIn.stage === "checking" || signIn.stage === "unconfirmed")
@@ -1863,7 +1931,11 @@ export class AccountsEngine {
     this.holdSecret(key);
     try {
       const answer = asRecord(
-        await this.ctx.request("models.authSetApiKey", { provider, apiKey: key, agentId: forBot }),
+        await this.ctx.request("models.authSetApiKey", {
+          provider,
+          apiKey: key,
+          ...(this.ctx.bots().length > 0 ? { agentId: forBot } : {}),
+        }),
       );
       const named = typeof answer?.profileId === "string" ? answer.profileId : null;
       // Saved only when the read after it shows the account, as for every sign-in.
@@ -2243,7 +2315,18 @@ export class AccountsEngine {
       throw new Error("A bot is already being created.");
     if (previous?.status === "partial" && previous.botId)
       throw new Error(`${previous.name} exists already: finish it rather than create it again.`);
-    const ref: ModelRef = { provider: input.provider, model: input.model, account: input.account };
+    if (
+      previous?.status === "failed" &&
+      previous.uncertain &&
+      (previous.name !== name || this.planned?.name !== name)
+    )
+      throw new Error(`Check whether ${previous.name} was created before making another bot.`);
+    const retryPlan = previous?.status === "failed" && previous.uncertain ? this.planned : null;
+    let ref: ModelRef = retryPlan?.ref ?? {
+      provider: input.provider,
+      model: input.model,
+      account: input.account,
+    };
     if (input.account && accountProvider(input.account) !== input.provider)
       throw new Error("That account belongs to another provider.");
     // An explicit picture must be one the gateway can keep and Clawtrate can read back;
@@ -2252,17 +2335,15 @@ export class AccountsEngine {
       throw new Error("That picture can't be kept.");
     const avatar = input.avatar;
     // The bots there before: kept from the first Create of this name while its answer is in doubt.
-    const retrying =
-      previous?.status === "failed" && previous.uncertain && previous.name === name && this.planned
-        ? this.planned.name === name
-        : false;
+    const retrying = retryPlan !== null;
     // The state's bot list, which holds at most MAX_BOTS.
     if (!retrying) this.before.splice(0, this.before.length, ...ctx.bots().map((bot) => bot.id));
-    this.planned = {
+    this.planned = retryPlan ?? {
       name,
       botId: null,
       ref,
       effort: input.effort,
+      ...(input.verifyAccountModel ? { verifyAccountModel: true } : {}),
       intent: input.account ? { mode: "account", account: input.account } : { mode: "gateway" },
       picture: avatar !== null,
     };
@@ -2277,6 +2358,12 @@ export class AccountsEngine {
         slow: false,
         botId: null,
         error: null,
+        ...(input.verifyAccountModel && !retrying
+          ? {
+              accountCheck: "checking" as const,
+              ...(ref.account ? { accountChecked: ref.account } : {}),
+            }
+          : {}),
         missing: [],
         uncertain: false,
       },
@@ -2292,10 +2379,40 @@ export class AccountsEngine {
     const assertCreating = () => {
       if (this.creating !== mark) throw new WriteRetired();
     };
-    const failed = (error: unknown, uncertain: boolean): never => {
+    const failed = (
+      error: unknown,
+      uncertain: boolean,
+      accountCheck?: "unusable" | "unchecked",
+    ): never => {
       assertCreating();
-      return this.creationFailed(ctx, error, uncertain);
+      const unidentified =
+        accountCheck &&
+        mark.gatewayId !== null &&
+        this.ctx.gatewayNow() === null &&
+        this.ctx.target() === mark.target;
+      return this.creationFailed(unidentified ? this.ctx : ctx, error, uncertain, accountCheck);
     };
+    if (input.verifyAccountModel && !retrying) {
+      const check = await this.checkFirstBotAccount(ctx, ref);
+      assertCreating();
+      if (check.status === "unusable")
+        return failed(new Error("This account can’t run a model here."), false, "unusable");
+      if (check.status === "unchecked")
+        return failed(new Error("Clawtrate couldn’t check this account."), false, "unchecked");
+      if (check.status === "usable") {
+        ref = { ...ref, model: check.model.id };
+        const effort =
+          input.effort && check.model.levels.includes(input.effort)
+            ? input.effort
+            : check.model.defaultLevel;
+        this.planned = { ...this.planned, ref, effort, verifyAccountModel: false };
+      }
+      ctx.update((a) => {
+        if (!a.creation) return a;
+        const { accountCheck: _checked, ...creation } = a.creation;
+        return { ...a, creation };
+      });
+    }
     let botId: string | null = null;
     // After an answer that settled nothing, the bot may exist: look before asking again.
     if (retrying) botId = await this.findMade(ctx, name, mark);
@@ -2324,9 +2441,62 @@ export class AccountsEngine {
       ctx,
       name,
       botId,
-      ["identity", "preference", "fallbacks", "listed", "task"],
+      [
+        "identity",
+        "preference",
+        "fallbacks",
+        "listed",
+        "task",
+        ...(this.planned.verifyAccountModel ? ["account-model" as const] : []),
+      ],
       mark,
     );
+  }
+
+  /** Check the chosen account once, before making a bot or conversation. */
+  private async checkFirstBotAccount(ctx: AccountsContext, ref: ModelRef) {
+    if (!ref.account) return { status: "unchecked" } as const;
+    const began = ctx.readStamp();
+    const current = () => ctx.connected() && answeredBy(began, ctx.readStamp()) !== null;
+    const clock = () => (ctx.clock ? ctx.clock() : ctx.now());
+    const deadline = clock() + FIRST_BOT_ACCOUNT_CHECK_MS;
+    const agentId = ctx.bots().find((bot) => bot.isDefault)?.id ?? ctx.bots()[0]?.id;
+    const scope = agentId ? { agentId } : {};
+    let answer: unknown;
+    try {
+      answer = await ctx.request(
+        "models.probe",
+        { ...scope, provider: ref.provider, profileId: ref.account, timeoutMs: FIRST_BOT_PROBE_MS },
+        { timeoutMs: FIRST_BOT_ACCOUNT_CHECK_MS },
+      );
+    } catch (error) {
+      if (
+        current() &&
+        error instanceof GatewayProtocolRequestError &&
+        (error.code === "UNKNOWN_METHOD" ||
+          /^unknown method:?\s+models\.probe\b/i.test(error.message))
+      )
+        return { status: "missing-method" } as const;
+      return { status: "unchecked" } as const;
+    }
+    if (!current()) return { status: "unchecked" } as const;
+    const checked = readAccountProbe(answer, ref);
+    if (checked.status !== "usable") return checked;
+    const remaining = deadline - clock();
+    if (remaining < 1) return { status: "unchecked" } as const;
+    try {
+      const catalogue = await ctx.request(
+        "models.list",
+        { ...scope, provider: ref.provider },
+        { timeoutMs: Math.floor(remaining) },
+      );
+      const model = catalogModel(catalogue, ref.provider, checked.model);
+      return model && current()
+        ? ({ status: "usable", model } as const)
+        : ({ status: "unchecked" } as const);
+    } catch {
+      return { status: "unchecked" } as const;
+    }
   }
 
   /**
@@ -2467,7 +2637,48 @@ export class AccountsEngine {
         failed("task", "its first task was not made", error);
       }
     }
+    if (steps.includes("account-model")) {
+      try {
+        if (!plan || missing.includes("task"))
+          throw new Error("The first conversation is not ready.");
+        await this.confirmFirstBotModel(ctx, botId, plan.ref, plan.effort, owns);
+      } catch (error) {
+        if (error instanceof WriteRetired) throw cut(error, "account-model");
+        failed("account-model", "the gateway could not confirm a model for its account", error);
+      }
+    }
     return this.settleCreation(ctx, name, botId, missing, errors, mark);
+  }
+
+  /** Project the selected account into the new empty conversation for one catalogue read. */
+  private async confirmFirstBotModel(
+    ctx: AccountsContext,
+    botId: string,
+    ref: ModelRef,
+    effort: string | null,
+    owns: () => boolean,
+  ): Promise<void> {
+    const key = `agent:${botId}:main`;
+    try {
+      await ctx.request("sessions.patch", { key, model: formatModelRef(ref) });
+      const answer = await ctx.request("models.list", { sessionKey: key, provider: ref.provider });
+      const selected = modelForAccount(answer, ref);
+      if (!selected) throw new Error("Choose another account or check again.");
+      if (selected.id !== ref.model) {
+        const next = { ...ref, model: selected.id };
+        const nextEffort = selected.defaultLevel ?? null;
+        await this.writeModel(botId, next, nextEffort, false, ctx, owns);
+        if (owns() && this.planned?.botId === botId) {
+          this.planned.ref = next;
+          this.planned.effort = nextEffort;
+        }
+      } else if (effort && !selected.levels.includes(effort)) {
+        await this.writeModel(botId, ref, selected.defaultLevel, false, ctx, owns);
+      }
+    } finally {
+      // The conversation follows its bot's settings after this read.
+      await ctx.request("sessions.patch", { key, model: null });
+    }
   }
 
   /**
@@ -2541,6 +2752,7 @@ export class AccountsEngine {
       mark.resets === this.resets &&
       mark.gatewayId !== null &&
       this.ctx.gatewayNow() === null;
+    const account = this.planned?.ref.account;
     (unidentified ? this.ctx : ctx).update((a) => ({
       ...a,
       creation: {
@@ -2553,6 +2765,7 @@ export class AccountsEngine {
             ? this.scrub(`${name} was created, but ${errors.join(", and ")}.`)
             : null,
         missing,
+        ...(missing.includes("account-model") && account ? { accountChecked: account } : {}),
         uncertain: false,
       },
     }));
@@ -2606,28 +2819,47 @@ export class AccountsEngine {
    * (the record of its account, its model with the empty fallback list and
    * effort, the bot list showing it, the first task), never create it again.
    */
-  async finishBot(botId: string, binding?: WriteBinding): Promise<CreatedBot> {
+  async finishBot(botId: string, binding?: WriteBinding, account?: string): Promise<CreatedBot> {
     // Bound to the gateway it was asked of, or else the creation's: never finished on another.
     const creation =
       this.creationGateway === null
         ? undefined
         : { gatewayId: this.creationGateway, target: this.creationTarget };
-    return this.boundTo(binding ?? creation, (ctx, mark) => this.finish(ctx, botId, mark));
+    return this.boundTo(binding ?? creation, (ctx, mark) => this.finish(ctx, botId, mark, account));
   }
 
-  private async finish(ctx: AccountsContext, botId: string, mark: WriteMark): Promise<CreatedBot> {
+  private async finish(
+    ctx: AccountsContext,
+    botId: string,
+    mark: WriteMark,
+    account?: string,
+  ): Promise<CreatedBot> {
     this.requireAdmin("Creating a bot");
     const creation = ctx.get().creation;
     if (!creation || creation.status !== "partial" || creation.botId !== botId)
       throw new Error("That bot has nothing left to finish.");
     if (this.finishing === creation) throw new Error("That bot is already being finished.");
+    const steps = [...creation.missing];
+    if (creation.accountChecked && !steps.includes("task")) {
+      const shared = ctx.get().accounts.find((row) => row.id === account && row.keptBy === null);
+      const candidate = ctx.get().firstBotModels?.find((row) => row.provider === shared?.provider);
+      if (!account || account === creation.accountChecked || !candidate || !this.planned)
+        throw new Error("Choose another account to finish this bot.");
+      this.planned = {
+        ...this.planned,
+        ref: { ...candidate, account },
+        effort: null,
+        intent: { mode: "account", account },
+      };
+      steps.push("preference", "fallbacks");
+    }
     this.finishing = creation;
     this.creating = mark;
     try {
       ctx.update((a) =>
         a.creation ? { ...a, creation: { ...a.creation, status: "creating", error: null } } : a,
       );
-      return await this.complete(ctx, creation.name, botId, creation.missing, mark);
+      return await this.complete(ctx, creation.name, botId, steps, mark);
     } finally {
       if (this.finishing === creation) this.finishing = null;
     }
@@ -2658,7 +2890,12 @@ export class AccountsEngine {
     this.ctx.update((a) => (a.creation ? { ...a, creation: null } : a));
   }
 
-  private creationFailed(ctx: AccountsContext, error: unknown, uncertain: boolean): never {
+  private creationFailed(
+    ctx: AccountsContext,
+    error: unknown,
+    uncertain: boolean,
+    accountCheck?: "unusable" | "unchecked",
+  ): never {
     if (this.slowTimer) clearTimeout(this.slowTimer);
     this.slowTimer = null;
     const name = ctx.get().creation?.name ?? "the bot";
@@ -2670,6 +2907,7 @@ export class AccountsEngine {
             status: "failed",
             slow: false,
             uncertain,
+            ...(accountCheck ? { accountCheck } : {}),
             error: uncertain
               ? `The gateway's answer did not say whether ${name} was made (${errorText(error)}). Create again looks for it first.`
               : errorText(error),
@@ -2683,7 +2921,7 @@ export class AccountsEngine {
   dismissCreation(): void {
     this.ctx.update((a) =>
       a.creation &&
-      (a.creation.status === "failed" ||
+      ((a.creation.status === "failed" && !a.creation.uncertain) ||
         a.creation.status === "created" ||
         // The person chose to open the bot as it is; its Account page still says what is missing.
         a.creation.status === "partial")
@@ -3247,7 +3485,7 @@ export class AccountsEngine {
       this.setSignIn(signIn.id, { stage: "ended", step: null, cancelling: false, saving: false });
     }
     const ended = this.ctx.get().signIn;
-    if (ended?.stage === "ended" && ended.result === null) {
+    if (ended?.stage === "ended" && (ended.result === null || ended.result.readFailed)) {
       void this.afterSignIn(ended.id, ended.known);
     } else if (this.ctx.get().status !== "idle") {
       // Only once a screen has asked: the accounts are read for the screens that show them.
