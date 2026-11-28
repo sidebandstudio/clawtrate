@@ -2304,11 +2304,11 @@ test("F-480 #988: after a repeated Computer Use timeout the card can turn it off
   const actions = card.locator(".turn-error-actions button");
   await expect(actions.nth(0)).toHaveText("Turn off Computer Use on this gateway");
   await expect(actions.nth(1)).toHaveText("Try again");
-  await actions.nth(0).click();
+  await actions.nth(0).press("Enter");
   await expect(card.getByText("Computer Use is off on this gateway.")).toBeVisible();
   await expect(actions.nth(0)).toHaveText("Try again");
   await expect(actions.nth(0)).toBeFocused();
-  await card.getByRole("button", { name: "Put back" }).click();
+  await card.getByRole("button", { name: "Put back" }).press("Enter");
   await expect(card.getByText("The previous Computer Use setting is back.")).toBeVisible();
   await expect(actions.nth(0)).toBeFocused();
 });

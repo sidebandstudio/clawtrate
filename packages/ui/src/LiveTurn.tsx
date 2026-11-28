@@ -316,9 +316,10 @@ export function RunEnding({
   const retryRef = useRef<HTMLButtonElement>(null);
   const recoveryRef = useRef<HTMLButtonElement>(null);
   const undoRef = useRef<HTMLButtonElement>(null);
+  const repairHadFocus = useRef(false);
   useEffect(() => {
-    if (!computerUseResult || changingComputerUse || document.activeElement !== document.body)
-      return;
+    if (!repairHadFocus.current || !computerUseResult || changingComputerUse) return;
+    repairHadFocus.current = false;
     if (computerUseResult === "off" || computerUseResult === "already-off")
       (retryRef.current ?? undoRef.current)?.focus();
     else (recoveryRef.current ?? undoRef.current ?? retryRef.current)?.focus();
@@ -430,6 +431,8 @@ export function RunEnding({
   const computerUseOff = undo || computerUseResult === "already-off";
   const repair = computerUse && repeated && !computerUseOff;
   const changeComputerUse = (restore: boolean) => {
+    repairHadFocus.current =
+      document.activeElement === (restore ? undoRef.current : recoveryRef.current);
     setChangingComputerUse(true);
     setComputerUseResult(null);
     void bridge
