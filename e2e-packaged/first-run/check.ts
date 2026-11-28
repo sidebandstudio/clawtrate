@@ -84,6 +84,7 @@ let accountPickerBeforeSave = false;
 let accountSheet: AccountSheetResult | null = null;
 let accountProbe: { checkingScreenObserved: boolean; scriptedResponses: number } | null = null;
 let notFoundAdvancedCount: number | null = null;
+let betaLanding: { screenshot: string; elements: Element[] } | null = null;
 
 mkdirSync(out, { recursive: true });
 const system = observeMac(out);
@@ -466,93 +467,102 @@ try {
     );
     await screenshot("04-granted-scopes.png");
     await press("Close settings", "inspection");
+    if (process.env.FIRST_RUN_RELEASE_LANDING === "1") {
+      await waitFor("the gateway's empty bot conversation", () => hasText(/^No tasks yet$/));
+      const file = "04-published-beta-landing.png";
+      await screenshot(file);
+      betaLanding = { screenshot: file, elements: latest.filter(({ text }) => text.length > 0) };
+      return "OpenClaw granted all six operator scopes. The beta stops where it is expected to.";
+    }
     return "OpenClaw granted all six operator scopes.";
   });
-  await step(4, async () => {
-    if (!appData) throw new Error("The packaged app has no data folder for this run.");
-    await waitFor(
-      "the account picker, first-bot welcome or empty conversation",
-      () => accountPicker() || firstBotWelcome() || composer() || hasText(/^No tasks yet$/),
-    );
-    await screenshot("05-before-scripted-account.png");
-    if (!accountPicker() && firstBotWelcome()) {
-      await press("Get started", accountPickerClosedForInspection ? "inspection" : "person");
-      await waitFor("Connect an account on the fresh gateway", accountPicker);
-    }
-    accountPickerBeforeSave = accountPicker();
-    if (accountPickerBeforeSave) {
-      await screenshot("05-account-picker.png");
-    }
-    provider = await scriptedProvider(profile, appData, (text) =>
-      record({ kind: "fixture", text }),
-    );
-    accountSavedAt = performance.now();
-    await readWindow();
-    await screenshot("05-after-scripted-account.png");
-    return heading() ?? "The scripted model is configured on loopback.";
-  });
-  await step(5, async () => {
-    if (accountSavedAt !== undefined && (accountPickerBeforeSave || accountPicker())) {
-      accountSheet = await observeAccountSheet(accountSavedAt);
-      await screenshot("06-account-sheet-after-observation.png");
-      if (accountSheet.outcome === "gateway-unavailable") {
-        throw new Error(
-          "The account sheet did not reach two minutes of available gateway connection.",
-        );
-      }
-      if (accountSheet.outcome === "still-open") {
-        throw new Error(
-          "Connect an account stayed open for two minutes after the gateway was available.",
-        );
-      }
-    }
-    await waitFor(
-      "a first conversation or a first-bot button",
-      () => composer() || !!firstBotAction() || firstBotWelcome(),
-      60,
-    );
-    if (firstBotWelcome()) {
-      await screenshot("06-first-bot-welcome.png");
-      await press("Get started");
-      await waitFor("the first-bot creation button", () => !!firstBotAction());
-    }
-    const action = firstBotAction();
-    if (action) {
-      if (!provider) throw new Error("The scripted provider was not started.");
-      await screenshot("06-first-bot-setup.png");
-      const requestsBeforeCreate = await successfulScriptedRequests(provider);
-      await press(action.text);
-      const checking = () => hasText(/^Checking this account/i);
+  if (!betaLanding)
+    await step(4, async () => {
+      if (!appData) throw new Error("The packaged app has no data folder for this run.");
       await waitFor(
-        "the account check or the first conversation",
-        () => checking() || composer(),
+        "the account picker, first-bot welcome or empty conversation",
+        () => accountPicker() || firstBotWelcome() || composer() || hasText(/^No tasks yet$/),
+      );
+      await screenshot("05-before-scripted-account.png");
+      if (!accountPicker() && firstBotWelcome()) {
+        await press("Get started", accountPickerClosedForInspection ? "inspection" : "person");
+        await waitFor("Connect an account on the fresh gateway", accountPicker);
+      }
+      accountPickerBeforeSave = accountPicker();
+      if (accountPickerBeforeSave) {
+        await screenshot("05-account-picker.png");
+      }
+      provider = await scriptedProvider(profile, appData, (text) =>
+        record({ kind: "fixture", text }),
+      );
+      accountSavedAt = performance.now();
+      await readWindow();
+      await screenshot("05-after-scripted-account.png");
+      return heading() ?? "The scripted model is configured on loopback.";
+    });
+  if (!betaLanding)
+    await step(5, async () => {
+      if (accountSavedAt !== undefined && (accountPickerBeforeSave || accountPicker())) {
+        accountSheet = await observeAccountSheet(accountSavedAt);
+        await screenshot("06-account-sheet-after-observation.png");
+        if (accountSheet.outcome === "gateway-unavailable") {
+          throw new Error(
+            "The account sheet did not reach two minutes of available gateway connection.",
+          );
+        }
+        if (accountSheet.outcome === "still-open") {
+          throw new Error(
+            "Connect an account stayed open for two minutes after the gateway was available.",
+          );
+        }
+      }
+      await waitFor(
+        "a first conversation or a first-bot button",
+        () => composer() || !!firstBotAction() || firstBotWelcome(),
         60,
       );
-      const checkingScreenObserved = checking();
-      if (checkingScreenObserved) {
-        await screenshot("06-checking-account.png");
-        await waitFor("the first conversation's composer", composer, 60);
+      if (firstBotWelcome()) {
+        await screenshot("06-first-bot-welcome.png");
+        await press("Get started");
+        await waitFor("the first-bot creation button", () => !!firstBotAction());
       }
-      accountProbe = {
-        checkingScreenObserved,
-        scriptedResponses: (await successfulScriptedRequests(provider)) - requestsBeforeCreate,
-      };
-      if (accountProbe.scriptedResponses < 1) {
-        throw new Error(
-          "Create bot did not complete a request through the selected scripted account.",
+      const action = firstBotAction();
+      if (action) {
+        if (!provider) throw new Error("The scripted provider was not started.");
+        await screenshot("06-first-bot-setup.png");
+        const requestsBeforeCreate = await successfulScriptedRequests(provider);
+        await press(action.text);
+        const checking = () => hasText(/^Checking this account/i);
+        await waitFor(
+          "the account check or the first conversation",
+          () => checking() || composer(),
+          60,
         );
+        const checkingScreenObserved = checking();
+        if (checkingScreenObserved) {
+          await screenshot("06-checking-account.png");
+          await waitFor("the first conversation's composer", composer, 60);
+        }
+        accountProbe = {
+          checkingScreenObserved,
+          scriptedResponses: (await successfulScriptedRequests(provider)) - requestsBeforeCreate,
+        };
+        if (accountProbe.scriptedResponses < 1) {
+          throw new Error(
+            "Create bot did not complete a request through the selected scripted account.",
+          );
+        }
       }
-    }
-    if ((await ax("compose")) !== "ok")
-      throw new Error("Could not focus the first conversation's composer.");
-    const replies = () => latest.filter(({ text }) => text.includes(SCRIPTED_REPLY)).length;
-    const beforeSending = replies();
-    record({ kind: "type", text: FIRST_MESSAGE });
-    await ax("type", FIRST_MESSAGE);
-    await press("Return", "person", "enter");
-    await waitFor("the scripted reply", () => replies() > beforeSending, 120);
-    return SCRIPTED_REPLY;
-  });
+      if ((await ax("compose")) !== "ok")
+        throw new Error("Could not focus the first conversation's composer.");
+      const replies = () => latest.filter(({ text }) => text.includes(SCRIPTED_REPLY)).length;
+      const beforeSending = replies();
+      record({ kind: "type", text: FIRST_MESSAGE });
+      await ax("type", FIRST_MESSAGE);
+      await press("Return", "person", "enter");
+      await waitFor("the scripted reply", () => replies() > beforeSending, 120);
+      return SCRIPTED_REPLY;
+    });
 } catch {
   // The first failing step retains the error and all later steps stay not reached.
 } finally {
@@ -593,7 +603,11 @@ try {
       : "missing",
   };
   const answer = {
-    verdict: verdict(stepResults),
+    verdict:
+      betaLanding && stepResults.slice(0, 4).every(({ status }) => status === "passed")
+        ? "passed"
+        : verdict(stepResults),
+    betaLanding,
     steps: stepResults,
     pressCounts,
     accountSheet,
