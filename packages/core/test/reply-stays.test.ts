@@ -151,6 +151,21 @@ describe("#912: a run a live frame ended keeps its reply drawn until history hol
     client.stop();
   });
 
+  it("the other end frame of a run a read already let go doesn't keep it again", async () => {
+    const { client, gateway, reads, run } = await withHeldReads();
+    for (const payload of [lifecycle(1, "start"), said(2, "All clean."), lifecycle(3, "end")])
+      gateway.emit("agent", payload);
+    await until(() => run()?.awaitsRows === true && reads.length > 0);
+    reads.shift()!({ messages: [user, answerRow], hasMore: false });
+    await until(() => run()?.awaitsRows === undefined);
+    gateway.emit("chat", chat(4, "final"));
+    gateway.emit("agent", lifecycle(5, "end"));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(run()!.state).toBe("completed");
+    expect(run()!.awaitsRows).toBeUndefined();
+    client.stop();
+  });
+
   it("a read that fails lets it go: no reply is drawn as if history held it", async () => {
     const { client, gateway, reads, run } = await withHeldReads();
     gateway.handlers["chat.history"] = () => Promise.reject(new Error("not reachable"));
@@ -199,8 +214,9 @@ describe("awaitRows and rowsRead", () => {
   it("only an end a frame brings marks the run; a run already ended stays as it is", () => {
     const before = live();
     expect(awaitRows(before, ended(before)).runs[0]!.awaitsRows).toBe(true);
+    // A later frame of a run already ended (its other end frame, after a read let it go).
     const done = ended(before);
-    expect(awaitRows(done, done).runs[0]!.awaitsRows).toBeUndefined();
+    expect(awaitRows(done, { ...done, runs: [...done.runs] }).runs[0]!.awaitsRows).toBeUndefined();
   });
 
   it("a run whose text was placed beside a call has no reply to keep", () => {
