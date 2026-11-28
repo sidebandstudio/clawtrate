@@ -9206,7 +9206,7 @@ export class ClawtrateClient {
     this.everConnected = hasData;
     // A reopen of the gateway that is restarting (Retry) still waits for it; any other ends it.
     const restart = this.state.connection.restart;
-    const keepRestart = sameGateway && this.state.connection.target === this.target && restart;
+    const keepRestart = sameGateway && restart;
     if (!keepRestart) this.restarts.end();
     this.store.update((state) => ({
       ...(sameGateway

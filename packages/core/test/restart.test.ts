@@ -339,17 +339,17 @@ describe("what ends a restart, or an ask, besides the next hello (#913)", () => 
     client.stop();
   });
 
-  it("an ask doesn't outlive a Disconnect: the gateway's next drop after Connect is any drop", async () => {
+  it("an ask doesn't outlive a Disconnect: a Connect that never reaches the gateway isn't a restart", async () => {
     const gateway = grantingGateway();
     gateway.handlers["config.patch"] = () => patchAnswer(true);
     const { client } = await openTask({ gateway });
     await write(client, "config.patch");
     await client.disconnect();
-    await client.connect({ url: URL_A });
-    await until(() => client.state.connection.status === "connected");
     gateway.refuseConnections = true;
-    gateway.dropAll();
-    await until(() => client.state.connection.status === "reconnecting");
+    const sockets = gateway.sockets.length;
+    await client.connect({ url: URL_A });
+    await until(() => gateway.sockets.length > sockets + 1);
+    expect(client.state.connection.status).not.toBe("connected");
     expect(restartOf(client)).toBeNull();
     client.stop();
   });
@@ -363,6 +363,23 @@ describe("what ends a restart, or an ask, besides the next hello (#913)", () => 
     gateway.dropAll();
     await until(() => client.state.connection.status === "reconnecting");
     await client.connect({ url: URL_B });
+    expect(client.state.connection.gatewayUrl).toBe(URL_B);
+    expect(restartOf(client)).toBeNull();
+    client.stop();
+  });
+
+  it("a reopen that finds another address selected, without a new target, ends it", async () => {
+    const gateway = grantingGateway();
+    const { client } = await openTask({ gateway });
+    gateway.emit("shutdown", RESTARTING);
+    await until(() => restartOf(client) !== null);
+    gateway.refuseConnections = true;
+    gateway.dropAll();
+    await until(() => client.state.connection.status === "reconnecting");
+    // The selected gateway's record changed under this client (another window on the store).
+    const inner = client as unknown as { settings: { url: string; token: string | null } };
+    inner.settings = { ...inner.settings, url: URL_B };
+    await client.retryNow();
     expect(client.state.connection.gatewayUrl).toBe(URL_B);
     expect(restartOf(client)).toBeNull();
     client.stop();
