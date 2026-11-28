@@ -59,7 +59,7 @@ The host speaks plain HTTP, so it refuses to listen on anything but loopback in 
 - An SSH tunnel: `ssh -L 5310:127.0.0.1:5310 <host>`, then open `http://localhost:5310/` on your machine.
 - An HTTPS proxy on the same machine that forwards to `127.0.0.1:5310`, WebSocket upgrades included. Tell the host its public address, so it accepts that origin and marks its cookie `Secure`: `pnpm preview:web --private --public-origin https://clawtrate.example`.
 
-To sign every browser out, stop the host and start it again with `--private --rotate-access-secret`. It prints the new secret once; the paired device stays. A page can sign its own browser out with a same-origin `POST /logout`. To remove the device itself, revoke it on the gateway. `--private` can't be combined with `--dev-gateway`, `--no-access-token` or `--setup-look`.
+To sign every browser out, stop the host and start it again with `--private --rotate-access-secret`. It prints the new secret once; the paired device stays. A page can sign its own browser out with a same-origin `POST /logout`. To remove the device itself, revoke it on the gateway. `--private` can't be combined with `--dev-gateway`, `--no-access-token` or `--setup-look`. It isn't available on Windows yet.
 
 ## The desktop app
 

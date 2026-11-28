@@ -3,6 +3,7 @@
 // gateway token or the gateway socket; it only receives state and sends commands.
 
 import {
+  ACCESS_REFUSED_CLOSE_CODE,
   AttachmentTooLargeError,
   batchSnapshots,
   type HostInfo,
@@ -344,14 +345,15 @@ export function startWebHost(options: WebHostOptions) {
   const attempts = createAttemptLimit();
   const secure = publicOrigin ? "; Secure" : "";
 
-  const cookieValid = (req: IncomingMessage): boolean => {
-    if (accessToken === null) return true;
+  /** Until when the request's cookie admits it, in milliseconds, or null when it admits nothing. */
+  const admittedUntil = (req: IncomingMessage): number | null => {
+    if (accessToken === null) return Infinity;
     const fromCookie = readCookie(req, ACCESS_COOKIE);
-    if (!fromCookie) return false;
-    return typeof accessToken === "string"
-      ? safeEqual(fromCookie, accessToken)
-      : verifySession(accessToken.secret, fromCookie);
+    if (!fromCookie) return null;
+    if (typeof accessToken !== "string") return verifySession(accessToken.secret, fromCookie);
+    return safeEqual(fromCookie, accessToken) ? Infinity : null;
   };
+  const cookieValid = (req: IncomingMessage) => admittedUntil(req) !== null;
 
   const authorized = (req: IncomingMessage, url: URL): "ok" | "redirect" | "denied" => {
     if (cookieValid(req)) return "ok";
@@ -634,10 +636,12 @@ export function startWebHost(options: WebHostOptions) {
       refuseUpgrade(socket, "401 Unauthorized");
       return;
     }
-    sockets.handleUpgrade(req, socket, head, (ws) => sockets.emit("connection", ws));
+    // Only the startup token's link admits without a cookie, and it never expires.
+    const until = admittedUntil(req) ?? Infinity;
+    sockets.handleUpgrade(req, socket, head, (ws) => sockets.emit("connection", ws, until));
   });
 
-  sockets.on("connection", (ws: WebSocket) => {
+  sockets.on("connection", (ws: WebSocket, until: number) => {
     if (sockets.clients.size > MAX_WEB_VIEWERS) {
       ws.close(1013, "too many viewers");
       return;
@@ -659,6 +663,15 @@ export function startWebHost(options: WebHostOptions) {
     const stop = batchSnapshots(runtime.client.store.subscribe, (state) =>
       channel.sendState(state),
     );
+    // A private session admits its socket only until the session expires.
+    let expiry: ReturnType<typeof setTimeout> | undefined;
+    const watchExpiry = () => {
+      const left = until - Date.now();
+      if (left <= 0) return ws.close(ACCESS_REFUSED_CLOSE_CODE, "session expired");
+      // setTimeout fires at once past 2^31 - 1 ms, which is shorter than a session.
+      expiry = setTimeout(watchExpiry, Math.min(left, 2 ** 31 - 1));
+    };
+    if (Number.isFinite(until)) watchExpiry();
     let ended = false;
     /**
      * Release everything this viewer held. Each step runs even if another
@@ -668,6 +681,7 @@ export function startWebHost(options: WebHostOptions) {
     const end = () => {
       if (ended) return;
       ended = true;
+      clearTimeout(expiry);
       for (const [name, step] of [
         ["snapshots", stop],
         ["channel", () => channel.stop()],
@@ -681,6 +695,8 @@ export function startWebHost(options: WebHostOptions) {
       }
     };
     ws.on("message", (data) => {
+      // Between the deadline and the socket's close, a command is not run.
+      if (Date.now() >= until) return;
       let id = "";
       try {
         const message = JSON.parse(String(data)) as {

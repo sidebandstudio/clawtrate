@@ -117,11 +117,13 @@ export function signSession(secret: string, now = Date.now()): string {
   return `${expires}.${mac(secret, expires)}`;
 }
 
-export function verifySession(secret: string, session: string, now = Date.now()): boolean {
+/** When a valid session expires, in milliseconds, or null when it is not valid now. */
+export function verifySession(secret: string, session: string, now = Date.now()): number | null {
   const match = /^(\d{1,12})\.([A-Za-z0-9_-]{43})$/.exec(session);
-  if (!match) return false;
+  if (!match) return null;
   const [, expires, given] = match;
-  return Number(expires) * 1000 > now && safeEqual(given!, mac(secret, expires!));
+  const end = Number(expires) * 1000;
+  return end > now && safeEqual(given!, mac(secret, expires!)) ? end : null;
 }
 
 /** Counts sign-in attempts in fixed windows; `allow` is false once a window's are used up. */
@@ -160,7 +162,10 @@ export type ListenFlags = {
  * listens on loopback only, because the host speaks plain HTTP: a browser on
  * another machine reaches it through an SSH tunnel or an HTTPS proxy on this one.
  */
-export function listenChoice(flags: ListenFlags): { host: string; publicOrigin: string | null } {
+export function listenChoice(
+  flags: ListenFlags,
+  platform: NodeJS.Platform = process.platform,
+): { host: string; publicOrigin: string | null } {
   if (!flags.private) {
     for (const flag of ["public-origin", "rotate-access-secret"] as const) {
       if (flags[flag]) throw new Error(`--${flag} is only allowed with --private.`);
@@ -169,6 +174,13 @@ export function listenChoice(flags: ListenFlags): { host: string; publicOrigin: 
   }
   for (const flag of ["no-access-token", "dev-gateway", "setup-look"] as const) {
     if (flags[flag]) throw new Error(`--private cannot be used with --${flag}.`);
+  }
+  // Node makes up a Windows file's group and other bits, so the owner-only checks on the
+  // secret prove nothing there, and this host has no access-list check to take their place.
+  if (platform === "win32") {
+    throw new Error(
+      "--private is not available on Windows yet: it cannot check that only you can read the access secret.",
+    );
   }
   const host = flags.host ?? "127.0.0.1";
   if (!loopback(host)) {

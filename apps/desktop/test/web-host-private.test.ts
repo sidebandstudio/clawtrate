@@ -1,7 +1,13 @@
 // Private mode: a secret kept in the data folder, a sign-in page at the bare
 // URL, and sessions that last across host restarts until the secret rotates.
 
-import { AttachmentStore, createStore, initialState, type ClawtrateClient } from "@clawtrate/core";
+import {
+  ACCESS_REFUSED_CLOSE_CODE,
+  AttachmentStore,
+  createStore,
+  initialState,
+  type ClawtrateClient,
+} from "@clawtrate/core";
 import { chmodSync, readFileSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { request } from "node:http";
 import type { AddressInfo } from "node:net";
@@ -16,6 +22,8 @@ import {
   loadAccessSecret,
   MAX_AUTH_ATTEMPTS,
   MAX_AUTH_BODY_BYTES,
+  SESSION_MAX_AGE_S,
+  signSession,
 } from "../src/web-host/access.ts";
 import { ACCESS_COOKIE, startWebHost } from "../src/web-host/server.ts";
 
@@ -235,6 +243,19 @@ describe("private web host", () => {
     expect((await signIn(after.base, after.secret)).status).toBe(303);
   });
 
+  it("closes a bridge socket when its session expires, and admits it no more", async () => {
+    const { base, secret } = await start(tempDir("clawtrate-private-"));
+    // Signed almost a whole session ago, so it has about a second left.
+    const cookie = `${ACCESS_COOKIE}=${signSession(secret, Date.now() - SESSION_MAX_AGE_S * 1000 + 1500)}`;
+    const socket = new WebSocket(`${base.replace("http", "ws")}/bridge`, {
+      headers: { cookie, origin: base },
+    });
+    await new Promise((resolve) => socket.once("open", resolve));
+    const code = await new Promise<number>((resolve) => socket.once("close", resolve));
+    expect(code).toBe(ACCESS_REFUSED_CLOSE_CODE);
+    expect(await openBridge(base, { cookie, origin: base })).toBe(401);
+  });
+
   it("behind an HTTPS public origin, sets Secure cookies and takes uploads and the bridge from it", async () => {
     const { base, secret } = await start(tempDir("clawtrate-private-"), { publicOrigin: PUBLIC });
     const ok = await signIn(base, secret, PUBLIC);
@@ -317,5 +338,12 @@ describe("web host listen choice", () => {
     expect(() => listenChoice({ ...flags, "public-origin": PUBLIC })).toThrow(
       /only allowed with --private/,
     );
+  });
+
+  it("refuses private mode on Windows, where it cannot check that the secret is owner-only", () => {
+    expect(() => listenChoice({ ...flags, private: true }, "win32")).toThrow(
+      "--private is not available on Windows yet",
+    );
+    expect(listenChoice(flags, "win32")).toEqual({ host: "0.0.0.0", publicOrigin: null });
   });
 });
