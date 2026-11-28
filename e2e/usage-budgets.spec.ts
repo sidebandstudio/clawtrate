@@ -236,13 +236,18 @@ async function bar(on: Page, list: string, name: string): Promise<number> {
   return n(/([\d,]+) tokens/.exec(label ?? "")?.[1] ?? null);
 }
 
-/** The budget meter's count and tokens, from its accessible name. */
+/** The budget meter's accessible name. */
+async function meterLabel(on: Page): Promise<string> {
+  return (await on.getByTestId("budget-meter").getByRole("meter").getAttribute("aria-label"))!;
+}
+
+/**
+ * The budget meter's count and tokens, from its accessible name. A device in another time zone
+ * than the budget's reads the same figures with the budget's zone after them.
+ */
 async function meter(on: Page): Promise<{ used: number; tokens: number; words: string }> {
-  const label = (await on
-    .getByTestId("budget-meter")
-    .getByRole("meter")
-    .getAttribute("aria-label"))!;
-  const match = /: ([\d,]+) of ([\d,]+) tokens (today|this week)$/.exec(label)!;
+  const label = await meterLabel(on);
+  const match = /: ([\d,]+) of ([\d,]+) tokens (today|this week)(?: · \S+)?$/.exec(label)!;
   return { used: n(match[1]!), tokens: n(match[2]!), words: match[3]! };
 }
 
@@ -688,6 +693,8 @@ test("F-234: a weekly budget set on one device is shown with the same value afte
   // counted over the budget's own days in its own zone, and no way to change it.
   await usagePage(reader, "Otto");
   await expect.poll(() => meter(reader), { timeout: 60_000 }).toEqual(shown);
+  expect(await meterLabel(reader)).toContain(` · ${timeZone}`);
+  expect(await meterLabel(page)).not.toContain(" · ");
   await expect(reader.getByTestId("budget-edit")).toHaveCount(0);
   await expect(reader.getByTestId("budget-new")).toHaveCount(0);
   await shot(page, "usage-page");
