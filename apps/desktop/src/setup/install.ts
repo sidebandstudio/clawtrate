@@ -1538,20 +1538,23 @@ export class Installer {
     const paths = this.removalPaths;
     if (!(await lstat(paths.root).catch(() => null))?.isDirectory()) return false;
     const receipt = await readOwn(paths.receipt);
-    if (receipt) {
+    const saved = receipt ? parsed(receipt.text) : null;
+    // An empty or unparseable receipt was opened but never written: nothing was moved yet.
+    // clearRemoval takes the bundle with rmdir, so one holding anything stays where it is.
+    if (receipt && saved) {
       if ((await presence(paths.bundle)) !== "absent") return false;
-      const saved = parsed(receipt.text);
       const proof = await this.prove("onboarded");
       if (
         !proof ||
         proof.id !== id ||
-        saved?.id !== id ||
+        saved.id !== id ||
         saved.record !== identity(proof.record.stat) ||
         saved.program !== identity(proof.dir) ||
         saved.marker !== identity(proof.marker.stat)
       )
         return false;
-    } else if ((await presence(paths.receipt)) !== "absent") {
+    } else if (!receipt && (await presence(paths.receipt)) !== "absent") {
+      // A receipt that can't be read as the app's own file (a link, a folder) is left alone.
       return false;
     }
     return this.clearRemoval(receipt);

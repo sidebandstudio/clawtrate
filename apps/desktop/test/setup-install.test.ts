@@ -690,62 +690,70 @@ describe("F-502 F-503: each failure, named, with what the attempt left", () => {
     },
   );
 
-  it.each(["before receipt", "after restoring", "unknown contents"] as const)(
-    "F-505: a look handles unfinished removal bookkeeping (%s)",
-    async (window) => {
-      const stand = await make();
-      const stop = new AbortController();
-      const interrupted = installer(stand, {
-        signal: stop.signal,
-        run: async (request, check) => {
-          const result = await runner.run(request, check);
-          if (request.args.includes("onboard")) stop.abort();
-          return result;
-        },
-      });
-      await runAll(interrupted);
-      const awake = installer(stand);
-      const pending = await awake.recovery();
-      const root = join(dirname(stand.place.programDir), ".openclaw-removing");
-      const bundle = join(root, "Unfinished OpenClaw setup");
-      mkdirSync(root, { mode: 0o700 });
-      mkdirSync(bundle, { mode: 0o700 });
-      const identity = (path: string) => {
-        const { dev, ino } = statSync(path);
-        return `${dev}:${ino}`;
-      };
-      const program = identity(stand.place.programDir);
-      const profile = identity(stand.place.stateDir);
-      if (window === "after restoring") {
-        writeFileSync(
-          join(root, "receipt.json"),
-          JSON.stringify({
-            id: pending?.id,
-            record: identity(stand.place.recordFile),
-            program,
-            marker: identity(join(stand.place.programDir, ".clawtrate-install.json")),
-            bundle: identity(bundle),
-          }),
-          { mode: 0o600 },
-        );
-        rmdirSync(bundle);
-      } else if (window === "unknown contents") {
-        writeFileSync(join(bundle, "notes.txt"), "don't touch");
-      }
-      if (window === "unknown contents") {
-        expect(await awake.recovery()).toEqual({ action: "inspect", location: "staging" });
-        expect(await awake.run(() => {}, "continue", pending?.id)).toMatchObject({ ok: false });
-        expect(readFileSync(join(bundle, "notes.txt"), "utf8")).toBe("don't touch");
-      } else {
-        expect(await awake.recovery()).toEqual(pending);
-        expect(existsSync(root)).toBe(false);
-      }
-      expect(identity(stand.place.programDir)).toBe(program);
-      expect(identity(stand.place.stateDir)).toBe(profile);
-      if (window !== "unknown contents")
-        expect(await awake.run(() => {}, "continue", pending?.id)).toMatchObject({ ok: true });
-    },
-  );
+  it.each([
+    "before receipt",
+    "empty receipt",
+    "after restoring",
+    "unknown contents",
+    "empty receipt, unknown contents",
+  ] as const)("F-505: a look handles unfinished removal bookkeeping (%s)", async (window) => {
+    const stand = await make();
+    const stop = new AbortController();
+    const interrupted = installer(stand, {
+      signal: stop.signal,
+      run: async (request, check) => {
+        const result = await runner.run(request, check);
+        if (request.args.includes("onboard")) stop.abort();
+        return result;
+      },
+    });
+    await runAll(interrupted);
+    const awake = installer(stand);
+    const pending = await awake.recovery();
+    const root = join(dirname(stand.place.programDir), ".openclaw-removing");
+    const bundle = join(root, "Unfinished OpenClaw setup");
+    mkdirSync(root, { mode: 0o700 });
+    mkdirSync(bundle, { mode: 0o700 });
+    const identity = (path: string) => {
+      const { dev, ino } = statSync(path);
+      return `${dev}:${ino}`;
+    };
+    const program = identity(stand.place.programDir);
+    const profile = identity(stand.place.stateDir);
+    if (window === "after restoring") {
+      writeFileSync(
+        join(root, "receipt.json"),
+        JSON.stringify({
+          id: pending?.id,
+          record: identity(stand.place.recordFile),
+          program,
+          marker: identity(join(stand.place.programDir, ".clawtrate-install.json")),
+          bundle: identity(bundle),
+        }),
+        { mode: 0o600 },
+      );
+      rmdirSync(bundle);
+    } else if (window.endsWith("unknown contents")) {
+      writeFileSync(join(bundle, "notes.txt"), "don't touch");
+    }
+    // Quit after the receipt's exclusive open and before its write: zero bytes.
+    if (window.startsWith("empty receipt"))
+      writeFileSync(join(root, "receipt.json"), "", { mode: 0o600 });
+    const unknown = window.endsWith("unknown contents");
+    if (unknown) {
+      expect(await awake.recovery()).toEqual({ action: "inspect", location: "staging" });
+      expect(await awake.run(() => {}, "continue", pending?.id)).toMatchObject({ ok: false });
+      expect(readFileSync(join(bundle, "notes.txt"), "utf8")).toBe("don't touch");
+      expect(existsSync(join(root, "receipt.json"))).toBe(window.startsWith("empty receipt"));
+    } else {
+      expect(await awake.recovery()).toEqual(pending);
+      expect(existsSync(root)).toBe(false);
+    }
+    expect(identity(stand.place.programDir)).toBe(program);
+    expect(identity(stand.place.stateDir)).toBe(profile);
+    if (!unknown)
+      expect(await awake.run(() => {}, "continue", pending?.id)).toMatchObject({ ok: true });
+  });
 
   it("F-505: an orphaned profile and service are reported and left as they are", async () => {
     const stand = await make();
