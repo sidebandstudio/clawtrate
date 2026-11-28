@@ -305,6 +305,7 @@ async function proxy() {
   await new Promise<void>((r) => server.listen(0, "127.0.0.1", () => r()));
   const proxyPort = (server.address() as { port: number }).port;
   const dataDir = mkdtempSync(join(tmpdir(), "su-proxy-"));
+  process.on("exit", () => rmSync(dataDir, { recursive: true, force: true }));
   const client = coreClient(dataDir);
   await client.start();
   say("connect through a header-adding proxy on", proxyPort);
@@ -313,7 +314,6 @@ async function proxy() {
   say("core client:", summary(client));
   client.stop();
   server.close();
-  rmSync(dataDir, { recursive: true, force: true });
   void httpRequest;
 }
 

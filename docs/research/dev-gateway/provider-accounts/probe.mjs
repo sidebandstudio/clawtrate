@@ -18,8 +18,6 @@
 // bots and sessions, so reset the instance afterwards.
 
 import crypto from "node:crypto";
-import { mkdtempSync } from "node:fs";
-import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
@@ -43,10 +41,7 @@ const check = (ok, label) => {
   console.log(`${ok ? "PASS" : "FAIL"} ${label}`);
 };
 
-const recorders = await startRecorders(
-  recPorts.map((port, i) => ({ port, label: ["acct-a", "acct-b", "acct-x"][i] })),
-  path.join(mkdtempSync(path.join(tmpdir(), "clawtrate-accounts-probe-")), "requests.jsonl"),
-);
+const recorders = await startRecorders(recPorts.map((port, i) => ({ port, label: ["acct-a", "acct-b", "acct-x"][i] })));
 const requests = recorders.requests;
 const gw = await connectGateway(inst);
 const { hello, call, waitFor, patchConfig } = gw;

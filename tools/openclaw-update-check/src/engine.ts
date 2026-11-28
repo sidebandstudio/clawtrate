@@ -14,7 +14,7 @@
 // --warm-session gives the main bot a main task first, so the gateway's notice has a place to land.
 
 import { execFileSync } from "node:child_process";
-import { appendFileSync, mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseArgs } from "node:util";
@@ -271,8 +271,9 @@ async function until(
   }
 }
 
-// The client's key and stored device token stay out of the uploaded folder.
+// The client's key and stored device token stay out of the uploaded folder, and go when the check ends.
 const dataDir = mkdtempSync(join(tmpdir(), "clawtrate-engine-"));
+process.once("exit", () => rmSync(dataDir, { recursive: true, force: true }));
 let { client, bridge, unsubscribe } = makeClient(dataDir);
 let noticeRead: "ready" | "error" | "timeout" | null = null;
 const state = () => client.state;

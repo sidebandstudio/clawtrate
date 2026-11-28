@@ -20,7 +20,14 @@
 import { _electron, expect, test, type ElectronApplication, type Page } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -250,6 +257,25 @@ test("an automated launch without a sandbox is refused, loudly, and looks at not
       "The look on this computer refused to start: this run must look in a sandbox and was given none.",
     );
   await close(launched);
+});
+
+test("a refused launch that names no data folder leaves no temporary folder once it has quit", async () => {
+  const temp = folder("temp");
+  const args = [DESKTOP];
+  if (process.platform === "linux") args.push("--no-sandbox");
+  const app = await _electron.launch({
+    executablePath: ELECTRON!,
+    args,
+    env: { ...appEnv(), TMPDIR: temp },
+    cwd: temp,
+  });
+  running.add(app);
+  const launched = await ready(app, 0, "");
+  const refused = () => readdirSync(temp).filter((name) => name.startsWith("clawtrate-refused-"));
+  expect(refused()).toHaveLength(1);
+  await close(launched);
+  // Chromium writes its profile until the app's last moment, so the folder goes just after.
+  await expect.poll(refused, { timeout: 10_000 }).toEqual([]);
 });
 
 test("a description that names a program is refused before anything is read or run", async () => {

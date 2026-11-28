@@ -20,8 +20,7 @@ import {
   shell,
   type WebContents,
 } from "electron";
-import { chmodSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, mkdirSync, realpathSync, writeFileSync } from "node:fs";
 import { readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -53,7 +52,7 @@ import { localConnectFor, provedRouteFor } from "../setup/local-connect.ts";
 import { ProgramRunner } from "../setup/programs.ts";
 import { resolveSetupLaunch, sandboxOpener, type Opened } from "../setup/sandbox.ts";
 import { startSyntheticGateway } from "../setup/synthetic-gateway.ts";
-import { desktopStartup } from "../setup/startup.ts";
+import { desktopStartup, privateDataFolder } from "../setup/startup.ts";
 import { processIdentity } from "../../../../tools/dev-gateway/src/state-guard.ts";
 import { accountHome, productionWorld, type SetupRefusedError } from "../setup/world.ts";
 
@@ -143,7 +142,7 @@ const STARTUP = desktopStartup(SETUP, {
     readDevConnection(REPO_ROOT, { instance: selectInstance(undefined, process.env) }),
   autoConnectDev: () => process.env.CLAWTRATE_AUTOCONNECT_DEV === "1",
   launchData: () => switchValue("user-data-dir") || null,
-  privateData: () => mkdtempSync(join(tmpdir(), "clawtrate-refused-")),
+  privateData: () => privateDataFolder(process.pid),
 });
 if (STARTUP.userData) app.setPath("userData", STARTUP.userData);
 /** A packaged launch check's own app name, set before safeStorage reads it for its Keychain item. */

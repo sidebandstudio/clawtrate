@@ -5,8 +5,9 @@
 // and the web host's setup look needs its sandbox and keeps its data there.
 
 import { ClawtrateClient } from "@clawtrate/core";
-import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { spawn } from "node:child_process";
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   FakeGateway,
@@ -17,10 +18,11 @@ import {
 } from "../../../packages/core/test/fake-gateway.ts";
 import { startHostRuntime } from "../src/host/runtime.ts";
 import { setupLookChoice } from "../src/web-host/setup-look.ts";
-import { desktopStartup, webStartup } from "../src/setup/startup.ts";
+import { desktopStartup, privateDataFolder, webStartup } from "../src/setup/startup.ts";
 import { resolveSetupLaunch } from "../src/setup/sandbox.ts";
 import { vi } from "vitest";
 import * as fake from "./fixtures/sandbox.ts";
+import { tempDir } from "../../../test/temp-dir.ts";
 
 // Every fake home and run folder goes, whether the test passed or not.
 afterEach(() => fake.removeBases());
@@ -192,6 +194,36 @@ describe("a sandboxed host's start", () => {
       const main = readFileSync(new URL("../src/main/index.ts", import.meta.url), "utf8");
       expect(main).toContain('launchData: () => switchValue("user-data-dir") || null,');
     },
+  );
+
+  it.skipIf(process.platform === "win32")(
+    "a refused start's private data folder goes once the app has ended, and not before",
+    async () => {
+      const parent = tempDir("clawtrate-private-");
+      vi.stubEnv("TMPDIR", parent);
+      // Stands in for the app: the folder's owner, alive until it is killed.
+      const app = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)"], {
+        stdio: "ignore",
+      });
+      try {
+        const dir = privateDataFolder(app.pid!);
+        expect(dirname(dir)).toBe(parent);
+        writeFileSync(join(dir, "Preferences"), "{}");
+        await new Promise((resolve) => setTimeout(resolve, 1_500));
+        expect(readdirSync(dir)).toEqual(["Preferences"]);
+        app.kill();
+        await vi.waitFor(() => expect(existsSync(dir)).toBe(false), {
+          timeout: 10_000,
+          interval: 100,
+        });
+      } finally {
+        app.kill();
+        vi.unstubAllEnvs();
+      }
+      const main = readFileSync(new URL("../src/main/index.ts", import.meta.url), "utf8");
+      expect(main).toContain("privateData: () => privateDataFolder(process.pid),");
+    },
+    20_000,
   );
 
   it("the desktop host resolves the launch before its lock and its runtime, and resumes only a person's app", () => {

@@ -3,9 +3,10 @@
 
 import { spawn, spawnSync } from "node:child_process";
 import crypto from "node:crypto";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { createConnection } from "node:net";
 import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { checkout } from "./instance-guard.mjs";
@@ -20,9 +21,15 @@ const portOpen = (port) =>
     socket.once("error", () => resolve(false));
   });
 
-/** Starts recording-model.mjs servers, waits until each listens, and stops them by PID on exit. */
-export async function startRecorders(specs, log) {
+/**
+ * Starts recording-model.mjs servers logging to one temporary file, waits until each listens, and
+ * stops them by PID on exit. The probes read every request back while they run, so stopping also
+ * removes the log's folder.
+ */
+export async function startRecorders(specs) {
   for (const { port } of specs) if (await portOpen(port)) throw new Error(`port ${port} is already in use; refusing to start a recording server there`);
+  const logDir = mkdtempSync(path.join(tmpdir(), "clawtrate-recorders-"));
+  const log = path.join(logDir, "requests.jsonl");
   const children = specs.map(({ port, label }) => {
     const child = spawn(process.execPath, [path.join(here, "recording-model.mjs"), "--port", String(port), "--label", label, "--log", log], { stdio: ["ignore", "ignore", "pipe"] });
     let stderr = "";
@@ -32,6 +39,7 @@ export async function startRecorders(specs, log) {
   });
   const stop = () => {
     for (const child of children) if (child.pid && child.exitCode === null) process.kill(child.pid, "SIGTERM");
+    rmSync(logDir, { recursive: true, force: true });
   };
   process.on("exit", stop);
   for (const [i, { port }] of specs.entries()) {

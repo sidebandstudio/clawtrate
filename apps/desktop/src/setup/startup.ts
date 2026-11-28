@@ -6,6 +6,10 @@
 // `app-data`, a refused or automated Windows start in the folder its launch named with
 // `--user-data-dir`, or else in a fresh private temporary folder.
 
+import { spawn } from "node:child_process";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { DevGatewayConnection } from "../host/runtime.ts";
 import type { SetupLaunch } from "./sandbox.ts";
 import type { SetupLookChoice } from "../web-host/setup-look.ts";
@@ -46,6 +50,34 @@ export function desktopStartup(
         resume: true,
       };
   }
+}
+
+/**
+ * A fresh private temporary folder for a start that named none, removed once process `pid` has
+ * ended, whether it quit or crashed. Nothing in it is read again: the next such start makes its
+ * own. Chromium writes its profile there until the end of its shutdown, after Node's own `exit`,
+ * so the removal waits outside the app, in a shell that outlives it and doesn't hold up its quit.
+ */
+export function privateDataFolder(pid: number): string {
+  const dir = mkdtempSync(join(tmpdir(), "clawtrate-refused-"));
+  // shortcut: Windows keeps the folder, having no /bin/sh; give it a PowerShell wait if that start matters.
+  if (process.platform !== "win32") {
+    spawn(
+      "/bin/sh",
+      [
+        "-c",
+        'while kill -0 "$1" 2>/dev/null; do sleep 1; done; rm -rf -- "$2"',
+        "sh",
+        `${pid}`,
+        dir,
+      ],
+      { detached: true, stdio: "ignore" },
+    )
+      // A shell that couldn't start leaves the folder; it never takes the app down with it.
+      .on("error", () => {})
+      .unref();
+  }
+  return dir;
 }
 
 export type WebStartup = {

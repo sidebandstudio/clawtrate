@@ -38,8 +38,7 @@
 // No real provider, credential or sign-in is involved.
 
 import crypto from "node:crypto";
-import { mkdtempSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { writeFileSync } from "node:fs";
 import path from "node:path";
 import { parseArgs } from "node:util";
 import { instanceCli, resetInstance, resolveInstance } from "./instance-guard.mjs";
@@ -55,14 +54,10 @@ if (otherPort >= inst.gatewayPort + 20 || accountsPort <= inst.scriptedPort) {
   process.exit(2);
 }
 
-const logDir = mkdtempSync(path.join(tmpdir(), "clawtrate-pin-probe-"));
-const recorders = await startRecorders(
-  [
-    { port: accountsPort, label: "accounts" },
-    { port: otherPort, label: "other" },
-  ],
-  path.join(logDir, "requests.jsonl"),
-);
+const recorders = await startRecorders([
+  { port: accountsPort, label: "accounts" },
+  { port: otherPort, label: "other" },
+]);
 const gw = await connectGateway(inst);
 
 const out = { instance: inst.name, steps: [] };
