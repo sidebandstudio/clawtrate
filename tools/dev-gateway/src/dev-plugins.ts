@@ -58,6 +58,7 @@
 
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
   lstatSync,
   mkdirSync,
   readdirSync,
@@ -500,6 +501,9 @@ export function copyPlugin(plugin: DevPlugin, stateDir: string, rule: PluginRule
     mkdirSync(dirname(path), { recursive: true });
     // wx: never through anything already there.
     writeFileSync(path, file.bytes, { mode: file.mode, flag: "wx" });
+    // The mode again: the caller's umask takes bits off the one a new file is made with, and
+    // the copy's digest covers modes.
+    chmodSync(path, file.mode);
   }
   mkdirSync(pluginData(stateDir, plugin.name), { recursive: true });
   checkedCopy(plugin.name, plugin.digest, stateDir, rule);
