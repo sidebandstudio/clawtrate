@@ -1394,9 +1394,11 @@ describe("F-502: the runner ends what it started", () => {
   it("F-502: stopping a program ends its whole process group and waits for it", async () => {
     const stand = await make();
     const marker = join(stand.root, "late");
+    const ready = join(stand.root, "ready");
+    // The descendant says it runs before it waits to write: a stop of the leader alone fails then.
     const request: InstallRequest = {
       program: "/bin/bash",
-      args: ["-c", 'set -- "$1"; ( sleep 1; : > "$1" ) & sleep 30', "x", marker],
+      args: ["-c", '( : > "$1"; sleep 1; : > "$2" ) & sleep 30', "x", ready, marker],
       env: { PATH: "/usr/bin:/bin" },
       cwd: stand.root,
       timeoutMs: 60_000,
@@ -1404,7 +1406,10 @@ describe("F-502: the runner ends what it started", () => {
     };
     const own = new InstallRunner();
     const running = own.run(request, () => {});
-    await pause(200);
+    for (let waited = 0; !existsSync(ready); waited += 25) {
+      expect(waited, "the descendant runs").toBeLessThan(10_000);
+      await pause(25);
+    }
     expect(own.running()).toHaveLength(1);
     own.stopAll();
     await running;
