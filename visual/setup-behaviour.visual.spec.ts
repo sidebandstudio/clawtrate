@@ -788,3 +788,15 @@ test("F-602: the host's late result for its look at start isn't put over a look 
   await page.clock.runFor(1_000);
   await expect(page.getByTestId("bot-list")).toBeVisible();
 });
+
+test("F-501: About names what the default OpenClaw uninstall leaves behind", async ({ page }) => {
+  await openFixture(page, "setup=install-ready", "light");
+  await page.getByRole("button", { name: "About setting up OpenClaw" }).focus();
+  const about = page.getByRole("note");
+  await expect(about).toContainText("bin/openclaw --profile clawtrate uninstall");
+  await expect(about).toContainText("By default, the command removes only the gateway service.");
+  await expect(about).toContainText(
+    "Your bots' files stay in the .openclaw-clawtrate folder in your home folder",
+  );
+  await expect(about).toContainText("program stays in the openclaw folder in Clawtrate's app data");
+});

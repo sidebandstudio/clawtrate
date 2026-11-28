@@ -7,6 +7,7 @@ import type {
   ConnectionState,
   HostInfo,
   InstallAction,
+  InstallLocation,
   InstallFailure,
   OnboardClassification,
   LookService,
@@ -650,8 +651,11 @@ function LookResult({
               discovery and Tailscale access off. Other devices won't find it automatically unless
               you enable discovery. To remove OpenClaw, run{" "}
               <code>bin/openclaw --profile clawtrate uninstall</code> from the openclaw folder in
-              Clawtrate's app data. Then remove that folder and the openclaw-install.json file
-              beside it.
+              Clawtrate's app data. By default, the command removes only the gateway service. Your
+              bots' files stay in the .openclaw-clawtrate folder in your home folder, and the
+              program stays in the openclaw folder in Clawtrate's app data. You can move those
+              folders and the openclaw-install.json file in Clawtrate's app data to the Trash
+              yourself.
             </InfoCard>
             <p className="s-links">
               <SmallLink onClick={onAdvanced}>Advanced</SmallLink>
@@ -886,6 +890,7 @@ function installCause(failure: InstallFailure): string {
     case "expired":
       return "Try again.";
     case "trash":
+    case "restore":
       return "";
     case "changed":
     case "unchecked":
@@ -910,7 +915,8 @@ const BEFORE: Partial<Record<InstallFailure["kind"], string>> = {
   changed: "This changed since you looked.",
   unchecked: "Clawtrate couldn't check whether OpenClaw was already set up.",
   expired: "This setup confirmation expired.",
-  trash: "Clawtrate couldn’t move the unfinished setup folder to the Trash.",
+  trash: "Clawtrate couldn’t move the unfinished setup folders to the Trash.",
+  restore: "Clawtrate couldn’t put the setup files back in their original folders.",
 };
 
 /** The typed record of a failed step (§10): the step, the error category, the exit code. */
@@ -935,6 +941,15 @@ const CATEGORY: Record<InstallFailure["kind"], string> = {
   unchecked: "Not checked",
   expired: "Expired",
   trash: "Trash",
+  restore: "Restore setup",
+};
+
+const RECOVERY_LOCATION: Record<InstallLocation, string> = {
+  profile: "the .openclaw-clawtrate folder in your home folder",
+  program: "the openclaw folder in Clawtrate’s app data",
+  record: "the openclaw-install.json file in Clawtrate’s app data",
+  service: "the ai.openclaw.clawtrate service file in your Library/LaunchAgents folder",
+  staging: "the hidden .openclaw-removing folder in Clawtrate’s app data",
 };
 
 /** "Setting up OpenClaw" (§10, F-502): the steps, and a failed step with its cause and record. */
@@ -942,10 +957,12 @@ function Installing({
   setup,
   onBack,
   onRecover,
+  onAdvanced,
 }: {
   setup: SetupState;
   onBack: () => void;
   onRecover: (action: InstallAction) => void;
+  onAdvanced: () => void;
 }) {
   const send = useCommand();
   const install = setup.install ?? { step: 0, nodeChecked: false, failure: null };
@@ -957,6 +974,8 @@ function Installing({
   else if (failure?.kind === "changed") lead = BEFORE.changed!;
   else if (failure) lead = `${INSTALL_STEPS[failure.step] ?? INSTALL_STEPS[0]} failed.`;
   const again = failure?.kind === "changed" || failure?.kind === "unchecked";
+  const recovery = install.recovery;
+  const location = install.recoveryLocation ? RECOVERY_LOCATION[install.recoveryLocation] : null;
   return (
     <>
       {(failure || install.recovery) && <Back onBack={onBack} />}
@@ -966,15 +985,19 @@ function Installing({
       </Title>
       {install.recovery && (
         <Lede>
-          {install.recovery === "inspect"
-            ? "Setup stopped before Clawtrate could confirm the gateway. Files may remain in the clawtrate profile and Clawtrate's app data."
-            : "Clawtrate set up the gateway profile. Continue to finish setting up its service."}
+          {recovery === "inspect"
+            ? `Clawtrate can't tell what an earlier setup left${location ? ` at ${location}` : ""}.`
+            : recovery === "staged"
+              ? `Removal stopped. Clawtrate saved setup files in ${RECOVERY_LOCATION.staging}.`
+              : recovery === "finish"
+                ? `Removal stopped before Clawtrate cleared its record in ${RECOVERY_LOCATION.staging}.`
+                : "Clawtrate set up the gateway profile. Continue to finish setting up its service."}
         </Lede>
       )}
       {install.recovery === "replace" && (
-        <Hint>Starting again moves the unfinished setup folder to the Trash.</Hint>
+        <Hint>Starting again moves the program and gateway folders to the Trash.</Hint>
       )}
-      {install.profileTrashed && <Hint>The unfinished setup folder is in the Trash.</Hint>}
+      {install.foldersTrashed && <Hint>The unfinished setup folders are in the Trash.</Hint>}
       <Steps
         steps={INSTALL_STEPS}
         current={current}
@@ -1031,13 +1054,21 @@ function Installing({
       )}
       {install.recovery && (
         <Actions>
-          {install.recovery === "inspect" ? (
-            <Primary onClick={() => void send({ type: "setupLook" })}>Look again</Primary>
+          {recovery === "inspect" ? (
+            <>
+              <Primary onClick={() => void send({ type: "setupLook" })}>Look again</Primary>
+              <Quiet onClick={onAdvanced}>Advanced</Quiet>
+            </>
+          ) : recovery === "finish" ? (
+            <Primary onClick={() => onRecover("replace")}>Finish and start again</Primary>
           ) : (
             <Primary onClick={() => onRecover("continue")}>Continue</Primary>
           )}
-          {install.recovery === "replace" && (
+          {recovery === "replace" && (
             <Quiet onClick={() => onRecover("replace")}>Remove and start again</Quiet>
+          )}
+          {recovery === "staged" && (
+            <Quiet onClick={() => onRecover("replace")}>Finish moving to Trash</Quiet>
           )}
         </Actions>
       )}
@@ -1163,7 +1194,9 @@ export function SetupFlow({
 
   let body: ReactNode;
   if (setup.phase === "install-failed" && setup.install?.recovery && view === "first") {
-    body = <Installing setup={setup} onBack={toFirst} onRecover={installHere} />;
+    body = (
+      <Installing setup={setup} onBack={toFirst} onRecover={installHere} onAdvanced={advanced} />
+    );
   } else if (holding) {
     body = <WaitingHere />;
   } else if (view === "first" && !firstCard) {
@@ -1200,6 +1233,7 @@ export function SetupFlow({
         setup={setup}
         onBack={setup.install?.recovery ? toFirst : backFromConnect}
         onRecover={installHere}
+        onAdvanced={advanced}
       />
     );
   } else if (setup.phase === "looking" || setup.phase === "idle") {

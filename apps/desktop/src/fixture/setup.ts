@@ -74,7 +74,7 @@ const installFailed = (
   install: {
     step: Math.max(step, 0),
     nodeChecked: step > 1,
-    ...(kind === "service" && extra.cleanup === "removed" ? { profileTrashed: true } : {}),
+    ...(kind === "service" && extra.cleanup === "removed" ? { foldersTrashed: true } : {}),
     failure: {
       kind,
       step,
@@ -244,13 +244,21 @@ export const SETUP_STATES: Record<string, SetupState> = {
     ...installing({ step: 2, nodeChecked: true, recovery: "replace" }),
     phase: "install-failed",
   },
-  "install-replaced": installing({ profileTrashed: true }),
+  "install-replaced": installing({ foldersTrashed: true }),
   "install-trash-refused": {
     ...trashRefused,
     install: { ...trashRefused.install!, step: 2, nodeChecked: true, recovery: "replace" },
   },
+  "install-removal-staged": {
+    ...installing({ step: 2, nodeChecked: true, recovery: "staged", recoveryLocation: "staging" }),
+    phase: "install-failed",
+  },
+  "install-removal-finish": {
+    ...installing({ step: 2, nodeChecked: true, recovery: "finish", recoveryLocation: "staging" }),
+    phase: "install-failed",
+  },
   "install-recovery-inspect": {
-    ...installing({ step: 2, nodeChecked: true, recovery: "inspect" }),
+    ...installing({ step: 2, nodeChecked: true, recovery: "inspect", recoveryLocation: "profile" }),
     phase: "install-failed",
   },
   "install-download": installFailed("download", 0, { cleanup: "removed" }),
@@ -422,7 +430,7 @@ export function setupCommand(
     }
     case "setupInstall": {
       // As the host runs it after its dialog: the four steps, then the look finds the gateway.
-      const trashed = command.action === "replace" ? { profileTrashed: true } : {};
+      const trashed = command.action === "replace" ? { foldersTrashed: true } : {};
       setup(installing(command.action === "continue" ? { step: 2, nodeChecked: true } : trashed));
       const at = (ms: number, install: Partial<SetupInstall>) =>
         after(

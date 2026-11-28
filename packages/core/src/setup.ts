@@ -244,7 +244,9 @@ export type InstallFailureKind =
   /** The host's dialog was answered after the prepared operation's two minutes. */
   | "expired"
   /** The unfinished profile could not be moved to the Trash. */
-  | "trash";
+  | "trash"
+  /** A saved setup could not be restored to its original folders. */
+  | "restore";
 
 /**
  * What a failed attempt left: nothing made (`none`); removed and proven
@@ -279,13 +281,16 @@ export type InstallFailure = {
 
 /** Where setting OpenClaw up stands (§10). */
 export type InstallAction = "continue" | "replace";
-export type InstallRecovery = InstallAction | "inspect";
+export type InstallRecovery = InstallAction | "inspect" | "staged" | "finish";
+export type InstallLocation = "profile" | "program" | "record" | "service" | "staging";
 
 export type SetupInstall = {
   /** Inspect marks an incomplete attempt without enough evidence to continue or remove it. */
   recovery?: InstallRecovery;
-  /** The previous unfinished profile is in the system Trash. */
-  profileTrashed?: boolean;
+  /** The previous unfinished setup folders are in the system Trash. */
+  foldersTrashed?: boolean;
+  /** A location containing files from an earlier setup. */
+  recoveryLocation?: InstallLocation;
   /** The step under way, from 0; 4 once every step is done. */
   step: number;
   /** The installer reported that it used the checked Node.js. */

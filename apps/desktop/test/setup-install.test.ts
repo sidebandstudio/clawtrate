@@ -19,6 +19,7 @@ import {
   readdirSync,
   readFileSync,
   renameSync,
+  rmdirSync,
   statSync,
   symlinkSync,
   unlinkSync,
@@ -91,10 +92,10 @@ function installer(
     accountHome: homedir(),
     env: {},
     statusWaitMs: 300,
-    trashProfile: async (profile) => {
+    trashSetup: async (bundle) => {
       const trash = join(stand.root, "Trash");
       mkdirSync(trash, { recursive: true });
-      await rename(profile, join(trash, basename(profile)));
+      await rename(bundle, join(trash, basename(bundle)));
     },
     sleep: (ms) => new Promise((done) => setTimeout(done, Math.min(ms, 50))),
     ...extra,
@@ -500,6 +501,7 @@ describe("F-502 F-503: each failure, named, with what the attempt left", () => {
     });
     expect(existsSync(stand.place.stateDir)).toBe(true);
     expect(existsSync(stand.place.programDir)).toBe(true);
+    expect(await installer(stand).recovery()).toEqual({ action: "inspect", location: "profile" });
   });
 
   it.each(["continue", "replace"] as const)(
@@ -550,12 +552,13 @@ describe("F-502 F-503: each failure, named, with what the attempt left", () => {
       const edited = readFileSync(config, "utf8") + "\n";
       writeFileSync(config, edited);
       writeFileSync(join(stand.place.stateDir, "my-notes.txt"), "Please keep this.");
+      writeFileSync(join(stand.place.programDir, "program-notes.txt"), "Keep this too.");
 
       const awake = installer(
         stand,
         unavailable
           ? {
-              trashProfile: async () => {
+              trashSetup: async () => {
                 throw new Error("Trash unavailable");
               },
             }
@@ -571,12 +574,19 @@ describe("F-502 F-503: each failure, named, with what the attempt left", () => {
         expect(readFileSync(join(stand.place.stateDir, "my-notes.txt"), "utf8")).toBe(
           "Please keep this.",
         );
+        expect(readFileSync(join(stand.place.programDir, "program-notes.txt"), "utf8")).toBe(
+          "Keep this too.",
+        );
         expect(await awake.recovery()).toEqual(pending);
         expect(await awake.run(() => {}, "continue", pending?.id)).toMatchObject({ ok: true });
       } else {
         expect(outcome).toMatchObject({ ok: true });
-        expect(progress).toContainEqual(expect.objectContaining({ profileTrashed: true }));
-        const saved = join(stand.root, "Trash", "Unfinished OpenClaw setup");
+        expect(progress).toContainEqual(expect.objectContaining({ foldersTrashed: true }));
+        const bundle = join(stand.root, "Trash", "Unfinished OpenClaw setup");
+        const saved = join(bundle, "Gateway profile");
+        expect(readFileSync(join(bundle, "Program", "program-notes.txt"), "utf8")).toBe(
+          "Keep this too.",
+        );
         expect(readFileSync(join(saved, "openclaw.json"), "utf8")).toBe(edited);
         expect(readFileSync(join(saved, "my-notes.txt"), "utf8")).toBe("Please keep this.");
         expect(existsSync(join(stand.place.stateDir, "my-notes.txt"))).toBe(false);
@@ -584,6 +594,113 @@ describe("F-502 F-503: each failure, named, with what the attempt left", () => {
       }
     },
   );
+
+  it.each(["continue", "replace"] as const)(
+    "F-505: %s recovers the folders saved by an interrupted Remove",
+    async (action) => {
+      const stand = await make();
+      const stop = new AbortController();
+      const interrupted = installer(stand, {
+        signal: stop.signal,
+        run: async (request, check) => {
+          const result = await runner.run(request, check);
+          if (request.args.includes("onboard")) stop.abort();
+          return result;
+        },
+      });
+      await runAll(interrupted);
+      writeFileSync(join(stand.place.stateDir, "notes.txt"), "keep me");
+      const failing = installer(stand, {
+        trashSetup: async () => {
+          mkdirSync(stand.place.stateDir);
+          throw new Error("Trash unavailable");
+        },
+      });
+      const original = await failing.recovery();
+      expect(await failing.run(() => {}, "replace", original?.id)).toMatchObject({
+        ok: false,
+        failure: { kind: "trash" },
+      });
+      const location = join(
+        dirname(stand.place.programDir),
+        ".openclaw-removing",
+        "Unfinished OpenClaw setup",
+      );
+      expect(readFileSync(join(location, "Gateway profile", "notes.txt"), "utf8")).toBe("keep me");
+      const awake = installer(stand);
+      const saved = await awake.recovery();
+      expect(saved).toEqual({ id: original?.id, action: "staged", location: "staging" });
+      expect(await awake.run(() => {}, "continue", saved?.id)).toMatchObject({
+        ok: false,
+        failure: { kind: "restore" },
+      });
+      expect(await awake.recovery()).toEqual(saved);
+      // Clear the test's empty obstruction. Clawtrate did not replace it when it rolled back.
+      rmdirSync(stand.place.stateDir);
+      expect(await awake.run(() => {}, action, saved?.id)).toMatchObject({ ok: true });
+      const notes =
+        action === "continue"
+          ? join(stand.place.stateDir, "notes.txt")
+          : join(stand.root, "Trash", "Unfinished OpenClaw setup", "Gateway profile", "notes.txt");
+      expect(readFileSync(notes, "utf8")).toBe("keep me");
+      expect(existsSync(dirname(location))).toBe(false);
+      expect(stand.calls().filter((line) => line.includes(" onboard "))).toHaveLength(
+        action === "replace" ? 2 : 1,
+      );
+    },
+  );
+
+  it.each([false, true])(
+    "F-505: an interruption after the Trash move can still finish removal (record cleared: %s)",
+    async (cleared) => {
+      const stand = await make();
+      const stop = new AbortController();
+      const interrupted = installer(stand, {
+        signal: stop.signal,
+        run: async (request, check) => {
+          const result = await runner.run(request, check);
+          if (request.args.includes("onboard")) stop.abort();
+          return result;
+        },
+      });
+      await runAll(interrupted);
+      const trash = join(stand.root, "Trash");
+      mkdirSync(trash);
+      const since = installer(stand, {
+        trashSetup: async (bundle) => {
+          await rename(bundle, join(trash, basename(bundle)));
+          throw new Error("interrupted after the move");
+        },
+      });
+      const original = await since.recovery();
+      expect(await since.run(() => {}, "replace", original?.id)).toMatchObject({ ok: false });
+      if (cleared) unlinkSync(stand.place.recordFile);
+      const awake = installer(stand);
+      expect(await awake.recovery()).toEqual({
+        id: original?.id,
+        action: "finish",
+        location: "staging",
+      });
+      expect(await awake.run(() => {}, "continue", original?.id)).toMatchObject({ ok: false });
+      expect(await awake.run(() => {}, "replace", original?.id)).toMatchObject({ ok: true });
+      expect(existsSync(join(trash, "Unfinished OpenClaw setup", "Program"))).toBe(true);
+      expect(existsSync(join(trash, "Unfinished OpenClaw setup", "Gateway profile"))).toBe(true);
+      expect(await awake.recovery()).toBeNull();
+    },
+  );
+
+  it("F-505: an orphaned profile and service are reported and left as they are", async () => {
+    const stand = await make();
+    mkdirSync(stand.place.stateDir);
+    mkdirSync(dirname(stand.place.serviceFile), { recursive: true });
+    writeFileSync(join(stand.place.stateDir, "notes.txt"), "existing profile");
+    writeFileSync(stand.place.serviceFile, "existing service");
+    const awake = installer(stand);
+    expect(await awake.recovery()).toEqual({ action: "inspect", location: "profile" });
+    expect(await awake.run(() => {}, "replace", "unknown")).toMatchObject({ ok: false });
+    expect(readFileSync(join(stand.place.stateDir, "notes.txt"), "utf8")).toBe("existing profile");
+    expect(readFileSync(stand.place.serviceFile, "utf8")).toBe("existing service");
+  });
 
   it("F-505: Continue loads an existing owned service without rewriting it", async () => {
     const stand = await make();
@@ -830,7 +947,7 @@ describe("F-501 F-502: nothing there before, and the narrowed retry", () => {
       const install = installer(stand);
       expect(await install.site()).toBe("exists");
       expect(await install.leftoverProgram()).toBeNull();
-      expect(await install.discard()).toBe("kept");
+      expect(await install.discard()).toBe(false);
     }
     expect(existsSync(stand.place.programDir)).toBe(true);
   });
