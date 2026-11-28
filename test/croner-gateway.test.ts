@@ -24,6 +24,7 @@ const json = (file: string) => JSON.parse(readFileSync(file, "utf8")) as Record<
 const GATEWAY_CRONER: Record<OpenclawVersion, string> = {
   "2026.10.6": "10.0.1",
   "2026.11.10": "10.0.1",
+  "2026.11.11": "10.0.1",
 };
 
 it("@clawtrate/ui pins the croner version every listed OpenClaw runs", () => {

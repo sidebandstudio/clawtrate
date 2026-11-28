@@ -1,0 +1,13 @@
+- status
+- main:
+  - button "Back"
+  - heading "Starting OpenClaw" [level=2]
+  - paragraph
+  - list "Steps":
+    - listitem "Starting OpenClaw, failed": Starting OpenClaw
+    - listitem "Checking the gateway, waiting": Checking the gateway
+  - alert:
+    - paragraph: macOS couldn't start the OpenClaw service.
+  - button "Try again"
+  - button "Look again"
+  - paragraph: Starting OpenClaw
