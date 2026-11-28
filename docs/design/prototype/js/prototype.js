@@ -24,9 +24,14 @@
     }
   };
 
+  // "system" is kept as the choice and resolved against the system's colour at each start.
+  const resolve = (choice) =>
+    choice === "system" ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : choice;
+  // Dark is the default whatever the system prefers, as in the app (docs/decisions.md).
+  const themeChoice = params.get("theme") || stored("theme") || "dark";
   const settings = {
-    // Dark is the default whatever the system prefers, as in the app (docs/decisions.md).
-    theme: params.get("theme") || stored("theme") || "dark",
+    theme: resolve(themeChoice),
+    followSystem: themeChoice === "system",
     width: params.get("width") || stored("width") || "full",
     motion:
       params.get("motion") ||
@@ -56,9 +61,8 @@
   // The app's own theme choice, used by the gateway menu: system, light or dark.
   CT.setTheme = (choice) => {
     settings.followSystem = choice === "system";
-    settings.theme =
-      choice === "system" ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light") : choice;
-    store("theme", settings.theme);
+    settings.theme = resolve(choice);
+    store("theme", choice);
     apply();
   };
 
@@ -96,6 +100,7 @@
         const button = event.target.closest("[data-setting]");
         if (!button) return;
         settings[button.dataset.setting] = button.dataset.value;
+        if (button.dataset.setting === "theme") settings.followSystem = false;
         store(button.dataset.setting, button.dataset.value);
         apply();
       });
