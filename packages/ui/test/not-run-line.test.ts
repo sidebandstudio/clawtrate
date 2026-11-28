@@ -6,6 +6,7 @@ import {
   emptyActivity,
   enforceState,
   historyQueuePairs,
+  initialState,
   mapHistory,
   mergeHistoryRuns,
   newRun,
@@ -496,7 +497,7 @@ describe("#686: a not-run line sits only under the message its run is known to h
     expect(retryPlan(run, dropped)).toEqual({ kind: "words-cut" });
     const html = renderToStaticMarkup(
       createElement(BridgeProvider, {
-        bridge: { getState: () => ({ bots: [] }) } as unknown as ClawtrateBridge,
+        bridge: { getState: () => initialState } as unknown as ClawtrateBridge,
         children: createElement(RunEndingCard, {
           run,
           bot: { id: "otto", name: "Otto" } as Bot,
@@ -510,6 +511,30 @@ describe("#686: a not-run line sits only under the message its run is known to h
     );
     expect(html).not.toContain("too long");
   });
+
+  it.each([true, false])(
+    "F-480: a missing account links to provider sign-in when this connection can manage accounts (%s)",
+    (canAdmin) => {
+      const { transcript, run } = reloaded([userRow("run-a", "Hi", 1), failedRow("run-a", 2)]);
+      const html = renderToStaticMarkup(
+        createElement(BridgeProvider, {
+          bridge: {
+            getState: () => ({
+              ...initialState,
+              connection: { ...initialState.connection, status: "connected", canAdmin },
+            }),
+          } as unknown as ClawtrateBridge,
+          children: createElement(RunEndingCard, {
+            run,
+            bot: { id: "otto", name: "Otto" } as Bot,
+            transcript,
+            taskKey: KEY,
+          }),
+        }),
+      );
+      expect(html.includes("Connect an account")).toBe(canAdmin);
+    },
+  );
 
   it("a run that started, then failed before replying: the gateway's row says nothing more", () => {
     const ctx = { raw: new RawTable(), sessionKey: KEY, now: T0 + 10_000 };
