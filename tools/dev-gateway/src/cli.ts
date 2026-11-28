@@ -577,6 +577,8 @@ export function devConfig(
         ...(browsers ? ["browser"] : []),
         ...(options.images ? ["image_generate"] : []),
         ...(options.messageTool ? ["message"] : []),
+        // A tool only the running version has that a scenario uses (versions.ts).
+        ...form.extraAllowedTools,
         // 2026.11.10 adds skill_library beside skill_workshop itself (skillLibraryToolSplit).
         ...(options.skillReview ? form.skillReviewTools : []),
       ],
