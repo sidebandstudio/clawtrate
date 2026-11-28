@@ -371,6 +371,44 @@ describe("the planner", () => {
       text: expect.stringContaining("It has no reply written for"),
     });
   });
+
+  it("answers the gateway's notice that a task the main task watches changed with its own 'nothing to say' (#576)", () => {
+    const notice = (key: string, since: number) =>
+      `Session "${key}" changed (other actor). Reconcile before acting: session_status sessionKey "${key}" changesSince ${since}.`;
+    const quiet = [{ kind: "text", text: "NO_REPLY" }];
+    // As 2026.10.6 sent it to Marlow's main task after a seed: the notice is the turn's prompt.
+    expect(
+      planReply(
+        [
+          { role: "system", content: "x" },
+          {
+            role: "user",
+            content: `[Sat 2026-11-28 06:03 EST] ${notice("agent:marlow:newsletter-intro", 8)}`,
+          },
+        ],
+        ALL_TOOLS,
+      ),
+    ).toEqual(quiet);
+    // Notices for two tasks, delivered in one turn: one line each.
+    expect(
+      planReply(
+        [
+          {
+            role: "user",
+            content: `[Sat 2026-11-28 06:03 EST] ${notice("agent:marlow:cover-letter", 3)}\n${notice("agent:marlow:newsletter-intro", 8)}`,
+          },
+        ],
+        ALL_TOOLS,
+      ),
+    ).toEqual(quiet);
+    // A person's message that only starts like one still gets the fallback.
+    expect(
+      planReply(
+        [user('Session "agent:marlow:cover-letter" changed (other actor). What changed?')],
+        ALL_TOOLS,
+      ).at(-1),
+    ).toMatchObject({ kind: "text", text: expect.stringContaining("It has no reply written for") });
+  });
 });
 
 describe("the stand-in coding agent", () => {

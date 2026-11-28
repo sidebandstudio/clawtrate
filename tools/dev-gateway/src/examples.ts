@@ -14,6 +14,7 @@ import {
 } from "./scenarios.ts";
 import {
   SCENARIO_EXAMPLES,
+  SEED_BOTS,
   sessionKeyFor,
   type ExampleResult,
   type ScenarioExample,
@@ -393,5 +394,99 @@ export async function verifyExample(op: OperatorSession, example: ScenarioExampl
   }
   if (problems.length > 0) {
     throw new Error(`${example.botId} / ${example.label}: ${problems.join("; ")}`);
+  }
+}
+
+/** The bots' main tasks the seed opens: a scripted conversation's or an example's. */
+export const SEEDED_MAIN_TASKS = [
+  ...SEED_BOTS.flatMap((bot) =>
+    bot.tasks.filter((task) => task.main).map((task) => sessionKeyFor(bot.id, task.slug)),
+  ),
+  ...SCENARIO_EXAMPLES.filter((e) => e.slug === "main").map((e) => sessionKeyFor(e.botId, e.slug)),
+];
+
+/**
+ * How long a main task must have had no run before the seed counts it settled (#576). The seed's
+ * messages in a bot's tasks queue a notice for their parent, the bot's main task, and once that
+ * task exists the gateway runs the notice there as a turn of its own: 20 s after it queued it
+ * (the state notices' delay in OpenClaw 2026.10.6, 2026.11.10 and 2026.11.11), and on a loaded
+ * runner some seconds more before the turn shows on the task's row.
+ */
+export const MAIN_TASK_QUIET_MS = 45_000;
+
+type TaskRow = {
+  key?: string;
+  status?: string;
+  hasActiveRun?: boolean;
+  endedAt?: number;
+  updatedAt?: number;
+  lastRunId?: string;
+  lastRunError?: string;
+  suppressErrorNotice?: boolean;
+};
+
+/**
+ * A row whose latest run did not end well. An end the gateway marked not to show (2026.11.10's
+ * for a turn no person asked for that answered nothing) is no failure, as in the app.
+ */
+const endedBadly = (row: TaskRow) =>
+  row.suppressErrorNotice !== true &&
+  ((row.status !== undefined && row.status !== "done") || Boolean(row.lastRunError));
+
+/**
+ * Wait until none of these tasks has had a run for `quietMs`, then throw for each whose latest
+ * run did not end well: a turn the gateway started there on its own ends, and ends well, before
+ * the seed does (#576). Throws as well when they are not quiet within `limitMs`.
+ */
+export async function settleTasks(
+  op: Pick<OperatorSession, "request">,
+  keys: string[],
+  options: { quietMs?: number; limitMs?: number; pollMs?: number } = {},
+): Promise<void> {
+  const quietMs = options.quietMs ?? MAIN_TASK_QUIET_MS;
+  const limitMs = options.limitMs ?? quietMs + SEED_RUN_MS;
+  const pollMs = options.pollMs ?? 1_000;
+  const started = Date.now();
+  for (;;) {
+    const rows = (
+      await Promise.all(
+        keys.map(async (key) => {
+          const agentId = key.split(":")[1];
+          const listed = await op.request<{ sessions?: TaskRow[] }>("sessions.list", {
+            agentId,
+            search: key,
+          });
+          return listed.sessions?.find((row) => row.key === key);
+        }),
+      )
+    ).filter((row): row is TaskRow => row !== undefined);
+    const busy = rows.filter(
+      (row) => row.hasActiveRun === true || row.status === "running" || row.status === "queued",
+    );
+    const lastEnd = Math.max(0, ...rows.map((row) => row.endedAt ?? row.updatedAt ?? 0));
+    const quietFor = Date.now() - lastEnd;
+    if (busy.length === 0 && quietFor >= quietMs) {
+      const failed = rows.filter(endedBadly);
+      if (failed.length === 0) return;
+      throw new Error(
+        failed
+          .map(
+            (row) =>
+              `${row.key}: its latest run ${row.lastRunId ?? "(no id)"} ended ${row.status ?? "with no status"}${row.lastRunError ? ` (${row.lastRunError})` : ""}, after the seed's own runs there ended well`,
+          )
+          .join("; "),
+      );
+    }
+    const left = limitMs - (Date.now() - started);
+    if (left <= 0) {
+      throw new Error(
+        busy.length > 0
+          ? `${busy.map((row) => row.key).join(", ")} still had a run after ${seconds(limitMs)} s`
+          : `the bots' main tasks were not quiet for ${seconds(quietMs)} s within ${seconds(limitMs)} s`,
+      );
+    }
+    await new Promise((resolve) =>
+      setTimeout(resolve, Math.min(left, busy.length > 0 ? pollMs : quietMs - quietFor)),
+    );
   }
 }

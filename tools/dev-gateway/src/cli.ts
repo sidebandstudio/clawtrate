@@ -153,7 +153,16 @@ import {
   type DevPlugin,
   type PluginRule,
 } from "./dev-plugins.ts";
-import { SEED_ANSWER_MS, SEED_CAPS, SEED_SCOPES, seedExample, verifyExample } from "./examples.ts";
+import {
+  MAIN_TASK_QUIET_MS,
+  SEED_ANSWER_MS,
+  SEED_CAPS,
+  SEED_SCOPES,
+  SEEDED_MAIN_TASKS,
+  seedExample,
+  settleTasks,
+  verifyExample,
+} from "./examples.ts";
 import {
   CLI_DEFAULT_MS,
   GIVE_UP_PAUSE_MS,
@@ -2844,6 +2853,11 @@ async function seedScenarioExamples(
       console.log(`  ${bot}: ${example.label}`);
       await seedExample(op, example, console.log);
     }
+    // The gateway runs turns of its own in a bot's main task, after the seed's (#576).
+    console.log(
+      `Waiting until the bots' main tasks have had no run for ${MAIN_TASK_QUIET_MS / 1000} s`,
+    );
+    await settleTasks(op, SEEDED_MAIN_TASKS);
   } finally {
     await op.close();
     // The seed's device is not left paired.
