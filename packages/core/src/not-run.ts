@@ -357,6 +357,8 @@ export function notRunRetryRecorded(transcript: Transcript, id: string): boolean
 export const MAX_NOT_RUN_FILE_MESSAGES = 8;
 /** Decoded bytes, across tasks on the same gateway. */
 export const MAX_NOT_RUN_FILE_BYTES = 32 * 1024 * 1024;
+/** Runs known to have had files, remembered without them after their copy goes. */
+export const MAX_NOT_RUN_FILE_EVIDENCE = 256;
 
 type RetryFiles = {
   task: string;
@@ -370,9 +372,13 @@ type RetryFiles = {
 };
 
 /** Files and original text for a send preparing to run or known to have failed before running. */
+type FilesOf = { task: string; bot: string | null; runId: string; retriedAs?: string };
+
 export class NotRunFiles {
   private readonly entries = new Map<string, RetryFiles>();
   private bytes = 0;
+  /** That a run's message had files, kept past its copy: words alone never go again for it. */
+  private readonly hadFiles = new Map<string, FilesOf>();
 
   private key(task: string, runId: string): string {
     return JSON.stringify([task, runId]);
@@ -382,7 +388,24 @@ export class NotRunFiles {
     return this.entries.get(this.key(task, runId));
   }
 
+  /** Whether the run's message is known to have had files, held now or not. */
+  knownToHaveFiles(task: string, runId: string): boolean {
+    return this.hadFiles.has(this.key(task, runId));
+  }
+
+  /** Remember that the run's message had files; the oldest such fact goes past the bound. */
+  noteFiles(entry: FilesOf): void {
+    const key = this.key(entry.task, entry.runId);
+    this.hadFiles.delete(key);
+    this.hadFiles.set(key, { task: entry.task, bot: entry.bot, runId: entry.runId });
+    for (const oldest of this.hadFiles.keys()) {
+      if (this.hadFiles.size <= MAX_NOT_RUN_FILE_EVIDENCE) break;
+      this.hadFiles.delete(oldest);
+    }
+  }
+
   hold(entry: RetryFiles): RetryFiles[] {
+    this.noteFiles(entry);
     this.drop(entry.task, entry.runId);
     this.entries.set(this.key(entry.task, entry.runId), entry);
     this.bytes += entry.bytes;
@@ -404,13 +427,16 @@ export class NotRunFiles {
     this.bytes -= entry.bytes;
   }
 
-  dropWhere(matches: (entry: RetryFiles) => boolean): void {
+  /** Let go of the copies, and what is known of their files, that `matches` names. */
+  dropWhere(matches: (entry: FilesOf) => boolean): void {
     for (const entry of this.entries.values())
       if (matches(entry)) this.drop(entry.task, entry.runId);
+    for (const [key, entry] of this.hadFiles) if (matches(entry)) this.hadFiles.delete(key);
   }
 
   clear(): void {
     this.entries.clear();
+    this.hadFiles.clear();
     this.bytes = 0;
   }
 }

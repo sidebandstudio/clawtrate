@@ -11689,7 +11689,11 @@ export class ClawtrateClient {
     const runs = next.runs.map((run): Run => {
       if (this.notRunFiles.get(key, run.id))
         return run.retryFiles === "held" ? run : { ...run, retryFiles: "held" };
-      return run.retryFiles === "held" ? { ...run, retryFiles: "gone" } : run;
+      // A run rebuilt from history after its copy went still had files: never words alone.
+      return run.retryFiles === "held" ||
+        (!run.retryFiles && this.notRunFiles.knownToHaveFiles(key, run.id))
+        ? { ...run, retryFiles: "gone" }
+        : run;
     });
     const transcriptWithFiles = runs.some((run, index) => run !== next.runs[index])
       ? { ...next, runs }
@@ -11898,6 +11902,8 @@ export class ClawtrateClient {
       );
       // History may contain the send before the gateway finishes preparing it. Save its files
       // while it can still end without a run, even if this read came before that failure.
+      // Copies this gives up are published with the rebuilt transcript, never between.
+      const evicted: Array<{ task: string; runId: string }> = [];
       for (const message of current.outbox) {
         if (reconciled.outbox.some((each) => each.id === message.id)) continue;
         const kept = this.attachmentContent.get(message.id);
@@ -11911,14 +11917,17 @@ export class ClawtrateClient {
           !run.ranInHistory &&
           (!isTerminal(run.state) || neverRan(run) || neverStarted(run))
         ) {
+          if (message.attachments.length > 0)
+            this.notRunFiles.noteFiles({ task: key, bot: kept.bot, runId: run.id });
           if (kept.gatewayId && kept.gatewayId === this.state.connection.gatewayId) {
-            const evicted = this.notRunFiles.hold({
-              ...kept,
-              gatewayId: kept.gatewayId,
-              runId: run.id,
-              message,
-            });
-            for (const each of evicted) this.markRetryFilesGone(each.task, each.runId);
+            evicted.push(
+              ...this.notRunFiles.hold({
+                ...kept,
+                gatewayId: kept.gatewayId,
+                runId: run.id,
+                message,
+              }),
+            );
           }
           // Keep the knowledge that this send had files even if a gateway history row omits
           // them, or the retry budget already let them go.
@@ -11958,6 +11967,7 @@ export class ClawtrateClient {
       };
       this.retainTaskRaw(key, rebuilt);
       this.setTranscript(key, () => withLive(rebuilt));
+      for (const each of evicted) this.markRetryFilesGone(each.task, each.runId);
       const left = quietToRead(rebuilt.runs.filter((run) => quietBefore.has(run.id)));
       if (left.size > 0) void this.settleQuietLater(key, left, generation);
       // A read is news of its own: the runs it leaves active are asked again.

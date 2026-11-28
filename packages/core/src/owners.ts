@@ -64,7 +64,7 @@ import {
   MAX_TRANSFER_BYTES,
 } from "./files.ts";
 import { MAX_ROUTINE_READS, MAX_ROUTINE_UPDATES } from "./routines.ts";
-import { MAX_NOT_RUN_FILE_MESSAGES } from "./not-run.ts";
+import { MAX_NOT_RUN_FILE_EVIDENCE, MAX_NOT_RUN_FILE_MESSAGES } from "./not-run.ts";
 import { emptyActivity, MAX_QUEUE_ALIASES } from "./runs.ts";
 import {
   MAX_COMPUTER_PANES,
@@ -309,6 +309,12 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
       MAX_ATTACHMENTS_PER_MESSAGE * (3 * MAX_FILE_NAME_CHARS + 4),
     row: "notRunFiles",
     opaque: "the original message and files; file content shares MAX_NOT_RUN_FILE_BYTES",
+  },
+  // That a run's message had files, kept without them: its key, task, bot and run.
+  "notRunFiles.hadFiles": {
+    max: MAX_NOT_RUN_FILE_EVIDENCE,
+    each: 6 * ID + SHORT,
+    row: "notRunFiles",
   },
   // Pictures of messages history holds, kept to show: their content is in `outboxFiles`'s budget.
   sentPictures: {

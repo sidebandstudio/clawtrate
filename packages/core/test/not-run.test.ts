@@ -1465,6 +1465,8 @@ describe("F-480 #988: recovering a message that never ran", () => {
       expect(files.hold(entry(String(i), 1))).toEqual([]);
     expect(files.hold(entry("next", 1)).map((each) => each.runId)).toEqual(["0"]);
     expect(files.get(KEY, "0")).toBeUndefined();
+    // What it gives up is still known to have had files.
+    expect(files.knownToHaveFiles(KEY, "0")).toBe(true);
     expect(files.get(KEY, "1")).toBeDefined();
     expect(files.hold(entry("big", MAX_NOT_RUN_FILE_BYTES - 1)).map((each) => each.runId)).toEqual(
       Array.from({ length: MAX_NOT_RUN_FILE_MESSAGES - 1 }, (_, i) => String(i + 1)),
@@ -1521,6 +1523,98 @@ describe("F-480 #988: recovering a message that never ran", () => {
       await until(() => transcript().runs.find((run) => run.id === id)?.retryFiles === "gone");
       expect(client.retryNotRun(KEY, id)).toBe(next);
       expect(gateway.calls("chat.send")).toHaveLength(2);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("publishes a retry copy's eviction with the history read, so a message sent then is kept", async () => {
+    const gateway = gatewayWith([{ key: KEY, agentId: "otto", updatedAt: T0 - 60_000 }]);
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway" });
+    const { client, transcript } = await openTask({ gateway });
+    const file = { type: "file", fileName: "a.txt", mimeType: "text/plain", content: "Zmlyc3Q=" };
+    const rows: Row[] = [];
+    const ids: string[] = [];
+    let sentThen: string | null = null;
+    let unsubscribe = () => {};
+    try {
+      for (let i = 0; i <= MAX_NOT_RUN_FILE_MESSAGES; i++) {
+        const text = `Read file ${i}.`;
+        const id = client.sendMessage(KEY, text, { attachments: [file] });
+        ids.push(id);
+        await until(() => transcript().runs.find((run) => run.id === id)?.bound === true);
+        gateway.emit("chat", {
+          runId: id,
+          sessionKey: KEY,
+          seq: 1,
+          state: "error",
+          errorMessage: "Backend unavailable.",
+        });
+        await until(() => transcript().runs.find((run) => run.id === id)?.state === "failed");
+        rows.push(userRow(id, text), beforeReplyRow(id));
+        if (i === MAX_NOT_RUN_FILE_MESSAGES)
+          // A window that sends a message as soon as it sees the oldest copy go.
+          unsubscribe = client.store.subscribe((state) => {
+            const oldest = state.transcripts[KEY]?.runs.find((run) => run.id === ids[0]);
+            if (sentThen !== null || oldest?.retryFiles !== "gone") return;
+            sentThen = "";
+            sentThen = client.sendMessage(KEY, "A message sent meanwhile.");
+          });
+        const messages = [...rows];
+        gateway.handlers["chat.history"] = () => ({ messages, hasMore: false });
+        gateway.emit("session.message", { sessionKey: KEY, messageSeq: i + 1 });
+        await until(() => transcript().runs.find((run) => run.id === id)?.retryFiles === "held");
+      }
+      expect(transcript().runs.find((run) => run.id === ids[0])?.retryFiles).toBe("gone");
+      expect(sentThen).not.toBeNull();
+      expect(transcript().outbox.map((message) => message.text)).toContain(
+        "A message sent meanwhile.",
+      );
+      await until(() =>
+        gateway
+          .calls("chat.send")
+          .some((send) => (send as Row).message === "A message sent meanwhile."),
+      );
+    } finally {
+      unsubscribe();
+      client.stop();
+    }
+  });
+
+  it("still knows a message had files after its card let them go and the task reopens", async () => {
+    const gateway = gatewayWith([{ key: KEY, agentId: "otto", updatedAt: T0 - 60_000 }]);
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway" });
+    const { client, transcript } = await openTask({ gateway });
+    try {
+      const id = client.sendMessage(KEY, "Read this.", {
+        attachments: [
+          { type: "file", fileName: "a.txt", mimeType: "text/plain", content: "Zmlyc3Q=" },
+        ],
+      });
+      await until(() => transcript().runs[0]?.bound === true);
+      gateway.emit("chat", {
+        runId: id,
+        sessionKey: KEY,
+        seq: 1,
+        state: "error",
+        errorMessage: "Backend unavailable.",
+      });
+      await until(() => transcript().runs[0]?.state === "failed");
+      // History confirms the send without listing its files.
+      gateway.handlers["chat.history"] = () => ({
+        messages: [userRow(id, "Read this."), beforeReplyRow(id)],
+        hasMore: false,
+      });
+      gateway.emit("session.message", { sessionKey: KEY, messageSeq: 1 });
+      await until(() => transcript().runs[0]?.retryFiles === "held");
+      client.dismissNotRun(KEY, id);
+      client.closeSession(KEY);
+      expect(client.state.transcripts[KEY]).toBeUndefined();
+      client.openSession(KEY);
+      await until(() => transcript()?.runs.some((run) => run.id === id) === true);
+      expect(transcript().runs.find((run) => run.id === id)?.retryFiles).toBe("gone");
+      expect(() => client.retryNotRun(KEY, id)).toThrow("Its files are no longer held");
+      expect(gateway.calls("chat.send")).toHaveLength(1);
     } finally {
       client.stop();
     }
