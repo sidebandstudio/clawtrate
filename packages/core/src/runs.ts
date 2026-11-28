@@ -2548,7 +2548,7 @@ export function applyAgentEvent(
             ? withComputerUseReason(
                 observed,
                 findRun(observed, existing.id) ?? existing,
-                data.error,
+                lifecycleErrorText(data),
                 ctx,
                 "lifecycle-data",
                 data,
@@ -2741,6 +2741,11 @@ export function isDefinitiveLifecycleError(data: RawRecord): boolean {
   );
 }
 
+/** A lifecycle event's error, sent as text or as `{ message }`: read the same whenever it arrives. */
+function lifecycleErrorText(data: RawRecord): string | null {
+  return str(data.error) ?? str(asRecord(data.error)?.message);
+}
+
 function terminalFromLifecycle(
   run: Run,
   phase: "end" | "error",
@@ -2749,10 +2754,7 @@ function terminalFromLifecycle(
   ctx: EngineContext,
 ): Run {
   const reason = classifyLifecycleTerminal(phase, data);
-  const message =
-    str(data.error) ??
-    str(asRecord(data.error)?.message) ??
-    (phase === "error" ? "The run failed." : null);
+  const message = lifecycleErrorText(data) ?? (phase === "error" ? "The run failed." : null);
   switch (reason) {
     case "completed":
       return finishRun(run, "completed", ctx, null, at);

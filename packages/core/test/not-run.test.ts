@@ -1752,6 +1752,34 @@ describe("F-480 #988: Computer Use recovery", () => {
     });
   }
 
+  it("reads a settled lifecycle error sent as { message } after the chat error", () => {
+    const ctx = { raw: new RawTable(), sessionKey: KEY, now: T0 };
+    const lifecycle = (activity: TaskActivity, extra: Record<string, unknown> = {}) =>
+      applyAgentEvent(
+        activity,
+        agentEvent("run-1", 2, "lifecycle", {
+          phase: "error",
+          executionSettled: true,
+          error: { message: reason },
+          ...extra,
+        }),
+        ctx,
+      ).activity;
+    const chat = applyChatEvent(
+      emptyActivity,
+      { runId: "run-1", sessionKey: KEY, seq: 1, state: "error", errorMessage: "Request ended." },
+      null,
+      ctx,
+    );
+    const applied = lifecycle(chat);
+    expect(applied.runs[0]!.error?.message).toBe(reason);
+    expect(notRunCause(applied.runs[0]!.error?.message)?.kind).toBe("computer-use-timeout");
+    // Late start evidence still wins: a run that started is not a Computer Use not-run.
+    const started = lifecycle(chat, { providerStarted: true });
+    expect(neverRan(started.runs[0]!)).toBe(false);
+    expect(started.runs[0]!.error?.message).toBe("Request ended.");
+  });
+
   const patch = (value: boolean | null, baseHash: string) => ({
     baseHash,
     raw: JSON.stringify({
