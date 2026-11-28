@@ -25,6 +25,7 @@ import {
   type Route,
 } from "./navigation.ts";
 import { panes } from "./presentation/panes.ts";
+import { keptAfterOpening } from "./lists.ts";
 import { RuntimeContext, startRuntime, useClawtrateState } from "./runtime.ts";
 import { useSwitcherProbe } from "./switcher-probe.ts";
 import { ThemeContext, themeFor, useTheme } from "./theme/index.ts";
@@ -52,8 +53,8 @@ function Screens() {
   // What this viewer has read: the gateway's unread marks need write to change.
   const [seen, setSeen] = useState<SeenMap>({});
   const onRead = useCallback((task: Task) => setSeen((was) => markSeen(was, task)), []);
-  // The bot last opened: the gateway's own bot, opened while it waited, stays on Home until the
-  // person opens another bot, as on the desktop (F-562).
+  // The bot kept on Home: the gateway's own bot, opened while the rule left it out, stays until
+  // the person opens another bot, as on the desktop (F-562, `keptAfterOpening`).
   const [keptBot, setKeptBot] = useState<string | null>(null);
 
   const kept = keptMismatch(state, mismatch);
@@ -117,7 +118,7 @@ function Screens() {
         now={now}
         kept={keptBot}
         onOpenBot={(botId) => {
-          setKeptBot(botId);
+          setKeptBot(keptAfterOpening(state, keptBot, botId));
           setRoute({ name: "bot", botId });
         }}
         onSettings={() => setSettingsOpen(true)}
@@ -165,8 +166,7 @@ function Screens() {
       ]}
       {show.list === "home" && (
         <Settings
-          connection={state.connection}
-          showChannelChats={state.showChannelChats === true}
+          state={state}
           visible={settingsOpen}
           onClose={() => setSettingsOpen(false)}
           onForget={another}

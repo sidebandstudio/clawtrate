@@ -2,14 +2,13 @@
 // (`presentation/gateway-state.ts`): the address, the state and its dot, this
 // device, the scopes the connection can use, the gateway's version, the error when
 // there is one; Disconnect, which keeps the pairing, Reconnect, and Use another
-// gateway, which forgets this one. Then the desktop's Conversation section, which
-// here holds "Show external channel chats" alone (F-519).
+// gateway, which forgets this one. Conversation and Advanced hold device settings.
 
-import type { ConnectionState } from "@clawtrate/core";
+import type { ClawtrateState } from "@clawtrate/core";
 import { isCleartext, scopeWords } from "../presentation/connect-words.ts";
 import {
   addressWords,
-  CHANNEL_CHATS_NOTE,
+  DEVICE_SWITCHES,
   GATEWAY_APPEARANCE,
   gatewayActions,
   gatewayProblem,
@@ -18,9 +17,10 @@ import {
   pairingNote,
   serverWords,
   SETTINGS_WORDS as W,
+  type DeviceSwitch,
 } from "../presentation/gateway-state.ts";
-import { useState, type ReactNode } from "react";
-import { Modal, ScrollView, Switch, View } from "react-native";
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
+import { Modal, Pressable, ScrollView, Switch, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { BackIcon, CloseIcon } from "../components/icons.tsx";
 import { FONT_LICENSES } from "../font-licenses.ts";
@@ -67,48 +67,116 @@ function Fact({
   );
 }
 
+function DeviceSwitchRow({ setting, shown }: { setting: DeviceSwitch; shown: boolean }) {
+  const { saves } = useRuntime();
+  const { c } = useTheme();
+  // The system's switch flips as it is tapped: it keeps the choice asked for until core
+  // reports it, and goes back when the choice could not be kept. The save is the app's, so a
+  // row opened again while it is on its way, or after it failed, shows it (`switch-saves.ts`).
+  const { asked, saving, error } = useSyncExternalStore(saves.subscribe, () =>
+    saves.get(setting.id),
+  );
+  useEffect(() => saves.settle(setting.id, shown), [saves, setting.id, shown, asked]);
+  const value = asked ?? shown;
+  const toggle = (on: boolean) => saves.toggle(setting, on);
+  return (
+    <>
+      <Txt
+        testID={setting.headingId}
+        size={S["text-sm"]}
+        color="text-faint"
+        accessibilityRole="header"
+      >
+        {setting.heading}
+      </Txt>
+      <Pressable
+        accessible={false}
+        disabled={saving}
+        onPress={() => toggle(!value)}
+        style={{
+          minHeight: TOUCH.taskRow,
+          flexDirection: "row",
+          alignItems: "center",
+          gap: S["space-3"],
+          paddingVertical: 10,
+          paddingHorizontal: S["space-4"],
+          backgroundColor: c["bg-bubble"],
+          borderRadius: S["radius-lg"],
+        }}
+      >
+        {/* The whole row is tappable. VoiceOver uses the native switch. */}
+        <Txt
+          style={{ flex: 1 }}
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+        >
+          {setting.label}
+        </Txt>
+        <Switch
+          testID={setting.id}
+          accessibilityLabel={setting.label}
+          accessibilityHint={
+            typeof setting.note === "string" ? setting.note : setting.note.join("")
+          }
+          value={value}
+          disabled={saving}
+          onValueChange={toggle}
+          trackColor={{ false: c["border-strong"], true: c["bg-inverse"] }}
+          ios_backgroundColor={c["border-strong"]}
+          thumbColor={value ? c["text-inverse"] : undefined}
+        />
+      </Pressable>
+      <Txt testID={`${setting.id}-note`} size={S["text-sm"]} color="text-faint">
+        {typeof setting.note === "string" ? (
+          setting.note
+        ) : (
+          <>
+            {setting.note[0]}
+            <Txt size={S["text-sm"]} color="text-faint" style={{ fontFamily: FONTS.mono }}>
+              {setting.note[1]}
+            </Txt>
+            {setting.note[2]}
+          </>
+        )}
+      </Txt>
+      {error && (
+        <View
+          testID={`${setting.id}-error`}
+          accessibilityRole="alert"
+          style={{
+            backgroundColor: c["danger-soft"],
+            borderRadius: S["radius-md"],
+            padding: S["space-4"],
+          }}
+        >
+          <Txt size={S["text-md"]}>{error}</Txt>
+        </View>
+      )}
+    </>
+  );
+}
+
 export function Settings({
-  connection,
-  showChannelChats,
+  state,
   visible,
   onClose,
   onForget,
 }: {
-  connection: ConnectionState;
-  /** "Show external channel chats" as core reports it. */
-  showChannelChats: boolean;
+  state: Pick<ClawtrateState, "connection" | DeviceSwitch["stateKey"]>;
   visible: boolean;
   onClose: () => void;
   /** After Use another gateway: the address screen. */
   onForget: () => void;
 }) {
+  const { connection } = state;
   const { send, redact } = useRuntime();
   const { c } = useTheme();
   const [licenses, setLicenses] = useState(false);
-  const { label: state, dot } = GATEWAY_APPEARANCE[gatewayState(connection)];
+  const { label: status, dot } = GATEWAY_APPEARANCE[gatewayState(connection)];
   const problem = gatewayProblem(connection);
   const actions = gatewayActions(connection);
   const server = serverWords(connection);
   const pairing = pairingNote(connection);
-  // The system's switch flips as it is tapped: it keeps the choice asked for until core
-  // reports it, and goes back when the choice could not be kept.
-  const [asked, setAsked] = useState<boolean | null>(null);
-  const [channelError, setChannelError] = useState<string | null>(null);
-  // One save at a time: a second tap before the first is kept could show the first's answer.
-  const [saving, setSaving] = useState(false);
-  if (asked !== null && asked === showChannelChats) setAsked(null);
-  const channelChats = asked ?? showChannelChats;
-  const toggleChannelChats = (on: boolean) => {
-    setAsked(on);
-    setSaving(true);
-    setChannelError(null);
-    void send({ type: "setShowChannelChats", on })
-      .catch((failure: unknown) => {
-        setAsked(null);
-        setChannelError(redact(failure instanceof Error ? failure.message : String(failure)));
-      })
-      .finally(() => setSaving(false));
-  };
   return (
     <Modal
       visible={visible}
@@ -184,7 +252,7 @@ export function Settings({
               )}
               <Fact label={W.state} testID="gateway-state">
                 <Dot tone={dot === "disconnected" ? "off" : dot} />
-                <Txt testID="gateway-state-text">{state}</Txt>
+                <Txt testID="gateway-state-text">{status}</Txt>
               </Fact>
               <Fact label={W.device}>
                 <Txt testID="gateway-device">
@@ -266,61 +334,13 @@ export function Settings({
                 {redact(pairing)}
               </Txt>
             )}
-            <Txt testID="settings-conversation" size={S["text-sm"]} color="text-faint">
-              {W.conversation}
-            </Txt>
-            <View
-              style={{
-                minHeight: TOUCH.taskRow,
-                flexDirection: "row",
-                alignItems: "center",
-                gap: S["space-3"],
-                paddingVertical: 10,
-                paddingHorizontal: S["space-4"],
-                backgroundColor: c["bg-bubble"],
-                borderRadius: S["radius-lg"],
-              }}
-            >
-              {/* The switch carries the same name for VoiceOver. */}
-              <Txt
-                style={{ flex: 1 }}
-                accessibilityElementsHidden
-                importantForAccessibility="no-hide-descendants"
-              >
-                {W.channelChats}
-              </Txt>
-              <Switch
-                testID="channel-chats"
-                accessibilityLabel={W.channelChats}
-                accessibilityHint={CHANNEL_CHATS_NOTE.join("")}
-                value={channelChats}
-                disabled={saving}
-                onValueChange={toggleChannelChats}
-                trackColor={{ false: c["border-strong"], true: c["bg-inverse"] }}
-                ios_backgroundColor={c["border-strong"]}
-                thumbColor={channelChats ? c["text-inverse"] : undefined}
+            {DEVICE_SWITCHES.map((setting) => (
+              <DeviceSwitchRow
+                key={setting.id}
+                setting={setting}
+                shown={state[setting.stateKey] === true}
               />
-            </View>
-            <Txt testID="channel-chats-note" size={S["text-sm"]} color="text-faint">
-              {CHANNEL_CHATS_NOTE[0]}
-              <Txt size={S["text-sm"]} color="text-faint" style={{ fontFamily: FONTS.mono }}>
-                {CHANNEL_CHATS_NOTE[1]}
-              </Txt>
-              {CHANNEL_CHATS_NOTE[2]}
-            </Txt>
-            {channelError && (
-              <View
-                testID="channel-chats-error"
-                accessibilityRole="alert"
-                style={{
-                  backgroundColor: c["danger-soft"],
-                  borderRadius: S["radius-md"],
-                  padding: S["space-4"],
-                }}
-              >
-                <Txt size={S["text-md"]}>{channelError}</Txt>
-              </View>
-            )}
+            ))}
             <Button
               label={LICENSES_TITLE}
               variant="quiet"

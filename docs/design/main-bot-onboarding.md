@@ -541,7 +541,9 @@ Clawtrate does not prompt: it does the thing, shows what it did and offers Undo.
 
 ## 7. The iPhone app
 
-`apps/mobile` isn't on `main` and belongs to its own coordinator. Impact: core's first-run engine and its words are shared; the Main Bot's tile (the first item of the bot list, full width, with the gold star), the first run's conversation with its account step, its rename line with Undo and the skip button need the app's own screens at 44 pt. From section 15: the gateway's own bot, once used, is a row of the bot list like the others; the "Set up your Main Bot" tile with its waiting line and Try again, or with Set up and Hide, is the list's first item; a phone that connects to a gateway whose Main Bot another device made opens it as it is, with no first run of its own.
+Core's first-run engine and its words are shared. The Main Bot's tile (the first item of the bot list, full width, with the gold star), the first run's conversation with its account step, its rename line with Undo and the skip button need the app's own screens at 44 pt. From section 15: the gateway's own bot, once used, is a row of the bot list like the others; the "Set up your Main Bot" tile with its waiting line and Try again, or with Set up and Hide, is the list's first item; a phone that connects to a gateway whose Main Bot another device made opens it as it is, with no first run of its own.
+
+On iPhone, Settings → Advanced has a 44 pt **Show the gateway's own bot** switch (F-562). It is off by default. Turning it on lists the bot on Home. Turning it off takes the bot off Home again, also after the person opened it, unless it is the only bot or a task of its own is waiting on the person. As on the desktop, a bot opened while it waited with the switch off stays on Home until the person opens another bot. The choice is kept on this device across launches and reconnects. It needs no gateway scope. The Simulator check turns it on and back off on a read-only connection and checks Home after each change.
 
 ## 8. Parity rows
 

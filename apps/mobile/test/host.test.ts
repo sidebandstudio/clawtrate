@@ -1,5 +1,11 @@
 import { createPrivateKey, createPublicKey, createHash, sign, verify } from "node:crypto";
-import { ClawtrateClient, createBridgeSession, type KeyValueStore } from "@clawtrate/core";
+import {
+  ClawtrateClient,
+  createBridgeSession,
+  type ClawtrateState,
+  type KeyValueStore,
+  type Task,
+} from "@clawtrate/core";
 import { describe, expect, it, vi } from "vitest";
 import {
   deferred,
@@ -19,8 +25,10 @@ import {
 } from "../src/host/keychain.ts";
 import { createKeychainSigner, DEVICE_KEY_ITEM } from "../src/host/signer.ts";
 import { createSocketFactory, type WebSocketConstructor } from "../src/host/socket.ts";
-import { createSecrets, REDACTED } from "../src/host/secrets.ts";
+import { createSecrets, learningStore, REDACTED } from "../src/host/secrets.ts";
 import { createKeychainStore } from "../src/host/store.ts";
+import { homeModel } from "../src/lists.ts";
+import { DEVICE_SWITCHES } from "../src/presentation/gateway-state.ts";
 
 /** A Keychain of generic-password items, keyed by service and name, as expo-secure-store keeps them. */
 function fakeKeychain() {
@@ -70,6 +78,130 @@ function readOnlyClient(gateway: FakeGateway, storage: KeyValueStore) {
     { readOnly: true, reconnect: { initialMs: 60_000, maxMs: 60_000 } },
   );
 }
+
+describe("F-562: the gateway's own bot on iPhone", () => {
+  function setup() {
+    const setting = DEVICE_SWITCHES.find((entry) => entry.id === "gateway-bot");
+    const gateway = new FakeGateway();
+    gateway.handlers["agents.list"] = () => ({
+      defaultId: "atlas",
+      agents: [{ id: "atlas" }, { id: "pip" }],
+    });
+    const keychain = fakeKeychain();
+    const open = () => {
+      const storage = learningStore(createKeychainStore(keychain, ACCESSIBLE), createSecrets());
+      const client = readOnlyClient(gateway, storage);
+      const session = createBridgeSession(client);
+      return {
+        client,
+        session,
+        close: () => {
+          session.dispose();
+          client.stop();
+        },
+      };
+    };
+    return { setting, gateway, open };
+  }
+
+  const ready = (client: ClawtrateClient) =>
+    until(
+      () =>
+        client.state.connection.status === "connected" && client.state.discovery.status === "ready",
+    );
+  const homeIds = (state: ClawtrateState) =>
+    homeModel(state, {}, Date.now()).rows.map((row) => row.bot.id);
+
+  it("F-562: Advanced starts off, and turning the switch on and off changes Home on a read-only connection", async () => {
+    const { setting, gateway, open } = setup();
+    expect(setting).toMatchObject({ heading: "Advanced", label: "Show the gateway's own bot" });
+    const app = open();
+    const { client, session } = app;
+    try {
+      await client.start();
+      await session.apply({ type: "connect", url: GATEWAY });
+      await ready(client);
+      expect(client.state.connection.scopes).toEqual(["operator.read"]);
+      expect(client.state[setting!.stateKey]).toBe(false);
+      expect(homeIds(client.state)).toEqual(["pip"]);
+
+      const requests = gateway.requests.length;
+      await session.apply({ type: setting!.command, on: true });
+      expect(client.state[setting!.stateKey]).toBe(true);
+      expect(homeIds(client.state)).toEqual(["atlas", "pip"]);
+      await session.apply({ type: setting!.command, on: false });
+      expect(client.state[setting!.stateKey]).toBe(false);
+      expect(homeIds(client.state)).toEqual(["pip"]);
+      expect(gateway.requests).toHaveLength(requests);
+    } finally {
+      app.close();
+    }
+  });
+
+  it("F-562: keeps the choice in the iPhone Keychain across a restart and a reconnect", async () => {
+    const { setting, open } = setup();
+    expect(setting).toBeDefined();
+    const first = open();
+    try {
+      await first.client.start();
+      await first.session.apply({ type: "connect", url: GATEWAY });
+      await ready(first.client);
+      await first.session.apply({ type: setting!.command, on: true });
+    } finally {
+      first.close();
+    }
+
+    const reopened = open();
+    const { client, session } = reopened;
+    try {
+      await client.start();
+      await ready(client);
+      expect(client.state[setting!.stateKey]).toBe(true);
+      expect(homeIds(client.state)).toContain("atlas");
+
+      await session.apply({ type: "suspend" });
+      expect(client.state.connection.status).toBe("disconnected");
+      await session.apply({ type: "retry" });
+      await ready(client);
+      expect(client.state[setting!.stateKey]).toBe(true);
+      expect(homeIds(client.state)).toContain("atlas");
+    } finally {
+      reopened.close();
+    }
+  });
+
+  it("F-562: either switch setting keeps the gateway's only bot and a bot with a waiting task on Home", async () => {
+    const { setting, open } = setup();
+    expect(setting).toBeDefined();
+    const app = open();
+    const { client, session } = app;
+    const waiting: Task = {
+      key: "agent:atlas:main",
+      botId: "atlas",
+      sessionId: null,
+      title: "Main",
+      preview: null,
+      updatedAt: null,
+      status: "waiting",
+      unread: false,
+    };
+    try {
+      await client.start();
+      await session.apply({ type: "connect", url: GATEWAY });
+      await ready(client);
+      for (const on of [true, false]) {
+        await session.apply({ type: setting!.command, on });
+        expect(client.state[setting!.stateKey]).toBe(on);
+        const solo = { ...client.state, bots: client.state.bots.filter((bot) => bot.isDefault) };
+        expect(homeIds(solo)).toEqual(["atlas"]);
+        const tasksByBot = { ...client.state.tasksByBot, atlas: [waiting] };
+        expect(homeIds({ ...client.state, tasksByBot })).toContain("atlas");
+      }
+    } finally {
+      app.close();
+    }
+  });
+});
 
 describe("gateway actions when the iOS Keychain is unavailable", () => {
   it("reports a failed manual pairing check and lets the next check connect", async () => {

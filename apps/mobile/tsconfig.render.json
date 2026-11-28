@@ -1,0 +1,6 @@
+{
+  // The unit tests that render the app's screens, checked with the app's own settings: React
+  // Native's types change Node's globals, so they stay out of tsconfig.node.json.
+  "extends": "./tsconfig.json",
+  "include": ["test/settings.test.ts", "src/env.d.ts"]
+}
