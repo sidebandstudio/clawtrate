@@ -4496,7 +4496,23 @@ export class ClawtrateClient {
         return "changed";
       }
       if (!before.applied) return "not-sent";
-      if (!restore && before.value === false) return "already-off";
+      if (!restore && before.value === false) {
+        // This card's own disable whose read-back was lost settles against this read: Put back
+        // only at its receipt's hash.
+        if (
+          prior &&
+          prior === this.computerUseWrite &&
+          prior.gatewayId === gatewayId &&
+          prior.undo.taskKey === key &&
+          prior.undo.runId === runId &&
+          prior.undo.expiresAt > this.now() &&
+          !this.state.computerUseUndo
+        )
+          return this.settleComputerUseDisable(prior, before) ?? "already-off";
+        return "already-off";
+      }
+      // Put back can outlast its window while it reads: the deadline holds when the write leaves.
+      if (restore && undo!.expiresAt <= this.now()) return "not-sent";
       const value = restore ? undo!.previous : false;
       sameConnection(false);
       if (!admin()) throw new AdminNeededError("Changing Computer Use");

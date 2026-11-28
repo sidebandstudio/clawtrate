@@ -1950,6 +1950,50 @@ describe("F-480 #988: Computer Use recovery", () => {
     }
   });
 
+  it("a second press settles an acknowledged disable whose read failed on the same connection", async () => {
+    const { client, gateway, runId, change } = await recovery();
+    const read = gateway.handlers["config.get"]!;
+    let failed = false;
+    gateway.handlers["config.get"] = (params) => {
+      if (!failed && gateway.calls("config.patch").length > 0) {
+        failed = true;
+        throw new GatewayError({ code: "UNAVAILABLE", message: "Try the read again." });
+      }
+      return read(params);
+    };
+    try {
+      expect(await change(false)).toBe("unconfirmed");
+      expect(client.state.computerUseUndo).toBeUndefined();
+      expect(await change(false)).toBe("off");
+      expect(client.state.computerUseUndo?.runId).toBe(runId);
+      expect(await change(true)).toBe("restored");
+      expect(gateway.calls("config.patch")).toEqual([
+        patch(false, "hash-1"),
+        patch(true, "hash-2"),
+      ]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("Put back sends nothing when its week ends while it reads", async () => {
+    const { client, gateway, change } = await recovery();
+    try {
+      expect(await change(false)).toBe("off");
+      const read = gateway.handlers["config.get"]!;
+      const later = client.state.computerUseUndo!.expiresAt + 1;
+      gateway.handlers["config.get"] = (params) => {
+        vi.spyOn(Date, "now").mockReturnValue(later);
+        return read(params);
+      };
+      expect(await change(true)).toBe("not-sent");
+      expect(gateway.calls("config.patch")).toEqual([patch(false, "hash-1")]);
+    } finally {
+      vi.restoreAllMocks();
+      client.stop();
+    }
+  });
+
   it("keeps the saved revision from a pending application reply", async () => {
     const { client, gateway, runId, change } = await recovery();
     const write = gateway.handlers["config.patch"]!;
