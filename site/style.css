@@ -911,58 +911,98 @@ h3 {
   max-width: 340px;
 }
 
-/* In the beta: what ships, and what is being built. */
+/* In the beta: an index of what ships, in three short columns on a faint wash,
+   and beside it, quieter, what is being built. */
 .beta {
   padding-top: var(--gap-section);
 }
-.lists {
+.index {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: clamp(32px, 6vw, 112px);
-  margin-top: 48px;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 1fr);
+  gap: clamp(28px, 4vw, 64px);
+  margin-top: 40px;
 }
-.list h3 {
-  margin-bottom: 14px;
+.index-now {
+  border-radius: 28px;
+  padding: clamp(28px, 3.4vw, 48px);
+  background: color-mix(in srgb, var(--stage-green) var(--wash), var(--bg-rail));
 }
-.list-note {
-  margin: -6px 0 10px;
+.index-cols {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: clamp(24px, 3vw, 48px);
+  margin-top: clamp(24px, 2.6vw, 36px);
+}
+.index-col h4 {
+  margin: 0 0 6px;
   font-size: var(--t-s);
+  font-weight: 500;
   color: var(--text-muted);
 }
-.list ul {
+.index ul {
   list-style: none;
   padding: 0;
 }
-.list li {
+.index-col li {
   position: relative;
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 16px;
-  padding: 7px 0 7px 24px;
-  line-height: 1.45;
+  padding: 8px 0 8px 22px;
+  line-height: 1.3;
+  text-wrap: balance;
 }
-.list li::before {
+.index-col li::before {
   content: "";
   position: absolute;
   left: 0;
   top: 15px;
-  width: 9px;
-  height: 9px;
+  width: 8px;
+  height: 8px;
   border-radius: 999px;
   background: var(--accent);
 }
-.list-next li::before {
-  background: transparent;
+.index-more {
+  margin-top: clamp(20px, 2.2vw, 28px);
+  font-size: var(--t-s);
+  color: var(--text-muted);
+}
+.index-more a:hover {
+  color: var(--accent);
+}
+/* What is being built sits on the page itself: no fill, open dots, and each row a link to its work. */
+.index-next {
+  padding-top: clamp(28px, 3.4vw, 48px);
+}
+/* Its rows start level with the panel's first items, below their column headings. */
+.index-next ul {
+  margin-top: calc(clamp(24px, 2.6vw, 36px) + 28px);
+}
+.index-next a {
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding: 8px 0 8px 22px;
+  line-height: 1.3;
+  text-decoration: none;
+}
+.index-next a::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 15px;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
   box-shadow: inset 0 0 0 1.5px var(--text-faint); /* taste-skill-ignore: an open dot for what is coming */
 }
-.list li > a {
+.index-ref {
   flex: none;
   font-size: var(--t-s);
   font-variant-numeric: tabular-nums;
   color: var(--text-muted);
 }
-.list li > a:hover {
+.index-next a:hover,
+.index-next a:hover .index-ref {
   color: var(--accent);
 }
 
@@ -1320,8 +1360,12 @@ h3 {
   }
   .row-split,
   .row-split:has(.stage-tall),
-  .row-wide .row-text {
+  .row-wide .row-text,
+  .index {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .index-next {
+    padding: 0 clamp(28px, 3.4vw, 48px);
   }
   .row-flip .row-text {
     order: 0;
@@ -1332,7 +1376,7 @@ h3 {
     --t-b: 16px;
   }
   .paths,
-  .lists,
+  .index-cols,
   .close-inner {
     grid-template-columns: minmax(0, 1fr);
   }

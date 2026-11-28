@@ -123,6 +123,7 @@ jobs:
             e2e/global-setup.ts
             e2e/ports.ts
             e2e/run-record.ts
+            plugins/clawtrate-bots/**
             plugins/clawtrate-computer/**
             plugins/clawtrate-dev-signin/**
             plugins/clawtrate-tool-rules/**
