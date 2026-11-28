@@ -50,7 +50,7 @@
     catalog: p("t3catalog") || "ready",
     stillOn: null,
   };
-  if (added) binding.otto.t3 = { on: true, projects: "some", chosen: ["website"], models: ["Codex · gpt-5.5"], ask: true };
+  if (added) binding.otto.t3 = { on: true, projects: "some", chosen: ["website"], models: ["Codex · gpt-5.5"], ask: false };
   if (added && p("t3withheld")) binding.otto.t3.withheld = true;
   if (T.on && p("t3found")) binding.pip.t3found = true;
   // Which skills a bot sees: its own list when it has one; otherwise the gateway's
@@ -382,7 +382,7 @@
     }
     if (what === "bot-toggle") {
       const id = t.dataset.t3bot;
-      const cur = binding[id].t3 || { on: false, projects: "all", chosen: [], models: [...T3MODELS], ask: true };
+      const cur = binding[id].t3 || { on: false, projects: "all", chosen: [], models: [...T3MODELS], ask: false };
       if (p("t3write") === "refused") {
         cur.writeError = true;
         binding[id].t3 = cur;
