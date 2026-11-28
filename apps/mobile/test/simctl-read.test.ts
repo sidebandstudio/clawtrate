@@ -3,8 +3,8 @@
 // checks meet a timeout only by chance, so the rule's cases are proven here with a stand-in for
 // `xcrun simctl`.
 
-import { describe, expect, it } from "vitest";
-import { simctlRead, type SimctlResult } from "../simulator/harness.ts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { appLog, simctlRead, type SimctlResult } from "../simulator/harness.ts";
 
 // What simctl printed when `pbpaste` timed out on CI (#1039).
 const TIMED_OUT =
@@ -111,5 +111,39 @@ describe("simctlRead", () => {
     expect(simctl.read).toThrow(/^simctl pbpaste booted: /);
     expect(simctl.runs).toHaveLength(3);
     expect(simctl.pauses).toEqual([1_000, 1_000]);
+  });
+});
+
+describe("appLog", () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it("reads from the same start on every attempt, far enough back to hold the time asked for", () => {
+    vi.stubEnv("CLAWTRATE_IOS_DEVICE", "booted");
+    // 45 seconds before 12:00:00.250 UTC is 11:59:15.250, so the window opens at 11:59:15.
+    let clock = Date.UTC(2026, 10, 28, 12, 0, 0, 250);
+    const results = [failure(TIMED_OUT), failure(TIMED_OUT), answer("the app's lines\n")];
+    const runs: string[][] = [];
+    const log = appLog(
+      45,
+      (args) => {
+        runs.push(args);
+        // Each `log show` takes time of its own, and so does each pause after one.
+        clock += 20_000;
+        return results[runs.length - 1]!;
+      },
+      (ms) => {
+        clock += ms;
+      },
+      () => clock,
+    );
+    expect(log).toBe("the app's lines\n");
+    expect(runs).toHaveLength(3);
+    expect(runs.map((args) => args[args.indexOf("--start") + 1])).toEqual([
+      "2026-11-28 11:59:15+0000",
+      "2026-11-28 11:59:15+0000",
+      "2026-11-28 11:59:15+0000",
+    ]);
+    expect(runs[1]).toEqual(runs[0]);
+    expect(runs[2]).toEqual(runs[0]);
   });
 });

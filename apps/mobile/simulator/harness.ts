@@ -1299,20 +1299,36 @@ export function sharedFolders(): string[] {
   }
 }
 
-/** The app's own log lines since a time, from the device's unified log. */
-export function appLog(sinceSeconds: number): string {
-  return simctlRead([
-    "spawn",
-    env.device,
-    "log",
-    "show",
-    "--last",
-    `${sinceSeconds}s`,
-    "--style",
-    "compact",
-    "--predicate",
-    'process == "Clawtrate"',
-  ]);
+/**
+ * The app's own log lines from the last `sinceSeconds`, from the device's
+ * unified log. The start is fixed once, as a date `log show` takes, so a read
+ * that is asked again still begins where the first one did.
+ */
+export function appLog(
+  sinceSeconds: number,
+  run?: (args: string[]) => SimctlResult,
+  pause?: (ms: number) => void,
+  now: () => number = Date.now,
+): string {
+  // UTC to the whole second, rounded down so the window holds all it was asked for.
+  const from = new Date(now() - sinceSeconds * 1000).toISOString();
+  const start = `${from.slice(0, 10)} ${from.slice(11, 19)}+0000`;
+  return simctlRead(
+    [
+      "spawn",
+      env.device,
+      "log",
+      "show",
+      "--start",
+      start,
+      "--style",
+      "compact",
+      "--predicate",
+      'process == "Clawtrate"',
+    ],
+    run,
+    pause,
+  );
 }
 
 /** One of the device's built-in displays, as CoreDevice reports it, in points. */
