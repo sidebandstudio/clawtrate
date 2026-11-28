@@ -134,7 +134,8 @@ function cards(
   const runs: Run[] = runsFromHistory(rows, inFlight, { sessionKey: HERE, now: T + 60_000, raw });
   return selectStartedTasks(
     { runs, items: mapHistory(rows), taskKey: HERE, tasks },
-    (step) => step.raw ?? (payload ? (raw.get(HERE, step.id) as never) : null),
+    // Without the payload, nothing raw at all: only what the step itself keeps.
+    (step) => (payload ? (step.raw ?? (raw.get(HERE, step.id) as never)) : null),
   );
 }
 
