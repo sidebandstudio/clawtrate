@@ -109,8 +109,9 @@ type Alias = { alias: string; ref: AllowRef | null };
  * (`listModelAliasCandidates`, :213 and :13); the last row per model wins, and an empty alias
  * takes that model's away (`buildEffectiveModelAliases`, :223 and :13). A row keyed by a bare name
  * or anything else the app can't place is kept with no model, so a lookup it matches is unknown.
+ * Null past `MAX_ALLOWLIST_ENTRIES` rows, which the app doesn't read: then nothing is known.
  */
-function aliasesOf(config: Raw | null, botId: string | null): Alias[] {
+function aliasesOf(config: Raw | null, botId: string | null): Alias[] | null {
   const agents = asRecord(asRecord(config?.config)?.agents);
   const maps = [
     asRecord(asRecord(agents?.defaults)?.models),
@@ -119,7 +120,9 @@ function aliasesOf(config: Raw | null, botId: string | null): Alias[] {
   const byModel = new Map<string, Alias | null>();
   const unplaced: Alias[] = [];
   const rows = maps.flatMap((models) => Object.entries(models ?? {}));
-  for (const [key, value] of rows.slice(0, MAX_ALLOWLIST_ENTRIES)) {
+  // More rows than the app reads: an alias it didn't read may name anything, so nothing is known.
+  if (rows.length > MAX_ALLOWLIST_ENTRIES) return null;
+  for (const [key, value] of rows) {
     const row = asRecord(value);
     if (!row || !Object.hasOwn(row, "alias")) continue;
     const alias = typeof row.alias === "string" ? row.alias.trim() : "";
@@ -172,9 +175,9 @@ function configuredRow(config: Raw | null, model: string): boolean {
  * can't place, or an alias with a `/` or `@` of its own, which a version may read only qualified
  * (`createModelAliasScope`) or as a profile.
  */
-function resolveRef(config: Raw | null, raw: string, aliases: Alias[]): AllowRef | null {
+function resolveRef(config: Raw | null, raw: string, aliases: Alias[] | null): AllowRef | null {
   const model = withoutProfile(raw);
-  if (!model) return null;
+  if (!model || aliases === null) return null;
   const literal = exactRef(model);
   if (literal && configuredRow(config, model)) return literal;
   const plain = new Set([model.toLowerCase(), raw.trim().toLowerCase()]);

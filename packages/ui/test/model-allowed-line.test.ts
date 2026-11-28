@@ -48,6 +48,10 @@ describe("F-042 F-587: the model list's line (#799)", () => {
     expect(allowedWords({ ...added, status: "changed" }, "Pip")).toBe(
       "Added OpenAI's gpt-5.5 to the models this gateway allows. The gateway's settings have changed since, so it can't be undone here.",
     );
+    // Its answer didn't come, and a read since shows it isn't there.
+    expect(allowedWords({ ...added, status: "not-added", revision: null }, "Pip")).toBe(
+      "OpenAI's gpt-5.5 wasn't added to the models this gateway allows: the gateway didn't answer, and it isn't there.",
+    );
     // Its answer didn't come: never "nothing changed".
     expect(allowedWords({ ...added, status: "unconfirmed", revision: null }, "Pip")).toBe(
       "It isn't confirmed yet whether OpenAI's gpt-5.5 was added to the models this gateway allows.",

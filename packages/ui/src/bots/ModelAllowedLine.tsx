@@ -28,6 +28,9 @@ export function allowedWords(allowed: NonNullable<AccountsState["allowed"]>, bot
     case "unconfirmed":
       // The write's answer didn't come: whether it was made is read again, never assumed.
       return `It isn't confirmed yet whether ${model} was added to ${list}.`;
+    case "not-added":
+      // Its answer didn't come, and a read since shows it isn't there.
+      return `${model} wasn't added to ${list}: the gateway didn't answer, and it isn't there.`;
     case "changed":
       // Only that the configuration changed is known, not how: Undo is no longer offered.
       return `Added ${model} to ${list}. The gateway's settings have changed since, so it can't be undone here.`;

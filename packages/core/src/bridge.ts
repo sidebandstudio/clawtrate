@@ -1419,7 +1419,8 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         type: "setBotEffort",
         botId: botId(command.botId),
         provider: providerId(command.provider),
-        model: modelId(command.model),
+        // The bot's model as the config names it (an `@q4_k_m` may be its own), as for Allow.
+        model: configuredModel(providerId(command.provider), command.model),
         effort: id(command.effort, "effort"),
         stamp: gatewayStampOf(command.stamp),
       };

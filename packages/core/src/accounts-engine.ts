@@ -3086,7 +3086,7 @@ export class AccountsEngine {
       );
     };
     settle("undoing");
-    const outcome = { taken: false, changed: false };
+    const outcome = { taken: false, changed: false, unsure: false };
     try {
       const { ctx, check } = this.checked(beforeSend);
       const { config, applied } = await this.patchFrom(
@@ -3105,6 +3105,9 @@ export class AccountsEngine {
           outcome.taken = true;
           settle("undone");
         },
+        () => {
+          outcome.unsure = true;
+        },
       );
       check();
       if (outcome.changed) settle("changed");
@@ -3121,9 +3124,34 @@ export class AccountsEngine {
         if (this.resets === resets) this.rereadSoon(resets);
         return;
       }
+      // Its answer didn't come: the config is read back, never the removal sent again. Gone
+      // from its list, it was taken out; there still, or not read, Undo stays offered.
+      if (outcome.unsure) {
+        const back = await this.readBack();
+        if (this.resets !== resets) return;
+        if (
+          back &&
+          !holdsAddition(back, allowed.botId, { entry: allowed.entry, place: allowed.scope })
+        ) {
+          settle("undone");
+          this.refusedAfter(back, appliedConfig(back));
+          if (!appliedConfig(back)) this.rereadSoon(resets);
+          return;
+        }
+      }
       settle("failed", this.scrub(errorText(error)));
       throw error;
     }
+  }
+
+  /** The config read again after a write whose answer didn't come: a few tries, a second apart. */
+  private async readBack(): Promise<RawRecord | null> {
+    for (let tries = 0; tries < REREADS; tries += 1) {
+      if (tries > 0) await new Promise<void>((resolve) => setTimeout(() => resolve(), REREAD_MS));
+      const read = await this.ctx.request("config.get", {}).then(asRecord, () => null);
+      if (read) return read;
+    }
+    return null;
   }
 
   /** "Remove fallbacks": the bot's model keeps its account; its fallback list becomes empty. */
@@ -3251,7 +3279,8 @@ function settledAllowed(
     (allowed.status === "added" && allowed.revision === null)
   ) {
     if (there && hash !== null) return { ...allowed, status: "added", revision: hash };
-    return allowed.status === "unconfirmed" ? null : { ...allowed, status: "changed" };
+    // Not there: one whose answer didn't come was never made, and says so.
+    return { ...allowed, status: allowed.status === "unconfirmed" ? "not-added" : "changed" };
   }
   if ((allowed.status === "added" || allowed.status === "failed") && hash !== allowed.revision)
     return { ...allowed, status: "changed" };

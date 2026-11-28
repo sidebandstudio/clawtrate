@@ -1243,7 +1243,7 @@ describe("F-042: lost replies, read again, and the gateway the refusals are from
     expect(defaults(fake).modelPolicy).toEqual({ allow: ["acme/dev-2"] });
   });
 
-  it("a patch whose reply is lost and that wasn't made: the record goes, and the refusal stays", async () => {
+  it("a patch whose reply is lost and that wasn't made: the line says so, and the refusal stays", async () => {
     const fake = new AccountsGateway();
     limited(fake, ["acme/dev-2"]);
     fake.gateway.handlers["config.patch"] = () => {
@@ -1252,8 +1252,62 @@ describe("F-042: lost replies, read again, and the gateway the refusals are from
     const { engine, state } = engineOn(fake);
     await engine.load();
     await engine.allowModel("otto", DEV1);
-    await until(() => state().allowed === null);
+    await until(() => state().allowed?.status === "not-added");
+    expect(state().allowed).toMatchObject({ entry: "acme/dev-1", revision: null });
     expect(state().modelsRefused).toEqual([{ botId: "otto", ...DEV1, why: null }]);
+  });
+
+  it("an Undo whose reply is lost is read back: taken out, it says so, and the refusal is back", async () => {
+    const fake = new AccountsGateway();
+    limited(fake, ["acme/dev-2"]);
+    const { engine, state } = engineOn(fake);
+    await engine.load();
+    await engine.allowModel("otto", DEV1);
+    expect(state().allowed?.status).toBe("added");
+    const patch = fake.gateway.handlers["config.patch"]!;
+    let sent = 0;
+    fake.gateway.handlers["config.patch"] = (params) => {
+      sent += 1;
+      patch(params);
+      throw new Error("gateway request timeout for config.patch");
+    };
+    await engine.undoAllowed({ botId: "otto", id: state().allowed!.id });
+    expect(state().allowed?.status).toBe("undone");
+    expect(defaults(fake).modelPolicy).toEqual({ allow: ["acme/dev-2"] });
+    expect(state().modelsRefused).toEqual([{ botId: "otto", ...DEV1, why: null }]);
+    // Read back, never sent again.
+    expect(sent).toBe(1);
+  });
+
+  it("an alias row past the rows the app reads leaves the list unknown: no refusal, no Allow", () => {
+    const rows: Record<string, unknown> = {};
+    for (let i = 0; i < MAX_ALLOWLIST_ENTRIES; i += 1) rows[`acme/old-${i}`] = {};
+    rows["openai/gpt-5.5"] = { alias: "workhorse" };
+    const config = cfg({
+      agents: {
+        defaults: { models: rows, modelPolicy: { allow: ["openai/workhorse"] } },
+        entries: { pip: { model: { primary: "openai/gpt-5.5" } } },
+      },
+    });
+    expect(ownModelRefusal(config, "pip", V11)).toBeNull();
+    expect(allowAddition(config, "pip", gpt, V11)).toBeNull();
+  });
+
+  it("Effort carries a configured id with an `@` of its own, and writes only the effort", async () => {
+    const fake = new AccountsGateway();
+    (entries(fake).otto!.model as { primary: string }).primary = "ollama/example@q4_k_m";
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    const binding = accounts().bindings.find((each) => each.botId === "otto")!;
+    const shown = { provider: binding.provider!, model: binding.model! };
+    const stamp = { gatewayId: "gateway-a", target: 1 };
+    expect(
+      parseBridgeCommand({ type: "setBotEffort", botId: "otto", ...shown, effort: "high", stamp }),
+    ).toMatchObject({ model: shown.model });
+    await client.setBotEffort("otto", shown, "high");
+    expect(JSON.parse(patches(fake).at(-1)!.raw)).toEqual({
+      agents: { entries: { otto: { thinkingDefault: "high" } } },
+    });
+    client.stop();
   });
 
   it("an Undo whose reads after it fail a few times is read again until one lands", async () => {
@@ -1353,6 +1407,9 @@ describe("F-042: lost replies, read again, and the gateway the refusals are from
       throw new Error("gateway request timeout for config.get");
     };
     engine.onGateway("gateway-b");
+    expect(state().modelsRefused).toEqual([]);
+    // And still none once the read it starts has failed.
+    await until(() => state().error !== null);
     expect(state().modelsRefused).toEqual([]);
   });
 });
