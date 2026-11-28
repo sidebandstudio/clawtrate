@@ -160,7 +160,21 @@ const SCENES: Scene[] = [
     ready: async (page) => {
       await connectStep(page);
       await newBot(page).getByRole("button", { name: "Show more" }).click();
-      await expect(newBot(page).getByRole("button", { name: /^MiniMax/ })).toBeFocused();
+      await expect(newBot(page).getByRole("button", { name: /^OpenCode Go/ })).toBeFocused();
+    },
+  },
+  {
+    // On a gateway without the setup sign-in, Claude's tile takes an Anthropic key: it opens the
+    // key's fields with Anthropic chosen.
+    name: "connect-claude",
+    query: `${ADMIN}&plan=0`,
+    ready: async (page) => {
+      await connectStep(page);
+      await newBot(page)
+        .getByRole("button", { name: /^Claude\b/ })
+        .click();
+      await expect(page.getByTestId("api-key")).toBeFocused();
+      await expect(page.getByText(/This replaces the Anthropic key/)).toBeVisible();
     },
   },
   {
@@ -173,6 +187,53 @@ const SCENES: Scene[] = [
         .click();
       await expect(page.getByRole("heading", { name: "OpenAI", level: 2 })).toBeVisible();
       // The pointer off the rows, so none is drawn hovered.
+      await page.mouse.move(0, 0);
+    },
+  },
+  {
+    // Claude's ways: the plan's setup token first, the key second (#932).
+    name: "connect-claude-ways",
+    query: `${ADMIN}&plan=1`,
+    ready: async (page) => {
+      await connectStep(page);
+      await newBot(page)
+        .getByRole("button", { name: /^Claude\b/ })
+        .click();
+      await expect(page.getByRole("heading", { name: "Claude", level: 2 })).toBeVisible();
+      await page.mouse.move(0, 0);
+    },
+  },
+  {
+    // The plan's step: the one thing to do outside the app, and a made-up token typed, masked.
+    name: "signin-token",
+    query: `${ADMIN}&plan=1`,
+    ready: async (page) => {
+      await connectStep(page);
+      await newBot(page)
+        .getByRole("button", { name: /^Claude\b/ })
+        .click();
+      await newBot(page)
+        .getByRole("button", { name: /^Paste a setup token/ })
+        .click();
+      await page.getByTestId("paste").fill("made-up-fake-token-for-a-picture");
+      await expect(page.getByTestId("paste")).toHaveAttribute("type", "password");
+    },
+  },
+  {
+    // The plan connected: what changed on the bot, with Put back.
+    name: "signin-token-done",
+    query: `${ADMIN}&plan=1`,
+    ready: async (page) => {
+      await connectStep(page);
+      await newBot(page)
+        .getByRole("button", { name: /^Claude\b/ })
+        .click();
+      await newBot(page)
+        .getByRole("button", { name: /^Paste a setup token/ })
+        .click();
+      await page.getByTestId("paste").fill("made-up-fake-token-for-a-picture");
+      await newBot(page).getByRole("button", { name: "Continue" }).click();
+      await expect(page.getByTestId("model-change")).toBeVisible();
       await page.mouse.move(0, 0);
     },
   },
@@ -263,6 +324,14 @@ const SCENES: Scene[] = [
     ready: signIn("OpenAI", "Use a device code", (page) =>
       expect(page.getByRole("heading", { name: "Connected to OpenAI" })).toBeVisible(),
     ),
+  },
+  {
+    name: "signin-unsure-label",
+    query: `${ADMIN}&signin=unsure`,
+    ready: signIn("xAI", null, async (page) => {
+      await page.getByTestId("reread").getByRole("button", { name: "Name it" }).click();
+      await expect(page.getByRole("heading", { name: "xAI account found" })).toBeVisible();
+    }),
   },
   {
     name: "signin-label-clash",

@@ -674,6 +674,7 @@ export async function accountsClient(
     scopes?: readonly string[];
     gateway?: AccountsGateway;
     adminHeld?: boolean;
+    setupTokenSignIn?: boolean;
     /** Read the accounts before returning (the default). */
     read?: boolean;
     /** Leave the bots' guides on, as a new device has them (`guidesOff`). */
@@ -694,6 +695,9 @@ export async function accountsClient(
   const storage = options.guides ? stored : guidesOff(stored);
   const client = new ClawtrateClient(testHost(fake.gateway, storage), {
     ...FAST,
+    ...(options.setupTokenSignIn === undefined
+      ? {}
+      : { setupTokenSignIn: options.setupTokenSignIn }),
     ...guidesOptions(storage),
   });
   await client.start();

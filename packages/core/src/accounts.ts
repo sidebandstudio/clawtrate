@@ -138,7 +138,11 @@ export type GatewayAccount = {
 };
 
 /** What the person does in a sign-in, predicted from the method; the steps decide. */
-export type SignInFlow = "code" | "paste" | "host" | "domain" | "key";
+/**
+ * `token`: a Claude plan's setup token, pasted into the steps screen and sent to the gateway's
+ * setup sign-in (`openclaw.setup.auth.start`, #932).
+ */
+export type SignInFlow = "code" | "paste" | "host" | "domain" | "key" | "token";
 
 export type SignInMethod = {
   /** The `authChoice` to pass: `<pluginId>/<choiceId>`. */
@@ -454,6 +458,16 @@ export type SignInResult = {
   /** The read after the sign-in failed. */
   readFailed: boolean;
   locks: LockCheck[];
+  /**
+   * The bot's own model before and after, when the sign-in changed it: the gateway's setup
+   * sign-in sets the bot's model as it connects the account (#932). Put back writes `before`.
+   */
+  modelChange: { before: string | null; after: string | null } | null;
+  /**
+   * The bot's own model as read after a sign-in whose end Clawtrate couldn't confirm (`unsure`);
+   * null when it wasn't read or the bot has no model of its own.
+   */
+  model: string | null;
 };
 
 export type SignInState = {
@@ -483,6 +497,11 @@ export type SignInState = {
   known: string[];
   /** A cancel was asked for and the gateway's answer did not say whether it took. */
   cancelUnknown: boolean;
+  /**
+   * It ended where Clawtrate can't tell whether the account connected: the gateway sent a step it
+   * can't read, or went on without asking until Clawtrate stopped following it.
+   */
+  unsure: boolean;
 };
 
 /**
@@ -915,6 +934,33 @@ const KNOWN_FLOWS: Record<string, SignInFlow> = {
   "github-copilot/github-copilot-enterprise": "domain",
 };
 
+/** A Claude plan's setup token: the gateway's setup sign-in for Anthropic's `setup-token` choice. */
+export const SETUP_TOKEN_METHOD = "anthropic/setup-token";
+export const SETUP_TOKEN_SIGN_IN_ENABLED = false;
+/** The setup method that starts it, `operator.admin` on OpenClaw 2026.10.6 and 2026.11.10. */
+export const SETUP_AUTH_START = "openclaw.setup.auth.start";
+
+/**
+ * The setup-token sign-in, when the gateway lists Anthropic and offers its setup sign-in in the
+ * hello's methods: `models.authStatus` lists no sign-in for it (#900), but the setup method takes
+ * the `setup-token` choice on both versions.
+ */
+export function setupTokenMethods(capabilities: RawRecord[], offersSetup: boolean): SignInMethod[] {
+  if (!offersSetup || !capabilities.some((each) => str(each.provider) === "anthropic")) return [];
+  return [
+    {
+      id: SETUP_TOKEN_METHOD,
+      provider: "anthropic",
+      providerLabel: "Anthropic",
+      label: "Claude plan setup token",
+      hint: null,
+      kind: "secret",
+      flow: "token",
+      group: "subscription",
+    },
+  ];
+}
+
 /** The sign-ins the gateway can start, from `providerCapabilities[].loginOptions[]`. */
 export function readMethods(capabilities: RawRecord[]): SignInMethod[] {
   const methods: SignInMethod[] = [];
@@ -924,7 +970,8 @@ export function readMethods(capabilities: RawRecord[]): SignInMethod[] {
     for (const raw of Array.isArray(capability.loginOptions) ? capability.loginOptions : []) {
       const option = asRecord(raw);
       const id = str(option?.id);
-      if (!option || !id || methods.length >= MAX_SIGNIN_METHODS) continue;
+      if (!option || !id || id === SETUP_TOKEN_METHOD || methods.length >= MAX_SIGNIN_METHODS)
+        continue;
       const kind = str(option.kind) ?? "oauth";
       const flow: SignInFlow =
         KNOWN_FLOWS[id] ?? (kind === "device-code" ? "code" : kind === "secret" ? "key" : "paste");
@@ -954,7 +1001,7 @@ export function readKeyProviders(view: BotView | undefined): KeyProvider[] {
       continue;
     const secret = (Array.isArray(capability.loginOptions) ? capability.loginOptions : [])
       .map(asRecord)
-      .find((option) => option?.kind === "secret");
+      .find((option) => option?.kind === "secret" && option.id !== SETUP_TOKEN_METHOD);
     out.push({
       provider,
       hasKey: view.keyed.includes(provider),

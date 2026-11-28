@@ -50,7 +50,13 @@ import {
   type CreatedBot,
 } from "./accounts-engine.ts";
 import { BotNames } from "./bot-names.ts";
-import type { ModelList, ModelRefresh, OrderClear } from "./accounts.ts";
+import {
+  SETUP_AUTH_START,
+  SETUP_TOKEN_SIGN_IN_ENABLED,
+  type ModelList,
+  type ModelRefresh,
+  type OrderClear,
+} from "./accounts.ts";
 import {
   dismissCheckInSave,
   loadCheckIns,
@@ -817,6 +823,8 @@ export type ClientOptions = {
    * a saved one resumed at start and every retry.
    */
   allowGatewayUrl?: (url: string) => boolean;
+  /** Enable the setup-token path in tests. Shipped hosts use the core default. */
+  setupTokenSignIn?: boolean;
   /** Reconnect backoff. Tests shorten it. */
   reconnect?: { initialMs: number; maxMs: number };
   /** Turn limit for runs this client starts. */
@@ -1956,6 +1964,8 @@ export class ClawtrateClient {
   private checkInReads = 0;
   /** Provider accounts per bot (`accounts-engine.ts`); its state is `accounts`. */
   private readonly accounts = new AccountsEngine({
+    offers: (method) => method === SETUP_AUTH_START && this.setupAuthAdvertised,
+    setupTokenSignIn: () => this.options.setupTokenSignIn ?? SETUP_TOKEN_SIGN_IN_ENABLED,
     request: (method, params, options) => {
       if (!this.protocol) return Promise.reject(new NotSentError());
       return this.protocol.request(method, params, options);
@@ -2191,6 +2201,8 @@ export class ClawtrateClient {
    */
   /** Whether the latest hello's `features.methods` lists the voice plugin's read, or null when it listed none. */
   private voiceAdvertised: boolean | null = null;
+  /** Whether the latest hello's `features.methods` lists the setup sign-in (#932). */
+  private setupAuthAdvertised = false;
   private readonly computer: ComputerViews = new ComputerViews({
     request: (method, params) => this.request(method, params),
     openStream: (url) => {
@@ -7285,23 +7297,23 @@ export class ClawtrateClient {
     return this.accounts.checkLock(botId);
   }
 
-  startSignIn(methodId: string, botId: string | null): Promise<void> {
-    return this.accounts.startSignIn(methodId, botId);
+  startSignIn(methodId: string, botId: string | null, id?: string): Promise<void> {
+    return this.accounts.startSignIn(methodId, botId, id);
   }
 
   /** A code or address pasted back, or a company address: sent once, kept nowhere. */
-  answerSignIn(value: string): Promise<void> {
-    return this.accounts.answerSignIn(value);
+  answerSignIn(value: string, setupToken?: true): Promise<void> {
+    return this.accounts.answerSignIn(value, setupToken);
   }
 
   /** Cancel the sign-in under way; `cancelled` only when the gateway confirmed it. */
-  cancelSignIn(): Promise<{ cancelled: boolean }> {
-    return this.accounts.cancelSignIn();
+  cancelSignIn(id?: string, setupToken?: true): Promise<{ cancelled: boolean }> {
+    return this.accounts.cancelSignIn(id, setupToken);
   }
 
   /** Let go of a sign-in that has ended; one under way is kept unless the gateway confirms its cancel. */
-  dismissSignIn(): Promise<{ dismissed: boolean }> {
-    return this.accounts.dismissSignIn();
+  dismissSignIn(id?: string): Promise<{ dismissed: boolean }> {
+    return this.accounts.dismissSignIn(id);
   }
 
   /** Read again where a finished sign-in's account landed, after that read failed. */
@@ -7414,6 +7426,17 @@ export class ClawtrateClient {
     if (stamp === undefined) return this.accounts.setModel(botId, model, effort);
     await this.requireSameGateway(stamp);
     return this.accounts.setModel(botId, model, effort, this.sameConnection(stamp));
+  }
+
+  /** Put back the model a setup sign-in gave a bot, on the gateway `stamp` names (#932). */
+  async putBackModel(
+    botId: string,
+    before: string | null,
+    after: string | null,
+    stamp: GatewayStamp,
+  ): Promise<void> {
+    await this.requireSameGateway(stamp);
+    return this.accounts.putBackModel(botId, before, after, this.sameConnection(stamp));
   }
 
   /**
@@ -10462,6 +10485,7 @@ export class ClawtrateClient {
       ? methods.filter((m): m is string => typeof m === "string")
       : null;
     this.voiceAdvertised = listed === null ? null : listed.includes(VOICE_GET);
+    this.setupAuthAdvertised = listed?.includes(SETUP_AUTH_START) ?? false;
     this.computer.hello(listed ?? []);
     if (!this.isSetup(this.settings?.url)) this.deviceApprovals.onHello();
     const reason =

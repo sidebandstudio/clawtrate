@@ -653,6 +653,19 @@ test("F-474 F-475: an API key typed into the key path reaches the gateway once a
   await page.keyboard.press("Escape");
 });
 
+test("F-474 #932: Claude's tile opens the Anthropic API key path", async () => {
+  const settings = await connectFromSettings();
+  await settings.getByRole("button", { name: "Connect an account" }).first().click();
+  const tiles = settings.getByRole("list", { name: "Providers" }).getByRole("button");
+  await expect(tiles.nth(0)).toHaveText(/^OpenAI/);
+  await expect(tiles.nth(1)).toHaveText(/^Claude.*API key.*Billed per token/s);
+  await tiles.nth(1).click();
+  await expect(settings.getByRole("button", { name: /^Paste a setup token/ })).toHaveCount(0);
+  await expect(settings.getByRole("combobox", { name: "Provider" })).toHaveValue("anthropic");
+  await expect(settings.getByTestId("api-key")).toHaveValue("");
+  await page.keyboard.press("Escape");
+});
+
 test("F-474: a sign-in that is refused says so, and what the gateway now has", async () => {
   const settings = await connectFromSettings();
   await settings.getByRole("button", { name: "Connect an account" }).first().click();

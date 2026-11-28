@@ -8,6 +8,8 @@ import {
   isSignInActive,
   labelProblem,
   normalizeLabel,
+  parseModelRef,
+  SETUP_TOKEN_METHOD,
   type AccountsState,
   type Bot,
   type ConnectionState,
@@ -15,7 +17,15 @@ import {
   type HostInfo,
   type SignInState,
 } from "@clawtrate/core";
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { useBridge } from "../bridge.tsx";
 import { screenStamp, shownStamp } from "../stamp.ts";
 import { ChevronIcon, ExternalIcon, LockIcon } from "../icons.tsx";
@@ -28,7 +38,8 @@ import { accountName, flowWords, providerName } from "./words.ts";
 
 /** A label step left before Done, kept until the app quits so it comes back (section 6). */
 const LABEL_KEPT = "connect-label";
-type KeptLabel = { account: string; byKey: boolean };
+/** `found`: the account a read showed after a sign-in that wasn't confirmed. */
+type KeptLabel = { account: string; byKey: boolean; found?: boolean };
 
 /** The label step left open, when its account is still on the gateway. */
 export function keptLabel(accounts: AccountsState): KeptLabel | null {
@@ -55,7 +66,7 @@ type Where =
   | { view: "provider"; tile: string }
   /** `tile`: the provider whose methods it was chosen from, where Back goes. */
   | { view: "flow"; method: string; tile?: string }
-  | { view: "label"; account: string; byKey: boolean }
+  | { view: "label"; account: string; byKey: boolean; found?: boolean }
   | { view: "same"; provider: string }
   /** A key the gateway took whose account the read after it didn't show. */
   | { view: "key-check"; provider: string; known: string[] };
@@ -114,7 +125,9 @@ export function useConnect({
   const setWhere = (next: Where) => {
     remember(
       LABEL_KEPT,
-      next.view === "label" ? { account: next.account, byKey: next.byKey } : null,
+      next.view === "label"
+        ? { account: next.account, byKey: next.byKey, ...(next.found ? { found: true } : {}) }
+        : null,
     );
     setWhereState(next);
   };
@@ -130,12 +143,22 @@ export function useConnect({
   // A label save that answers after Connect has gone with its bot finishes nothing: the sign-in it
   // would dismiss may be another bot's by then (#781).
   const mounted = useRef(true);
-  useEffect(() => {
+  const openedSetup = useRef<string | null>(null);
+  const visibleSetup = useRef<string | null>(null);
+  const visibleSignIn = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    visibleSignIn.current = signIn?.id ?? null;
+    visibleSetup.current = signIn?.flow === "token" && isSignInActive(signIn) ? signIn.id : null;
+  }, [signIn]);
+  useLayoutEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
+      const signInId = openedSetup.current ?? visibleSetup.current;
+      if (signInId)
+        void bridge.send({ type: "cancelSignIn", signInId, setupToken: true }).catch(() => {});
     };
-  }, []);
+  }, [bridge]);
   const [confirmDrop, setConfirmDrop] = useState<string | null>(null);
   // The grid: the tiles after the first few once "Show more" is pressed, and the tile last left,
   // which takes focus when the grid comes back.
@@ -144,6 +167,12 @@ export function useConnect({
   const firstMoreRef = useRef<HTMLButtonElement>(null);
   // Why the last Disconnect of a sign-in's account was refused, said under it.
   const [dropError, setDropError] = useState<string | null>(null);
+  // Put back of the model a setup sign-in gave the bot (#932).
+  const [putBack, setPutBack] = useState<{
+    signInId: string;
+    status: "saving" | "done" | "failed";
+    change: { before: string | null; after: string | null };
+  } | null>(null);
 
   // A sign-in that finished moves on to its label; one that found no new account says so.
   const stage = signIn?.stage ?? null;
@@ -177,7 +206,20 @@ export function useConnect({
   const begin = useCallback(
     async (id: string) => {
       await bridge.send({ type: "dismissSignIn" }).catch(() => {});
-      await bridge.send({ type: "startSignIn", methodId: id, botId: forBot }).catch(() => {});
+      if (!mounted.current) return;
+      const signInId =
+        id === SETUP_TOKEN_METHOD
+          ? `clawtrate-${Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, "0")).join("")}`
+          : null;
+      if (signInId) openedSetup.current = signInId;
+      await bridge
+        .send({
+          type: "startSignIn",
+          methodId: id,
+          botId: forBot,
+          ...(signInId === null ? {} : { signInId }),
+        })
+        .catch(() => {});
     },
     [bridge, forBot],
   );
@@ -223,14 +265,22 @@ export function useConnect({
         : { view: "methods" },
     );
   };
-  // A key's sign-in that ended without a key saved starts again where a key is typed.
-  const toKey = async (provider: string) => {
-    await bridge.send({ type: "dismissSignIn" }).catch(() => {});
+  // A key's sign-in that ended without a key saved starts again where a key is typed; a tile that
+  // takes a key opens there. Only the sign-in the key form replaces is let go, by its id.
+  const toKey = async (provider: string, replaces: string | null = null) => {
+    if (replaces !== null)
+      await bridge.send({ type: "dismissSignIn", signInId: replaces }).catch(() => {});
     if (accounts.keyProviders.some((each) => each.provider === provider)) setKeyProvider(provider);
+    setKeyError(null);
     setKeyOpen(true);
     setKeyAgain((n) => n + 1);
     setWhere({ view: "methods" });
   };
+  // A key typed for one provider is never sent as another's: the field empties whenever the
+  // provider changes, by the tile, the provider list or a sign-in started again.
+  useEffect(() => {
+    if (keyRef.current) keyRef.current.value = "";
+  }, [keyProvider]);
   // The key's fields, brought into view as the disclosure opens (a phone shows little at once).
   useEffect(() => {
     if (keyOpen) requestAnimationFrame(() => keyRef.current?.scrollIntoView({ block: "nearest" }));
@@ -240,7 +290,7 @@ export function useConnect({
   }, [keyAgain]);
 
   // --- Choosing how -------------------------------------------------------------
-  const tiles = providerTiles(accounts.methods, accounts.accounts);
+  const tiles = providerTiles(accounts.methods, accounts.accounts, accounts.keyProviders);
 
   // --- A provider's methods -------------------------------------------------------
   if (where.view === "provider") {
@@ -267,12 +317,36 @@ export function useConnect({
                 >
                   <span className="b-choice-text">
                     <span className="b-choice-title">{name}</span>
-                    <span className="b-choice-sub">{flowWords(m.flow)}</span>
+                    <span className="b-choice-sub">
+                      {m.flow === "token" && !admin
+                        ? "Your Claude plan · needs full control"
+                        : flowWords(m.flow)}
+                    </span>
                   </span>
                   <ChevronIcon />
                 </button>
               </li>
             ))}
+            {tile?.keyProvider && (
+              <li>
+                <button
+                  type="button"
+                  className="b-choice"
+                  data-method="api-key"
+                  onClick={() => {
+                    const provider = tile.keyProvider!;
+                    setWhere({ view: "methods" });
+                    void toKey(provider);
+                  }}
+                >
+                  <span className="b-choice-text">
+                    <span className="b-choice-title">API key</span>
+                    <span className="b-choice-sub">Billed per token</span>
+                  </span>
+                  <ChevronIcon />
+                </button>
+              </li>
+            )}
           </ul>
         </>
       ),
@@ -293,17 +367,25 @@ export function useConnect({
     const hidden = tiles.slice(FIRST_TILES);
     const showAll = moreTiles || hidden.some((tile) => tile.key === leftTile);
     const shown = showAll ? tiles : tiles.slice(0, FIRST_TILES);
+    // A tile with a Claude plan's way opens its ways without admin access too: the plan's way then
+    // says it needs full control, beside the request for it (#932).
+    const hasPlan = (tile: ProviderTile) => tile.methods.some((m) => m.method.flow === "token");
     const choose = (tile: ProviderTile) => {
-      if (!admin) return;
+      if (!admin && !hasPlan(tile)) return;
       setLeftTile(tile.key);
-      const only = tile.methods.length === 1 ? tile.methods[0]! : null;
-      if (only) void start(only.method.id);
+      if (!admin) return setWhere({ view: "provider", tile: tile.key });
+      const only = tile.methods.length === 1 && !tile.keyProvider ? tile.methods[0]! : null;
+      // A tile that takes only a key (it says so) opens the key's fields with its provider chosen.
+      if (tile.keyProvider && tile.methods.length === 0) void toKey(tile.keyProvider);
+      else if (only) void start(only.method.id);
       else setWhere({ view: "provider", tile: tile.key });
     };
     const tileButton = (tile: ProviderTile, index: number) => {
-      const notes = [tile.connected ? "Connected" : null, tile.perToken ? "Billed per token" : null]
-        .filter(Boolean)
-        .join(" · ");
+      const notes = [
+        tile.connected ? "Connected" : null,
+        tile.keyProvider && tile.methods.length === 0 ? "API key" : null,
+        tile.perToken ? "Billed per token" : null,
+      ].filter((note) => note !== null);
       return (
         <li key={tile.key}>
           <button
@@ -312,13 +394,23 @@ export function useConnect({
             className="b-tile"
             data-tile={tile.key}
             data-b-focus={tile.key === leftTile ? "" : undefined}
-            aria-disabled={!admin || undefined}
+            aria-disabled={(!admin && !hasPlan(tile)) || undefined}
             onClick={() => choose(tile)}
           >
             <ProviderLogo logo={tile.logo} name={tile.name} />
             <span className="b-tile-text">
               <span className="b-tile-name">{tile.name}</span>
-              {notes && <span className="b-tile-note">{notes}</span>}
+              {notes.length > 0 && (
+                // A long note wraps between its parts, after a dot, never inside one.
+                <span className="b-tile-note">
+                  {notes.map((note, at) => (
+                    <Fragment key={note}>
+                      {at > 0 && "\u00a0· "}
+                      <span>{note}</span>
+                    </Fragment>
+                  ))}
+                </span>
+              )}
             </span>
           </button>
         </li>
@@ -424,7 +516,10 @@ export function useConnect({
                   className="input"
                   value={keyProvider}
                   disabled={!admin}
-                  onChange={(event) => setKeyProvider(event.target.value)}
+                  onChange={(event) => {
+                    setKeyProvider(event.target.value);
+                    setKeyError(null);
+                  }}
                 >
                   {accounts.keyProviders.map((each) => (
                     <option key={each.provider} value={each.provider}>
@@ -542,6 +637,14 @@ export function useConnect({
     };
   }
 
+  const modelWords = (ref: string) => {
+    const parsed = parseModelRef(ref);
+    const named = accounts.models.find(
+      (each) => each.provider === parsed?.provider && each.id === parsed?.model,
+    )?.name;
+    return named ?? parsed?.model ?? ref;
+  };
+
   // --- Naming the account -------------------------------------------------------
   if (where.view === "label" || where.view === "same") {
     if (where.view === "same") {
@@ -590,6 +693,31 @@ export function useConnect({
         ? "Every bot can use it: the gateway shows it to other bots as shared."
         : "Clawtrate hasn't seen it in the gateway's lists yet, so it can't say which bots can use it.";
     const locks = signIn?.result?.locks ?? [];
+    // What the setup sign-in changed on the bot besides the account, with Put back (#932).
+    const ownPutBack = putBack?.signInId === signIn?.id ? putBack : null;
+    const change = ownPutBack?.change ?? landing?.modelChange ?? null;
+    const putStatus = ownPutBack?.status ?? "idle";
+    const changedBot = bots.find((bot) => bot.id === signIn?.forBot)?.name ?? "The bot";
+    const putModelBack = async (what: { before: string | null; after: string | null }) => {
+      if (!signIn) return;
+      const signInId = signIn.id;
+      setPutBack({ signInId, status: "saving", change: what });
+      try {
+        await bridge.invoke({
+          type: "putBackModel",
+          botId: signIn.forBot,
+          before: what.before,
+          after: what.after,
+          stamp: await screenStamp(bridge, openedOn),
+        });
+        if (!mounted.current || visibleSignIn.current !== signInId) return;
+        setPutBack({ signInId, status: "done", change: what });
+        announce("Model put back");
+      } catch {
+        if (mounted.current && visibleSignIn.current === signInId)
+          setPutBack({ signInId, status: "failed", change: what });
+      }
+    };
     const done = async () => {
       if (!typed) {
         finish(where.account);
@@ -614,17 +742,50 @@ export function useConnect({
       backLabel: "Back to sign-in methods",
       body: (
         <>
-          <Result
-            tone="ok"
-            mark="check"
-            title={where.byKey ? "Key saved" : `Connected to ${who}`}
-            focus={false}
-          >
-            {where.byKey ? "Your gateway keeps the key." : "Your gateway keeps the sign-in."}
-          </Result>
+          {where.found ? (
+            // Found by a read after a sign-in whose end wasn't confirmed: never said to be connected.
+            <Result tone="warn" mark="warning" title={`${who} account found`} focus={false}>
+              The gateway lists it, but Clawtrate couldn't confirm the sign-in.
+            </Result>
+          ) : (
+            <Result
+              tone="ok"
+              mark="check"
+              title={where.byKey ? "Key saved" : `Connected to ${who}`}
+              focus={false}
+            >
+              {where.byKey ? "Your gateway keeps the key." : "Your gateway keeps the sign-in."}
+            </Result>
+          )}
           <p className="b-hint" role="status" style={{ textAlign: "center" }} data-testid="landed">
             {landedText}
           </p>
+          {change && (
+            <p
+              className="b-hint"
+              role="status"
+              style={{ textAlign: "center" }}
+              data-testid="model-change"
+            >
+              {putStatus === "done"
+                ? `${changedBot} uses ${change.before ? modelWords(change.before) : "the gateway's default model"} again.`
+                : putStatus === "failed"
+                  ? "The model wasn't put back: it has changed since, or the gateway didn't take it. Nothing else changed."
+                  : `${changedBot} now uses ${change.after ? modelWords(change.after) : "the gateway's default model"}.`}{" "}
+              {(putStatus === "idle" || putStatus === "saving") && (
+                <button
+                  type="button"
+                  className="button"
+                  data-variant="quiet"
+                  data-size="sm"
+                  disabled={putStatus === "saving"}
+                  onClick={() => void putModelBack(change)}
+                >
+                  Put back {change.before ? modelWords(change.before) : "the default model"}
+                </button>
+              )}
+            </p>
+          )}
           <label className="b-field">
             <span>Label</span>
             <input
@@ -718,7 +879,10 @@ export function useConnect({
   const chosen = method(where.method);
   const current: SignInState | null = signIn && signIn.method === where.method ? signIn : null;
   const who = providerName(current?.provider ?? chosen?.provider ?? "");
-  const title = `Sign in to ${current?.label ?? chosen?.label ?? who}`;
+  const plan = (current?.flow ?? chosen?.flow) === "token";
+  const title = plan
+    ? "Connect your Claude plan"
+    : `Sign in to ${current?.label ?? chosen?.label ?? who}`;
   const cancelButton = current && isSignInActive(current) && (
     <button
       type="button"
@@ -738,7 +902,7 @@ export function useConnect({
       data-size="lg"
       onClick={() =>
         void (current && (current.byKey || current.flow === "key")
-          ? toKey(current.provider)
+          ? toKey(current.provider, current.id)
           : start(where.method, where.tile))
       }
     >
@@ -805,10 +969,14 @@ export function useConnect({
   const reread = (sign: SignInState) => {
     const res = sign.result;
     if (!res) return <Wait>Checking the gateway's accounts…</Wait>;
+    // The bot's model, when the read after an unsure end has it: said in the same line.
+    const model = res.model
+      ? ` ${bots.find((bot) => bot.id === sign.forBot)?.name ?? "The bot"}'s model is ${modelWords(res.model)}.`
+      : "";
     if (res.readFailed)
       return (
         <p className="b-hint" style={{ textAlign: "center" }}>
-          Clawtrate couldn't read the gateway's accounts after the sign-in.
+          Clawtrate couldn't read the gateway's accounts after the sign-in.{model}
         </p>
       );
     const added = res.added[0];
@@ -817,14 +985,16 @@ export function useConnect({
         <Note tone="warn" testId="reread">
           <p>
             The gateway now has a {who} account it didn't have before,{" "}
-            <span className="mono">{added}</span>. It may not be ready to use.
+            <span className="mono">{added}</span>. It may not be ready to use.{model}
           </p>
           <div className="b-actions">
             <button
               type="button"
               className="button"
               data-size="sm"
-              onClick={() => setWhere({ view: "label", account: added, byKey: sign.byKey })}
+              onClick={() =>
+                setWhere({ view: "label", account: added, byKey: sign.byKey, found: true })
+              }
             >
               Name it
             </button>
@@ -843,7 +1013,7 @@ export function useConnect({
       );
     return (
       <p className="b-hint" style={{ textAlign: "center" }} data-testid="reread">
-        Clawtrate checked the gateway's accounts: no new {who} account.
+        Clawtrate checked the gateway's accounts: no new {who} account.{model}
       </p>
     );
   };
@@ -936,62 +1106,103 @@ export function useConnect({
       if (!value.trim()) return;
       // Cleared as it is sent: the code goes to the gateway in this one request.
       if (pasteRef.current) pasteRef.current.value = "";
-      await bridge.send({ type: "answerSignIn", value }).catch(() => {});
+      await bridge
+        .send({ type: "answerSignIn", value, ...(plan ? { setupToken: true } : {}) })
+        .catch(() => {});
     };
-    body = step.sensitive ? (
-      <>
-        <ol className="b-steps">
-          <li>
-            <p>Open {who}'s sign-in page and sign in.</p>
-            {step.url && open(step.url)}
-          </li>
-          <li>
-            <p>
-              The page then shows a code, or your browser lands on an address that does not open.
-              Copy the code, or that whole address, and paste it here.
-            </p>
-            <label className="b-field">
-              <span>Code or address</span>
-              <input
-                ref={pasteRef}
-                className="input"
-                type="password"
-                autoComplete="off"
-                spellCheck={false}
-                placeholder={step.placeholder ?? "Paste here"}
-                data-b-focus=""
-                data-testid="paste"
-                onKeyDown={(event) => {
-                  if (event.key === "Enter") void submit();
-                }}
-              />
-            </label>
-          </li>
-        </ol>
-        <p className="b-hint">
-          It goes straight to your gateway, which finishes the sign-in. Clawtrate does not keep it.
-        </p>
-      </>
-    ) : (
-      <>
-        <p className="b-lead">
-          {step.message ?? "The gateway asks for this before the sign-in goes on."}
-        </p>
-        <label className="b-field">
-          <span>{step.title ?? "GitHub Enterprise address"}</span>
-          <input
-            ref={pasteRef}
-            className="input"
-            placeholder={step.placeholder ?? ""}
-            data-b-focus=""
-            data-testid="paste"
-            onKeyDown={(event) => {
-              if (event.key === "Enter") void submit();
-            }}
-          />
-        </label>
-      </>
-    );
+    body =
+      current.flow === "token" ? (
+        <>
+          <ol className="b-steps">
+            <li>
+              <p>
+                In a terminal on a computer where Claude Code is signed in, run{" "}
+                <code>claude setup-token</code>. Paste what it prints here.
+              </p>
+              <label className="b-field">
+                <span>Setup token</span>
+                <input
+                  ref={pasteRef}
+                  className="input"
+                  type="password"
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder="Paste the token"
+                  data-b-focus=""
+                  data-testid="paste"
+                  aria-invalid={current.error ? true : undefined}
+                  aria-describedby={current.error ? "b-token-error" : undefined}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") void submit();
+                  }}
+                />
+              </label>
+              {current.error && (
+                <p className="b-field-error" id="b-token-error" role="alert">
+                  That isn't a setup token. Paste the whole line it printed.
+                </p>
+              )}
+            </li>
+          </ol>
+          <p className="b-hint">
+            It goes to this gateway, to connect your Claude plan. Clawtrate doesn't keep it.
+          </p>
+        </>
+      ) : step.sensitive ? (
+        <>
+          <ol className="b-steps">
+            <li>
+              <p>Open {who}'s sign-in page and sign in.</p>
+              {step.url && open(step.url)}
+            </li>
+            <li>
+              <p>
+                The page then shows a code, or your browser lands on an address that does not open.
+                Copy the code, or that whole address, and paste it here.
+              </p>
+              <label className="b-field">
+                <span>Code or address</span>
+                <input
+                  ref={pasteRef}
+                  className="input"
+                  type="password"
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder={step.placeholder ?? "Paste here"}
+                  data-b-focus=""
+                  data-testid="paste"
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") void submit();
+                  }}
+                />
+              </label>
+            </li>
+          </ol>
+          <p className="b-hint">
+            It goes straight to your gateway, which finishes the sign-in. Clawtrate does not keep
+            it.
+          </p>
+        </>
+      ) : (
+        <>
+          <p className="b-lead">
+            {step.message ?? "The gateway asks for this before the sign-in goes on."}
+          </p>
+          <label className="b-field">
+            <span>{step.title ?? "GitHub Enterprise address"}</span>
+            <input
+              ref={pasteRef}
+              className="input"
+              placeholder={step.placeholder ?? ""}
+              data-b-focus=""
+              data-testid="paste"
+              onKeyDown={(event) => {
+                if (event.key === "Enter") void submit();
+              }}
+            />
+          </label>
+        </>
+      );
     foot = (
       <>
         <button
@@ -1009,11 +1220,40 @@ export function useConnect({
   } else if (current.stage === "checking" || (current.stage === "connected" && !current.result)) {
     body = <Wait>Finishing the sign-in with {who}…</Wait>;
     foot = cancelButton;
+  } else if (current.stage === "failed" && current.unsure) {
+    // The gateway may have connected the account: neither a failure nor a success is said (#848).
+    body = (
+      <>
+        <Result tone="warn" mark="warning" title="Couldn't confirm the connection">
+          Clawtrate couldn't read how the sign-in ended, so it can't tell whether the {who} account
+          connected. Check again to read the gateway's accounts now.
+        </Result>
+        {reread(current)}
+      </>
+    );
+    foot = (
+      <>
+        <button
+          type="button"
+          className="button"
+          data-variant="primary"
+          data-size="lg"
+          onClick={() => void bridge.send({ type: "recheckSignIn" }).catch(() => {})}
+        >
+          Check again
+        </button>
+        {again("Try again", false)}
+        {another}
+      </>
+    );
   } else if (current.stage === "failed") {
     body = (
       <>
         <Result tone="danger" mark="warning" title="Couldn't connect">
-          {current.error ?? `${who} refused the sign-in.`}
+          {current.error ??
+            (plan
+              ? "Clawtrate couldn't confirm that your Claude plan connected."
+              : `${who} refused the sign-in.`)}
         </Result>
         {reread(current)}
       </>
@@ -1056,7 +1296,9 @@ export function useConnect({
     body = (
       <>
         <Result tone="warn" mark="warning" title="The sign-in ended">
-          The connection to the gateway dropped, and a sign-in ends with its connection.
+          {plan
+            ? "The connection dropped before Clawtrate got the gateway's final answer."
+            : "The connection to the gateway dropped, and a sign-in ends with its connection."}
         </Result>
         {reread(current)}
       </>

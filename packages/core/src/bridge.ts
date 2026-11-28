@@ -359,11 +359,12 @@ export type BridgeCommand =
   /** Read one bot's stored order again: the lock's evidence. */
   | { type: "checkLock"; botId: string }
   /** Start one of the gateway's sign-ins, for the bot the person works on (or null). */
-  | { type: "startSignIn"; methodId: string; botId: string | null }
+  | { type: "startSignIn"; methodId: string; botId: string | null; signInId?: string }
   /** The code or address pasted back, or a company address. Sent once and kept nowhere. */
-  | { type: "answerSignIn"; value: string }
-  | { type: "cancelSignIn" }
-  | { type: "dismissSignIn" }
+  | { type: "answerSignIn"; value: string; setupToken?: true }
+  | { type: "cancelSignIn"; signInId?: string; setupToken?: true }
+  /** With `signInId`, only that sign-in is let go. */
+  | { type: "dismissSignIn"; signInId?: string }
   /** Read again where a finished sign-in's account landed, after that read failed. */
   | { type: "recheckSignIn" }
   | { type: "chooseSignInAccount"; profileId: string }
@@ -406,6 +407,17 @@ export type BridgeCommand =
       stamp: GatewayStamp;
     }
   | { type: "removeBotFallbacks"; botId: string; stamp: GatewayStamp }
+  /**
+   * Put back the model a setup sign-in gave a bot (#932): `before` again, only while the bot still
+   * has `after`.
+   */
+  | {
+      type: "putBackModel";
+      botId: string;
+      before: string | null;
+      after: string | null;
+      stamp: GatewayStamp;
+    }
   /**
    * The Effort menu (#799): the bot's effort alone, for the model the menu was drawn for, which
    * the host checks is still the bot's.
@@ -1384,9 +1396,17 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       };
     case "readGatewayHooks":
       return { type: "readGatewayHooks" };
-    case "refreshAccounts":
-    case "cancelSignIn":
     case "dismissSignIn":
+      return command.signInId === undefined
+        ? { type: "dismissSignIn" }
+        : { type: "dismissSignIn", signInId: id(command.signInId, "sign-in") };
+    case "cancelSignIn":
+      return {
+        type: "cancelSignIn",
+        ...(command.signInId === undefined ? {} : { signInId: id(command.signInId, "sign-in") }),
+        ...(command.setupToken === true ? { setupToken: true } : {}),
+      };
+    case "refreshAccounts":
     case "recheckSignIn":
     case "dismissBotCreation":
       return { type: command.type };
@@ -1476,10 +1496,15 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       return {
         type: "startSignIn",
         methodId: id(command.methodId, "sign-in method"),
+        ...(command.signInId === undefined ? {} : { signInId: id(command.signInId, "sign-in") }),
         botId: command.botId === null || command.botId === undefined ? null : botId(command.botId),
       };
     case "answerSignIn":
-      return { type: "answerSignIn", value: secretText(command.value) };
+      return {
+        type: "answerSignIn",
+        value: secretText(command.value),
+        ...(command.setupToken === true ? { setupToken: true } : {}),
+      };
     case "saveApiKey":
       return {
         type: "saveApiKey",
@@ -1554,6 +1579,14 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
           command.effort === null || command.effort === undefined
             ? null
             : id(command.effort, "effort"),
+        stamp: gatewayStampOf(command.stamp),
+      };
+    case "putBackModel":
+      return {
+        type: "putBackModel",
+        botId: botId(command.botId),
+        before: command.before === null ? null : id(command.before, "model"),
+        after: command.after === null ? null : id(command.after, "model"),
         stamp: gatewayStampOf(command.stamp),
       };
     case "disconnect":
@@ -2390,13 +2423,13 @@ class ViewerSession implements BridgeSession {
       case "checkLock":
         return client.checkLock(command.botId);
       case "startSignIn":
-        return client.startSignIn(command.methodId, command.botId);
+        return client.startSignIn(command.methodId, command.botId, command.signInId);
       case "answerSignIn":
-        return client.answerSignIn(command.value);
+        return client.answerSignIn(command.value, command.setupToken);
       case "cancelSignIn":
-        return client.cancelSignIn();
+        return client.cancelSignIn(command.signInId, command.setupToken);
       case "dismissSignIn":
-        return client.dismissSignIn();
+        return client.dismissSignIn(command.signInId);
       case "recheckSignIn":
         return client.recheckSignIn();
       case "chooseSignInAccount":
@@ -2436,6 +2469,8 @@ class ViewerSession implements BridgeSession {
         return client.setBotModel(command.botId, command.model, command.effort, command.stamp);
       case "removeBotFallbacks":
         return client.removeBotFallbacks(command.botId, command.stamp);
+      case "putBackModel":
+        return client.putBackModel(command.botId, command.before, command.after, command.stamp);
       case "setBotEffort":
         return client.setBotEffort(
           command.botId,

@@ -590,6 +590,7 @@ function engineOn(
     bots: () => [{ id: "otto", name: "Otto", isDefault: true, avatarUrl: null }],
     connected: () => true,
     admin: () => true,
+    offers: () => false,
     serverVersion: () => "2026.11.10",
     refreshBots: async () => {},
     gateway: async () => gateway(),

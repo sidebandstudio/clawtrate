@@ -1297,6 +1297,8 @@ const signInResult = object<SignInResult>()({
   keptBy: ID,
   readFailed: FLAG,
   locks: list(MAX_LOCK_CHECKS, lockCheck),
+  modelChange: object<NonNullable<SignInResult["modelChange"]>>()({ before: ID, after: ID }),
+  model: ID,
 });
 const signIn = object<SignInState>()({
   id: ID,
@@ -1316,6 +1318,7 @@ const signIn = object<SignInState>()({
   byKey: FLAG,
   known: list(MAX_ACCOUNTS, ID),
   cancelUnknown: FLAG,
+  unsure: FLAG,
 });
 const botCreation = object<BotCreationState>()({
   name: NAME,

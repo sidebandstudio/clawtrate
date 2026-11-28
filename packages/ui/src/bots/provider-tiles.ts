@@ -3,7 +3,13 @@
 // logo, and the order and plain names of its methods, the usual one first. A provider or method
 // the table doesn't have still shows, under the gateway's own name, after the ones it has.
 
-import { providerName, type GatewayAccount, type SignInMethod } from "@clawtrate/core";
+import {
+  providerName,
+  SETUP_TOKEN_METHOD,
+  type GatewayAccount,
+  type KeyProvider,
+  type SignInMethod,
+} from "@clawtrate/core";
 import type { LogoKey } from "./logos/ProviderLogo.tsx";
 
 type Known = {
@@ -14,6 +20,8 @@ type Known = {
   providers: readonly string[];
   /** Its methods by id, the usual one first, each with a short plain name. */
   methods: ReadonlyArray<{ id: string; name: string }>;
+  /** The tile also offers the gateway's key for it, and shows for the key alone. */
+  byKey?: true;
 };
 
 /**
@@ -31,6 +39,16 @@ export const KNOWN_PROVIDERS: readonly Known[] = [
       { id: "openai/openai", name: "Sign in with a browser" },
       { id: "openai/openai-token-sharing", name: "Sign in with ChatGPT" },
     ],
+  },
+  {
+    // A Claude plan through the gateway's setup sign-in, with a setup token pasted in (#932), and
+    // an Anthropic key, billed per token, beside it.
+    key: "claude",
+    name: "Claude",
+    logo: "claude",
+    providers: ["anthropic"],
+    methods: [{ id: SETUP_TOKEN_METHOD, name: "Paste a setup token" }],
+    byKey: true,
   },
   {
     key: "github-copilot",
@@ -75,8 +93,8 @@ export const KNOWN_PROVIDERS: readonly Known[] = [
   },
 ];
 
-/** How many tiles show before "Show more". */
-export const FIRST_TILES = 4;
+/** How many tiles show before "Show more": whole rows of one, two or three columns. */
+export const FIRST_TILES = 6;
 
 export type TileMethod = { method: SignInMethod; name: string };
 
@@ -89,8 +107,10 @@ export type ProviderTile = {
   methods: TileMethod[];
   /** The gateway already has an account of this provider. */
   connected: boolean;
-  /** Every method of it saves a key billed per token (OpenRouter's). */
+  /** Every method of it saves a key billed per token (OpenRouter's), or it takes a key. */
   perToken: boolean;
+  /** The tile also takes this provider's key, in the API key path: alone, when it has no sign-in. */
+  keyProvider: string | null;
 };
 
 /**
@@ -101,12 +121,29 @@ export type ProviderTile = {
 export function providerTiles(
   methods: readonly SignInMethod[],
   accounts: readonly GatewayAccount[],
+  keyProviders: readonly KeyProvider[] = [],
 ): ProviderTile[] {
   const startable = methods.filter((m) => m.flow !== "key");
   const known: ProviderTile[] = [];
   for (const entry of KNOWN_PROVIDERS) {
     const own = startable.filter((m) => entry.providers.includes(m.provider));
-    if (own.length === 0) continue;
+    const connected = accounts.some((a) => entry.providers.includes(a.provider));
+    if (own.length === 0) {
+      const byKey = entry.byKey
+        ? keyProviders.find((each) => entry.providers.includes(each.provider))
+        : undefined;
+      if (byKey)
+        known.push({
+          key: entry.key,
+          name: entry.name,
+          logo: entry.logo,
+          methods: [],
+          connected,
+          perToken: true,
+          keyProvider: byKey.provider,
+        });
+      continue;
+    }
     const rank = (m: SignInMethod) => {
       const at = entry.methods.findIndex((each) => each.id === m.id);
       return at < 0 ? entry.methods.length : at;
@@ -119,8 +156,11 @@ export function providerTiles(
       methods: [...own]
         .sort((a, b) => rank(a) - rank(b))
         .map((m) => ({ method: m, name: entry.methods[rank(m)]?.name ?? m.label })),
-      connected: accounts.some((a) => entry.providers.includes(a.provider)),
+      connected,
       perToken: own.every((m) => m.group === "token"),
+      keyProvider: entry.byKey
+        ? (keyProviders.find((each) => entry.providers.includes(each.provider))?.provider ?? null)
+        : null,
     });
   }
   const others: ProviderTile[] = [];
@@ -136,6 +176,7 @@ export function providerTiles(
         methods: [],
         connected: accounts.some((a) => a.provider === m.provider),
         perToken: true,
+        keyProvider: null,
       };
       others.push(tile);
     }

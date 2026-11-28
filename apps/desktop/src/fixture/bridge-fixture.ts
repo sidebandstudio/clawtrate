@@ -16,6 +16,7 @@ import {
   defaultApprovalInstructions,
   FULL_SCOPES,
   INSTALL_OPENCLAW_VERSION,
+  SETUP_TOKEN_METHOD,
   initialState,
   MAX_RAW_ENTRY_CHARS,
   noteSent,
@@ -1068,9 +1069,18 @@ export function createFixtureBridge(
       sent.push(command);
       return machine;
     }
+    if (!accountParams.plan) {
+      if (command.type === "startSignIn" && command.methodId === SETUP_TOKEN_METHOD)
+        throw new Error("Connecting a Claude plan isn't available in this version.");
+      if (command.type === "answerSignIn" && command.setupToken) return;
+      if (command.type === "cancelSignIn" && command.setupToken) return { cancelled: false };
+      if (command.type === "putBackModel") return;
+    }
     const account = accountCommand(command, () => state, setAnswer, accountParams, deferred);
     if (account) {
-      sent.push(command);
+      if (command.type === "answerSignIn") sent.push({ ...command, value: "" });
+      else if (command.type === "saveApiKey") sent.push({ ...command, key: "" });
+      else sent.push(command);
       return account;
     }
     const rail = railCommand(

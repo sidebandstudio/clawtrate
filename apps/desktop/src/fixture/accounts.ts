@@ -17,6 +17,9 @@
 //   keyread=fail              a key saved directly whose read afterwards fails
 //   keyfails=1                xAI's key goes through a sign-in that refuses it
 //   plugin=1                  a plugin's provider the app has no name or logo for, with two sign-ins
+//   plan=1                    the gateway offers its plan's setup token beside the key (#932);
+//                             otherwise, as the app ships, Claude takes a key alone. A pasted
+//                             token shorter than 20 characters is refused, as a malformed one is
 //   saved=1                   a sign-in that ended uncleanly left an account behind
 //   kept=1                    the gateway has no main bot with a shared store
 //   create=failed|slow|checking|partial   how New bot's Create goes
@@ -64,6 +67,7 @@ import {
   type BotBinding,
   type CatalogModel,
   MAX_PROVIDER_MODELS,
+  SETUP_TOKEN_SIGN_IN_ENABLED,
   type ModelList,
   type ModelRefresh,
   type BridgeCommand,
@@ -92,6 +96,8 @@ export type AccountParams = {
   keyfails: boolean;
   /** A plugin adds a provider Clawtrate has no name or logo for. */
   plugin: boolean;
+  /** The gateway offers its setup sign-in, and with it a Claude plan's setup token (#932). */
+  plan: boolean;
   /** A key saved directly whose read afterwards fails; Check again reads it. */
   keyread: boolean;
   /**
@@ -145,6 +151,7 @@ export function accountParams(params: URLSearchParams): AccountParams {
     defacct: params.get("defacct") === "1",
     keyfails: params.get("keyfails") === "1",
     plugin: params.get("plugin") === "1",
+    plan: params.has("plan") ? params.get("plan") === "1" : SETUP_TOKEN_SIGN_IN_ENABLED,
     keyread: params.get("keyread") === "fail",
     picturesave:
       params.get("picturesave") === "hold" ||
@@ -202,6 +209,7 @@ export const NO_ACCOUNT_PARAMS: AccountParams = {
   labels: null,
   keyfails: false,
   plugin: false,
+  plan: SETUP_TOKEN_SIGN_IN_ENABLED,
   keyread: false,
   picturesave: null,
   finish: null,
@@ -470,6 +478,21 @@ export function fixtureAccounts(now: number, params: AccountParams): AccountsSta
         flow: "paste",
         group: "token",
       },
+      // A Claude plan's setup token, through the gateway's setup sign-in.
+      ...(params.plan
+        ? [
+            {
+              id: "anthropic/setup-token",
+              provider: "anthropic",
+              providerLabel: "Anthropic",
+              label: "Claude plan setup token",
+              hint: null,
+              kind: "secret",
+              flow: "token" as const,
+              group: "subscription" as const,
+            },
+          ]
+        : []),
       // A plugin's provider Clawtrate has no name or logo for: shown under the gateway's name.
       ...(params.plugin
         ? [
@@ -1112,6 +1135,8 @@ export function accountCommand(
     keptBy: keeper(),
     readFailed: false,
     locks: [],
+    modelChange: null,
+    model: null,
   });
   switch (command.type) {
     case "requestAccess": {
@@ -1185,7 +1210,7 @@ export function accountCommand(
     case "startSignIn": {
       const method = accounts().methods.find((m) => m.id === command.methodId)!;
       const base: SignInState = {
-        id: "fixture-signin",
+        id: command.signInId ?? "fixture-signin",
         method: method.id,
         provider: method.provider,
         label: method.label,
@@ -1202,6 +1227,7 @@ export function accountCommand(
         byKey: false,
         known: [],
         cancelUnknown: false,
+        unsure: false,
       };
       put((a) => ({ ...a, signIn: base }));
       const stage = params.signin ?? "waiting";
@@ -1265,6 +1291,14 @@ export function accountCommand(
               sensitive: false,
             },
           });
+        // signin=unsure: a step Clawtrate can't read, and the read after it finds an account.
+        if (stage === "unsure")
+          return signIn({
+            stage: "failed",
+            unsure: true,
+            error: "The gateway sent a step Clawtrate can't read.",
+            result: result([`${method.provider}:second`]),
+          });
         if (["failed", "expired", "cancelled", "ended", "unconfirmed"].includes(stage)) {
           return signIn({
             stage: stage as SignInState["stage"],
@@ -1294,6 +1328,24 @@ export function accountCommand(
               sensitive: true,
             },
           });
+        if (method.flow === "token") {
+          const current = accounts().signIn;
+          if (current?.id !== base.id || current.stage !== "starting") return;
+          return signIn({
+            stage: "entering",
+            step: {
+              id: "setup-token",
+              type: "text",
+              title: null,
+              message: "Paste Anthropic setup-token",
+              url: null,
+              code: null,
+              expiresInMinutes: null,
+              placeholder: null,
+              sensitive: false,
+            },
+          });
+        }
         if (method.flow === "domain")
           return signIn({
             stage: "entering",
@@ -1360,12 +1412,27 @@ export function accountCommand(
         });
         return Promise.resolve();
       }
+      // A plan's setup token: one too short is refused on the same step; one taken connects the
+      // plan and gives the bot an Anthropic model, as the gateway's setup sign-in does.
+      if (current?.flow === "token") {
+        // Only the step that waits for it takes it: one arriving after Cancel changes nothing.
+        if (current.stage !== "entering" || !current.step) return Promise.resolve();
+        if (command.value.trim().length < 20) {
+          signIn({ stage: "entering", error: "refused" });
+          return Promise.resolve();
+        }
+        signIn({ stage: "checking", error: null });
+        later(400, () => planConnected(current.id));
+        return Promise.resolve();
+      }
       signIn({ stage: "checking" });
       // signin=checking: the gateway is still finishing, for a picture of that stage.
       if (params.signin !== "checking") later(400, () => connected());
       return Promise.resolve();
     }
     case "cancelSignIn":
+      if (command.signInId !== undefined && accounts().signIn?.id !== command.signInId)
+        return Promise.resolve({ cancelled: false });
       // signin=cancel-unknown: the gateway's answer to the cancel says nothing.
       if (params.signin === "cancel-unknown") {
         signIn({ cancelUnknown: true });
@@ -1379,6 +1446,8 @@ export function accountCommand(
       return Promise.resolve({ cancelled: true });
     case "dismissSignIn": {
       const current = accounts().signIn;
+      if (command.signInId !== undefined && current?.id !== command.signInId)
+        return Promise.resolve({ dismissed: false });
       if (params.signin === "cancel-unknown" && current && current.result === null)
         return Promise.resolve({ dismissed: false });
       put((a) => ({ ...a, signIn: null }));
@@ -1425,6 +1494,7 @@ export function accountCommand(
             byKey: true,
             known: [],
             cancelUnknown: false,
+            unsure: false,
           },
         }));
         later(300, () => signIn({ stage: "failed", error: "xAI refused the key." }));
@@ -1635,6 +1705,16 @@ export function accountCommand(
     case "dismissBotCreation":
       put((a) => ({ ...a, creation: null }));
       return Promise.resolve();
+    case "putBackModel": {
+      // The model the setup sign-in gave the bot, put back; the line then says so.
+      put((a) => ({
+        ...a,
+        signIn: a.signIn?.result
+          ? { ...a.signIn, result: { ...a.signIn.result, modelChange: null } }
+          : a.signIn,
+      }));
+      return Promise.resolve();
+    }
     case "changeBotAccount":
     case "setBotModel": {
       put((a) => ({
@@ -1843,6 +1923,28 @@ export function accountCommand(
       return Promise.resolve();
     default:
       return undefined;
+  }
+
+  function planConnected(signInId: string) {
+    const current = accounts().signIn;
+    if (current?.id !== signInId || current.stage !== "checking") return;
+    const id = "anthropic:setup-fixture";
+    const before = accounts().bindings.find((b) => b.botId === current.forBot)?.primary ?? null;
+    const after = `anthropic/claude-sonnet-5-5@${id}`;
+    put((a) => ({
+      ...a,
+      accounts: a.accounts.some((x) => x.id === id)
+        ? a.accounts
+        : [...a.accounts, account(id, null, "token", "subscription")],
+      signIn: a.signIn
+        ? {
+            ...a.signIn,
+            stage: "connected",
+            step: null,
+            result: { ...result([id]), modelChange: { before, after } },
+          }
+        : null,
+    }));
   }
 
   function connected() {
