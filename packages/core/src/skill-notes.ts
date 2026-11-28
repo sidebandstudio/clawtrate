@@ -3,8 +3,9 @@
 // folds it into the line of the run it follows ("Saved a skill: …") instead of drawing it as the
 // bot's message. A bot's own message sent with its message tool can carry every field the note has
 // on OpenClaw 2026.10.6, so a row is taken for the note only when its text also has the note's exact
-// form, and the folded line always shows the note's own words. docs/decisions.md, "The gateway's
-// skill notes", records what is left.
+// form, the gateway's own list of skill changes shows its review wrote exactly that note
+// (`reviewNotes`), and the folded line always shows the note's own words. docs/decisions.md, "The
+// gateway's skill notes", records what is left.
 
 import { jsonTextLength } from "./bounds.ts";
 import { rowIdempotencyKey } from "./update-notice.ts";
@@ -154,9 +155,15 @@ function markedSkills(
  * - on a gateway that marks its notes (`marked`: OpenClaw 2026.11.10 or newer), the mark
  *   (`openclawDeliveryMirror`: a `plugin-notice` of `skill-workshop`, `skills-changed`, naming the
  *   same review), whose skills written as the note are its text. Only the gateway's own plugin
- *   can write that mark. Without `marked`, a row with no mark at all.
+ *   can write that mark. Without `marked`, a row with no mark at all;
+ * - `confirmed`, given the note and its text: whether the gateway's list of skill changes shows
+ *   its review wrote it (`reviewNotes`). Left out, the form alone decides, as tests of it do.
  */
-export function skillNoteOf(row: unknown, marked: boolean): SkillNote | null {
+export function skillNoteOf(
+  row: unknown,
+  marked: boolean,
+  confirmed?: (note: SkillNote, text: string) => boolean,
+): SkillNote | null {
   const message = record(row);
   const meta = record(message?.__openclaw);
   if (
@@ -182,12 +189,91 @@ export function skillNoteOf(row: unknown, marked: boolean): SkillNote | null {
   if (!changes) return null;
   const skills = (list: SkillNoteChange[]) => list.map(({ name, action }) => ({ name, action }));
   const mark = message.openclawDeliveryMirror;
+  let note: SkillNote | null;
   if (mark === undefined)
-    return marked ? null : { reviewId, skills: skills(changes), agentId: null };
-  const markRecord = record(mark);
-  const fromMark = markRecord ? markedSkills(markRecord, reviewId) : null;
-  if (!fromMark || skillNoteText(fromMark.skills) !== text) return null;
-  return { reviewId, skills: skills(fromMark.skills), agentId: fromMark.agentId };
+    note = marked ? null : { reviewId, skills: skills(changes), agentId: null };
+  else {
+    const markRecord = record(mark);
+    const fromMark = markRecord ? markedSkills(markRecord, reviewId) : null;
+    note =
+      fromMark && skillNoteText(fromMark.skills) === text
+        ? { reviewId, skills: skills(fromMark.skills), agentId: fromMark.agentId }
+        : null;
+  }
+  return note && (!confirmed || confirmed(note, text)) ? note : null;
+}
+
+/** The most changes one `skills.workshop.changes` answer gives, and the most the gateway keeps of a bot's. */
+export const MAX_SKILL_CHANGES = 500;
+/** The most changes of its own a review reads back to write its note (`listWorkshopChanges`' default). */
+const REVIEW_CHANGES_READ = 50;
+/** The note's verb for each kind of change (`ACTION_VERB`, both versions). */
+const CHANGE_VERB: Record<string, SkillNoteAction> = {
+  create: "created",
+  patch: "updated",
+  write_file: "updated",
+  remove_file: "updated",
+  archive: "archived",
+  restore: "restored",
+};
+
+/**
+ * The note each background review wrote into task `key`, by review id, rebuilt from a
+ * `skills.workshop.changes` answer as both versions write it (`formatWorkshopChangeNotice`): the
+ * review's changes there (`actor: "review"`, its run `skill-workshop-review:<id>`, the task's
+ * key), oldest first, each skill once with its creation or else its latest change. Only a review
+ * run records a change with that actor; a bot's own is `agent`, whatever its run is called. The
+ * list is newest first, as the review read its own.
+ */
+export function reviewNotes(answer: unknown, key: string): Map<string, string> {
+  const list = record(answer)?.changes;
+  const byReview = new Map<
+    string,
+    { name: string; action: string; summary: string; at: number }[]
+  >();
+  for (const each of Array.isArray(list) ? list.slice(0, MAX_SKILL_CHANGES) : []) {
+    const change = record(each);
+    const runId = change?.runId;
+    if (
+      change?.actor !== "review" ||
+      change.sessionKey !== key ||
+      typeof runId !== "string" ||
+      !runId.startsWith(SKILL_REVIEW_RUN_PREFIX) ||
+      typeof change.skillName !== "string" ||
+      typeof change.action !== "string" ||
+      !Object.hasOwn(CHANGE_VERB, change.action) ||
+      typeof change.summary !== "string" ||
+      typeof change.createdAtMs !== "number"
+    )
+      continue;
+    const reviewId = runId.slice(SKILL_REVIEW_RUN_PREFIX.length);
+    const changes = byReview.get(reviewId) ?? [];
+    byReview.set(reviewId, changes);
+    if (changes.length < REVIEW_CHANGES_READ)
+      changes.push({
+        name: change.skillName,
+        action: change.action,
+        summary: change.summary,
+        at: change.createdAtMs,
+      });
+  }
+  const notes = new Map<string, string>();
+  for (const [reviewId, changes] of byReview) {
+    const bySkill = new Map<string, (typeof changes)[number]>();
+    for (const change of changes.toSorted((a, b) => a.at - b.at))
+      if (bySkill.get(change.name)?.action !== "create") bySkill.set(change.name, change);
+    notes.set(
+      reviewId,
+      skillNoteText(
+        [...bySkill.values()].map(({ name, action, summary }) => ({
+          name,
+          action: CHANGE_VERB[action]!,
+          ...(summary.trim() ? { summary: summary.trim() } : {}),
+        })),
+      ),
+    );
+  }
+  return notes;
 }
 
 /**

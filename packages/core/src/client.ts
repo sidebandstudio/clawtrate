@@ -205,7 +205,12 @@ import {
   type RawRecord,
 } from "./mapping.ts";
 import { holdsUpdateNotice, mainToReadAgain } from "./update-notice.ts";
-import { SKILL_REVIEW_RUN_PREFIX } from "./skill-notes.ts";
+import {
+  MAX_SKILL_CHANGES,
+  reviewNotes,
+  SKILL_REVIEW_RUN_PREFIX,
+  skillNoteOf,
+} from "./skill-notes.ts";
 import {
   MAX_SEARCHES_IN_FLIGHT,
   searchFiles,
@@ -689,6 +694,8 @@ const SESSION_LIST_PARAMS = {
   excludeSubagents: true,
 };
 const HISTORY_LIMIT = 200;
+/** The skill notes one task keeps a verdict for: at most one per row of its history read. */
+export const MAX_SKILL_VERDICTS = HISTORY_LIMIT;
 
 /** Whether a history read lists a turn the gateway holds to run. One it withdrew stays listed as `cancelled`. */
 function holdsInput(history: RawRecord | null): boolean {
@@ -1844,6 +1851,12 @@ export class ClawtrateClient {
    * from its last history read: what a picture with no copy here is read back by.
    */
   private readonly sentSources = new Map<string, Map<string, string>>();
+  /**
+   * Each followed task's skill notes from its last history read, by review id: whether the
+   * gateway's list of skill changes showed the review wrote that note (#875). A note without a
+   * verdict is read for once; a failed read gives none, so the next history read asks again.
+   */
+  private readonly skillVerdicts = new Map<string, Map<string, boolean>>();
   /**
    * Tasks this client names (#750), by key, oldest first: `waiting` until the gateway accepts the
    * message it is named from (`TaskNaming`), `naming` while the name is made. Only the device that sends a task's
@@ -3158,6 +3171,7 @@ export class ClawtrateClient {
     // this device, and they show there once more. Their own bound lets them go. Its references
     // come back with its next history read.
     this.sentSources.delete(key);
+    this.skillVerdicts.delete(key);
     this.recipients.delete(key);
     for (const readKey of [...this.approvalReads.keys()])
       if (readKey.startsWith(`${key}\u0000`)) this.approvalReads.delete(readKey);
@@ -6324,6 +6338,39 @@ export class ClawtrateClient {
   }
 
   /**
+   * The notes the task's background reviews wrote, by review id (`reviewNotes`), read from the
+   * gateway's list of its bot's skill changes (`skills.workshop.changes`, `operator.read` on both
+   * versions) when a skill note in `rows` has no verdict yet: undefined when none needs it, null
+   * when the read failed. The gateway records a review's changes before it writes its note, so a
+   * read after the note's row came holds them.
+   */
+  private async readSkillReviews(
+    key: string,
+    rows: unknown,
+  ): Promise<Map<string, string> | null | undefined> {
+    const bot = botIdFromSessionKey(key);
+    const verdicts = this.skillVerdicts.get(key);
+    const marked = this.marksSkillNotes();
+    const unsettled =
+      Array.isArray(rows) &&
+      rows.some((row) => {
+        const note = skillNoteOf(row, marked);
+        return note !== null && verdicts?.get(note.reviewId) === undefined;
+      });
+    if (!bot || !unsettled) return undefined;
+    try {
+      const answer = await this.request("skills.workshop.changes", {
+        agentId: bot,
+        limit: MAX_SKILL_CHANGES,
+      });
+      return reviewNotes(answer, key);
+    } catch (error) {
+      this.logFailure("warn", "skills.workshop.changes", error);
+      return null;
+    }
+  }
+
+  /**
    * Read the reactions on a task's messages (`session.reactions.list`, `operator.read`) once its
    * history loads, keeping those of the messages it shows. Later changes come as
    * `session.reaction` events. A failed read leaves what was shown before (F-283).
@@ -7107,6 +7154,7 @@ export class ClawtrateClient {
         startedAt: startedTaskSince(history),
         gatewayEvents: this.writesEvents(),
         skillNotesMarked: this.marksSkillNotes(),
+        skillNoteConfirmed: (note) => this.skillVerdicts.get(key)?.get(note.reviewId) === true,
       }).find((item) => item.id === itemId) ?? null
     );
   }
@@ -10074,6 +10122,7 @@ export class ClawtrateClient {
     this.readBackPictures.clear();
     this.readBackBytes = 0;
     this.sentSources.clear();
+    this.skillVerdicts.clear();
     this.taskNames.clear();
     this.firstMessageTitles.clear();
   }
@@ -11370,6 +11419,9 @@ export class ClawtrateClient {
         ),
       );
       if (stale()) return;
+      // Asked before the history shows, so a real note is drawn folded from the start.
+      const reviews = await this.readSkillReviews(key, history?.messages);
+      if (stale()) return;
       // A resync starts every stream of this task again from what the gateway sends next.
       if (resync) this.streams.retire(key);
       // A queued turn's two ids, as history pairs them, whatever this client holds: kept, so a
@@ -11459,11 +11511,25 @@ export class ClawtrateClient {
           this.keepSentPictures(message);
       }
       const activity = markUnconfirmed(reconciled);
+      const verdicts = this.skillVerdicts.get(key);
+      const settled = new Map<string, boolean>();
       const items = mapHistory(messages, {
         startedAt: startedTaskSince(history),
         gatewayEvents: this.writesEvents(),
         skillNotesMarked: this.marksSkillNotes(),
+        skillNoteConfirmed: (note, text) => {
+          const verdict =
+            verdicts?.get(note.reviewId) ??
+            (reviews
+              ? reviews.get(note.reviewId) === text &&
+                (note.agentId === null || note.agentId === botIdFromSessionKey(key))
+              : undefined);
+          if (verdict !== undefined) settled.set(note.reviewId, verdict);
+          return verdict === true;
+        },
       });
+      if (settled.size > 0) this.skillVerdicts.set(key, settled);
+      else this.skillVerdicts.delete(key);
       this.sentSources.set(key, sentSources(messages));
       const rebuilt: Transcript = {
         ...current,

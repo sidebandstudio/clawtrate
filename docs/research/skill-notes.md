@@ -142,4 +142,29 @@ Observed on development gateways of each version, after a `#learn` turn an admin
 
 - **2026.10.6.** Saying "undo" in the task is the gateway's own way back: the queued system event tells the bot which call reverts the change. The gateway has no method that undoes a review as one: `skills.workshop.archive` and `skills.workshop.restore` need `operator.admin` and act on one skill each (`core-method-policy-*.mjs`).
 - **2026.11.10.** The gateway undoes a review itself. `skills.workshop.undo {agentId, runId: "skill-workshop-review:<id>"}`, from an admin connection, answered `{status: "undone", changes: [{skillName: "trail-check-2", action: "archive", runId: "skill-workshop-undo:<id>", …}]}`; the same call from a connection with read, write, approvals and questions was refused: "missing scope: operator.admin". The method is registered with `ADMIN` (`extensions/skill-workshop`), and on a second call for the same review it answers with a status other than `undone` (`revertReview`: nothing left to revert). The gateway's own command `/learn undo <id>`, sent with `chat.send`, did the same from the admin connection, answering in the task "↩️ Undid the skill change: archived `trail-check`." as a `gateway-injected` row; from the connection without admin it answered "You are not authorized to use this owner-only command. Ask the operator to grant this Gateway client operator.admin access." Saying "undo" to the bot needs `skill_workshop`, which that version doesn't offer a sender without admin (above).
-- The changes, with the run that made each, are listed by `skills.workshop.changes` (`operator.read` on both versions): a client could check from it that a review saved what its note says.
+- The changes, with the run that made each, are listed by `skills.workshop.changes` (`operator.read` on both versions). Clawtrate checks each note against it ([below](#the-list-of-skill-changes)).
+
+## The list of skill changes
+
+Observed on development gateways of each version started with `--with-skill-review --no-seed`, after a `#learn` turn an admin connection sent, read every 250 ms by a paired connection with `operator.read` alone, and read with each version's source (`skills-*.mjs`, `library-*.mjs`, `changes.worker-*.mjs` and `experience-review-*.mjs` on 2026.10.6; `extensions/skill-workshop`, `skill-workshop-host-runtime-*.mjs` and `experience-review-*.mjs` on 2026.11.10).
+
+- **Parameters.** `skills.workshop.changes {agentId, limit?, beforeMs?}`, and nothing else: `runId` is refused ("invalid skills.workshop.changes params: at root: unexpected property 'runId'"). `limit` is 1 to 500, 50 when left out. `beforeMs` keeps changes made before that time. Without `agentId`, a gateway with more than one bot refuses: "Multiple agents are configured, but skills workspace has no explicit owner. Pass agentId to select a configured agent." The read-only connection's read was answered on both versions.
+- **Paging.** The answer is `{changes: [...]}`, newest first (`created_at_ms` then `rowid`, descending), with no cursor. The gateway keeps the newest 500 changes of each bot and deletes older ones as it records a new one (`MAX_CHANGES_PER_AGENT`). 2026.11.10 also reads those 500 once per bot and applies `beforeMs` and `limit` to that copy, so no `beforeMs` reaches past them. One read with `limit: 500` is the whole list on both versions.
+- **A change.** `{id, agentId, skillName, action, actor, summary, createdAtMs, versionId?, sessionKey?, runId?}`. `action` is `create`, `patch`, `write_file`, `remove_file`, `archive` or `restore`; `actor` is `agent`, `review`, `curator` or `user`. A review's change, as both versions listed it:
+
+  ```json
+  {
+    "id": "c707cace-ad6d-4306-91fd-f5b3959f7c5f",
+    "agentId": "clawtrate-main-bot",
+    "skillName": "trail-check-2",
+    "action": "create",
+    "actor": "review",
+    "summary": "check the trail before a hike",
+    "createdAtMs": 1795841717929,
+    "sessionKey": "agent:clawtrate-main-bot:probe-1795841685109",
+    "runId": "skill-workshop-review:6b8af22d-cdd3-4917-8764-278875329ec3"
+  }
+  ```
+
+- **How it ties to the note.** The change's `runId` is the review's run, the note's key without `skill-workshop-notice:`; its `sessionKey` is the reviewed task, the one the note is in; its `actor` is `review`. The skill workshop's tool records `actor: reviewOf ? "review" : "agent"` on both versions, and only the review run sets `reviewOf`; the gateway's own methods record `user`. The note's text is made from the review's own changes (`formatWorkshopChangeNotice`, the same on both versions): the review reads them back with its run id (newest 50), sorts them oldest first, keeps each skill once, its creation or else its latest change, and writes each as its verb (`created`, `updated` for the three kinds of edit, `archived`, `restored`), the name and the trimmed summary.
+- **When.** The review records each change as it makes it, during its run, and writes the note after the run ends, from those records. On 2026.10.6 the change's `createdAtMs` was 1795841717929 and the note's `timestamp` 1795841718110; on 2026.11.10, 1795841724302 and 1795841724497. So the list holds a review's changes before its note's row exists.

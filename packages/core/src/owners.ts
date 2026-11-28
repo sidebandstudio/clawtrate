@@ -50,12 +50,14 @@ import {
   MAX_PICTURE_READS,
   MAX_READ_BACK_PICTURES,
   MAX_SENT_PICTURE_MESSAGES,
+  MAX_SKILL_VERDICTS,
   MAX_SPAWN_LINKS,
   MAX_STREAMS_PER_TASK,
 } from "./client.ts";
 import { MAX_VIEWER_OPEN_TASKS } from "./bridge.ts";
 import { MAX_COLLIDED, MAX_DEVICE_REQUESTS } from "./device-approval.ts";
 import { MAX_INBOUND_REF_CHARS, MAX_SENT_SOURCES } from "./mapping.ts";
+import { SKILL_REVIEW_ID_CHARS } from "./skill-notes.ts";
 import { ADMIN_SCOPES } from "./scopes.ts";
 import {
   MAX_FILE_TRANSFERS,
@@ -326,6 +328,13 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
     row: "bookkeeping",
   },
   "sentSources.*": { max: MAX_SENT_SOURCES, each: 2 * MAX_INBOUND_REF_CHARS + N, row: null },
+  // Each followed task's skill notes, by review id, and whether the gateway's skill changes confirm it.
+  skillVerdicts: {
+    max: T,
+    each: ID + MAX_SKILL_VERDICTS * (SKILL_REVIEW_ID_CHARS + N),
+    row: "bookkeeping",
+  },
+  "skillVerdicts.*": { max: MAX_SKILL_VERDICTS, each: SKILL_REVIEW_ID_CHARS + N, row: null },
   // Tasks this client names, or waits to name from their first message with text, by key: the stage,
   // the session the task was created as, the gateway it was made on, the message it is named from
   // once the gateway accepts it, the ids of this client's messages there with no text, and of its

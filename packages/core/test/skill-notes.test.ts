@@ -8,6 +8,7 @@
 import { describe, expect, it } from "vitest";
 import {
   mapHistory,
+  reviewNotes,
   seenThroughSkillNote,
   seenThroughUpdateNotice,
   skillNoteChanges,
@@ -19,6 +20,8 @@ import {
 import { jsonTextLength } from "../src/bounds.ts";
 import { MAX_SKILL_NOTE_CHARS } from "../src/skill-notes.ts";
 import { enforceState, MAX_BLOCK_CHARS } from "../src/state-bounds.ts";
+import { grantingGateway, KEY, openTask } from "./client-harness.ts";
+import { deferred, GatewayError, type helloOk, sleep, until } from "./fake-gateway.ts";
 
 const NOTE_KEY = "skill-workshop-notice:skill-workshop-review:0357efcc-6ce0-4f3f-9f39-c9cd6905189a";
 const NOTE_TEXT =
@@ -300,10 +303,12 @@ describe("F-560: who can imitate the note", () => {
     expect(items.some((item) => item.skillNote)).toBe(false);
   });
 
-  it("on 2026.10.6 a bot's channel copy in the note's exact form folds: the case docs/decisions.md says is left", () => {
+  it("on 2026.10.6 a bot's channel copy has the note's whole form: only the gateway's skill changes tell them apart", () => {
     expect(skillNoteOf(withText(channelCopy, NOTE_TEXT), false)?.skills).toEqual([
       { name: "trail-check", action: "created" },
     ]);
+    // No review of the gateway's wrote it, so the client takes it for the bot's message (#875).
+    expect(skillNoteOf(withText(channelCopy, NOTE_TEXT), false, () => false)).toBeNull();
     // On 2026.11.10 the same copy has no mark, so it is the bot's message.
     expect(skillNoteOf(withText(channelCopy, NOTE_TEXT), true)).toBeNull();
   });
@@ -677,7 +682,7 @@ describe("F-560 F-590: a read-only viewer's read goes past any run of quiet line
     ).toBe(T + 100);
   });
 
-  it("2026.10.6: a bot's copy in the note's exact form, which folds there, is still to read, in either order", () => {
+  it("2026.10.6: a bot's copy in the note's exact form is still to read, in either order", () => {
     // On a client that takes the unmarked form for the note, the copy is a skill note item, but
     // nothing vouches for it: it stops the walk.
     const old = (rows: unknown[], preview: string) =>
@@ -685,5 +690,176 @@ describe("F-560 F-590: a read-only viewer's read goes past any run of quiet line
     expect(old([reply, update(T + 200), copy(T + 300)], LISTED_NOTE)).toBe(T + 100);
     expect(old([reply, copy(T + 200), update(T + 300)], UPDATE_TEXT)).toBe(T + 100);
     expect(old([reply, update(T + 200), copy(T + 250), copy(T + 300)], LISTED_NOTE)).toBe(T + 100);
+  });
+});
+
+/** One change as `skills.workshop.changes` lists it on both versions: the review's, in task `KEY`. */
+const change = (fields: Record<string, unknown> = {}) => ({
+  id: "c707cace-ad6d-4306-91fd-f5b3959f7c5f",
+  agentId: "otto",
+  skillName: "trail-check",
+  action: "create",
+  actor: "review",
+  summary: "check the trail before a hike",
+  createdAtMs: 1795618562900,
+  sessionKey: KEY,
+  runId: `skill-workshop-review:${REVIEW}`,
+  ...fields,
+});
+const changes =
+  (...list: unknown[]) =>
+  () => ({ changes: list });
+const noteItem = (transcript: { items: { id: string; skillNote?: unknown }[] }) =>
+  transcript.items.find((item) => item.id.startsWith(NOTE_ID));
+/** A gateway that serves `rows` as the task's history, and the bot's skill changes. */
+function serving(rows: () => unknown[], list: () => unknown, version = "test") {
+  const gateway = grantingGateway();
+  const hello = gateway.connectReply;
+  gateway.connectReply = (params, url) => {
+    const reply = hello(params, url);
+    if (!reply.ok) return reply;
+    const payload = reply.payload as ReturnType<typeof helloOk>;
+    return { ok: true, payload: { ...payload, server: { ...payload.server, version } } };
+  };
+  gateway.handlers["chat.history"] = () => ({ messages: rows(), hasMore: false });
+  gateway.handlers["skills.workshop.changes"] = list;
+  return gateway;
+}
+
+describe("F-560: a note folds only when the gateway's skill changes show its review wrote it (#875)", () => {
+  it("F-560: a row in the note's exact form with no matching change stays a message", async () => {
+    // The review's change in another task, made by the bot itself, or with other words: none is
+    // the note's.
+    for (const list of [
+      changes(),
+      changes(change({ sessionKey: "agent:otto:other" })),
+      changes(change({ actor: "agent" })),
+      changes(change({ runId: `skill-workshop-review:${REVIEW.replace("0", "1")}` })),
+      changes(change({ summary: "check the weather" })),
+      () => ({}),
+    ]) {
+      const gateway = serving(() => realNote, list);
+      const { client, transcript } = await openTask({ gateway });
+      expect(noteItem(transcript())).toMatchObject({ blocks: [{ text: NOTE_TEXT }] });
+      expect(noteItem(transcript())!.skillNote).toBeUndefined();
+      expect(gateway.calls("skills.workshop.changes")).toEqual([{ agentId: "otto", limit: 500 }]);
+      client.stop();
+    }
+  });
+
+  it("F-560: a real note folds once the list confirms it, drawn folded from the start, read once", async () => {
+    let rows: unknown[] = realNote.slice(0, 1);
+    const answer = deferred<unknown>();
+    const gateway = serving(
+      () => rows,
+      () => answer.promise,
+    );
+    const { client, transcript } = await openTask({ gateway });
+    expect(gateway.calls("skills.workshop.changes")).toHaveLength(0);
+    // The note comes about 30 seconds after the run, as the gateway writes it.
+    const drawnUnfolded: unknown[] = [];
+    const stop = client.store.subscribe((state) => {
+      const note = noteItem(state.transcripts[KEY]!);
+      if (note && !note.skillNote) drawnUnfolded.push(note);
+    });
+    rows = realNote;
+    gateway.emit("session.message", { sessionKey: KEY });
+    await until(() => gateway.calls("skills.workshop.changes").length === 1);
+    await sleep(30);
+    expect(noteItem(transcript())).toBeUndefined();
+    answer.resolve(changes(change())());
+    await until(() => noteItem(transcript()) !== undefined);
+    expect(noteItem(transcript())!.skillNote).toMatchObject({ reviewId: REVIEW, agentId: null });
+    expect(drawnUnfolded).toEqual([]);
+    // Later reads of the task's history fold it again without asking.
+    gateway.emit("session.message", { sessionKey: KEY });
+    await until(() => gateway.calls("chat.history").length === 3);
+    await sleep(30);
+    expect(noteItem(transcript())!.skillNote).toBeDefined();
+    expect(gateway.calls("skills.workshop.changes")).toHaveLength(1);
+    stop();
+    client.stop();
+  });
+
+  it("F-560: a failed or refused read leaves the row a message, and the next history read settles it", async () => {
+    for (const failure of [
+      new GatewayError({ code: "INVALID_REQUEST", message: "missing scope: operator.read" }),
+      new Error("socket closed"),
+    ]) {
+      let reads = 0;
+      const gateway = serving(
+        () => realNote,
+        () => {
+          reads += 1;
+          if (reads === 1) throw failure;
+          return { changes: [change()] };
+        },
+      );
+      const { client, transcript } = await openTask({ gateway });
+      expect(noteItem(transcript())!.skillNote).toBeUndefined();
+      gateway.emit("session.message", { sessionKey: KEY });
+      await until(() => noteItem(transcript())?.skillNote !== undefined);
+      expect(reads).toBe(2);
+      client.stop();
+    }
+  });
+
+  it("F-560: 2026.11.10's marked note folds when confirmed, and not with a mark naming another bot", async () => {
+    const marked = (agentId: string) => ({
+      ...NOTE_1110,
+      openclawDeliveryMirror: {
+        ...NOTE_1110.openclawDeliveryMirror,
+        data: { ...NOTE_1110.openclawDeliveryMirror.data, agentId },
+      },
+    });
+    for (const [agentId, folds] of [
+      ["otto", true],
+      ["main", false],
+    ] as const) {
+      const gateway = serving(
+        () => [realNote[0], marked(agentId)],
+        changes(change()),
+        "2026.11.10",
+      );
+      const { client, transcript } = await openTask({ gateway });
+      const note = transcript().items.at(-1)!;
+      expect(note.skillNote?.agentId).toBe(folds ? "otto" : undefined);
+      client.stop();
+    }
+  });
+
+  it("rebuilds each review's note as the gateway writes it, from its own changes oldest first", () => {
+    const at = (createdAtMs: number, fields: Record<string, unknown>) =>
+      change({ createdAtMs, ...fields });
+    // Newest first, as listed: a creation then an edit of the same skill keeps the creation; two
+    // edits keep the latest; an empty reason is left out.
+    const notes = reviewNotes(
+      {
+        changes: [
+          at(5, { skillName: "packing-list", action: "patch", summary: "second" }),
+          at(4, { skillName: "trail-check", action: "patch", summary: "tightened" }),
+          at(3, { skillName: "packing-list", action: "write_file", summary: "first" }),
+          at(2, { skillName: "old-route", action: "archive", summary: "  " }),
+          at(1, { skillName: "trail-check", action: "create", summary: " check the trail " }),
+          at(0, { runId: "skill-workshop-review:other", action: "restore" }),
+          { ...change(), action: "rename" },
+          null,
+        ],
+      },
+      KEY,
+    );
+    expect(notes).toEqual(
+      new Map([
+        [
+          REVIEW,
+          '💾 Learned: created `trail-check` (check the trail); archived `old-route`; updated `packing-list` (second). Say "undo" to revert this skill change.',
+        ],
+        [
+          "other",
+          '💾 Learned: restored `trail-check` (check the trail before a hike). Say "undo" to revert this skill change.',
+        ],
+      ]),
+    );
+    expect(reviewNotes({ changes: [change()] }, KEY).get(REVIEW)).toBe(NOTE_TEXT);
   });
 });

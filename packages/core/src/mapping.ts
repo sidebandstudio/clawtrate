@@ -7,7 +7,7 @@ import { utf8Length } from "./encoding.ts";
 import { channelChatTitle, externalChannelOf, stripChannelMetadata } from "./channels.ts";
 import { isOtherToolSession } from "./origins.ts";
 import { previewWithoutMarker, titleWithoutMarker } from "./send-marker.ts";
-import { skillNoteOf } from "./skill-notes.ts";
+import { skillNoteOf, type SkillNote } from "./skill-notes.ts";
 import {
   gatewayPreviewOf,
   LIST_PREVIEW_MAX_CHARS,
@@ -830,6 +830,8 @@ export function mapHistory(
      * by its reported version): a row without the mark is then never the note (`skillNoteOf`).
      */
     skillNotesMarked?: boolean;
+    /** Whether the gateway's list of skill changes confirms a skill note (`skillNoteOf`'s `confirmed`). */
+    skillNoteConfirmed?: (note: SkillNote, text: string) => boolean;
   } = {},
 ): TranscriptItem[] {
   const items: TranscriptItem[] = [];
@@ -968,7 +970,11 @@ export function mapHistory(
             item.runless = true;
           }
           // Perhaps the gateway's skill note, folded into the line of the run it follows.
-          const skillNote = skillNoteOf(message, options.skillNotesMarked === true);
+          const skillNote = skillNoteOf(
+            message,
+            options.skillNotesMarked === true,
+            options.skillNoteConfirmed,
+          );
           if (skillNote)
             item.skillNote = before !== null ? { ...skillNote, after: before } : skillNote;
           // Perhaps the gateway's update notice: the first row with its key, never a later one.
