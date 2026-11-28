@@ -193,6 +193,19 @@ async function usagePage(on: Page, bot: string): Promise<void> {
   await expect(on.getByTestId("usage-total")).toBeVisible({ timeout: 30_000 });
 }
 
+/**
+ * Whether the Usage page shows a report the gateway has finished counting: its total is on
+ * screen, says no "so far", and no line says records are still being counted. A page still
+ * loading after a tab change has no total, so it is never taken for a settled one.
+ */
+async function reportSettled(on: Page) {
+  const total = on.getByTestId("usage-total");
+  if ((await total.count()) !== 1) return false;
+  if ((await total.textContent({ timeout: 1_000 }).catch(() => null))?.includes("so far") ?? true)
+    return false;
+  return (await on.getByTestId("usage-counting").count()) === 0;
+}
+
 /** The figures a Usage page shows, as numbers. */
 async function shownTokens(on: Page) {
   const value = async (label: string) =>
@@ -366,10 +379,13 @@ test("F-237: usage by bot and source agrees with the gateway for the selected pe
     await page.getByTestId("usage-page").getByRole("radio", { name: choice }).click();
     const expected = await gatewayTotal("otto", period);
     expect(expected.counting, "the gateway finished counting").toBe(false);
-    // The page reads again while the gateway is still counting, and then shows what it settled on.
-    await expect(page.getByTestId("usage-counting")).toHaveCount(0, { timeout: 60_000 });
+    // The page reads again while the gateway is still counting, and then shows what it settled on;
+    // a report still loading or still being counted is never compared.
+    await expect.poll(() => reportSettled(page), { timeout: 60_000 }).toBe(true);
     await expect
-      .poll(() => shownTokens(page), { timeout: 30_000 })
+      .poll(async () => ((await reportSettled(page)) ? shownTokens(page) : null), {
+        timeout: 30_000,
+      })
       .toEqual({
         input: expected.input,
         output: expected.output,
@@ -544,7 +560,7 @@ async function settledWeek(bot: string, botId: string, since: number) {
   await gatewayAgrees(botId, "week");
   await usagePage(page, bot);
   await page.getByTestId("usage-page").getByRole("radio", { name: "This week" }).click();
-  await expect(page.getByTestId("usage-counting")).toHaveCount(0, { timeout: 60_000 });
+  await expect.poll(() => reportSettled(page), { timeout: 60_000 }).toBe(true);
   await expect(page.getByTestId("usage-sources")).toBeVisible({ timeout: 30_000 });
 }
 

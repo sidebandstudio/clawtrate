@@ -14,6 +14,7 @@ import {
   CONTEXT_HINT,
   contextValue,
   budgetLine,
+  budgetMeterLine,
   costHint,
   costValue,
   deviceTimeZone,
@@ -140,6 +141,27 @@ describe("every bot's bars", () => {
 
 describe("a budget's time zone", () => {
   const weekly: Budget = { ...routine, id: "bot:otto", routineId: null, period: "weekly" };
+
+  it("F-234: the meter names the budget's zone only when it isn't this device's", () => {
+    const here: Budget = { ...weekly, timeZone: deviceTimeZone() };
+    expect(budgetMeterLine(here, count({}))).toBe("200 of 1,000 tokens this week");
+    const elsewhere = deviceTimeZone() === "Asia/Tokyo" ? NY : "Asia/Tokyo";
+    expect(budgetMeterLine({ ...weekly, timeZone: elsewhere }, count({}))).toBe(
+      `200 of 1,000 tokens this week · ${elsewhere}`,
+    );
+  });
+
+  it("F-234: after a failed recount the meter says when the count it kept is from", () => {
+    const here: Budget = { ...weekly, timeZone: deviceTimeZone() };
+    const at = Date.UTC(2026, 10, 19, 15, 7);
+    expect(budgetMeterLine(here, count({ asOf: at, error: "read timed out" }))).toBe(
+      `200 of 1,000 tokens this week, refresh failed, as of ${clock(at)}`,
+    );
+    // No count kept: nothing to date.
+    expect(budgetMeterLine(here, count({ used: null, error: "read timed out" }))).toBe(
+      "1,000 tokens this week, count unavailable",
+    );
+  });
 
   it("F-234: changing a budget keeps the time zone it was set in; a new one counts in this device's", () => {
     const tokyo: Budget = { ...weekly, timeZone: "Asia/Tokyo" };

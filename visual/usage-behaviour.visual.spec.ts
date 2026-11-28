@@ -756,11 +756,42 @@ test("F-234: a hidden window asks for no report at the date's rollover, and read
     timezoneId: "America/New_York",
   });
   const page = await context.newPage();
+  // Each of Otto's weekly reports the host answers, by the last day of the range it covers;
+  // the new day's report carries a total of its own, so only it can show that figure.
+  await page.addInitScript(() => {
+    type Reply = { range?: { endDate: string }; figure: { tokens: { total: number } } };
+    const days: string[] = [];
+    let held: { invoke(command: { type: string }): Promise<unknown> } | undefined;
+    Object.defineProperty(window, "usageDays", { value: days });
+    Object.defineProperty(window, "clawtrateFixture", {
+      configurable: true,
+      get: () => held,
+      set(bridge: NonNullable<typeof held>) {
+        held = bridge;
+        const original = bridge.invoke.bind(bridge);
+        bridge.invoke = async (command) => {
+          const answer = (await original(command)) as Reply;
+          const read = command as { type: string; botId?: string | null; period?: string };
+          if (read.type !== "readUsage" || read.botId !== "otto" || read.period !== "week")
+            return answer;
+          if (!answer?.range) return answer;
+          days.push(answer.range.endDate);
+          if (answer.range.endDate !== "2026-11-17") return answer;
+          const tokens = { ...answer.figure.tokens, total: 7_777_777 };
+          return { ...answer, figure: { ...answer.figure, tokens } };
+        };
+      },
+    });
+  });
+  const days = () =>
+    page.evaluate(() => [...(window as unknown as { usageDays: string[] }).usageDays]);
   // Two minutes before midnight, so the page's first report is for Nov 16 however long it loads;
   // then the clock is held just before midnight until the page is hidden.
   await page.clock.install({ time: new Date("2026-11-16T23:58:00-05:00") });
   await page.goto(`/?${PAGE}&theme=light`);
-  await expect(page.getByTestId("usage-total")).toBeVisible();
+  await expect(page.getByTestId("usage-total")).toHaveText("1,640,000 tokens");
+  expect(await days()).toEqual(expect.arrayContaining(["2026-11-16"]));
+  expect(await days()).not.toContain("2026-11-17");
   await page.clock.pauseAt(new Date("2026-11-16T23:59:50-05:00"));
   await setHidden(page, true);
   const before = await usageReads(page);
@@ -770,9 +801,38 @@ test("F-234: a hidden window asks for no report at the date's rollover, and read
   await setHidden(page, false);
   await page.clock.resume();
   await expect.poll(() => usageReads(page)).toBeGreaterThan(before);
-  // A report is shown only for the days it covers (reportFits), so figures again are the new day's.
-  await expect(page.getByTestId("usage-total")).toBeVisible();
+  // The read asks for the week to Nov 17, and the page shows that report's own total.
+  await expect.poll(async () => (await days()).at(-1)).toBe("2026-11-17");
+  await expect(page.getByTestId("usage-total")).toHaveText("7,777,777 tokens");
   await context.close();
+});
+
+test("F-234: a budget saved in another time zone names that zone on its meter; one saved here names none (fixture)", async ({
+  page,
+}) => {
+  await openFixture(page, PAGE, "light");
+  await expect(page.getByTestId("budget-meter")).toContainText(
+    /^1,640,000 of 2,500,000 tokens this week\s*65%$/,
+  );
+  await openFixture(page, `${PAGE}&budget=elsewhere`, "light");
+  const zone = await page.evaluate(() =>
+    Intl.DateTimeFormat().resolvedOptions().timeZone === "Asia/Tokyo"
+      ? "America/New_York"
+      : "Asia/Tokyo",
+  );
+  await expect(page.getByTestId("budget-meter")).toContainText(` tokens this week · ${zone}`);
+  await expect(page.getByTestId("budget-meter").getByRole("meter")).toHaveAccessibleName(
+    new RegExp(`^Otto's weekly budget: .* tokens this week · ${zone}$`),
+  );
+});
+
+test("F-234: a budget whose recount failed says when the count it kept is from (fixture)", async ({
+  page,
+}) => {
+  await openFixture(page, `${PAGE}&budget=recountfailed`, "light");
+  await expect(page.getByTestId("budget-meter")).toContainText(
+    /^1,640,000 of 2,500,000 tokens this week, refresh failed, as of \d{1,2}:\d{2} [AP]M/,
+  );
 });
 
 test("F-234: a Usage page kept out of view asks for no recount, and asks once shown again (fixture)", async ({

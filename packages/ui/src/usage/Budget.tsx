@@ -19,7 +19,7 @@ import { Choice, Meter, ShownOnly } from "./parts.tsx";
 import {
   budgetFailure,
   budgetInput,
-  budgetLine,
+  budgetMeterLine,
   deviceTimeZone,
   full,
   kindWord,
@@ -287,8 +287,8 @@ export function BudgetPart({
         <Meter
           used={used}
           limit={budget.tokens}
-          words={budgetLine(budget, count)}
-          label={`${name}'s ${kindWord(budget.period)} budget: ${budgetLine(budget, count)}`}
+          words={budgetMeterLine(budget, count)}
+          label={`${name}'s ${kindWord(budget.period)} budget: ${budgetMeterLine(budget, count)}`}
           testId="budget-meter"
         />
       )}

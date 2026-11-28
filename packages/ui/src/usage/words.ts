@@ -251,6 +251,16 @@ export function budgetLine(budget: Budget, count: BudgetCount | null): string {
     : `${full(used)} of ${full(budget.tokens)} tokens ${periodWord(budget.period)}${count?.counting ? " so far" : ""}${count?.partial ? ", partial" : ""}${count?.error ? ", refresh failed" : ""}`;
 }
 
+/**
+ * The bot page's budget meter: its line; after a failed recount, when the count it kept is
+ * from; and the budget's time zone when it isn't this device's, as the Settings row says it.
+ */
+export function budgetMeterLine(budget: Budget, count: BudgetCount | null): string {
+  const kept = count?.error && count.used !== null ? `, ${asOf(count.asOf)}` : "";
+  const zone = budget.timeZone === deviceTimeZone() ? "" : ` · ${zoneWords(budget.timeZone)}`;
+  return `${budgetLine(budget, count)}${kept}${zone}`;
+}
+
 /** What a partial count is short of. */
 export const PARTIAL_COUNT =
   "Partial: the gateway lists only its most recently updated tasks at once, and some of this routine's may not be among them.";
