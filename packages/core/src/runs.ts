@@ -557,6 +557,12 @@ export type Run = {
    */
   ranInHistory?: true;
   /**
+   * The id `mapHistory` gives this failed run's error row: the run's last row (`stopReason:
+   * "error"`), text only, whose text is the error. An item with that id is that row alone; its
+   * failure card says it, so it is not drawn as a reply too (#723). Absent otherwise.
+   */
+  errorItemId?: string;
+  /**
    * An event of the run said it started where none of its other fields keeps it: one that came
    * after the run's end (a lifecycle error saying the provider started, after the `chat` error), or
    * an attempt's error saying the provider started. Evidence that a run started is kept whatever
@@ -3219,6 +3225,8 @@ export function runsFromHistory(
   const inFlightRunId = str(snapshot?.runId);
   const runs = new Map<string, Run>();
   const lastAssistant = new Map<string, RawRecord>();
+  /** The item id `mapHistory` gives each run's last assistant row. */
+  const lastAssistantItem = new Map<string, string>();
   /** Runs whose last persisted content is a thinking block: that segment may still be streaming. */
   const trailingThinking = new Map<string, boolean>();
   let anchor: string | null = null;
@@ -3297,6 +3305,7 @@ export function runsFromHistory(
       );
     if (message.role === "assistant") {
       lastAssistant.set(runId, message);
+      lastAssistantItem.set(runId, historyItemId(message, index));
       run = { ...run, model: str(message.model) ?? run.model, endedAt: at ?? run.endedAt };
       // What tells a quiet answer from a turn that ended with none (#680).
       if (answeredNothing(message)) run = { ...run, unansweredInHistory: true };
@@ -3499,7 +3508,17 @@ export function runsFromHistory(
       // The gateway writes the failure as the run's last row; its text is the error itself.
       const message =
         str(last?.errorMessage) || liveTextFromChatMessage(last).trim() || "The run failed.";
-      return finishRun(run, "failed", ctx, { message, kind: null }, run.endedAt);
+      const failedRun = finishRun(run, "failed", ctx, { message, kind: null }, run.endedAt);
+      const content = last?.content;
+      const textOnly =
+        typeof content === "string" ||
+        (Array.isArray(content) && content.every((part) => asRecord(part)?.type === "text"));
+      // Left to the row unless the card says its whole text: an error the card cuts, or the
+      // gateway's own message where the row holds other words, keeps the row.
+      const said = failedRun.error?.message === liveTextFromChatMessage(last).trim();
+      return textOnly && said
+        ? { ...failedRun, errorItemId: lastAssistantItem.get(run.id)! }
+        : failedRun;
     }
     // Only a final reply establishes completion. A last row that stops for a
     // tool, or no reply row at all, says the run ended but not how.
@@ -3777,7 +3796,12 @@ export function mergeHistoryRuns(
         endFromRows: true,
       };
     }
-    return run;
+    // The row history marks as the error is left out only while the card says its words: a live
+    // error the merge kept can say something else, and a mark from an earlier read goes (#723).
+    const { errorItemId: _earlier, ...unmarked } = run;
+    return fromRun.errorItemId !== undefined && run.error?.message === fromRun.error?.message
+      ? { ...unmarked, errorItemId: fromRun.errorItemId }
+      : unmarked;
   });
   const runs = [...merged, ...live.filter((run) => !historyIds.has(run.id))].sort(
     (a, b) => Number(a.state === "queued") - Number(b.state === "queued"),

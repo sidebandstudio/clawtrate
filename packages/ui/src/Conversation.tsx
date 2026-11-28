@@ -676,7 +676,12 @@ type LiveOptions = {
   leaving: { key: string; run: Run } | null;
 };
 
-function buildLive(bot: Bot, task: Task, transcript: Transcript, options: LiveOptions): LiveParts {
+export function buildLive(
+  bot: Bot,
+  task: Task,
+  transcript: Transcript,
+  options: LiveOptions,
+): LiveParts {
   const active = currentRun(transcript);
   const foot: ReactNode[] = [];
   const placed = new Set<string>();
@@ -799,6 +804,7 @@ function buildLive(bot: Bot, task: Task, transcript: Transcript, options: LiveOp
       if (message.mode === "steer" && message.runId === run.id) bubble(message.id);
     }
     if (run !== active) {
+      if (run.state === "failed" && run.errorItemId) echoes.add(run.errorItemId);
       // A finished run the engine still draws folds the notes after its message, as above.
       const anchor = run.anchorItemId;
       foot.push(

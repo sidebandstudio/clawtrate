@@ -468,6 +468,7 @@ export const RUN: Bound = flagged<Run>()({
   omittedToolsAtEnd: NUMBER,
   endFromRows: FLAG,
   ranInHistory: FLAG,
+  errorItemId: ID,
   startSaid: FLAG,
   quietEnd: ENUM,
   quietError: runError,

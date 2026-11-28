@@ -34,6 +34,7 @@ import {
   type Step,
   type TaskActivity,
 } from "../src/runs.ts";
+import { mapHistory } from "../src/mapping.ts";
 import { MAX_PREAMBLES_PER_RUN } from "../src/state-bounds.ts";
 
 const KEY = "agent:otto:disk-space";
@@ -937,6 +938,95 @@ describe("rebuilding from history (F-107, F-093)", () => {
     expect(runs[1]!.error?.message).toBe("provider down");
     expect(runs[1]!.steps[0]).toMatchObject({ status: "done", truncated: true });
     expect(runs[2]!.steps[0]!.status).toBe("running");
+  });
+
+  it("a run that failed after it started names the row the gateway stored its error in (#723)", () => {
+    const rows = [
+      // No `<runId>:user` key and no `startedBy`: nothing ties the run to a message.
+      { role: "user", content: "a", __openclaw: { id: "u1", seq: 1 } },
+      {
+        role: "assistant",
+        content: [{ type: "text", text: "provider down" }],
+        stopReason: "error",
+        errorMessage: "provider down",
+        __openclaw: { id: "a1", seq: 2, runId: "r1" },
+      },
+      { role: "user", content: "b", __openclaw: { id: "u2", seq: 3 } },
+      {
+        role: "assistant",
+        content: [
+          { type: "text", text: "Looking." },
+          { type: "toolCall", id: "c1", name: "exec", arguments: {} },
+        ],
+        stopReason: "error",
+        __openclaw: { id: "a2", seq: 4, runId: "r2" },
+      },
+    ];
+    const [failed, withCall] = runsFromHistory(rows, null, ctx());
+    expect(failed).toMatchObject({ state: "failed", anchorItemId: null, errorItemId: "a1:1" });
+    expect(mapHistory(rows).map((item) => item.id)).toContain("a1:1");
+    // A row that holds more than the error is not the error alone.
+    expect(withCall!.state).toBe("failed");
+    expect(withCall!.errorItemId).toBeUndefined();
+  });
+
+  it("a failed run's error row stays when its failure card doesn't say all of it (#723)", () => {
+    const failedWith = (text: string, errorMessage?: string) =>
+      runsFromHistory(
+        [
+          { role: "user", content: "a", __openclaw: { id: "u1", seq: 1 } },
+          {
+            role: "assistant",
+            content: [{ type: "text", text }],
+            stopReason: "error",
+            ...(errorMessage ? { errorMessage } : {}),
+            __openclaw: { id: "a1", seq: 2, runId: "r1" },
+          },
+        ],
+        null,
+        ctx(),
+      )[0]!;
+    // The card cuts a long error: the row keeps the rest of it.
+    const long = failedWith("x".repeat(2_048));
+    expect(long.error!.message.length).toBeLessThan(2_048);
+    expect(long.errorItemId).toBeUndefined();
+    // The card says the gateway's error message, which isn't what the row holds.
+    expect(
+      failedWith("Retrying with a smaller model.", "provider down").errorItemId,
+    ).toBeUndefined();
+    expect(failedWith("provider down").errorItemId).toBe("a1:1");
+  });
+
+  it("a failed run's error row stays when the live error its card keeps says something else (#723)", () => {
+    const history = (text: string) =>
+      runsFromHistory(
+        [
+          { role: "user", content: "a", __openclaw: { id: "u1", seq: 1 } },
+          {
+            role: "assistant",
+            content: [{ type: "text", text }],
+            stopReason: "error",
+            __openclaw: { id: "a1", seq: 2, runId: "run-1" },
+          },
+        ],
+        null,
+        ctx(),
+      );
+    const failed = (message: string) =>
+      play([
+        A("run-1", 1, "lifecycle", { phase: "start", startedAt: 1_001 }),
+        C("run-1", 2, "error", { errorMessage: message }),
+      ]).activity.runs;
+    // The card keeps the live error: the row says other words, so it is drawn.
+    const other = mergeHistoryRuns(failed("timeout"), history("provider down"), ctx()).runs[0]!;
+    expect(other.error?.message).toBe("timeout");
+    expect(other.errorItemId).toBeUndefined();
+    // The same words: the row is the card's, and is left out.
+    const same = mergeHistoryRuns(failed("provider down"), history("provider down"), ctx()).runs;
+    expect(same[0]!.errorItemId).toBe("a1:1");
+    // A mark an earlier read left goes when history no longer marks the row.
+    const stale = mergeHistoryRuns(same, history("timeout and more"), ctx()).runs;
+    expect(stale[0]!.errorItemId).toBeUndefined();
   });
 
   it("merges a reload into live runs without duplicating runs or steps", () => {
