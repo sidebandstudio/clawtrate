@@ -1120,8 +1120,9 @@ function beforeUpdateNotice(
  * For a viewer that keeps its own memory of what it read (a read-only connection), when it read a
  * task through, past an update notice that is all that came since: when the task's listed preview
  * is the notice its loaded history ends with, and the viewer read the task at or after the latest
- * row before it (`updateNoticeAfter`, so every row of a merged turn; both are the gateway's times),
- * the task's own time. Otherwise `seenAt`. On a
+ * row before it, or before the first of the quiet lines it ends a run of (skill notes included,
+ * `readThroughQuietLines`; so every row of a merged turn; both are the gateway's times), the
+ * task's own time. Otherwise `seenAt`. On a
  * connection that writes, the gateway keeps unread, and the notice doesn't raise it: writing it
  * moves only the row's `updatedAt` (OpenClaw 2026.10.6, `deriveSessionUnread`).
  */
@@ -1133,16 +1134,40 @@ export function seenThroughUpdateNotice(
 ): number | undefined {
   if (seenAt === undefined || task.updatedAt === null || task.updatedAt <= seenAt) return seenAt;
   if (beforeUpdateNotice(task, transcript, scope) === undefined) return seenAt;
-  // Back through earlier update lines (two updates with nothing between them) to the first: what
-  // came before it is what the viewer must have read.
-  const items = transcript!.items;
+  return readThroughQuietLines({ ...task, updatedAt: task.updatedAt }, seenAt, transcript!, scope);
+}
+
+/**
+ * Past the quiet lines a loaded history ends with, whose last one the listed preview is: back
+ * through every earlier one to the first. Quiet is only what the gateway vouches for: a skill note
+ * it marks (OpenClaw 2026.11.10, `SkillNote.agentId`) and an update line this device followed
+ * (F-560, F-590). An unmarked note, which a bot's message can imitate (2026.10.6), a row the
+ * gateway cut, and anything else is what the viewer must have read: it stops the walk, and as the
+ * last line it isn't passed.
+ * The viewer read the task through when it read at or after the latest row before the first quiet
+ * line (`updateNoticeAfter` or `SkillNote.after`, both the gateway's times): then the task's own
+ * time.
+ */
+function readThroughQuietLines(
+  task: Task & { updatedAt: number },
+  seenAt: number,
+  transcript: Transcript,
+  scope: UpdateNoticeScope,
+): number {
+  const items = transcript.items;
+  // A row the gateway cut is still to read: a real notice is never that long (the gateway cuts at
+  // 8,000 characters; a note folds only up to `MAX_SKILL_NOTE_CHARS`).
+  const quiet = (item: TranscriptItem | undefined) =>
+    item?.truncated !== true &&
+    ((item?.skillNote !== undefined && item.skillNote.agentId !== null) ||
+      updateNoticeLine(item, task.key, scope) !== null);
+  if (!quiet(items.at(-1))) return seenAt;
   let first = items.length - 1;
-  while (first > 0 && updateNoticeLine(items[first - 1], task.key, scope)) first -= 1;
-  if (first === 0) {
-    // Nothing loaded before the line: the conversation had nothing else only if it is all loaded.
-    return transcript!.hasMore ? seenAt : task.updatedAt;
-  }
-  const after = items[first]!.updateNoticeAfter;
+  while (first > 0 && quiet(items[first - 1])) first -= 1;
+  // Nothing loaded before the lines: the conversation had nothing else only if it is all loaded.
+  if (first === 0) return transcript.hasMore ? seenAt : task.updatedAt;
+  const head = items[first]!;
+  const after = head.skillNote ? head.skillNote.after : head.updateNoticeAfter;
   if (after === undefined || seenAt < after) return seenAt;
   return task.updatedAt;
 }
@@ -1165,23 +1190,20 @@ function trailingSkillNotes(task: Task, transcript: Transcript | undefined): num
 
 /**
  * For a viewer that keeps its own memory of what it read (a read-only connection), when it read a
- * task through, past skill notes that are all that came since: when the task's listed preview is
- * the note its loaded history ends with, and the viewer read the task at or after the latest row
- * before the first of them (`SkillNote.after`; both are the gateway's times), the task's own
- * time. Otherwise `seenAt`. On a connection that writes, the gateway keeps unread, and the note
+ * task through, past quiet lines that are all that came since: when the task's listed preview is
+ * the skill note its loaded history ends with, the gateway marks that note, and the viewer read the
+ * task at or after the latest row before the first of the quiet lines there, update lines this
+ * device vouches for included (`readThroughQuietLines`), the task's own time. Otherwise `seenAt`:
+ * an unmarked note (2026.10.6), which a bot can imitate, is still to read. On a connection that writes, the gateway keeps unread, and the note
  * doesn't raise it (OpenClaw 2026.10.6 and 2026.11.10: writing it moves only `updatedAt`).
  */
 export function seenThroughSkillNote(
   task: Task,
   seenAt: number | undefined,
   transcript: Transcript | undefined,
+  scope: UpdateNoticeScope,
 ): number | undefined {
   if (seenAt === undefined || task.updatedAt === null || task.updatedAt <= seenAt) return seenAt;
-  const first = trailingSkillNotes(task, transcript);
-  if (first === undefined) return seenAt;
-  // Nothing loaded before the notes: the conversation had nothing else only if it is all loaded.
-  if (first === 0) return transcript!.hasMore ? seenAt : task.updatedAt;
-  const after = transcript!.items[first]!.skillNote!.after;
-  if (after === undefined || seenAt < after) return seenAt;
-  return task.updatedAt;
+  if (trailingSkillNotes(task, transcript) === undefined) return seenAt;
+  return readThroughQuietLines({ ...task, updatedAt: task.updatedAt }, seenAt, transcript!, scope);
 }

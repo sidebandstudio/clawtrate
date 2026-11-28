@@ -207,6 +207,10 @@ export type CreateBotInput = {
 const MODELS_GATEWAY_CHANGED = "The gateway changed while its models were looked for.";
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
+const entryOf = (config: RawRecord | null, botId: string) =>
+  asRecord(asRecord(asRecord(asRecord(config?.config)?.agents)?.entries)?.[botId]);
+const providerOf = (entry: RawRecord | null) =>
+  parseModelRef(readModelConfig(entry?.model).primary)?.provider ?? null;
 
 /** The longest picture New bot sends. */
 export const MAX_CREATE_AVATAR_CHARS = MAX_PICTURE_CHARS;
@@ -344,20 +348,22 @@ export class AccountsEngine {
           failure ??= { error };
           return null;
         });
+      const configRead = settle(
+        ctx
+          .readAgain(() => ctx.request("config.get", {}), current)
+          .then(asRecord, (error) => {
+            configFailed = true;
+            throw error;
+          }),
+      );
       const [config, views, prefs] = await Promise.all([
-        settle(
-          ctx
-            .readAgain(() => ctx.request("config.get", {}), current)
-            .then(asRecord, (error) => {
-              configFailed = true;
-              throw error;
-            }),
-        ),
+        configRead,
         settle(
           this.readViews(
             bots.map((bot) => bot.id),
             failed,
             sent,
+            configRead,
           ),
         ),
         ctx.request("users.prefs.get", {}).then(asRecord, () => null),
@@ -651,6 +657,7 @@ export class AccountsEngine {
     botIds: string[],
     failed: BotReadFailure[] = [],
     sent: Map<string, number> = new Map(),
+    config: Promise<RawRecord | null>,
   ): Promise<Map<string, BotView>> {
     const views = new Map<string, BotView>();
     // A few bots at a time. Sharing is decided only from refreshed answers (row 33).
@@ -665,6 +672,7 @@ export class AccountsEngine {
       );
       for (const botId of chunk) sent.set(botId, seq);
       const settled = await out;
+      const read = await config;
       let first: unknown = null;
       for (let j = 0; j < chunk.length; j += 1) {
         const botId = chunk[j]!;
@@ -672,7 +680,7 @@ export class AccountsEngine {
         let view: BotView;
         try {
           if (each.status === "rejected") throw each.reason;
-          view = readBotView(each.value);
+          view = readBotView(each.value, providerOf(entryOf(read, botId)));
         } catch (error) {
           failed.push({ botId, seq, status: "failed", error: this.scrub(errorText(error)) });
           first ??= error;
@@ -941,7 +949,7 @@ export class AccountsEngine {
     try {
       let answer: unknown;
       [answer, config] = await out;
-      view = readBotView(answer);
+      view = readBotView(answer, providerOf(entryOf(config, botId)));
     } catch (error) {
       this.readFailed(ctx, botId, seq, "failed", this.scrub(errorText(error)));
       throw error;
@@ -950,7 +958,7 @@ export class AccountsEngine {
       this.readFailed(ctx, botId, seq, "unavailable", view.unavailable);
       return null;
     }
-    const entry = asRecord(asRecord(asRecord(asRecord(config?.config)?.agents)?.entries)?.[botId]);
+    const entry = entryOf(config, botId);
     const gateway = answeredBy(on, ctx.readStamp());
     let applied = false;
     ctx.update((a) => {
@@ -1617,7 +1625,7 @@ export class AccountsEngine {
       const read = (agentId: string, asked: Promise<unknown>) =>
         asked
           .then((answer) => {
-            const view = readBotView(answer);
+            const view = readBotView(answer, signIn.provider);
             if (view.unavailable)
               this.readFailed(ctx, agentId, seq, "unavailable", view.unavailable);
             return view;

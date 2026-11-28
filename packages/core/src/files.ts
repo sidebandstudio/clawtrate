@@ -599,6 +599,10 @@ export class FileTransfers {
     return { data };
   }
 
+  holds(owner: object, id: string): boolean {
+    return this.held.get(id)?.owner === owner;
+  }
+
   release(owner: object, id?: string): void {
     for (const [key, transfer] of this.held) {
       if (transfer.owner === owner && (id === undefined || id === key)) this.held.delete(key);

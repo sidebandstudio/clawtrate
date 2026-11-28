@@ -740,8 +740,9 @@ export type ViewProfile = {
 export type BotView = {
   profiles: ViewProfile[];
   /**
-   * The providers the answer lists, within `MAX_ACCOUNTS`. A provider not here was not read: its
-   * missing order says nothing, so it is never taken as "no order".
+   * The providers the answer lists, within `MAX_ACCOUNTS`, the bot's own provider always among
+   * them. A provider not here was not read: its missing order says nothing, so it is never taken
+   * as "no order".
    */
   providers: string[];
   orders: Record<string, StoredOrder>;
@@ -770,9 +771,10 @@ export const NO_ACCOUNT_STATUS = "The gateway's answer carried no account status
 /**
  * One bot's `models.authStatus` answer. An answer that says it is unavailable is read as such;
  * one with no record or no `providers` list throws `NO_ACCOUNT_STATUS`, so it is never read as a
- * bot with no accounts and no order.
+ * bot with no accounts and no order. `current` is the provider the read is for, always kept: the
+ * bot's own model's, or the one a sign-in just added to.
  */
-export function readBotView(answer: unknown): BotView {
+export function readBotView(answer: unknown, current: string | null = null): BotView {
   const unavailable = unavailableReason(answer);
   const record = asRecord(answer) ?? {};
   if (unavailable === null && !Array.isArray(record.providers)) throw new Error(NO_ACCOUNT_STATUS);
@@ -780,7 +782,10 @@ export function readBotView(answer: unknown): BotView {
   const orders: Record<string, StoredOrder> = {};
   const keyed = new Set<string>();
   const listed = new Set<string>();
-  const providers = Array.isArray(record.providers) ? record.providers : [];
+  const all = Array.isArray(record.providers) ? record.providers : [];
+  // Read first, so the caps never cut it off and its account never reads as missing (#716).
+  const mine = (raw: unknown) => current !== null && str(asRecord(raw)?.provider) === current;
+  const providers = [...all.filter(mine), ...all.filter((raw) => !mine(raw))];
   for (const raw of providers.slice(0, MAX_ACCOUNTS)) {
     const provider = asRecord(raw);
     const id = str(provider?.provider);
