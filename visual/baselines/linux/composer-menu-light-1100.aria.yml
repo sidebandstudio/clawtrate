@@ -105,6 +105,7 @@
   - listbox "Skills and commands":
     - option "tide-table Use when someone asks when the tide turns at the harbour. Your skill" [selected]
     - option "ferry-times Use when someone asks for the next ferry. Team skill"
+    - option "moon-phase Use when someone asks for the moon's phase tonight. Add your skill"
     - option "/healthcheck Check the health of this machine and its services. Bot skill"
     - option "/weather Get the weather for a place. Bot skill"
     - option "/status Show the session's status. Command"

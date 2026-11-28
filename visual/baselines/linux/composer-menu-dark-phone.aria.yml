@@ -67,6 +67,7 @@
   - listbox "Skills and commands":
     - option "tide-table Your skill" [selected]
     - option "ferry-times Team skill"
+    - option "moon-phase Add your skill"
     - option "/healthcheck Bot skill"
     - option "/weather Bot skill"
     - option "/status Command"
