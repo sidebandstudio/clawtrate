@@ -119,7 +119,7 @@ describe("the first screen on a Mac whose OpenClaw profile the host found and ma
     expect(html).not.toContain("Where does OpenClaw run?");
   });
 
-  it("F-602: the startup look that finds no settings opens the same local setup card as This computer", () => {
+  it("F-491 F-602: the startup look that finds no settings opens the same local setup card as This computer", () => {
     for (const unasked of [true, false]) {
       const html = render(local(), found({ outcome: "not-found", access: null }, unasked));
       expect(html).toContain('data-testid="setup-found"');
@@ -133,7 +133,7 @@ describe("the first screen on a Mac whose OpenClaw profile the host found and ma
     }
   });
 
-  it("F-602: a named profile discovered at startup offers Advanced without an install card", () => {
+  it("F-491 F-602: a named profile discovered at startup offers Advanced without an install card", () => {
     const html = render(
       local(),
       found({ outcome: "named-profile", profile: "Work_Lab", access: null }, true),
@@ -154,7 +154,7 @@ describe("the first screen on a Mac whose OpenClaw profile the host found and ma
     expect(html).toContain(">Connect</button>");
   });
 
-  it("F-602: where the startup look can't offer a local route, it asks where OpenClaw runs", () => {
+  it("F-491 F-602: where the startup look can't offer a local route, it asks where OpenClaw runs", () => {
     for (const setup of [
       found({ outcome: "unverified", access: null }, true),
       found({ outcome: "cant-tell", reason: "settings-unfinished", access: null }, true),
