@@ -188,7 +188,9 @@ describe("a desktop start that can't open this device's credentials", () => {
     const aside =
       'await keepAside(recover === "settings" ? join(dir, STATE_FILE) : dir, new Date());';
     expect(fresh.indexOf(aside)).toBeGreaterThan(0);
-    expect(fresh.indexOf("app.relaunch();")).toBeGreaterThan(fresh.indexOf(aside));
+    expect(fresh.indexOf("app.relaunch({ args: relaunchArgs() });")).toBeGreaterThan(
+      fresh.indexOf(aside),
+    );
   });
 
   it("for unreadable settings, starting fresh sets only the settings file aside, and the sealed record stays", async () => {

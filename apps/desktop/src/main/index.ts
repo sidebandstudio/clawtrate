@@ -14,6 +14,8 @@ import {
   BrowserWindow,
   dialog,
   ipcMain,
+  type IpcMainInvokeEvent,
+  type WebFrameMain,
   nativeImage,
   safeStorage,
   session,
@@ -31,6 +33,7 @@ import { applyUnreadBadge, dotBitmap, parseBadgeCount } from "./badge.ts";
 import { startDesktopUpdates } from "./update/build-info.ts";
 import { createUpdatePreferenceStore } from "./update/preferences.ts";
 import { windowsAppUserModelId } from "./identity.ts";
+import { givesSwitch, LinkInbox, linkArgument } from "./links.ts";
 import { safeFileName, writeExactly, type SaveResult } from "./save.ts";
 import {
   keychainCheckName,
@@ -103,13 +106,77 @@ let window: BrowserWindow | null = null;
 /** The programs setup started, ended by PID when the app quits. */
 const programs = new ProgramRunner();
 let closeSetup: () => Promise<void> = async () => {};
+/** Set once the IPC handlers are in place, so a window can be opened for a link. */
+let started = false;
 
-/** Whether a command-line switch was given, to Chromium or to the app. */
-function hasSwitch(name: string): boolean {
+// A link waits here until the window takes it; the window is told one is waiting.
+const links = new LinkInbox(() => {
+  if (window && !window.isDestroyed()) window.webContents.send("clawtrate:link");
+});
+
+/**
+ * The one page the window loads, and the address it is checked against: the dev server's when
+ * one is named, else the renderer's index.html as a file URL, a literal `%` in its path escaped.
+ */
+const APP_PAGE = DEV_SERVER || pathToFileURL(join(RENDERER_DIR, "index.html")).href;
+
+/** A document's address: the URL in full without its fragment, or null when it isn't a URL. */
+function documentUrl(raw: string): string | null {
+  const url = URL.parse(raw);
+  if (url === null) return null;
+  url.hash = "";
+  return url.href;
+}
+
+/** The app's page as a document; null for a dev server address that isn't a URL, which no page is. */
+const APP_DOCUMENT = documentUrl(APP_PAGE);
+
+/**
+ * The app's page as the window's top frame last committed it, a navigation to a new document;
+ * null once that frame committed anything else. A navigation within a document commits nothing,
+ * so a page that changes its own address does not become the app's page.
+ */
+let committedPage: { contents: WebContents; frame: WebFrameMain } | null = null;
+
+/** Follow what a web contents' top frame commits, for `fromAppPage`. */
+function trackPage(contents: WebContents): void {
+  contents.on("did-navigate", (_event, url) => {
+    if (documentUrl(url) === APP_DOCUMENT && APP_DOCUMENT !== null)
+      committedPage = { contents, frame: contents.mainFrame };
+    else if (committedPage?.contents === contents) committedPage = null;
+  });
+}
+
+/**
+ * Whether a call comes from the app's page as the window shows it now: the live window's own
+ * contents, their current top frame, the document that frame committed as the app's page, and
+ * that document still at its own address, a fragment aside. Anything else is refused.
+ */
+function fromAppPage(event: IpcMainInvokeEvent): boolean {
+  if (!window || window.isDestroyed() || event.sender !== window.webContents) return false;
+  const frame = event.senderFrame;
   return (
-    app.commandLine?.hasSwitch(name) === true ||
-    process.argv.some((arg) => arg === `--${name}` || arg.startsWith(`--${name}=`))
+    frame !== null &&
+    !frame.detached &&
+    frame === window.webContents.mainFrame &&
+    committedPage?.contents === window.webContents &&
+    committedPage.frame === frame &&
+    documentUrl(frame.url) === APP_DOCUMENT
   );
+}
+
+/**
+ * The launch's own arguments, for a relaunch: its switches and, in development, the app's path.
+ * Never the link it was given, nor anything Windows split off it: all of that follows the first `--`.
+ */
+function relaunchArgs(): string[] {
+  const end = process.argv.indexOf("--");
+  return process.argv.slice(1, end === -1 ? undefined : end);
+}
+
+/** Whether a command-line switch was given, to Chromium or to the app, before any `--`. */
+function hasSwitch(name: string): boolean {
+  return app.commandLine?.hasSwitch(name) === true || givesSwitch(process.argv, name);
 }
 
 /** A switch's value, given to Chromium or to the app; empty when it has none. */
@@ -302,8 +369,7 @@ function createWindow(): BrowserWindow {
     if (!process.env.CLAWTRATE_SCREENSHOT) win.show();
   });
 
-  if (DEV_SERVER) void win.loadURL(DEV_SERVER);
-  else void win.loadFile(join(RENDERER_DIR, "index.html"));
+  void win.loadURL(APP_PAGE);
   return win;
 }
 
@@ -328,7 +394,8 @@ async function captureAndQuit(win: BrowserWindow, path: string): Promise<void> {
 
 /**
  * Every web contents, the window's and any other: no new windows (links from
- * transcripts open in the system browser), no navigation, no webviews.
+ * transcripts open in the system browser), no navigation, no webviews. What its
+ * top frame commits is followed, for the links it may take (`fromAppPage`).
  */
 app.on("web-contents-created", (_event, contents) => {
   contents.setWindowOpenHandler(({ url }) => {
@@ -337,6 +404,7 @@ app.on("web-contents-created", (_event, contents) => {
   });
   contents.on("will-navigate", (event) => event.preventDefault());
   contents.on("will-attach-webview", (event) => event.preventDefault());
+  trackPage(contents);
 });
 
 /**
@@ -484,7 +552,7 @@ async function main(): Promise<void> {
       try {
         const dir = privateDataDir();
         await keepAside(recover === "settings" ? join(dir, STATE_FILE) : dir, new Date());
-        app.relaunch();
+        app.relaunch({ args: relaunchArgs() });
         app.exit(0);
       } catch {
         dialog.showErrorBox(
@@ -618,6 +686,11 @@ async function main(): Promise<void> {
     if (window && !window.isDestroyed()) window.webContents.send("clawtrate:state", state);
   });
 
+  // The app registers no scheme itself. Only the app's page in the current window takes a
+  // waiting link: any other caller gets nothing and leaves the link for it.
+  ipcMain.handle("clawtrate:link:take", (event) => (fromAppPage(event) ? links.take() : null));
+
+  started = true;
   window = createWindow();
   if (process.env.CLAWTRATE_SCREENSHOT)
     void captureAndQuit(window, process.env.CLAWTRATE_SCREENSHOT);
@@ -648,14 +721,38 @@ app.on("before-quit", (event) => {
   runtime?.client.stop();
 });
 
-// One app per data folder: a second launch focuses the running window and exits.
+/** Bring the window forward, for a second launch or a link. */
+function bringForward(): void {
+  if (!window) return;
+  if (window.isMinimized()) window.restore();
+  window.show();
+  window.focus();
+}
+
+/** A link from the system: held for the window, which comes forward, or opens if there is none. */
+function openLink(raw: string): void {
+  links.receive(raw);
+  if (!window && started) window = createWindow();
+  else bringForward();
+}
+
+// One app per data folder: a second launch focuses the running window and exits,
+// handing over the link it was started with, if any.
 if (app.requestSingleInstanceLock()) {
-  app.on("second-instance", () => {
-    if (!window) return;
-    if (window.isMinimized()) window.restore();
-    window.show();
-    window.focus();
+  // macOS: a link opened while the app runs, or the one that launched it, which
+  // can come before the window exists.
+  app.on("open-url", (event, url) => {
+    event.preventDefault();
+    openLink(url);
   });
+  app.on("second-instance", (_event, argv) => {
+    const link = linkArgument(argv);
+    if (link === null) bringForward();
+    else openLink(link);
+  });
+  // Windows: the link the app was started with.
+  const launchLink = linkArgument(process.argv);
+  if (launchLink !== null) links.receive(launchLink);
   void main();
 } else {
   app.quit();
