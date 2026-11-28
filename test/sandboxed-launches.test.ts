@@ -2,17 +2,18 @@
 // with none of the markers, it is a person's app and looks at the real
 // computer (docs/development/setup.md). Every launch of the packaged app the
 // launch check makes carries `--clawtrate-setup-sandbox`.
-import { spawn } from "node:child_process";
+import { ChildProcess, spawn } from "node:child_process";
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   exitedWithin,
   launchArgs,
   launchPlace,
   recordExit,
   reportExit,
+  windowsQuitProblem,
   withCheckBundle,
 } from "../e2e-packaged/global-setup.ts";
 import { APP_ID } from "../apps/desktop/src/main/identity.ts";
@@ -202,5 +203,83 @@ describe("the packaged app's launches", () => {
     } finally {
       process.kill(child.pid!, "SIGKILL");
     }
+  });
+});
+
+// Windows can end the app before Node reports how it ended (#326): until the
+// exit event, its exit code reads null, which is no answer about the quit.
+describe("the Windows packaged quit", () => {
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  /** A recorded app whose PID the system already says is gone, before Node reports its exit. */
+  function childWithGonePid() {
+    vi.useFakeTimers();
+    vi.spyOn(process, "kill").mockImplementation(() => {
+      throw Object.assign(new Error("no such process"), { code: "ESRCH" });
+    });
+    return recordExit(Object.assign(new ChildProcess(), { pid: 42 }));
+  }
+
+  /** In Node's own order: the exit code and signal are set, then the exit event. */
+  function nodeReportsExit(child: ChildProcess, code: number | null, signal: string | null) {
+    Object.assign(child, { exitCode: code, signalCode: signal });
+    child.emit("exit", code, signal);
+  }
+
+  it("waits for Node to report the exit of an app whose PID is gone, then accepts exit 0", async () => {
+    const child = childWithGonePid();
+    const settled = vi.fn();
+    const problem = windowsQuitProblem(child).then((found) => (settled(), found));
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(settled, "judged before Node reported the exit").not.toHaveBeenCalled();
+    expect(child.listenerCount("exit"), "a listener added for the wait").toBe(1);
+    nodeReportsExit(child, 0, null);
+    expect(await problem).toBeNull();
+    expect(vi.getTimerCount(), "the deadline still running after the exit").toBe(0);
+  });
+
+  it("reports a timeout if the PID is gone but Node never reports an exit", async () => {
+    const child = childWithGonePid();
+    const settled = vi.fn();
+    void windowsQuitProblem(child).then(settled);
+    await vi.advanceTimersByTimeAsync(14_999);
+    expect(settled).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(1);
+    expect(settled).toHaveBeenCalledWith(
+      `the app (pid ${child.pid}) did not quit within 15 seconds`,
+    );
+    expect(vi.getTimerCount()).toBe(0);
+    expect(child.listenerCount("exit"), "only the exit recorded at spawn").toBe(1);
+  });
+
+  it("judges an app that already exited by the code Node recorded, without waiting", async () => {
+    const child = recordExit(
+      spawn(process.execPath, ["-e", "process.exit(0)"], { stdio: "ignore", windowsHide: true }),
+    );
+    await new Promise((resolve) => child.once("exit", resolve));
+    vi.useFakeTimers();
+    expect(await windowsQuitProblem(child)).toBeNull();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("rejects a nonzero exit", async () => {
+    const child = recordExit(
+      spawn(process.execPath, ["-e", "process.exit(7)"], { stdio: "ignore", windowsHide: true }),
+    );
+    expect(await windowsQuitProblem(child)).toBe("the app exited with 7");
+  });
+
+  it("rejects an app ended by a signal", async () => {
+    const child = recordExit(
+      spawn(process.execPath, ["-e", "setTimeout(() => {}, 10000)"], {
+        stdio: "ignore",
+        windowsHide: true,
+      }),
+    );
+    child.kill("SIGKILL");
+    expect(await windowsQuitProblem(child)).toBe("the app exited with SIGKILL");
   });
 });
