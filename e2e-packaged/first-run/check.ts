@@ -16,7 +16,12 @@ import { setTimeout as sleep } from "node:timers/promises";
 import { promisify } from "node:util";
 import { FULL_SCOPES } from "../../packages/core/src/scopes.ts";
 import { appEnv } from "../desktop-driver.ts";
-import { FIRST_MESSAGE, SCRIPTED_REPLY, scriptedProvider } from "./provider.ts";
+import {
+  FIRST_MESSAGE,
+  SCRIPTED_REPLY,
+  scriptedProvider,
+  successfulScriptedRequests,
+} from "./provider.ts";
 import { observeMac } from "./system-observation.ts";
 import { forbiddenScreen, STEPS, verdict, type Element, type StepResult } from "./verdict.ts";
 
@@ -58,7 +63,6 @@ type AccountSheetResult = {
   observedReconnect: boolean;
   secondsSinceAccountSaved: number;
   secondsAvailable: number;
-  secondsBeforeClose: number | null;
 };
 const trace: Event[] = [];
 const pressCounts: Record<PressPurpose, number> = { person: 0, inspection: 0, fixture: 0 };
@@ -78,6 +82,7 @@ let accountSavedAt: number | undefined;
 let accountPickerClosedForInspection = false;
 let accountPickerBeforeSave = false;
 let accountSheet: AccountSheetResult | null = null;
+let accountProbe: { checkingScreenObserved: boolean; scriptedResponses: number } | null = null;
 
 mkdirSync(out, { recursive: true });
 const system = observeMac(out);
@@ -174,6 +179,12 @@ async function waitFor(label: string, ready: () => boolean, seconds = 30) {
       text.includes("This gateway keeps the sign-in for its own bot"),
     );
     if (privateAccount) throw new Error(privateAccount.text);
+    const failedAccount = latest.find(({ text }) =>
+      /^(?:This account can['’]t run a model here|Clawtrate couldn['’]t check this account)\./i.test(
+        text,
+      ),
+    );
+    if (failedAccount) throw new Error(failedAccount.text);
     const retry = latest.find(({ role, text }) => role === "AXButton" && text === "Try again");
     if (retry) throw new Error(`${heading() ?? label} offers Try again.`);
     await sleep(600);
@@ -332,7 +343,8 @@ const firstBotAction = () =>
       role === "AXButton" &&
       /^(?:Create bot|(?:Make|Create|Start) (?:your )?first bot)[.…]?$/i.test(text),
   );
-const reconnecting = () => hasText(/^(?:Waiting for your gateway to reconnect|Reconnecting\b)/i);
+const reconnecting = () =>
+  hasText(/^(?:Waiting for your gateway to reconnect|Reconnecting\b|Restarting OpenClaw)/i);
 
 const shellVisible = () =>
   latest.some(({ role, text }) => role === "AXLandmarkNavigation" && text === "Bots") ||
@@ -350,7 +362,6 @@ async function observeAccountSheet(savedAt: number): Promise<AccountSheetResult>
       observedReconnect,
       secondsSinceAccountSaved: seconds(at - savedAt),
       secondsAvailable: availableSince === undefined ? 0 : seconds(at - availableSince),
-      secondsBeforeClose: null,
     };
   }
   while (true) {
@@ -480,13 +491,9 @@ try {
         );
       }
       if (accountSheet.outcome === "still-open") {
-        record({
-          kind: "fixture",
-          text: "The account picker stayed open for two minutes after the gateway was available.",
-        });
-        accountSheet.secondsBeforeClose = seconds(performance.now() - accountSavedAt);
-        await press("Close", "fixture");
-        await waitFor("the first-bot screen after closing account setup", firstBotWelcome);
+        throw new Error(
+          "Connect an account stayed open for two minutes after the gateway was available.",
+        );
       }
     }
     await waitFor(
@@ -496,14 +503,35 @@ try {
     );
     if (firstBotWelcome()) {
       await screenshot("06-first-bot-welcome.png");
-      await press("Get started", accountSheet?.outcome === "still-open" ? "fixture" : "person");
+      await press("Get started");
       await waitFor("the first-bot creation button", () => !!firstBotAction());
     }
     const action = firstBotAction();
     if (action) {
+      if (!provider) throw new Error("The scripted provider was not started.");
       await screenshot("06-first-bot-setup.png");
+      const requestsBeforeCreate = await successfulScriptedRequests(provider);
       await press(action.text);
-      await waitFor("the first conversation's composer", composer);
+      const checking = () => hasText(/^Checking this account/i);
+      await waitFor(
+        "the account check or the first conversation",
+        () => checking() || composer(),
+        60,
+      );
+      const checkingScreenObserved = checking();
+      if (checkingScreenObserved) {
+        await screenshot("06-checking-account.png");
+        await waitFor("the first conversation's composer", composer, 60);
+      }
+      accountProbe = {
+        checkingScreenObserved,
+        scriptedResponses: (await successfulScriptedRequests(provider)) - requestsBeforeCreate,
+      };
+      if (accountProbe.scriptedResponses < 1) {
+        throw new Error(
+          "Create bot did not complete a request through the selected scripted account.",
+        );
+      }
     }
     if ((await ax("compose")) !== "ok")
       throw new Error("Could not focus the first conversation's composer.");
@@ -558,6 +586,7 @@ try {
     steps: stepResults,
     pressCounts,
     accountSheet,
+    accountProbe,
     trace,
     diagnostics,
   };
