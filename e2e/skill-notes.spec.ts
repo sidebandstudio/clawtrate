@@ -283,6 +283,16 @@ test("F-560: a real skill note folds into its run's line, and its undo works", a
     });
   else expect(mark).toBeUndefined();
   const skill = /`(trail-check[\w-]*)`/.exec(noteText)![1]!;
+  // What the app folds it by (#875): the gateway's own list of skill changes shows the note's
+  // review made the change in this task.
+  const review = String(keyOf(note!)).replace("skill-workshop-notice:", "");
+  const { changes: listed } = await gatewayCall<{ changes: Json[] }>("skills.workshop.changes", {
+    agentId: "clawtrate-main-bot",
+    limit: 500,
+  });
+  expect(listed).toContainEqual(
+    expect.objectContaining({ runId: review, actor: "review", sessionKey: key, skillName: skill }),
+  );
 
   // The note sends no sessions.changed, so the host's list still has the reply. The app opened
   // again reads the list fresh, and the task's runs are rebuilt from its history. On this
@@ -310,7 +320,6 @@ test("F-560: a real skill note folds into its run's line, and its undo works", a
     // The gateway's own undo, from this admin connection.
     await undo.getByRole("button", { name: `Undo: Saved a skill: ${skill}` }).click();
     await expect(undo.getByRole("status")).toHaveText("Undone.", { timeout: 30_000 });
-    const review = String(keyOf(note!)).replace("skill-workshop-notice:", "");
     const { changes } = await gatewayCall<{ changes: Json[] }>("skills.workshop.changes", {
       agentId: "clawtrate-main-bot",
     });

@@ -50,6 +50,7 @@ import {
   MAX_PICTURE_READS,
   MAX_READ_BACK_PICTURES,
   MAX_SENT_PICTURE_MESSAGES,
+  MAX_SKILL_VERDICTS,
   MAX_SPAWN_LINKS,
   MAX_STREAMS_PER_TASK,
 } from "./client.ts";
@@ -129,6 +130,8 @@ const ID = MAX_ID_CHARS;
 const N = 24;
 /** A scope name, a resync reason, a list kind. */
 const SHORT = 32;
+/** A skill note's verdict key: a SHA-256 in hex. */
+const VERDICT_KEY = 64;
 /** A digest key (`digestKey`): three base-36 numbers. */
 const DIGEST = 32;
 const runWithoutSteps = worstCase(RUN, new Map([["steps", 0]]));
@@ -326,6 +329,13 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
     row: "bookkeeping",
   },
   "sentSources.*": { max: MAX_SENT_SOURCES, each: 2 * MAX_INBOUND_REF_CHARS + N, row: null },
+  // Each followed task's skill notes, by review id, and whether the gateway's skill changes confirm it.
+  skillVerdicts: {
+    max: T,
+    each: ID + MAX_SKILL_VERDICTS * (VERDICT_KEY + N),
+    row: "bookkeeping",
+  },
+  "skillVerdicts.*": { max: MAX_SKILL_VERDICTS, each: VERDICT_KEY + N, row: null },
   // Tasks this client names, or waits to name from their first message with text, by key: the stage,
   // the session the task was created as, the gateway it was made on, the message it is named from
   // once the gateway accepts it, the ids of this client's messages there with no text, and of its
