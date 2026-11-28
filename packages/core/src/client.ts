@@ -29,6 +29,7 @@ import {
   GatewayBrowserDeviceAuthLifecycle,
   GatewayProtocolClient,
   GatewayProtocolRequestError,
+  GatewayProtocolRequestTimeoutError,
   PROTOCOL_VERSION,
   shouldPauseGatewayReconnect,
   type EventFrame,
@@ -406,7 +407,13 @@ import {
   QuietChecks,
   quietInHistory,
 } from "./quiet-end.ts";
-import { mentionRows, slashRows, type MenuRow } from "./composer-menus.ts";
+import {
+  attachedCommand,
+  detached,
+  mentionRows,
+  slashRows,
+  type MenuRow,
+} from "./composer-menus.ts";
 import { listedBots } from "./gateway-bot.ts";
 import {
   CONTROL_EVENT,
@@ -1249,6 +1256,9 @@ export class NotSentError extends Error {
     this.name = "NotSentError";
   }
 }
+
+/** A `skills.library.activate` whose answer was lost: whether it took isn't known. */
+const LOST = Symbol("lost");
 
 /** The gateway's answer did not come: what happened is not known yet, and is being checked. */
 export class OutcomeUnknownError extends Error {
@@ -6392,7 +6402,77 @@ export class ClawtrateClient {
     ]);
     if (skills === null && metadata === null && library === null)
       throw new Error("The gateway did not list them.");
-    return slashRows(skills, metadata, library);
+    const canAttach = !this.options.readOnly && this.state.connection.canWrite;
+    return slashRows(skills, metadata, library, canAttach);
+  }
+
+  /**
+   * Attach one of the person's own library skills to a task that started without it
+   * (`skills.library.activate` `attach`, `operator.write`); the task's next turn has it (F-071).
+   * Resolves with the command that runs it, from the gateway's answer, which must list it, or
+   * null when the answer was lost and whether it was attached isn't known.
+   */
+  async attachLibrarySkill(
+    key: string,
+    skillId: string,
+    revision: string,
+    owner: object | null = null,
+  ): Promise<{ command: string | null }> {
+    const answer = await this.activateLibrarySkill(
+      key,
+      { action: "attach", skillId, revision },
+      owner,
+    );
+    if (answer === LOST) return { command: null };
+    const command = attachedCommand(answer, skillId, revision);
+    if (!command) throw new Error("The gateway's answer doesn't list the skill on this task.");
+    return { command };
+  }
+
+  /**
+   * Take a library skill off a task again (`skills.library.activate` `detach`, F-071): false when
+   * the answer was lost and whether it was detached isn't known.
+   */
+  async detachLibrarySkill(
+    key: string,
+    skillId: string,
+    owner: object | null = null,
+  ): Promise<{ detached: boolean }> {
+    const answer = await this.activateLibrarySkill(key, { action: "detach", skillId }, owner);
+    if (answer === LOST) return { detached: false };
+    if (!detached(answer, skillId))
+      throw new Error("The gateway's answer still lists the skill on this task.");
+    return { detached: true };
+  }
+
+  private async activateLibrarySkill(
+    key: string,
+    params: { action: "attach" | "detach"; skillId: string; revision?: string },
+    owner: object | null,
+  ): Promise<unknown> {
+    if (this.options.readOnly) throw new Error("This host only reads; it does not attach skills.");
+    // A scope upgrade reconnects to the same address and keeps the opening of the task.
+    const url = this.settings?.url;
+    const incarnation = this.incarnations.get(key);
+    await this.ensureScope(WRITE_SCOPE, owner);
+    if (this.settings?.url !== url || this.incarnations.get(key) !== incarnation)
+      throw new Error(CONNECTION_CHANGED);
+    this.checkNotWithdrawn(owner);
+    try {
+      return await this.request("skills.library.activate", { sessionKey: key, ...params });
+    } catch (error) {
+      // A refusal is said in the gateway's words, a request that never left changed nothing, and
+      // a lost answer leaves the outcome unknown, never said in the client's own words (#848).
+      if (error instanceof GatewayProtocolRequestError) throw error;
+      if (
+        error instanceof NotSentError ||
+        (error instanceof GatewayProtocolRequestTimeoutError && !error.requestSent)
+      )
+        throw new Error("The connection was lost before it was sent, so nothing changed.", {
+          cause: error,
+        });
+      return LOST;
+    }
   }
 
   /**

@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { MAX_MENU_ROWS, mentionRows, slashRows } from "../src/composer-menus.ts";
+import {
+  attachedCommand,
+  detached,
+  MAX_MENU_ROWS,
+  mentionRows,
+  slashRows,
+} from "../src/composer-menus.ts";
+import { createBridgeSession } from "../src/bridge.ts";
+import { INTERACTIVE_SCOPES } from "../src/scopes.ts";
 import { KEY, openTask, URL_B } from "./client-harness.ts";
 import { deferred, until } from "./fake-gateway.ts";
 
@@ -84,6 +92,15 @@ const ferry = {
   name: "ferry-times",
   description: "Use when someone asks for the next ferry.",
   insert: "/skill s_ferry_tim_8e7f5f9d4d4747729d35",
+};
+
+// The person's own skill saved after the task started, offered to attach.
+const moon = {
+  kind: "your-skill",
+  name: "moon-phase",
+  description: "Use when someone asks when the tide turns at the harbour.",
+  insert: "/skill s_moon_phas_e65dd9b102714cd6a01b",
+  attach: { skillId: "e65dd9b1-0271-4cd6-a01b-ca53f774a07a", revision: own.revision },
 };
 
 describe("the composer's menus", () => {
@@ -172,6 +189,53 @@ describe("the composer's menus", () => {
       expect(slashRows(null, null, answer)).toEqual([]);
   });
 
+  it("F-071: / offers the person's own skill the task could attach, after the task's own, only when the connection may attach it", () => {
+    const answer = library(selected([own]));
+    expect(slashRows(null, null, answer, true)).toEqual([tide, moon]);
+    // Without operator.write the task's own skills alone, as before.
+    expect(slashRows(null, null, answer, false)).toEqual([tide]);
+    expect(slashRows(null, null, answer)).toEqual([tide]);
+    // Only the person's own, switched on and still in the library, with an id and a revision to
+    // attach: another's skill, or one the gateway's answer can't pin, is not offered.
+    const offered = (attachable: unknown[], profileId: unknown = "gateway-owner") =>
+      slashRows(null, null, library({ ...selected([]), attachable }, profileId), true);
+    expect(offered([team])).toEqual([]);
+    expect(offered([saved], null)).toEqual([]);
+    expect(offered([entry({ enabled: false })])).toEqual([]);
+    expect(offered([entry({ enabled: undefined })])).toEqual([]);
+    expect(offered([entry({ removed: true })])).toEqual([]);
+    expect(offered([entry({ skillId: undefined })])).toEqual([]);
+    expect(offered([entry({ revision: 7 })])).toEqual([]);
+    expect(offered([entry({ name: "two words" })])).toEqual([]);
+    for (const attachable of ["x", null, [null, "x"]])
+      expect(slashRows(null, null, library({ ...selected([]), attachable }), true)).toEqual([]);
+  });
+
+  it("F-071: an attach is established only by the task's selections holding that skill at that revision, a detach only by their leaving it out", () => {
+    const pin = { skillId: saved.skillId, revision: saved.revision, name: saved.name };
+    const answer = (selections: unknown) => ({
+      sessionKey: "agent:otto:tides",
+      selections,
+      sessionActivation: "next-turn",
+    });
+    expect(attachedCommand(answer([pin]), saved.skillId, saved.revision)).toBe(saved.name);
+    expect(attachedCommand(answer([]), saved.skillId, saved.revision)).toBeNull();
+    expect(
+      attachedCommand(
+        answer([{ ...pin, revision: "f".repeat(64) }]),
+        saved.skillId,
+        saved.revision,
+      ),
+    ).toBeNull();
+    expect(
+      attachedCommand(answer([{ ...pin, name: "two words" }]), saved.skillId, saved.revision),
+    ).toBeNull();
+    expect(attachedCommand(null, saved.skillId, saved.revision)).toBeNull();
+    expect(detached(answer([]), saved.skillId)).toBe(true);
+    expect(detached(answer([pin]), saved.skillId)).toBe(false);
+    expect(detached(answer(undefined), saved.skillId)).toBe(false);
+  });
+
   it("F-070: @ lists the bots, then the routines the gateway keeps, never its own heartbeat", () => {
     const cron = {
       jobs: [
@@ -199,7 +263,13 @@ describe("the / menu's read", () => {
     gateway.handlers["skills.library.list"] = () => library(selected([own]));
     const rows = await client.readComposerMenu(KEY, "/");
     expect(gateway.calls("skills.library.list")).toEqual([{ sessionKey: KEY }]);
-    expect(rows.map((row) => row.kind)).toEqual(["your-skill", "skill", "skill", "command"]);
+    expect(rows.map((row) => row.kind)).toEqual([
+      "your-skill",
+      "your-skill",
+      "skill",
+      "skill",
+      "command",
+    ]);
     gateway.handlers["skills.library.list"] = () => {
       throw new Error("unknown method: skills.library.list");
     };
@@ -216,11 +286,118 @@ describe("the / menu's read", () => {
     gateway.handlers["skills.status"] = refuse;
     gateway.handlers["chat.metadata"] = refuse;
     gateway.handlers["skills.library.list"] = () => library(selected([own]));
-    expect(await client.readComposerMenu(KEY, "/")).toEqual([tide]);
+    expect(await client.readComposerMenu(KEY, "/")).toEqual([tide, moon]);
     gateway.handlers["skills.library.list"] = refuse;
     await expect(client.readComposerMenu(KEY, "/")).rejects.toThrow(
       "The gateway did not list them.",
     );
+    client.stop();
+  });
+});
+
+describe("attaching a library skill", () => {
+  it("F-071: choosing an attachable skill sends the attach with its id and revision before the skill's command, and Undo detaches it", async () => {
+    const { client, gateway } = await openTask();
+    let selections: unknown[] = [];
+    gateway.handlers["skills.library.list"] = () => library(selected(selections));
+    gateway.handlers["skills.library.activate"] = (params) => {
+      const { action, skillId, revision } = params as Record<string, string>;
+      selections =
+        action === "attach"
+          ? [{ skillId, revision, name: saved.name, ownerProfileId: "gateway-owner" }]
+          : [];
+      return { sessionKey: KEY, selections, sessionActivation: "next-turn" };
+    };
+    const row = (await client.readComposerMenu(KEY, "/")).find((each) => each.attach);
+    expect(row).toMatchObject({ name: "moon-phase", attach: { skillId: saved.skillId } });
+    const { command } = await client.attachLibrarySkill(
+      KEY,
+      row!.attach!.skillId,
+      row!.attach!.revision,
+    );
+    client.sendMessage(KEY, `/skill ${command} for tonight`);
+    await until(() => gateway.calls("chat.send").length === 1);
+    const order = gateway.requests
+      .filter((each) => each.method === "skills.library.activate" || each.method === "chat.send")
+      .map((each) => [each.method, each.params]);
+    expect(order).toEqual([
+      [
+        "skills.library.activate",
+        { sessionKey: KEY, action: "attach", skillId: saved.skillId, revision: saved.revision },
+      ],
+      ["chat.send", expect.objectContaining({ message: `/skill ${saved.name} for tonight` })],
+    ]);
+    expect(await client.detachLibrarySkill(KEY, saved.skillId)).toEqual({ detached: true });
+    expect(gateway.calls("skills.library.activate").at(-1)).toEqual({
+      sessionKey: KEY,
+      action: "detach",
+      skillId: saved.skillId,
+    });
+    // An answer that doesn't list the skill establishes no attach.
+    gateway.handlers["skills.library.activate"] = () => ({ sessionKey: KEY, selections: [] });
+    await expect(client.attachLibrarySkill(KEY, saved.skillId, saved.revision)).rejects.toThrow(
+      "The gateway's answer doesn't list the skill on this task.",
+    );
+    client.stop();
+  });
+
+  it("F-071 #848: an attach or detach whose answer is lost is unconfirmed, and a refusal is said in the gateway's words", async () => {
+    const { client, gateway } = await openTask();
+    gateway.handlers["skills.library.activate"] = () => {
+      throw new Error("skill revision is stale");
+    };
+    await expect(client.attachLibrarySkill(KEY, saved.skillId, saved.revision)).rejects.toThrow(
+      "skill revision is stale",
+    );
+    // The request goes, and the connection drops before its answer: nothing says it failed.
+    const held = deferred<unknown>();
+    gateway.handlers["skills.library.activate"] = () => held.promise;
+    const attach = client.attachLibrarySkill(KEY, saved.skillId, saved.revision);
+    await until(() => gateway.calls("skills.library.activate").length === 2);
+    gateway.dropAll();
+    expect(await attach).toEqual({ command: null });
+    await until(() => client.state.connection.status === "connected");
+    gateway.handlers["skills.library.activate"] = () => held.promise;
+    const detach = client.detachLibrarySkill(KEY, saved.skillId);
+    await until(() => gateway.calls("skills.library.activate").length === 3);
+    gateway.dropAll();
+    expect(await detach).toEqual({ detached: false });
+    client.stop();
+  });
+
+  it("F-071: closing the task withdraws an attach still waiting for write access, though another view keeps it open", async () => {
+    const { client, gateway } = await openTask({ held: ["operator.read"] });
+    const wait = deferred<unknown>();
+    gateway.handlers["device.scopes.requestUpgrade"] = () => ({ requestId: "up-1" });
+    gateway.handlers["device.scopes.waitUpgrade"] = () => wait.promise;
+    gateway.handlers["skills.library.activate"] = () => ({ sessionKey: KEY, selections: [] });
+    const first = createBridgeSession(client);
+    const second = createBridgeSession(client);
+    await first.apply({ type: "openSession", key: KEY });
+    await second.apply({ type: "openSession", key: KEY });
+    const attach = first.apply({
+      type: "attachLibrarySkill",
+      key: KEY,
+      skillId: saved.skillId,
+      revision: saved.revision,
+    });
+    await until(() => client.state.connection.upgrade.status === "pending");
+    await first.apply({ type: "closeSession", key: KEY });
+    wait.resolve({
+      status: "approved",
+      requestId: "up-1",
+      deviceToken: "rotated",
+      scopes: INTERACTIVE_SCOPES,
+    });
+    await expect(attach).rejects.toThrow("The request was withdrawn.");
+    expect(gateway.calls("skills.library.activate")).toEqual([]);
+    client.stop();
+  });
+
+  it("F-071: a connection without operator.write is offered only the task's own library skills", async () => {
+    const { client, gateway } = await openTask({ held: ["operator.read"] });
+    gateway.handlers["skills.library.list"] = () => library(selected([own]));
+    expect(await client.readComposerMenu(KEY, "/")).toEqual([tide]);
     client.stop();
   });
 });
