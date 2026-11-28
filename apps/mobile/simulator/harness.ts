@@ -151,6 +151,26 @@ export const waitGone = (selector: Selector | string, ms = 60_000): Step => ({
   extendedWaitUntil: { notVisible: selector, timeout: ms },
 });
 /**
+ * Tap `target` until `gone` has gone, as a person taps again when a tap doesn't take: the tap,
+ * then a wait of up to `ms` for it to go, at most `tries` times, and only while it is still
+ * there. The last wait is the check's: still there then, the steps fail.
+ */
+export function tapUntilGone(
+  target: Selector | string,
+  gone: Selector | string,
+  { tries = 3, ms = 10_000 }: { tries?: number; ms?: number } = {},
+): Step[] {
+  const wait = (last: boolean): Step => ({
+    extendedWaitUntil: { notVisible: gone, timeout: ms, ...(last ? {} : { optional: true }) },
+  });
+  const commands: Step[] = [tap(target), wait(tries === 1)];
+  for (let each = 2; each <= tries; each += 1)
+    commands.push({
+      runFlow: { when: { visible: gone }, commands: [tap(target), wait(each === tries)] },
+    });
+  return commands;
+}
+/**
  * Swipe until the element is wholly on screen. Maestro looks before each swipe
  * and stops once `ms` has passed, so a long scroll needs time for every swipe
  * and the settling Maestro waits for before and after it.
