@@ -3280,3 +3280,169 @@ textarea {
 .settings-full {
   margin-top: var(--space-4);
 }
+
+/* The sidebar's width (#792) ------------------------------------------------ */
+
+/* Its edge: 8 px to grab, a 2 px line while hovered, dragged or focused. It sits over the
+   seam, above the title bar's drag region. */
+.rail-edge {
+  position: absolute;
+  z-index: 3;
+  top: 0;
+  bottom: 0;
+  left: calc(var(--rail) - 4px);
+  width: 8px;
+  cursor: col-resize;
+  touch-action: none;
+  -webkit-app-region: no-drag;
+}
+
+.rail-edge::after {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 3px;
+  width: 2px;
+  border-radius: 1px;
+  background: transparent;
+  transition: background var(--dur-quick) var(--ease-out);
+}
+
+.rail-edge:hover::after,
+.shell[data-resizing] > .rail-edge::after {
+  background: var(--border-strong);
+}
+
+.rail-edge:focus-visible {
+  outline: none;
+}
+
+.rail-edge:focus-visible::after {
+  background: var(--accent-line);
+}
+
+/* While it is dragged: no text is selected, the cursor stays, and the conversation takes no
+   pointer events (the edge holds the pointer anyway). */
+.shell[data-resizing] {
+  cursor: col-resize;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+.shell[data-resizing] > .main-pane {
+  pointer-events: none;
+}
+
+/* The rail of pictures: each bot is its picture, with its state on it and the unread dot at its
+   top left; the buttons stack at the bottom, above the gateway's dot and Settings. */
+.rail[data-width="pictures"] .bot-list {
+  order: 0;
+  padding: 8px 8px 4px;
+}
+
+.rail[data-width="pictures"] .rail-top {
+  order: 1;
+  flex-direction: column;
+  justify-content: flex-start;
+  height: auto;
+  padding: 8px 0;
+  -webkit-app-region: no-drag;
+}
+
+.rail[data-width="pictures"] .rail-footer {
+  order: 2;
+  flex-direction: column;
+  padding: 0 0 12px;
+}
+
+.rail[data-width="pictures"] .bot,
+.rail[data-width="pictures"] .pin {
+  position: relative;
+  display: grid;
+  grid-template-columns: var(--avatar-row);
+  justify-content: center;
+  min-height: 56px;
+  padding: 4px;
+}
+
+.rail[data-width="pictures"] .pin .presence {
+  --size: var(--avatar-bot);
+}
+
+.rail[data-width="pictures"] .bot-line,
+.rail[data-width="pictures"] .pin-name,
+.rail[data-width="pictures"] .bot-toggle,
+.rail[data-width="pictures"] .row-more,
+.rail[data-width="pictures"] .gateway-pill-text {
+  display: none;
+}
+
+.rail[data-width="pictures"] .rail-unread {
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  box-shadow: 0 0 0 2px var(--bg-rail);
+}
+
+.rail[data-width="pictures"] .pin-grid {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* A section's name stays for screen readers and becomes a hairline between its pictures. */
+.rail[data-width="pictures"] .rail-section {
+  height: 1px;
+  margin: 8px 6px;
+  padding: 0;
+  background: var(--border);
+  color: transparent;
+}
+
+.rail[data-width="pictures"] .hidden-toggle {
+  justify-content: center;
+  padding: 0;
+  font-size: 0;
+}
+
+.rail[data-width="pictures"] .hidden-count {
+  font-size: var(--text-xs);
+}
+
+.rail[data-width="pictures"] .gateway-pill {
+  flex: none;
+  justify-content: center;
+  width: 40px;
+  padding: 0;
+}
+
+/* Words that don't fit 72 px stay for screen readers; the conversation says them too. */
+.rail[data-width="pictures"] .rail-empty,
+.rail[data-width="pictures"] .list-note {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* A notice floats beside the rail, over the conversation's edge: its tone's tint on a solid card. */
+.rail[data-width="pictures"] .rail-notice {
+  --tint: var(--danger-soft);
+  position: absolute;
+  z-index: 4;
+  bottom: 64px;
+  left: calc(100% + 8px);
+  width: 280px;
+  margin: 0;
+  background: linear-gradient(var(--tint), var(--tint)), var(--bg-raised);
+  box-shadow: var(--shadow-pop);
+}
+
+.rail[data-width="pictures"] .rail-notice[data-tone="wait"] {
+  --tint: var(--warn-soft);
+}
+
+.rail[data-width="pictures"] .rail-notice[data-tone="info"] {
+  --tint: var(--bg-hover);
+}

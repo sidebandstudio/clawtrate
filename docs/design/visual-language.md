@@ -220,7 +220,7 @@ The window is two panes, with a third on request.
 
 | Pane         | Width                                                            | Notes                                                                   |
 | ------------ | ---------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| Rail         | 280 px (248 px below 900)                                        | Bots, with tasks under them                                             |
+| Rail         | 280 px (248 px below 900) by default; dragged from 72 to 400 px  | Bots, with tasks under them; at 72 px, the rail of pictures             |
 | Main pane    | the rest                                                         | Holds the conversation and the Work pane                                |
 | Conversation | never less than 440 px; 600 px or more beside a docked Work pane | Transcript column capped at 760 px and centred                          |
 | Work pane    | 360 px                                                           | A drawer by default. Docked only when the main pane is 960 px or wider. |
@@ -238,6 +238,10 @@ Two containers carry the layout, so the same rules serve a narrow window, a spli
 | below 688 | one pane at a time | full-width sheet | full width                | under the sheet         |
 
 688 is where a 248 px rail leaves exactly 440 px for the conversation.
+
+**The rail's width (#792).** Its edge is a separator (`RailEdge.tsx`, `rail-width.ts`): dragged, or moved by keyboard, it takes any width from 208 px, the narrowest that still shows names, to 400 px, or 72 px, the rail of pictures, and nothing between 72 and 208: a drag under halfway between the two (140 px) is the rail. The arrow keys move it 8 px (32 with Shift) and step over the gap; Home goes to the rail, End to the widest; a double-click or Enter goes back to the default and forgets the kept width. This device keeps the width (`clawtrate.railWidth`); it is never sent to the gateway. A kept width leaves the conversation its 440 px, so in a smaller window the rail is narrower than kept until the window is wide again. At phone width the rail is the list pane and has no width of its own. While the edge is dragged no text is selected, the conversation takes no pointer, and the width is written to the shell's `--rail` at most once a frame without a render.
+
+**The rail of pictures (72 px).** Each bot is its picture, 48 px, with its state on it, the unread dot at its top left, its name in its tooltip and its accessible name. No task is listed under a bot: a picture opens its bot (its remembered task, or its newest), and search finds any task. The header's Tasks button for the open bot is `bot-opens-main.md` section 2's, still to be built. The buttons (Routines, Sort, Search, New) stack at the bottom, above the gateway's dot and Settings; their menus open beside them. Pinned bots are pictures in one column; a section's name is a hairline (its name stays for screen readers); Hidden bots is its chevron and count. Search, ⌘⇧F included, opens the search window. A notice floats beside the rail, over the conversation's edge.
 
 **The reader's place.** Opening or closing the pane, docking or undocking it, and resizing the window never move the reader. If the reader was at the bottom, they stay at the bottom. Otherwise the first message in view stays where it was while the text reflows around it.
 
