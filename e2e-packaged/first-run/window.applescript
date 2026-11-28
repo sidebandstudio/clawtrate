@@ -12,19 +12,19 @@ on labelOf(itemRef, roleName)
   tell application "System Events"
     if roleName is in {"AXStaticText", "AXHeading"} then
       try
-        set words to value of itemRef as text
-        if words is not "" and words is not "missing value" then return words
+        set visibleLabel to value of itemRef as text
+        if visibleLabel is not "" and visibleLabel is not "missing value" then return visibleLabel
       end try
     end if
     repeat with field in {"AXTitle", "AXDescription", "AXPlaceholderValue", "AXHelp"}
       try
-        set words to value of attribute (contents of field) of itemRef as text
-        if words is not "" and words is not "missing value" then return words
+        set visibleLabel to value of attribute (contents of field) of itemRef as text
+        if visibleLabel is not "" and visibleLabel is not "missing value" then return visibleLabel
       end try
     end repeat
     try
-      set words to name of itemRef as text
-      if words is not "missing value" then return words
+      set visibleLabel to name of itemRef as text
+      if visibleLabel is not "missing value" then return visibleLabel
     end try
     return ""
   end tell
