@@ -17,7 +17,7 @@ import { updatingHere } from "../src/bots/update-words.ts";
 import { composerFor, statusLineFor } from "../src/live.ts";
 import { presenceWords } from "../src/Rail.tsx";
 import { connectionHeard, RESTARTING_WORDS } from "../src/restarting.ts";
-import { gatewayState } from "../src/Settings.tsx";
+import { gatewayDot, gatewayState } from "../src/Settings.tsx";
 import { stripFor } from "../src/StatusStrip.tsx";
 
 const NOW = 1_800_000_000_000;
@@ -158,6 +158,9 @@ describe("#913: the footer, Settings and what is announced", () => {
     expect(gatewayState(down)).toBe("Offline");
     expect(gatewayState({ ...down, retryAt: null })).toBe("Connecting");
     expect(gatewayState({ ...down, status: "error", restart: RESTART })).toBe("Offline");
+    // Its dot is the one a connection on its way back has.
+    expect(gatewayDot(gatewayState({ ...down, restart: RESTART }))).toBe("connecting");
+    expect(gatewayDot(gatewayState(down))).toBe("error");
   });
 
   it("the conversation announces Restarting OpenClaw when the connection drops for one", () => {

@@ -96,6 +96,17 @@ export function gatewayState(connection: ConnectionState): string {
   }
 }
 
+/** The dot beside the gateway's state in words (`gatewayState`). */
+export function gatewayDot(state: string): string {
+  return state === "Connected"
+    ? "connected"
+    : state === "Connecting" || state === "Pairing pending" || state === RESTARTING_WORDS
+      ? "connecting"
+      : state === "Offline"
+        ? "error"
+        : "disconnected";
+}
+
 /**
  * Whether the connection ended because This computer's check refused it, or the address is
  * This computer's own, on a host that offers This computer: its way on is offered here too.
@@ -981,14 +992,7 @@ export function Settings({
     )?.focus();
   });
 
-  const dot =
-    state === "Connected"
-      ? "connected"
-      : state === "Connecting" || state === "Pairing pending" || state === RESTARTING_WORDS
-        ? "connecting"
-        : state === "Offline"
-          ? "error"
-          : "disconnected";
+  const dot = gatewayDot(state);
 
   const toNav = (
     <button

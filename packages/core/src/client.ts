@@ -2047,7 +2047,6 @@ export class ClawtrateClient {
   /** A restart of the gateway while it plausibly lasts (`restart.ts`): `connection.restart`. */
   private readonly restarts = new RestartWatch({
     now: () => this.now(),
-    target: () => this.state.connection.target,
     current: () => this.state.connection.restart ?? null,
     publish: (restart) => this.setConnection({ restart }),
     waitMs: () => this.options.restartWaitMs ?? RESTART_WAIT_MS,
@@ -9122,7 +9121,6 @@ export class ClawtrateClient {
 
     if (!this.isAllowed(settings.url)) {
       this.rows = new Map();
-      this.restarts.end();
       this.store.set({
         ...initialState,
         turnLimitMinutes: this.turnLimitMs / 60_000,
@@ -12506,11 +12504,10 @@ export class ClawtrateClient {
     // The log policy of the connection this goes out on: a late failure is logged with it,
     // never with that of a connection that replaced it.
     const quiet = this.quiet();
-    const generation = this.generation;
     return this.protocol.request(method, params, options).then(
       (answer) => {
-        // A write the gateway restarts to apply, answered on the connection still open.
-        if (generation === this.generation && answerRestarts(method, answer)) this.restarts.asked();
+        // A write the gateway restarts to apply.
+        if (answerRestarts(method, answer)) this.restarts.asked();
         return answer;
       },
       (error: unknown) => {

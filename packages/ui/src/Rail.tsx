@@ -113,9 +113,7 @@ export function presenceWords(
 
 /** The footer dot: the gateway's presence, never a single task's trouble. */
 function presenceDot(connection: ConnectionState, catchingUp: boolean): string {
-  return connection.status === "connected" && (catchingUp || restartingNow(connection))
-    ? "connecting"
-    : connection.status;
+  return connection.status === "connected" && catchingUp ? "connecting" : connection.status;
 }
 
 /** Re-render once a minute, so relative times stay true. */

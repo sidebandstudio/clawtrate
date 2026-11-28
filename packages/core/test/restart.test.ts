@@ -9,7 +9,7 @@ import { createRemoteBridge } from "../src/remote-bridge.ts";
 import type { WebSocketLike } from "../src/host.ts";
 import { initialState, type ClawtrateState } from "../src/types.ts";
 import { deferred, sleep, until } from "./fake-gateway.ts";
-import { grantingGateway, KEY, openTask, sentTexts } from "./client-harness.ts";
+import { grantingGateway, KEY, openTask, sentTexts, URL_A, URL_B } from "./client-harness.ts";
 
 const RESTARTING = { reason: "gateway restarting", restartExpectedMs: 1500 };
 const STOPPING = { reason: "gateway stopping" };
@@ -308,6 +308,63 @@ describe("another gateway at the same address (#913)", () => {
     await sleep(120);
     stop();
     expect(seen.every((restart) => restart == null)).toBe(true);
+    client.stop();
+  });
+});
+
+describe("what ends a restart, or an ask, besides the next hello (#913)", () => {
+  it("a reconnect that waits for the gateway's owner is said as such, not as a restart", async () => {
+    const gateway = grantingGateway();
+    const { client } = await openTask({ gateway });
+    gateway.emit("shutdown", RESTARTING);
+    await until(() => restartOf(client) !== null);
+    gateway.connectReply = () => ({
+      ok: false,
+      error: {
+        code: "NOT_PAIRED",
+        message: "device pairing required",
+        details: {
+          code: "PAIRING_REQUIRED",
+          reason: "not-paired",
+          requestId: "req-1",
+          deviceId: "device-1",
+          requestedRole: "operator",
+          requestedScopes: ["operator.read"],
+        },
+      },
+    });
+    gateway.dropAll();
+    await until(() => client.state.connection.status === "pairing");
+    expect(restartOf(client)).toBeNull();
+    client.stop();
+  });
+
+  it("an ask doesn't outlive a Disconnect: the gateway's next drop after Connect is any drop", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["config.patch"] = () => patchAnswer(true);
+    const { client } = await openTask({ gateway });
+    await write(client, "config.patch");
+    await client.disconnect();
+    await client.connect({ url: URL_A });
+    await until(() => client.state.connection.status === "connected");
+    gateway.refuseConnections = true;
+    gateway.dropAll();
+    await until(() => client.state.connection.status === "reconnecting");
+    expect(restartOf(client)).toBeNull();
+    client.stop();
+  });
+
+  it("pointed at another gateway while one restarts, the other isn't said to be restarting", async () => {
+    const gateway = grantingGateway();
+    const { client } = await openTask({ gateway });
+    gateway.emit("shutdown", RESTARTING);
+    await until(() => restartOf(client) !== null);
+    gateway.refuseConnections = true;
+    gateway.dropAll();
+    await until(() => client.state.connection.status === "reconnecting");
+    await client.connect({ url: URL_B });
+    expect(client.state.connection.gatewayUrl).toBe(URL_B);
+    expect(restartOf(client)).toBeNull();
     client.stop();
   });
 });

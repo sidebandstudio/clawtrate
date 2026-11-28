@@ -52,8 +52,6 @@ export function answerRestarts(method: string, answer: unknown): boolean {
 
 type RestartContext = {
   now: () => number;
-  /** The host's target now (`ConnectionState.target`). */
-  target: () => number;
   /** The fact as it is published now. */
   current: () => ConnectionRestart | null;
   publish: (restart: ConnectionRestart | null) => void;
@@ -63,7 +61,7 @@ type RestartContext = {
 
 /** The restart fact of one client's connection, and the ask that may lead to it. */
 export class RestartWatch {
-  private ask: { at: number; target: number } | null = null;
+  private askedAt: number | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
 
   private readonly ctx: RestartContext;
@@ -74,7 +72,7 @@ export class RestartWatch {
 
   /** A write of this app's was answered: the gateway restarts to apply it. */
   asked(): void {
-    this.ask = { at: this.ctx.now(), target: this.ctx.target() };
+    this.askedAt = this.ctx.now();
   }
 
   /** The gateway announced a restart on the open connection. */
@@ -89,20 +87,17 @@ export class RestartWatch {
 
   /** A hello, a stop, or the host pointed elsewhere: no restart, and no ask, carries over. */
   end(): void {
-    this.ask = null;
+    this.askedAt = null;
     this.clear();
   }
 
   private askHolds(): boolean {
-    const ask = this.ask;
-    return (
-      ask !== null && ask.target === this.ctx.target() && this.ctx.now() - ask.at <= RESTART_ASK_MS
-    );
+    return this.askedAt !== null && this.ctx.now() - this.askedAt <= RESTART_ASK_MS;
   }
 
   /** The first sign starts the wait; a later one, before the next hello, doesn't extend it. */
   private begin(cause: ConnectionRestart["cause"]): void {
-    this.ask = null;
+    this.askedAt = null;
     if (this.ctx.current()) return;
     const since = this.ctx.now();
     const waitMs = this.ctx.waitMs();
