@@ -260,7 +260,12 @@ export type InstallFailure = {
 };
 
 /** Where setting OpenClaw up stands (§10). */
+export type InstallAction = "continue" | "replace";
+export type InstallRecovery = InstallAction | "inspect";
+
 export type SetupInstall = {
+  /** Inspect marks an incomplete attempt without enough evidence to continue or remove it. */
+  recovery?: InstallRecovery;
   /** The step under way, from 0; 4 once every step is done. */
   step: number;
   /** The installer reported that it used the checked Node.js. */
@@ -316,7 +321,7 @@ export type SetupHost = {
    * dialog and downloads and runs nothing unless that dialog's answer is yes;
    * once the gateway answers, the host connects to it by itself.
    */
-  install(): Promise<void>;
+  install(action?: InstallAction): Promise<void>;
   /** Back to the first screen. */
   reset(): void;
 };

@@ -28,6 +28,7 @@ import {
   PROOF_REFUSAL_LINES,
   type ClawtrateClient,
   type ClawtrateState,
+  type InstallAction,
   type SetupFailure,
   type SetupHost,
   type SetupState,
@@ -97,8 +98,23 @@ export type SetupControllerOptions = {
 export const INSTALL_CONFIRMATION: Confirmation = {
   message: "Set up OpenClaw on this computer?",
   detail:
-    "Clawtrate installs OpenClaw and Node.js for your account and checks both downloads. npm also downloads packages Clawtrate hasn't verified. They can run with your account's permissions. Clawtrate connects this Mac with full control.",
+    "Clawtrate downloads and sets up OpenClaw for your account only. It connects this Mac with full control.",
   confirm: "Set Up OpenClaw",
+};
+
+const RECOVERY_CONFIRMATION: Record<InstallAction, Confirmation> = {
+  continue: {
+    message: "Continue setting up OpenClaw?",
+    detail:
+      "Clawtrate uses the gateway profile it already set up, finishes setting up its service, and connects this Mac with full control.",
+    confirm: "Continue",
+  },
+  replace: {
+    message: "Remove this setup attempt and start again?",
+    detail:
+      "Clawtrate removes the program and gateway profile created by this attempt. It will check new OpenClaw and Node.js downloads. npm also downloads packages Clawtrate hasn't verified. They can run with your account's permissions. Clawtrate connects this Mac with full control.",
+    confirm: "Remove and Start Again",
+  },
 };
 
 /** Said when a look, a Connect or a second install is asked for while one is under way. */
@@ -381,7 +397,20 @@ export class SetupController implements SetupHost {
       else if (signs !== "nothing") look = { ...look, outcome: "cant-tell", reason: "shape" };
       else if (leftover) look = { ...look, leftover: true };
     }
+    const recovery =
+      look.outcome !== "running" || look.profile === "clawtrate"
+        ? await this.installRecovery()
+        : null;
     if (attempt !== this.attempt) return;
+    if (recovery) {
+      this.publish({
+        ...initialSetupState,
+        phase: "install-failed",
+        look,
+        install: { step: 2, nodeChecked: true, failure: null, recovery: recovery.action },
+      });
+      return;
+    }
     this.publish({ ...initialSetupState, phase: "found", unasked, look });
   }
 
@@ -393,6 +422,14 @@ export class SetupController implements SetupHost {
     } catch {
       return "unreadable";
     }
+  }
+
+  private installRecovery(make = this.installer) {
+    return (
+      make?.()
+        .recovery?.()
+        .catch(() => null) ?? Promise.resolve(null)
+    );
   }
 
   /** The program of a proven early leftover of Clawtrate's own, or null. */
@@ -507,11 +544,16 @@ export class SetupController implements SetupHost {
    * step is done the look runs again, and when it proves the gateway just set up, Connect
    * follows by itself.
    */
-  async install(): Promise<void> {
+  async install(action?: InstallAction): Promise<void> {
     if (this.busy) throw new Error(BUSY);
     const { phase, look, install } = this.state;
     const retry = phase === "install-failed" && install?.failure?.retry === true;
-    if (!retry && !(phase === "found" && look?.outcome === "not-found"))
+    const recovery = phase === "install-failed" ? install?.recovery : undefined;
+    if (
+      action
+        ? !recovery || recovery === "inspect" || (action === "replace" && recovery !== "replace")
+        : !retry && !(phase === "found" && look?.outcome === "not-found")
+    )
       throw new Error("There is nothing to set up here. Look again.");
     const make = this.options.installer;
     const confirm = this.options.confirm;
@@ -519,7 +561,7 @@ export class SetupController implements SetupHost {
     if (!make || !confirm || !local) throw new Error("This host doesn't set OpenClaw up.");
     if (this.closed) return;
     this.busy = true;
-    const operation = this.installHeld(make, confirm);
+    const operation = this.installHeld(make, confirm, action);
     this.operation = operation.then(
       () => {},
       () => {},
@@ -539,15 +581,27 @@ export class SetupController implements SetupHost {
   private async installHeld(
     make: () => Installer,
     confirm: (confirmation: Confirmation) => Promise<boolean>,
+    action?: InstallAction,
   ): Promise<boolean> {
     const { look } = this.state;
     const attempt = (this.attempt += 1);
     const at = this.now();
     const before = this.state;
     this.publish({ ...this.state, phase: "confirming", failure: null, unasked: false });
+    const pending = action ? await this.installRecovery(make) : null;
+    if (attempt !== this.attempt) return false;
+    if (
+      action &&
+      (!pending ||
+        pending.action === "inspect" ||
+        (action === "replace" && pending.action !== "replace"))
+    ) {
+      await this.lookNow();
+      return false;
+    }
     let yes: boolean;
     try {
-      yes = await confirm(INSTALL_CONFIRMATION);
+      yes = await confirm(action ? RECOVERY_CONFIRMATION[action] : INSTALL_CONFIRMATION);
     } catch {
       yes = false;
     }
@@ -579,7 +633,7 @@ export class SetupController implements SetupHost {
       stoppedBefore("expired");
       return false;
     }
-    const again = await this.installSite(await this.leftoverProgram());
+    const again = action ? "nothing" : await this.installSite(await this.leftoverProgram());
     if (attempt !== this.attempt) return false;
     if (again === "unreadable" || again === "timeout") {
       this.log("the file checks couldn't be made again after the dialog");
@@ -599,9 +653,13 @@ export class SetupController implements SetupHost {
     this.publish({ ...initialSetupState, look, phase: "installing", install: start });
     let outcome: InstallOutcome;
     try {
-      outcome = await make().run((progress) => {
-        if (attempt === this.attempt) this.publish({ ...this.state, install: progress });
-      });
+      outcome = await make().run(
+        (progress) => {
+          if (attempt === this.attempt) this.publish({ ...this.state, install: progress });
+        },
+        action,
+        pending?.id,
+      );
     } catch (error) {
       this.log(
         error instanceof Error && error.name === "InstallRefusedError"
@@ -623,10 +681,16 @@ export class SetupController implements SetupHost {
     if (attempt !== this.attempt) return false;
     if (!outcome.ok) {
       this.log(`setting OpenClaw up failed: ${outcome.failure.kind}`);
+      const recovery = outcome.failure.retry ? null : await this.installRecovery(make);
+      if (attempt !== this.attempt) return false;
       this.publish({
         ...this.state,
         phase: "install-failed",
-        install: { ...(this.state.install ?? start), failure: outcome.failure },
+        install: {
+          ...(this.state.install ?? start),
+          failure: outcome.failure,
+          ...(recovery ? { recovery: recovery.action } : {}),
+        },
       });
       return false;
     }

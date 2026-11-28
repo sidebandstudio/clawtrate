@@ -33,9 +33,11 @@
 // an attempt whose files it can prove it made, with no service left to use them.
 
 import type {
+  InstallAction,
   InstallCleanup,
   InstallFailure,
   InstallFailureKind,
+  InstallRecovery,
   OnboardClassification,
   SetupInstall,
 } from "@clawtrate/core";
@@ -94,6 +96,26 @@ export const INSTALL_PROFILE = "clawtrate";
 /** OpenClaw's default port and the development gateway's: never chosen for an install. */
 const RESERVED_PORTS = new Set([18789, 19001]);
 const SYSTEM_PATH = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"];
+// OpenClaw probes git while creating a workspace, both during onboarding and after launch.
+// Its LaunchAgent puts the checked Node runtime's bin directory first in PATH.
+// Look directly for a real install so Apple's /usr/bin/git stub cannot open a tools prompt.
+export const DARWIN_GIT = `#!/bin/sh
+try_git() {
+  [ -x "$1" ] && ! [ "$1" -ef /usr/bin/git ] || return 0
+  exec "$@"
+}
+try_git /opt/homebrew/bin/git "$@"
+try_git /usr/local/bin/git "$@"
+developer="$(/usr/bin/xcode-select --print-path 2>/dev/null)" || exit 127
+case "$developer" in
+  /*) ;;
+  *) exit 127 ;;
+esac
+try_git "$developer/usr/bin/git" "$@"
+try_git "$developer/Toolchains/XcodeDefault.xctoolchain/usr/bin/git" "$@"
+exit 127
+`;
+
 /** The status wait after the service is installed (§10). */
 export const STATUS_WAIT_MS = 60_000;
 const STATUS_EVERY_MS = 2_000;
@@ -467,6 +489,18 @@ export function onboardArgs(port: number): string[] {
   ];
 }
 
+/** A local-only gateway has no LAN or wide-area discovery and no tailnet exposure. */
+export const QUIET_DISCOVERY_ARGS = [
+  ...PROFILE_ARGS,
+  "config",
+  "set",
+  "--batch-json",
+  JSON.stringify([
+    { path: "discovery.mdns.mode", value: "off" },
+    { path: "gateway.tailscale.mode", value: "off" },
+  ]),
+];
+
 /** The profile's service, installed on its own, never replacing one (no `--force`). */
 export function serviceInstallArgs(port: number): string[] {
   return [...PROFILE_ARGS, "gateway", "install", "--port", String(port), "--json"];
@@ -540,6 +574,7 @@ export function commands(
   ];
   if (port !== null) {
     list.push({ program: at.openclaw, args: onboardArgs(port) });
+    list.push({ program: at.openclaw, args: QUIET_DISCOVERY_ARGS });
     list.push({ program: at.openclaw, args: serviceInstallArgs(port) });
   }
   return list;
@@ -986,7 +1021,7 @@ export async function rmdirIfSame(path: string, made: Stats): Promise<boolean> {
   );
 }
 
-type Stage = "installing" | "onboarding" | "installed";
+type Stage = "installing" | "onboarding" | "onboarded" | "installed";
 
 /**
  * Clawtrate's own record of an install (§10): one id, its folders, its
@@ -1001,6 +1036,8 @@ export type InstallRecord = {
   stateDir: string;
   service: string;
   port: number | null;
+  profileIdentity?: string;
+  ownerIdentity?: string;
   /** A later attempt can clear only an early leftover. The active attempt can prove its own profile. */
   stage: Stage;
 };
@@ -1010,6 +1047,15 @@ type FolderRecord = { id: string; version: string; profile: string };
 
 /** What an earlier attempt was proven to be, by identity, before any of it is removed. */
 type ProfileProof = { dir: Stats; owner: Stats };
+
+const identity = (stat: Stats) => `${stat.dev}:${stat.ino}`;
+
+type PendingInstall = {
+  id: string;
+  port: number;
+  profile: ProfileProof;
+  canRemove: boolean;
+};
 
 type Proof = {
   id: string;
@@ -1147,7 +1193,11 @@ export class Installer {
   private env(extra: Record<string, string> = {}): Record<string, string> {
     return {
       ...this.options.place.env,
-      PATH: [join(this.options.place.programDir, "bin"), ...SYSTEM_PATH].join(":"),
+      PATH: [
+        ...(this.options.place.platform === "darwin" ? [dirname(this.at.nodeBin)] : []),
+        join(this.options.place.programDir, "bin"),
+        ...SYSTEM_PATH,
+      ].join(":"),
       ...extra,
     };
   }
@@ -1297,7 +1347,7 @@ export class Installer {
       if ((await presence(place.stateDir)) !== "absent" || !(await this.serviceAbsent()))
         return false;
     }
-    const stage = profile ? "onboarding" : "installing";
+    const stage = profile ? "onboarded" : "installing";
     const proof = await this.prove(stage);
     if (!proof || (id !== null && proof.id !== id)) return false;
     const name = `.openclaw-removing-${randomUUID()}`;
@@ -1394,7 +1444,12 @@ export class Installer {
     return `${this.options.place.recordFile}.${id}.${stage}.next`;
   }
 
-  private record(id: string, stage: Stage, port: number | null): InstallRecord {
+  private record(
+    id: string,
+    stage: Stage,
+    port: number | null,
+    profile?: ProfileProof,
+  ): InstallRecord {
     const { place, pins } = this.options;
     return {
       id,
@@ -1405,13 +1460,21 @@ export class Installer {
       service: place.service,
       port,
       stage,
+      ...(profile
+        ? { profileIdentity: identity(profile.dir), ownerIdentity: identity(profile.owner) }
+        : {}),
     };
   }
 
   /** Clawtrate's record at a new stage: written whole to a new file, then moved over the last in one step. */
-  private async writeStage(id: string, stage: Stage, port: number | null): Promise<void> {
+  private async writeStage(
+    id: string,
+    stage: Stage,
+    port: number | null,
+    profile?: ProfileProof,
+  ): Promise<void> {
     const next = this.scratch(id, stage);
-    const made = await this.writeNew(next, JSON.stringify(this.record(id, stage, port)));
+    const made = await this.writeNew(next, JSON.stringify(this.record(id, stage, port, profile)));
     try {
       await rename(next, this.options.place.recordFile);
     } catch (error) {
@@ -1479,12 +1542,59 @@ export class Installer {
     return null;
   }
 
+  /** The recorded checkpoint after onboarding, with the same profile and owner files on disk. */
+  private async pending(): Promise<PendingInstall | null> {
+    const { place, pins } = this.options;
+    const proof = await this.prove("onboarded");
+    if (!proof || proof.staging) return null;
+    const record = parsed(proof.record.text);
+    const port = record?.port;
+    if (
+      typeof port !== "number" ||
+      !Number.isInteger(port) ||
+      port < 1024 ||
+      port > 65535 ||
+      RESERVED_PORTS.has(port)
+    )
+      return null;
+    const dir = await lstat(place.stateDir).catch(() => null);
+    const owner = await readOwn(this.at.owner);
+    if (
+      !dir?.isDirectory() ||
+      !owner ||
+      owner.text !== JSON.stringify({ id: proof.id }) ||
+      record?.profileIdentity !== identity(dir) ||
+      record.ownerIdentity !== identity(owner.stat)
+    )
+      return null;
+    if (!(await this.checkedProgram(pins.version))) return null;
+    const written = await this.writtenService(port);
+    if (written !== "absent" && written !== "ours") return null;
+    return {
+      id: proof.id,
+      port,
+      profile: { dir, owner: owner.stat },
+      canRemove: written === "absent",
+    };
+  }
+
+  async recovery(): Promise<{ id: string; action: InstallRecovery } | null> {
+    const pending = await this.pending();
+    if (pending) return { id: pending.id, action: pending.canRemove ? "replace" : "continue" };
+    const incomplete = (await this.prove("onboarded")) ?? (await this.prove("onboarding"));
+    return incomplete ? { id: incomplete.id, action: "inspect" } : null;
+  }
+
   /**
    * Runs every step, publishing where it stands. Resolves how it ended; a
    * failure before onboarding has already removed what the attempt made, and
    * says so with `cleanup`.
    */
-  async run(progress: (install: SetupInstall) => void): Promise<InstallOutcome> {
+  async run(
+    progress: (install: SetupInstall) => void,
+    action?: InstallAction,
+    expectedId?: string,
+  ): Promise<InstallOutcome> {
     const { place, pins } = this.options;
     await assertMayInstall(place, pins, {
       personsApp: this.options.personsApp,
@@ -1508,6 +1618,22 @@ export class Installer {
 
     // Before anything is made: the user manager, then the place again.
     if (!(await this.userManager())) return stopped("user-service", -1);
+    if (action) {
+      const pending = await this.pending();
+      if (!pending || pending.id !== expectedId || this.closing) return stopped("changed", -1);
+      if (action === "continue") {
+        publish({ step: 2, nodeChecked: true });
+        return this.finishProfile(
+          publish,
+          pending.id,
+          pending.port,
+          pending.profile,
+          !pending.canRemove,
+        );
+      }
+      if (!pending.canRemove || !(await this.discard(pending.id, pending.profile)))
+        return stopped("changed", -1, { cleanup: "unproven" });
+    }
     const site = await this.site();
     if (site === "unreadable") return stopped("write", -1);
     if (site === "exists") return stopped("exists", -1);
@@ -1598,7 +1724,7 @@ export class Installer {
       return unmake("onboard");
     }
     const onboarded = readOnboarding(onboard.stdout, port);
-    if (onboard.timedOut || !onboarded.ok || onboard.exitCode !== 0) {
+    if (this.lingering || onboard.timedOut || !onboarded.ok || onboard.exitCode !== 0) {
       this.log(
         `onboarding not accepted: exit=${onboard.exitCode} timedOut=${onboard.timedOut} tooLarge=${onboard.tooLarge} ${onboardingFacts(onboard.stdout, port)}`,
       );
@@ -1613,51 +1739,101 @@ export class Installer {
     } catch {
       return kept("write");
     }
-    if (this.closing) return kept("service");
-    // The service is installed only where none is: the same predicate as every check before,
-    // immediately before the call (docs/decisions.md, "The profile's service").
-    if (!(await this.serviceAbsent())) {
-      this.log("a service of the profile appeared before it was installed");
-      return kept("changed");
-    }
-    const installed = await this.exec(
-      {
-        program: this.at.openclaw,
-        args: serviceInstallArgs(port),
-        env: this.env(),
-        cwd: place.home,
-        timeoutMs: 3 * 60_000,
-        maxBytes: 1024 * 1024,
-      },
-      port,
-    );
-    // What is defined now, read back: a definition that doesn't run this install on its port is
-    // someone else's, which appeared after the check above. It is left as it is.
-    const written = await this.writtenService(port);
-    if (written === "other") {
-      this.log(
-        "a service of the profile appeared while it was being installed; it was left as it is",
-      );
-      return kept("service-appeared", { exitCode: installed.exitCode });
-    }
-    if (written !== "ours" || !ok(installed) || !readServiceInstall(installed.stdout)) {
-      this.log(
-        `the service wasn't confirmed installed: exit=${installed.exitCode} timedOut=${installed.timedOut} definition=${written}`,
-      );
-      if (written === "absent" && !this.lingering) {
-        const removed = await this.discard(id, { dir: state, owner });
-        return stopped("service", 2, {
-          exitCode: installed.exitCode,
-          cleanup: removed ? "removed" : "unproven",
-          retry: removed,
-        });
-      }
-      return kept("service", { exitCode: installed.exitCode });
-    }
+    const profile = { dir: state, owner };
+    // The installer completed onboarding and its process group exited. A new app process can
+    // continue from here after proving the checkpoint, even if this one quits before launchd.
     try {
-      await this.writeStage(id, "installed", port);
+      await this.writeStage(id, "onboarded", port, profile);
     } catch {
       return kept("write");
+    }
+    return this.finishProfile(publish, id, port, profile);
+  }
+
+  /** Reads back only the discovery flags from OpenClaw's own profile config. */
+  private async discoveryOff(): Promise<boolean> {
+    const config = await readOwn(join(this.options.place.stateDir, "openclaw.json"));
+    const settings = config ? parsed(config.text) : null;
+    const discovery = field(settings, "discovery");
+    const gateway = field(settings, "gateway");
+    return (
+      field(field(discovery, "mdns"), "mode") === "off" &&
+      field(field(discovery, "wideArea"), "domain") === undefined &&
+      field(field(gateway, "tailscale"), "mode") === "off"
+    );
+  }
+
+  private async finishProfile(
+    publish: (next: Partial<SetupInstall>) => void,
+    id: string,
+    port: number,
+    profile: ProfileProof,
+    checkExisting = false,
+  ): Promise<InstallOutcome> {
+    const { place, pins } = this.options;
+    const stopped = (
+      kind: InstallFailureKind,
+      step: number,
+      extra: Partial<InstallFailure> = {},
+    ): InstallOutcome => ({ ok: false, failure: failure(kind, step, extra) });
+    const kept = (kind: InstallFailureKind, extra: Partial<InstallFailure> = {}, step = 2) =>
+      stopped(kind, step, { cleanup: "kept", ...extra });
+    if (this.closing) return kept("service");
+    if (!(await this.sameProfile(place.stateDir, id, profile))) return kept("changed");
+    if (checkExisting) {
+      if ((await this.writtenService(port)) !== "ours" || !(await this.discoveryOff()))
+        return kept("changed");
+    } else {
+      if (!(await this.serviceAbsent())) return kept("changed");
+      if (!(await this.discoveryOff())) {
+        const configured = await this.exec(
+          {
+            program: this.at.openclaw,
+            args: QUIET_DISCOVERY_ARGS,
+            env: this.env(),
+            ...this.quick(),
+          },
+          port,
+        );
+        if (!ok(configured) || !(await this.discoveryOff()))
+          return kept("onboard", { exitCode: configured.exitCode });
+      }
+      // Recheck after the config write. A service which appears beforehand is left in place.
+      if (this.closing || !(await this.serviceAbsent())) return kept("changed");
+      const installed = await this.exec(
+        {
+          program: this.at.openclaw,
+          args: serviceInstallArgs(port),
+          env: this.env(),
+          cwd: place.home,
+          timeoutMs: 3 * 60_000,
+          maxBytes: 1024 * 1024,
+        },
+        port,
+      );
+      // What is defined now, read back: a definition that doesn't run this install on its port is
+      // someone else's, which appeared after the check above. It is left as it is.
+      const written = await this.writtenService(port);
+      if (written === "other") {
+        this.log(
+          "a service of the profile appeared while it was being installed; it was left as it is",
+        );
+        return kept("service-appeared", { exitCode: installed.exitCode });
+      }
+      if (written !== "ours" || !ok(installed) || !readServiceInstall(installed.stdout)) {
+        this.log(
+          `the service wasn't confirmed installed: exit=${installed.exitCode} timedOut=${installed.timedOut} definition=${written}`,
+        );
+        if (written === "absent" && !this.lingering) {
+          const removed = await this.discard(id, profile);
+          return stopped("service", 2, {
+            exitCode: installed.exitCode,
+            cleanup: removed ? "removed" : "unproven",
+            retry: removed,
+          });
+        }
+        return kept("service", { exitCode: installed.exitCode });
+      }
     }
     publish({ step: 3 });
 
@@ -1681,6 +1857,11 @@ export class Installer {
       if (ok(status) && readAnswering(status.stdout, port, pins.version)) break;
       if (now() >= until || this.closing) return kept("not-answering", {}, 3);
       await sleep(Math.min(STATUS_EVERY_MS, Math.max(0, until - now())));
+    }
+    try {
+      await this.writeStage(id, "installed", port);
+    } catch {
+      return kept("write");
     }
     publish({ step: 4 });
     this.log("set up and answering");
@@ -1781,6 +1962,8 @@ export class Installer {
       return no("installer-changed", 1);
     }
     await writeFile(this.at.installer, patched, { mode: 0o700 });
+    if (place.platform === "darwin")
+      await this.writeNew(join(dirname(this.at.nodeBin), "git"), DARWIN_GIT, 0o700);
     const usable = await this.exec({ ...check!, env: this.env(), ...unpack }, null);
     if (!ok(usable)) {
       this.log("the installer's Node.js check refused the checked Node.js");

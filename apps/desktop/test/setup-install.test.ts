@@ -9,6 +9,7 @@
 // says what it would catch.
 
 import type { SetupInstall } from "@clawtrate/core";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import {
@@ -19,15 +20,18 @@ import {
   readFileSync,
   renameSync,
   statSync,
+  symlinkSync,
   unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { createServer } from "node:http";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   CHECKED_INSTALL_NODE,
+  DARWIN_GIT,
+  QUIET_DISCOVERY_ARGS,
   commands,
   computerPlace,
   download,
@@ -143,6 +147,7 @@ describe("F-502 F-503 F-504 F-505: the whole way through", () => {
         "--gateway-bind loopback --gateway-auth token",
         `--gateway-port ${port} --no-install-daemon --skip-health --skip-skills --json`,
       ].join(" ")}`,
+      `openclaw ${QUIET_DISCOVERY_ARGS.join(" ")}`,
       `openclaw --profile clawtrate gateway install --port ${port} --json`,
       "openclaw --profile clawtrate gateway status --json",
     ]);
@@ -206,7 +211,9 @@ describe("F-502 F-503 F-504 F-505: the whole way through", () => {
     expect(at.tmp.startsWith(`${stand.place.programDir}/`)).toBe(true);
     expect(stand.marked("tmp-elsewhere")).toBe(false);
     expect(env.HOME).toBe(stand.home);
-    expect(env.PATH).toBe(`${stand.place.programDir}/bin:/usr/bin:/bin:/usr/sbin:/sbin`);
+    expect(env.PATH).toBe(
+      `${dirname(at.nodeBin)}:${stand.place.programDir}/bin:/usr/bin:/bin:/usr/sbin:/sbin`,
+    );
     expect(env.CLAWTRATE_TEST_SECRET).toBeUndefined();
     // Only what the install names, and what bash itself sets.
     const named = new Set([
@@ -431,6 +438,7 @@ describe("F-502 F-503: each failure, named, with what the attempt left", () => {
     });
     expect(existsSync(stand.place.programDir)).toBe(true);
     expect(json(stand.place.recordFile)).toMatchObject({ stage: "onboarding" });
+    expect(await installer(stand).recovery()).toMatchObject({ action: "inspect" });
     // A later install refuses while it is there.
     const again = await runAll(installer(stand));
     expect(again.outcome).toMatchObject({ ok: false, failure: { kind: "exists", step: -1 } });
@@ -486,6 +494,77 @@ describe("F-502 F-503: each failure, named, with what the attempt left", () => {
     });
     expect(existsSync(stand.place.stateDir)).toBe(true);
     expect(existsSync(stand.place.programDir)).toBe(true);
+  });
+
+  it.each(["continue", "replace"] as const)(
+    "F-505: %s can recover after the app quits between onboarding and service installation",
+    async (action) => {
+      const stand = await make();
+      const stop = new AbortController();
+      const interrupted = installer(stand, {
+        signal: stop.signal,
+        run: async (request, check) => {
+          const result = await runner.run(request, check);
+          if (request.args.includes("onboard")) stop.abort();
+          return result;
+        },
+      });
+      expect((await runAll(interrupted)).outcome).toMatchObject({
+        ok: false,
+        failure: { kind: "service", cleanup: "kept" },
+      });
+      expect(stand.calls().some((line) => line.includes("gateway install"))).toBe(false);
+      const awake = installer(stand);
+      const pending = await awake.recovery();
+      expect(pending?.action).toBe("replace");
+      expect(await awake.run(() => {}, action, pending?.id)).toMatchObject({ ok: true });
+      expect(stand.calls().filter((line) => line.includes(" onboard "))).toHaveLength(
+        action === "replace" ? 2 : 1,
+      );
+      expect(stand.requests).toHaveLength(action === "replace" ? 4 : 2);
+      expect(await awake.recovery()).toBeNull();
+    },
+  );
+
+  it("F-505: Continue waits on an existing owned service after an inconclusive install result", async () => {
+    const stand = await make();
+    const interrupted = installer(stand, {
+      run: async (request, check) => {
+        const result = await runner.run(request, check);
+        return request.args.slice(2, 4).join(" ") === "gateway install"
+          ? { ...result, exitCode: 1 }
+          : result;
+      },
+    });
+    expect((await runAll(interrupted)).outcome).toMatchObject({
+      ok: false,
+      failure: { kind: "service", cleanup: "kept" },
+    });
+    const awake = installer(stand);
+    const pending = await awake.recovery();
+    expect(pending?.action).toBe("continue");
+    expect(await awake.run(() => {}, "replace", pending?.id)).toMatchObject({ ok: false });
+    expect(await awake.run(() => {}, "continue", "different-attempt")).toMatchObject({ ok: false });
+    expect(await awake.run(() => {}, "continue", pending?.id)).toMatchObject({ ok: true });
+    expect(stand.calls().filter((line) => line.includes("gateway install"))).toHaveLength(1);
+  });
+
+  it("F-504: the service starts with Bonjour, wide-area discovery and Tailscale exposure off", async () => {
+    const stand = await make();
+    const checked = installer(stand, {
+      run: async (request, check) => {
+        if (request.args.slice(2, 4).join(" ") === "gateway install") {
+          const profile = json(join(stand.place.stateDir, "openclaw.json"));
+          expect(profile).not.toHaveProperty("discovery.wideArea.domain");
+          expect(profile).toMatchObject({
+            discovery: { mdns: { mode: "off" } },
+            gateway: { tailscale: { mode: "off" } },
+          });
+        }
+        return runner.run(request, check);
+      },
+    });
+    expect((await runAll(checked)).outcome.ok).toBe(true);
   });
 
   it("F-502: on Linux, a session without a reachable user manager stops before anything is downloaded or made", async () => {
@@ -819,9 +898,10 @@ describe("F-501 F-503: what may run, and where", () => {
       at.openclaw,
       at.openclaw,
       at.openclaw,
+      at.openclaw,
     ]);
-    // The service manager is asked about the profile's job before anything, before onboarding and before its install.
-    expect(asked.filter((command) => command[0] === stand.place.serviceManager)).toHaveLength(3);
+    // Check the job at preflight, before onboarding, and on both sides of the discovery write.
+    expect(asked.filter((command) => command[0] === stand.place.serviceManager)).toHaveLength(4);
   });
 
   it("F-501: the systems offered are macOS and glibc Linux on arm64 and x64, and nothing else", () => {
@@ -878,6 +958,63 @@ describe("F-501 F-503: what may run, and where", () => {
     expect(patchInstaller(script.replace("TMPFILES+=", "TMPFILE+="))).toBeNull();
     expect(patchInstaller(`#!/usr/bin/env bash\n${installNode.slice(0, -2)}`)).toBeNull();
     expect(patchInstaller(`#!/usr/bin/env bash\n${installNode}`)).toBeNull();
+  });
+});
+
+describe("F-504: workspace Git on a Mac", () => {
+  it("F-504: the installer, onboarding and service share the checked runtime's Git guard", async () => {
+    const stand = await make();
+    const asked: InstallRequest[] = [];
+    expect((await runAll(installer(stand, {}, asked))).outcome.ok).toBe(true);
+    const runtime = dirname(layout(stand.place, stand.pins).nodeBin);
+    expect(readFileSync(join(runtime, "git"), "utf8")).toBe(DARWIN_GIT);
+    const calls = asked.filter(
+      (request) =>
+        request.args.includes("--runtime-only") ||
+        request.args.includes("onboard") ||
+        request.args.slice(2, 4).join(" ") === "gateway install",
+    );
+    expect(calls).toHaveLength(3);
+    for (const call of calls) expect(call.env.PATH?.split(":")[0]).toBe(runtime);
+    expect(serviceArgv("darwin", readFileSync(stand.place.serviceFile, "utf8"))).toContain(
+      layout(stand.place, stand.pins).nodeBin,
+    );
+  });
+
+  it("F-504: Git fails quietly with no developer tools and forwards to real Git when available", async () => {
+    const { home } = await make();
+    const apple = join(home, "apple-stub");
+    const marker = join(home, "called-apple");
+    const xcode = join(home, "xcode-select");
+    const brew = join(home, "brew-git");
+    const developer = join(home, "developer");
+    const git = join(home, "git");
+    writeFileSync(apple, `#!/bin/sh\n: > '${marker}'\nexit 1\n`, { mode: 0o700 });
+    writeFileSync(xcode, "#!/bin/sh\nexit 1\n", { mode: 0o700 });
+    writeFileSync(
+      git,
+      DARWIN_GIT.replaceAll("/usr/bin/git", apple)
+        .replaceAll("/usr/bin/xcode-select", xcode)
+        .replaceAll("/opt/homebrew/bin/git", brew)
+        .replaceAll("/usr/local/bin/git", join(home, "other-git"))
+        .replaceAll("$developer" + apple, "$developer/usr/bin/git"),
+      { mode: 0o700 },
+    );
+    const run = () => spawnSync(git, ["--version"], { env: { PATH: home }, encoding: "utf8" });
+    expect(run().status).toBe(127);
+    expect(existsSync(marker)).toBe(false);
+    symlinkSync(apple, brew);
+    expect(run().status).toBe(127);
+    expect(existsSync(marker)).toBe(false);
+    mkdirSync(join(developer, "usr", "bin"), { recursive: true });
+    writeFileSync(xcode, `#!/bin/sh\nprintf '%s\n' '${developer}'\n`, { mode: 0o700 });
+    writeFileSync(
+      join(developer, "usr", "bin", "git"),
+      '#!/bin/sh\nprintf "real git %s\n" "$1"\n',
+      { mode: 0o700 },
+    );
+    expect(run()).toMatchObject({ status: 0, stdout: "real git --version\n" });
+    expect(existsSync(marker)).toBe(false);
   });
 });
 
@@ -1127,7 +1264,7 @@ describe("F-501 F-502 F-503: the review's closing cases", () => {
       // Left as it is: the other program's definition, and no status asked of it.
       expect(readFileSync(stand.place.serviceFile, "utf8")).toContain("/usr/bin/true");
       expect(stand.calls().some((line) => line.endsWith("gateway status --json"))).toBe(false);
-      expect(json(stand.place.recordFile)).toMatchObject({ stage: "onboarding" });
+      expect(json(stand.place.recordFile)).toMatchObject({ stage: "onboarded" });
       expect(lines.join("\n")).toMatch(/appeared while it was being installed/);
     },
   );

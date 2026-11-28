@@ -233,6 +233,12 @@ case "$1" in
     fi
     printf '{"ok":true,"mode":"local","authChoice":"skip","gateway":{"port":%s,"bind":"loopback","authMode":"token","tailscaleMode":"off"},"installDaemon":false,"skipHealth":true}\\n' "$port"
     ;;
+  config)
+    [[ "$2" == "set" && "$3" == "--batch-json" ]] || exit 64
+    [[ "$4" == '[{"path":"discovery.mdns.mode","value":"off"},{"path":"gateway.tailscale.mode","value":"off"}]' ]] || exit 64
+    port="$(cat "$HOME/stand-in-port")"
+    printf '{"gateway":{"port":%s,"tailscale":{"mode":"off"}},"discovery":{"mdns":{"mode":"off"}}}\n' "$port" > "$HOME/.openclaw-clawtrate/openclaw.json"
+    ;;
   gateway)
     port="$(cat "$HOME/stand-in-port")"
     if [[ "$2" == "install" ]]; then

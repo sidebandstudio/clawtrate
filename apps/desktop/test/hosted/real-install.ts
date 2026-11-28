@@ -316,6 +316,24 @@ check(
   argv !== null && runsCheckedInstall(argv, place, PINS, port),
   "the service file's command is exactly the checked Node.js, the installed, checked entrypoint and gateway --port <the install's port>",
 );
+const serviceEnvFile = argv?.[2];
+const runtimePath = dirname(at.nodeBin);
+const servicePath =
+  serviceEnvFile && existsSync(serviceEnvFile)
+    ? readFileSync(serviceEnvFile, "utf8")
+        .split("\n")
+        .find((line) => line.startsWith("export PATH="))
+        ?.slice("export PATH=".length)
+    : undefined;
+const serviceFirst = servicePath?.replace(/^['"]/, "").split(":")[0];
+check(
+  !!serviceFirst &&
+    existsSync(serviceFirst) &&
+    realpathSync(serviceFirst) === realpathSync(runtimePath) &&
+    existsSync(join(runtimePath, "git")),
+  "the service finds the checked runtime's Git guard before the system path",
+);
+
 check(
   argv !== null &&
     argv.some((arg) => existsSync(arg) && realpathSync(arg) === realpathSync(at.nodeBin)),
@@ -372,6 +390,23 @@ check(
   auth.status === 0 && parseAuthMode(auth.stdout) === "token",
   "the profile's gateway signs in with a token",
 );
+const profileConfig = recordOfProfile();
+function recordOfProfile(): {
+  discovery?: { mdns?: { mode?: unknown }; wideArea?: { domain?: unknown } };
+  gateway?: { tailscale?: { mode?: unknown } };
+} {
+  try {
+    return JSON.parse(readFileSync(join(place.stateDir, "openclaw.json"), "utf8"));
+  } catch {
+    return {};
+  }
+}
+check(
+  profileConfig.discovery?.mdns?.mode === "off" &&
+    profileConfig.discovery?.wideArea?.domain === undefined &&
+    profileConfig.gateway?.tailscale?.mode === "off",
+  "the installed profile disables Bonjour, wide-area discovery and Tailscale exposure",
+);
 const status = openclaw("gateway", "status", "--json");
 const listener = status.status === 0 ? (parseStatus(status.stdout)?.listenerPid ?? null) : null;
 /** The process and its parents, up to the service manager's. */
@@ -402,6 +437,15 @@ mkdirSync(join(sentinel, ".."), { recursive: true });
 check(!existsSync(sentinel), "no default service definition was there before the sentinel");
 writeFileSync(sentinel, sentinelText, { flag: "wx" });
 const keptBefore = `${tree(decoy)}\n${sha(sentinel)}`;
+const trash = join(home, ".Trash");
+const trashEntries = () => {
+  try {
+    return new Set(existsSync(trash) ? readdirSync(trash) : []);
+  } catch {
+    return null;
+  }
+};
+const trashBefore = trashEntries();
 const uninstall = spawnSync(
   at.openclaw,
   [
@@ -449,14 +493,15 @@ check(
     noJob("ai.openclaw.gateway"),
     "the default profile's ai.openclaw.gateway is absent after uninstall",
   );
-  // OpenClaw's own uninstall leaves these (research §6.8): asserted, then removed.
-  const trash = join(home, ".Trash/ai.openclaw.clawtrate.plist");
-  const log = join(home, "Library/Logs/openclaw/gateway-clawtrate.log");
-  check(existsSync(trash), "OpenClaw's uninstall moved the profile's plist to the Trash, as known");
-  check(existsSync(log), "OpenClaw's uninstall left the profile's service log, as known");
-  await rm(trash, { force: true });
-  await rm(log, { force: true });
-  check(!existsSync(trash) && !existsSync(log), "those known leftovers are removed");
+  // OpenClaw 2026.10.6 used the exact plist name. 2026.11.10 can add a timestamp.
+  // Removing that copy is housekeeping. The service checks above establish teardown.
+  if (trashBefore) {
+    for (const name of trashEntries() ?? []) {
+      if (!trashBefore.has(name) && /^ai[.]openclaw[.]clawtrate(?:-[0-9]+)?[.]plist$/.test(name))
+        await rm(join(trash, name), { force: true }).catch(() => {});
+    }
+  }
+  await rm(join(home, "Library/Logs/openclaw/gateway-clawtrate.log"), { force: true });
 }
 const listening = await new Promise<boolean>((done) => {
   if (!own.port) return done(false);

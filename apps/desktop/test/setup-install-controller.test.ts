@@ -6,7 +6,12 @@
 // here is a stand-in object; the installer itself is tested in
 // setup-install.test.ts.
 
-import { ClawtrateClient, type SetupInstall, type SetupState } from "@clawtrate/core";
+import {
+  ClawtrateClient,
+  parseBridgeCommand,
+  type SetupInstall,
+  type SetupState,
+} from "@clawtrate/core";
 import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -77,6 +82,8 @@ function harness(
     /** Called as the world is opened after the dialog. */
     afterDialogOpen?: () => void;
     withoutLocal?: boolean;
+    recovery?: { id: string; action: "continue" | "replace" };
+    recoveryCalls?: unknown[];
   } = {},
 ): Fake {
   const client = new ClawtrateClient(testHost(new FakeGateway(), memoryStorage()));
@@ -169,7 +176,12 @@ function harness(
         ? null
         : () =>
             ({
-              run: async (progress: (install: SetupInstall) => void) => {
+              run: async (
+                progress: (install: SetupInstall) => void,
+                action?: string,
+                id?: string,
+              ) => {
+                options.recoveryCalls?.push({ action, id });
                 fake.runs += 1;
                 if (options.hold) await held;
                 for (const step of [0, 1, 2, 3, 4])
@@ -190,6 +202,7 @@ function harness(
                 return outcome;
               },
               leftoverProgram: async () => options.leftover ?? null,
+              recovery: async () => (installed ? null : (options.recovery ?? null)),
             }) as unknown as Installer,
   });
   client.store.subscribe((state) => {
@@ -222,7 +235,7 @@ describe("F-501: nothing is downloaded or run before the host's own dialog", () 
     expect(INSTALL_CONFIRMATION).toEqual({
       message: "Set up OpenClaw on this computer?",
       detail:
-        "Clawtrate installs OpenClaw and Node.js for your account and checks both downloads. npm also downloads packages Clawtrate hasn't verified. They can run with your account's permissions. Clawtrate connects this Mac with full control.",
+        "Clawtrate downloads and sets up OpenClaw for your account only. It connects this Mac with full control.",
       confirm: "Set Up OpenClaw",
     });
     expect(fake.runs).toBe(0);
@@ -327,6 +340,33 @@ describe("F-502 F-505: the steps, then the look of the gateway just set up", () 
     await fake.setup.install();
     expect(fake.setup.current.phase).toBe("found");
     expect(readToken).not.toHaveBeenCalled();
+  });
+
+  it("F-505: the bridge accepts only the two recovery actions and takes no path or profile", () => {
+    expect(
+      parseBridgeCommand({ type: "setupInstall", action: "replace", path: "ignored" }),
+    ).toEqual({
+      type: "setupInstall",
+      action: "replace",
+    });
+    expect(() => parseBridgeCommand({ type: "setupInstall", action: "uninstall" })).toThrow(
+      "Invalid setup install action.",
+    );
+  });
+
+  it("F-505: a recorded install is shown on relaunch and Continue gets fresh consent", async () => {
+    const calls: unknown[] = [];
+    const fake = harness({ recovery: { id: "pending", action: "replace" }, recoveryCalls: calls });
+    await fake.setup.lookAtStart();
+    expect(fake.setup.current).toMatchObject({
+      phase: "install-failed",
+      install: { recovery: "replace" },
+    });
+    await expect(fake.setup.install()).rejects.toThrow(/nothing to set up/);
+    await fake.setup.install("continue");
+    expect(fake.dialogs).toHaveLength(1);
+    expect(fake.dialogs[0]?.message).toBe("Continue setting up OpenClaw?");
+    expect(calls).toEqual([{ action: "continue", id: "pending" }]);
   });
 
   it("F-501: after the dialog, look's file checks that can't be made stop it before anything is run, and aren't called a change", async () => {

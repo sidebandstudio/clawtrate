@@ -6,6 +6,7 @@
 import type {
   ConnectionState,
   HostInfo,
+  InstallAction,
   InstallFailure,
   OnboardClassification,
   LookService,
@@ -591,7 +592,7 @@ function LookResult({
                 again.
               </Hint>
             )}
-            <Actions>
+            <div className="s-actions s-install-actions">
               <button
                 type="button"
                 className="button"
@@ -605,12 +606,17 @@ function LookResult({
                 Set up OpenClaw here
               </button>
               <InfoTip id="setup-install-info" about="setting up OpenClaw" />
-            </Actions>
+            </div>
             <InfoCard id="setup-install-info">
-              Clawtrate checks the downloads for OpenClaw {INSTALL_OPENCLAW_VERSION} and Node.js{" "}
-              {INSTALL_NODE_VERSION} before installing them in its app data. npm also downloads
-              packages that run with your account's permissions. The gateway uses the clawtrate
-              profile and starts when you log in. Clawtrate connects this Mac with full control.
+              Clawtrate downloads OpenClaw {INSTALL_OPENCLAW_VERSION} from npm and Node.js{" "}
+              {INSTALL_NODE_VERSION} from nodejs.org. It checks both against fingerprints built into
+              this version. OpenClaw's installer then fetches dependencies from npm. Clawtrate
+              doesn't verify those downloads. Their code runs with your account's permissions. The
+              program goes in Clawtrate's app data. The gateway uses the clawtrate profile and
+              starts when you log in. Clawtrate connects this Mac with full control. Other devices
+              won't find the gateway automatically unless you enable discovery. To remove OpenClaw,
+              use its uninstall for the clawtrate profile and remove the program from Clawtrate's
+              app data.
             </InfoCard>
             <p className="s-links">
               <SmallLink onClick={onAdvanced}>Advanced</SmallLink>
@@ -884,7 +890,15 @@ const CATEGORY: Record<InstallFailure["kind"], string> = {
 };
 
 /** "Setting up OpenClaw" (§10, F-502): the steps, and a failed step with its cause and record. */
-function Installing({ setup, onBack }: { setup: SetupState; onBack: () => void }) {
+function Installing({
+  setup,
+  onBack,
+  onRecover,
+}: {
+  setup: SetupState;
+  onBack: () => void;
+  onRecover: (action: InstallAction) => void;
+}) {
   const send = useCommand();
   const install = setup.install ?? { step: 0, nodeChecked: false, failure: null };
   const failure = setup.phase === "install-failed" ? install.failure : null;
@@ -897,9 +911,18 @@ function Installing({ setup, onBack }: { setup: SetupState; onBack: () => void }
   const again = failure?.kind === "changed" || failure?.kind === "unchecked";
   return (
     <>
-      {failure && <Back onBack={onBack} />}
+      {(failure || install.recovery) && <Back onBack={onBack} />}
       <Mark />
-      <Title id="setup-title">Setting up OpenClaw</Title>
+      <Title id="setup-title">
+        {install.recovery ? "Finish setting up OpenClaw" : "Setting up OpenClaw"}
+      </Title>
+      {install.recovery && (
+        <Lede>
+          {install.recovery === "inspect"
+            ? "Setup stopped before Clawtrate could confirm the gateway. Files may remain in the clawtrate profile and Clawtrate's app data."
+            : "Clawtrate set up the gateway profile. Continue to finish setting up its service."}
+        </Lede>
+      )}
       <Steps steps={INSTALL_STEPS} current={current} failed={!!failure} details={details} />
       {failure && (
         <>
@@ -934,19 +957,33 @@ function Installing({ setup, onBack }: { setup: SetupState; onBack: () => void }
               </div>
             </details>
           )}
-          <Actions>
-            {failure.retry && (
-              <Primary onClick={() => void send({ type: "setupInstall" })}>Try again</Primary>
-            )}
-            {again ? (
-              <Primary onClick={() => void send({ type: "setupLook" })}>Look again</Primary>
-            ) : (
-              !failure.retry && (
-                <Primary onClick={() => void send({ type: "setupLook" })}>Try again</Primary>
-              )
-            )}
-          </Actions>
+          {!install.recovery && (
+            <Actions>
+              {failure.retry && (
+                <Primary onClick={() => void send({ type: "setupInstall" })}>Try again</Primary>
+              )}
+              {again ? (
+                <Primary onClick={() => void send({ type: "setupLook" })}>Look again</Primary>
+              ) : (
+                !failure.retry && (
+                  <Primary onClick={() => void send({ type: "setupLook" })}>Try again</Primary>
+                )
+              )}
+            </Actions>
+          )}
         </>
+      )}
+      {install.recovery && (
+        <Actions>
+          {install.recovery === "inspect" ? (
+            <Primary onClick={() => void send({ type: "setupLook" })}>Look again</Primary>
+          ) : (
+            <Primary onClick={() => onRecover("continue")}>Continue</Primary>
+          )}
+          {install.recovery === "replace" && (
+            <Quiet onClick={() => onRecover("replace")}>Remove and start again</Quiet>
+          )}
+        </Actions>
       )}
     </>
   );
@@ -958,6 +995,8 @@ function screenKey(
   setup: SetupState,
   offer: NonNullable<HostInfo["setup"]>,
 ): string {
+  if (setup.phase === "install-failed" && setup.install?.recovery)
+    return `install-recovery:${setup.install.recovery}`;
   if (view === "first" && offeredHere(offer, setup)) return "first:found";
   if (view === "first" && setup.unasked && setup.phase === "looking") return "first:waiting";
   if (view !== "here") return view;
@@ -1011,7 +1050,7 @@ export function SetupFlow({
     ? "first:waiting"
     : offerHere
       ? "first:found"
-      : view === "first"
+      : view === "first" && !setup.install?.recovery
         ? "first"
         : screenKey(view, setup, offer);
   const shown = useRef<string | null>(null);
@@ -1025,9 +1064,9 @@ export function SetupFlow({
     if (!first) title.focus();
   }, [key]);
 
-  const installHere = () => {
+  const installHere = (action?: InstallAction) => {
     onView("here");
-    void send({ type: "setupInstall" });
+    void send(action ? { type: "setupInstall", action } : { type: "setupInstall" });
   };
   const toFirst = () => {
     if (view === "here") void send(leaveLook(setup));
@@ -1052,6 +1091,7 @@ export function SetupFlow({
     if (event.key !== "Escape" || view === "first" || setup.phase === "installing") return;
     event.preventDefault();
     // As each screen's Back: a refused sandbox's goes to the first question.
+    if (setup.install?.recovery) return toFirst();
     if (
       view === "here" &&
       (setup.phase === "connecting" ||
@@ -1063,7 +1103,9 @@ export function SetupFlow({
   };
 
   let body: ReactNode;
-  if (holding) {
+  if (setup.phase === "install-failed" && setup.install?.recovery && view === "first") {
+    body = <Installing setup={setup} onBack={toFirst} onRecover={installHere} />;
+  } else if (holding) {
     body = <WaitingHere />;
   } else if (view === "first") {
     body = offerHere ? (
@@ -1093,7 +1135,13 @@ export function SetupFlow({
       </>
     );
   } else if (setup.phase === "installing" || setup.phase === "install-failed") {
-    body = <Installing setup={setup} onBack={backFromConnect} />;
+    body = (
+      <Installing
+        setup={setup}
+        onBack={setup.install?.recovery ? toFirst : backFromConnect}
+        onRecover={installHere}
+      />
+    );
   } else if (setup.phase === "looking" || setup.phase === "idle") {
     body = (
       <>

@@ -187,6 +187,11 @@ export const SETUP_STATES: Record<string, SetupState> = {
     cleanup: "kept",
   }),
   "install-service": installFailed("service", 2, { exitCode: 1, cleanup: "kept" }),
+  "install-service-removed": installFailed("service", 2, { exitCode: 1, cleanup: "removed" }),
+  "install-download-short": installFailed("download-short", 0, { cleanup: "removed" }),
+  "install-unpack": installFailed("unpack", 0, { cleanup: "removed" }),
+  "install-installer-changed": installFailed("installer-changed", 1, { cleanup: "removed" }),
+  "install-no-program": installFailed("no-program", 1, { cleanup: "removed" }),
   "install-service-appeared": installFailed("service-appeared", 2, {
     exitCode: 0,
     cleanup: "kept",

@@ -1388,6 +1388,7 @@ const setup = object<SetupState>()({
   look: setupLook,
   failure: object<SetupFailure>()({ kind: ENUM, exitCode: NUMBER, port: NUMBER, reason: ENUM }),
   install: object<SetupInstall>()({
+    recovery: ENUM,
     step: NUMBER,
     nodeChecked: FLAG,
     failure: object<InstallFailure>()({
