@@ -337,7 +337,7 @@ describe("a gateway's PATH (#933)", () => {
     dirs.push(dir);
     return dir;
   };
-  const shell = { PATH: "/Users/someone/.local/bin:/opt/homebrew/bin:/usr/bin", LANG: "C" };
+  const shell = { PATH: "/opt/agent-tools/bin:/usr/local/bin:/usr/bin", LANG: "C" };
 
   it("is the system's folders and the gateway's Node, never the caller's PATH", () => {
     expect(openclawEnv(shell).PATH).toBe(SYSTEM_PATH.join(":"));
