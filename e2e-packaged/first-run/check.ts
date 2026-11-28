@@ -257,21 +257,33 @@ try {
     return heading() ?? "The scripted model is configured on loopback.";
   });
   await step(5, async () => {
-    await waitFor("Make your first bot", () => hasButton("Make your first bot"), 60);
-    await press("Make your first bot");
-    await waitFor("the new bot's composer", () =>
-      latest.some(({ role, text }) => /^AXText(?:Area|Field)$/.test(role) && /^Message/.test(text)),
+    const composer = () =>
+      latest.some(
+        ({ role, text }) => /^AXText(?:Area|Field)$/.test(role) && /^Message /.test(text),
+      );
+    const firstBotAction = () =>
+      buttons().find(
+        ({ role, text }) =>
+          role === "AXButton" && /^(?:Make|Create|Start) (?:your )?first bot[.…]?$/i.test(text),
+      );
+    await waitFor(
+      "a first conversation or a first-bot button",
+      () => composer() || !!firstBotAction(),
+      60,
     );
-    if ((await ax("compose")) !== "ok") throw new Error("Could not focus the new bot's composer.");
+    if (!composer()) {
+      await press(firstBotAction()!.text);
+      await waitFor("the first conversation's composer", composer);
+    }
+    if ((await ax("compose")) !== "ok")
+      throw new Error("Could not focus the first conversation's composer.");
+    const replies = () => latest.filter(({ text }) => text.includes(SCRIPTED_REPLY)).length;
+    const beforeSending = replies();
     record("type", FIRST_MESSAGE);
     await ax("type", FIRST_MESSAGE);
     record("press", "Return");
     await ax("enter");
-    await waitFor(
-      "the scripted reply",
-      () => latest.some(({ text }) => text.includes(SCRIPTED_REPLY)),
-      120,
-    );
+    await waitFor("the scripted reply", () => replies() > beforeSending, 120);
     return SCRIPTED_REPLY;
   });
 } catch {
