@@ -111,7 +111,11 @@ describe("a desktop start that can't open this device's credentials", () => {
   });
 
   it("the main process shows that, exits, and warns when this session's pairing can't be kept", () => {
-    const main = readFileSync(join(import.meta.dirname, "../src/main/index.ts"), "utf8");
+    // Read as LF, whatever line endings the checkout wrote.
+    const main = readFileSync(join(import.meta.dirname, "../src/main/index.ts"), "utf8").replaceAll(
+      "\r\n",
+      "\n",
+    );
     const guarded = main.slice(main.indexOf("try {\n    runtime = await startHostRuntime("));
     expect(guarded.indexOf("startupFailure(error)")).toBeGreaterThan(0);
     expect(guarded.indexOf("startupFailure(error)")).toBeLessThan(guarded.indexOf("createWindow("));

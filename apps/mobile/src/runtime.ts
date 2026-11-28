@@ -11,10 +11,14 @@ import {
   type BridgeResultFor,
   type BridgeSession,
   type ClawtrateState,
+  type TranscriptItem,
 } from "@clawtrate/core";
 import { createContext, useCallback, useContext, useSyncExternalStore } from "react";
+import type { ShownStamp } from "../../../packages/ui/src/stamp.ts";
+import { historyStamps } from "./bot-files.ts";
 import { createIosHost } from "./host/index.ts";
 import type { DevGatewayHint } from "./host/dev-gateway.ts";
+import type { ShareFile } from "./host/share.ts";
 
 export type Runtime = {
   client: ClawtrateClient;
@@ -23,6 +27,10 @@ export type Runtime = {
   send: <C extends BridgeCommand>(command: C) => Promise<BridgeResultFor<C>>;
   /** Any credential this host holds, scrubbed from a string about to be shown. */
   redact: (text: string) => string;
+  /** Where a task's history shown now was read (`historyStamps`): its rows' writes carry it. */
+  readOn: (items: readonly TranscriptItem[]) => ShownStamp;
+  /** Offer a file in the system's share sheet (`host/share.ts`). */
+  shareFile: ShareFile;
 };
 
 let runtime: Runtime | null = null;
@@ -34,11 +42,13 @@ let runtime: Runtime | null = null;
  */
 export function startRuntime(): Runtime {
   if (runtime) return runtime;
-  const { host, devGateway, secrets, installedBefore, markInstalled } = createIosHost();
+  const { host, devGateway, secrets, installedBefore, markInstalled, shareFile } = createIosHost();
   // A gateway saved by an earlier install of the app is kept, not reopened: the
   // welcome screen offers it as a choice.
   const client = new ClawtrateClient(host, { readOnly: true });
   const session = createBridgeSession(client);
+  // From before the first connect, so every read of a task's history is stamped.
+  const reads = historyStamps({ getState: client.store.get, subscribe: client.store.subscribe });
   runtime = {
     client,
     session,
@@ -49,6 +59,8 @@ export function startRuntime(): Runtime {
       return result;
     },
     redact: secrets.redact,
+    readOn: reads.of,
+    shareFile,
   };
   void client.start({ resume: installedBefore ? true : "disconnected" }).catch((error: unknown) => {
     console.error(

@@ -198,7 +198,7 @@ const shown = (id: string, place: number, text: string, timestamp: number) => ({
   id: `${id}:${place}`,
   role: "assistant",
   timestamp,
-  blocks: [{ kind: "text", text, messageId: id }],
+  blocks: [{ kind: "text", text, messageId: id, gatewayRow: true }],
   model: "delivery-mirror",
   messageId: id,
 });
