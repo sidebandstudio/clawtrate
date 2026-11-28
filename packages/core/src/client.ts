@@ -3909,6 +3909,8 @@ export class ClawtrateClient {
         sizeBytes: decodedBytes(attachment.content),
       })),
       ...(replyToId ? { replyToId } : {}),
+      // Written in the session the task's history last came from: only its history settles it.
+      ...(transcript.sessionId !== undefined ? { sessionId: transcript.sessionId } : {}),
     };
     this.noteFirstSend(key, message);
     if (attachments.length > 0) {
@@ -11363,9 +11365,17 @@ export class ClawtrateClient {
         );
         if (stale()) return;
       }
+      // The outbox as the answered request was asked, each try asked again taking it anew: its
+      // answer confirms by sequence number only a number a message held by then. One a send's
+      // answer gives later is confirmed by the read that answer asks for (`deliver`), which runs
+      // once this one ends (`loadTranscript`).
+      let asked = (this.state.transcripts[key] ?? emptyActivity).outbox;
       const history = asRecord(
         await this.readAgain(
-          () => this.request("chat.history", { sessionKey: key, limit: HISTORY_LIMIT }),
+          () => {
+            asked = (this.state.transcripts[key] ?? emptyActivity).outbox;
+            return this.request("chat.history", { sessionKey: key, limit: HISTORY_LIMIT });
+          },
           () => !stale(),
         ),
       );
@@ -11449,9 +11459,16 @@ export class ClawtrateClient {
           ((run.state === "stopping" && !findRun(current, run.id)?.bound) ||
             (run.state === "stopped" && !run.outcomeKnown)),
       );
+      // The session this history came from, as named. One past the id cap can't be kept as named,
+      // and its digest is no proof of the same session: such a read settles no bound message.
+      const named =
+        typeof history?.sessionId === "string" && history.sessionId ? history.sessionId : null;
+      const sessionId = named !== null && jsonTextLength(named) <= MAX_ID_CHARS ? named : null;
       const reconciled = reconcileOutbox(
         parkAfterStop(current, { ...current, runs }, this.now()),
         messages,
+        sessionId,
+        asked,
       );
       // History holds these now: only their pictures are kept, to be shown.
       for (const message of current.outbox) {
@@ -11483,6 +11500,11 @@ export class ClawtrateClient {
         caughtUp: resync ? { reason: resync, at: this.now() } : current.caughtUp,
         loadedAt: this.now(),
       };
+      // A message written from now on is bound to this session; after a read that names none,
+      // to none, as no session is known; after one that names a session past the id cap, to "",
+      // which no read names, so no history settles it.
+      if (named === null) delete rebuilt.sessionId;
+      else rebuilt.sessionId = sessionId ?? "";
       this.retainTaskRaw(key, rebuilt);
       this.setTranscript(key, () => withLive(rebuilt));
       const left = quietToRead(rebuilt.runs.filter((run) => quietBefore.has(run.id)));

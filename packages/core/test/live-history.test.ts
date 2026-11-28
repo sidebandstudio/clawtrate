@@ -21,7 +21,11 @@ import {
   RawTable,
   runsFromHistory,
 } from "../src/index.ts";
+import { capId } from "../src/bounds.ts";
 import type { Run, Step } from "../src/runs.ts";
+import { MAX_ID_CHARS } from "../src/state-bounds.ts";
+import { grantingGateway, KEY, openTask } from "./client-harness.ts";
+import { deferred, GatewayError, sleep, until } from "./fake-gateway.ts";
 
 type Rec = Record<string, unknown>;
 type Case = {
@@ -1064,4 +1068,364 @@ describe("every kind's outcome is the same live and from history", () => {
       }
     });
   }
+});
+
+// A sent message and the history that confirms it (F-075, F-278). OpenClaw 2026.10.6 names the
+// session a task's history came from (`chat.history` `sessionId`, docs/research/
+// gateway-capabilities.md). A task deleted elsewhere can be made again under the same key as a
+// new session, whose rows count their sequence from 1 again.
+
+/** Two rows of the first session, the user's with its own key. */
+const FIRST = [
+  {
+    role: "user",
+    content: "Check the disk.",
+    __openclaw: { id: "a-1", seq: 1, idempotencyKey: "earlier:user" },
+  },
+  {
+    role: "assistant",
+    content: [{ type: "text", text: "It is fine." }],
+    __openclaw: { id: "a-2", seq: 2 },
+  },
+];
+
+/**
+ * A task whose history names `sessionId` (none when undefined), and a message sent to it, answered
+ * with `messageSeq` 3. The read its answer asks for is held: `answer` answers it with what
+ * `history` holds by then, as a read that comes back after a slow network or a reconnect does.
+ */
+async function sentIn(sessionId: string | undefined) {
+  const gateway = grantingGateway();
+  const history: { sessionId?: string; messages: unknown[] } = {
+    ...(sessionId ? { sessionId } : {}),
+    messages: FIRST,
+  };
+  let held: Promise<void> | null = null;
+  gateway.handlers["chat.history"] = async () => {
+    if (held) await held;
+    return { ...history, hasMore: false };
+  };
+  gateway.handlers["chat.send"] = () => ({ runId: "run-1", status: "started", messageSeq: 3 });
+  const opened = await openTask({ gateway });
+  const read = deferred<void>();
+  held = read.promise;
+  const reads = () => gateway.calls("chat.history").length;
+  const before = reads();
+  const loaded = opened.transcript().loadedAt;
+  const id = opened.client.sendMessage(KEY, "Free some space.");
+  await until(() => opened.transcript().outbox[0]?.status === "sent" && reads() > before);
+  return {
+    ...opened,
+    history,
+    id,
+    message: () => opened.transcript().outbox.find((each) => each.id === id),
+    run: () => opened.transcript().runs.find((each) => each.id === "run-1"),
+    answer: async () => {
+      read.resolve();
+      await until(() => opened.transcript().loadedAt !== loaded);
+      await sleep(50);
+    },
+  };
+}
+
+/** The session that replaced the task: a row of the person's from elsewhere at sequence 3, with no key. */
+const REPLACEMENT = [
+  { role: "user", content: "From the channel.", __openclaw: { id: "b-1", seq: 1 } },
+  {
+    role: "assistant",
+    content: [{ type: "text", text: "Hello." }],
+    __openclaw: { id: "b-2", seq: 2 },
+  },
+  { role: "user", content: "Another message.", __openclaw: { id: "b-3", seq: 3 } },
+];
+
+describe("history settles a sent message only from the session it was written in (F-075, F-278)", () => {
+  it("a read of another session under the key, with a row at its sequence number, settles nothing: its words stay, unconfirmed", async () => {
+    const { client, history, id, message, run, answer, transcript } = await sentIn("s-A");
+    expect(message()).toMatchObject({ status: "sent", messageSeq: 3 });
+    history.sessionId = "s-B";
+    history.messages = REPLACEMENT;
+    await answer();
+    expect(run()).toMatchObject({ messageId: id, anchorItemId: null });
+    expect(message()).toMatchObject({ text: "Free some space.", status: "unconfirmed" });
+    // Bound to the session the history read named when its words were written, and only that.
+    expect(message()?.sessionId).toBe("s-A");
+    expect(transcript().sessionId).toBe("s-B");
+    client.stop();
+  });
+
+  it("a read of another session that holds its key settles nothing either", async () => {
+    const { client, history, id, message, answer } = await sentIn("s-A");
+    history.sessionId = "s-B";
+    history.messages = [
+      {
+        role: "user",
+        content: "Free some space.",
+        __openclaw: { id: "b-1", seq: 1, idempotencyKey: `${id}:user` },
+      },
+    ];
+    await answer();
+    expect(message()).toMatchObject({ text: "Free some space.", status: "unconfirmed" });
+    client.stop();
+  });
+
+  it("a read of the session it was written in settles it by its key", async () => {
+    const { client, history, id, message, run, answer } = await sentIn("s-A");
+    history.messages = [
+      ...FIRST,
+      {
+        role: "user",
+        content: "Free some space.",
+        __openclaw: { id: "a-3", seq: 3, idempotencyKey: `${id}:user` },
+      },
+    ];
+    await answer();
+    expect(message()).toBeUndefined();
+    expect(run()).toMatchObject({ messageId: null, anchorItemId: "a-3:2" });
+    client.stop();
+  });
+
+  it("a read of the session it was written in settles it by its sequence number", async () => {
+    const { client, history, message, run, answer } = await sentIn("s-A");
+    history.messages = [
+      ...FIRST,
+      { role: "user", content: "Free some space.", __openclaw: { id: "a-3", seq: 3 } },
+    ];
+    await answer();
+    expect(message()).toBeUndefined();
+    expect(run()).toMatchObject({ messageId: null, anchorItemId: "a-3:2" });
+    client.stop();
+  });
+
+  it("written in a session past the id cap, it is bound to no id: a short id equal to its digest settles nothing", async () => {
+    const long = `s-${"x".repeat(MAX_ID_CHARS)}`;
+    const { client, history, id, message, answer } = await sentIn(long);
+    expect(message()).toMatchObject({ status: "sent", sessionId: "" });
+    // An ordinary session id that reads as the digest, with the message's key and its sequence.
+    history.sessionId = capId(long, MAX_ID_CHARS);
+    history.messages = [
+      ...FIRST,
+      {
+        role: "user",
+        content: "Free some space.",
+        __openclaw: { id: "a-3", seq: 3, idempotencyKey: `${id}:user` },
+      },
+    ];
+    await answer();
+    expect(message()).toMatchObject({
+      text: "Free some space.",
+      status: "unconfirmed",
+      sessionId: "",
+    });
+    client.stop();
+  });
+
+  it("written while the view showed no session, it is bound to none and settles as before", async () => {
+    const { client, history, message, run, answer, transcript } = await sentIn(undefined);
+    expect(transcript().sessionId).toBeUndefined();
+    expect(message()).not.toHaveProperty("sessionId");
+    history.messages = REPLACEMENT;
+    await answer();
+    expect(message()).toBeUndefined();
+    expect(run()).toMatchObject({ messageId: null, anchorItemId: "b-3:2" });
+    client.stop();
+  });
+
+  it("after a read that names no session, the next message is bound to none", async () => {
+    const { client, history, message, answer, transcript } = await sentIn("s-A");
+    // Deleted elsewhere: the gateway names no session for a key that holds no task.
+    delete history.sessionId;
+    history.messages = [];
+    await answer();
+    expect(transcript().sessionId).toBeUndefined();
+    expect(message()).toMatchObject({ status: "unconfirmed", sessionId: "s-A" });
+    const next = client.sendMessage(KEY, "Are you there?");
+    expect(transcript().outbox.find((each) => each.id === next)).not.toHaveProperty("sessionId");
+    client.stop();
+  });
+});
+
+/**
+ * A task whose history names `s-A`, with a read asked and held before a message is sent to it,
+ * answered with `messageSeq` 3. `release` waits for the oldest read to be asked and answers it with
+ * what `history` holds by then.
+ */
+async function sentDuringRead() {
+  const gateway = grantingGateway();
+  const history: { sessionId?: string; messages: unknown[] } = {
+    sessionId: "s-A",
+    messages: FIRST,
+  };
+  const held: Array<() => void> = [];
+  let holding = false;
+  gateway.handlers["chat.history"] = async () => {
+    if (holding) await new Promise<void>((resolve) => held.push(resolve));
+    return { ...history, hasMore: false };
+  };
+  gateway.handlers["chat.send"] = () => ({ runId: "run-1", status: "started", messageSeq: 3 });
+  const opened = await openTask({ gateway });
+  holding = true;
+  const asked = gateway.calls("chat.history").length;
+  opened.client.reloadSession(KEY);
+  await until(() => held.length === 1 && gateway.calls("chat.history").length > asked);
+  const id = opened.client.sendMessage(KEY, "Free some space.");
+  await until(() => opened.transcript().outbox[0]?.messageSeq === 3);
+  return {
+    ...opened,
+    history,
+    id,
+    message: () => opened.transcript().outbox.find((each) => each.id === id),
+    run: () => opened.transcript().runs.find((each) => each.id === "run-1"),
+    release: async () => {
+      await until(() => held.length > 0);
+      const loaded = opened.transcript().loadedAt;
+      held.shift()!();
+      await until(() => opened.transcript().loadedAt !== loaded);
+    },
+  };
+}
+
+describe("a read asked before a send's answer, answered after it (F-075, F-278)", () => {
+  it("can't confirm it by the sequence number the answer gave: its own session's row at that number is another message", async () => {
+    const { client, history, id, message, run, release } = await sentDuringRead();
+    // As the session stood when the read was asked: another message at 3, with no key.
+    history.messages = [
+      ...FIRST,
+      { role: "user", content: "From the channel.", __openclaw: { id: "a-3", seq: 3 } },
+    ];
+    await release();
+    expect(run()).toMatchObject({ messageId: id, anchorItemId: null });
+    expect(message()).toMatchObject({ text: "Free some space.", status: "sent", sessionId: "s-A" });
+    // The read its answer asked for: the task was replaced, and the new session has a row at 3 too.
+    history.sessionId = "s-B";
+    history.messages = REPLACEMENT;
+    await release();
+    expect(run()).toMatchObject({ messageId: id, anchorItemId: null });
+    expect(message()).toMatchObject({ text: "Free some space.", status: "unconfirmed" });
+    client.stop();
+  });
+
+  it("the read its answer asks for confirms it by that sequence number, from the session it was written in", async () => {
+    const { client, history, message, run, release } = await sentDuringRead();
+    await release();
+    expect(message()).toMatchObject({ status: "sent" });
+    history.messages = [
+      ...FIRST,
+      { role: "user", content: "Free some space.", __openclaw: { id: "a-3", seq: 3 } },
+    ];
+    await release();
+    expect(message()).toBeUndefined();
+    expect(run()).toMatchObject({ messageId: null, anchorItemId: "a-3:2" });
+    client.stop();
+  });
+
+  it("its own key confirms it, however early the read was asked", async () => {
+    const { client, history, id, message, run, release } = await sentDuringRead();
+    history.messages = [
+      ...FIRST,
+      {
+        role: "user",
+        content: "Free some space.",
+        __openclaw: { id: "a-3", seq: 3, idempotencyKey: `${id}:user` },
+      },
+    ];
+    await release();
+    expect(message()).toBeUndefined();
+    expect(run()).toMatchObject({ messageId: null, anchorItemId: "a-3:2" });
+    client.stop();
+  });
+});
+
+/**
+ * A task whose history names `s-A`, and a read of it asked and held. `failFirst` fails the held
+ * try with an answer that may pass (`UNAVAILABLE` with no reason), so the read asks again, and
+ * holds that try; `answer` answers the held try with what `history` holds by then.
+ */
+async function askedAgain() {
+  const gateway = grantingGateway();
+  const history: { sessionId?: string; messages: unknown[] } = {
+    sessionId: "s-A",
+    messages: FIRST,
+  };
+  const held: Array<{ resolve: () => void; reject: (error: unknown) => void }> = [];
+  let holding = false;
+  gateway.handlers["chat.history"] = async () => {
+    if (holding) await new Promise<void>((resolve, reject) => held.push({ resolve, reject }));
+    return { ...history, hasMore: false };
+  };
+  gateway.handlers["chat.send"] = () => ({ runId: "run-1", status: "started", messageSeq: 3 });
+  const opened = await openTask({ gateway });
+  holding = true;
+  const reads = () => gateway.calls("chat.history").length;
+  const before = reads();
+  opened.client.reloadSession(KEY);
+  await until(() => held.length === 1 && reads() === before + 1);
+  let id = "";
+  return {
+    ...opened,
+    history,
+    send: async () => {
+      id = opened.client.sendMessage(KEY, "Free some space.");
+      await until(() => opened.transcript().outbox[0]?.messageSeq === 3);
+      return id;
+    },
+    message: () => opened.transcript().outbox.find((each) => each.id === id),
+    run: () => opened.transcript().runs.find((each) => each.id === "run-1"),
+    failFirst: async () => {
+      const asked = reads();
+      held
+        .shift()!
+        .reject(new GatewayError({ code: "UNAVAILABLE", message: "Try again shortly." }));
+      await until(() => held.length === 1 && reads() === asked + 1);
+    },
+    answer: async () => {
+      const loaded = opened.transcript().loadedAt;
+      held.shift()!.resolve();
+      await until(() => opened.transcript().loadedAt !== loaded);
+    },
+  };
+}
+
+describe("a read whose first try failed, asked again (F-075, F-278)", () => {
+  it("the try asked after a send's answer confirms it by that sequence number, with no further read", async () => {
+    const { client, history, message, run, send, failFirst, answer } = await askedAgain();
+    await send();
+    await failFirst();
+    history.messages = [
+      ...FIRST,
+      { role: "user", content: "Free some space.", __openclaw: { id: "a-3", seq: 3 } },
+    ];
+    await answer();
+    // Settled by that try's own answer: the read the send's answer asked for is still held.
+    expect(message()).toBeUndefined();
+    expect(run()).toMatchObject({ messageId: null, anchorItemId: "a-3:2" });
+    client.stop();
+  });
+
+  it("the try asked before a send's answer can't confirm it by the sequence number that answer gave", async () => {
+    const { client, history, message, run, send, failFirst, answer } = await askedAgain();
+    await failFirst();
+    const id = await send();
+    // Its own session's row at that number, as that try was answered: another message's.
+    history.messages = [
+      ...FIRST,
+      { role: "user", content: "From the channel.", __openclaw: { id: "a-3", seq: 3 } },
+    ];
+    await answer();
+    expect(run()).toMatchObject({ messageId: id, anchorItemId: null });
+    expect(message()).toMatchObject({ text: "Free some space.", status: "sent", sessionId: "s-A" });
+    client.stop();
+  });
+
+  it("the try asked after a send's answer confirms nothing from another session", async () => {
+    const { client, history, message, run, send, failFirst, answer } = await askedAgain();
+    const id = await send();
+    await failFirst();
+    history.sessionId = "s-B";
+    history.messages = REPLACEMENT;
+    await answer();
+    expect(run()).toMatchObject({ messageId: id, anchorItemId: null });
+    expect(message()).toMatchObject({ text: "Free some space.", status: "sent", sessionId: "s-A" });
+    client.stop();
+  });
 });

@@ -1017,6 +1017,70 @@ describe("outbox reconciliation (F-075, F-107)", () => {
     expect(reconcileOutbox(once, rows)).toBe(once);
     expect(once.outbox).toEqual([]);
   });
+
+  it("settles a message bound to a session only from history of that session (F-278)", () => {
+    const activity: TaskActivity = {
+      ...emptyActivity,
+      outbox: [
+        message("m1", { status: "sent", sessionId: "s-A" }),
+        message("m2", { status: "unconfirmed", text: "Second", messageSeq: 8, sessionId: "s-A" }),
+      ],
+    };
+    // Another session's rows, by key or by sequence number, and a read that names none, are no
+    // evidence of it.
+    expect(reconcileOutbox(activity, rows, "s-B")).toBe(activity);
+    expect(reconcileOutbox(activity, rows, null)).toBe(activity);
+    expect(reconcileOutbox(activity, rows)).toBe(activity);
+    // Its own session's rows settle it as any message: by key, then by sequence number.
+    expect(reconcileOutbox(activity, rows, "s-A").outbox).toEqual([]);
+  });
+
+  it("settles a message written in a session past the id cap from no history (F-278)", () => {
+    const activity: TaskActivity = {
+      ...emptyActivity,
+      outbox: [
+        message("m1", { status: "sent", sessionId: "" }),
+        message("m2", { status: "unconfirmed", text: "Second", messageSeq: 8, sessionId: "" }),
+      ],
+    };
+    // Kept as no id: neither a named session, nor none, nor an empty one stands in for it.
+    for (const sessionId of ["s-A", null, ""]) {
+      expect(reconcileOutbox(activity, rows, sessionId)).toBe(activity);
+    }
+  });
+
+  it("matches by sequence number only a number the message held when the read was asked (F-278)", () => {
+    const now = message("m2", { status: "sent", text: "Second", messageSeq: 8 });
+    const activity: TaskActivity = { ...emptyActivity, outbox: [now] };
+    // Sent after the read was asked, given its number since, or another message's number then: the
+    // row at 8 may be another message.
+    expect(reconcileOutbox(activity, rows, null, [])).toBe(activity);
+    expect(reconcileOutbox(activity, rows, null, [{ ...now, messageSeq: null }])).toBe(activity);
+    expect(reconcileOutbox(activity, rows, null, [{ ...now, messageSeq: 7 }])).toBe(activity);
+    expect(
+      reconcileOutbox(activity, rows, null, [message("m9", { status: "sent", messageSeq: 8 })]),
+    ).toBe(activity);
+    // Held when it was asked: matched, as always.
+    expect(reconcileOutbox(activity, rows, null, [now]).outbox).toEqual([]);
+    // Its own key is matched however early the read was asked.
+    const keyed: TaskActivity = {
+      ...emptyActivity,
+      outbox: [message("m1", { status: "sent", messageSeq: 99 })],
+    };
+    expect(reconcileOutbox(keyed, rows, null, []).outbox).toEqual([]);
+  });
+
+  it("settles a message bound to no session from any history, as before", () => {
+    const activity: TaskActivity = {
+      ...emptyActivity,
+      outbox: [
+        message("m1", { status: "sent" }),
+        message("m2", { status: "sent", text: "Second", messageSeq: 8 }),
+      ],
+    };
+    expect(reconcileOutbox(activity, rows, "s-B").outbox).toEqual([]);
+    expect(reconcileOutbox(activity, rows, null).outbox).toEqual([]);
+  });
 });
 
 function questionRecord(id: string, runId = "run-1") {

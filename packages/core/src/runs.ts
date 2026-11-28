@@ -749,6 +749,13 @@ export type OutgoingMessage = {
   /** The gateway's id of the message this one replies to (`chat.send` `replyToId`, F-067). */
   replyToId?: string;
   /**
+   * The gateway's id of the session its task's history came from when it was written
+   * (`TaskActivity.sessionId`), kept through every retry: only history of that session settles it
+   * (`reconcileOutbox`). Empty when that session's id was past the id cap: no history settles it.
+   * Absent when no read had named one; such a message settles as before.
+   */
+  sessionId?: string;
+  /**
    * Where the gateway put a steer, by its own record; its acknowledgement says neither
    * (docs/research/steer-stop.md). `joined`: the bare `chat` final under the steer's own id
    * came while the run it was sent into went on. `withdrawn`: a Stop's `chat.abort` with that
@@ -876,6 +883,12 @@ export type TaskActivity = {
   questionsOmitted: number;
   /** Runs started elsewhere not kept because the task held `MAX_RUN_LIST` runs. */
   runsOmitted: number;
+  /**
+   * The gateway's id of the session the task's latest history read came from (`chat.history`
+   * `sessionId`), absent when that read named none and empty when the id was past the id cap,
+   * which is kept as no id: a message written now is bound to it.
+   */
+  sessionId?: string;
 };
 
 export const emptyActivity: TaskActivity = {
@@ -4079,9 +4092,22 @@ function gatewayAuthored(message: RawRecord): boolean {
  * when the row carries no contradicting key. Text is never evidence: a message
  * no identifier ties to a row stays visible, to be retried or deleted, rather
  * than being retired by a look-alike. Matched messages leave the outbox, and
- * their runs anchor to the row.
+ * their runs anchor to the row. A message bound to a session (`sessionId`) is
+ * settled only by history that names that session (`sessionId` here, null
+ * when the read named none or a session past the id cap): a row of another
+ * session, whatever its key or sequence number, is no evidence of it, and one
+ * bound to a session past the id cap (empty) is settled by none. `asked` is
+ * the outbox as it stood when the read was asked: only a sequence number a
+ * message already held then is matched, since the read may have been answered
+ * from before a number the message was given since, and a row at that number
+ * is then another message's. A key is matched however early the read was asked.
  */
-export function reconcileOutbox(activity: TaskActivity, messages: unknown): TaskActivity {
+export function reconcileOutbox(
+  activity: TaskActivity,
+  messages: unknown,
+  sessionId: string | null = null,
+  asked: readonly OutgoingMessage[] = activity.outbox,
+): TaskActivity {
   const rows = (Array.isArray(messages) ? messages : [])
     .map((entry, index) => ({ message: asRecord(entry), index }))
     .filter(
@@ -4101,13 +4127,19 @@ export function reconcileOutbox(activity: TaskActivity, messages: unknown): Task
     ) {
       return true;
     }
+    if (
+      outgoing.sessionId !== undefined &&
+      (outgoing.sessionId === "" || outgoing.sessionId !== sessionId)
+    )
+      return true;
     const byKey = rows.find(
       (row) => !used.has(row.index) && namesOutgoing(rowIdempotencyKey(row.message), outgoing),
     );
     const bySeq =
       byKey ??
       ((outgoing.status === "sent" || outgoing.status === "unconfirmed") &&
-      outgoing.messageSeq !== null
+      outgoing.messageSeq !== null &&
+      asked.some((each) => each.id === outgoing.id && each.messageSeq === outgoing.messageSeq)
         ? rows.find((row) => {
             if (used.has(row.index) || num(meta(row.message).seq) !== outgoing.messageSeq)
               return false;
