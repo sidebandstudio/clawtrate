@@ -1,0 +1,13 @@
+- status
+- main:
+  - button "Back"
+  - heading "Finish setting up OpenClaw" [level=2]
+  - paragraph: Removal stopped before Clawtrate cleared its record in the hidden .openclaw-removing folder in Clawtrate’s app data.
+  - paragraph
+  - list "Steps":
+    - listitem "Download and check OpenClaw 2026.11.10, done": Download and check OpenClaw 2026.11.10
+    - listitem "Install Node.js and OpenClaw, done": Install Node.js and OpenClaw Node.js 24.22.1, checked
+    - listitem "Set up the gateway, waiting": Set up the gateway
+    - listitem "Start and check, waiting": Start and check
+  - button "Finish and start again"
+  - paragraph: Finish setting up OpenClaw

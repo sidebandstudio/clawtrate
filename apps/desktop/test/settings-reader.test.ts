@@ -1116,7 +1116,7 @@ const ownModule = (os: string, arch: string, glibc: boolean) =>
 
 // Each platform 0.25.0 publishes a module for (its `optionalDependencies`) is looked for by the
 // name 2026.10.6's table pins. It publishes none for Windows on Arm, and no table pins one;
-// 2026.11.10's pins only macOS, where the proof runs.
+// 2026.11.10's, which 2026.11.11 shares, pins only macOS, where the proof runs.
 it("looks for each platform's own module by the name it is published and pinned under", () => {
   expect(PINNED_FS_SAFE["2026.10.6"]).toBe("0.25.0");
   const looked = [
@@ -1131,6 +1131,10 @@ it("looks for each platform's own module by the name it is published and pinned 
   // As sets: the table's order is not part of the pin.
   expect(looked.sort()).toEqual(Object.keys(OPENCLAW_PINS["2026.10.6"]!).sort());
   expect(Object.keys(OPENCLAW_PINS["2026.11.10"]!).sort()).toEqual(["darwin-arm64", "darwin-x64"]);
+  // 2026.11.11 depends on the same `@openclaw/fs-safe@0.27.1`, whose published modules are those.
+  expect(PINNED_FS_SAFE["2026.11.11"]).toBe(PINNED_FS_SAFE["2026.11.10"]);
+  expect(OPENCLAW_PINS["2026.11.11"]).toBe(OPENCLAW_PINS["2026.11.10"]);
+  expect(Object.keys(OPENCLAW_PINS).sort()).toEqual(Object.keys(PINNED_FS_SAFE).sort());
   for (const pins of Object.values(OPENCLAW_PINS))
     expect(Object.keys(pins)).not.toContain(ownModule("win32", "arm64", false));
 });

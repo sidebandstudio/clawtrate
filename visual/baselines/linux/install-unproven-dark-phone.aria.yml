@@ -1,0 +1,15 @@
+- status
+- main:
+  - button "Back"
+  - heading "Setting up OpenClaw" [level=2]
+  - paragraph
+  - list "Steps":
+    - listitem "Download and check OpenClaw 2026.11.10, done": Download and check OpenClaw 2026.11.10
+    - listitem "Install Node.js and OpenClaw, failed": Install Node.js and OpenClaw
+    - listitem "Set up the gateway, waiting": Set up the gateway
+    - listitem "Start and check, waiting": Start and check
+  - alert:
+    - paragraph: Install Node.js and OpenClaw failed. Clawtrate couldn't read or write a file it needs. Check that there is space and that its app data can be written. Check the clawtrate profile and Clawtrate’s app data. Some setup files may still be there.
+  - group: Show details
+  - button "Try again"
+  - paragraph: Setting up OpenClaw

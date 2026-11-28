@@ -8,6 +8,8 @@ import {
   type BridgeCommand,
   type ClawtrateState,
   type HostInfo,
+  type InstallFailure,
+  type SetupInstall,
   type SetupLook,
   type SetupState,
 } from "@clawtrate/core";
@@ -41,9 +43,54 @@ const failed = (kind: NonNullable<SetupState["failure"]>["kind"], extra = {}): S
   failure: { kind, exitCode: null, port: null, reason: null, ...extra },
 });
 
+const notFound: SetupLook = {
+  ...running,
+  outcome: "not-found",
+  version: null,
+  profile: null,
+  listens: null,
+  service: null,
+  port: null,
+  access: null,
+};
+
+/** Setting OpenClaw up (§10), at a step, after a look found nothing. */
+const installing = (install: Partial<SetupInstall>): SetupState => ({
+  ...initialSetupState,
+  phase: "installing",
+  look: notFound,
+  install: { step: 0, nodeChecked: false, failure: null, ...install },
+});
+
+/** A failed install, at the step that failed. */
+const installFailed = (
+  kind: InstallFailure["kind"],
+  step: number,
+  extra: Partial<InstallFailure> = {},
+): SetupState => ({
+  ...initialSetupState,
+  phase: "install-failed",
+  look: notFound,
+  install: {
+    step: Math.max(step, 0),
+    nodeChecked: step > 1,
+    ...(kind === "service" && extra.cleanup === "removed" ? { foldersTrashed: true } : {}),
+    failure: {
+      kind,
+      step,
+      exitCode: null,
+      classification: null,
+      retry: extra.cleanup === "removed",
+      cleanup: "none",
+      ...extra,
+    },
+  },
+});
 const localStopped = looked({ ...localLook, outcome: "stopped", access: null, canStart: true });
 
 /** Every setup state the fixture shows, by the name used in `?setup=`. */
+const trashRefused = installFailed("trash", -1);
+
 export const SETUP_STATES: Record<string, SetupState> = {
   first: initialSetupState,
   looking: { ...initialSetupState, phase: "looking", step: 1 },
@@ -187,6 +234,70 @@ export const SETUP_STATES: Record<string, SetupState> = {
   "local-refused": { ...looked({ ...localLook }), phase: "done", step: 2 },
   "local-refused-token": { ...looked({ ...localLook }), phase: "done", step: 2 },
   "local-refused-bots": { ...looked({ ...localLook }), phase: "done", step: 2 },
+  "install-ready": looked(notFound),
+  // The host's own look at start found nothing: the same card is the first screen.
+  "install-first": { ...looked(notFound), unasked: true },
+  installing: installing({}),
+  "installing-node": installing({ step: 1, nodeChecked: true }),
+  "installing-gateway": installing({ step: 2, nodeChecked: true }),
+  "installing-check": installing({ step: 3, nodeChecked: true }),
+  "install-recovery": {
+    ...installing({ step: 2, nodeChecked: true, recovery: "replace" }),
+    phase: "install-failed",
+  },
+  "install-replaced": installing({ foldersTrashed: true }),
+  "install-trash-refused": {
+    ...trashRefused,
+    install: { ...trashRefused.install!, step: 2, nodeChecked: true, recovery: "replace" },
+  },
+  "install-removal-staged": {
+    ...installing({ step: 2, nodeChecked: true, recovery: "staged", recoveryLocation: "staging" }),
+    phase: "install-failed",
+  },
+  "install-removal-finish": {
+    ...installing({ step: 2, nodeChecked: true, recovery: "finish", recoveryLocation: "staging" }),
+    phase: "install-failed",
+  },
+  "install-recovery-inspect": {
+    ...installing({
+      step: 0,
+      nodeChecked: false,
+      recovery: "inspect",
+      recoveryLocation: "profile",
+    }),
+    phase: "install-failed",
+  },
+  "install-download": installFailed("download", 0, { cleanup: "removed" }),
+  "install-download-space": installFailed("download-space", 0, { cleanup: "removed" }),
+  "install-fingerprint": installFailed("fingerprint", 0, { cleanup: "removed" }),
+  "install-installer": installFailed("installer", 1, { exitCode: 1, cleanup: "removed" }),
+  "install-node": installFailed("node-not-checked", 1, { cleanup: "removed" }),
+  "install-unproven": installFailed("write", 1, { cleanup: "unproven" }),
+  "install-onboard": installFailed("onboard", 2, {
+    exitCode: 1,
+    classification: "startup-blocked",
+    cleanup: "kept",
+  }),
+  "install-service": installFailed("service", 2, { exitCode: 1, cleanup: "kept" }),
+  "install-service-removed": installFailed("service", 2, { exitCode: 1, cleanup: "removed" }),
+  "install-download-short": installFailed("download-short", 0, { cleanup: "removed" }),
+  "install-unpack": installFailed("unpack", 0, { cleanup: "removed" }),
+  "install-installer-changed": installFailed("installer-changed", 1, { cleanup: "removed" }),
+  "install-no-program": installFailed("no-program", 1, { cleanup: "removed" }),
+  "install-service-appeared": installFailed("service-appeared", 2, {
+    exitCode: 0,
+    cleanup: "kept",
+  }),
+  "install-not-answering": installFailed("not-answering", 3, { cleanup: "kept" }),
+  "install-exists": installFailed("exists", -1),
+  "install-user-service": installFailed("user-service", -1),
+  "install-changed": installFailed("changed", -1),
+  "install-unchecked": installFailed("unchecked", -1),
+  "install-expired": installFailed("expired", -1),
+  /** An earlier attempt of Clawtrate's that never reached onboarding: setting up removes it first. */
+  "not-found-leftover": looked({ ...notFound, leftover: true }),
+  /** The gateway Clawtrate set up, found by the look that follows the install. */
+  "found-installed": looked({ ...localLook, profile: "clawtrate", port: 52114 }),
 };
 
 /** The connection of the `local-refused` scenes: the saved gateway's reconnect, refused. */
@@ -217,7 +328,12 @@ export function isSetupState(name: string | null): name is string {
  * person's Mac app, with local connect and the Keychain, so a new pairing asks for full control.
  */
 export function setupInfo(info: HostInfo, name: string): HostInfo {
-  const local = name.startsWith("local-");
+  const install =
+    name.startsWith("install-") ||
+    name.startsWith("installing") ||
+    name === "not-found-leftover" ||
+    name === "found-installed";
+  const local = install || name.startsWith("local-");
   return {
     ...info,
     kind: "desktop",
@@ -228,6 +344,7 @@ export function setupInfo(info: HostInfo, name: string): HostInfo {
       pair: true,
       platform: name === "windows" ? "win32" : "darwin",
       ...(local ? { local: true } : {}),
+      ...(install ? { install: true } : {}),
     },
   };
 }
@@ -319,6 +436,30 @@ export function setupCommand(
           return;
         }
         set({ ...connected(), setup: { ...current(), phase: "done" } });
+      });
+      return true;
+    }
+    case "setupInstall": {
+      // As the host runs it after its dialog: the four steps, then the look finds the gateway.
+      const trashed = command.action === "replace" ? { foldersTrashed: true } : {};
+      setup(installing(command.action === "continue" ? { step: 2, nodeChecked: true } : trashed));
+      const at = (ms: number, install: Partial<SetupInstall>) =>
+        after(
+          ms,
+          () => current().phase === "installing" && setup(installing({ ...trashed, ...install })),
+        );
+      if (command.action !== "continue") {
+        at(300, { step: 1 });
+        at(500, { step: 1, nodeChecked: true });
+        at(700, { step: 2, nodeChecked: true });
+      }
+      at(900, { step: 3, nodeChecked: true });
+      after(1100, () => {
+        if (current().phase !== "installing") return;
+        setup({ ...SETUP_STATES["found-installed"]!, phase: "connecting" });
+        after(900, () => {
+          if (current().phase === "connecting") set(connected());
+        });
       });
       return true;
     }

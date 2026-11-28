@@ -1,0 +1,7 @@
+- status
+- region "Conversation":
+  - button "Back to bots"
+  - heading "No bots to show" [level=1]
+  - paragraph: This gateway has no bots yet.
+  - status
+- status
