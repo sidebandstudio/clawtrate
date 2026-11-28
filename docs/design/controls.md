@@ -723,9 +723,7 @@ Each plugin is written from its list, each item checked by a test or a review, a
 6. The plugin writes exposure warnings at startup, and OpenClaw's standalone security audit reads installed plugin metadata without running its service.
 7. Removing an existing bot deny list with `config.patch` uses `null` and the exact array path in `replacePaths`.
 8. In a run started by another bot's message, the plugin refuses an Ask before any card, records it `cancelled`, and its tool result names the bot (#606).
-9. For known lost rules, the plugin keeps applying the last verified policy when available, and otherwise asks before every dispatch that reaches the hook except `ask_user`.
-
-   While the rules are lost and no earlier copy is held, a person can allow once a call that a lost Never would have refused; the card says the rules could not be read.
+9. For known lost rules, the plugin keeps applying the last verified policy when available, and otherwise refuses every dispatch that reaches the hook except `ask_user`, with no card, saying the rules could not be read. A saved Never is never offered to a person while it cannot be read; restoring the file ends the refusal at the next call.
 
 10. For path rules, Never and Ask fold letter case, the specified Unicode spaces and apostrophes, and composed or decomposed accents after path parsing, while Allow compares the parsed path without those folds.
 11. Auto redaction omits paths, commands and agent ids from plugin text when forwarding or chat configuration is present, and OpenClaw can add the agent id to the forwarded request.
