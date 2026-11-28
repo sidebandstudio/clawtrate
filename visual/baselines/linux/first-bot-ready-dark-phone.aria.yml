@@ -1,0 +1,23 @@
+- status
+- region "Conversation":
+  - button "Back to bots"
+  - button "main, no task selected. Show details.": main
+  - button "Show work panel"
+  - heading "Set up your first bot" [level=1]
+  - button "Get started"
+  - status
+- dialog "Make your first bot":
+  - banner:
+    - heading "Make your first bot" [level=2]
+    - button "Close"
+  - text: Name
+  - textbox "Name":
+    - /placeholder: Juniper
+    - text: Juniper
+  - paragraph:
+    - text: Uses OpenAI.
+    - button "About checking this account"
+  - contentinfo:
+    - button "Create bot"
+  - status: Connected to OpenAI
+- status

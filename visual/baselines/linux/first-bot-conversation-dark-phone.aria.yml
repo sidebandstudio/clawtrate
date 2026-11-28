@@ -1,0 +1,11 @@
+- status
+- region "Conversation":
+  - button "Back to bots"
+  - button "Juniper, Main. Show details.": Juniper
+  - button "Show work panel"
+  - heading "Send a message to start" [level=1]
+  - button "Attach files"
+  - textbox "Message Juniper"
+  - button "Send" [disabled]
+  - status
+- status
