@@ -1713,6 +1713,12 @@ export class ClawtrateClient {
    * the guides made before then waits for it, so it shows what that change leaves.
    */
   private guidesConnectPass: { epoch: number; queued: Promise<void> } | null = null;
+  /**
+   * Settled once this connection's route has decided its binding from the saved record
+   * (`bindRouteIdentity`): until then an upkeep write can't know which gateway the route is for.
+   * True only when the record was read and the route may go on as this connection's gateway.
+   */
+  private routeBinding: { epoch: number; decided: Promise<boolean> } | null = null;
   /** Bots of this connection whose `AGENTS.md` didn't exist yet at its guide change (`keepGuides`). */
   private readonly guidesMissing = new Set<string>();
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
@@ -7288,7 +7294,7 @@ export class ClawtrateClient {
     // A bot made in Clawtrate gets the guides right away, as every bot does, on the connection it
     // was made on, once the gateway is known to be the one it was made on. It never fails the
     // creation.
-    if (gatewayId !== null && this.routeIdentityHolds(gatewayId) && this.guidesWritable())
+    if (gatewayId !== null && (await this.routeIdentityHolds(gatewayId)) && this.guidesWritable())
       await this.guidesByThemselves(request, created.botId).catch((error: unknown) =>
         this.logFailure("warn", "guides for a new bot", error),
       );
@@ -8119,6 +8125,10 @@ export class ClawtrateClient {
           this.guidesUnnamed = { generation, epoch };
           return false;
         }
+        // Learned here first, the route's saved record is checked for it before anything is
+        // written; publishing the name stays with the connection's own reads.
+        if (known === undefined && this.bindRouteIdentity(id, current) === "changed") return false;
+        if (!current()) return false;
         return this.routeIdentityHolds(id);
       },
     );
@@ -8131,7 +8141,10 @@ export class ClawtrateClient {
    * Whether `id` can be this connection's gateway as its saved route knows it: a route that has
    * bound an identity accepts only that one; no route, or one not bound yet, accepts any.
    */
-  private routeIdentityHolds(id: string): boolean {
+  private async routeIdentityHolds(id: string): Promise<boolean> {
+    // Another client on this store may have bound the route since this one loaded it.
+    const binding = this.routeBinding;
+    if (binding?.epoch === this.epoch && !(await binding.decided)) return false;
     const settings = this.settings;
     return (
       settings?.route === undefined || settings.gatewayId === undefined || settings.gatewayId === id
@@ -8488,6 +8501,10 @@ export class ClawtrateClient {
   /** The next part of a file on its way to this viewer. */
   readFileChunk(id: string, index: number, owner: object = DIRECT_CALLER): { data: string } {
     return this.fileTransfers.chunk(owner, id, index);
+  }
+
+  holdsFile(id: string, owner: object): boolean {
+    return this.fileTransfers.holds(owner, id);
   }
 
   /** Drop a file's transfer before its last part was read. */
@@ -10417,24 +10434,31 @@ export class ClawtrateClient {
       void this.changeConnection(() => this.dropRouteToken(url, deviceId, used));
       return "changed";
     }
-    void this.changeConnection(async () => {
+    const decided = this.changeConnection(async () => {
       const now = this.settings;
-      if (!current() || now?.url !== url || now.route !== route) return;
+      if (!current() || now?.url !== url || now.route !== route) return false;
       // Decided from the record as it is now: another client on this store may have saved the
       // route's identity since this one read it.
       const saved = await this.savedSettings();
-      if (!current() || saved?.url !== url || saved.route !== route) return;
+      if (!current() || saved?.url !== url || saved.route !== route) return false;
       const bound = now.gatewayId ?? saved.gatewayId;
       if (bound === undefined) {
         await this.writeRecord({ ...saved, gatewayId: id });
         if (this.settings === now) this.settings = { ...now, gatewayId: id };
-        return;
+        return true;
       }
       if (this.settings === now) this.settings = { ...now, gatewayId: bound };
-      if (bound === id) return;
+      if (bound === id) return true;
       this.stopChangedRoute(url);
       await this.dropRouteToken(url, deviceId, used);
-    }).catch(() => this.log("warn", "Could not check which gateway answers on this route."));
+      return false;
+    }).catch(() => {
+      // A record that couldn't be read says nothing of which gateway the route is for: no upkeep
+      // write goes until another check reads it.
+      this.log("warn", "Could not check which gateway answers on this route.");
+      return false;
+    });
+    this.routeBinding = { epoch: this.epoch, decided };
   }
 
   /**

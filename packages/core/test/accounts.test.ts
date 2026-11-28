@@ -556,6 +556,31 @@ describe("a bot's account: bound, locked, and the gateway choosing", () => {
     client.stop();
   });
 
+  it("a bot's own provider listed 70th, past the read's cap, keeps its account", async () => {
+    const fake = new AccountsGateway();
+    const status = fake.status.bind(fake);
+    const fillers = Array.from({ length: 69 }, (_, i) => ({
+      provider: `filler${i}`,
+      profiles: [{ profileId: `filler${i}:a`, type: "api_key", source: "inherited" }],
+    }));
+    fake.status = (agentId) => {
+      const answer = status(agentId) as { providers: Array<{ provider: string }> };
+      const acme = answer.providers.filter((each) => each.provider === "acme");
+      return { ...answer, providers: [...fillers, ...acme] };
+    };
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    for (const read of ["the first read", "a check of the lock"]) {
+      const pip = binding(accounts(), "pip");
+      expect({ read, missing: pip.accountMissing, word: accountWord(pip) }).toEqual({
+        read,
+        missing: false,
+        word: "bound",
+      });
+      await client.checkLock("pip");
+    }
+    client.stop();
+  });
+
   it("an answer that account status is unavailable is not an empty reading: the last good read stands", async () => {
     const fake = new AccountsGateway();
     fake.orders.otto = { acme: ["acme:work"] };

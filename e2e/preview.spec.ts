@@ -583,7 +583,7 @@ test("a task stays read after it was opened", async ({ page }) => {
   await expect(backup).toHaveAttribute("data-unread", "false");
 });
 
-test("F-015 F-017 F-019 F-031 F-425: the rail lists the gateway's bots by recent activity, with the primary bot's star, labels, previews and times", async ({
+test("F-015 F-017 F-019 F-031 F-425: the rail lists the gateway's bots by recent activity, each its picture and name with the primary bot's star and labels, and no preview or time", async ({
   page,
 }) => {
   await openShell(page);
@@ -630,7 +630,6 @@ async function railOfEveryBot(page: Page): Promise<void> {
     "Sort bots: Recent activity",
   );
 
-  let previewed = 0;
   for (const agent of bots) {
     const row = botRow(page, name(agent));
     // F-015: the gateway's default bot carries the star, and only it.
@@ -641,23 +640,14 @@ async function railOfEveryBot(page: Page): Promise<void> {
     if (agent.identity?.theme)
       await expect(row.locator(".bot-label")).toHaveText(agent.identity.theme);
     else await expect(row.locator(".bot-label")).toHaveCount(0);
-    // F-017: a preview of the latest message and the time of the latest activity.
-    const newest = sessions
-      .filter((s) => s.agentId === agent.id && !s.archived)
-      .sort((a, b) => (b.updatedAt ?? 0) - (a.updatedAt ?? 0))[0]!;
-    // The gateway previews only a task with a message. One another check just made has none
-    // yet, and the row shows that task's title instead.
-    if (newest.lastMessagePreview) {
-      const words = newest.lastMessagePreview
-        .replace(/[*_`#|]/g, "")
-        .split(/\s+/)
-        .slice(0, 3);
-      await expect(row.locator(".bot-preview")).toContainText(words.join(" "));
-      previewed += 1;
-    }
-    await expect(row.locator(".bot-time")).toHaveText(/^(\d{1,2}:\d{2}\s[AP]M|Yesterday)$/);
+    // F-017: the picture and the name, and no preview of the latest message or time.
+    await expect(row.locator(".presence")).toBeVisible();
+    await expect(row.locator(".bot-name")).toHaveText(name(agent));
+    await expect(row.locator("time")).toHaveCount(0);
+    await expect(row.locator(".bot-line")).toHaveText(
+      `${name(agent)}${agent.identity?.theme ?? ""}`,
+    );
   }
-  expect(previewed).toBeGreaterThan(0);
   expect(agents.defaultId).toBe("main");
   await expect(page.getByTestId("primary-star")).toHaveCount(1);
 
@@ -1244,7 +1234,7 @@ test("F-227 F-387 F-457: Settings shows the gateway, this device and its granted
   expect(listed.pending ?? []).toEqual([]);
 });
 
-test("F-017 F-020: a run started on the gateway shows its bot working, then the row shows the reply", async ({
+test("F-017 F-020: a run started on the gateway shows its bot working, then not once the reply has come", async ({
   page,
 }) => {
   // Every state the host sends the page, to see the run while it lasts.
@@ -1266,11 +1256,11 @@ test("F-017 F-020: a run started on the gateway shows its bot working, then the 
   const task = (state: (typeof seen)[number]) =>
     state.tasksByBot?.marlow?.find((t) => t.key === key);
   await expect.poll(() => seen.some((state) => task(state)?.status === "running")).toBe(true);
-  // The row says the bot worked while it did, and shows the reply once it finished.
+  // The row says the bot worked while it did, and stops once the reply has come.
+  await expect
+    .poll(() => seen.some((state) => task(state)?.preview?.includes("scripted development model")))
+    .toBe(true);
   await expect(botRow(page, "Marlow")).not.toHaveAccessibleName(/working/);
-  await expect(botRow(page, "Marlow").locator(".bot-preview")).toContainText(
-    "This is the scripted development model",
-  );
   // Its count is every task the gateway lists for Marlow now, this check's own included.
   await expect(botRow(page, "Marlow")).toHaveAccessibleName(
     new RegExp(`^Marlow, ${await gatewayTaskCount("marlow")} tasks`),
