@@ -172,7 +172,8 @@ function removeOwned(dir: string): void {
     if (stat.isDirectory()) for (const name of readdirSync(path)) check(join(path, name));
   };
   check(dir);
-  rmSync(dir, { recursive: true });
+  // A scanner or a helper can hold a file a moment longer: Node retries a busy or refused removal.
+  rmSync(dir, { recursive: true, maxRetries: 5 });
 }
 
 const sha256 = (text: string) => createHash("sha256").update(text).digest("hex");
