@@ -133,6 +133,27 @@ describe("the first screen on a Mac whose OpenClaw profile the host found and ma
     }
   });
 
+  it("F-602: a named profile discovered at startup offers Advanced without an install card", () => {
+    const html = render(
+      local(),
+      found({ outcome: "named-profile", profile: "Work_Lab", access: null }, true),
+    );
+    expect(html).toContain("OpenClaw settings found for Work_Lab");
+    expect(html).toContain(escape("Clawtrate needs this profile's gateway address to connect."));
+    expect(html).toContain(">Use Advanced</button>");
+    expect(html).not.toContain("Set up OpenClaw here");
+    expect(html).not.toContain("Clawtrate didn&#x27;t find OpenClaw here");
+  });
+
+  it("F-602: the Connect offer names its profile when two profiles exist", () => {
+    const html = render(
+      local(),
+      found({ profile: "default", others: ["profile clawtrate"] }, true),
+    );
+    expect(html).toContain("Using the default profile.");
+    expect(html).toContain(">Connect</button>");
+  });
+
   it("F-602: where the startup look can't offer a local route, it asks where OpenClaw runs", () => {
     for (const setup of [
       found({ outcome: "unverified", access: null }, true),
@@ -228,10 +249,17 @@ describe("the card for this computer, after This computer", () => {
   });
 
   it("F-602: Start OpenClaw appears only when the Mac host found a service it can start", () => {
-    const stopped = found({ outcome: "stopped", access: null, canStart: true });
+    const stopped = found({
+      outcome: "stopped",
+      access: null,
+      canStart: true,
+      profile: "clawtrate",
+      others: ["profile default"],
+    });
     const html = render(local(), stopped);
     expect(html).toContain(escape("OpenClaw's gateway isn't running"));
     expect(html).toContain(">Start OpenClaw</button>");
+    expect(html).toContain("<dt>Profile</dt><dd>clawtrate</dd>");
     expect(html).toContain("OpenClaw will keep running after Clawtrate closes.");
     expect(html).not.toContain("Connect</button>");
     const unavailable = render(

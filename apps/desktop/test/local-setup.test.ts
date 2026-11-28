@@ -547,6 +547,12 @@ describe.skipIf(!mac)(
         mkdirSync(agents, { recursive: true });
         writeFileSync(plist, "stand-in");
         settingsFile(home, folder, tokenSettings(port, "a-gateway-token"));
+        const other = profile === "default" ? "clawtrate" : "default";
+        settingsFile(
+          home,
+          other === "default" ? ".openclaw" : ".openclaw-clawtrate",
+          tokenSettings(await freePort(), "another-gateway-token"),
+        );
         const gateway = silentGateway();
         let server: Awaited<ReturnType<typeof bridged>> | undefined;
         const run = vi.fn(async ([action]: string[]) => {
@@ -555,7 +561,8 @@ describe.skipIf(!mac)(
             server = await bridged(gateway, port);
             proofFile(home, folder, provedAnswer(home, folder, port));
           }
-          return 0;
+          // Bootstrap can start the job even when a second kickstart is refused.
+          return action === "kickstart" ? 1 : 0;
         });
         const app = localApp({
           home,
@@ -573,6 +580,7 @@ describe.skipIf(!mac)(
             outcome: "stopped",
             profile,
             canStart: true,
+            others: [`profile ${other}`],
           });
           expect(run).not.toHaveBeenCalled();
           await session.apply(parseBridgeCommand({ type: "setupStart" }));
@@ -582,7 +590,12 @@ describe.skipIf(!mac)(
             ["bootstrap", domain, plist],
             ["kickstart", `${domain}/${label}`],
           ]);
-          expect(app.setup.current.look).toMatchObject({ outcome: "running", profile, port });
+          expect(app.setup.current.look).toMatchObject({
+            outcome: "running",
+            profile,
+            port,
+            others: [`profile ${other}`],
+          });
           expect(gateway.connects).toHaveLength(0);
           await app.setup.connect();
           await until(() => app.setup.current.phase === "done", 30_000);
@@ -687,6 +700,7 @@ describe.skipIf(!mac)(
             });
             app.setup.cancel();
           }
+          await until(() => app.setup.current.phase === "found", 30_000);
           expect(app.setup.current).toMatchObject({
             phase: "found",
             look: { outcome: "stopped", canStart: true },
@@ -759,6 +773,87 @@ describe.skipIf(!mac)(
         } finally {
           app.client.stop();
           await server.close();
+        }
+      },
+      SLOW,
+    );
+
+    it(
+      "F-602: Back during Start waits for macOS and looks for the gateway again",
+      async () => {
+        const home = newHome();
+        const port = await freePort();
+        const label = "ai.openclaw.gateway";
+        const agents = join(home, "Library", "LaunchAgents");
+        mkdirSync(agents, { recursive: true });
+        writeFileSync(join(agents, `${label}.plist`), "stand-in");
+        settingsFile(home, ".openclaw", tokenSettings(port, "a-gateway-token"));
+        const pending = deferred<number>();
+        const run = vi.fn(() => pending.promise);
+        const app = localApp({
+          home,
+          helper: standInHelper(home),
+          platform,
+          sandboxed: true,
+          deadlineMs: SLOW,
+          launchd: { labelAt: async () => label, run },
+        });
+        let server: Awaited<ReturnType<typeof bridged>> | undefined;
+        try {
+          await app.setup.look();
+          const starting = app.setup.start();
+          await until(() => run.mock.calls.length === 1, 30_000);
+          app.setup.cancel();
+          expect(app.setup.current.phase).toBe("looking");
+          server = await bridged(silentGateway(), port);
+          proofFile(home, ".openclaw", provedAnswer(home, ".openclaw", port));
+          pending.resolve(0);
+          await starting;
+          await until(() => app.setup.current.phase === "found", 30_000);
+          expect(app.setup.current.look).toMatchObject({ outcome: "running", port });
+        } finally {
+          pending.resolve(1);
+          app.client.stop();
+          await server?.close();
+        }
+      },
+      SLOW,
+    );
+
+    it.each(["settings", "empty", "link"] as const)(
+      "F-602: detects a named profile by its own settings file metadata (%s)",
+      async (state) => {
+        const home = newHome();
+        const profile = "Work_Lab";
+        const path = join(home, `.openclaw-${profile}`);
+        mkdirSync(path, { mode: 0o700 });
+        if (state === "settings") writeFileSync(join(path, "openclaw.json"), "never parsed");
+        if (state === "link") {
+          writeFileSync(join(home, "other.json"), "never followed");
+          symlinkSync(join(home, "other.json"), join(path, "openclaw.json"));
+        }
+        const app = localApp({
+          home,
+          helper: standInHelper(home),
+          platform,
+          sandboxed: true,
+          deadlineMs: SLOW,
+        });
+        try {
+          await app.setup.lookAtStart();
+          expect(app.setup.current).toMatchObject({ phase: "found", unasked: true });
+          const look =
+            state === "settings"
+              ? { outcome: "named-profile", profile, port: null }
+              : { outcome: "not-found", profile: null };
+          expect(app.setup.current.look).toMatchObject(look);
+          expect(readFileSync(join(home, "commands"), "utf8").trim().split("\n")).toEqual([
+            "read-private",
+            "read-private",
+          ]);
+          await expect(app.setup.connect()).rejects.toThrow("nothing to connect to");
+        } finally {
+          app.client.stop();
         }
       },
       SLOW,

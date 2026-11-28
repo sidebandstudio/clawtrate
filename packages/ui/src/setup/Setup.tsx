@@ -317,6 +317,7 @@ function LocalConnect({
   return (
     <>
       <Lede>{LOCAL_FOUND_LINE}</Lede>
+      {look.profile && look.others.length > 0 && <Hint>Using the {look.profile} profile.</Hint>}
       {asksFull && <FullControlConsent />}
       <Actions>
         <Primary onClick={connect}>Connect</Primary>
@@ -488,6 +489,9 @@ function LookResult({
                   ["Installed program", look.version ?? NOT_REPORTED],
                   ["Service", serviceWords(look.service)],
                 ] as Array<[string, string]>)),
+            ...(offer.local && look.profile && look.others.length > 0
+              ? ([["Profile", look.profile]] as Array<[string, string]>)
+              : []),
             ["Port", `No gateway answered on port ${look.port}`],
           ]}
         >
@@ -564,6 +568,20 @@ function LookResult({
           <p className="s-links">
             <SmallLink onClick={onAdvanced}>Advanced</SmallLink>
           </p>
+        </Found>
+      );
+    case "named-profile":
+      return (
+        <Found
+          mark={<WarnIcon />}
+          tone="warn"
+          heading={`OpenClaw settings found for ${look.profile}`}
+        >
+          <Lede>Clawtrate needs this profile's gateway address to connect.</Lede>
+          <Actions>
+            {advanced}
+            <Quiet onClick={lookAgain}>Look again</Quiet>
+          </Actions>
         </Found>
       );
     case "not-found":
@@ -729,7 +747,9 @@ export const START_WAIT_MS = 3_000;
 const offeredHere = (offer: NonNullable<HostInfo["setup"]>, setup: SetupState) => {
   if (offer.local !== true || !setup.unasked || setup.phase !== "found") return null;
   const outcome = setup.look?.outcome;
-  return outcome === "running" || outcome === "not-found" ? outcome : null;
+  return outcome === "running" || outcome === "not-found" || outcome === "named-profile"
+    ? outcome
+    : null;
 };
 
 /** A screen's identity, so that a new one takes focus and is announced. */
@@ -746,7 +766,7 @@ export function SetupFlow({
   info,
 }: {
   view: SetupView;
-  onView: (view: SetupView) => void;
+  onView: (view: SetupView, advancedAddress?: string) => void;
   setup: SetupState;
   connection: ConnectionState;
   info: HostInfo;
@@ -777,12 +797,13 @@ export function SetupFlow({
   }, [initial]);
   const holding = view === "first" && initial === "waiting";
   const firstOutcome = view === "first" && initial === "offer" ? offeredHere(offer, setup) : null;
+  const firstCard = firstOutcome === "not-found" || firstOutcome === "named-profile";
   const key = holding
     ? "first:waiting"
     : firstOutcome === "running"
       ? "first:found"
-      : firstOutcome === "not-found"
-        ? "first:not-found"
+      : firstCard
+        ? `first:${firstOutcome}`
         : screenKey(view, setup);
   const shown = useRef<string | null>(null);
   useEffect(() => {
@@ -805,8 +826,18 @@ export function SetupFlow({
     send({ type: "setupLook" }).catch(() => onView("first"));
   };
   const advanced = () => {
+    // Resetting a failed local attempt may select the earlier gateway. Take the local
+    // text field's address from the refusal, before that selection is restored.
+    const local = offer.local === true && view === "here";
+    const port = local && setup.failure?.kind === "token-refused" ? setup.failure.port : null;
+    const address =
+      port !== null && Number.isInteger(port) && port > 0 && port <= 65_535
+        ? `ws://127.0.0.1:${port}`
+        : local
+          ? ""
+          : undefined;
+    onView("advanced", address);
     if (view === "here") void send({ type: "setupReset" });
-    onView("advanced");
   };
   const another = () => {
     if (view === "here") void send({ type: "setupReset" });
@@ -832,7 +863,7 @@ export function SetupFlow({
   let body: ReactNode;
   if (holding) {
     body = <WaitingHere />;
-  } else if (view === "first" && firstOutcome !== "not-found") {
+  } else if (view === "first" && !firstCard) {
     body =
       firstOutcome === "running" ? (
         <FoundHere
@@ -984,7 +1015,7 @@ export function SetupFlow({
     const look = setup.look!;
     body = (
       <>
-        {firstOutcome !== "not-found" && <Back onBack={toFirst} />}
+        {!firstCard && <Back onBack={toFirst} />}
         <Mark />
         <Title id="setup-title">On this computer</Title>
         <LookResult
@@ -1001,7 +1032,7 @@ export function SetupFlow({
             <SmallLink onClick={advanced}>Advanced</SmallLink>
           </p>
         )}
-        <Others others={look.others} onAdvanced={advanced} />
+        {!offer.local && <Others others={look.others} onAdvanced={advanced} />}
       </>
     );
   }

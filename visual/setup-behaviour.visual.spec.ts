@@ -543,6 +543,50 @@ test("F-602: Advanced opens after a local token refusal or an unfinished handsha
   }
 });
 
+test("F-602: Advanced after a refused local token keeps the local address even with a remote gateway saved", async ({
+  page,
+}) => {
+  await openFixture(page, "setup=local-refused-token", "dark");
+  const address = page.getByPlaceholder("Gateway address");
+  const token = page.getByPlaceholder("Gateway token, for pairing");
+  const remote = "wss://remote.example.test";
+  const local = "ws://127.0.0.1:18789";
+  await expect(address).toHaveValue(remote);
+  await page.getByRole("button", { name: "Use This computer" }).click();
+  const connect = page.getByRole("button", { name: "Connect", exact: true });
+  await connect.waitFor();
+  await page.waitForTimeout(600);
+  await connect.click();
+  await expect(page.getByText("OpenClaw refused the token from its settings.")).toBeVisible();
+  await page.getByRole("button", { name: "Use Advanced" }).click();
+  await expect(address).toHaveValue(local);
+
+  await token.fill("a-local-fixture-token");
+  await address.fill(remote);
+  await expect(token).toHaveValue("");
+  await token.fill("a-remote-fixture-token");
+  await address.fill(local);
+  await expect(token).toHaveValue("");
+  await token.fill("a-local-fixture-token");
+  await page.getByRole("button", { name: "Connect a gateway" }).click();
+  const connection = await page.evaluate(() =>
+    (
+      window as unknown as { clawtrateFixture: { sent: Array<{ type: string }> } }
+    ).clawtrateFixture.sent.find((command) => command.type === "connect"),
+  );
+  expect(connection).toEqual({ type: "connect", url: local, token: "a-local-fixture-token" });
+});
+
+test("F-602: a named profile goes straight to its card and Advanced", async ({ page }) => {
+  await openFixture(page, "setup=local-named-profile", "dark");
+  await expect(
+    page.getByRole("heading", { name: "OpenClaw settings found for work" }),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "Set up OpenClaw here" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Use Advanced" }).click();
+  await expect(page.getByPlaceholder("Gateway address")).toHaveValue("");
+});
+
 test("F-602: a gateway local connect couldn't prove isn't offered: it says so, with Advanced and Look again", async ({
   page,
 }) => {

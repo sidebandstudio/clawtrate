@@ -115,6 +115,24 @@ export const SETUP_STATES: Record<string, SetupState> = {
     ...looked({ ...localLook, outcome: "not-found", access: null, port: null, profile: null }),
     unasked: true,
   },
+  "local-named-profile": {
+    ...looked({
+      ...localLook,
+      outcome: "named-profile",
+      profile: "work",
+      port: null,
+      access: null,
+    }),
+    unasked: true,
+  },
+  "local-running-two-profiles": {
+    ...looked({ ...localLook, others: ["profile clawtrate"] }),
+    unasked: true,
+  },
+  "local-stopped-two-profiles": {
+    ...localStopped,
+    look: { ...localStopped.look!, profile: "clawtrate", others: ["profile default"] },
+  },
   "local-stopped": localStopped,
   "local-stopped-without-service": {
     ...localStopped,
@@ -126,7 +144,10 @@ export const SETUP_STATES: Record<string, SetupState> = {
     ...failed("not-started", { reason: "no-answer" }),
     look: localStopped.look,
   },
-  "local-token-refused": { ...failed("token-refused"), look: looked(localLook).look },
+  "local-token-refused": {
+    ...failed("token-refused", { port: 18789 }),
+    look: looked(localLook).look,
+  },
   "local-unanswered": { ...failed("unanswered", { port: 18789 }), look: looked(localLook).look },
   "local-protocol-older": {
     ...failed("protocol", { reason: "gateway-older" }),
@@ -164,6 +185,7 @@ export const SETUP_STATES: Record<string, SetupState> = {
   // Set up through This computer, then its reconnect refused by the check
   // (`REFUSED_RECONNECT`): with no bots kept, and with them (`-bots`, in the app behind it).
   "local-refused": { ...looked({ ...localLook }), phase: "done", step: 2 },
+  "local-refused-token": { ...looked({ ...localLook }), phase: "done", step: 2 },
   "local-refused-bots": { ...looked({ ...localLook }), phase: "done", step: 2 },
 };
 
@@ -227,8 +249,8 @@ export function setupCommand(
   set: (state: ClawtrateState) => void,
   connected: () => ClawtrateState,
   later: (ms: number, run: () => void) => void,
-  /** How Connect ends: the app opens, or the gateway refuses its protocol. */
-  ending: "connected" | "protocol" = "connected",
+  /** How Connect ends. */
+  ending: "connected" | "protocol" | "token-refused" = "connected",
 ): boolean {
   const setup = (next: SetupState) => set({ ...get(), setup: next });
   const current = () => get().setup ?? initialSetupState;
@@ -259,6 +281,11 @@ export function setupCommand(
       after(600, () => current().phase === "connecting" && setup({ ...current(), step: 2 }));
       after(900, () => {
         if (current().phase !== "connecting") return;
+        if (ending === "token-refused") {
+          const look = current().look;
+          setup({ ...failed("token-refused", { port: look?.port }), look });
+          return;
+        }
         if (ending === "protocol") {
           // As the client publishes a handshake refused for its protocol.
           const state = get();

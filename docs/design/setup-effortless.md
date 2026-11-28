@@ -151,6 +151,8 @@ A gateway-side revoke and a narrower replacement are later work (§14). A reject
 
 Clawtrate reads where the gateway listens and its token from OpenClaw's own settings file. It runs no OpenClaw program before or after Connect: OpenClaw's launcher may repair its own installation before any command (`<openclaw>/openclaw.mjs` lines 649-715). Before any credential leaves the host, Clawtrate checks who holds the other end of that exact socket, and that it matches this account's OpenClaw profile (below).
 
+When neither supported profile has settings, Clawtrate checks for other CLI profile folders and their settings file names. It checks file metadata alone. A named profile opens a card naming it and offers Advanced. When both supported profiles have settings, Start and Connect name the profile they will use.
+
 If the settings name a port that refuses connections and Clawtrate finds this account's LaunchAgent for that profile, This computer offers Start OpenClaw. That press asks macOS to start the service in this account's session. Clawtrate looks again and offers Connect once the socket passes the same proof. If the start is refused or the gateway does not answer in time, the card offers Try again and Look again.
 
 ### The send gate

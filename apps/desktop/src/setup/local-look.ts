@@ -21,6 +21,7 @@ import {
 import { refusalKind, type ProveRefusal } from "./local-prove.ts";
 import type { SettingsProfile } from "./settings-extract.ts";
 import {
+  findOtherLocalProfile,
   readLocalSettings,
   SETTINGS_PROFILES,
   type HeldToken,
@@ -127,6 +128,9 @@ export async function lookLocally(
   for (const { outcome } of read) if (outcome.kind === "found") outcome.token.drop();
   if (cancelled()) return null;
   onStep(1);
+  const present = read.filter(
+    ({ outcome }) => outcome.kind !== "refused" || outcome.reason !== "absent",
+  );
   const closest: { rank: number; look: SetupLook }[] = [];
   const keep = (rank: number, look: SetupLook) => closest.push({ rank, look });
   let blocked = false;
@@ -144,7 +148,10 @@ export async function lookLocally(
       blocked = true;
       continue;
     }
-    const facts = { ...empty, profile, port };
+    const others = present
+      .filter((entry) => entry.profile !== profile)
+      .map((entry) => `profile ${entry.profile}`);
+    const facts = { ...empty, profile, port, others };
     const result = await probe(local, folder, port);
     if (cancelled()) return null;
     if (result.kind === "proved") {
@@ -167,7 +174,17 @@ export async function lookLocally(
   if (blocked && !closest.length) throw new SetupRefusedError("state");
   // The closest result; between two alike, the reader's order.
   const best = closest.sort((a, b) => a.rank - b.rank)[0];
-  return { look: best?.look ?? { ...empty, outcome: "not-found" }, found: null };
+  if (best) return { look: best.look, found: null };
+  const named = await findOtherLocalProfile(local);
+  if (cancelled()) return null;
+  return {
+    look: named.profile
+      ? { ...empty, outcome: "named-profile", profile: named.profile }
+      : named.complete
+        ? { ...empty, outcome: "not-found" }
+        : { ...empty, outcome: "cant-tell", reason: "settings-unfinished" },
+    found: null,
+  };
 }
 
 /**
@@ -243,5 +260,7 @@ export async function startLocally(
   if (!agent || !launchd || !current()) return false;
   if ((await launchd(["kickstart", agent.target])) === 0) return true;
   if (!current() || (await launchd(["bootstrap", agent.domain, agent.plist])) !== 0) return false;
-  return current() && (await launchd(["kickstart", agent.target])) === 0;
+  // Bootstrap itself can start a RunAtLoad job. Check its gateway even if kickstart fails.
+  if (current()) await launchd(["kickstart", agent.target]).catch(() => 1);
+  return true;
 }

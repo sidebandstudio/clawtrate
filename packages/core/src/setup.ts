@@ -33,6 +33,8 @@ export type LookOutcome =
    * failed, `ProofRefusalKind`).
    */
   | "unverified"
+  /** A named profile outside this Mac's automatic pairing routes has its own settings file. */
+  | "named-profile"
   | "not-found"
   | "windows";
 

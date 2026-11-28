@@ -132,6 +132,7 @@ export class SetupController implements SetupHost {
   private found: FoundGateway | null = null;
   /** With local connect: what its look found. */
   private localFound: LocalFound | null = null;
+  private pendingStart: Promise<boolean> | null = null;
   /** The next look is the host's own, at start (`lookAtStart`). */
   private unasked = false;
   /** The connection this setup attempt opened, by attempt and address: the only one Back closes. */
@@ -370,7 +371,10 @@ export class SetupController implements SetupHost {
       )
         return this.foundLocally(before, attempt, false);
 
-      const started = await startLocally(local, look.profile, current).catch(() => false);
+      const request = startLocally(local, look.profile, current).catch(() => false);
+      this.pendingStart = request;
+      const started = await request;
+      if (this.pendingStart === request) this.pendingStart = null;
       if (!current()) return;
       if (started) {
         this.publish({ ...this.state, step: 1 });
@@ -413,17 +417,19 @@ export class SetupController implements SetupHost {
       this.publish(initialSetupState);
       return;
     }
-    // Back from Start OpenClaw, or from its failure: the card it was pressed on. A start launchd
-    // already took goes on; the next look sees it.
     if (
       phase === "starting" ||
       (phase === "failed" && this.state.failure?.kind === "not-started")
     ) {
-      this.publish(
-        this.state.look
-          ? { ...initialSetupState, phase: "found", look: this.state.look }
-          : initialSetupState,
-      );
+      const attempt = this.attempt;
+      const refresh = () => {
+        if (attempt === this.attempt) void this.look();
+      };
+      const pending = this.pendingStart;
+      if (pending) {
+        this.publish({ ...initialSetupState, phase: "looking" });
+        void pending.then(refresh);
+      } else refresh();
       return;
     }
     if (phase === "confirming") {
