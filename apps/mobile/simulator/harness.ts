@@ -28,6 +28,7 @@ import { IOS_STREAM_HOLD_FILE, parseJsonOutput } from "../../../tools/dev-gatewa
 import type { OperatorSession } from "../../../tools/dev-gateway/src/operator.ts";
 import { decodePng } from "../../../tools/brand/src/png.ts";
 import { clockTime } from "../../../packages/ui/src/format.ts";
+import { PICTURE_REASONS, SENT_PICTURE_LINES } from "../src/presentation/sent-files.ts";
 
 const run = promisify(execFile);
 const REPO = join(import.meta.dirname, "../../..");
@@ -915,6 +916,99 @@ export function describeFrontRequests(requests: readonly FrontRequest[]): string
     .join("\n");
 }
 
+/** A line of the app's log that ends with exactly `pictureLogLine`'s record, which it captures. */
+const PICTURE_LINE = new RegExp(
+  `(?:^|\\s)(\\[picture\\] reason=(?:${PICTURE_REASONS.join("|")})(?: status=[1-5]\\d\\d)?)$`,
+);
+
+/**
+ * The app's reasons a picture didn't load, from its log: each line that ends with exactly the
+ * app's record (`[picture] reason=<one of PICTURE_REASONS>`, and ` status=<three digits>`), and
+ * only that record. Any other line holding `[picture]` is dropped, whatever else it says.
+ */
+export function pictureReasons(log: string): string[] {
+  return log.split(/\r?\n/).flatMap((line) => {
+    const record = PICTURE_LINE.exec(line)?.[1];
+    return record ? [record] : [];
+  });
+}
+
+/** A read for a failure's message, given `ms`: what it gave, or that it threw or ran past `ms`. */
+async function within<T>(
+  read: () => T | Promise<T>,
+  ms: number,
+): Promise<{ ok: true; value: T } | { ok: false; why: "threw" | "timed out" }> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<{ ok: false; why: "timed out" }>((resolve) => {
+    timer = setTimeout(() => resolve({ ok: false, why: "timed out" }), ms);
+  });
+  try {
+    return await Promise.race([
+      Promise.resolve()
+        .then(read)
+        .then((value) => ({ ok: true as const, value })),
+      late,
+    ]);
+  } catch {
+    return { ok: false, why: "threw" };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** What F-557's check reads to explain a failure at the protected address. */
+export type PictureFailureReads = {
+  /** Maestro's view of the screen, as text. */
+  screen: () => Promise<string>;
+  /** The front's requests, described (`describeFrontRequests`). */
+  front: () => string;
+  /** The app's log since the steps began. */
+  log: () => string | Promise<string>;
+};
+
+/**
+ * What F-557's check throws when its steps at the protected address failed with `error`,
+ * Maestro's failure. When the screen says the picture didn't load, the front's requests and the
+ * app's reasons are printed and added to `error`'s message, with `error` as the cause. When the
+ * screen can't be read, they are printed and `error` is thrown as it was, as it is when the screen
+ * shows another failure. Each read is given `ms`: one that throws or runs past it is noted in a
+ * fixed line, and anything else that fails here leaves `error` as it was.
+ */
+export async function pictureFailure(
+  error: unknown,
+  reads: PictureFailureReads,
+  ms = 60_000,
+): Promise<unknown> {
+  try {
+    const screen = await within(reads.screen, ms);
+    if (screen.ok && !screen.value.includes(SENT_PICTURE_LINES.failed)) return error;
+    const front = await within(reads.front, ms);
+    const log = await within(reads.log, ms);
+    const reasons = log.ok ? pictureReasons(log.value) : [];
+    const why = [
+      "The protected front's requests:",
+      front.ok ? front.value : `(they couldn't be described: it ${front.why})`,
+      "The app's reason:",
+      ...(!log.ok
+        ? [`(the app's log couldn't be read: it ${log.why})`]
+        : reasons.length > 0
+          ? reasons
+          : ["(none in the app's log)"]),
+    ].join("\n");
+    if (!screen.ok) {
+      console.log(`F-557: the screen couldn't be read (it ${screen.why}).\n${why}`);
+      return error;
+    }
+    console.log(`F-557: the picture didn't load.\n${why}`);
+    return new Error(`${error instanceof Error ? error.message : String(error)}\n${why}`, {
+      cause: error,
+    });
+  } catch {
+    console.log("F-557: what explains the failure couldn't be gathered; Maestro's failure stands.");
+    return error;
+  }
+}
+
 /** This Mac's own address on its network, never loopback: en0's, or the first there is. */
 function ownAddress(): string {
   const found = Object.entries(networkInterfaces()).flatMap(([name, list]) =>
@@ -1278,9 +1372,12 @@ export async function relay(
   };
 }
 
-/** Maestro's whole view of the screen as text: every label and value the app exposes. */
-export async function screenText(): Promise<string> {
-  return hierarchy();
+/**
+ * Maestro's whole view of the screen as text: every label and value the app exposes. With
+ * `timeoutMs`, a read that takes longer is stopped and fails.
+ */
+export async function screenText(timeoutMs?: number): Promise<string> {
+  return hierarchy(timeoutMs);
 }
 
 /** How many of the app's own data files hold each needle, as UTF-8 or UTF-16. */
@@ -1320,8 +1417,11 @@ export function sharedFolders(): string[] {
   }
 }
 
-/** The app's own log lines since a time, from the device's unified log. */
-export function appLog(sinceSeconds: number): string {
+/**
+ * The app's own log lines since a time, from the device's unified log. With `timeoutMs`, a read
+ * that takes longer is stopped and fails.
+ */
+export function appLog(sinceSeconds: number, timeoutMs?: number): string {
   const result = spawnSync(
     "xcrun",
     [
@@ -1337,7 +1437,11 @@ export function appLog(sinceSeconds: number): string {
       "--predicate",
       'process == "Clawtrate"',
     ],
-    { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
+    {
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+      ...(timeoutMs ? { timeout: timeoutMs, killSignal: "SIGKILL" as const } : {}),
+    },
   );
   if (result.status !== 0) throw new Error(`log show: ${result.stderr}`);
   return result.stdout;

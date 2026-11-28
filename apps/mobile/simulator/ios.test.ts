@@ -83,6 +83,7 @@ import {
   operator,
   relay,
   pasteboard,
+  pictureFailure,
   protectedFront,
   protocolFiveGateway,
   Proxy,
@@ -2114,26 +2115,6 @@ describe("the iOS app", () => {
       ]);
       devGateway("approve");
       const farSince = Date.now();
-      // The picture didn't load: what the front was asked and answered, and the app's reason.
-      const whyNotLoaded = () => {
-        let reasons: string[];
-        try {
-          reasons = appLog(Math.ceil((Date.now() - farSince) / 1000) + 30)
-            .split("\n")
-            .filter((line) => line.includes("[picture]"))
-            .map((line) => line.slice(line.indexOf("[picture]")));
-          if (reasons.length === 0) reasons = ["(none in the app's log)"];
-        } catch {
-          // A log that can't be read takes nothing from the failure or the front's requests.
-          reasons = ["(the app's log couldn't be read)"];
-        }
-        return [
-          "The protected front's requests:",
-          describeFrontRequests(front!.requests),
-          "The app's reason:",
-          ...reasons,
-        ].join("\n");
-      };
       try {
         await steps("picture-far", [
           ...openTask(lineFor("moved.png")),
@@ -2141,12 +2122,18 @@ describe("the iOS app", () => {
           see({ id: "sent-picture", text: lineFor("moved.png") }),
         ]);
       } catch (error) {
-        // A driver that has stopped can't read the screen; the failure above still stands.
-        const shown = await screenText().catch(() => "");
-        if (!shown.includes(SENT_PICTURE_LINES.failed)) throw error;
-        const why = whyNotLoaded();
-        console.log(`F-557: the picture didn't load.\n${why}`);
-        throw new Error(`${(error as Error).message}\n${why}`, { cause: error });
+        // What the front was asked and answered, and the app's reason, each read in a minute at
+        // most; Maestro's failure is the one that stands.
+        const bound = 60_000;
+        throw await pictureFailure(
+          error,
+          {
+            screen: () => screenText(bound),
+            front: () => describeFrontRequests(front!.requests),
+            log: () => appLog(Math.ceil((Date.now() - farSince) / 1000) + 30, bound),
+          },
+          bound,
+        );
       }
       await shoot("sent-picture-protected");
       // The exact picture sent, drawn from the bytes the gateway gave.

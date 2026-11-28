@@ -1,10 +1,19 @@
 // What F-557's Simulator check prints when your picture didn't load at the protected address
-// (#878): the front's requests, each with its status and time. The check only prints them when a
-// read fails there, so how they are kept and written is proven here.
+// (#878): the front's requests, each with its status and time, and the app's reasons from its
+// log, which CI makes public. The check only prints them when a read fails there, so how they are
+// kept, written and gathered is proven here.
 
 import { createServer, request, type Server } from "node:http";
-import { afterEach, describe, expect, it } from "vitest";
-import { describeFrontRequests, trackAnswer, type FrontRequest } from "../simulator/harness.ts";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  describeFrontRequests,
+  pictureFailure,
+  pictureReasons,
+  trackAnswer,
+  type FrontRequest,
+  type PictureFailureReads,
+} from "../simulator/harness.ts";
+import { SENT_PICTURE_LINES } from "../src/presentation/sent-files.ts";
 
 const SOURCE = "media://inbound/shot---0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0.png";
 const TICKET = ["v1", "c2NvcGU", "c2lnbmF0dXJl"].join(".");
@@ -151,5 +160,150 @@ describe("F-557: the protected front keeps each answer's end", () => {
     expect(requests[0]!.status).toBeUndefined();
     expect(requests[0]!.ms).toBeGreaterThanOrEqual(90);
     expect(requests[0]!.ms).toBeLessThan(4_000);
+  });
+});
+
+describe("F-557: the app's reasons, from its log", () => {
+  it("F-557: keeps only lines that end with exactly the app's record, and only the record", () => {
+    const at =
+      "2026-11-28 10:00:00.123 E  Clawtrate[4021:7f1a] [com.facebook.react.log:javascript]";
+    const log = [
+      `${at} [picture] reason=too-slow`,
+      `${at} [picture] reason=gateway-answered status=503`,
+      "[picture] reason=parts-missing",
+      // The app's old line, and any other line holding the marker, whatever it carries.
+      `${at} [picture] A sent picture didn't load: Bearer tok-4f1c9a`,
+      `${at} [picture] reason=too-slow https://gateway.example/?mediaTicket=${TICKET}`,
+      `${at} [picture] reason=too-slow status=503 ${SESSION}`,
+      `${at} [picture] reason=agent:pip:check`,
+      `${at} [picture] reason=no-such-reason`,
+      `${at} [picture] reason=gateway-answered status=5031`,
+      `${at} [picture] reason=gateway-answered status=abc`,
+      `${at} [picture]  reason=too-slow`,
+      `${at} x[picture] reason=too-slow`,
+      `${at} [picture] reason=too-slow\u0000/private/var/mobile`,
+      `${at} [core] could not start: ${SESSION}`,
+    ].join("\n");
+    expect(pictureReasons(log)).toEqual([
+      "[picture] reason=too-slow",
+      "[picture] reason=gateway-answered status=503",
+      "[picture] reason=parts-missing",
+    ]);
+    expect(pictureReasons("")).toEqual([]);
+  });
+});
+
+describe("F-557: what explains a failure never takes Maestro's place", () => {
+  const MAESTRO = 'Steps "picture-far" failed: sent-picture not found';
+  const FAILED_SCREEN = `{"text":"shot.png, 1 KB. ${SENT_PICTURE_LINES.failed}"}`;
+  const LOG = "2026-11-28 E  Clawtrate[1:2] [picture] reason=too-slow";
+  const FRONT = [
+    asked(
+      { meta: "1", source: SOURCE, sessionKey: SESSION },
+      { at: 1_000, status: 200, ms: 4, ended: "sent" },
+    ),
+  ];
+  const reads = (more: Partial<PictureFailureReads>): PictureFailureReads => ({
+    screen: async () => FAILED_SCREEN,
+    front: () => describeFrontRequests(FRONT),
+    log: () => LOG,
+    ...more,
+  });
+  const never = () => new Promise<never>(() => {});
+  const printed = () => {
+    const spy = vi.spyOn(console, "log").mockImplementation(() => {});
+    return { text: () => spy.mock.calls.map((call) => call.join(" ")).join("\n"), spy };
+  };
+  afterEach(() => vi.restoreAllMocks());
+
+  it("F-557: with the line on screen, the front's requests and the app's reason join Maestro's failure", async () => {
+    const out = printed();
+    const maestro = new Error(MAESTRO);
+    const thrown = (await pictureFailure(maestro, reads({}))) as Error;
+    expect(thrown.cause).toBe(maestro);
+    expect(thrown.message.split("\n")).toEqual([
+      MAESTRO,
+      "The protected front's requests:",
+      "+1.0 s GET ticket for shot -> 200 in 4 ms",
+      "The app's reason:",
+      "[picture] reason=too-slow",
+    ]);
+    expect(out.text()).toContain("+1.0 s GET ticket for shot -> 200 in 4 ms");
+  });
+
+  it("F-557: a description that throws is noted, and the app's reason and Maestro's failure stand", async () => {
+    printed();
+    const maestro = new Error(MAESTRO);
+    const thrown = (await pictureFailure(
+      maestro,
+      reads({
+        front: () => {
+          throw new Error(`Invalid URL /api/chat/media/outgoing/${SESSION}`);
+        },
+      }),
+    )) as Error;
+    expect(thrown.cause).toBe(maestro);
+    expect(thrown.message.split("\n")).toEqual([
+      MAESTRO,
+      "The protected front's requests:",
+      "(they couldn't be described: it threw)",
+      "The app's reason:",
+      "[picture] reason=too-slow",
+    ]);
+    expect(thrown.message).not.toContain(SESSION);
+  });
+
+  it(
+    "F-557: a screen that can't be read, or doesn't answer, still prints the front's requests, and Maestro's failure is thrown as it was",
+    { timeout: 2_000 },
+    async () => {
+      for (const screen of [async () => Promise.reject(new Error("driver stopped")), never]) {
+        const out = printed();
+        const maestro = new Error(MAESTRO);
+        expect(await pictureFailure(maestro, reads({ screen }), 50)).toBe(maestro);
+        expect(out.text()).toContain(
+          "The protected front's requests:\n+1.0 s GET ticket for shot -> 200 in 4 ms",
+        );
+        expect(out.text()).toContain("[picture] reason=too-slow");
+        expect(out.text()).not.toContain("driver stopped");
+        vi.restoreAllMocks();
+      }
+    },
+  );
+
+  it(
+    "F-557: an app log that can't be read, or doesn't answer, is noted, and the front's requests and Maestro's failure stand",
+    { timeout: 2_000 },
+    async () => {
+      for (const [log, note] of [
+        [
+          () => {
+            throw new Error("log show: /private/var/mobile");
+          },
+          "(the app's log couldn't be read: it threw)",
+        ],
+        [never, "(the app's log couldn't be read: it timed out)"],
+      ] as const) {
+        printed();
+        const maestro = new Error(MAESTRO);
+        const thrown = (await pictureFailure(maestro, reads({ log }), 50)) as Error;
+        expect(thrown.cause).toBe(maestro);
+        expect(thrown.message.split("\n")).toEqual([
+          MAESTRO,
+          "The protected front's requests:",
+          "+1.0 s GET ticket for shot -> 200 in 4 ms",
+          "The app's reason:",
+          note,
+        ]);
+        vi.restoreAllMocks();
+      }
+    },
+  );
+
+  it("F-557: a screen that shows another failure leaves Maestro's failure as it was, and prints nothing", async () => {
+    const out = printed();
+    const maestro = new Error(MAESTRO);
+    expect(await pictureFailure(maestro, reads({ screen: async () => "{}" }))).toBe(maestro);
+    expect(out.spy).not.toHaveBeenCalled();
   });
 });
