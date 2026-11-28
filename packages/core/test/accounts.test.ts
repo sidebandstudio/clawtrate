@@ -1623,6 +1623,84 @@ describe("sign-ins, through the gateway's own methods", () => {
     }
   });
 
+  it("a cancel sent with a reused viewer ID never ends the replacement sign-in", async () => {
+    const fake = new AccountsGateway();
+    fake.nextEnding = { outcome: "refuse" };
+    const { client, accounts } = await accountsClient({ gateway: fake, setupTokenSignIn: false });
+    const viewerId = "viewer-reused-cancel";
+    try {
+      await client.startSignIn(CHOICES.browser, null, viewerId);
+      await client.answerSignIn("made-up-refused-code");
+      await until(() => accounts().signIn?.stage === "failed" && accounts().signIn?.result != null);
+      await client.dismissSignIn();
+
+      fake.nextEnding = { outcome: "approve", account: "travel" };
+      await client.startSignIn(CHOICES.browser, null, viewerId);
+      const replacement = accounts().signIn!;
+      // The first attempt's cancel, arriving late, names the replacement's viewer ID too.
+      await expect(client.cancelSignIn(viewerId)).resolves.toEqual({ cancelled: false });
+      expect(fake.gateway.calls("wizard.cancel")).toEqual([]);
+      expect(accounts().signIn).toMatchObject({ id: replacement.id, stage: "entering" });
+      await expect(client.cancelSignIn(replacement.id)).resolves.toEqual({ cancelled: true });
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("a step it can't read leaves the sign-in unsure, with the accounts and the bot's model read after it", async () => {
+    const fake = new AccountsGateway();
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    try {
+      await client.startSignIn(CHOICES.browser, null);
+      const forBot = accounts().signIn!.forBot;
+      const entries = (fake.config.agents as { entries: Record<string, Record<string, unknown>> })
+        .entries;
+      entries[forBot] = { ...entries[forBot], model: { primary: "acme/dev-2" } };
+      // The gateway saves the account, then answers with a step that has no id.
+      fake.gateway.handlers["wizard.next"] = () => {
+        fake.shared.push({ id: "acme:made-up", provider: "acme", type: "oauth" });
+        return { done: false, step: { type: "text" } };
+      };
+      await client.answerSignIn("made-up-code");
+      await until(() => accounts().signIn?.result != null);
+      expect(accounts().signIn).toMatchObject({
+        stage: "failed",
+        unsure: true,
+        error: "The gateway sent a step Clawtrate can't read.",
+        result: { added: ["acme:made-up"], model: "acme/dev-2" },
+      });
+
+      // Check again reads the accounts as the gateway has them now, and stays unsure.
+      fake.shared = fake.shared.filter((profile) => profile.id !== "acme:made-up");
+      await client.recheckSignIn();
+      expect(accounts().signIn).toMatchObject({
+        stage: "failed",
+        unsure: true,
+        result: { added: [], model: "acme/dev-2" },
+      });
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("a sign-in the gateway refused is not unsure, and its read after it has no model", async () => {
+    const fake = new AccountsGateway();
+    fake.nextEnding = { outcome: "refuse" };
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    try {
+      await client.startSignIn(CHOICES.browser, null);
+      await client.answerSignIn("made-up-refused-code");
+      await until(() => accounts().signIn?.result != null);
+      expect(accounts().signIn).toMatchObject({
+        stage: "failed",
+        unsure: false,
+        result: { model: null },
+      });
+    } finally {
+      client.stop();
+    }
+  });
+
   it("a link and a code: starting, waiting with the code and the link, connected, and where it landed", async () => {
     const fake = new AccountsGateway();
     fake.orders.otto = { acme: ["acme:work"] };

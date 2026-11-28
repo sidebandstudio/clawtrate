@@ -305,6 +305,8 @@ export class AccountsEngine {
   private signInAbort: AbortController | null = null;
   /** A viewer can cancel its start request before it has seen the gateway wizard's ID. */
   private signInCancel: { attempt: string; request: string } | null = null;
+  /** The cancel ID the last attempt was started with: a later attempt that reuses it isn't named by it. */
+  private lastCancelRequest: string | null = null;
   /**
    * The bot's own model when the setup sign-in under way started, by that sign-in's id, and the
    * gateway it was started on: only that gateway's session is ended and its saved token removed.
@@ -1368,6 +1370,7 @@ export class AccountsEngine {
         byKey: method.flow === "key",
         known: [],
         cancelUnknown: false,
+        unsure: false,
       },
       null,
       false,
@@ -1386,10 +1389,12 @@ export class AccountsEngine {
     cancelId?: string,
   ): Promise<void> {
     const { ctx } = this;
+    const named = cancelId && cancelId.length <= MAX_SIGNIN_CANCEL_ID_CHARS ? cancelId : null;
+    // A cancel sent for an earlier attempt can arrive after this one starts: a reused ID names
+    // neither, so it never ends the replacement.
     this.signInCancel =
-      cancelId && cancelId.length <= MAX_SIGNIN_CANCEL_ID_CHARS
-        ? { attempt: signIn.id, request: cancelId }
-        : null;
+      named && named !== this.lastCancelRequest ? { attempt: signIn.id, request: named } : null;
+    if (named) this.lastCancelRequest = named;
     const before = this.accountsOf(signIn.provider);
     this.forgetSecrets();
     if (key !== null) this.holdSecret(key);
@@ -1596,6 +1601,7 @@ export class AccountsEngine {
           stage: "failed",
           step: null,
           error: "The gateway sent a step Clawtrate can't read.",
+          unsure: true,
         });
         return await this.afterSignIn(id, before);
       }
@@ -1647,6 +1653,7 @@ export class AccountsEngine {
     this.setSignIn(id, {
       stage: "failed",
       step: null,
+      unsure: true,
       error: `The gateway's sign-in went on for ${MAX_SIGNIN_STEPS} steps without asking for anything, so Clawtrate stopped following it. Check the accounts, or sign in on the gateway's machine.`,
     });
     await this.afterSignIn(id, before);
@@ -1776,8 +1783,10 @@ export class AccountsEngine {
   /** Read again where a finished sign-in's account landed, after that read failed. */
   async recheckSignIn(): Promise<void> {
     const signIn = this.ctx.get().signIn;
-    if (!signIn || signIn.stage !== "unverified") return;
-    this.setSignIn(signIn.id, { stage: "checking", result: null });
+    // One that ended where Clawtrate can't tell how has its accounts read again, and stays unsure.
+    const unsure = signIn?.stage === "failed" && signIn.unsure;
+    if (!signIn || (signIn.stage !== "unverified" && !unsure)) return;
+    this.setSignIn(signIn.id, { stage: unsure ? "failed" : "checking", result: null });
     await this.afterSignIn(signIn.id, signIn.known);
   }
 
@@ -1815,6 +1824,7 @@ export class AccountsEngine {
       readFailed: false,
       locks: [],
       modelChange: null,
+      model: null,
     };
     try {
       const other = ctx.bots().find((bot) => bot.id !== signIn.forBot)?.id ?? null;
@@ -1859,6 +1869,15 @@ export class AccountsEngine {
     } catch {
       result.readFailed = true;
     }
+    // Whether the account connected isn't known: what the bot's model is now is read, and said.
+    if (signIn.unsure)
+      result.model = await ctx
+        .request("config.get", {})
+        .then((snapshot) => {
+          const entries = asRecord(asRecord(asRecord(snapshot)?.config)?.agents)?.entries;
+          return readModelConfig(asRecord(asRecord(entries)?.[signIn.forBot])?.model).primary;
+        })
+        .catch(() => null);
     if (ctx.get().signIn?.id !== id) return;
     const ended = ctx.get().signIn!;
     // "Connected" only when the read after it shows the account; otherwise what is known.
@@ -2111,6 +2130,7 @@ export class AccountsEngine {
           byKey: true,
           known: [],
           cancelUnknown: false,
+          unsure: false,
         },
         key,
         true,

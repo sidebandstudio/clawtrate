@@ -17,9 +17,9 @@
 //   keyread=fail              a key saved directly whose read afterwards fails
 //   keyfails=1                xAI's key goes through a sign-in that refuses it
 //   plugin=1                  a plugin's provider the app has no name or logo for, with two sign-ins
-//   plan=0                    the gateway offers no setup sign-in, so Claude takes a key alone;
-//                             otherwise its plan's setup token is offered (#932). A pasted token
-//                             shorter than 20 characters is refused, as a malformed one is
+//   plan=1                    the gateway offers its plan's setup token beside the key (#932);
+//                             otherwise, as the app ships, Claude takes a key alone. A pasted
+//                             token shorter than 20 characters is refused, as a malformed one is
 //   saved=1                   a sign-in that ended uncleanly left an account behind
 //   kept=1                    the gateway has no main bot with a shared store
 //   create=failed|slow|checking|partial   how New bot's Create goes
@@ -1136,6 +1136,7 @@ export function accountCommand(
     readFailed: false,
     locks: [],
     modelChange: null,
+    model: null,
   });
   switch (command.type) {
     case "requestAccess": {
@@ -1226,6 +1227,7 @@ export function accountCommand(
         byKey: false,
         known: [],
         cancelUnknown: false,
+        unsure: false,
       };
       put((a) => ({ ...a, signIn: base }));
       const stage = params.signin ?? "waiting";
@@ -1482,6 +1484,7 @@ export function accountCommand(
             byKey: true,
             known: [],
             cancelUnknown: false,
+            unsure: false,
           },
         }));
         later(300, () => signIn({ stage: "failed", error: "xAI refused the key." }));

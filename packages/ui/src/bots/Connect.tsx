@@ -634,6 +634,14 @@ export function useConnect({
     };
   }
 
+  const modelWords = (ref: string) => {
+    const parsed = parseModelRef(ref);
+    const named = accounts.models.find(
+      (each) => each.provider === parsed?.provider && each.id === parsed?.model,
+    )?.name;
+    return named ?? parsed?.model ?? ref;
+  };
+
   // --- Naming the account -------------------------------------------------------
   if (where.view === "label" || where.view === "same") {
     if (where.view === "same") {
@@ -687,13 +695,6 @@ export function useConnect({
     const change = ownPutBack?.change ?? landing?.modelChange ?? null;
     const putStatus = ownPutBack?.status ?? "idle";
     const changedBot = bots.find((bot) => bot.id === signIn?.forBot)?.name ?? "The bot";
-    const modelWords = (ref: string) => {
-      const parsed = parseModelRef(ref);
-      const named = accounts.models.find(
-        (each) => each.provider === parsed?.provider && each.id === parsed?.model,
-      )?.name;
-      return named ?? parsed?.model ?? ref;
-    };
     const putModelBack = async (what: { before: string | null; after: string | null }) => {
       if (!signIn) return;
       const signInId = signIn.id;
@@ -958,10 +959,14 @@ export function useConnect({
   const reread = (sign: SignInState) => {
     const res = sign.result;
     if (!res) return <Wait>Checking the gateway's accounts…</Wait>;
+    // The bot's model, when the read after an unsure end has it: said in the same line.
+    const model = res.model
+      ? ` ${bots.find((bot) => bot.id === sign.forBot)?.name ?? "The bot"}'s model is ${modelWords(res.model)}.`
+      : "";
     if (res.readFailed)
       return (
         <p className="b-hint" style={{ textAlign: "center" }}>
-          Clawtrate couldn't read the gateway's accounts after the sign-in.
+          Clawtrate couldn't read the gateway's accounts after the sign-in.{model}
         </p>
       );
     const added = res.added[0];
@@ -970,7 +975,7 @@ export function useConnect({
         <Note tone="warn" testId="reread">
           <p>
             The gateway now has a {who} account it didn't have before,{" "}
-            <span className="mono">{added}</span>. It may not be ready to use.
+            <span className="mono">{added}</span>. It may not be ready to use.{model}
           </p>
           <div className="b-actions">
             <button
@@ -996,7 +1001,7 @@ export function useConnect({
       );
     return (
       <p className="b-hint" style={{ textAlign: "center" }} data-testid="reread">
-        Clawtrate checked the gateway's accounts: no new {who} account.
+        Clawtrate checked the gateway's accounts: no new {who} account.{model}
       </p>
     );
   };
@@ -1203,6 +1208,32 @@ export function useConnect({
   } else if (current.stage === "checking" || (current.stage === "connected" && !current.result)) {
     body = <Wait>Finishing the sign-in with {who}…</Wait>;
     foot = cancelButton;
+  } else if (current.stage === "failed" && current.unsure) {
+    // The gateway may have connected the account: neither a failure nor a success is said (#848).
+    body = (
+      <>
+        <Result tone="warn" mark="warning" title="Couldn't confirm the connection">
+          Clawtrate couldn't read how the sign-in ended, so it can't tell whether the {who} account
+          connected. Check again to read the gateway's accounts now.
+        </Result>
+        {reread(current)}
+      </>
+    );
+    foot = (
+      <>
+        <button
+          type="button"
+          className="button"
+          data-variant="primary"
+          data-size="lg"
+          onClick={() => void bridge.send({ type: "recheckSignIn" }).catch(() => {})}
+        >
+          Check again
+        </button>
+        {again("Try again", false)}
+        {another}
+      </>
+    );
   } else if (current.stage === "failed") {
     body = (
       <>

@@ -172,6 +172,7 @@ const STALE_SETUP: SignInState = {
   byKey: false,
   known: [],
   cancelUnknown: false,
+  unsure: false,
 };
 
 function expectNoSetup(

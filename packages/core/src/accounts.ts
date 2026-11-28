@@ -463,6 +463,11 @@ export type SignInResult = {
    * sign-in sets the bot's model as it connects the account (#932). Put back writes `before`.
    */
   modelChange: { before: string | null; after: string | null } | null;
+  /**
+   * The bot's own model as read after a sign-in whose end Clawtrate couldn't confirm (`unsure`);
+   * null when it wasn't read or the bot has no model of its own.
+   */
+  model: string | null;
 };
 
 export type SignInState = {
@@ -492,6 +497,11 @@ export type SignInState = {
   known: string[];
   /** A cancel was asked for and the gateway's answer did not say whether it took. */
   cancelUnknown: boolean;
+  /**
+   * It ended where Clawtrate can't tell whether the account connected: the gateway sent a step it
+   * can't read, or went on without asking until Clawtrate stopped following it.
+   */
+  unsure: boolean;
 };
 
 /**
