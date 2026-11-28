@@ -1054,6 +1054,25 @@ test.describe("Stop", () => {
     await expect(announcer(page)).toHaveText("Stopped");
   });
 
+  test("F-097: Escape in the message field stops; an open / menu takes Escape first", async ({
+    page,
+  }) => {
+    await open(page, "run-working");
+    const field = page.getByTestId("composer-input");
+    await field.click();
+    await page.keyboard.type("/");
+    await expect(page.getByRole("listbox")).toBeVisible();
+    await answers(page, "hold");
+    await page.keyboard.press("Escape");
+    await expect(page.getByRole("listbox")).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Stop Otto" })).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect(page.getByTestId("status-phrase")).toHaveText("Stopping…");
+    await expect(page.getByRole("button", { name: "Stop Otto" })).toHaveCount(0);
+    await answers(page, "release");
+    await expect(announcer(page)).toHaveText("Stopped");
+  });
+
   test("F-299: the stop note says how long the run took and that completed actions are not undone", async ({
     page,
   }) => {
@@ -1671,6 +1690,7 @@ test("F-467: Cmd/Ctrl+/ shows every keyboard shortcut; Escape closes the list an
     "⇧⌘↵",
     "⌘↵",
     "⌘.",
+    "Esc",
     "⌘J",
     "⌘I",
     "⌘L",
