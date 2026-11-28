@@ -1,9 +1,5 @@
-// #699: a turn the gateway started itself, in the iPhone chat. On OpenClaw 2026.11.10 and later,
-// core gives its system item the text the event came with as a second block (`gatewayEvent`,
-// #674). The chat keeps the gateway's line as the centred row and puts that text behind "Text that
-// came with it", as the desktop does (packages/ui/test/gateway-event.test.ts). Rows have the
-// fields a development instance of 2026.11.10 returned, with made-up ids, as there. CI's OpenClaw,
-// 2026.10.6, sends no event text, so no Simulator check can show it.
+// #699: OpenClaw 2026.11.10 includes event text in system rows. CI's 2026.10.6
+// gateway does not, so test the history mapping and disclosure in Node.
 
 import {
   emptyActivity,
@@ -12,20 +8,78 @@ import {
   type Transcript,
   type TranscriptItem,
 } from "@clawtrate/core";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { Children, isValidElement, type ReactElement, type ReactNode } from "react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { grantingGateway, KEY, openTask } from "../../../packages/core/test/client-harness.ts";
 import { helloOk, until } from "../../../packages/core/test/fake-gateway.ts";
-import { GATEWAY_EVENT_WORDS as W, gatewayEventView } from "../src/presentation/gateway-event.ts";
+import { GatewayEvent } from "../src/components/GatewayEvent.tsx";
+import { Txt } from "../src/components/ui.tsx";
 import { chatRows, type ChatRow } from "../src/transcript.ts";
 
 const LINE = "The gateway started a turn by itself";
 const RESUMED = "The gateway resumed an earlier turn by itself";
 // A command's completion as 2026.11.10 words it, with words a person might have typed.
 const EXEC = "Exec completed (b7d41c2e, code 0, 12s):\nthe command you ran finished";
+const LABEL = "Text that came with it";
 const NOTE =
   "Written by whatever started this turn (a command, a bot or another app), not by the gateway or Clawtrate.";
+
+// Render the iPhone component's element tree without a native runtime. Keep its
+// initial state and apply the state update the real button sends on each press.
+const useOpen = vi.hoisted(() =>
+  vi.fn<(initial: boolean) => [boolean, (update: (open: boolean) => boolean) => void]>(),
+);
+vi.mock("react", async (load) => ({
+  ...(await load<typeof import("react")>()),
+  useState: useOpen,
+}));
+vi.mock("react-native", () => ({ Pressable: "Pressable", Text: "Text", View: "View" }));
+vi.mock("../src/components/icons.tsx", () => ({ ChevronIcon: "ChevronIcon" }));
+vi.mock("../src/theme/index.ts", async (load) => {
+  const theme = await load<typeof import("../src/theme/index.ts")>();
+  return { ...theme, useTheme: () => theme.themeFor("light") };
+});
+
+beforeEach(() => {
+  let open: boolean | undefined;
+  useOpen.mockImplementation((initial) => {
+    const current = (open ??= initial);
+    return [current, (update) => (open = update(current))];
+  });
+});
+
+type NativeProps = {
+  children?: ReactNode;
+  testID?: string;
+  onPress?: () => void;
+};
+type NativeElement = ReactElement<NativeProps>;
+
+function renderEvent(line = LINE, text: string | undefined = EXEC): NativeElement {
+  return GatewayEvent({ line, text });
+}
+
+function childrenOf(element: NativeElement): NativeElement[] {
+  return Children.toArray(element.props.children).filter(isValidElement<NativeProps>);
+}
+
+function pressToggle(): void {
+  childrenOf(renderEvent())
+    .find((child) => child.props.testID === "event-text-toggle")
+    ?.props.onPress?.();
+}
+
+function expectLineOnly(row: ChatRow | undefined, line: string): void {
+  expect(row).toEqual({ kind: "event", id: expect.any(String), text: line });
+  if (row?.kind !== "event") throw new Error("Expected a system event row");
+  const rendered: NativeElement = GatewayEvent({ line: row.text, text: row.eventText });
+  expect(rendered.type).toBe(Txt);
+  expect(rendered.props).toMatchObject({
+    testID: "event-line",
+    style: { textAlign: "center" },
+    children: line,
+  });
+}
 
 /** A row 2026.11.10 keeps for an event from `sourceTool`, as `chat.history` gives it. */
 const eventRow = (text: string, sourceTool = "exec") => ({
@@ -78,69 +132,74 @@ const shown = (rows: ChatRow[]) => rows.filter((row) => row.kind !== "stamp");
 const rowsOf = (raw: unknown[], events: boolean) =>
   shown(chatRows(TASK, transcript(mapHistory(raw, { gatewayEvents: events })), "Otto", 0, LINK));
 
-describe("#699: a turn the gateway started itself, in the iPhone chat", () => {
-  it("#699: keeps the gateway's line as the centred row and the event's text apart from it, for every kind of event", () => {
-    // A wake, a command finishing, a device's, a hook's, a plugin's, a task's and a session's event.
+describe("iPhone gateway events (#699)", () => {
+  it("#699: keeps the centred gateway line apart from the event text", () => {
     for (const source of ["cron", "exec", "node", "hook", "plugin", "task", "session"])
       expect(rowsOf([eventRow(EXEC, source)], true), source).toEqual([
         { kind: "event", id: expect.any(String), text: LINE, eventText: EXEC },
       ]);
-  });
 
-  it("#699: a restart's resume says the gateway resumed a turn and offers no text, as core gives it, while another event's row does", () => {
-    const prompt = "The Gateway restarted while you were working. Resume your work.";
-    for (const source of ["restart", "main_session_restart_recovery"]) {
-      const rows = rowsOf([eventRow(prompt, source)], true);
-      expect(rows, source).toEqual([{ kind: "event", id: expect.any(String), text: RESUMED }]);
-      expect(JSON.stringify(rows), source).not.toContain("Resume your work");
-    }
-    expect(rowsOf([eventRow(prompt, "cron")], true)).toEqual([
-      { kind: "event", id: expect.any(String), text: LINE, eventText: prompt },
-    ]);
-  });
-
-  it('#699: the text is closed at first: its button says "Text that came with it", and none of the text shows', () => {
-    const view = gatewayEventView(EXEC);
-    expect(view).toEqual({
-      toggle: { label: "Text that came with it", expanded: false },
-      body: null,
+    const [line] = childrenOf(renderEvent());
+    expect(line?.type).toBe(Txt);
+    expect(line?.props).toMatchObject({
+      testID: "event-line",
+      style: { textAlign: "center" },
+      children: LINE,
     });
-    expect(JSON.stringify(view)).not.toContain("b7d41c2e");
   });
 
-  it("#699: opened, it says who wrote the text before the text, and is read in that order", () => {
-    const view = gatewayEventView(EXEC, true);
-    expect(view.toggle).toEqual({ label: "Text that came with it", expanded: true });
-    expect(view.body).toEqual({ note: NOTE, text: EXEC, spoken: `${NOTE} ${EXEC}` });
+  it("#699: a restart shows the resume line alone", () => {
+    const prompt = "The Gateway restarted while you were working. Resume your work.";
+    for (const source of ["restart", "main_session_restart_recovery"])
+      expectLineOnly(rowsOf([eventRow(prompt, source)], true)[0], RESUMED);
   });
 
-  it("#699: says what the desktop says, in its words", () => {
-    const desktop = readFileSync(
-      join(import.meta.dirname, "../../../packages/ui/src/GatewayEventLine.tsx"),
-      "utf8",
-    ).replace(/\s+/g, " ");
-    expect(desktop).toContain(`data-side="center"> ${W.toggle} <ChevronIcon`);
-    expect(desktop).toContain(`<p className="gateway-event-note"> ${W.note} </p>`);
-    expect(W).toEqual({ toggle: "Text that came with it", note: NOTE });
+  it("#699: the disclosure starts closed and announces a collapsed button", () => {
+    const children = childrenOf(renderEvent());
+    expect(children.map((child) => child.props.testID)).toEqual([
+      "event-line",
+      "event-text-toggle",
+    ]);
+    const toggle = children[1]!;
+    expect(toggle.props).toMatchObject({
+      accessibilityRole: "button",
+      accessibilityLabel: LABEL,
+      accessibilityState: { expanded: false },
+    });
+    expect(childrenOf(toggle)[0]?.props.children).toBe(LABEL);
   });
 
-  it("#699: markdown, a link or a picture in the event's text stays plain text, as written", () => {
+  it("#699: opening the disclosure shows and reads the attribution before the event text", () => {
+    pressToggle();
+    const [, toggle, body] = childrenOf(renderEvent());
+    expect(toggle?.props).toMatchObject({ accessibilityState: { expanded: true } });
+    expect(body?.props).toMatchObject({
+      testID: "event-text",
+      accessible: true,
+      accessibilityLabel: `${NOTE} ${EXEC}`,
+    });
+    expect(childrenOf(body!).map((child) => child.props.children)).toEqual([NOTE, EXEC]);
+
+    pressToggle();
+    expect(childrenOf(renderEvent())).toHaveLength(2);
+  });
+
+  it("#699: markdown, links and images in the event stay plain text", () => {
     const text =
       "**bold** and `code`\n[a link](https://example.com)\n![a picture](https://example.com/a.png) <img src=x>";
-    expect(rowsOf([eventRow(text)], true)).toEqual([
-      { kind: "event", id: expect.any(String), text: LINE, eventText: text },
-    ]);
-    expect(gatewayEventView(text, true).body?.text).toBe(text);
-    // The row draws it as the app's text, never through the bot's markdown.
-    const component = readFileSync(
-      join(import.meta.dirname, "../src/components/GatewayEvent.tsx"),
-      "utf8",
-    );
-    expect(component).not.toMatch(/from "\.\/Markdown\.tsx"/);
-    expect(component).toContain("{view.body.text}</Txt>");
+    const row = rowsOf([eventRow(text)], true)[0];
+    expect(row).toMatchObject({ kind: "event", eventText: text });
+    if (row?.kind !== "event") throw new Error("Expected a system event row");
+
+    pressToggle();
+    const body = childrenOf(renderEvent(row.text, row.eventText))[2]!;
+    const content = childrenOf(body)[1]!;
+    expect(content.type).toBe(Txt);
+    expect(content.props.children).toBe(text);
+    expect(content.props.onPress).toBeUndefined();
   });
 
-  it("#699: on 2026.10.6 and a gateway that reports no version, the row is the line alone, as before; 2026.11.10 brings the text", async () => {
+  it("#699: only a gateway version with event text offers a disclosure", async () => {
     const answer = {
       role: "assistant",
       content: [{ type: "text", text: "The build finished." }],
@@ -161,16 +220,23 @@ describe("#699: a turn the gateway started itself, in the iPhone chat", () => {
       };
       gateway.handlers["chat.history"] = () => ({ messages: [eventRow(EXEC), answer] });
       const { client, transcript: held } = await openTask({ gateway });
-      await until(() => held().items.length === 2);
-      const rows = shown(chatRows(TASK, held(), "Otto", 0, LINK));
-      expect(rows[0], String(version)).toEqual({
-        kind: "event",
-        id: expect.any(String),
-        text: LINE,
-        ...(eventText ? { eventText } : {}),
-      });
-      expect(rows[1], String(version)).toMatchObject({ kind: "bot", text: "The build finished." });
-      client.stop();
+      try {
+        await until(() => held().items.length === 2);
+        const [event, reply] = shown(chatRows(TASK, held(), "Otto", 0, LINK));
+        if (eventText) {
+          expect(event).toEqual({
+            kind: "event",
+            id: expect.any(String),
+            text: LINE,
+            eventText,
+          });
+        } else {
+          expectLineOnly(event, LINE);
+        }
+        expect(reply).toMatchObject({ kind: "bot", text: "The build finished." });
+      } finally {
+        client.stop();
+      }
     }
   });
 });
