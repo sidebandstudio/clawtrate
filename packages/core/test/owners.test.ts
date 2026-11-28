@@ -11,6 +11,7 @@
 import { describe, expect, it } from "vitest";
 import { AttachmentStore } from "../src/attachments.ts";
 import { createBridgeSession } from "../src/bridge.ts";
+import { MAX_CHECKED_RUN_CHARS } from "../src/bot-names.ts";
 import { worstCase } from "../src/bounds.ts";
 import { ClawtrateClient, MAX_FULL_READS } from "../src/client.ts";
 import { MAX_PENDING_SAVES, MAX_SAVE_BYTES, PendingSaves } from "../src/files.ts";
@@ -142,6 +143,13 @@ function expectRegistered(
 const size = (value: unknown) => JSON.stringify(value).length;
 
 describe("the registry of what the host keeps", () => {
+  it("F-552: budgets the JSON-escaped run ID of a start read", () => {
+    const start = { botId: "pip", name: "Pip" };
+    expect(size(["\u0000".repeat(MAX_CHECKED_RUN_CHARS), start])).toBeLessThanOrEqual(
+      CLIENT_OWNERS["botNames.starts"]!.each,
+    );
+  });
+
   it("keeps no stopped startup in its registry across start and stop cycles", async () => {
     const storage = memoryStorage({ connection: JSON.stringify({ url: URL_A, token: null }) });
     const gate = deferred<void>();

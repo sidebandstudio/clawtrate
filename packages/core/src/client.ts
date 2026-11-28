@@ -2047,12 +2047,14 @@ export class ClawtrateClient {
     readHistory: async (key) => {
       if (!this.tracked(key)) return false;
       const generation = this.generation;
+      const epoch = this.epoch;
       const incarnation = this.incarnations.get(key);
       const since = this.now();
       await this.loadTranscript(key, false, null).catch(() => {});
       const read = this.state.transcripts[key];
       return (
         generation === this.generation &&
+        epoch === this.epoch &&
         this.tracked(key) &&
         this.incarnations.get(key) === incarnation &&
         read !== undefined &&
@@ -2077,7 +2079,13 @@ export class ClawtrateClient {
         anchor !== -1 &&
         transcript.items
           .slice(anchor + 1)
-          .some((item) => item.role === "user" && item.timestamp !== null && item.timestamp <= end);
+          // History marks steers even without timestamps. An untimed input whose place
+          // relative to the end is unknown also rules out direct attribution.
+          .some(
+            (item) =>
+              item.role === "user" &&
+              (item.steered || item.timestamp === null || item.timestamp <= end),
+          );
       return {
         steps:
           run.omittedSteps === 0

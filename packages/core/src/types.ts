@@ -736,7 +736,7 @@ export type NameLine = {
    * Why a rename wasn't made: a name another bot has, a name before that another bot has too (so
    * Undo couldn't put it back), the day's limit, no room, no admin, no record.
    */
-  reason: "taken" | "shared" | "limit" | "full" | "no-admin" | "no-record" | null;
+  reason: "taken" | "claimed" | "shared" | "limit" | "full" | "no-admin" | "no-record" | null;
   /** After Undo: the bot's name as the gateway's bot list gave it back, or null before. */
   after: string | null;
   error: string | null;

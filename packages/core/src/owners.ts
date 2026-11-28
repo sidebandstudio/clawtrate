@@ -426,7 +426,7 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // The name each run found in IDENTITY.md as it started: its run id, its bot and the name.
   "botNames.starts": {
     max: MAX_CHECKED_RUNS,
-    each: MAX_CHECKED_RUN_CHARS + ID + MAX_NAME_CHARS,
+    each: 6 * MAX_CHECKED_RUN_CHARS + 2 + ID + MAX_NAME_CHARS,
     row: "bookkeeping",
   },
   // An earlier build's "Not now" answers, as kept on this device: a gateway and bot key, a name.

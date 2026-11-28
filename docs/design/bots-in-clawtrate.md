@@ -299,16 +299,14 @@ So `trigger` and `senderIsOwner` tell none of these apart, `channel` rules out t
 
 ### 4.3 The rule
 
+The A, B and C cases below describe the proposed plugin. F-552's shipped rename rule is in the next section.
+
 A call is **A** when the plugin says its run was typed here, the device that applies it sent that run in that conversation (as its first message or as a steer), and:
 
 - the run's `readOutside` is off before the call, for every tool. A run that read something from outside first can be steered by it, whatever the person typed, so nothing done in it is shown as their ask;
 - for a name or picture, also, the value is in what the person typed into that run: the name, spaces collapsed and compared without case, appears in the device's own copy of the messages, or a picture's avatar is named in them ("call yourself Juniper" passes; "you choose", followed by the bot picking "Maple", doesn't).
 
 **What counts as read from outside** (`readOutside` turns on, and records its source): every tool result except Clawtrate's own tools, `ask_user`, `progress_card`, and `sessions_spawn`'s acceptance. That includes the session tools: a `sessions_send` that waits for the other bot's reply, `sessions_history` (a task may have read a page), `sessions_list` (labels bots wrote) and `subagents` (results). It also turns on for a message that arrived with attachments (a file's contents aren't the person's words) and for a run that took in a steer no Clawtrate device sent. The source is kept so the line can name it: "after reading a web page", "after reading Marlow's reply", "after reading a file you sent". Reading the bot's own IDENTITY.md counts as reading a file, including when the bot reads it before editing its name.
-
-**Who can cause a rename** (F-552's rename, `docs/decisions.md`). Only the owner's own turn, and only a name change that run made: the run's own message is one the gateway stored as the owner's (`senderIsOwner`, as OpenClaw itself reads a row's origin), and one of the run's own writes put a name on the `Name:` line of `IDENTITY.md` other than the one Clawtrate read when it started; a write of another line while someone else changed the name doesn't count. Where the sender can't be established (history that can't be read, an older row, a version whose fields this build doesn't know) or the start wasn't read, nothing is done. **Bots made outside Clawtrate are eligible on exactly the same rule:** a person who tells their own bot to take a name has asked for it, whoever made the bot, since what makes a rename the person's is their own turn, not the bot's origin. The gateway's default bot stays excluded.
-
-**Which device applies a rename, and what each device shows** (F-552's rename, `docs/decisions.md`). The device that sent the run has five seconds to claim the rename; then the first eligible device applies it; if a device other than the sender applied it, every device shows it as the bot's own change.
 
 **What Clawtrate's own read tools return.** What a Clawtrate tool returns is the person's only where the person set it. Any other text a bot wrote that a read tool returns is outside content: returning it turns `readOutside` on, with its source ("after reading Marlow's name, which Marlow chose"). The plugin knows which is which from the journal: each field the journal records the person setting (typed in Clawtrate as A, or set in Settings) is the person's; a field already there before the plugin's record began, and unchanged since, is the person's; a field the journal records a bot choosing (B or C), or one Clawtrate's last read found changed outside Clawtrate since, is outside content. Clawtrate's own fixed words (a state, what a tool does) are never outside content.
 
@@ -326,11 +324,19 @@ The name check alone doesn't prove the person asked for the rename: a page could
 
 A call is **B** when the run is typed here and sent by the device but one of those two fails, and **C** otherwise, including whenever a field is missing, the hooks aren't allowed, or the gateway is a version whose fields this build doesn't know. Section 3 then decides. A call is never presented as the person's ask unless it is A. If a later version broke the match (its run id no longer the key), every call would be C: names done as the bot's own, everything standing not done. That errs toward doing less, and section 10's first scenario catches it.
 
+#### Shipped rename behavior (F-552)
+
+**Who can cause a rename** (F-552's rename, `docs/decisions.md`). Only the owner's own turn, and only a name change that run made: the run's own message is one the gateway stored as the owner's (`senderIsOwner`, as OpenClaw itself reads a row's origin), and one of the run's own writes put a name on the `Name:` line of `IDENTITY.md` other than the one Clawtrate read when it started; a write of another line while someone else changed the name doesn't count. Where the sender can't be established (history that can't be read, an older row, a version whose fields this build doesn't know) or the start wasn't read, nothing is done. **Bots made outside Clawtrate are eligible on exactly the same rule:** a person who tells their own bot to take a name has asked for it, whoever made the bot, since what makes a rename the person's is their own turn, not the bot's origin. The gateway's default bot stays excluded.
+
+**Which device applies a rename, and what each device shows** (F-552's rename, `docs/decisions.md`). The device that sent the run has five seconds to claim the rename; then the first eligible device applies it; if a device other than the sender applied it, every device shows it as the bot's own change.
+
 ### 4.4 The first run
 
 The first run's name step is A by the rule above, with nothing special: the bot asks for a name, the person types it, and it is applied at once with "Renamed to Juniper · Undo". What the first run does when the bot goes off its script is the first-run design's.
 
-### 4.5 What each source of a request now does
+### 4.5 Proposed behavior by request source
+
+This table describes the proposed plugin. Under F-552 an inter-session message cannot start a rename.
 
 | Where the request came from                                                          | The attack                                                                                                                                                 | What happens, and what the person sees                                                                                                                                                                                                                                                                                                                                                          |
 | ------------------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

@@ -296,8 +296,9 @@ function ownIdentityFile(tool: string, args: string | null): boolean {
 /**
  * Whether a run's own steps wrote `name` into the bot's `IDENTITY.md`: a successful write of that
  * file whose own text has a `Name:` line naming it (an edit's new text, a write's content, a
- * patch's added lines). A write that changed only other lines, or whose arguments aren't all
- * here, wrote no name: a name someone else put in the file meanwhile isn't the run's.
+ * patch's added lines) where its text before didn't already name it. A write that changed only
+ * other lines, or whose arguments aren't all here, wrote no name: a name someone else put in the
+ * file meanwhile isn't the run's.
  */
 export function nameWritten(steps: readonly RunStepFacts[] | null, name: string): boolean {
   return (steps ?? []).some((step) => {
@@ -309,29 +310,39 @@ export function nameWritten(steps: readonly RunStepFacts[] | null, name: string)
     } catch {
       return false;
     }
-    const texts: unknown[] =
+    // Each write as its text before and after: a pair whose text before already named it changed
+    // nothing about the name (an edit of another line that spans the Name line, say).
+    const lines = (patch: string, mark: string) =>
+      patch
+        .split("\n")
+        .filter((line) => line.startsWith(mark) && !line.startsWith(mark.repeat(3)))
+        .map((line) => line.slice(1))
+        .join("\n");
+    const pair = (edit: Record<string, unknown> | null) => ({
+      before: edit?.oldText ?? edit?.old_string,
+      after: edit?.newText ?? edit?.new_string,
+    });
+    const patch = String(parsed?.input ?? parsed?.patch ?? "");
+    const pairs: Array<{ before: unknown; after: unknown }> =
       step.toolName === "write"
-        ? [parsed?.content]
+        ? [{ before: undefined, after: parsed?.content }]
         : step.toolName === "apply_patch"
-          ? [
-              String(parsed?.input ?? parsed?.patch ?? "")
-                .split("\n")
-                .filter((line) => line.startsWith("+") && !line.startsWith("+++"))
-                .map((line) => line.slice(1))
-                .join("\n"),
-            ]
+          ? [{ before: lines(patch, "-"), after: lines(patch, "+") }]
           : [
-              parsed?.newText,
-              parsed?.new_string,
+              pair(parsed),
               ...(Array.isArray(parsed?.edits)
-                ? parsed.edits.map((edit) => asRecord(edit)?.newText ?? asRecord(edit)?.new_string)
+                ? parsed.edits.map((edit) => pair(asRecord(edit)))
                 : []),
             ];
-    return texts.some((text) => {
+    const names = (text: unknown) => {
       if (typeof text !== "string") return false;
       const written = identityName(text);
       return written !== null && plainName(written) === name;
-    });
+    };
+    return pairs.some(
+      ({ before, after }) =>
+        (step.toolName !== "edit" || typeof before === "string") && names(after) && !names(before),
+    );
   });
 }
 
@@ -490,6 +501,16 @@ const otherClaim = (record: NameRecord, bot: string, op: string, now: number) =>
     (each) => each.bot === bot && each.op !== op && now - each.at < CLAIM_EXPIRY_MS,
   );
 
+/** Live claims reserve their destination across bots using the same compare-and-set record. */
+function destinationClaimed(record: NameRecord, bot: string, name: string, now: number): boolean {
+  const destination = folded(name);
+  return record.claims.some((claim) => {
+    if (claim.bot === bot || now - claim.at >= CLAIM_EXPIRY_MS) return false;
+    const change = record.changes.find((each) => each.run === claim.run && each.bot === claim.bot);
+    return change !== undefined && folded(claim.undo ? change.from : change.to) === destination;
+  });
+}
+
 /**
  * Whether Undo can be offered for a change: kept, not undone, the latest change of its bot's name,
  * within Undo's window, the bot still called what the change made it, and the name it puts back
@@ -550,7 +571,7 @@ export type BotNamesContext = {
    * Read the bot list again. Answers with every bot the gateway's reply lists, past the display's
    * cap too (for a name check, kept by no one), or null when that reply was set aside.
    */
-  refreshBots: () => Promise<readonly Pick<Bot, "id" | "name">[] | null | void>;
+  refreshBots: () => Promise<readonly Pick<Bot, "id" | "name">[] | null>;
   /**
    * The steps of a run in a task as the engine holds them, or null when it doesn't hold them
    * all, and whether a message other than the run's own was seen within it (a steer).
@@ -918,6 +939,7 @@ export class BotNames {
           const now = this.ctx.now();
           claimedAt = now;
           if (otherClaim(record, botId, opId, now)) return "busy";
+          if (destinationClaimed(record, botId, name, now)) return "claimed-name";
           const same = record.changes.find((each) => each.run === origin.run && each.bot === botId);
           if (same && (same.undone !== undefined || landed(same, record.changes, this.ctx.bots())))
             return "taken";
@@ -954,6 +976,7 @@ export class BotNames {
         if (epoch !== this.epoch) return;
         if (claimed === "busy") return this.giveUp(botId);
         if (claimed === "taken") return this.giveUp(botId);
+        if (claimed === "claimed-name") return line({ status: "not-done", reason: "claimed" });
         if (claimed === "limit") return line({ status: "not-done", reason: "limit" });
         if (claimed === "full") return line({ status: "not-done", reason: "full" });
         if (claimed === "unavailable") return line({ status: "not-done", reason: "no-record" });
@@ -965,14 +988,14 @@ export class BotNames {
         const still = this.ctx.bots().find((each) => each.id === botId);
         // Renamed by someone else since the run ended, or already this name: not this rename's.
         if (!still || still.name !== bot.name) {
-          await this.release(op, opId, botId, origin.run, true);
+          await this.release(op, opId, botId, origin.run, claimedAt);
           return this.giveUp(botId);
         }
         // Another bot took the name meanwhile, or the one before: nothing is sent into a clash,
         // checked against every bot the reply listed, past the display's cap too. A reply set
         // aside shows nothing to check against: nothing is sent either.
         if (!listed) {
-          await this.release(op, opId, botId, origin.run, true);
+          await this.release(op, opId, botId, origin.run, claimedAt);
           return this.giveUp(botId);
         }
         const clash = nameTaken(listed, botId, name)
@@ -981,7 +1004,7 @@ export class BotNames {
             ? ("shared" as const)
             : null;
         if (clash) {
-          await this.release(op, opId, botId, origin.run, true);
+          await this.release(op, opId, botId, origin.run, claimedAt);
           return line({ status: "not-done", reason: clash });
         }
         // Sent only on the connection that holds the claim, while the claim is young enough to
@@ -994,7 +1017,7 @@ export class BotNames {
           // Otherwise its answer was lost and the rename may have landed: both stay until the
           // claim expires, and then the bot's name as the gateway lists it says which.
           if (this.ctx.certainRefusal(error)) {
-            await this.release(op, opId, botId, origin.run, true);
+            await this.release(op, opId, botId, origin.run, claimedAt);
             throw error;
           }
           this.ctx.log(`no answer to ${botId}'s rename: ${errorText(error)}`);
@@ -1052,9 +1075,9 @@ export class BotNames {
    * called what it made it, and the name it puts back is `from`, the one the button named. This
    * device's own copy of a change it applied wins over the shared record's. It holds the bot's
    * claim, reads the bot again, sends on the claim's connection, then reads the name back: the
-   * line says what the gateway lists now. The change is marked undone and that edit declined on
-   * the gateway; when that can't be written, the decline is kept here and written again before
-   * this device applies another name on that gateway, and the line says so.
+   * line says what the gateway lists now. The change is marked undone on the gateway, with no
+   * decline entry; when that can't be written, the Undo is kept here and written before this
+   * device applies another name on that gateway, and the line says so.
    */
   async undo(botId: string, run: string, from: string, stamp: GatewayStamp): Promise<void> {
     const epoch = this.epoch;
@@ -1104,8 +1127,20 @@ export class BotNames {
           const now = this.ctx.now();
           claimedAt = now;
           if (otherClaim(current, botId, opId, now)) return "busy";
+          // Still the change the button was for, and still the bot's latest: one superseded
+          // since, even by a change back to the same name, isn't undone.
           const kept = current.changes.find((each) => each.run === run && each.bot === botId);
-          if (!kept || kept.undone !== undefined) return "gone";
+          const latest = current.changes.filter((each) => each.bot === botId).at(-1);
+          if (
+            !kept ||
+            kept !== latest ||
+            kept.undone !== undefined ||
+            kept.at !== change.at ||
+            kept.from !== change.from ||
+            kept.to !== change.to
+          )
+            return "gone";
+          if (destinationClaimed(current, botId, change.from, now)) return "claimed-name";
           return {
             ...current,
             claims: [
@@ -1117,6 +1152,8 @@ export class BotNames {
         if (claimed === "busy")
           throw new Error("Another change to this bot's name is under way, so nothing was sent.");
         if (claimed === "gone") throw new Error(NO_LONGER);
+        if (claimed === "claimed-name")
+          throw new Error(`Another bot is taking the name ${change.from}, so nothing was sent.`);
         if (claimed !== "written")
           throw new Error("Clawtrate couldn't hold this Undo on the gateway, so nothing was sent.");
         const listed = await this.ctx.refreshBots();
@@ -1124,13 +1161,17 @@ export class BotNames {
         if (epoch !== this.epoch) throw new Error(NOTHING_SENT);
         // Exactly the name the change gave: a rename since, from anywhere, ends it here.
         if (this.ctx.bots().find((each) => each.id === botId)?.name !== change.to) {
-          await this.release(op, opId, botId, run, false);
+          await this.release(op, opId, botId, run, null);
           this.reconcile();
           throw new Error(NO_LONGER);
         }
         // Another bot has the name before now, anywhere in the reply's list: nothing is sent.
-        if (!listed || nameTaken(listed, botId, change.from)) {
-          await this.release(op, opId, botId, run, false);
+        if (!listed) {
+          await this.release(op, opId, botId, run, null);
+          throw new Error("Clawtrate couldn't read the current bot names, so nothing was sent.");
+        }
+        if (nameTaken(listed, botId, change.from)) {
+          await this.release(op, opId, botId, run, null);
           throw new Error(`Another bot is called ${change.from} now, so nothing was sent.`);
         }
         if (!this.current(op) || this.ctx.now() - claimedAt >= CLAIM_SEND_MS) continue;
@@ -1141,7 +1182,7 @@ export class BotNames {
           // may be back, which the read below settles.
           // A refusal: nothing was written, and the claim goes, so Undo can be pressed again.
           if (this.ctx.certainRefusal(error)) {
-            await this.release(op, opId, botId, run, false);
+            await this.release(op, opId, botId, run, null);
             throw error;
           }
           this.ctx.log(`no answer to ${botId}'s Undo: ${errorText(error)}`);
@@ -1157,21 +1198,17 @@ export class BotNames {
     // What the gateway lists now, read again on the very connection Undo was sent on (`op`). A
     // list that couldn't be read there says nothing of Undo: its claim stays, for the record to
     // settle by the name listed.
-    const reread =
-      this.current(op) &&
-      (await this.ctx.refreshBots().then(
-        () => true,
-        () => false,
-      ));
+    const reread = this.current(op) ? await this.ctx.refreshBots().catch(() => null) : null;
+    // A reply set aside, or none: nothing said of Undo, and its claim stays.
     if (!reread || !this.current(op)) {
       // Undo stays offered: pressed again, it takes this claim again.
       restore({ status: "renamed", error: UNCONFIRMED });
       return;
     }
-    // Said as it is.
-    const after = this.ctx.bots().find((each) => each.id === botId)?.name ?? null;
+    // Said as it is, from the list that reply gave.
+    const after = reread.find((each) => each.id === botId)?.name ?? null;
     if (after !== change.from) {
-      await this.release(op, opId, botId, run, false);
+      await this.release(op, opId, botId, run, null);
       // Still the name the change gave: Undo didn't land, and stays offered.
       if (after === change.to) return restore({ status: "renamed", error: STILL });
       restore({ status: "undone", after });
@@ -1236,21 +1273,32 @@ export class BotNames {
     return true;
   }
 
-  /** Let go of a claim this device holds, and, for a rename not sent, take its entry back. */
+  /**
+   * Let go of a claim this device holds, and, for a rename not sent, take back the entry that
+   * claim wrote (`entryAt`, the time both carry): a newer claim's entry for the run stays.
+   */
   private async release(
     op: RecordOp,
     opId: string,
     botId: string,
     run: string,
-    entry: boolean,
+    entryAt: number | null,
   ): Promise<void> {
     const result = await this.writeRecord(op, (record) => ({
       ...record,
-      changes: entry
-        ? record.changes.filter(
-            (each) => !(each.run === run && each.bot === botId && each.done === undefined),
-          )
-        : record.changes,
+      changes:
+        entryAt === null ||
+        !record.claims.some((claim) => claim.op === opId && claim.at === entryAt)
+          ? record.changes
+          : record.changes.filter(
+              (each) =>
+                !(
+                  each.run === run &&
+                  each.bot === botId &&
+                  each.done === undefined &&
+                  each.at === entryAt
+                ),
+            ),
       claims: record.claims.filter((each) => each.op !== opId),
     })).catch(() => "unavailable" as const);
     if (result !== "written") this.ctx.log(`could not let go of the claim on ${botId}'s name`);
@@ -1446,12 +1494,10 @@ export class BotNames {
       if (!record) return "unavailable";
       // An Undo's claim in what was just read is confirmed only from a list fetched now, after it,
       // on this operation's connection.
-      let fresh = false;
+      let fresh: readonly Pick<Bot, "id" | "name">[] | null = null;
       if (record.claims.some((each) => each.undo) && this.current(op)) {
-        fresh = await this.ctx.refreshBots().then(
-          () => this.current(op),
-          () => false,
-        );
+        const listed = await this.ctx.refreshBots().catch(() => null);
+        if (this.current(op)) fresh = listed;
       }
       const base = settled(record, this.ctx.bots(), this.ctx.now(), fresh);
       const next = change(base);
@@ -1576,9 +1622,10 @@ export class BotNames {
 /**
  * The record with its claims settled against the name the gateway lists. A claim whose change
  * the bot list shows has landed is let go whatever its age: a rename whose bot has its name is
- * marked done and counted, an Undo whose bot has the name before is marked undone and its edit
- * declined, but only from a bot list fetched after the record holding that claim was read
- * (`fresh`): a list from before could show the name before and confirm an Undo that never landed.
+ * marked done and counted, an Undo whose bot has the name before is marked undone, but only by
+ * the bot list a reply gave after the record holding that claim was read (`fresh`): a list from
+ * before could show the name before and confirm an Undo that never landed, and with no such list
+ * an Undo stays unconfirmed.
  * A claim abandoned past `CLAIM_EXPIRY_MS` is let go too, and a rename it held that never landed
  * is taken back. Any other claim stays as it is.
  */
@@ -1586,16 +1633,15 @@ export function settled(
   record: NameRecord,
   bots: readonly Bot[],
   now: number,
-  fresh = false,
+  fresh: readonly Pick<Bot, "id" | "name">[] | null = null,
 ): NameRecord {
   let next: NameRecord = record;
   for (const claim of record.claims) {
-    const name = bots.find((bot) => bot.id === claim.bot)?.name;
+    const name = (claim.undo ? fresh : bots)?.find((bot) => bot.id === claim.bot)?.name;
     const entry = next.changes.find((each) => each.run === claim.run && each.bot === claim.bot);
     const stale = now - claim.at >= CLAIM_EXPIRY_MS;
     const live = !!entry && entry.undone === undefined;
-    const landedHere =
-      live && name === (claim.undo ? entry.from : entry.to) && (!claim.undo || fresh);
+    const landedHere = live && name !== undefined && name === (claim.undo ? entry.from : entry.to);
     if (!landedHere && !stale) continue;
     next = { ...next, claims: next.claims.filter((each) => each !== claim) };
     if (!live) continue;

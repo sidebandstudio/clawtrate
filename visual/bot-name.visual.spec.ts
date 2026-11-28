@@ -79,6 +79,26 @@ test.describe("bot name behaviour", () => {
     expect(await sent(page)).toEqual([]);
   });
 
+  test("F-552: a turn with no name write leaves the bot named as it was", async ({ page }) => {
+    await open(page, "bot-name-no-write", "dark");
+    await expect(page.locator(".title-pill-name")).toHaveText("New bot");
+    await expect(line(page)).toHaveCount(0);
+    const record = await page.evaluate(
+      () => (window as unknown as Fixture).clawtrateFixture.getState().botNameRecord,
+    );
+    expect(record).toBeNull();
+  });
+
+  test("F-552: a restored legacy change belongs to an earlier run", async ({ page }) => {
+    await open(page, "bot-name-file", "dark");
+    const { botNameRecord, transcripts } = await page.evaluate(() =>
+      (window as unknown as Fixture).clawtrateFixture.getState(),
+    );
+    expect(botNameRecord!.changes[0]!.at).toBeLessThan(
+      transcripts["agent:new-bot:main"]!.items[0]!.timestamp!,
+    );
+  });
+
   test("F-552: Undo is reached by keyboard, is named for what it does, and sends only the change shown", async ({
     page,
   }) => {
@@ -181,6 +201,39 @@ test.describe("bot name behaviour", () => {
     await expect(line(page).locator("img, b")).toHaveCount(0);
     // A name is isolated wherever it shows, so a right-to-left one can't reorder the words around it.
     await expect(line(page).locator("bdi.name-line-name")).toHaveCount(1);
+  });
+
+  test("F-552: a settings Undo error stays on the connection that produced it", async ({
+    page,
+  }) => {
+    await open(page, "bot-name", "dark", SETTINGS);
+    const settings = page.getByTestId("bot-settings");
+    const changes = settings.getByTestId("name-changes");
+    const update = (resync: boolean) =>
+      page.evaluate((resync) => {
+        const fixture = (window as unknown as Fixture).clawtrateFixture;
+        fixture.setState((state) => {
+          const connection = { ...state.connection, target: state.connection.target + 1 };
+          return {
+            ...state,
+            connection,
+            ...(resync
+              ? {
+                  botNameRecord: {
+                    ...state.botNameRecord!,
+                    stamp: { gatewayId: connection.gatewayId, target: connection.target },
+                  },
+                }
+              : {}),
+          };
+        });
+      }, resync);
+    await update(false);
+    await changes.getByRole("button", { name: "Undo: back to New bot" }).click();
+    await expect(settings.getByRole("alert")).toHaveText(/read on another gateway/);
+    await update(true);
+    await expect(changes.getByRole("button", { name: "Undo: back to New bot" })).toBeVisible();
+    await expect(settings.getByRole("alert")).toHaveCount(0);
   });
 
   test("F-552: the bot's settings list its recent name changes, with Undo until it is undone", async ({

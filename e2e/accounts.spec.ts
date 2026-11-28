@@ -14,6 +14,7 @@ import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from "node:f
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { choiceFromPicture } from "../packages/core/src/avatar.ts";
+import { runTag } from "../packages/core/src/bot-names.ts";
 import { createBridgeSession } from "../packages/core/src/bridge.ts";
 import { ClawtrateClient } from "../packages/core/src/client.ts";
 import { createNodeHost } from "../packages/core/src/node/index.ts";
@@ -498,6 +499,13 @@ test("F-552: a bot made in New bot takes a name in the chat and is renamed at on
   );
   const renames = () => secondSent.filter((method) => method === "agents.update");
   const viewer = createBridgeSession(second);
+  const key = "agent:new-bot:main";
+  const followed = new Set<string>();
+  const stopFollowing = second.store.subscribe((state) => {
+    for (const run of state.transcripts[key]?.runs ?? []) {
+      if (run.state === "running" && run.followed) followed.add(runTag(run.id));
+    }
+  });
   try {
     await second.start();
     await second.connect({ url: connection.url, token: connection.token });
@@ -507,7 +515,8 @@ test("F-552: a bot made in New bot takes a name in the chat and is renamed at on
     await approve();
     await expect.poll(() => second.state.connection.canAdmin, { timeout: 30_000 }).toBe(true);
     await expect.poll(() => second.state.discovery.status).toBe("ready");
-    second.openSession("agent:new-bot:main");
+    second.openSession(key);
+    await expect.poll(() => second.state.transcripts[key]?.status).toBe("ready");
 
     const field = page.getByTestId("composer-input");
     await expect(field).toBeVisible({ timeout: 20_000 });
@@ -551,7 +560,9 @@ test("F-552: a bot made in New bot takes a name in the chat and is renamed at on
     await expect
       .poll(() => second.state.botNames?.[0], { timeout: 30_000 })
       .toMatchObject({ to: "Johnny", status: "renamed", whose: "bot" });
-    expect(second.state.botNameRecord?.changes).toHaveLength(1);
+    const changes = second.state.botNameRecord?.changes;
+    expect(changes).toHaveLength(1);
+    expect([...followed]).toContain(changes![0]!.run);
     expect(renames()).toEqual([]);
     await shots("bot-name-renamed");
 
@@ -589,6 +600,7 @@ test("F-552: a bot made in New bot takes a name in the chat and is renamed at on
     // Thistle stays: deleting it behind the page's back would leave the page listing a bot the
     // gateway no longer has, and the accounts checks after this read every listed bot.
   } finally {
+    stopFollowing();
     second.stop();
     rmSync(dataDir, { recursive: true, force: true });
   }

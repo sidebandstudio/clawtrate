@@ -4,8 +4,8 @@
 // `- Name:` line. The line is the state the engine publishes then
 // (`botNames`), with the record of changes it read (`botNameRecord`):
 // `bot-name` renamed as the person's own ask, `bot-name-own` renamed by the
-// bot after reading a file, `bot-name-file` a name picked up from the file with
-// no write of the run's, `bot-name-undone` put back, and in
+// bot after reading a file, `bot-name-file` a restored change from an earlier
+// build, `bot-name-no-write` a turn that leaves the name alone, `bot-name-undone` put back, and in
 // `bot-name-read-only` the connection lacks admin, so nothing was renamed.
 
 import {
@@ -27,6 +27,7 @@ export const BOT_NAME_SCENES = [
   "bot-name",
   "bot-name-own",
   "bot-name-file",
+  "bot-name-no-write",
   "bot-name-undone",
   "bot-name-read-only",
 ] as const;
@@ -44,7 +45,7 @@ const FILE =
 /**
  * The conversation, its run's steps as each scene's line needs them: the read of IDENTITY.md
  * and the edit (the bot's own, as `#take-name` runs), the edit alone (the person's ask), or
- * neither (a name picked up from the file).
+ * neither (a conversation that made no name change).
  */
 function rows(start: number, steps: "read-edit" | "edit" | "none") {
   const run = "3c1f4b7e-9a2d-4e51-8f0b-6d2a7c9e1b40";
@@ -131,15 +132,18 @@ export function botNameScene(
   now: number,
 ): ClawtrateState {
   const start = now - 5 * 60 * SECOND;
+  const restored = name === "bot-name-file";
+  const noWrite = name === "bot-name-no-write";
   const history = rows(
     start,
-    name === "bot-name" ? "edit" : name === "bot-name-file" ? "none" : "read-edit",
+    name === "bot-name" ? "edit" : restored || noWrite ? "none" : "read-edit",
   );
   const ctx: EngineContext = { sessionKey: NAMED_TASK, now, raw: new RawTable() };
   const admin = name !== "bot-name-read-only";
-  const renamed = name === "bot-name" || name === "bot-name-own" || name === "bot-name-file";
+  const renamed = name === "bot-name" || name === "bot-name-own" || restored;
   const stamp = gatewayStamp(base.connection);
-  const run = runTag("3c1f4b7e-9a2d-4e51-8f0b-6d2a7c9e1b40");
+  // The legacy record predates this conversation and refers to a run outside its history.
+  const run = runTag(restored ? "earlier-file-rename" : "3c1f4b7e-9a2d-4e51-8f0b-6d2a7c9e1b40");
   const line: NameLine = {
     botId: NAMED_BOT,
     from: "New bot",
@@ -153,7 +157,7 @@ export function botNameScene(
     after: renamed || !admin ? null : "New bot",
     error: null,
   };
-  const at = start + 33 * SECOND;
+  const at = restored ? start - 60 * SECOND : start + 33 * SECOND;
   return {
     ...base,
     connection: admin
@@ -205,27 +209,28 @@ export function botNameScene(
         questions: [],
       },
     },
-    botNames: [line],
-    botNameRecord: admin
-      ? {
-          stamp,
-          changes: [
-            {
-              bot: NAMED_BOT,
-              field: "name",
-              from: "New bot",
-              to: "Johnny",
-              at,
-              run,
-              whose: line.whose,
-              source: line.source,
-              file: runTag(FILE),
-              done: at,
-              ...(renamed ? {} : { undone: at + 60 * SECOND }),
-            },
-          ],
-        }
-      : null,
+    botNames: noWrite ? [] : [line],
+    botNameRecord:
+      admin && !noWrite
+        ? {
+            stamp,
+            changes: [
+              {
+                bot: NAMED_BOT,
+                field: "name",
+                from: "New bot",
+                to: "Johnny",
+                at,
+                run,
+                whose: line.whose,
+                source: line.source,
+                file: runTag(FILE),
+                done: at,
+                ...(renamed ? {} : { undone: at + 60 * SECOND }),
+              },
+            ],
+          }
+        : null,
   };
 }
 
