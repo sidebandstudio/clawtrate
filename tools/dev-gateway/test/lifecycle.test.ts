@@ -938,23 +938,17 @@ describe("a start whose gateway never answers says what the gateway was doing (#
 });
 
 describe("this process looks itself up again when ps is slow, and never assumes (#582)", () => {
-  /** A `ps` that sleeps past the lookup's limit `slow` times, then answers. */
+  /**
+   * A `ps` that is too slow for the first `slow` tries, then answers. Which tries are slow is
+   * counted, not timed: a slow try is a `ps` that never answers, run with a 300 ms limit, so it
+   * times out however busy the machine is; the answering try is a `ps` that answers at once, run
+   * with the tool's own limit, so a busy machine does not make it time out either.
+   */
   function slowPs(slow: number): Identify {
-    const dir = tempDir("clawtrate-ps-");
-    const count = join(dir, "count");
-    writeFileSync(count, "");
-    writeFileSync(
-      join(dir, "ps"),
-      [
-        "#!/bin/sh",
-        `n=$(wc -c < '${count}')`,
-        `printf x >> '${count}'`,
-        `[ "$n" -lt ${slow} ] && exec sleep 5`,
-        "echo 'S    Mon Nov 16 21:27:01 2026'",
-      ].join("\n"),
-    );
-    chmodSync(join(dir, "ps"), 0o755);
-    return psIdentity([join(dir, "ps")], 300);
+    const timesOut = brokenPs("exec sleep 5", 300);
+    const answers = brokenPs("echo 'S    Mon Nov 16 21:27:01 2026'");
+    let tries = 0;
+    return (pid) => (tries++ < slow ? timesOut : answers)(pid);
   }
 
   it("answers when a slow ps answers on a later try", () => {
