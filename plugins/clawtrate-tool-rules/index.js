@@ -560,25 +560,41 @@ const PLUGIN_REGISTRY_STATE = Symbol.for("openclaw.pluginRegistryState");
  * each handler the original call and apply the merged arguments only after
  * the last one (`runBeforeToolCall`), with nothing after that can refuse.
  *
+ * The hook runner dispatches from a registry it resolves for each call (a
+ * prepared generation's, or a request's laid over the active one), which the
+ * plugin cannot read by name; its `getHookCount` counts from that same
+ * registry. So where it counts more such hooks than this plugin's own and the
+ * registries read name no other, there is one the plugin cannot name: null.
+ *
  * @param {Record<PropertyKey, any>} [store] where the registries are kept: the process itself
  * @returns {string[] | null}
  */
 export function otherToolHooks(store = globalThis) {
-  const registries = [
-    store[HOOK_RUNNER_STATE]?.registry,
-    store[PLUGIN_REGISTRY_STATE]?.activeRegistry,
-  ].filter((registry) => registry !== null && registry !== undefined);
+  const state = store[HOOK_RUNNER_STATE];
+  const registries = [state?.registry, store[PLUGIN_REGISTRY_STATE]?.activeRegistry].filter(
+    (registry) => registry !== null && registry !== undefined,
+  );
   if (registries.length === 0) return null;
   const ids = new Set();
+  let own = false;
   for (const registry of registries) {
     if (!Array.isArray(registry?.typedHooks)) return null;
     for (const hook of registry.typedHooks) {
       if (hook?.hookName !== "before_tool_call") continue;
       const id = text(hook.pluginId);
       if (!id) return null;
-      if (id !== PLUGIN_ID) ids.add(id);
+      if (id === PLUGIN_ID) own = true;
+      else ids.add(id);
     }
   }
+  let live;
+  try {
+    live = state?.hookRunner?.getHookCount?.("before_tool_call");
+  } catch {
+    return null;
+  }
+  if (!Number.isInteger(live)) return null;
+  if (ids.size === 0 && live > (own ? 1 : 0)) return null;
   return [...ids].sort();
 }
 

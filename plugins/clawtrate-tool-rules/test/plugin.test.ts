@@ -1587,24 +1587,51 @@ describe("another plugin's hook can change a call after the rules decided it (#6
       handler: () => undefined,
       priority: undefined,
     });
+    // The hook runner counts from the registry it dispatches from, resolved for each call.
+    const runner = (count: number) => ({
+      getHookCount: (name: string) => (name === "before_tool_call" ? count : 0),
+    });
     // 2026.10.6 and 2026.11.10 both: the hook runner's registry and the active one.
     expect(
       otherToolHooks({
         [HOOKS]: {
-          hookRunner: null,
+          hookRunner: runner(3),
           registry: { typedHooks: [hook("rewriter"), hook("clawtrate-tool-rules")] },
         },
         [ACTIVE]: { activeRegistry: { typedHooks: [hook("other"), hook("x", "after_tool_call")] } },
       }),
     ).toEqual(["other", "rewriter"]);
+    const ownOnly = { typedHooks: [hook("clawtrate-tool-rules")] };
+    expect(otherToolHooks({ [HOOKS]: { hookRunner: runner(1), registry: ownOnly } })).toEqual([]);
+    // The runner dispatches a hook no registry read names (a prepared generation's, or a
+    // request's): one the plugin cannot name.
+    expect(otherToolHooks({ [HOOKS]: { hookRunner: runner(2), registry: ownOnly } })).toBeNull();
     expect(
-      otherToolHooks({ [HOOKS]: { registry: { typedHooks: [hook("clawtrate-tool-rules")] } } }),
-    ).toEqual([]);
-    // Nothing there, or a shape the plugin cannot read: it cannot say none.
+      otherToolHooks({ [HOOKS]: { hookRunner: runner(1), registry: { typedHooks: [] } } }),
+    ).toBeNull();
+    // Nothing there, no runner to count, or a shape the plugin cannot read: it cannot say none.
     expect(otherToolHooks({})).toBeNull();
-    expect(otherToolHooks({ [HOOKS]: { registry: {} } })).toBeNull();
+    expect(otherToolHooks({ [HOOKS]: { hookRunner: null, registry: ownOnly } })).toBeNull();
     expect(
-      otherToolHooks({ [HOOKS]: { registry: { typedHooks: [{ hookName: "before_tool_call" }] } } }),
+      otherToolHooks({
+        [HOOKS]: {
+          hookRunner: {
+            getHookCount: () => {
+              throw new Error("retired");
+            },
+          },
+          registry: ownOnly,
+        },
+      }),
+    ).toBeNull();
+    expect(otherToolHooks({ [HOOKS]: { hookRunner: runner(1), registry: {} } })).toBeNull();
+    expect(
+      otherToolHooks({
+        [HOOKS]: {
+          hookRunner: runner(1),
+          registry: { typedHooks: [{ hookName: "before_tool_call" }] },
+        },
+      }),
     ).toBeNull();
   });
 });

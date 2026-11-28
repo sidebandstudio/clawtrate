@@ -759,9 +759,12 @@ export const RULES_CHECKS: RulesCheck[] = [
           rec(status.rules).state,
           status.enforcing,
           rec(status.hook).registered,
+          // No other plugin here holds a before_tool_call hook, and the gateway's registries and
+          // hook runner are read as this version keeps them.
+          rec(status.hook).otherToolHooks,
         ],
         // The check before it leaves a valid empty store.
-        [PLUGIN, VERSION, 1, "read", "rules", true],
+        [PLUGIN, VERSION, 1, "read", "rules", true, []],
         "the plugin's status",
       );
       answered(await rules(reader, "get"), "get at the read tier");
