@@ -530,6 +530,15 @@ function resumeServiceArgs(place: InstallPlace): string[] {
 /** Linux: the user manager's own version, which only a reachable manager answers. */
 const USER_MANAGER_ARGS = ["--user", "show", "--property=Version", "--value"];
 
+/** Linux: whether the unit runs; a loaded unit can also be `inactive` or `failed`. */
+const unitStateArgs = (place: InstallPlace) => [
+  "--user",
+  "show",
+  place.service,
+  "--property=ActiveState",
+  "--value",
+];
+
 /** Every command an install of this place runs, given its port: the only ones the runner starts. */
 export function commands(
   place: InstallPlace,
@@ -540,7 +549,10 @@ export function commands(
   const list = [
     { program: place.serviceManager, args: supervisorArgs(place) },
     ...(place.platform === "linux"
-      ? [{ program: place.serviceManager, args: USER_MANAGER_ARGS }]
+      ? [
+          { program: place.serviceManager, args: USER_MANAGER_ARGS },
+          { program: place.serviceManager, args: unitStateArgs(place) },
+        ]
       : []),
     {
       program: place.tar,
@@ -1271,6 +1283,22 @@ export class Installer {
     }
     if (result.exitCode !== 0) return "unreadable";
     return result.stdout.trim() === "not-found" ? "absent" : "there";
+  }
+
+  /** Linux: a loaded unit that isn't running (`inactive`, `failed`), which Continue starts. */
+  private async unitStopped(): Promise<boolean> {
+    const { place } = this.options;
+    if (place.platform !== "linux") return false;
+    const result = await this.exec(
+      {
+        program: place.serviceManager,
+        args: unitStateArgs(place),
+        env: this.env(),
+        ...this.quick(),
+      },
+      null,
+    );
+    return ok(result) && ["inactive", "failed"].includes(result.stdout.trim());
   }
 
   /** The profile's service: its file and the service manager's job or unit, the one predicate of every check. */
@@ -2101,7 +2129,7 @@ export class Installer {
         return kept("changed");
       const loaded = await this.supervisor();
       if (loaded === "unreadable") return kept("service");
-      if (loaded === "absent") {
+      if (loaded === "absent" || (await this.unitStopped())) {
         if (this.closing || (await this.writtenService(port)) !== "ours") return kept("changed");
         const started = await this.exec(
           {

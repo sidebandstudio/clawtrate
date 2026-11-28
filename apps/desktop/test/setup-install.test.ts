@@ -824,6 +824,29 @@ describe("F-502 F-503: each failure, named, with what the attempt left", () => {
     expect(stand.calls().filter((line) => line.includes("gateway install"))).toHaveLength(1);
   });
 
+  it("F-505: on Linux, Continue starts its own unit that is loaded and not running", async () => {
+    const stand = await make({ platform: "linux" });
+    const interrupted = installer(stand, {
+      run: async (request, check) => {
+        const result = await runner.run(request, check);
+        if (request.args.slice(2, 4).join(" ") !== "gateway install") return result;
+        // The unit is written and loaded, and stopped before the app saw it answer.
+        writeFileSync(join(stand.home, "stand-in-stopped"), "");
+        return { ...result, exitCode: 1 };
+      },
+    });
+    expect((await runAll(interrupted)).outcome).toMatchObject({
+      ok: false,
+      failure: { kind: "service", cleanup: "kept" },
+    });
+    const awake = installer(stand);
+    const pending = await awake.recovery();
+    expect(pending?.action).toBe("continue");
+    expect(await awake.run(() => {}, "continue", pending?.id)).toMatchObject({ ok: true });
+    expect(stand.manager().filter((line) => line.includes("--user start"))).toHaveLength(1);
+    expect(stand.calls().filter((line) => line.includes("gateway install"))).toHaveLength(1);
+  });
+
   it("F-504: the service starts with Bonjour, wide-area discovery and Tailscale exposure off", async () => {
     const stand = await make();
     const checked = installer(stand, {
