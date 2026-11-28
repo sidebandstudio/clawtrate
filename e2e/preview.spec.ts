@@ -1719,10 +1719,13 @@ test("F-301: a turn the gateway fails offers Copy request ID, which copies the i
   const shown = ((await card.getByTestId("request-id").textContent()) ?? "").trim();
   // The protocol client's own id for the frame, as it set it ("<n>:<uuid>").
   expect(shown).toMatch(/^\S{8,}$/);
-  // Read when opened: what the gateway sent that ended the run, labelled as exactly that.
-  await expect(card.getByTestId("turn-error-raw")).toContainText(
-    /The (chat event|data of the agent lifecycle event) that ended the turn, as received/,
-  );
+  // Read when opened: what the gateway sent that ended the run, labelled as exactly that. Its
+  // credentials are scrubbed before it is kept, so the label no longer says "as received".
+  await expect(
+    card
+      .getByTestId("turn-error-raw")
+      .getByText(/^The (chat event|data of the agent lifecycle event) that ended the turn$/),
+  ).toBeVisible();
   await expect(card.getByTestId("run-raw")).toBeVisible();
   // One failure is shown once: no bot bubble repeats it, and nothing is "Incomplete".
   await expect(page.getByTestId("incomplete")).toHaveCount(0);
