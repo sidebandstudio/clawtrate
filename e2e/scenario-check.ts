@@ -14,9 +14,10 @@
 // `e2e-<run>-computer`, started with `--with-plugin clawtrate-computer`,
 // whose bots Marlow and Pip have browsers of their own; and the rules checks
 // (rules-checks.ts) on a third, `e2e-<run>-rules`, started with
-// `--with-plugin clawtrate-tool-rules`; and the image check on a fourth,
-// `e2e-<run>-images`, started with `--with-images`. Each is recorded and reset
-// the same way.
+// `--with-plugin clawtrate-tool-rules`; the image check on a fourth,
+// `e2e-<run>-images`, started with `--with-images`; and the bots checks
+// (bots-checks.ts) on a fifth, `e2e-<run>-bots`, started with
+// `--with-plugin clawtrate-bots`. Each is recorded and reset the same way.
 
 import { spawn } from "node:child_process";
 import { randomBytes } from "node:crypto";
@@ -47,6 +48,11 @@ import {
   type RulesClient,
 } from "../tools/dev-gateway/src/rules-checks.ts";
 import { PLUGIN_RULE } from "../tools/dev-gateway/src/cli.ts";
+import {
+  BOTS_CLIENTS,
+  runBotsChecks,
+  type BotsClient,
+} from "../tools/dev-gateway/src/bots-checks.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
 import {
   openCheckClients,
@@ -81,6 +87,8 @@ async function main(): Promise<number> {
   const rulesRunId = newRunId();
   const imagesName = `${name}-images`;
   const imagesRunId = newRunId();
+  const botsName = `${name}-bots`;
+  const botsRunId = newRunId();
   const self = ownIdentity();
   const record: RunRecord = {
     run,
@@ -90,6 +98,7 @@ async function main(): Promise<number> {
       { name: computerName, runId: computerRunId },
       { name: rulesName, runId: rulesRunId },
       { name: imagesName, runId: imagesRunId },
+      { name: botsName, runId: botsRunId },
     ],
     host: null,
     dirs: [],
@@ -213,6 +222,7 @@ async function main(): Promise<number> {
     const computer = await computerChecks(computerName, computerRunId, startInstance);
     const rules = await rulesChecks(rulesName, rulesRunId, startInstance);
     const images = await imageChecks(imagesName, imagesRunId, startInstance);
+    const bots = await botsChecks(botsName, botsRunId, startInstance);
     return [
       pairingFailed,
       scenariosFailed,
@@ -221,6 +231,7 @@ async function main(): Promise<number> {
       computer,
       rules,
       images,
+      bots,
     ].every((n) => n === 0)
       ? 0
       : 1;
@@ -369,6 +380,42 @@ async function rulesChecks(
       stateDir: inst.stateDir,
     });
     console.log(`${passed} of ${passed + failed} rules checks passed`);
+    return failed;
+  } finally {
+    for (const op of Object.values(clients)) await op.close();
+  }
+}
+
+/** Start the bots instance, run the bots checks on it, and return how many failed. */
+async function botsChecks(
+  name: string,
+  runId: string,
+  startInstance: (instance: string, id: string, extra: string[]) => Promise<void>,
+): Promise<number> {
+  console.log(`Starting instance ${name} for the bots checks`);
+  await startInstance(name, runId, ["--with-plugin", "clawtrate-bots"]);
+  const inst = openInstance(name);
+  const ports = instancePorts(inst);
+  for (const port of [ports.gatewayPort, ports.providerPort]) {
+    if (FORBIDDEN_PORTS.includes(port)) {
+      throw new Error(`instance ${name} is on port ${port}, which the check never uses`);
+    }
+  }
+  const clients: Partial<Record<BotsClient, OperatorSession>> = {};
+  try {
+    for (const [client, { scopes, caps }] of Object.entries(BOTS_CLIENTS)) {
+      clients[client as BotsClient] = await openOperator(
+        inst,
+        `Clawtrate bots check (${client})`,
+        [...scopes],
+        [...caps],
+      );
+    }
+    const { passed, failed } = await runBotsChecks({
+      clients: clients as Record<BotsClient, OperatorSession>,
+      cli: (args) => inst.runner.run(args),
+    });
+    console.log(`${passed} of ${passed + failed} bots checks passed`);
     return failed;
   } finally {
     for (const op of Object.values(clients)) await op.close();

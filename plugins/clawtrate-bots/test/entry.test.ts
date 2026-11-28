@@ -21,6 +21,8 @@ it("the shipped entry gets no Apply and dispatches only reads and its own config
       handlers.set(name, handler),
     registerReload: () => {},
     registerService: () => {},
+    on: () => {},
+    registerTool: () => {},
     runtime: { state: { openKeyedStore: () => memoryStore() } },
   });
   const call = async (name: string, params: Json = {}) => {
