@@ -264,6 +264,7 @@ describe("a Claude plan's setup token (#932)", () => {
         release();
         await started;
       }
+      await until(() => accounts().signIn?.result != null);
       expect(fake.gateway.calls(SETUP_AUTH_START)).toEqual([]);
       expect(fake.gateway.calls("wizard.cancel")).toEqual([]);
     } finally {

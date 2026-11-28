@@ -1606,6 +1606,7 @@ export class AccountsEngine {
       // The config read is still pending. There is no gateway session to cancel.
       this.setSignIn(signIn.id, { stage: "cancelled", step: null });
       this.forgetSecrets();
+      void this.afterSignIn(signIn.id, signIn.known);
       return { cancelled: true };
     }
     this.setSignIn(signIn.id, { cancelling: true, cancelUnknown: false });
