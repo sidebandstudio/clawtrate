@@ -104,17 +104,32 @@
   const NAV = [
     ["gateway", "Gateway"],
     ["accounts", "Accounts"],
-    ["models", "Models"],
-    ["chat", "Chat apps"],
-    ["plugins", "Plugins"],
+    // One row for all of OpenClaw's settings; its parts are tabs inside it (section 3).
+    ["openclaw", "OpenClaw"],
     ["conversation", "Conversation"],
     ["usage", "Usage"],
     ["machines", "Machines"],
     ["updates", "Updates"],
-    ["all", "All OpenClaw settings"],
     ["advanced", "Advanced"],
   ];
-  const navFor = (screen) => (screen === "telegram" || screen === "pair" ? "chat" : screen);
+  const PARTS = [
+    ["models", "Models"],
+    ["chat", "Chat apps"],
+    ["plugins", "Plugins"],
+    ["all", "All settings"],
+  ];
+  const isPart = (screen) => PARTS.some(([id]) => id === screen);
+  const navFor = (screen) =>
+    isPart(screen) || screen === "telegram" || screen === "pair" ? "openclaw" : screen;
+
+  /** The parts' tabs, at the top of the OpenClaw section. */
+  const partTabs = (current) =>
+    `<div class="gs-parts" role="tablist" aria-label="OpenClaw settings">` +
+    PARTS.map(
+      ([id, label]) =>
+        `<button type="button" role="tab" class="gs-part" id="gs-tab-${id}" data-part="${id}" aria-selected="${id === current}" aria-controls="gs-part-${id}" tabindex="${id === current ? 0 : -1}">${label}</button>`,
+    ).join("") +
+    `</div>`;
 
   // ---- sections ----------------------------------------------------------------
 
@@ -323,9 +338,18 @@
       title: NAV.find(([n]) => n === id)[1],
       body: `<p class="gs-note" style="margin-top:12px">As built today. This design doesn't change this section.</p>`,
     });
-    for (const [id] of NAV) if (!views[id]) views[id] = unchanged(id);
+    for (const [id] of NAV) if (!views[id] && id !== "openclaw") views[id] = unchanged(id);
     const list = state.screen === "list";
-    const view = list ? { title: "", body: "" } : (views[state.screen] || modelsSection)();
+    let view = list ? { title: "", body: "" } : (views[state.screen] || modelsSection)();
+    // A part of OpenClaw: the section's heading, its tabs, and the part in its panel.
+    if (isPart(state.screen))
+      view = {
+        ...view,
+        title: "OpenClaw",
+        body:
+          partTabs(state.screen) +
+          `<div role="tabpanel" id="gs-part-${state.screen}" aria-labelledby="gs-tab-${state.screen}">${view.body}</div>`,
+      };
     const current = navFor(state.screen);
     const nav =
       `<nav class="gs-nav" aria-label="Settings"><h2 tabindex="-1">Settings</h2>` +
@@ -357,7 +381,14 @@
       root.querySelector(`[data-tip="${t.dataset.tip}"]`)?.focus();
       return;
     }
-    if (t.dataset.nav) return go(t.dataset.nav);
+    if (t.dataset.part) {
+      state.screen = t.dataset.part;
+      state.done = false;
+      render();
+      root.querySelector(`#gs-tab-${t.dataset.part}`)?.focus();
+      return;
+    }
+    if (t.dataset.nav) return go(t.dataset.nav === "openclaw" ? "models" : t.dataset.nav);
     if (t.dataset.app === "telegram") return go("telegram");
     if (t.dataset.action === "to-pair") return go("pair");
     if (t.dataset.action === "its-me") {
@@ -400,6 +431,18 @@
   });
 
   root.addEventListener("keydown", (e) => {
+    // The tab pattern: arrows, Home and End move between OpenClaw's parts and choose them.
+    if (e.target.closest?.('[role="tablist"]') && ["ArrowRight", "ArrowLeft", "Home", "End"].includes(e.key)) {
+      const at = PARTS.findIndex(([id]) => id === state.screen);
+      const to =
+        e.key === "Home" ? 0 : e.key === "End" ? PARTS.length - 1 : (at + (e.key === "ArrowRight" ? 1 : -1) + PARTS.length) % PARTS.length;
+      e.preventDefault();
+      state.screen = PARTS[to][0];
+      state.done = false;
+      render();
+      root.querySelector(`#gs-tab-${state.screen}`)?.focus();
+      return;
+    }
     if (e.key === "Escape" && state.tip) {
       const id = state.tip;
       state.tip = null;

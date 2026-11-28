@@ -3,6 +3,7 @@
     - heading "Settings" [level=2]
     - button "Gateway"
     - button "Accounts"
+    - button "OpenClaw"
     - button "Conversation"
     - button "Usage"
     - button "Machines"

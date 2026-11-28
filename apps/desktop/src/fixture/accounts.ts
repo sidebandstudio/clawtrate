@@ -48,6 +48,10 @@
 //   allowlist=1               the gateway's config names the models bots may use
 //   version=<version>         the OpenClaw version the gateway runs (default 2026.10.6), such as
 //                             2026.11.10, which changes a bot's account order only while stopped
+//   models=<state>            Settings › Models (gateway-settings.md section 4.1): held (a change
+//                             that waits for Save and restart, with the gateway's reload off) or
+//                             since (the read-back found another device's value), or refused
+//                             (a change is refused before it is sent, as for another gateway)
 //   clear=<status>            how Unlock or Clear order ends (default cleared): refused, unanswered,
 //                             kept, unread, moved (the order is Home's alone), unsent, or hold
 //                             (sending until releaseClear(), then cleared)
@@ -58,6 +62,7 @@ import {
   INTERACTIVE_SCOPES,
   gatewayStamp,
   initialAccountsState,
+  type DefaultsValues,
   sameStamp,
   type AccountsState,
   type BotBinding,
@@ -118,6 +123,8 @@ export type AccountParams = {
   version: string | null;
   /** How Unlock or Clear order ends, when the address names it. */
   clear: string | null;
+  /** Settings › Models' last change, when the address names one: held or since. */
+  models: "held" | "since" | "refused" | null;
 };
 
 export function accountParams(params: URLSearchParams): AccountParams {
@@ -169,6 +176,9 @@ export function accountParams(params: URLSearchParams): AccountParams {
       ? params.get("version")
       : null,
     clear: params.get("clear"),
+    models: ["held", "since", "refused"].includes(params.get("models") ?? "")
+      ? (params.get("models") as "held" | "since" | "refused")
+      : null,
   };
 }
 
@@ -198,6 +208,7 @@ export const NO_ACCOUNT_PARAMS: AccountParams = {
   openclawRun: null,
   version: null,
   clear: null,
+  models: null,
 };
 
 /** The fixture's endings of an Unlock or Clear that keep the order, with the words each carries. */
@@ -346,6 +357,27 @@ export function fixtureAccounts(now: number, params: AccountParams): AccountsSta
     readAt: now - READ_AGO,
     labels: params.access === "admin",
     defaultModel: params.defacct ? "openai/gpt-5.5@openai:work" : "openai/gpt-5.5",
+    // Settings › Models (gateway-settings.md section 4.1): the same default, with one backup.
+    defaults: {
+      primary: params.defacct ? "openai/gpt-5.5@openai:work" : "openai/gpt-5.5",
+      fallbacks: ["openai/gpt-5.5-mini@openai:home"],
+      thinking: null,
+      reloadOff: params.models === "held",
+    },
+    defaultsChange:
+      params.models === null || params.models === "refused"
+        ? null
+        : {
+            status: params.models === "held" ? "held" : "changedSince",
+            before: { primary: "openai/gpt-5.5" },
+            after: { primary: "openai/gpt-5.5-mini@openai:home" },
+            current: params.models === "since" ? { primary: "openai/gpt-5.5@openai:work" } : null,
+            restart: params.models === "held",
+            putBack: false,
+            error: null,
+            at: now,
+            gatewayId: null,
+          },
     modelAllowlist: params.allowlist
       ? { whole: [], wildcards: false, prefixWildcards: false }
       : null,
@@ -1714,6 +1746,51 @@ export function accountCommand(
         order(null);
         outcome("cleared");
       }
+      return Promise.resolve();
+    }
+    case "setModelDefaults": {
+      // As the host does when another gateway is here (`requireSameGateway`): nothing is sent.
+      if (params.models === "refused")
+        return Promise.reject(
+          new Error("This change was made for another gateway, so nothing was sent."),
+        );
+      // Applied and read back as written: the fixture's gateway is the only writer.
+      const before: DefaultsValues = {};
+      for (const key of Object.keys(command.values) as Array<keyof DefaultsValues>)
+        before[key] = (accounts().defaults?.[key] ?? null) as never;
+      put((a) => ({
+        ...a,
+        defaultModel: command.values.primary ?? a.defaultModel,
+        defaults: a.defaults ? { ...a.defaults, ...command.values } : a.defaults,
+        defaultsChange: {
+          status: "saved",
+          before,
+          after: command.values,
+          current: null,
+          restart: false,
+          putBack: false,
+          error: null,
+          at: Date.now(),
+          gatewayId: null,
+        },
+      }));
+      return Promise.resolve();
+    }
+    case "putBackModelDefaults": {
+      const last = accounts().defaultsChange;
+      if (!last || last.status !== "saved") return Promise.resolve();
+      put((a) => ({
+        ...a,
+        defaultModel: last.before.primary ?? a.defaultModel,
+        defaults: a.defaults ? { ...a.defaults, ...last.before } : a.defaults,
+        defaultsChange: {
+          ...last,
+          before: last.after,
+          after: last.before,
+          putBack: true,
+          at: Date.now(),
+        },
+      }));
       return Promise.resolve();
     }
     case "removeBotFallbacks":

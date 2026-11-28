@@ -844,3 +844,33 @@
 [data-input="touch"] .gs-input {
   min-height: var(--tap-min);
 }
+
+/* ---- OpenClaw's parts, as tabs at the top of its section (section 3) ---- */
+
+.gs-parts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 4px 0 12px;
+}
+
+.gs-part {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--text-md);
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+}
+
+.gs-part[aria-selected="true"] {
+  background: var(--bg-selected);
+  color: var(--text);
+}
+
+[data-input="touch"] .gs-part {
+  min-height: var(--tap-min);
+}

@@ -1939,3 +1939,79 @@ button.b-open > .icon {
 .info-tip-card code {
   font-size: 0.95em;
 }
+
+/* Settings › Models (gateway-settings.md section 4.1). */
+.b-models .b-field select {
+  max-width: 420px;
+}
+
+.b-models-backups,
+.b-models-bots {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.b-models-backups li,
+.b-models-bots li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 12px;
+  min-height: 32px;
+}
+
+.b-models-bot {
+  font-weight: var(--weight-medium);
+}
+
+.b-models-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 12px;
+  margin: 12px 0;
+  padding: 10px 14px;
+  border-radius: var(--radius-md);
+  background: var(--bg-inset);
+  font-size: var(--text-sm);
+}
+
+.b-models-line > span {
+  flex: 1 1 240px;
+  min-width: 0;
+}
+
+/* Settings › OpenClaw's parts, once there are two (gateway-settings.md section 3). */
+.b-parts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 0 0 12px;
+}
+
+.b-part {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-weight: var(--weight-medium);
+  cursor: pointer;
+}
+
+.b-part[aria-selected="true"] {
+  background: var(--bg-selected);
+  color: var(--text);
+}
+
+.b-part:focus-visible {
+  outline: 2px solid var(--accent-line);
+  outline-offset: 2px;
+}

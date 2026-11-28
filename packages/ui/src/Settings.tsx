@@ -32,6 +32,7 @@ import { BotGuidesPane } from "./BotGuides.tsx";
 import { InfoCard, InfoTip } from "./InfoTip.tsx";
 import { useBridge, useClawtrateState, useCommand } from "./bridge.tsx";
 import { useAccountsSection } from "./bots/AccountsSection.tsx";
+import { useOpenClawSection } from "./bots/OpenClawSection.tsx";
 import { useCheckInsSection } from "./check-ins/CheckIns.tsx";
 import { useUsageSection } from "./usage/UsageSection.tsx";
 import { useMachinesSection } from "./machines/Machines.tsx";
@@ -136,6 +137,7 @@ export function gatewayProblem(
 export type SettingsSection =
   | "gateway"
   | "accounts"
+  | "openclaw"
   | "conversation"
   | "usage"
   | "machines"
@@ -147,6 +149,7 @@ type Section = SettingsSection;
 export const SETTINGS_SECTIONS: Array<[Section, string, string]> = [
   ["gateway", "Gateway", "The gateway, its address and this device"],
   ["accounts", "Accounts", "Provider accounts the bots run on"],
+  ["openclaw", "OpenClaw", "The default model, and OpenClaw's own settings"],
   ["conversation", "Conversation", "How long a bot's turn may run, and how the bots talk"],
   ["usage", "Usage", "Tokens, cost and warning budgets"],
   ["machines", "Machines", "Where the bots run"],
@@ -1028,6 +1031,16 @@ export function Settings({
     announce,
     toNav,
   });
+  const showGatewayBot = useClawtrateState().showGatewayBot === true;
+  const openClawSection = useOpenClawSection({
+    accounts,
+    bots,
+    connection,
+    info,
+    announce,
+    toNav,
+    showGatewayBot,
+  });
   const usageSection = useUsageSection({
     bots,
     connection,
@@ -1216,7 +1229,7 @@ export function Settings({
   let content: ReactNode;
   if (section === "accounts" && accountsSection.connect) content = accountsSection.connect;
   else {
-    const view =
+    const shown =
       section === "accounts" && accountsSection.view
         ? accountsSection.view
         : section === "checkins"
@@ -1257,6 +1270,7 @@ export function Settings({
                         body: <AdvancedPane announce={announce} />,
                       }
                     : { title: "Gateway", back: toNav, body: gatewayPane, foot: null };
+    const view = section === "openclaw" ? openClawSection : shown;
     content = (
       <>
         <header className="b-section-head">
