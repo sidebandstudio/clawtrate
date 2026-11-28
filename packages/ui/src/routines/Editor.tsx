@@ -9,6 +9,7 @@ import {
   changedFields,
   fieldsOf,
   listedBots,
+  randomId,
   type ClawtrateState,
   type HostInfo,
   type Routine,
@@ -93,10 +94,6 @@ type Save =
 type Asked = { key: string } | { id: string; original: RoutineFields; expected: RoutineFields };
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
-
-function newKey(): string {
-  return crypto.randomUUID();
-}
 
 function whenWords(fields: RoutineFields): string {
   const words = scheduleWords(fields.schedule).text;
@@ -239,7 +236,7 @@ export function Editor({
   // The gateway treats a second add with the same key as an edit of the first, so a
   // retry after a check that found nothing gets a new key: that save may still land,
   // and its key must not overwrite what it became since.
-  const key = useRef(newKey());
+  const key = useRef(randomId());
   const [save, setSave] = useState<Save>({ status: "idle" });
   /** The gateway said it has no such routine. */
   const [gone, setGone] = useState(false);
@@ -557,7 +554,7 @@ export function Editor({
               data-size="sm"
               data-variant="quiet"
               onClick={() => {
-                key.current = newKey();
+                key.current = randomId();
                 submit();
               }}
             >

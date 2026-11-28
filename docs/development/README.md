@@ -26,7 +26,7 @@ pnpm dev-gateway start                  # a fresh development gateway with four 
 pnpm preview:web
 ```
 
-This builds the interface and serves it on `0.0.0.0:5310`. It prints a link with an access token, for example `http://localhost:5310/?token=…`, plus one per network address. Open that link from any machine that can reach this one. The token is generated at each start and printed once. Nothing is served without it.
+This builds the interface and serves it on `0.0.0.0:5310`. It prints a link with an access token, for example `http://localhost:5310/?token=…`, plus one per network address. Open that link from any machine that can reach this one. The network links are plain HTTP, so the token and the page cross the network unencrypted; use them only on a network you trust, or reach `localhost` through an SSH tunnel. Every feature works over plain HTTP: ids come from `crypto.getRandomValues` (`randomId` in `packages/core/src/bytes.ts`), and copying falls back to a selection copy (`packages/ui/src/clipboard.ts`). The token is generated at each start and printed once. Nothing is served without it.
 
 In the browser, choose **Use the development gateway**. The gateway has not seen this device before, so Clawtrate shows a pairing request. Approve it:
 

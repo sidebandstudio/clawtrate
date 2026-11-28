@@ -138,7 +138,12 @@ async function main(): Promise<void> {
     const query = accessToken ? `?token=${accessToken}` : "";
     console.log("\nClawtrate web preview");
     console.log(`  Local    http://localhost:${bound}/${query}`);
-    for (const url of networkUrls(bound, query)) console.log(`  Network  ${url}`);
+    const network = networkUrls(bound, query);
+    for (const url of network) console.log(`  Network  ${url}`);
+    if (network.length > 0)
+      console.log(
+        "\nNetwork links are plain HTTP: the token and the page cross the network unencrypted. Every feature works over them.",
+      );
     console.log(
       accessToken
         ? "\nThe access token is shown once. Anyone with this link can read the connected gateway's sessions."

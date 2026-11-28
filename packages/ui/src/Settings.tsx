@@ -54,6 +54,7 @@ import { useShowCommands, useShowThinking } from "./preferences.ts";
 import { useForget } from "./forget.ts";
 import { thisComputer, ThisComputerStage } from "./this-computer.ts";
 import { DeviceRequestsList } from "./DeviceApproval.tsx";
+import { PanelBoundary } from "./PanelBoundary.tsx";
 import { BackIcon, ChevronIcon, CloseIcon, ExternalIcon } from "./icons.tsx";
 
 // The width below which a section replaces the list instead of sitting beside it (bots.css).
@@ -1214,7 +1215,8 @@ export function Settings({
   );
 
   let content: ReactNode;
-  if (section === "accounts" && accountsSection.connect) content = accountsSection.connect;
+  if (section === "accounts" && accountsSection.connect)
+    content = <PanelBoundary key="accounts-connect">{accountsSection.connect}</PanelBoundary>;
   else {
     const view =
       section === "accounts" && accountsSection.view
@@ -1265,7 +1267,9 @@ export function Settings({
             {view.title}
           </h3>
         </header>
-        <div className="b-section-body">{view.body}</div>
+        <div className="b-section-body">
+          <PanelBoundary key={section}>{view.body}</PanelBoundary>
+        </div>
         {view.foot && <footer className="b-section-foot">{view.foot}</footer>}
       </>
     );

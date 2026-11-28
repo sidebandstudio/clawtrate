@@ -138,3 +138,20 @@ export function sha256Hex(bytes: Uint8Array): string {
   }
   return [...h].map((word) => word.toString(16).padStart(8, "0")).join("");
 }
+
+/**
+ * A random id. Browsers offer `crypto.randomUUID` only in a secure context, so a page on
+ * plain HTTP gets hex from `getRandomValues`, which they offer everywhere; Hermes may have neither.
+ */
+export function randomId(): string {
+  const api = (
+    globalThis as {
+      crypto?: { randomUUID?: () => string; getRandomValues?: (bytes: Uint8Array) => void };
+    }
+  ).crypto;
+  if (api?.randomUUID) return api.randomUUID();
+  const bytes = new Uint8Array(16);
+  if (api?.getRandomValues) api.getRandomValues(bytes);
+  else for (let i = 0; i < bytes.length; i += 1) bytes[i] = Math.floor(Math.random() * 256);
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
