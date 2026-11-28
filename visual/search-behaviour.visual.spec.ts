@@ -267,6 +267,46 @@ test("F-033: a message search the gateway left incomplete offers Search each bot
   expect((await sent(page, "searchMessages")).filter((one) => one.botId).length).toBeGreaterThan(0);
 });
 
+test("F-033: a bot or task list that couldn't be read is said with nothing matched too, as a status line, and announced", async ({
+  page,
+}) => {
+  const lines = () => palette(page).getByTestId("search-status").locator(".s-status");
+  const STALE = [
+    "Couldn't load the gateway's bots. Searched the bots loaded before.",
+    "Couldn't load the task list. Searched the titles of the tasks loaded before.",
+  ];
+  await search(page, "kayak", `scene=discovery-error&${OTTO_DISK}&search=on&routines=on`);
+  await expect(lines()).toHaveText(["No results for “kayak”.", ...STALE]);
+  await expect(announcer(page)).toHaveText(["No results for “kayak”.", ...STALE].join(" "));
+  await expect(group(page, "bots")).toHaveCount(0);
+  await expect(group(page, "tasks")).toHaveCount(0);
+  // Beside a matching bot, its own group says it, and only the task list's line is a status line.
+  await field(page).fill("Otto");
+  await expect(group(page, "bots").locator(".s-group-lines")).toHaveText(
+    "Couldn't load the gateway's bots. Showing the bots loaded before.",
+  );
+  await expect(lines().filter({ hasText: "the gateway's bots" })).toHaveCount(0);
+});
+
+test("F-033: with no bot listed, an incomplete message search offers no Search each bot for more, and keeps what it left out", async ({
+  page,
+}) => {
+  await openFixture(page, `${BASE}&src=archive`, "light");
+  await page.evaluate(() => {
+    const fixture = (window as unknown as { clawtrateFixture: Fixture }).clawtrateFixture;
+    fixture.setState((state) => ({ ...state, bots: [] }));
+  });
+  await page.keyboard.press("ControlOrMeta+K");
+  await page.keyboard.type("kayak");
+  const lines = () => palette(page).getByTestId("search-status").locator(".s-status");
+  await expect(lines()).toHaveText([
+    "No results for “kayak”.",
+    "Older messages in 4 tasks weren't searched.",
+  ]);
+  await expect(group(page, "messages")).toHaveCount(0);
+  await expect(palette(page).getByRole("option", { name: /Search each bot/ })).toHaveCount(0);
+});
+
 test("F-033: while the gateway is still indexing, a search that finds no message says so beside No results, and beside matches", async ({
   page,
 }) => {

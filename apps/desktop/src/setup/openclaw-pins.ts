@@ -1,8 +1,8 @@
 // OpenClaw's own native module, pinned (docs/design/setup-effortless.md §3,
 // check (f)): a consistency check where the app has a pin, which authenticates
 // nothing (docs/decisions.md, "Local connect's proof"). OpenClaw 2026.10.6 depends on exactly `@openclaw/fs-safe@0.25.0`
-// and its per-platform packages, 2026.11.10 on exactly `@openclaw/fs-safe@0.27.1`
-// (each `package.json`'s `dependencies` and `optionalDependencies`). Each macOS module is ad-hoc signed with no team,
+// and its per-platform packages, 2026.11.10 and 2026.11.11 on exactly `@openclaw/fs-safe@0.27.1`
+// (each `package.json`'s `dependencies` and `optionalDependencies`), so those two share one table. Each macOS module is ad-hoc signed with no team,
 // so its code signature proves nothing; the SHA-256 of
 // `node_modules/@openclaw/fs-safe-<suffix>/fs-safe-native.node` is
 // what binds it. The macOS and Linux hashes are of the files in the packages
@@ -28,7 +28,10 @@ export const FS_SAFE_NATIVE_SHA256: Readonly<Record<string, string>> = {
   "win32-x64-msvc": "5d90ece5908fe7e0326c6f50aca43e1e5712958cfdfc2f249858ab519eec31f9",
 };
 
-/** OpenClaw 2026.11.10's modules, `@openclaw/fs-safe-<suffix>@0.27.1`: macOS only, where the proof runs. */
+/**
+ * OpenClaw 2026.11.10's and 2026.11.11's modules, `@openclaw/fs-safe-<suffix>@0.27.1`: macOS only,
+ * where the proof runs.
+ */
 export const FS_SAFE_1110_SHA256: Readonly<Record<string, string>> = {
   "darwin-arm64": "3ddcdbba4f82b40b42fe8fd870d4bc699cb118031cfcd5973016c6afac292436",
   "darwin-x64": "2117f146a90ac10e7531ddfc4ce74690369e07090c8a7a9b82a50525a3f9986b",
@@ -43,10 +46,12 @@ export const FS_SAFE_1110_SHA256: Readonly<Record<string, string>> = {
 export const OPENCLAW_PINS: Readonly<Record<string, Readonly<Record<string, string>>>> = {
   [PINNED_OPENCLAW_VERSION]: FS_SAFE_NATIVE_SHA256,
   "2026.11.10": FS_SAFE_1110_SHA256,
+  "2026.11.11": FS_SAFE_1110_SHA256,
 };
 
 /** The `@openclaw/fs-safe` each pinned version depends on exactly, whose modules those are. */
 export const PINNED_FS_SAFE: Readonly<Record<string, string>> = {
   [PINNED_OPENCLAW_VERSION]: PINNED_FS_SAFE_VERSION,
   "2026.11.10": "0.27.1",
+  "2026.11.11": "0.27.1",
 };

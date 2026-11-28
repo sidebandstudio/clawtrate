@@ -2,7 +2,7 @@
 // (docs/design/bots-in-clawtrate.md, sections 4.1 and 4.3). In memory only, and
 // bounded: a run this store doesn't hold is never the person's ask.
 //
-// What the gateway tells a plugin, on both OpenClaw versions this build knows:
+// What the gateway tells a plugin, on every OpenClaw version this build knows:
 //   before_prompt_build   once per model request of a run: its run id, session,
 //                         bot, trigger, channel, workspace and the provenance of
 //                         its input (needs hooks.allowConversationAccess)
@@ -14,7 +14,7 @@
 //                         made: every run in it is a task (C), and carries
 //                         what the run that started it had read
 
-export const KNOWN_VERSIONS = Object.freeze(["2026.10.6", "2026.11.10"]);
+export const KNOWN_VERSIONS = Object.freeze(["2026.10.6", "2026.11.10", "2026.11.11"]);
 
 export const LIMITS = Object.freeze({
   /** Runs held at once. When full, ended runs leave first; a new run past the bound isn't held. */
