@@ -61,6 +61,7 @@ import {
   containerHits,
   deadPort,
   describeConnections,
+  describeFrontRequests,
   devGateway,
   devices,
   displays,
@@ -2112,11 +2113,32 @@ describe("the iOS app", () => {
         waitFor({ id: "pairing" }, 90_000),
       ]);
       devGateway("approve");
-      await steps("picture-far", [
-        ...openTask(lineFor("moved.png")),
-        waitFor({ id: "sent-picture", text: lit(alt) }, 60_000),
-        see({ id: "sent-picture", text: lineFor("moved.png") }),
-      ]);
+      const farSince = Date.now();
+      // The picture didn't load: what the front was asked and answered, and the app's reason.
+      const whyNotLoaded = () => {
+        const reasons = appLog(Math.ceil((Date.now() - farSince) / 1000) + 30)
+          .split("\n")
+          .filter((line) => line.includes("[picture]"))
+          .map((line) => line.slice(line.indexOf("[picture]")));
+        return [
+          "The protected front's requests:",
+          describeFrontRequests(front!.requests),
+          "The app's reason:",
+          ...(reasons.length > 0 ? reasons : ["(none in the app's log)"]),
+        ].join("\n");
+      };
+      try {
+        await steps("picture-far", [
+          ...openTask(lineFor("moved.png")),
+          waitFor({ id: "sent-picture", text: lit(alt) }, 60_000),
+          see({ id: "sent-picture", text: lineFor("moved.png") }),
+        ]);
+      } catch (error) {
+        if (!(await screenText()).includes(SENT_PICTURE_LINES.failed)) throw error;
+        const why = whyNotLoaded();
+        console.log(`F-557: the picture didn't load.\n${why}`);
+        throw new Error(`${(error as Error).message}\n${why}`, { cause: error });
+      }
       await shoot("sent-picture-protected");
       // The exact picture sent, drawn from the bytes the gateway gave.
       const at = await layout();
