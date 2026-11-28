@@ -40,6 +40,7 @@ Every document in the repository, by what you want to do.
 - [Controls](design/controls.md): what each bot may do and who enforces it, saved approvals, activity, memory, where a bot runs, usage and warning budgets.
 - [Setting up](design/setup.md): the first run, where OpenClaw runs and what Clawtrate found there, connecting on this computer or over SSH, installing OpenClaw, setup codes and approvals.
 - [Effortless setup and connection](design/setup-effortless.md): full access at the first connect, connecting on this Mac from OpenClaw's settings file, approving devices inside Clawtrate, and the first run timed.
+- [A Clawtrate account](design/accounts.md): linking a gateway once on its own computer, adding a device by signing in and confirming it on another, what the account never holds, settings that follow a person, hosting and its cost, and the order of work.
 - [Search](design/search.md): the Cmd/Ctrl+K palette, what each source covers, opening a result in its place, and the iPhone's scopes.
 - [The Main Bot](design/main-bot-onboarding.md): the first run's chat with the Main Bot, how bots run commands, bots asking to change themselves and other bots through Clawtrate's plugin, proposals, and external agents over MCP.
 - [Bots in Clawtrate](design/bots-in-clawtrate.md): what a bot knows about the app it lives in, the tools it has to change things there, what happens to each change, and how Clawtrate's plugin reaches a gateway with nothing typed.
