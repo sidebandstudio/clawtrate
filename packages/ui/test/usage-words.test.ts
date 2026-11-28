@@ -14,7 +14,6 @@ import {
   CONTEXT_HINT,
   contextValue,
   budgetLine,
-  budgetWindow,
   costHint,
   costValue,
   deviceTimeZone,
@@ -23,12 +22,10 @@ import {
   moreTasks,
   reachedLine,
   reportFits,
-  reportWindow,
   sourceBars,
   sourcesNote,
   stillClosed,
   warnedLine,
-  warningWords,
 } from "../src/usage/words.ts";
 
 const NY = "America/New_York";
@@ -92,8 +89,9 @@ describe("a figure the gateway is still counting", () => {
       `1,800 tokens · about $0.00, as of ${clock(Date.UTC(2026, 10, 19, 15, 7))}`,
     );
     expect(costValue(cold.cost, true)).toBe("About $0.00 so far");
-    expect(costHint(cold.cost, cold.asOf, true)).toBe(
-      "The gateway's estimate so far from its configured prices, in US dollars, while the gateway is still counting.",
+    expect(costHint(cold.cost, cold.asOf, true)).toBeNull();
+    expect(costHint({ status: "partial", usd: 1, unpriced: 2 }, cold.asOf, true)).toBe(
+      "Partial: 2 usage records have no price configured.",
     );
     expect(budgetLine(routine, count({ counting: true }))).toMatch(/ so far$/);
     // A recount that failed keeps the earlier count's state, and says it failed.
@@ -140,28 +138,8 @@ describe("every bot's bars", () => {
   });
 });
 
-describe("a budget's window and a report's", () => {
-  // Thursday 19 November 2026 at 15:00 in Tokyo, 01:00 in New York.
-  const NOW = Date.UTC(2026, 10, 19, 6);
+describe("a budget's time zone", () => {
   const weekly: Budget = { ...routine, id: "bot:otto", routineId: null, period: "weekly" };
-
-  it("F-234: each names its own days and time zone; neither says it is the other's figure", () => {
-    const words = budgetWindow(weekly, null, NOW);
-    expect(words).toBe(
-      `Counts the total the gateway reports this week (Nov 16 to Nov 19, ${NY === deviceTimeZone() ? "your time" : NY}): input, output and cache.`,
-    );
-    expect(words).not.toMatch(/same figure/);
-    expect(
-      reportWindow("today", {
-        startDate: "2026-11-20",
-        endDate: "2026-11-20",
-        timeZone: "Asia/Tokyo",
-      }),
-    ).toBe(`today (Nov 20, ${deviceTimeZone() === "Asia/Tokyo" ? "your time" : "Asia/Tokyo"})`);
-    expect(
-      reportWindow("month", { startDate: "2026-10-21", endDate: "2026-11-19", timeZone: NY }),
-    ).toMatch(/^the last 30 days \(Oct 21 to Nov 19, /);
-  });
 
   it("F-234: changing a budget keeps the time zone it was set in; a new one counts in this device's", () => {
     const tokyo: Budget = { ...weekly, timeZone: "Asia/Tokyo" };
@@ -236,7 +214,6 @@ describe("a budget reached", () => {
     expect(reachedLine("Otto", weekly)).toBe(
       "Otto has reached its weekly warning budget. Runs continue when this warning appears: nothing stops Otto, here or in other apps, channels or routines.",
     );
-    expect(warningWords("Otto")).toMatch(/Runs continue when it appears/);
     expect(meterTone(799, 1_000)).toBeUndefined();
     expect(meterTone(800, 1_000)).toBe("warn");
     expect(meterTone(1_000, 1_000)).toBe("warn");

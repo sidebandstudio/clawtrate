@@ -76,10 +76,6 @@ function ownDays(period: "daily" | "weekly", zone: string) {
   return { startDate: monday.toISOString().slice(0, 10), endDate: today, timeZone: zone };
 }
 
-/** A date as the page names it: "Nov 16". */
-const dayName = (date: string) =>
-  `${"Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split(" ")[Number(date.slice(5, 7)) - 1]} ${Number(date.slice(8))}`;
-
 /**
  * What the gateway answers for a bot's (or every bot's) total over a period, in the page's time
  * zone, once it has finished counting: a cold gateway first answers with what it has read so
@@ -371,9 +367,7 @@ test("F-237: usage by bot and source agrees with the gateway for the selected pe
     const expected = await gatewayTotal("otto", period);
     expect(expected.counting, "the gateway finished counting").toBe(false);
     // The page reads again while the gateway is still counting, and then shows what it settled on.
-    await expect(page.getByTestId("usage-source")).not.toContainText("still being counted", {
-      timeout: 60_000,
-    });
+    await expect(page.getByTestId("usage-counting")).toHaveCount(0, { timeout: 60_000 });
     await expect
       .poll(() => shownTokens(page), { timeout: 30_000 })
       .toEqual({
@@ -385,14 +379,9 @@ test("F-237: usage by bot and source agrees with the gateway for the selected pe
       });
     expect(expected.total).toBeGreaterThan(0);
   }
-  await expect(page.getByTestId("usage-source")).toHaveText(
-    /^From the gateway's usage records for Otto the last 30 days \([A-Z][a-z]{2} \d{1,2} to [A-Z][a-z]{2} \d{1,2}, your time\), as of \d{1,2}:\d{2} [AP]M\./,
-  );
-  // The development gateway configures a price of zero: an estimate of zero, named as the gateway's.
+  // The development gateway configures a price of zero: an estimate of zero.
   await expect(page.getByTestId("usage-cost")).toHaveText("About $0.00");
-  await expect(page.getByTestId("usage-cost-hint")).toContainText(
-    "The gateway's estimate from its configured prices, in US dollars, as of",
-  );
+  await expect(page.getByTestId("usage-cost-hint")).toHaveCount(0);
   // By task: each listed task's share is the gateway's, for the period.
   const sessions = await gateway.request<{ sessions: Array<{ label?: string; usage?: Json }> }>(
     "sessions.usage",
@@ -555,9 +544,7 @@ async function settledWeek(bot: string, botId: string, since: number) {
   await gatewayAgrees(botId, "week");
   await usagePage(page, bot);
   await page.getByTestId("usage-page").getByRole("radio", { name: "This week" }).click();
-  await expect(page.getByTestId("usage-source")).not.toContainText("still being counted", {
-    timeout: 60_000,
-  });
+  await expect(page.getByTestId("usage-counting")).toHaveCount(0, { timeout: 60_000 });
   await expect(page.getByTestId("usage-sources")).toBeVisible({ timeout: 30_000 });
 }
 
@@ -682,14 +669,9 @@ test("F-234: a weekly budget set on one device is shown with the same value afte
   await usagePage(page, "Otto");
   await expect.poll(() => meter(page), { timeout: 60_000 }).toEqual(shown);
   // On the second device, which only reads and is in another time zone: the same value,
-  // counted over the budget's own days in its own zone, named as that zone, and no way to change it.
+  // counted over the budget's own days in its own zone, and no way to change it.
   await usagePage(reader, "Otto");
   await expect.poll(() => meter(reader), { timeout: 60_000 }).toEqual(shown);
-  const days = ownDays("weekly", timeZone);
-  await expect(reader.getByTestId("budget-window")).toContainText(
-    `this week (${days.startDate === days.endDate ? dayName(days.endDate) : `${dayName(days.startDate)} to ${dayName(days.endDate)}`}, ${timeZone})`,
-  );
-  await expect(reader.getByTestId("budget")).toContainText(`Resets Monday at 00:00, ${timeZone}.`);
   await expect(reader.getByTestId("budget-edit")).toHaveCount(0);
   await expect(reader.getByTestId("budget-new")).toHaveCount(0);
   await shot(page, "usage-page");
@@ -797,19 +779,11 @@ test("F-234: a Daily and a Weekly budget are each counted over their own days, a
   await expect
     .poll(() => meter(page))
     .toEqual({ used: today.total, tokens: 1_000_000, words: "today" });
-  await expect(page.getByTestId("budget-window")).toContainText(
-    `today (${dayName(daily.startDate)}, your time)`,
-  );
-  await expect(page.getByTestId("budget")).toContainText("Resets at 00:00, your time.");
   await setBudget(page, "Weekly", 1_000_000);
   const week = await gatewayTotal("otto", weekly);
   await expect
     .poll(() => meter(page))
     .toEqual({ used: week.total, tokens: 1_000_000, words: "this week" });
-  await expect(page.getByTestId("budget-window")).toContainText(
-    `this week (${weekly.startDate === weekly.endDate ? dayName(weekly.endDate) : `${dayName(weekly.startDate)} to ${dayName(weekly.endDate)}`}, your time)`,
-  );
-  await expect(page.getByTestId("budget")).toContainText("Resets Monday at 00:00, your time.");
   expect(week.total).toBeGreaterThanOrEqual(today.total);
   // Changing only the amount keeps the budget's time zone.
   expect(await keptBudgets()).toContainEqual(

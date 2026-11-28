@@ -15,19 +15,16 @@ import {
 import { useEffect, useId, useRef, useState } from "react";
 import { useBridge } from "../bridge.tsx";
 import { Note } from "../bots/parts.tsx";
-import { Choice, Meter, ShownOnly, useNow } from "./parts.tsx";
+import { Choice, Meter, ShownOnly } from "./parts.tsx";
 import {
   budgetFailure,
   budgetInput,
   budgetLine,
-  budgetWindow,
   deviceTimeZone,
   full,
   kindWord,
   periodWord,
   reachedLine,
-  resetWords,
-  warningWords,
   zoneWords,
 } from "./words.ts";
 
@@ -239,7 +236,6 @@ export function BudgetPart({
   form: boolean;
   onForm: (open: boolean) => void;
 }) {
-  const now = useNow();
   if (usage?.budgetsStatus === "unavailable")
     return (
       <p className="b-hint" data-testid="budget-unavailable">
@@ -299,7 +295,6 @@ export function BudgetPart({
       <p className="c-sentence">
         <ShownOnly />
       </p>
-      <p className="b-hint">{warningWords(name)}</p>
       {percent !== null && percent >= 100 ? (
         <Note tone="warn" testId="budget-reached">
           <p>
@@ -313,11 +308,6 @@ export function BudgetPart({
           </p>
         </Note>
       ) : null}
-      <p className="b-hint" data-testid="budget-window">
-        {budgetWindow(budget, count, now)}
-        {count?.counting ? " Some of the gateway's records are still being counted." : ""}{" "}
-        {resetWords(budget)}
-      </p>
       {canSet && (
         <div className="b-actions" style={{ marginTop: 8 }}>
           <button
