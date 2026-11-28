@@ -1676,6 +1676,29 @@ describe("F-480 #988: Computer Use recovery", () => {
     }
   });
 
+  it("waits for the running gateway to apply the new revision before offering Put back", async () => {
+    const { client, gateway, change } = await recovery();
+    const saved = gateway.handlers["config.get"]!;
+    let observedPending = false;
+    let applied = false;
+    gateway.handlers["config.get"] = (params) => {
+      const snapshot = saved(params) as Row;
+      if (applied || gateway.calls("config.patch").length === 0) return snapshot;
+      observedPending = true;
+      return { ...snapshot, appliedConfigHash: "rev-1" };
+    };
+    try {
+      const result = change(false);
+      await until(() => observedPending);
+      expect(client.state.computerUseUndo).toBeUndefined();
+      applied = true;
+      expect(await result).toBe("off");
+      expect(client.state.computerUseUndo).toBeDefined();
+    } finally {
+      client.stop();
+    }
+  });
+
   it("puts back an unset value and refuses to replace a different value read back", async () => {
     const { client, gateway, change, set } = await recovery();
     try {
