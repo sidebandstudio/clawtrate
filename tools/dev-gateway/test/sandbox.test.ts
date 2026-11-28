@@ -1,4 +1,20 @@
-import { describe, expect, it } from "vitest";
+import { spawnSync } from "node:child_process";
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterEach, describe, expect, it } from "vitest";
 import {
   ALLOWED_TOOLS,
   CODING_AGENT_SCRIPT,
@@ -6,12 +22,27 @@ import {
   checkTurnOutcome,
   devConfig,
   expectedFinalText,
+  main,
   sandboxProblems,
 } from "../src/cli.ts";
-import { openclawEnv, PASSTHROUGH_ENV, providerEnv } from "../src/env.ts";
+import {
+  AGENT_STAND_INS_DIR,
+  agentStandInsDir,
+  gatewayPath,
+  nodeLinkDir,
+  openclawEnv,
+  PASSTHROUGH_ENV,
+  providerEnv,
+  STAND_INS_ENV,
+} from "../src/env.ts";
 import { SEED_BOTS } from "../src/seed-data.ts";
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+
+/** The system's folders, written out rather than taken from the constant under test. */
+const SYSTEM = "/usr/bin:/bin:/usr/sbin:/sbin";
+/** The folder of agent stand-ins the tool makes, written out the same way. */
+const AGENT_STAND_INS = join(import.meta.dirname, "../.run/path/agent-tools");
 
 describe("development gateway config", () => {
   const config = devConfig("test-token");
@@ -137,7 +168,13 @@ describe("development gateway config", () => {
   });
 
   it("denies exec globally and lets only the shell bot ask before each command", () => {
-    expect(config.tools.exec).toEqual({ mode: "deny" });
+    // #933: a command run on the gateway finds the agent stand-ins before the login shell's PATH.
+    expect(config.tools.exec).toEqual({
+      mode: "deny",
+      pathPrepend: [join(import.meta.dirname, "../.run/path/agent-tools")],
+    });
+    refused("tools.exec.pathPrepend", [], /^tools\.exec\.pathPrepend/);
+    refused("tools.exec.pathPrepend", undefined, /^tools\.exec\.pathPrepend/);
     const entries = config.agents.entries as Record<string, { tools: Record<string, unknown> }>;
     expect(entries.otto!.tools.exec).toEqual({ mode: "ask" });
     for (const id of ["main", "clawtrate-main-bot", "marlow", "pip"])
@@ -269,14 +306,17 @@ describe("child process environment", () => {
     const env = openclawEnv(shell);
     const allowed = new Set<string>([
       ...PASSTHROUGH_ENV,
+      "PATH",
       "HOME",
       "OPENCLAW_PROFILE",
       "OPENCLAW_STATE_DIR",
       "OPENCLAW_CONFIG_PATH",
       "OPENCLAW_GATEWAY_PORT",
+      "OPENCLAW_PATH_BOOTSTRAPPED",
       "NO_COLOR",
     ]);
     expect(Object.keys(env).filter((key) => !allowed.has(key))).toEqual([]);
+    expect(env.OPENCLAW_PATH_BOOTSTRAPPED).toBe("1");
     expect(env.OPENCLAW_PROFILE).toBe("dev");
     expect(env.OPENCLAW_STATE_DIR).toMatch(/\.openclaw-dev$/);
     expect(env.OPENCLAW_CONFIG_PATH).toMatch(/\.openclaw-dev\/openclaw\.json$/);
@@ -304,7 +344,148 @@ describe("child process environment", () => {
   });
 
   it("gives the scripted provider nothing beyond the allowlist", () => {
-    expect(providerEnv(shell)).toEqual({ PATH: "/usr/bin", LANG: "en_US.UTF-8" });
+    expect(providerEnv(shell)).toEqual({ PATH: SYSTEM, LANG: "en_US.UTF-8" });
+  });
+});
+
+describe("a gateway's PATH (#933)", () => {
+  const dirs: string[] = [];
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+  const made = (parent: string, prefix: string) => {
+    mkdirSync(parent, { recursive: true });
+    const dir = mkdtempSync(join(parent, prefix));
+    dirs.push(dir);
+    return dir;
+  };
+  const temp = () => made(tmpdir(), "clawtrate-path-");
+  const shell = { PATH: "/opt/agent-tools/bin:/usr/local/bin:/usr/bin", LANG: "C" };
+
+  it("is the agent stand-ins, the gateway's Node and the system's folders, never the caller's PATH", () => {
+    expect(openclawEnv(shell).PATH).toBe(SYSTEM);
+    expect(providerEnv(shell).PATH).toBe(SYSTEM);
+    const instance = { name: "alpha", stateDir: "/h/.x", gatewayPort: 19240 };
+    expect(openclawEnv(shell, instance, "/tool/.run/path/abc").PATH).toBe(
+      `/tool/.run/path/abc:${SYSTEM}`,
+    );
+    expect(openclawEnv(shell, instance, "/n", "/tool/.run/path/agent-tools").PATH).toBe(
+      `/tool/.run/path/agent-tools:/n:${SYSTEM}`,
+    );
+    expect(openclawEnv({ LANG: "C" }).PATH).toBe(SYSTEM);
+  });
+
+  it("tells OpenClaw its PATH is set, whatever the caller's shell says", () => {
+    expect(openclawEnv(shell).OPENCLAW_PATH_BOOTSTRAPPED).toBe("1");
+    expect(
+      openclawEnv({ ...shell, OPENCLAW_PATH_BOOTSTRAPPED: "0" }).OPENCLAW_PATH_BOOTSTRAPPED,
+    ).toBe("1");
+    expect(providerEnv(shell).OPENCLAW_PATH_BOOTSTRAPPED).toBeUndefined();
+  });
+
+  it("puts a test's stand-ins first, only from a folder inside the temporary folder", () => {
+    const standIns = temp();
+    expect(gatewayPath({ ...shell, [STAND_INS_ENV]: standIns }, "/n", "/a")).toBe(
+      `${realpathSync(standIns)}:/a:/n:${SYSTEM}`,
+    );
+    // The scripted provider never gets them.
+    expect(providerEnv({ ...shell, [STAND_INS_ENV]: standIns }).PATH).toBe(SYSTEM);
+    // A folder the test makes outside the temporary folder, so it exists wherever this runs.
+    const outside = made(join(import.meta.dirname, "../.run"), "outside-");
+    expect(() => gatewayPath({ [STAND_INS_ENV]: outside })).toThrow(/must name a folder inside/);
+    expect(() => gatewayPath({ [STAND_INS_ENV]: tmpdir() })).toThrow(/must name a folder inside/);
+  });
+
+  it("makes a stand-in for each agent tool, each failing at once and printing nothing", () => {
+    const root = join(temp(), "agent-tools");
+    expect(agentStandInsDir(root)).toBe(root);
+    expect(readdirSync(root).sort()).toEqual([
+      "agent",
+      "claude",
+      "codex",
+      "copilot",
+      "cursor-agent",
+      "droid",
+      "gemini",
+      "grok",
+      "kimi",
+      "kiro-cli",
+      "opencode",
+      "qwen",
+    ]);
+    for (const name of readdirSync(root)) {
+      expect(readFileSync(join(root, name), "utf8")).toBe("#!/bin/sh\nexit 1\n");
+      const run = spawnSync(join(root, name), ["auth", "status", "--json"], { encoding: "utf8" });
+      expect([run.status, run.stdout, run.stderr], name).toEqual([1, "", ""]);
+    }
+  });
+
+  it("puts a changed or missing stand-in back, and leaves nothing else beside them", () => {
+    const root = join(temp(), "agent-tools");
+    agentStandInsDir(root);
+    writeFileSync(join(root, "claude"), "#!/bin/sh\necho signed in\n");
+    chmodSync(join(root, "codex"), 0o644);
+    rmSync(join(root, "gemini"));
+    agentStandInsDir(root);
+    for (const name of ["claude", "codex", "gemini"]) {
+      expect(readFileSync(join(root, name), "utf8")).toBe("#!/bin/sh\nexit 1\n");
+      expect(statSync(join(root, name)).mode & 0o111, name).toBe(0o111);
+    }
+    expect(readdirSync(root)).toHaveLength(12);
+  });
+
+  it("gives the gateway its Node through a folder that holds nothing else", () => {
+    const root = temp();
+    const bin = temp();
+    const node = join(bin, "node");
+    writeFileSync(node, "");
+    writeFileSync(join(bin, "claude"), "");
+    const dir = nodeLinkDir(node, root);
+    expect(readdirSync(dir)).toEqual(["node"]);
+    expect(readlinkSync(join(dir, "node"))).toBe(realpathSync(node));
+    // The same Node again keeps its folder.
+    expect(nodeLinkDir(node, root)).toBe(dir);
+  });
+
+  it("puts the Node link in place over one already there, and leaves nothing else beside it", () => {
+    const root = temp();
+    const bin = temp();
+    const node = join(bin, "node");
+    writeFileSync(node, "");
+    const dir = nodeLinkDir(node, root);
+    // Something already at `node` that its check didn't read as the link, as when another start
+    // makes the link in the same moment: replaced, never an error.
+    rmSync(join(dir, "node"));
+    writeFileSync(join(dir, "node"), "");
+    expect(nodeLinkDir(node, root)).toBe(dir);
+    expect(readlinkSync(join(dir, "node"))).toBe(realpathSync(node));
+    // A stale link to another Node is replaced too.
+    rmSync(join(dir, "node"));
+    symlinkSync(join(bin, "elsewhere"), join(dir, "node"));
+    expect(nodeLinkDir(node, root)).toBe(dir);
+    expect(readlinkSync(join(dir, "node"))).toBe(realpathSync(node));
+    expect(readdirSync(dir)).toEqual(["node"]);
+  });
+
+  it("refuses a folder whose name has a colon, which would split into two PATH entries", () => {
+    const parent = temp();
+    const split = join(parent, "probes:extra");
+    mkdirSync(split);
+    expect(() => gatewayPath({ [STAND_INS_ENV]: split })).toThrow(/has a colon/);
+    expect(() => gatewayPath({}, "/tool/.run/path:/opt/agent-tools/bin")).toThrow(/has a colon/);
+    expect(() => gatewayPath({}, null, "/tool/.run:/opt/agent-tools/bin")).toThrow(/has a colon/);
+  });
+
+  it("refuses to start on Windows before reading any argument", async () => {
+    await expect(main(["status"], {}, "win32")).rejects.toThrow(
+      "The development gateway runs on macOS and Linux only, not on Windows.",
+    );
+    await expect(main(["--no-such-flag"], {}, "win32")).rejects.toThrow(/not on Windows/);
+  });
+
+  it("is what the seeded config puts first for a command run on the gateway", () => {
+    expect(devConfig("t").tools.exec.pathPrepend).toEqual([AGENT_STAND_INS]);
+    expect(AGENT_STAND_INS_DIR).toBe(AGENT_STAND_INS);
   });
 });
 

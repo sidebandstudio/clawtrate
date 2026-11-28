@@ -11,9 +11,20 @@ import {
   type StdioOptions,
 } from "node:child_process";
 import type { Writable } from "node:stream";
-import { realpathSync } from "node:fs";
-import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { createHash, randomBytes } from "node:crypto";
+import {
+  chmodSync,
+  mkdirSync,
+  readFileSync,
+  readlinkSync,
+  realpathSync,
+  renameSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { homedir, tmpdir } from "node:os";
+import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { OPENCLAW_VERSION, openclawProgram, type Program } from "./pinned.ts";
 import type { OpenclawVersion } from "./versions.ts";
@@ -76,15 +87,149 @@ export function assertDevStateDir(path: string, home: string = homedir()): void 
 }
 
 /** Variables passed through from the caller's shell. Everything else is dropped. */
-export const PASSTHROUGH_ENV = ["PATH", "TMPDIR", "LANG", "LC_ALL", "TZ", "USER"] as const;
+export const PASSTHROUGH_ENV = ["TMPDIR", "LANG", "LC_ALL", "TZ", "USER"] as const;
 
-function passthrough(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+/**
+ * The computer's own program folders: the only part of its `PATH` a gateway gets (#933). OpenClaw
+ * asks an agent tool it finds on `PATH` for its sign-in, so a folder a person installs tools into
+ * (`~/.local/bin`, Homebrew's) never reaches a gateway, nor anything the gateway starts.
+ */
+export const SYSTEM_PATH = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"] as const;
+
+/**
+ * Set for the gateway and every OpenClaw command, and so inherited by all they start. OpenClaw's
+ * `ensureOpenClawCliOnPath` (gateway start, every CLI command, the node host, the ACP client)
+ * otherwise appends Homebrew's folders, `~/.local/bin`, `~/.npm-global/bin`, pnpm's, bun's and
+ * yarn's to the `PATH` it was given; with this set it changes nothing (#933).
+ */
+export const PATH_BOOTSTRAPPED_ENV = "OPENCLAW_PATH_BOOTSTRAPPED";
+
+/**
+ * Every agent tool OpenClaw runs or looks for by name (`claude`, `codex`, `gemini`), and the
+ * programs of the coding-agent harnesses it can start. Each gets a stand-in that fails, first on a
+ * gateway's `PATH`, so a lookup by name never goes on to a folder of the person's.
+ */
+export const AGENT_TOOLS = [
+  "agent",
+  "claude",
+  "codex",
+  "copilot",
+  "cursor-agent",
+  "droid",
+  "gemini",
+  "grok",
+  "kimi",
+  "kiro-cli",
+  "opencode",
+  "qwen",
+] as const;
+
+/** What each of those stand-ins does: fail at once, printing nothing. */
+export const STAND_IN_SCRIPT = "#!/bin/sh\nexit 1\n";
+
+/** The folder of those stand-ins this tool makes, beside the Node link folders. */
+export const AGENT_STAND_INS_DIR = join(RUN_DIR, "path", "agent-tools");
+
+/**
+ * The one way a folder of the caller's reaches a gateway's `PATH`: a test's stand-in programs. It
+ * must be a folder inside the computer's temporary folder.
+ */
+export const STAND_INS_ENV = "DEV_GATEWAY_STAND_INS";
+
+/**
+ * The development gateway runs on macOS and Linux. Its `PATH`, its stand-ins and the gate it starts
+ * every process through are POSIX, and nothing on Windows uses it (#933).
+ */
+export function refuseWindows(platform: NodeJS.Platform = process.platform): void {
+  if (platform === "win32")
+    throw new Error("The development gateway runs on macOS and Linux only, not on Windows.");
+}
+
+/** A folder that goes on a gateway's `PATH`, refused if a colon would split it into two. */
+function pathEntry(dir: string, what: string): string {
+  if (dir.includes(":"))
+    throw new Error(`${what} can't go on a PATH: its name has a colon (${dir})`);
+  return dir;
+}
+
+/** The stand-ins folder a test asked for, checked; or null. */
+export function standInsDir(source: NodeJS.ProcessEnv): string | null {
+  const asked = source[STAND_INS_ENV];
+  if (!asked) return null;
+  const dir = realpathSync(resolve(asked));
+  const temp = realpathSync(tmpdir());
+  if (!dir.startsWith(temp + sep) || !statSync(dir).isDirectory())
+    throw new Error(`${STAND_INS_ENV} must name a folder inside ${temp}`);
+  return pathEntry(dir, `The ${STAND_INS_ENV} folder`);
+}
+
+/**
+ * A folder holding one link, `node`, to the Node a gateway runs on: for a program that finds Node
+ * by name, without the rest of the folder Node is installed in.
+ */
+export function nodeLinkDir(node: string, root: string = RUN_DIR): string {
+  const target = realpathSync(node);
+  const dir = join(root, "path", createHash("sha256").update(target).digest("hex").slice(0, 12));
+  const link = join(dir, "node");
+  mkdirSync(dir, { recursive: true });
+  let current: string | null = null;
+  try {
+    current = readlinkSync(link);
+  } catch {
+    // No link yet.
+  }
+  if (current !== target) {
+    // Made under a name of its own, then renamed over `node`: two starts at once both end with
+    // the link, since every link in this folder names the same Node.
+    const made = join(dir, `node.${process.pid}.${randomBytes(4).toString("hex")}`);
+    symlinkSync(target, made);
+    renameSync(made, link);
+  }
+  return dir;
+}
+
+/**
+ * Puts this tool's agent stand-ins (`AGENT_TOOLS`) in `root`, each written under a name of its own
+ * and renamed into place, so two starts at once both end with all of them. Returns the folder.
+ */
+export function agentStandInsDir(root: string = AGENT_STAND_INS_DIR): string {
+  mkdirSync(root, { recursive: true });
+  for (const name of AGENT_TOOLS) {
+    const file = join(root, name);
+    try {
+      if (readFileSync(file, "utf8") === STAND_IN_SCRIPT && statSync(file).mode & 0o100) continue;
+    } catch {
+      // Not there yet.
+    }
+    const made = join(root, `.${name}.${process.pid}.${randomBytes(4).toString("hex")}`);
+    writeFileSync(made, STAND_IN_SCRIPT);
+    chmodSync(made, 0o755);
+    renameSync(made, file);
+  }
+  return root;
+}
+
+/**
+ * A gateway's `PATH`: a test's stand-ins, this tool's agent stand-ins, the folder with its Node,
+ * the system's folders.
+ */
+export function gatewayPath(
+  source: NodeJS.ProcessEnv,
+  nodeDir: string | null = null,
+  agentStandIns: string | null = null,
+): string {
+  const tools =
+    agentStandIns === null ? null : pathEntry(agentStandIns, "The folder of agent stand-ins");
+  const node = nodeDir === null ? null : pathEntry(nodeDir, "The folder with the gateway's Node");
+  return [standInsDir(source), tools, node, ...SYSTEM_PATH].filter(Boolean).join(":");
+}
+
+function allowlisted(source: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = {};
   for (const key of PASSTHROUGH_ENV) {
     const value = source[key];
     if (value) env[key] = value;
   }
-  env.PATH ??= "/usr/bin:/bin";
   return env;
 }
 
@@ -100,9 +245,13 @@ export function openclawEnv(
     stateDir: devStateDir(),
     gatewayPort: GATEWAY_PORT,
   },
+  nodeDir: string | null = null,
+  agentStandIns: string | null = null,
 ): NodeJS.ProcessEnv {
   return {
-    ...passthrough(source),
+    ...allowlisted(source),
+    PATH: gatewayPath(source, nodeDir, agentStandIns),
+    [PATH_BOOTSTRAPPED_ENV]: "1",
     ...(instance.name !== null && source.FS_SAFE_NATIVE_MODE === "require"
       ? { FS_SAFE_NATIVE_MODE: "require" }
       : {}),
@@ -115,14 +264,16 @@ export function openclawEnv(
   };
 }
 
-/** The scripted provider gets the allowlist and the port it listens on. */
+/**
+ * The scripted provider gets the allowlist, the system's folders as its `PATH` (it starts nothing,
+ * and a test's stand-ins are for the gateway alone) and the port it listens on.
+ */
 export function providerEnv(
   source: NodeJS.ProcessEnv = process.env,
   port?: number,
 ): NodeJS.ProcessEnv {
-  return port === undefined
-    ? passthrough(source)
-    : { ...passthrough(source), SCRIPTED_PROVIDER_PORT: String(port) };
+  const env = { ...allowlisted(source), PATH: SYSTEM_PATH.join(":") };
+  return port === undefined ? env : { ...env, SCRIPTED_PROVIDER_PORT: String(port) };
 }
 
 /** The instance's profile options first; callers may never choose a profile themselves. */
@@ -164,6 +315,8 @@ export type RunnerOptions = {
   identify?: Identify;
   /** The checkout whose run file proves ownership. */
   checkout?: string;
+  /** The computer's platform, for tests; Windows is refused (`refuseWindows`). */
+  platform?: NodeJS.Platform;
 };
 
 /**
@@ -184,6 +337,7 @@ export class OpenclawRunner {
   private readonly checkout: string;
 
   constructor(options: RunnerOptions) {
+    refuseWindows(options.platform);
     this.instance = options.instance ?? null;
     this.stateDir = options.stateDir;
     this.runFile = options.runFile;
@@ -200,6 +354,17 @@ export class OpenclawRunner {
   private openclaw(): Program {
     this.program ??= openclawProgram();
     return this.program;
+  }
+
+  /**
+   * The folder with the Node the gateway runs on: the pinned program's own Node, or, for an
+   * `OPENCLAW_BIN` program that may find Node by name, `OPENCLAW_NODE` or this tool's Node.
+   */
+  private nodeDir(): string {
+    const program = this.openclaw();
+    const node =
+      program.args.length > 0 ? program.command : (process.env.OPENCLAW_NODE ?? process.execPath);
+    return nodeLinkDir(node);
   }
 
   /** The OpenClaw version this runner's program is, which the gateway it starts runs. */
@@ -242,7 +407,10 @@ export class OpenclawRunner {
       stateDir: this.stateDir,
       gatewayPort: this.gatewayPort(),
     };
-    return { cwd: this.stateDir, env: openclawEnv(process.env, instance) };
+    return {
+      cwd: this.stateDir,
+      env: openclawEnv(process.env, instance, this.nodeDir(), agentStandInsDir()),
+    };
   }
 
   /** Run an OpenClaw CLI command and wait for it. `input` is written to its stdin. */

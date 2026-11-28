@@ -76,6 +76,7 @@ import {
   scriptedNodeEnv,
 } from "./scripted-node.ts";
 import {
+  AGENT_STAND_INS_DIR,
   CHECKOUT_DIR,
   GATEWAY_PORT,
   IOS_STREAM_HOLD_FILE,
@@ -90,6 +91,7 @@ import {
   instancePaths,
   parseJsonOutput,
   providerEnv,
+  refuseWindows,
   type Gated,
   type InstancePaths,
   type RunResult,
@@ -566,7 +568,9 @@ export function devConfig(
       // With no policy the gateway runs model shell commands without asking.
       // This global policy is inherited by every bot without its own override,
       // including bots created later. Only the shell bot overrides it, with "ask".
-      exec: { mode: "deny" },
+      // A command it runs on the gateway gets the login shell's PATH in front of the gateway's
+      // (both versions); the agent stand-ins go in front of that, inherited by every bot (#933).
+      exec: { mode: "deny", pathPrepend: [AGENT_STAND_INS_DIR] },
       // Bot-to-bot messages only between the pair; both ends must match.
       agentToAgent: { enabled: true, allow: [...MESSAGING_PAIR] },
       // File tools stay inside each bot's own workspace.
@@ -3318,7 +3322,12 @@ const USAGE =
   "       pnpm dev-gateway unlock --instance <name> --agent <bot> --provider <provider>\n" +
   "       pnpm dev-gateway <list [--json]|prune>   (every instance on this machine)";
 
-export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env): Promise<void> {
+export async function main(
+  argv: string[],
+  env: NodeJS.ProcessEnv = process.env,
+  platform: NodeJS.Platform = process.platform,
+): Promise<void> {
+  refuseWindows(platform);
   const { values, positionals } = parseArgs({
     args: argv,
     options: {
