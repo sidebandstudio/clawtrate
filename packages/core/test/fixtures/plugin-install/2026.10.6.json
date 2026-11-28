@@ -1,6 +1,6 @@
 {
   "openclaw": "2026.10.6",
-  "captured": "A development gateway of this version, started --no-seed, reached by a paired admin operator connection; the gateway's state folder written /gateway-state, the instance name replaced, and the inspect's review token written as a placeholder. The config answer keeps its own top-level fields but the config's other copies (`raw`, `parsed`, `sourceConfig`, `resolved`, `runtimeConfig`), and of the config `plugins` and `meta`; the plugin list keeps three other plugins.",
+  "captured": "A development gateway of this version, started --no-seed, reached by a paired admin operator connection; the gateway's state folder written /gateway-state, the instance name replaced, and the inspect's review token written as a placeholder. The config answer keeps its own top-level fields but the config's other copies (`raw`, `parsed`, `sourceConfig`, `resolved`, `runtimeConfig`), and of the config `plugins` and `meta`; the plugin list keeps three other plugins. `cron` is `cron.list {includeDisabled: true, compact: true, limit: 200}` on a fresh unseeded instance, captured with `sessions.list`'s `includeGlobal` and `includeUnknown`.",
   "config": {
     "path": "/gateway-state/openclaw.json",
     "includedPaths": [],
@@ -536,9 +536,32 @@
     }
   },
   "cron": {
-    "jobs": [],
-    "snapshotRevision": "provisional",
-    "total": 0,
+    "jobs": [
+      {
+        "id": "40126a95-b87f-47d1-b27a-d0cbfcbb06ea",
+        "name": "heartbeat-main",
+        "agentId": "main",
+        "updatedAtMs": 1795829216774,
+        "declarationKey": "heartbeat:main",
+        "displayName": "Heartbeat (main)",
+        "enabled": true,
+        "nextRunAt": "2026-11-28T01:30:33.819Z",
+        "nextRunAtMs": 1795829433819,
+        "scheduleKind": "every",
+        "schedule": {
+          "kind": "every",
+          "everyMs": 1800000,
+          "anchorMs": 33819
+        },
+        "lastRunAt": null,
+        "lastRunAtMs": null,
+        "lastRunStatus": null,
+        "lastRunError": null,
+        "effectiveAgentId": "main"
+      }
+    ],
+    "snapshotRevision": "sha256:yQiTcO8qFfNshDHKeatPeTiP6lgrcuJAnLp0s1c1B9g",
+    "total": 1,
     "offset": 0,
     "limit": 200,
     "hasMore": false,

@@ -1,6 +1,6 @@
 {
   "openclaw": "2026.11.10",
-  "captured": "A development gateway of this version, started --no-seed, reached by a paired admin operator connection; the gateway's state folder written /gateway-state, the instance name replaced, and the inspect's review token written as a placeholder. The config answer keeps its own top-level fields but the config's other copies (`raw`, `parsed`, `sourceConfig`, `resolved`, `runtimeConfig`), and of the config `plugins` and `meta`; the plugin list keeps three other plugins.",
+  "captured": "A development gateway of this version, started --no-seed, reached by a paired admin operator connection; the gateway's state folder written /gateway-state, the instance name replaced, and the inspect's review token written as a placeholder. The config answer keeps its own top-level fields but the config's other copies (`raw`, `parsed`, `sourceConfig`, `resolved`, `runtimeConfig`), and of the config `plugins` and `meta`; the plugin list keeps three other plugins. `cron` is `cron.list {includeDisabled: true, compact: true, limit: 200}` on a fresh unseeded instance, captured with `sessions.list`'s `includeGlobal` and `includeUnknown`.",
   "config": {
     "path": "/gateway-state/openclaw.json",
     "includedPaths": [],
@@ -587,7 +587,7 @@
   },
   "cron": {
     "jobs": [],
-    "snapshotRevision": "provisional",
+    "snapshotRevision": "sha256:47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU",
     "total": 0,
     "offset": 0,
     "limit": 200,
