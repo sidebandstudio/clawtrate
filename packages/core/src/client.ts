@@ -6372,7 +6372,7 @@ export class ClawtrateClient {
    * What the composer's "/" or "@" menu lists for a task (`composer-menus.ts`), read now and
    * kept nowhere (F-071, F-070). Each read is `operator.read`, `skills.library.list` included.
    */
-  async readComposerMenu(key: string, trigger: "/" | "@"): Promise<MenuRow[]> {
+  async readComposerMenu(key: string, trigger: "/" | "@", query = ""): Promise<MenuRow[]> {
     if (this.state.connection.status !== "connected")
       throw new Error("Not connected to the gateway.");
     if (trigger === "@") {
@@ -6382,7 +6382,7 @@ export class ClawtrateClient {
       if (generation !== this.generation)
         throw new Error("The gateway changed while the list was read.");
       // The bots the sidebar lists (F-562).
-      return mentionRows(listedBots(this.state), routines);
+      return mentionRows(listedBots(this.state), routines, query);
     }
     const agentId = botIdFromSessionKey(key);
     const [skills, metadata, library] = await Promise.all([
@@ -6393,7 +6393,7 @@ export class ClawtrateClient {
     ]);
     if (skills === null && metadata === null && library === null)
       throw new Error("The gateway did not list them.");
-    return slashRows(skills, metadata, library);
+    return slashRows(skills, metadata, library, query);
   }
 
   /**

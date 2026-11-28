@@ -197,6 +197,93 @@ test.describe("the composer's menus", () => {
     ]);
   });
 
+  test("F-071: a menu read that fails while the person types asks again for what they typed", async ({
+    page,
+  }) => {
+    await open(page);
+    await record(page);
+    await page.evaluate(() => {
+      const w = window as unknown as {
+        clawtrateFixture: { invoke: (command: unknown) => Promise<unknown> };
+        failFirst?: () => void;
+      };
+      const invoke = w.clawtrateFixture.invoke.bind(w.clawtrateFixture);
+      let reads = 0;
+      w.clawtrateFixture.invoke = (command) => {
+        const each = command as { type: string; trigger?: string; query?: string };
+        if (each.type !== "readComposerMenu" || each.trigger !== "/") return invoke(command);
+        reads += 1;
+        // The first read is held, and fails once the person has typed more.
+        if (reads === 1)
+          return new Promise((_, reject) => (w.failFirst = () => reject(new Error("busy"))));
+        const query = (each.query ?? "").toLowerCase();
+        return Promise.resolve(
+          [
+            { kind: "skill", name: "zebra-deploy", description: null, insert: "/zebra-deploy" },
+          ].filter((row) => !query || row.name.includes(query)),
+        );
+      };
+    });
+    await field(page).click();
+    await page.keyboard.type("/zebra");
+    await page.evaluate(() => (window as unknown as { failFirst: () => void }).failFirst());
+    await expect(
+      page.getByRole("listbox", { name: "Skills and commands" }).getByRole("option"),
+    ).toHaveText([/zebra-deploy/]);
+  });
+
+  test("F-071: typing a skill's name finds it when more than 200 entries precede it", async ({
+    page,
+  }) => {
+    await open(page);
+    await record(page);
+    await page.evaluate(() => {
+      const w = window as unknown as {
+        clawtrateFixture: { invoke: (command: unknown) => Promise<unknown> };
+      };
+      const invoke = w.clawtrateFixture.invoke.bind(w.clawtrateFixture);
+      const all = [
+        ...Array.from({ length: 249 }, (_, n) => ({
+          kind: "skill",
+          name: `alpha-skill-${String(n).padStart(3, "0")}`,
+          description: null,
+          insert: `/skill alpha-skill-${String(n).padStart(3, "0")}`,
+        })),
+        {
+          kind: "skill",
+          name: "zebra-deploy",
+          description: "Deploy the release.",
+          insert: "/zebra-deploy",
+        },
+      ];
+      w.clawtrateFixture.invoke = (command) => {
+        const each = command as { type: string; trigger?: string; query?: string };
+        if (each.type !== "readComposerMenu" || each.trigger !== "/") return invoke(command);
+        const query = (each.query ?? "").toLowerCase();
+        const matched = query
+          ? all.filter(
+              (row) =>
+                row.name.toLowerCase().includes(query) || row.insert.toLowerCase().includes(query),
+            )
+          : all;
+        return Promise.resolve(matched.slice(0, 200));
+      };
+    });
+    await field(page).click();
+    await page.keyboard.type("/");
+    const list = page.getByRole("listbox", { name: "Skills and commands" });
+    await expect(list.getByRole("option")).toHaveCount(50);
+    await expect(list.getByRole("option", { name: /zebra-deploy/ })).toHaveCount(0);
+    await page.keyboard.type("zebra-deploy");
+    await expect(list.getByRole("option")).toHaveCount(1);
+    await expect(list.getByRole("option").first()).toContainText("/zebra-deploy");
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("token-chip")).toHaveText(/Bot skill\s*\/zebra-deploy/);
+    await page.keyboard.type("now");
+    await page.keyboard.press("Enter");
+    expect(await sends(page)).toMatchObject([{ text: "/zebra-deploy now" }]);
+  });
+
   test("F-070: typing @ lists the bots and the gateway's routines, tagged, and puts the chosen name where it was typed", async ({
     page,
   }) => {

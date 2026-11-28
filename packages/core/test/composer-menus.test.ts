@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { MAX_MENU_ROWS, mentionRows, slashRows } from "../src/composer-menus.ts";
+import { createBridgeSession, parseBridgeCommand } from "../src/bridge.ts";
+import {
+  MAX_MENU_QUERY_CHARS,
+  MAX_MENU_ROWS,
+  mentionRows,
+  slashRows,
+} from "../src/composer-menus.ts";
 import { KEY, openTask, URL_B } from "./client-harness.ts";
 import { deferred, until } from "./fake-gateway.ts";
 
@@ -189,9 +195,161 @@ describe("the composer's menus", () => {
       },
     ]);
   });
+
+  it("F-071: / filters before cutting to MAX_MENU_ROWS, so an exact query finds a skill beyond the first 200 while broad queries stay bounded", () => {
+    const manySkills = {
+      skills: [
+        ...Array.from({ length: 130 }, (_, n) => ({
+          name: `alpha-skill-${String(n).padStart(3, "0")}`,
+          description: "x".repeat(200),
+          userInvocable: true,
+          eligible: true,
+        })),
+        {
+          name: "zebra-deploy",
+          description: "Deploy the release.",
+          userInvocable: true,
+          eligible: true,
+        },
+      ],
+    };
+    const manyCommands = {
+      commands: Array.from({ length: 119 }, (_, n) => ({
+        name: `cmd_${n}`,
+        textAliases: [`/alpha-cmd-${String(n).padStart(3, "0")}`],
+        description: "y".repeat(200),
+      })),
+    };
+    // 130 skills + 1 target skill + 119 commands = 250 combined entries; push zebra-deploy past 200.
+    const lateSkills = {
+      skills: [
+        ...Array.from({ length: 249 }, (_, n) => ({
+          name: `alpha-skill-${String(n).padStart(3, "0")}`,
+          description: "x".repeat(200),
+          userInvocable: true,
+          eligible: true,
+        })),
+        {
+          name: "zebra-deploy",
+          description: "Deploy the release.",
+          userInvocable: true,
+          eligible: true,
+        },
+      ],
+    };
+    // With no query or a broad one, the answer stays within MAX_MENU_ROWS and one bridge frame.
+    const unfiltered = slashRows(lateSkills, manyCommands);
+    expect(unfiltered).toHaveLength(MAX_MENU_ROWS);
+    expect(unfiltered.some((row) => row.name === "zebra-deploy")).toBe(false);
+    expect(JSON.stringify(unfiltered).length).toBeLessThanOrEqual(262_144);
+    const broad = slashRows(lateSkills, manyCommands, null, "alpha");
+    expect(broad).toHaveLength(MAX_MENU_ROWS);
+    expect(JSON.stringify(broad).length).toBeLessThanOrEqual(262_144);
+    // An exact query finds the skill past the first 200, case-insensitively.
+    expect(slashRows(lateSkills, manyCommands, null, "zebra-deploy")).toEqual([
+      {
+        kind: "skill",
+        name: "zebra-deploy",
+        description: "Deploy the release.",
+        insert: "/skill zebra-deploy",
+      },
+    ]);
+    expect(slashRows(lateSkills, manyCommands, null, "ZEBRA-DEPLOY")).toHaveLength(1);
+    // A command past 200 combined entries is also found by an exact query.
+    expect(slashRows(manySkills, manyCommands, null, "alpha-cmd-118")).toEqual([
+      {
+        kind: "command",
+        name: "alpha-cmd-118",
+        description: `${"y".repeat(159)}…`,
+        insert: "/alpha-cmd-118",
+      },
+    ]);
+  });
+
+  it("F-070: @ filters before cutting to MAX_MENU_ROWS, so a routine past the first 200 is found", () => {
+    const cron = {
+      jobs: [
+        ...Array.from({ length: 249 }, (_, n) => ({
+          displayName: `Routine ${String(n).padStart(3, "0")}`,
+          payload: { kind: "agentTurn" },
+          enabled: true,
+        })),
+        { displayName: "Zebra audit", payload: { kind: "agentTurn" }, enabled: true },
+      ],
+    };
+    expect(mentionRows([{ id: "otto", name: "Otto" }], cron)).toHaveLength(MAX_MENU_ROWS);
+    expect(mentionRows([{ id: "otto", name: "Otto" }], cron, "zebra audit")).toEqual([
+      { kind: "routine", name: "Zebra audit", description: null, insert: "@Zebra audit" },
+    ]);
+  });
 });
 
 describe("the / menu's read", () => {
+  it("F-071: readComposerMenu and the bridge forward the query so a skill past the first 200 is returned", async () => {
+    const { client, gateway } = await openTask();
+    gateway.handlers["skills.status"] = () => ({
+      skills: [
+        ...Array.from({ length: 249 }, (_, n) => ({
+          name: `alpha-skill-${String(n).padStart(3, "0")}`,
+          userInvocable: true,
+          eligible: true,
+        })),
+        {
+          name: "zebra-deploy",
+          description: "Deploy the release.",
+          userInvocable: true,
+          eligible: true,
+        },
+      ],
+    });
+    gateway.handlers["chat.metadata"] = () => ({ commands: [] });
+    gateway.handlers["skills.library.list"] = () => library(selected([]));
+    const viewer = createBridgeSession(client);
+    await viewer.apply({ type: "openSession", key: KEY });
+    expect(
+      await viewer.apply(parseBridgeCommand({ type: "readComposerMenu", key: KEY, trigger: "/" })),
+    ).toHaveLength(MAX_MENU_ROWS);
+    expect(
+      await viewer.apply(
+        parseBridgeCommand({
+          type: "readComposerMenu",
+          key: KEY,
+          trigger: "/",
+          query: "zebra-deploy",
+        }),
+      ),
+    ).toEqual([
+      {
+        kind: "skill",
+        name: "zebra-deploy",
+        description: "Deploy the release.",
+        insert: "/skill zebra-deploy",
+      },
+    ]);
+    expect(
+      parseBridgeCommand({
+        type: "readComposerMenu",
+        key: KEY,
+        trigger: "/",
+        query: "x".repeat(MAX_MENU_QUERY_CHARS),
+      }),
+    ).toEqual({
+      type: "readComposerMenu",
+      key: KEY,
+      trigger: "/",
+      query: "x".repeat(MAX_MENU_QUERY_CHARS),
+    });
+    expect(() =>
+      parseBridgeCommand({
+        type: "readComposerMenu",
+        key: KEY,
+        trigger: "/",
+        query: "x".repeat(MAX_MENU_QUERY_CHARS + 1),
+      }),
+    ).toThrow("invalid query");
+    viewer.dispose();
+    client.stop();
+  });
   it("F-071: reads the task's library skills with operator.read, and a refusal of them leaves the bot's skills and the commands", async () => {
     const { client, gateway } = await openTask();
     gateway.handlers["skills.status"] = () => skills;

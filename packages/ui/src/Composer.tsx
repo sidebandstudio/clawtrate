@@ -1,6 +1,9 @@
 import {
   fileRefusal,
   isStopNow,
+  matchesMenuQuery,
+  MAX_MENU_QUERY_CHARS,
+  MAX_MENU_ROWS,
   sendRefusal,
   type SendShape,
   type AttachmentInfo,
@@ -177,6 +180,23 @@ export type Notice = { id: string; title: string; reason: string | null; retry?:
 /** What needs the person, for the shelf's row and ⌘J. */
 export type NeedsYou = { kind: "approval" | "question"; text: string } | null;
 
+type MenuState = {
+  trigger: "/" | "@";
+  query: string;
+  rows: MenuRow[] | null;
+  error: string | null;
+  loading: boolean;
+};
+
+/** Whether `state` already holds every row that could match `query` for `trigger`. */
+function menuCovered(state: MenuState | null, trigger: "/" | "@", query: string): boolean {
+  if (!state || state.trigger !== trigger || state.rows === null || state.error !== null)
+    return false;
+  const loaded = state.query.toLowerCase();
+  const typed = query.toLowerCase();
+  return state.rows.length < MAX_MENU_ROWS ? typed.includes(loaded) : typed === loaded;
+}
+
 export function Composer({
   bot,
   gateway,
@@ -226,14 +246,20 @@ export function Composer({
   // The skill or command chosen from the "/" menu: a chip sent before the words.
   const [tokens, setTokens] = useState<MenuRow[]>([]);
   /** The menu the words before the caret open: its trigger, what follows it, and where it starts. */
-  const [picker, setPicker] = useState<{ trigger: "/" | "@"; query: string; start: number } | null>(
-    null,
-  );
-  const [menuRows, setMenuRows] = useState<{
+  const [picker, setPickerState] = useState<{
     trigger: "/" | "@";
-    rows: MenuRow[] | null;
-    error: string | null;
+    query: string;
+    start: number;
   } | null>(null);
+  const pickerRef = useRef<{ trigger: "/" | "@"; query: string; start: number } | null>(null);
+  const setPicker = useCallback(
+    (next: { trigger: "/" | "@"; query: string; start: number } | null) => {
+      pickerRef.current = next;
+      setPickerState(next);
+    },
+    [],
+  );
+  const [menuRows, setMenuRows] = useState<MenuState | null>(null);
   /** The latest menu read; an earlier one's answer is not shown. */
   const menuRead = useRef(0);
   const [active, setActive] = useState(0);
@@ -422,6 +448,7 @@ export function Composer({
       taskKey,
       draftKey,
       setText,
+      setPicker,
       onAnnounce,
       onNotice,
       view,
@@ -461,25 +488,75 @@ export function Composer({
     return () => window.removeEventListener("keydown", onKey);
   }, [view, stop, sendAs, focusRef, setText, text]);
 
-  // The "/" and "@" menus (F-071, F-070): what the words before the caret open, read once per opening.
+  // The "/" and "@" menus (F-071, F-070): read when a menu opens, and again with the typed query
+  // when an answer hit MAX_MENU_ROWS or was read for a narrower query.
+  const readMenu = useCallback(
+    function load(trigger: "/" | "@", query: string, keepRows: boolean) {
+      const asked = ++menuRead.current;
+      setMenuRows((current) => ({
+        trigger,
+        query,
+        rows: keepRows && current?.trigger === trigger ? current.rows : null,
+        error: null,
+        loading: true,
+      }));
+      void bridge
+        .invoke({
+          type: "readComposerMenu",
+          key: taskKey,
+          trigger,
+          ...(query ? { query } : {}),
+        })
+        .then(
+          (rows) => {
+            if (asked !== menuRead.current) return;
+            const settled: MenuState = { trigger, query, rows, error: null, loading: false };
+            setMenuRows(settled);
+            const live = pickerRef.current;
+            if (
+              live &&
+              live.trigger === trigger &&
+              live.query.length <= MAX_MENU_QUERY_CHARS &&
+              !menuCovered(settled, trigger, live.query)
+            ) {
+              load(trigger, live.query, true);
+            }
+          },
+          (error: unknown) => {
+            if (asked !== menuRead.current) return;
+            setMenuRows({
+              trigger,
+              query,
+              rows: [],
+              error: error instanceof Error ? error.message : String(error),
+              loading: false,
+            });
+            // What was typed while this read was out is asked for; the failed query isn't again.
+            const live = pickerRef.current;
+            if (
+              live &&
+              live.trigger === trigger &&
+              live.query !== query &&
+              live.query.length <= MAX_MENU_QUERY_CHARS
+            )
+              load(trigger, live.query, false);
+          },
+        );
+    },
+    [bridge, taskKey],
+  );
+  const queryTooLong = picker !== null && picker.query.length > MAX_MENU_QUERY_CHARS;
   const shownRows =
-    picker && menuRows?.trigger === picker.trigger && menuRows.rows
-      ? menuRows.rows
-          .filter((row) => {
-            const query = picker.query.toLowerCase();
-            return (
-              !query ||
-              row.name.toLowerCase().includes(query) ||
-              row.insert.toLowerCase().includes(query)
-            );
-          })
-          .slice(0, 50)
+    picker && !queryTooLong && menuRows?.trigger === picker.trigger && menuRows.rows
+      ? menuRows.rows.filter((row) => matchesMenuQuery(row, picker.query)).slice(0, 50)
       : [];
   const pickerOpen =
     picker !== null &&
+    !queryTooLong &&
     (menuRows === null ||
       menuRows.trigger !== picker.trigger ||
       menuRows.rows === null ||
+      menuRows.loading ||
       menuRows.error !== null ||
       shownRows.length > 0);
   const watchCaret = (value: string, caret: number) => {
@@ -501,27 +578,21 @@ export function Composer({
       return;
     }
     const start = before.length - found[3]!.length - 1;
+    const query = found[3]!;
     const opening = !picker || picker.trigger !== trigger;
     if (!picker || picker.trigger !== trigger || picker.start !== start) setActive(0);
-    setPicker({ trigger, query: found[3]!, start });
-    // Read when the trigger changes, and again when a menu opens over a list that failed. Only
-    // the latest read's answer is shown.
+    setPicker({ trigger, query, start });
+    // Read when the trigger changes, when a menu opens over a list that failed, or when typing
+    // moves outside what the last read covers. Only the latest read's answer is shown.
+    if (query.length > MAX_MENU_QUERY_CHARS) return;
     if (menuRows?.trigger !== trigger || (opening && menuRows.error !== null)) {
-      const asked = ++menuRead.current;
-      setMenuRows({ trigger, rows: null, error: null });
-      void bridge.invoke({ type: "readComposerMenu", key: taskKey, trigger }).then(
-        (rows) => {
-          if (asked === menuRead.current) setMenuRows({ trigger, rows, error: null });
-        },
-        (error: unknown) => {
-          if (asked === menuRead.current)
-            setMenuRows({
-              trigger,
-              rows: [],
-              error: error instanceof Error ? error.message : String(error),
-            });
-        },
-      );
+      readMenu(trigger, query, false);
+    } else if (
+      !menuRows.loading &&
+      (menuRows.error === null || menuRows.query !== query) &&
+      !menuCovered(menuRows, trigger, query)
+    ) {
+      readMenu(trigger, query, !opening);
     }
   };
   const choose = (row: MenuRow) => {
@@ -826,7 +897,9 @@ export function Composer({
         <div className="composer-box" onDragOver={(e) => e.preventDefault()} onDrop={onDrop}>
           {pickerOpen && (
             <div className="composer-menu" data-testid="composer-menu">
-              {menuRows?.trigger !== picker!.trigger || menuRows.rows === null ? (
+              {menuRows?.trigger !== picker!.trigger ||
+              menuRows.rows === null ||
+              (menuRows.loading && shownRows.length === 0) ? (
                 <p className="composer-menu-note" aria-busy="true">
                   {picker!.trigger === "/"
                     ? "Loading skills and commands…"

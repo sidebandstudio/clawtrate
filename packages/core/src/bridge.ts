@@ -69,7 +69,7 @@ import {
   type MessageSearch,
   type RoutineSearch,
 } from "./search.ts";
-import type { MenuRow } from "./composer-menus.ts";
+import { MAX_MENU_QUERY_CHARS, type MenuRow } from "./composer-menus.ts";
 import type { UsageBusy, UsageReport } from "./usage-engine.ts";
 import {
   MAX_ROUTINE_NAME_CHARS,
@@ -169,7 +169,7 @@ export type BridgeCommand =
   /** "Show the gateway's own bot": list the gateway's default bot beside the others, or not. */
   | { type: "setShowGatewayBot"; on: boolean }
   /** What the composer's "/" or "@" menu lists for a task: read now, kept nowhere (F-071, F-070). */
-  | { type: "readComposerMenu"; key: string; trigger: "/" | "@" }
+  | { type: "readComposerMenu"; key: string; trigger: "/" | "@"; query?: string }
   | { type: "retryMessage"; key: string; messageId: string }
   | { type: "deleteMessage"; key: string; messageId: string }
   | { type: "cancelQueued"; key: string; messageId: string }
@@ -1650,9 +1650,19 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "setShowGatewayBot":
       if (typeof command.on !== "boolean") throw new Error("invalid gateway bot setting");
       return { type: "setShowGatewayBot", on: command.on };
-    case "readComposerMenu":
+    case "readComposerMenu": {
       if (command.trigger !== "/" && command.trigger !== "@") throw new Error("invalid menu");
-      return { type: "readComposerMenu", key: sessionKey(command.key), trigger: command.trigger };
+      const query =
+        command.query === undefined
+          ? undefined
+          : shortText(command.query, MAX_MENU_QUERY_CHARS, "query");
+      return {
+        type: "readComposerMenu",
+        key: sessionKey(command.key),
+        trigger: command.trigger,
+        ...(query !== undefined ? { query } : {}),
+      };
+    }
     case "setReaction": {
       const emoji = command.emoji;
       if (typeof emoji !== "string" || emoji.length === 0 || emoji.length > 64)
@@ -2552,7 +2562,7 @@ class ViewerSession implements BridgeSession {
       case "setShowGatewayBot":
         return client.setShowGatewayBot(command.on);
       case "readComposerMenu":
-        return client.readComposerMenu(this.mine(command.key), command.trigger);
+        return client.readComposerMenu(this.mine(command.key), command.trigger, command.query);
       case "setReaction":
         return client.setReaction(
           this.mine(command.key),
