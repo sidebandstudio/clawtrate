@@ -3,7 +3,14 @@
 // snapshots and sends commands. Transport is IPC in Electron and a WebSocket on the web.
 
 import { MAX_GATEWAY_URL_CHARS } from "./gateway-url.ts";
+import { fromBase64 } from "./bytes.ts";
 import { utf8Length } from "./encoding.ts";
+import {
+  skillSlugProblem,
+  type SkillLibraryActivateResult,
+  type SkillLibraryList,
+  type SkillLibrarySaveResult,
+} from "./skills-library.ts";
 import { MAX_MEMORY_BYTES, type MemoryDocument, type MemoryList } from "./memory.ts";
 import type { BotVoiceAnswer } from "./voice.ts";
 import type { BotGuidesAnswer } from "./guides.ts";
@@ -162,6 +169,22 @@ export type BridgeCommand =
    * (OpenClaw 2026.11.10, admin): the bot and the review a skill note's mark names.
    */
   | { type: "undoSkillChange"; agentId: string; reviewId: string; stamp: GatewayStamp }
+  /** The gateway's skill library (`skills.library.list`, `operator.read`). */
+  | { type: "listSkillLibrary" }
+  /**
+   * Import a local SKILL.md into the gateway skill library (`skills.library.save`,
+   * `operator.write`). The file travels via `attach` first and is named by `attachmentId`.
+   */
+  | { type: "importLibrarySkill"; slug: string; attachmentId: string; stamp: GatewayStamp }
+  /** Refresh, attach or detach library skills for an open task (`skills.library.activate`). */
+  | {
+      type: "activateSkillLibrary";
+      key: string;
+      action: "attach" | "detach" | "refresh";
+      skillId?: string;
+      revision?: string;
+      stamp: GatewayStamp;
+    }
   /** "Show external channel chats": list chats from Discord, Telegram and other channels, or not. */
   | { type: "setShowChannelChats"; on: boolean }
   /** "Show sessions from other tools": list sessions an API client, a routine or a plugin opened, or not. */
@@ -622,7 +645,13 @@ type BridgeResultStart<C extends BridgeCommand> = C extends { type: "readBotDele
       ? { declined: boolean }
       : C extends { type: "undoSkillChange" }
         ? { undone: boolean }
-        : BridgeResultRest<C>;
+        : C extends { type: "listSkillLibrary" }
+          ? SkillLibraryList
+          : C extends { type: "importLibrarySkill" }
+            ? SkillLibrarySaveResult
+            : C extends { type: "activateSkillLibrary" }
+              ? SkillLibraryActivateResult
+              : BridgeResultRest<C>;
 
 type BridgeResultRest<C extends BridgeCommand> = C extends { type: "sendMessage" }
   ? { messageId: string }
@@ -1634,6 +1663,46 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         reviewId: command.reviewId,
         stamp: gatewayStampOf(command.stamp),
       };
+    case "listSkillLibrary":
+      return { type: "listSkillLibrary" };
+    case "importLibrarySkill": {
+      if (typeof command.slug !== "string" || skillSlugProblem(command.slug) !== null)
+        throw new Error("invalid skill slug");
+      return {
+        type: "importLibrarySkill",
+        slug: command.slug,
+        attachmentId: id(command.attachmentId, "attachment id"),
+        stamp: gatewayStampOf(command.stamp),
+      };
+    }
+    case "activateSkillLibrary": {
+      if (
+        command.action !== "attach" &&
+        command.action !== "detach" &&
+        command.action !== "refresh"
+      )
+        throw new Error("invalid skill library action");
+      const skillId = command.skillId;
+      if (
+        skillId !== undefined &&
+        (typeof skillId !== "string" || !/^[a-f0-9-]{36}$/.test(skillId))
+      )
+        throw new Error("invalid skill id");
+      const revision = command.revision;
+      if (
+        revision !== undefined &&
+        (typeof revision !== "string" || !/^[a-f0-9]{64}$/.test(revision))
+      )
+        throw new Error("invalid skill revision");
+      return {
+        type: "activateSkillLibrary",
+        key: sessionKey(command.key),
+        action: command.action,
+        ...(skillId !== undefined ? { skillId } : {}),
+        ...(revision !== undefined ? { revision } : {}),
+        stamp: gatewayStampOf(command.stamp),
+      };
+    }
     case "setBotVoice":
       if (typeof command.on !== "boolean") throw new Error("invalid voice setting");
       return {
@@ -2543,6 +2612,22 @@ class ViewerSession implements BridgeSession {
         return client.readBotVoice();
       case "readBotGuides":
         return client.readBotGuides();
+      case "listSkillLibrary":
+        return client.listSkillLibrary();
+      case "importLibrarySkill": {
+        if (!policy.attachments) throw new Error("This host does not take files.");
+        // Consume the uploaded bytes immediately so failed or conflicted imports leave nothing held.
+        const taken = policy.attachments.take([command.attachmentId]);
+        const bytes = fromBase64(taken.attachments[0]!.content);
+        if (!bytes) throw new Error("The uploaded file could not be decoded.");
+        return client.importLibrarySkill(command.slug, bytes, command.stamp, owner);
+      }
+      case "activateSkillLibrary":
+        return client.activateSkillLibrary(this.mine(command.key), command.action, command.stamp, {
+          ...(command.skillId ? { skillId: command.skillId } : {}),
+          ...(command.revision ? { revision: command.revision } : {}),
+          owner,
+        });
       case "setBotVoice":
         return client.setBotVoice(command.on, command.stamp, owner);
       case "setShowChannelChats":

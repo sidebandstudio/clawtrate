@@ -110,6 +110,7 @@ import { checkInCommands, fixtureCheckIns, type CheckInParams } from "./check-in
 import { memoryCommands } from "./memory.ts";
 import { voiceCommands, type VoiceParams } from "./voice.ts";
 import { guidesCommands } from "./guides.ts";
+import { NO_SKILLS_PARAMS, skillsCommands, type SkillsParams } from "./skills.ts";
 import { fixtureUsage, NO_USAGE_PARAMS, usageCommand, type UsageParams } from "./usage.ts";
 import {
   NO_SEARCH_PARAMS,
@@ -738,6 +739,7 @@ export function createFixtureBridge(
      * `main` is out of view beside Juniper, the Main Bot; `gatewaybot=on` shows it.
      */
     showGatewayBot?: boolean;
+    skills?: SkillsParams;
   } = {},
 ): ClawtrateBridge & {
   setState(change: (state: ClawtrateState) => ClawtrateState): void;
@@ -975,8 +977,10 @@ export function createFixtureBridge(
   const approval = (key: string, id: string): ApprovalCard | undefined =>
     state.transcripts[key]?.approvals.find((each) => each.id === id);
 
-  // Files are named and counted, never kept.
-  const files = new Map<string, { fileName: string; mimeType: string; sizeBytes: number }>();
+  const files = new Map<
+    string,
+    { fileName: string; mimeType: string; sizeBytes: number; bytes?: Uint8Array }
+  >();
   // The rail's task actions, answered as the engine would.
   const railRefused = new Set<string>();
   // Rail commands whose answers wait for the test to let them go (`holdRail`, `releaseRail`).
@@ -994,6 +998,18 @@ export function createFixtureBridge(
     now,
   );
   const guides = guidesCommands(options.guides ?? null, () => gatewayStamp(state.connection));
+  const skills = skillsCommands(
+    now,
+    options.skills ?? NO_SKILLS_PARAMS,
+    () => gatewayStamp(state.connection),
+    (id) => {
+      const entry = files.get(id);
+      if (!entry?.bytes) return null;
+      files.delete(id);
+      return entry.bytes;
+    },
+    () => state.connection.canWrite,
+  );
   const routineCommand = routineCommands(now, routineParams);
   let latestAccessRequest = 0;
   async function apply(command: BridgeCommand, view = PAGE_VIEW): Promise<unknown> {
@@ -1018,6 +1034,14 @@ export function createFixtureBridge(
     if (command.type === "readBotGuides") {
       sent.push(command);
       return guides();
+    }
+    if (
+      command.type === "listSkillLibrary" ||
+      command.type === "importLibrarySkill" ||
+      command.type === "activateSkillLibrary"
+    ) {
+      sent.push(command);
+      return skills(command);
     }
     // A skill note's undo (F-560): the gateway's answer, for a connection with admin access.
     if (command.type === "undoSkillChange") {
@@ -1636,7 +1660,7 @@ export function createFixtureBridge(
         mimeType: file.type,
         sizeBytes: file.data.byteLength,
       };
-      files.set(info.id, info);
+      files.set(info.id, { ...info, bytes: new Uint8Array(file.data.slice(0)) });
       return info;
     },
     setState: (change) => set(change(state)),

@@ -6,6 +6,7 @@ export * from "./mapping.ts";
 export * from "./origins.ts";
 export * from "./update-notice.ts";
 export * from "./skill-notes.ts";
+export * from "./skills-library.ts";
 export * from "./avatar.ts";
 export * from "./gateway-update.ts";
 export * from "./openclaw-update.ts";

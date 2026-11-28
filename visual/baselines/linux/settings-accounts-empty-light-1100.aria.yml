@@ -9,6 +9,7 @@
     - button "Usage"
     - button "Machines"
     - button "Check-ins"
+    - button "Skills"
     - button "Updates"
     - button "Advanced"
   - region "Accounts":

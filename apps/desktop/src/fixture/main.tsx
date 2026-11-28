@@ -42,6 +42,7 @@ import { fixtureUpdates } from "./updates.ts";
 import { machineParams } from "./machines.ts";
 import { botDeleteParams } from "./bot-delete.ts";
 import { searchParams } from "./search.ts";
+import { skillsParams } from "./skills.ts";
 
 const params = new URLSearchParams(location.search);
 
@@ -120,6 +121,7 @@ const bridge = createFixtureBridge(isScene(sceneName) ? sceneName : "main", {
   search: searchParams(params),
   voice: voiceParams(params),
   guides: guidesParam(params),
+  skills: skillsParams(params),
   fullPairing: params.get("full") === "1",
   device: params.get("device"),
   deviceRead: params.get("deviceread"),

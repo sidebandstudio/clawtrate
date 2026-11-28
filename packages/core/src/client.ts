@@ -207,6 +207,15 @@ import {
 import { holdsUpdateNotice, mainToReadAgain } from "./update-notice.ts";
 import { SKILL_REVIEW_RUN_PREFIX } from "./skill-notes.ts";
 import {
+  activateSkillLibrary,
+  listSkillLibrary,
+  parseSkillMarkdown,
+  saveLibrarySkill,
+  type SkillLibraryActivateResult,
+  type SkillLibraryList,
+  type SkillLibrarySaveResult,
+} from "./skills-library.ts";
+import {
   MAX_SEARCHES_IN_FLIGHT,
   searchFiles,
   searchMessages,
@@ -8343,6 +8352,95 @@ export class ClawtrateClient {
       runId: `${SKILL_REVIEW_RUN_PREFIX}${reviewId}`,
     });
     return { undone: asRecord(answer)?.status === "undone" };
+  }
+
+  /**
+   * The gateway's skill library (`skills.library.list`, `operator.read`), stamped with the
+   * connected gateway's identity so an import preview stays bound to it.
+   */
+  async listSkillLibrary(): Promise<SkillLibraryList> {
+    const protocol = this.protocol;
+    const epoch = this.epoch;
+    const target = this.target;
+    const alive = () =>
+      protocol !== null &&
+      this.protocol === protocol &&
+      this.epoch === epoch &&
+      this.target === target &&
+      this.state.connection.status === "connected";
+    const gatewayId = await this.readGatewayIdentity();
+    this.confirmGatewayIdentity(gatewayId, alive);
+    const request = (method: string, params: unknown) =>
+      alive() ? protocol!.request(method, params) : Promise.reject(new Error(CONNECTION_CHANGED));
+    return listSkillLibrary(request, { gatewayId: alive() ? gatewayId : null, target });
+  }
+
+  /**
+   * Import a local SKILL.md into the gateway's personal skill library (`skills.library.save`,
+   * `operator.write`). Validates size, encoding and front matter at the trust boundary, checks the
+   * gateway identity before sending, and never overwrites an existing skill.
+   */
+  async importLibrarySkill(
+    slug: string,
+    bytes: Uint8Array,
+    stamp: GatewayStamp,
+    owner: object | null = null,
+  ): Promise<SkillLibrarySaveResult> {
+    if (this.options.readOnly || !this.state.connection.canWrite)
+      throw new Error("Importing a skill needs write access to the gateway.");
+    const parsed = parseSkillMarkdown(bytes);
+    if (!parsed.ok) throw new Error(parsed.error);
+    const protocol = this.protocol;
+    const epoch = this.epoch;
+    const alive = () =>
+      protocol !== null &&
+      this.protocol === protocol &&
+      this.epoch === epoch &&
+      this.target === stamp.target &&
+      this.state.connection.status === "connected";
+    await this.requireSameGateway(stamp);
+    if (!alive()) throw new Error(CONNECTION_CHANGED);
+    this.checkNotWithdrawn(owner);
+    return saveLibrarySkill(
+      (method, params) =>
+        alive() ? protocol!.request(method, params) : Promise.reject(new Error(CONNECTION_CHANGED)),
+      { slug, content: parsed.content, stamp },
+    );
+  }
+
+  /**
+   * Refresh, attach or detach library skills for an existing task (`skills.library.activate`,
+   * `operator.write`).
+   */
+  async activateSkillLibrary(
+    sessionKey: string,
+    action: "attach" | "detach" | "refresh",
+    stamp: GatewayStamp,
+    options: { skillId?: string; revision?: string; owner?: object | null } = {},
+  ): Promise<SkillLibraryActivateResult> {
+    if (this.options.readOnly || !this.state.connection.canWrite)
+      throw new Error("Updating a task's skills needs write access to the gateway.");
+    const protocol = this.protocol;
+    const epoch = this.epoch;
+    const alive = () =>
+      protocol !== null &&
+      this.protocol === protocol &&
+      this.epoch === epoch &&
+      this.target === stamp.target &&
+      this.state.connection.status === "connected";
+    await this.requireSameGateway(stamp);
+    if (!alive()) throw new Error(CONNECTION_CHANGED);
+    this.checkNotWithdrawn(options.owner ?? null);
+    return activateSkillLibrary(
+      (method, params) =>
+        alive() ? protocol!.request(method, params) : Promise.reject(new Error(CONNECTION_CHANGED)),
+      {
+        sessionKey,
+        action,
+        ...(options.skillId ? { skillId: options.skillId } : {}),
+        ...(options.revision ? { revision: options.revision } : {}),
+      },
+    );
   }
 
   /** A task's files and the folder it works in, read now (`sessions.files.list`, `sessions.describe`). */
