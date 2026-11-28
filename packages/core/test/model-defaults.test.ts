@@ -291,6 +291,41 @@ describe("Settings › Models: the defaults every bot uses", () => {
     expect(accounts().defaults?.primary).toBe("acme/dev-1");
   });
 
+  it("a subscriber that stops the client when the read-back lands sees the whole change, and nothing follows", async () => {
+    const { client, stamp, accounts } = await models();
+    let atStop: unknown;
+    let stopped = false;
+    const unsubscribe = client.store.subscribe((state) => {
+      if (stopped || state.accounts.defaults?.primary !== "acme/dev-2") return;
+      // A new target without a reset of the accounts: the change is no longer this screen's.
+      stopped = true;
+      atStop = state.accounts.defaultsChange;
+      client.stop();
+    });
+    await client.setModelDefaults({ primary: "acme/dev-2" }, false, stamp);
+    unsubscribe();
+    expect(stopped).toBe(true);
+    // The defaults and the change record land in one update; after the stop, nothing more.
+    expect(atStop).toMatchObject({ status: "saved", after: { primary: "acme/dev-2" } });
+    expect(accounts().defaultsChange).toBe(atStop);
+  });
+
+  it("a change whose client stopped while it was saving publishes nothing more", async () => {
+    const { client, stamp, accounts } = await models();
+    let atStop: unknown;
+    let stopped = false;
+    const unsubscribe = client.store.subscribe((state) => {
+      if (stopped || state.accounts.defaultsChange?.status !== "saving") return;
+      stopped = true;
+      atStop = state.accounts.defaultsChange;
+      client.stop();
+    });
+    await client.setModelDefaults({ primary: "acme/dev-2" }, false, stamp).catch(() => {});
+    unsubscribe();
+    expect(stopped).toBe(true);
+    expect(accounts().defaultsChange).toBe(atStop);
+  });
+
   it("refuses an account one bot keeps as every bot's model or backup, before anything is sent", async () => {
     const { client, fake, stamp } = await models();
     const engine = (

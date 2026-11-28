@@ -2834,10 +2834,14 @@ export class AccountsEngine {
   ): Promise<void> {
     const fields = Object.keys(after) as Array<keyof DefaultsValues>;
     const gatewayId = this.ctx.gatewayNow();
-    // The change belongs to the gateway it was asked of: once another is here, it publishes nothing.
+    // The change belongs to the gateway and the target it was asked of: once another is here, or
+    // the client stopped (a new target without a reset), it publishes nothing.
     const resets = this.resets;
+    const target = this.ctx.target();
     const live = () =>
-      this.resets === resets && (gatewayId === null || this.ctx.gatewayNow() === gatewayId);
+      this.resets === resets &&
+      this.ctx.target() === target &&
+      (gatewayId === null || this.ctx.gatewayNow() === gatewayId);
     const publish = (change: DefaultsChange) => {
       if (live()) this.setDefaultsChange(change);
     };
@@ -2969,12 +2973,16 @@ export class AccountsEngine {
             found,
             Object.keys(change.after) as Array<keyof DefaultsValues>,
           );
-          ctx.update((a) => ({ ...a, defaults: found, defaultModel: found.primary }));
-          this.setDefaultsChange(
-            sameDefaults(change.after, now)
-              ? { ...change, status: "saved", at: ctx.now() }
-              : { ...change, status: "changedSince", current: now, at: ctx.now() },
-          );
+          // One update: a subscriber told of it may stop the client, and nothing follows it.
+          const at = ctx.now();
+          ctx.update((a) => ({
+            ...a,
+            defaults: found,
+            defaultModel: found.primary,
+            defaultsChange: sameDefaults(change.after, now)
+              ? { ...change, status: "saved", at }
+              : { ...change, status: "changedSince", current: now, at },
+          }));
           return;
         }
       }
