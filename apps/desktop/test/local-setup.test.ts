@@ -38,11 +38,12 @@ import {
 } from "../../../packages/core/test/fake-gateway.ts";
 import { leaveLook, thisComputer } from "../../../packages/ui/src/this-computer.ts";
 import { localGatewayBuild } from "../packaging/config.ts";
+import type { Installer } from "../src/setup/install.ts";
 import { SetupController } from "../src/setup/controller.ts";
 import { localPortAllowed, provedRouteFor, type LocalConnect } from "../src/setup/local-connect.ts";
 import { OPENCLAW_PINS } from "../src/setup/openclaw-pins.ts";
 import { HeldToken } from "../src/setup/settings-reader.ts";
-import { SetupRefusedError } from "../src/setup/world.ts";
+import { productionWorld, SetupRefusedError } from "../src/setup/world.ts";
 import {
   FOLDER,
   freePort,
@@ -241,7 +242,10 @@ function silentGateway(): FakeGateway {
  * box) or without, whose saved route reopens only through local connect, and setup with local
  * connect on. Its own socket factory refuses: every socket is local connect's.
  */
-function localApp(local: LocalConnect, options: { secure?: boolean; dataDir?: string } = {}) {
+function localApp(
+  local: LocalConnect,
+  options: { secure?: boolean; dataDir?: string; installer?: () => Installer } = {},
+) {
   const dataDir = options.dataDir ?? mkdtempSync(join(scratch, "app-"));
   const host = createNodeHost({
     dataDir,
@@ -285,7 +289,20 @@ function localApp(local: LocalConnect, options: { secure?: boolean; dataDir?: st
   const dialog = vi.fn(async () => true);
   const setup = new SetupController({
     client,
-    open: async () => new SetupRefusedError("missing"),
+    open: async () =>
+      options.installer
+        ? {
+            world: {
+              ...productionWorld({ home: local.home, appData: dataDir, platform }),
+              candidates: [],
+            },
+            run: async () => {
+              throw new Error("Setup cannot run a discovered program.");
+            },
+            identify: () => ({ state: "exited", how: "absent" }),
+          }
+        : new SetupRefusedError("missing"),
+    ...(options.installer ? { installer: options.installer } : {}),
     stopPrograms: () => {},
     confirm: dialog,
     log: (line) => lines.push(line),
@@ -392,6 +409,46 @@ describe.skipIf(!mac)(
         expect([...inside.writes.retiredShared.values()]).not.toContain("token-at-connect");
       } finally {
         drops.mockRestore();
+        client.stop();
+        await server.close();
+      }
+    });
+
+    it("F-505: install pairs with all six scopes and no second confirmation", async () => {
+      const home = newHome();
+      const gateway = silentGateway();
+      const server = await bridged(gateway);
+      const local: LocalConnect = {
+        home,
+        helper: standInHelper(home),
+        platform,
+        sandboxed: true,
+        deadlineMs: SLOW,
+      };
+      const folder = ".openclaw-clawtrate";
+      const installer = () =>
+        ({
+          leftoverProgram: async () => null,
+          run: async () => {
+            settingsFile(home, folder, tokenSettings(server.port, "new-gateway-token"));
+            proofFile(home, folder, provedAnswer(home, folder, server.port, "2026.11.10"));
+            return { ok: true, port: server.port, env: {}, program: join(home, "stand-in") };
+          },
+        }) as unknown as Installer;
+      const { client, setup, dialog } = localApp(local, { installer });
+      try {
+        await client.start({ resume: false });
+        await setup.lookAtStart();
+        expect(setup.current.look?.outcome).toBe("not-found");
+        await setup.install();
+        await until(() => setup.current.phase === "done", 60_000);
+        expect(dialog).toHaveBeenCalledTimes(1);
+        expect(gateway.connects).toHaveLength(1);
+        expect(gateway.connects[0]).toMatchObject({ auth: { token: "new-gateway-token" } });
+        const { scopes } = gateway.connects[0] as { scopes: string[] };
+        expect([...scopes].sort()).toEqual([...FULL_SCOPES].sort());
+        expect(client.state.connection).toMatchObject({ status: "connected", fullPairing: true });
+      } finally {
         client.stop();
         await server.close();
       }
