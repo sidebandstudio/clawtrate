@@ -1181,7 +1181,7 @@ The pill from `visual-language.md`, with what a run adds. Send stays; Stop appea
 
 **The menu.** During a run it opens from the mode word. With no run it opens from Send: by right-click, by touch and hold, and from the keyboard with Shift+F10 or the Menu key while Send has focus. Items: "Steer this turn ↵" (or "Hold until you answer ↵"), "Queue after this turn ⌥↵", "Start as new task ⇧⌘↵"; with no run, "Send ↵" and "Start as new task ⇧⌘↵". It is a `menu`; the current mode is a checked `menuitemradio`. It opens with focus on the checked item, Up and Down move, Enter chooses, and Escape closes it and returns focus to what opened it. (F-061, F-096)
 
-**Keys.** Enter sends as the mode word says. Shift+Enter adds a line. ⌥Enter queues. ⇧⌘Enter starts a new task. ⌘. stops. ⌘J goes to what needs you. ⌘I focuses the composer. ⌘Enter sends from anywhere in the window except inside a pending card, where it answers the card (section 12). (F-072)
+**Keys.** Enter sends as the mode word says. Shift+Enter adds a line. ⌥Enter queues. ⇧⌘Enter starts a new task. ⌘. stops. ⌘J goes to what needs you. ⌘I focuses the composer. Up in an empty composer brings back the person's latest message in the task, to edit and send again (after a Stop, say); in a draft it moves the caret, and in an open menu it moves through the rows. ⌘Enter sends from anywhere in the window except inside a pending card, where it answers the card (section 12). (F-072)
 
 **The shelf** is a stack of rows above the pill, each 40 px on `--bg-bubble`, newest at the bottom. A row rises 4 px over 200 ms.
 

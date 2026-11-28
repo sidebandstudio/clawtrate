@@ -704,4 +704,96 @@ describe("the one-time offer of full control (F-500)", () => {
     expect(client.state.connection.upgrade.error).toContain("couldn't confirm which gateway");
     client.stop();
   });
+
+  /** The connection drops as the accept's request arrives, before anything answers it. */
+  const dropOnRequest = (gateway: FakeGateway, then: () => void = () => {}) => {
+    const upgrade = gateway.handlers["device.scopes.requestUpgrade"]!;
+    gateway.handlers["device.scopes.requestUpgrade"] = () => {
+      gateway.handlers["device.scopes.requestUpgrade"] = upgrade;
+      then();
+      gateway.dropAll();
+      return new Promise(() => {});
+    };
+  };
+
+  it("F-549: an accept whose request a reconnect drops is asked of no other gateway that answers at the same address, and can be made again there (#902)", async () => {
+    const storage = pairedAt();
+    const { gateway } = gatewayFor();
+    const client = await connected(clientOn(gateway, storage));
+    dropOnRequest(gateway, () => {
+      gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway-b" });
+    });
+    await accept(client);
+    await until(() => client.state.connection.gatewayId === "gateway-b", 6_000);
+    await sleep(50);
+    expect(gateway.calls("device.scopes.requestUpgrade")).toHaveLength(1);
+    expect(client.state.connection.upgrade.status).toBe("error");
+    expect(client.state.connection.upgrade.error).toContain(
+      "This change was made for another gateway, so nothing was sent.",
+    );
+    await accept(client);
+    await until(() => gateway.calls("device.scopes.requestUpgrade").length === 2);
+    client.stop();
+  });
+
+  it("F-549: an accept is asked of no other gateway when the task change that waited beside it is withdrawn during the reconnect's identity read (#902)", async () => {
+    const storage = pairedAt();
+    const { gateway } = gatewayFor();
+    const client = await connected(clientOn(gateway, storage));
+    const stamp = gatewayStamp(client.state.connection);
+    await accept(client);
+    await until(() => gateway.calls("device.scopes.requestUpgrade").length === 1);
+    gateway.refuseConnections = true;
+    gateway.dropAll();
+    await until(() => client.state.connection.status !== "connected");
+    const viewer = {};
+    const renaming = client
+      .renameTask("agent:main:main", "Weekly", { owner: viewer, stamp })
+      .catch((error: Error) => error.message);
+    await until(() => client.pendingAccessWaiters === 1);
+    const naming = deferred<{ deviceId: string }>();
+    gateway.handlers["gateway.identity.get"] = () => naming.promise;
+    const asked = gateway.calls("gateway.identity.get").length;
+    gateway.refuseConnections = false;
+    await until(
+      () =>
+        client.state.connection.status === "connected" &&
+        gateway.calls("gateway.identity.get").length > asked,
+      6_000,
+    );
+    client.withdraw(viewer);
+    expect(await renaming).toBe("The request was withdrawn.");
+    naming.resolve({ deviceId: "gateway-b" });
+    await until(() => client.state.connection.gatewayId === "gateway-b");
+    await sleep(50);
+    expect(gateway.calls("device.scopes.requestUpgrade")).toHaveLength(1);
+    expect(client.state.connection.upgrade.error).toContain(
+      "This change was made for another gateway, so nothing was sent.",
+    );
+    client.stop();
+  });
+
+  it("F-549: an accept whose request a reconnect drops is asked again of the same gateway once it names itself (#902)", async () => {
+    const storage = pairedAt();
+    const { gateway } = gatewayFor();
+    const client = await connected(clientOn(gateway, storage));
+    const naming = deferred<{ deviceId: string }>();
+    dropOnRequest(gateway, () => {
+      gateway.handlers["gateway.identity.get"] = () => naming.promise;
+    });
+    const asked = gateway.calls("gateway.identity.get").length;
+    await accept(client);
+    await until(
+      () =>
+        client.state.connection.status === "connected" &&
+        gateway.calls("gateway.identity.get").length > asked,
+      6_000,
+    );
+    await sleep(50);
+    expect(gateway.calls("device.scopes.requestUpgrade")).toHaveLength(1);
+    naming.resolve({ deviceId: "gateway-a" });
+    await until(() => gateway.calls("device.scopes.requestUpgrade").length === 2);
+    expect(gateway.calls("device.scopes.requestUpgrade")[1]).toEqual({ scopes: [...FULL_SCOPES] });
+    client.stop();
+  });
 });

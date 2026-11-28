@@ -117,6 +117,19 @@ test.describe("the explanation behind an i", () => {
     await expect(card(settings, "turn-limit-note")).toBeHidden();
   });
 
+  test("a card opened by hover stays open while the pointer is on it", async ({ page }) => {
+    const settings = await section(page, "Conversation");
+    await info(settings, "Turn time limit").hover();
+    const note = card(settings, "turn-limit-note");
+    await expect(note).toBeVisible();
+    await note.hover();
+    // Past the 150 ms the card waits after the pointer leaves the "i" (InfoTip.tsx, LEAVE_MS).
+    await page.waitForTimeout(400);
+    await expect(note).toBeVisible();
+    await page.mouse.move(5, 5);
+    await expect(note).toBeHidden();
+  });
+
   test("keyboard focus opens it; Escape puts it away and Settings stays; focus leaving puts it away", async ({
     page,
   }) => {

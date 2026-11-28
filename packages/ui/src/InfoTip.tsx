@@ -1,9 +1,9 @@
 // A setting's explanation behind a small "i" beside its name (#798). `InfoTip` is the "i";
 // `InfoCard` is the explanation, placed in the layout's flow right after the setting's row, so
 // an open card pushes what follows down and covers nothing: not its own control, not another, not
-// a warning that stays in view. The card shows on hover, on keyboard focus and on tap; Escape
-// (wherever focus is), a second press, a press elsewhere and focus leaving put it away; one card
-// is open at a time. The text is always in the page, hidden while closed, so the control keeps
+// a warning that stays in view. The card shows on hover (of the "i", or of the open card), on
+// keyboard focus and on tap; Escape (wherever focus is), a second press, a press elsewhere and
+// focus leaving put it away; one card is open at a time. The text is always in the page, hidden while closed, so the control keeps
 // `aria-describedby` to it and a screen reader reads it whether or not the "i" was opened.
 
 import {
@@ -31,6 +31,9 @@ const subscribe = (listener: () => void) => {
   listeners.add(listener);
   return () => listeners.delete(listener);
 };
+// Each "i"'s hover handlers, by its card's id: the pointer over an open card holds it the way the
+// pointer over its "i" does, so the card can be read with the pointer on it (WCAG 1.4.13).
+const hovers = new Map<string, Record<"enter" | "exit", (event: ReactPointerEvent) => void>>();
 const useOpenId = () =>
   useSyncExternalStore(
     subscribe,
@@ -112,6 +115,12 @@ export function InfoTip({
     if (leave.current) clearTimeout(leave.current);
     leave.current = setTimeout(() => setHovered(false), LEAVE_MS);
   };
+  useEffect(() => {
+    hovers.set(id, { enter, exit });
+    return () => {
+      hovers.delete(id);
+    };
+  });
 
   return (
     <button
@@ -154,7 +163,14 @@ export function InfoTip({
 export function InfoCard({ id, children }: { id: string; children: ReactNode }) {
   const open = useOpenId() === id;
   return (
-    <p className="info-tip-card" id={id} role="note" hidden={!open}>
+    <p
+      className="info-tip-card"
+      id={id}
+      role="note"
+      hidden={!open}
+      onPointerEnter={(event) => hovers.get(id)?.enter(event)}
+      onPointerLeave={(event) => hovers.get(id)?.exit(event)}
+    >
       {children}
     </p>
   );
