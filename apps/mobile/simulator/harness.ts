@@ -420,9 +420,20 @@ function simctl(...args: string[]) {
   return simctlOutput(args, xcrunSimctl(args));
 }
 
-/** CoreSimulator's reply when it did not answer in time: ETIMEDOUT, code 60. */
-const SIMCTL_TIMED_OUT = /domain=NSPOSIXErrorDomain, code=60\b|Operation timed out/;
 const SIMCTL_READ_ATTEMPTS = 3;
+
+/**
+ * Whether simctl's diagnostic on stderr says CoreSimulator did not answer in
+ * time: ETIMEDOUT, `(domain=NSPOSIXErrorDomain, code=60)`. Every domain and
+ * code it names must be that one, so another error that mentions a timeout is
+ * not asked again. Only a diagnostic that names no domain or code at all falls
+ * back to the words "Operation timed out".
+ */
+function simctlTimedOut(stderr: string): boolean {
+  const rest = stderr.replace(/domain=NSPOSIXErrorDomain, code=60\b/g, "");
+  if (/\b(?:domain|code)=/.test(rest)) return false;
+  return rest !== stderr || rest.includes("Operation timed out");
+}
 
 /**
  * A simctl command that only reads, such as `pbpaste`. On a loaded machine
@@ -439,11 +450,7 @@ export function simctlRead(
 ): string {
   for (let attempt = 1; ; attempt += 1) {
     const result = run(args);
-    if (
-      result.status === 0 ||
-      attempt === SIMCTL_READ_ATTEMPTS ||
-      !SIMCTL_TIMED_OUT.test(`${result.stdout}${result.stderr}`)
-    )
+    if (result.status === 0 || attempt === SIMCTL_READ_ATTEMPTS || !simctlTimedOut(result.stderr))
       return simctlOutput(args, result);
     pause(1_000);
   }

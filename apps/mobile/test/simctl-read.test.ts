@@ -37,8 +37,11 @@ function pbpaste(...results: SimctlResult[]) {
 describe("simctlRead", () => {
   it.each([
     ["the timeout simctl printed on CI", TIMED_OUT],
-    ["only its error code", "An error was encountered (domain=NSPOSIXErrorDomain, code=60):\n"],
-    ["only its words", "Operation timed out\n"],
+    [
+      "NSPOSIXErrorDomain code 60 with no words",
+      "An error was encountered (domain=NSPOSIXErrorDomain, code=60):\n",
+    ],
+    ["the words alone, when simctl names no domain or code", "Operation timed out\n"],
   ])("asks again after %s, a second later, and returns the answer", (_, stderr) => {
     const simctl = pbpaste(failure(stderr), answer("https://example.com/report"));
     expect(simctl.read()).toBe("https://example.com/report");
@@ -61,6 +64,39 @@ describe("simctlRead", () => {
   it("fails at once on any other error, with no second attempt", () => {
     const simctl = pbpaste(failure("No devices are booted.\n"), answer("never read"));
     expect(simctl.read).toThrow(new Error("simctl pbpaste booted: No devices are booted.\n"));
+    expect(simctl.runs).toHaveLength(1);
+    expect(simctl.pauses).toEqual([]);
+  });
+
+  it("fails at once when the timeout's words are only in the partial output, beside another error", () => {
+    const simctl = pbpaste(
+      { status: 1, stdout: "Operation timed out\n", stderr: "No devices are booted.\n" },
+      answer("never read"),
+    );
+    expect(simctl.read).toThrow(new Error("simctl pbpaste booted: No devices are booted.\n"));
+    expect(simctl.runs).toHaveLength(1);
+    expect(simctl.pauses).toEqual([]);
+  });
+
+  it.each([
+    [
+      "another code",
+      "An error was encountered processing the command (domain=NSPOSIXErrorDomain, code=61):\n" +
+        "Operation timed out\n",
+    ],
+    [
+      "another domain",
+      "An error was encountered processing the command (domain=com.apple.CoreSimulator.SimError, code=60):\n" +
+        "Operation timed out\n",
+    ],
+    [
+      "an underlying error of another kind",
+      `${TIMED_OUT}Underlying error (domain=com.apple.CoreSimulator.SimError, code=405):\n` +
+        "Unable to lookup in current state: Shutdown\n",
+    ],
+  ])("fails at once when the timeout's words come with %s", (_, stderr) => {
+    const simctl = pbpaste(failure(stderr), answer("never read"));
+    expect(simctl.read).toThrow(new Error(`simctl pbpaste booted: ${stderr}`));
     expect(simctl.runs).toHaveLength(1);
     expect(simctl.pauses).toEqual([]);
   });
