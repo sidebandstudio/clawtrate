@@ -290,6 +290,7 @@ import {
   questionPending,
   startQueuedRun,
   updateMessage,
+  unfollowed,
   type CaughtUp,
   type EngineContext,
   type OutgoingMessage,
@@ -6178,10 +6179,13 @@ export class ClawtrateClient {
     if (next.runs.length > FOREIGN_RUNS_PER_SESSION) {
       next = { ...next, runs: next.runs.slice(-FOREIGN_RUNS_PER_SESSION) };
     }
-    // Steps of foreign runs are not shown; keep only the run states, within the run bound.
+    // Steps of foreign runs are not shown; keep only the run states, within the run bound. Nor is
+    // a run followed while its task is not open (`Run.followed`).
     next = {
       ...next,
-      runs: next.runs.map((run) => enforce(RUN, run.steps.length ? { ...run, steps: [] } : run)),
+      runs: next.runs.map((run) =>
+        enforce(RUN, unfollowed(run.steps.length ? { ...run, steps: [] } : run)),
+      ),
     };
     // The id pairs the session's turns were named by, newest kept, as a task's own are.
     const aliasKeys = Object.keys(next.queueAliases);
@@ -10395,6 +10399,13 @@ export class ClawtrateClient {
     this.settleAccessWaiters();
     this.checkCreations();
     this.checkUnknownDecisions();
+    // A new connection: a run's stream followed on the last one may have lost frames since.
+    for (const [key, transcript] of Object.entries(this.state.transcripts))
+      if (transcript.runs.some((run) => run.followed || run.textAfter))
+        this.updateActivity(key, (activity) => ({
+          ...activity,
+          runs: activity.runs.map(unfollowed),
+        }));
     // Whether the computer plugin is loaded comes from the hello's methods; panes that lost a
     // connection while control was held read the browser's leases again before offering anything.
     this.computer.reconnected();

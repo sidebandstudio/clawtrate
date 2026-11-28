@@ -57,6 +57,8 @@ export function Button({
   disabled = false,
   busy = false,
   large = false,
+  spoken = label,
+  hint,
   testID,
   style,
 }: {
@@ -67,6 +69,9 @@ export function Button({
   /** Working on it: the label says so, and assistive technology hears it is busy. */
   busy?: boolean;
   large?: boolean;
+  /** The accessible name, when the label alone doesn't say what it acts on. */
+  spoken?: string;
+  hint?: string;
   testID?: string;
   style?: StyleProp<ViewStyle>;
 }) {
@@ -88,7 +93,8 @@ export function Button({
   return (
     <Pressable
       accessibilityRole="button"
-      accessibilityLabel={label}
+      accessibilityLabel={spoken}
+      accessibilityHint={hint}
       accessibilityState={{ disabled, busy }}
       disabled={disabled}
       testID={testID}
