@@ -15,7 +15,7 @@ import {
   writeFileSync,
   type Dirent,
 } from "node:fs";
-import { request as httpRequest } from "node:http";
+import { request as httpRequest, type ServerResponse } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
 import { createServer, Socket, type Server } from "node:net";
 import { networkInterfaces, tmpdir } from "node:os";
@@ -841,7 +841,60 @@ export type FrontRequest = {
   /** How many Authorization fields it carried, before Node keeps only the first. */
   authorizations: number;
   cookie: string | undefined;
+  /** When it came, in milliseconds since the front opened. */
+  at: number;
+  /** The status the front answered with, once it answered. */
+  status?: number;
+  /** Milliseconds from its arrival until its answer was sent whole or its connection closed. */
+  ms?: number;
+  /** Whether its answer was sent whole, or its connection closed before that. */
+  ended?: "sent" | "closed";
 };
+
+/**
+ * Keep in `request` the status `res` answered with, and when and how the answer ended: sent
+ * whole, or cut off by a closed connection, including one closed before any answer.
+ */
+export function trackAnswer(request: FrontRequest, res: ServerResponse, opened: number): void {
+  res.once("finish", () => {
+    request.status = res.statusCode;
+    request.ended = "sent";
+    request.ms = Date.now() - opened - request.at;
+  });
+  res.once("close", () => {
+    if (request.ended) return;
+    if (res.headersSent) request.status = res.statusCode;
+    request.ended = "closed";
+    request.ms = Date.now() - opened - request.at;
+  });
+}
+
+/**
+ * The front's requests, one line each, for a failure's message: when each came, its method and
+ * path, which read it was (a picture's ticket or its bytes, by the picture's name), and its
+ * answer's status and time. A query's values are never printed: they hold the ticket.
+ */
+export function describeFrontRequests(requests: readonly FrontRequest[]): string {
+  if (requests.length === 0) return "(no requests)";
+  return requests
+    .map((request) => {
+      const url = new URL(request.url, "https://front");
+      const source = url.searchParams.get("source");
+      const name = source?.match(/^media:\/\/inbound\/([A-Za-z0-9_-]+?)---/)?.[1] ?? null;
+      const read =
+        source === null
+          ? ""
+          : ` (${url.searchParams.get("meta") === "1" ? "ticket" : "bytes"} for ${name ?? "a picture"})`;
+      const answer =
+        request.ended === "sent"
+          ? `${request.status} in ${request.ms} ms`
+          : request.ended === "closed"
+            ? `${request.status === undefined ? "no answer" : `${request.status}, cut off`}: closed after ${request.ms} ms`
+            : "no answer yet";
+      return `+${(request.at / 1000).toFixed(1)} s ${request.method} ${url.pathname}${read} -> ${answer}`;
+    })
+    .join("\n");
+}
 
 /** This Mac's own address on its network, never loopback: en0's, or the first there is. */
 function ownAddress(): string {
@@ -924,10 +977,11 @@ export async function protectedFront(
 
   const requests: FrontRequest[] = [];
   const sockets = new Set<Socket>();
+  const opened = Date.now();
   const server = createHttpsServer(
     { key: readFileSync(file("key.pem")), cert: readFileSync(file("cert.pem")) },
     (req, res) => {
-      requests.push({
+      const request: FrontRequest = {
         method: req.method ?? "",
         url: req.url ?? "",
         authorization: req.headers.authorization,
@@ -935,7 +989,10 @@ export async function protectedFront(
           (field, i) => i % 2 === 0 && field.toLowerCase() === "authorization",
         ).length,
         cookie: req.headers.cookie,
-      });
+        at: Date.now() - opened,
+      };
+      requests.push(request);
+      trackAnswer(request, res, opened);
       const own = answer(new URL(req.url ?? "/", `https://${address}`));
       if (own) return void res.writeHead(own.status, own.headers).end();
       const upstream = httpRequest(
