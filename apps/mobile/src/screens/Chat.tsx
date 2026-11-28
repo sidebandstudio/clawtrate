@@ -32,6 +32,7 @@ import {
 import { Pressable, ScrollView, View, type LayoutChangeEvent } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { BotFiles } from "../components/BotFiles.tsx";
+import { GatewayEvent } from "../components/GatewayEvent.tsx";
 import { Markdown } from "../components/Markdown.tsx";
 import { SentFiles } from "../components/SentFiles.tsx";
 import { EyeIcon } from "../components/icons.tsx";
@@ -55,6 +56,8 @@ function redactRow(row: ChatRow, redact: (text: string) => string): ChatRow {
     };
   if (row.kind === "files")
     return { ...row, files: row.files.map((file) => ({ ...file, name: redact(file.name) })) };
+  if (row.kind === "event" && row.eventText !== undefined)
+    return { ...row, text: redact(row.text), eventText: redact(row.eventText) };
   return { ...row, text: redact(row.text) };
 }
 
@@ -172,6 +175,7 @@ function RowView({
         </Txt>
       );
     case "event":
+      if (row.eventText !== undefined) return <GatewayEvent line={row.text} text={row.eventText} />;
       return (
         <Txt
           testID="event-line"
