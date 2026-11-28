@@ -14,5 +14,4 @@
   - status:
     - paragraph: OpenClaw 2026.9.37 isn't the version this Clawtrate is tested with (2026.10.6). Use Advanced to try connecting.
   - button "Use Advanced"
-  - group: How to update
   - paragraph: On this computer

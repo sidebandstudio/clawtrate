@@ -8,6 +8,7 @@ import {
   LOCAL_ROUTE_ONLY,
   PROOF_REFUSAL_LINES,
   type ClawtrateBridge,
+  type ConnectionError,
   type HostInfo,
   type SetupLook,
   type SetupState,
@@ -47,7 +48,7 @@ const look = (more: Partial<SetupLook> = {}): SetupLook => ({
   ...more,
 });
 
-function render(info: HostInfo, setup: SetupState): string {
+function render(info: HostInfo, setup: SetupState, mismatch?: ConnectionError): string {
   return renderToStaticMarkup(
     createElement(BridgeProvider, {
       bridge: { info } as ClawtrateBridge,
@@ -55,6 +56,7 @@ function render(info: HostInfo, setup: SetupState): string {
         info,
         setup,
         connection: initialState.connection,
+        ...(mismatch ? { mismatch } : {}),
         discovery: initialState.discovery,
       }),
     }),
@@ -117,10 +119,45 @@ describe("the first screen on a Mac whose OpenClaw profile the host found and ma
     expect(html).not.toContain("Where does OpenClaw run?");
   });
 
-  it("when the host matched nothing, is the first question", () => {
+  it("F-602: the startup look that finds no settings opens the same local setup card as This computer", () => {
+    for (const unasked of [true, false]) {
+      const html = render(local(), found({ outcome: "not-found", access: null }, unasked));
+      expect(html).toContain('data-testid="setup-found"');
+      expect(html).toContain(escape("Clawtrate didn't find OpenClaw here"));
+      expect(html).toContain(">It runs on another computer</button>");
+      expect(html).not.toContain("Where does OpenClaw run?");
+      if (unasked) {
+        expect(html).toContain(">Advanced</button>");
+        expect(html).not.toContain(">Back</button>");
+      }
+    }
+  });
+
+  it("F-602: a named profile discovered at startup offers Advanced without an install card", () => {
+    const html = render(
+      local(),
+      found({ outcome: "named-profile", profile: "Work_Lab", access: null }, true),
+    );
+    expect(html).toContain("OpenClaw settings found for Work_Lab");
+    expect(html).toContain(escape("Clawtrate needs this profile's gateway address to connect."));
+    expect(html).toContain(">Use Advanced</button>");
+    expect(html).not.toContain("Set up OpenClaw here");
+    expect(html).not.toContain("Clawtrate didn&#x27;t find OpenClaw here");
+  });
+
+  it("F-602: the Connect offer names its profile when two profiles exist", () => {
+    const html = render(
+      local(),
+      found({ profile: "default", others: ["profile clawtrate"] }, true),
+    );
+    expect(html).toContain("Using the default profile.");
+    expect(html).toContain(">Connect</button>");
+  });
+
+  it("F-602: where the startup look can't offer a local route, it asks where OpenClaw runs", () => {
     for (const setup of [
       found({ outcome: "unverified", access: null }, true),
-      found({ outcome: "not-found", access: null }, true),
+      found({ outcome: "cant-tell", reason: "settings-unfinished", access: null }, true),
     ]) {
       const html = render(local(), setup);
       expect(html, setup.look?.outcome ?? setup.phase).toContain("Where does OpenClaw run?");
@@ -152,11 +189,7 @@ describe("the card for this computer, after This computer", () => {
     ] as const) {
       const html = render(local(), found({ outcome: "unverified", reason, access: null }));
       expect(html, reason).toContain("OpenClaw settings found");
-      expect(html, reason).toContain(
-        escape(
-          `${PROOF_REFUSAL_LINES[reason](PORT)} Clawtrate doesn't connect to it by itself. Use Advanced, or look again.`,
-        ),
-      );
+      expect(html, reason).toContain(escape(PROOF_REFUSAL_LINES[reason](PORT)));
       expect(html).toContain("Use Advanced");
       expect(html).toContain("Look again");
       // No button that connects, whatever its words after "Connect" ("Connect read-only").
@@ -183,7 +216,9 @@ describe("the card for this computer, after This computer", () => {
       local(),
       found({ outcome: "cant-tell", reason: "settings", access: null }),
     );
-    expect(settings).toContain("Clawtrate can&#x27;t use OpenClaw&#x27;s settings on this Mac");
+    expect(settings).toContain(
+      escape("Clawtrate couldn't read usable OpenClaw settings for this Mac."),
+    );
     const stopped = render(local(), found({ outcome: "stopped", access: null }));
     expect(stopped).toContain(`No gateway answered on port ${PORT}`);
     expect(stopped).not.toContain("Installed program");
@@ -206,19 +241,93 @@ describe("the card for this computer, after This computer", () => {
       phase: "failed",
       failure: { kind: "unanswered", exitCode: null, port: PORT, reason: null },
     });
-    expect(html).toContain(
-      escape(
-        `The gateway at port ${PORT} didn't answer as OpenClaw's settings on this Mac say it would.`,
-      ),
-    );
-    expect(html).toContain(
-      escape(
-        "It may have just stopped, or be running on settings changed since it started, such as a secure address. Use Advanced, or look again.",
-      ),
-    );
+    expect(html).toContain(escape(`The gateway at port ${PORT} didn't finish connecting.`));
+    expect(html).toContain(escape("It may have stopped or started with different settings."));
     expect(html).toMatch(/>Use Advanced<\/button>/);
     expect(html).toMatch(/>Look again<\/button>/);
     expect(html).not.toContain("Nothing answered");
+  });
+
+  it("F-602: Start OpenClaw appears only when the Mac host found a service it can start", () => {
+    const stopped = found({
+      outcome: "stopped",
+      access: null,
+      canStart: true,
+      profile: "clawtrate",
+      others: ["profile default"],
+    });
+    const html = render(local(), stopped);
+    expect(html).toContain(escape("OpenClaw's gateway isn't running"));
+    expect(html).toContain(">Start OpenClaw</button>");
+    expect(html).toContain("<dt>Profile</dt><dd>clawtrate</dd>");
+    expect(html).toContain("OpenClaw will keep running after Clawtrate closes.");
+    expect(html).not.toContain("Connect</button>");
+    const unavailable = render(
+      local(),
+      found({ outcome: "stopped", access: null, canStart: false }),
+    );
+    expect(unavailable).toContain(
+      escape("Clawtrate couldn't find a service it can start for this gateway."),
+    );
+    expect(unavailable).not.toContain(">Start OpenClaw</button>");
+  });
+
+  it.each([
+    [null, "macOS couldn't start the OpenClaw service."],
+    ["no-answer", "The gateway didn't answer in time."],
+  ] as const)("F-602: a failed start says why and offers another try (%s)", (reason, line) => {
+    const html = render(local(), {
+      ...found({ outcome: "stopped", access: null, canStart: true }),
+      phase: "failed",
+      failure: { kind: "not-started", exitCode: null, port: PORT, reason },
+    });
+    expect(html).toContain(escape(line));
+    expect(html).toContain(">Try again</button>");
+    expect(html).toContain(">Look again</button>");
+  });
+
+  it("F-602: a refused token offers Advanced and Look again", () => {
+    const html = render(local(), {
+      ...found(),
+      phase: "failed",
+      failure: { kind: "token-refused", exitCode: null, port: PORT, reason: null },
+    });
+    expect(html).toContain(escape("OpenClaw refused the token from its settings."));
+    expect(html).toContain(">Use Advanced</button>");
+    expect(html).toContain(">Look again</button>");
+  });
+
+  it.each([
+    ["gateway-older", "This gateway speaks an older protocol than Clawtrate supports."],
+    ["client-older", "This gateway needs a newer version of Clawtrate."],
+  ] as const)("F-515: the setup card explains which side is older (%s)", (reason, line) => {
+    const html = render(
+      local(),
+      {
+        ...found(),
+        phase: "failed",
+        failure: { kind: "protocol", exitCode: null, port: PORT, reason },
+      },
+      {
+        code: "PROTOCOL_MISMATCH",
+        message: "The gateway refused the protocol.",
+        hint: null,
+        protocol: { gateway: reason === "gateway-older" ? 3 : 5, client: 4 },
+      },
+    );
+    expect(html).toContain(line);
+    expect(html).toContain(">Look again</button>");
+    expect(html).toContain(">Use Advanced</button>");
+  });
+
+  it("F-602: the look says when it couldn't finish reading settings", () => {
+    const html = render(
+      local(),
+      found({ outcome: "cant-tell", reason: "settings-unfinished", access: null }),
+    );
+    expect(html).toContain(escape("Clawtrate couldn't finish reading OpenClaw's settings."));
+    expect(html).toContain(">Use Advanced</button>");
+    expect(html).toContain(">Look again</button>");
   });
 
   it("without local connect, the card is as it was", () => {

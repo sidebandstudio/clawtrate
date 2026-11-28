@@ -15,8 +15,8 @@
 
 import { spawn } from "node:child_process";
 import { constants, lstatSync, realpathSync } from "node:fs";
-import { lstat, open, type FileHandle } from "node:fs/promises";
-import { isAbsolute, normalize, resolve } from "node:path";
+import { lstat, open, opendir, type FileHandle } from "node:fs/promises";
+import { isAbsolute, join, normalize, resolve } from "node:path";
 import { Worker } from "node:worker_threads";
 import {
   REFUSALS,
@@ -228,6 +228,65 @@ export async function readLocalSettings(
     if (profile === "default" || !absent) results.push({ profile, outcome });
   }
   return results;
+}
+
+/** The CLI's profile-name rule and the canonical suffix it uses for a named profile. */
+const NAMED_PROFILE_FOLDER = /^\.openclaw-([a-z0-9][a-z0-9_-]{0,63})$/i;
+const PROFILE_SCAN_LIMIT = 2_048;
+
+/** Detect other profiles by metadata only. Never read their settings or probe their ports. */
+export async function findOtherLocalProfile(
+  options: Pick<ReaderOptions, "home" | "sandboxed">,
+): Promise<{ profile: string | null; complete: boolean }> {
+  const { home, sandboxed } = options;
+  const incomplete = { profile: null, complete: false };
+  const checked = guardHome(home, sandboxed);
+  const held = await holdHome(home, checked);
+  if (!("handle" in held)) return incomplete;
+  try {
+    const homeIdentity = await held.handle.stat({ bigint: true });
+    const dir = await opendir(home);
+    try {
+      const currentHome = await lstat(home, { bigint: true });
+      if (!currentHome.isDirectory() || !sameFolder(homeIdentity, currentHome)) return incomplete;
+      for (let index = 0; index < PROFILE_SCAN_LIMIT; index += 1) {
+        const entry = await dir.read();
+        if (!entry) return { profile: null, complete: true };
+        const name = NAMED_PROFILE_FOLDER.exec(entry.name)?.[1];
+        if (
+          !name ||
+          name.toLowerCase() === "default" ||
+          name === "clawtrate" ||
+          !entry.isDirectory()
+        )
+          continue;
+
+        const path = join(home, entry.name);
+        const folder = await lstat(path);
+        if (
+          !folder.isDirectory() ||
+          folder.uid !== process.geteuid?.() ||
+          (folder.mode & 0o022) !== 0
+        )
+          continue;
+        const settings = await lstat(join(path, SETTINGS_FILE)).catch(
+          (error: NodeJS.ErrnoException) => {
+            if (error.code === "ENOENT" || error.code === "ENOTDIR") return null;
+            throw error;
+          },
+        );
+        if (settings?.isFile() && settings.uid === folder.uid)
+          return { profile: name, complete: true };
+      }
+      return incomplete;
+    } finally {
+      await dir.close();
+    }
+  } catch {
+    return incomplete;
+  } finally {
+    await held.handle.close();
+  }
 }
 
 async function readProfile(

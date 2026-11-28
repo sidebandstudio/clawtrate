@@ -28,7 +28,7 @@ A screen shows what the gateway confirmed and no more. Where the gateway lacks s
 
 ### Our own identity
 
-The name Clawtrate and the slogan "Your OpenClaw agents, orchestrated." are fixed. Saying what Clawtrate works with, including naming OpenClaw, is fine, and so is using common layout and interaction patterns. Never use OpenClaw's or any other product's logos, icons or copied assets, with one exception: each model provider's own logo on its tile in Connect an account (`docs/decisions.md`, Brand). The logo is `assets/brand/logo.png`. App icons, the favicon and the interface's accent color all come from that one file, so it can be swapped in one place.
+The name Clawtrate and the slogan "Your OpenClaw agents, orchestrated." are fixed. Saying what Clawtrate works with, including naming OpenClaw, is fine, and so is using common layout and interaction patterns. Never use OpenClaw's or any other product's logos, icons or copied assets, with two exceptions: each model provider's own logo on its tile in Connect an account, and T3 Code's own logo on its cards (`docs/decisions.md`, Brand). The logo is `assets/brand/logo.png`. App icons, the favicon and the interface's accent color all come from that one file, so it can be swapped in one place.
 
 ## What we are building
 
@@ -64,7 +64,7 @@ The name Clawtrate and the slogan "Your OpenClaw agents, orchestrated." are fixe
 - `packages/core` (`@clawtrate/core`) holds the gateway connection, device identity, state stores and the mapping from gateway events to view models. No DOM and no Node-only APIs in shared code. The host injects WebSocket, storage and signing, so the same core runs in Electron, Node and Expo. Node implementations live behind `@clawtrate/core/node`. Its [README](packages/core/README.md) is the guide for building the interface on it.
 - `packages/ui` (`@clawtrate/ui`) holds the React interface shared by the desktop app, the web preview and the fixture mode.
 - `apps/desktop` is the Electron app: the main process, the preload script, the renderer entry, the web preview host, the fixture mode and the packaging configuration. The same renderer also runs in a browser through the web preview host, for remote review and self-hosted web use.
-- The Expo iOS app will live in `apps/mobile` and consume `packages/core`. It is not on `main` yet.
+- `apps/mobile` is the Expo iOS app and consumes `packages/core`. It is in development on `main` and has no release yet.
 - `packages/relay-protocol` (`@clawtrate/relay-protocol`) holds the wire protocol for reaching a gateway through Clawtrate's relay: frames, relay messages, the connector's register proof and the Noise IK channel. Like shared core, it uses no Node or DOM APIs.
 - `plugins/` holds OpenClaw plugins that fill gateway gaps.
 - `tools/dev-gateway` starts, seeds and resets development gateways and runs the scripted model. `tools/brand` makes the icons from the logo.

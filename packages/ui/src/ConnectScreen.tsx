@@ -266,10 +266,12 @@ const LOCAL_CODES: ReadonlySet<string> = new Set([LOCAL_ROUTE_ONLY, "LOCAL_UNVER
 function ConnectForm({
   connection,
   info,
+  initialAddress,
   onThisComputer,
 }: {
   connection: ConnectionState;
   info: HostInfo;
+  initialAddress?: string | undefined;
   /**
    * Where This computer (local connect) is offered: its way in, for an address whose pairing
    * belongs to it, or whose socket its proof refused.
@@ -277,8 +279,10 @@ function ConnectForm({
   onThisComputer?: (() => void) | undefined;
 }) {
   const send = useCommand();
-  const [url, setUrl] = useState(connection.gatewayUrl ?? info.devGateway?.url ?? "");
-  const [token, setToken] = useState("");
+  const [url, setUrl] = useState(
+    initialAddress ?? connection.gatewayUrl ?? info.devGateway?.url ?? "",
+  );
+  const [token, setToken] = useState<{ address: string; value: string } | null>(null);
   const [submitError, setSubmitError] = useState<{ title: string; message: string } | null>(null);
   const formRef = useRef<HTMLFormElement>(null);
   const busy = connection.status === "connecting";
@@ -298,7 +302,11 @@ function ConnectForm({
       return;
     }
     setSubmitError(null);
-    send({ type: "connect", url: url.trim(), token: token || null }).catch((error: unknown) =>
+    send({
+      type: "connect",
+      url: url.trim(),
+      token: token?.address === url ? token.value || null : null,
+    }).catch((error: unknown) =>
       setSubmitError({
         title: "Could not connect",
         message: error instanceof Error ? error.message : String(error),
@@ -306,19 +314,21 @@ function ConnectForm({
     );
   };
 
+  const gatewayError =
+    initialAddress === undefined || url === connection.gatewayUrl ? connection.error : null;
   const error = submitError
     ? { ...submitError, hint: null, code: null }
-    : connection.error
+    : gatewayError
       ? {
-          title: failureTitle(connection.error.code),
-          message: connection.error.message,
-          hint: connection.error.hint,
-          code: connection.error.code,
+          title: failureTitle(gatewayError.code),
+          message: gatewayError.message,
+          hint: gatewayError.hint,
+          code: gatewayError.code,
         }
       : null;
   // Try again repeats what failed: the saved gateway's connection, or this form.
   const tryAgain = () => {
-    if (!submitError && connection.error && connection.gatewayUrl) void send({ type: "retry" });
+    if (!submitError && gatewayError && connection.gatewayUrl) void send({ type: "retry" });
     else formRef.current?.requestSubmit();
   };
 
@@ -334,7 +344,14 @@ function ConnectForm({
             className="input"
             name="url"
             value={url}
-            onChange={(event) => setUrl(event.target.value)}
+            onChange={(event) => {
+              const address = event.target.value;
+              if (address !== url) {
+                setUrl(address);
+                setToken(null);
+                setSubmitError(null);
+              }
+            }}
             placeholder="Gateway address"
             autoComplete="off"
             spellCheck={false}
@@ -347,8 +364,8 @@ function ConnectForm({
             className="input"
             name="token"
             type="password"
-            value={token}
-            onChange={(event) => setToken(event.target.value)}
+            value={token?.value ?? ""}
+            onChange={(event) => setToken({ address: url, value: event.target.value })}
             placeholder="Gateway token, for pairing"
             autoComplete="off"
           />
@@ -657,6 +674,7 @@ export function ConnectScreen({
   );
   // A look staged from elsewhere while this screen is open (Settings, over the address form)
   // shows here, whichever view was open; where the person goes from it is theirs.
+  const [advancedAddress, setAdvancedAddress] = useState<string>();
   const [stagedSeen, setStagedSeen] = useState(isStaged);
   if (stagedSeen !== isStaged) {
     setStagedSeen(isStaged);
@@ -670,7 +688,8 @@ export function ConnectScreen({
     void thisComputer(command, stage);
   };
   // Leaving the staged look, by Back or Advanced, returns to the saved gateway's form.
-  const onView = (next: SetupView) => {
+  const onView = (next: SetupView, address?: string) => {
+    setAdvancedAddress(next === "advanced" ? address : undefined);
     if (isStaged && (next === "first" || next === "advanced")) stage(false);
     setView(next);
   };
@@ -690,6 +709,7 @@ export function ConnectScreen({
       (setup.phase === "found" &&
         (connection.error?.code === SETUP_PAIRING_GONE ||
           connection.error?.code === SETUP_PAIRING_APPEARED)));
+  const localProtocolFailure = info.setup?.local === true && setup?.failure?.kind === "protocol";
   const noGateway = connection.status === "idle" && connection.gatewayUrl === null;
   const showSetup =
     info.setup !== undefined &&
@@ -714,7 +734,7 @@ export function ConnectScreen({
     <main className="connect" inert={inert}>
       <div className="connect-drag" />
       <div className="connect-card" ref={card}>
-        {mismatch ? (
+        {mismatch && !localProtocolFailure ? (
           <>
             <header className="connect-brand">
               <img src={logoUrl} alt={PRODUCT_NAME} width={56} height={56} />
@@ -769,8 +789,10 @@ export function ConnectScreen({
               <SetupPanel connection={connection} loadingBots={loadingBots} />
             ) : (
               <ConnectForm
+                key={advancedAddress ?? "saved"}
                 connection={connection}
                 info={info}
+                initialAddress={advancedAddress}
                 onThisComputer={info.setup?.local === true ? stageLook : undefined}
               />
             )}

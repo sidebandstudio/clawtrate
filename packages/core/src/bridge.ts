@@ -109,6 +109,7 @@ export type BridgeCommand =
   | { type: "setupLook" }
   | { type: "setupCancel" }
   | { type: "setupConnect" }
+  | { type: "setupStart" }
   | { type: "setupReset" }
   /** Set OpenClaw up on the host's computer, after the host's own dialog (`setup.ts`). */
   | { type: "setupInstall"; action?: InstallAction }
@@ -1529,6 +1530,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "setupLook":
     case "setupCancel":
     case "setupConnect":
+    case "setupStart":
     case "setupReset":
       return { type: command.type };
     case "setupInstall":
@@ -2228,6 +2230,7 @@ class ViewerSession implements BridgeSession {
       case "setupLook":
       case "setupCancel":
       case "setupConnect":
+      case "setupStart":
       case "setupReset":
       case "setupInstall": {
         const setup = policy.setup;
@@ -2235,6 +2238,7 @@ class ViewerSession implements BridgeSession {
         if (command.type === "setupLook") return setup.look();
         if (command.type === "setupConnect") return setup.connect();
         if (command.type === "setupInstall") return setup.install(command.action);
+        if (command.type === "setupStart") return setup.start();
         if (command.type === "setupCancel") return setup.cancel();
         return setup.reset();
       }

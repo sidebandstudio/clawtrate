@@ -1,0 +1,13 @@
+- status
+- main:
+  - button "Back"
+  - heading "On this computer" [level=2]
+  - heading "OpenClaw's gateway isn't running" [level=3]
+  - term: Port
+  - definition: No gateway answered on port 18789
+  - paragraph: OpenClaw will keep running after Clawtrate closes.
+  - button "Start OpenClaw"
+  - button "Look again"
+  - paragraph:
+    - button "Advanced"
+  - paragraph: On this computer
