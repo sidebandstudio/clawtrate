@@ -1707,6 +1707,26 @@ describe("F-502 F-503: the CodeRabbit round's cases", () => {
     expect(existsSync(stand.place.programDir)).toBe(true);
   });
 
+  it("F-502: a step that exits 0 while its process group lives on doesn't lead to onboarding", async () => {
+    const stand = await make();
+    const { outcome } = await runAll(
+      installer(stand, {
+        run: async (request, check) => {
+          check(request);
+          const result = await runner.run(request, check);
+          return request.args.includes("--runtime-only") ? { ...result, lingering: true } : result;
+        },
+      }),
+    );
+    expect(outcome).toMatchObject({
+      ok: false,
+      failure: { kind: "installer", step: 1, retry: false, cleanup: "unproven" },
+    });
+    expect(stand.calls().some((line) => line.includes("onboard"))).toBe(false);
+    expect(existsSync(stand.place.stateDir)).toBe(false);
+    expect(existsSync(stand.place.programDir)).toBe(true);
+  });
+
   it("F-502: a reader of the output that throws stops the step instead of leaving it unresolved", async () => {
     const stand = await make();
     const own = new InstallRunner();

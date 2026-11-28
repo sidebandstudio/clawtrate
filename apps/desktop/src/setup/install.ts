@@ -1138,8 +1138,13 @@ const failure = (
   ...extra,
 });
 
+/** Ran to its end within its limits, exited 0, and its whole process group is confirmed ended. */
 const ok = (result: InstallResult) =>
-  result.exitCode === 0 && !result.timedOut && !result.tooLarge && !result.failed;
+  result.exitCode === 0 &&
+  !result.timedOut &&
+  !result.tooLarge &&
+  !result.failed &&
+  !result.lingering;
 
 export class Installer {
   private readonly options: InstallOptions;
