@@ -91,6 +91,21 @@ describe("--install-plugin", () => {
     );
   });
 
+  it("says nothing was installed, never that it took off a plugin it never had", () => {
+    expect(describeOutcome("clawtrate-voice", "2026.10.6", { kind: "nothing-installed" })).toBe(
+      "Nothing of clawtrate-voice was installed, so there was nothing to take off.",
+    );
+    expect(
+      describeOutcome("clawtrate-voice", "2026.10.6", {
+        kind: "stopped",
+        stop: "taking-off-later",
+        mayBeRunning: true,
+      }),
+    ).toBe(
+      "clawtrate-voice will be taken off when this device is next connected with full control: nothing was sent.\nUntil then it may still be running.",
+    );
+  });
+
   it("says when the plugin may still be running", () => {
     expect(
       describeOutcome("clawtrate-voice", "2026.10.6", {
@@ -285,7 +300,10 @@ describe("--install-plugin", () => {
     const outcome = await installPlugin(session(gateway), packedOnce(), recordMap(records));
     // A lost enable with the entry still off is a stop (#832): no Turn on after it.
     expect(outcome).toMatchObject({ kind: "stopped", stop: "listed-off" });
-    expect(gateway.calls.some((c) => c.method === "plugins.setEnabled")).toBe(false);
+    // Only the disable that proves the lost enable can no longer publish; never an enable.
+    expect(
+      gateway.calls.some((c) => c.method === "plugins.setEnabled" && c.params.enabled === true),
+    ).toBe(false);
   });
 
   it("the command run again on the same instance resumes the attempt the first run left", async () => {

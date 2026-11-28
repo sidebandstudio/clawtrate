@@ -45,11 +45,6 @@ export const INSTALLED_GRANTS: Record<
   { hooks: Record<string, true> }
 > = { "clawtrate-voice": { hooks: { allowConversationAccess: true } } };
 
-/** The plugin's own read that confirms it loaded (the engine's step 8). */
-const CONFIRM: Record<string, { method: string; params: unknown }> = {
-  "clawtrate-voice": { method: "clawtrate-voice.get", params: {} },
-};
-
 /** A packing: its pin, its tarball, and the folder it was packed into, the tool's "resources". */
 export type Packed = { pin: PluginPin; archive: string; dir: string; unrecorded: boolean };
 
@@ -183,6 +178,12 @@ export function describeOutcome(
   if (outcome.kind === "enabled")
     return `Installed ${name} on OpenClaw ${version}: enabled and confirmed.`;
   if (outcome.kind === "taken-off") return `Took ${name} off: installed and off.`;
+  if (outcome.kind === "nothing-installed")
+    return `Nothing of ${name} was installed, so there was nothing to take off.`;
+  if (outcome.stop === "taking-off-later")
+    return `${name} will be taken off when this device is next connected with full control: nothing was sent.${outcome.mayBeRunning ? "\nUntil then it may still be running." : ""}`;
+  if (outcome.stop === "taken-off-elsewhere")
+    return `Didn't install ${name}: it was taken off elsewhere since this device's last step, or that step's change never applied; nothing was written.${outcome.mayBeRunning ? "\nIt may still be running: no read has shown it off since." : ""}`;
   const said = outcome.gateway ? ` (${outcome.gateway})` : "";
   const digest =
     outcome.reported && version
@@ -203,7 +204,6 @@ export async function installPlugin(
   packed: Packed,
   records: RecordStore = recordMap(new Map()),
 ): Promise<PluginOutcome> {
-  const confirm = CONFIRM[packed.pin.pluginId]!;
   const pin = {
     ...packed.pin,
     // Unrecorded on this version: measured at the enable, then turned off and said.
@@ -217,10 +217,9 @@ export async function installPlugin(
   const engine = new PluginInstaller(operatorContext(session, records, { ...packed, pin }));
   // An attempt this tool left, on an earlier run too, resumes, and its outcome is final: a
   // recovery's stop never turns into a fresh Add again or Turn on.
-  if (await records.loadRecord(packed.pin.pluginId)) return engine.resume(pin, confirm);
-  const first = await engine.install(pin, confirm);
-  if (first.kind === "stopped" && first.stop === "not-listed-off")
-    return engine.addAgain(pin, confirm);
-  if (first.kind === "stopped" && first.stop === "listed-off") return engine.turnOn(pin, confirm);
+  if (await records.loadRecord(packed.pin.pluginId)) return engine.resume(pin);
+  const first = await engine.install(pin);
+  if (first.kind === "stopped" && first.stop === "not-listed-off") return engine.addAgain(pin);
+  if (first.kind === "stopped" && first.stop === "listed-off") return engine.turnOn(pin);
   return first;
 }

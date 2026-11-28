@@ -47,7 +47,6 @@ const record: RunRecord = {
 /** This spec's own unseeded instance, which no other spec uses. */
 const INSTANCE = `e2e-${record.run}-install`;
 const ID = "clawtrate-voice";
-const CONFIRM = { method: "clawtrate-voice.get", params: {} };
 const SCOPES = ["operator.admin", "operator.read", "operator.write"];
 
 type Pin = Parameters<PluginInstaller["install"]>[0];
@@ -209,7 +208,7 @@ test("row 1: installs the app's tarball, off until the enable, with the source d
       seen.push(
         `${method} ${JSON.stringify((await state()).entry ?? null)} ${params.enabled ?? ""}`,
       );
-  }).install(pin, CONFIRM);
+  }).install(pin);
   expect(outcome).toEqual({ kind: "enabled" });
   // Before each write the entry was off, or absent before the first. A write the gateway answered
   // "already running" is sent again, so it is seen twice: repeats are folded.
@@ -236,8 +235,8 @@ test("row 3: taken off it stays installed and off; nothing installs it again; Tu
     listed: { version: pin.version, state: "unloaded" },
   });
   expect((await state()).entry).toEqual({ enabled: false });
-  expect(await engine().install(pin, CONFIRM)).toMatchObject({ stop: "listed-off" });
-  expect(await engine().turnOn(pin, CONFIRM)).toEqual({ kind: "enabled" });
+  expect(await engine().install(pin)).toMatchObject({ stop: "listed-off" });
+  expect(await engine().turnOn(pin)).toEqual({ kind: "enabled" });
   expect((await state()).listed).toMatchObject({ state: "active" });
 });
 
@@ -246,8 +245,8 @@ test("row 2: after an uninstall elsewhere, Add again installs it", async () => {
   // Another tool uninstalls it: the gateway leaves the entry OFF.
   await ownerCall("plugins.uninstall", { pluginId: ID });
   expect(await state()).toMatchObject({ entry: { enabled: false }, listed: null });
-  expect(await engine().install(pin, CONFIRM)).toMatchObject({ stop: "not-listed-off" });
-  expect(await engine().addAgain(pin, CONFIRM)).toEqual({ kind: "enabled" });
+  expect(await engine().install(pin)).toMatchObject({ stop: "not-listed-off" });
+  expect(await engine().addAgain(pin)).toEqual({ kind: "enabled" });
 });
 
 test("row 4: an update the person asks for, from an older shipped release", async () => {
@@ -271,8 +270,8 @@ test("row 4: an update the person asks for, from an older shipped release", asyn
   });
   expect((await state()).listed).toMatchObject({ version: older.version, state: "active" });
   // Nothing updates by itself.
-  expect(await engine().install(pin, CONFIRM)).toMatchObject({ stop: "other-copy" });
-  expect(await engine().update(pin, CONFIRM)).toEqual({ kind: "enabled" });
+  expect(await engine().install(pin)).toMatchObject({ stop: "other-copy" });
+  expect(await engine().update(pin)).toEqual({ kind: "enabled" });
   expect((await state()).listed).toMatchObject({ version: pin.version, state: "active" });
 });
 
@@ -285,7 +284,7 @@ test("row 7b: the owner's deny between the last check and the enable is kept", a
       denied = true;
       await ownerPatch({ plugins: { deny: [ID] } });
     }
-  }).turnOn(pin, CONFIRM);
+  }).turnOn(pin);
   expect(outcome).toMatchObject({ stop: "owner-settings" });
   expect(await state()).toMatchObject({ deny: [ID], listed: { state: "unloaded" } });
   await ownerPatch({ plugins: { deny: [] } }, ["plugins.deny"]);
@@ -299,7 +298,7 @@ test("row 7e: the owner's revoked grant before the enable: never left running", 
       revoked = true;
       await ownerPatch({ plugins: { entries: { [ID]: { enabled: false, hooks: null } } } });
     }
-  }).turnOn(pin, CONFIRM);
+  }).turnOn(pin);
   // Which of two safe ends depends on the gateway's timing. If it takes the enable at once, step
   // 8 finds the grant gone and turns the plugin off ("owner-settings"). If it answers "already
   // running" just after the owner's write (it often does), the read before the enable is sent

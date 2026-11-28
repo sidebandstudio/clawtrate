@@ -105,25 +105,37 @@ export class LostReply extends Error {}
  * `plugins-mutations-MjAXEDgk.mjs:3`) with `projectPluginRuntimeFailure`'s `committed: true`
  * runtime (2026.10.6 `lifecycle-CvKiePUp.mjs:69-78`, 2026.11.10 `lifecycle-rUzhDmbF.mjs:4`).
  */
-export function committedError(digest: string): Json {
+export function committedError(
+  digest: string | null,
+  cause = "Plugin config could not be persisted.",
+): Json {
   return {
     code: "UNAVAILABLE",
-    message:
-      "Plugin config could not be persisted.\nAn earlier runtime change from this operation was applied in Gateway generation 7.",
+    message: `${cause}\nAn earlier runtime change from this operation was applied in Gateway generation 7.`,
     details: {
       runtime: {
         operationId: "a1d50d7d-069f-4544-babc-b1331e996fb9",
         generation: 7,
         pluginIds: [ID],
-        sourceDigests: { [ID]: digest },
-        selectedEntries: {
-          [ID]: "/gateway-state/npm/projects/voice/node_modules/@clawtrate/clawtrate-voice/index.js",
-        },
+        // What the change left loaded: the enabled copy, or nothing after a disable.
+        sourceDigests: digest ? { [ID]: digest } : {},
+        selectedEntries: digest
+          ? {
+              [ID]: "/gateway-state/npm/projects/voice/node_modules/@clawtrate/clawtrate-voice/index.js",
+            }
+          : {},
         committed: true,
       },
     },
   };
 }
+
+/**
+ * The cause both versions give when the registry lookup after an applied enable or disable
+ * fails (`<1006>/dist/management-mutations-BsUMS3ce.mjs:288`, the same words in
+ * `<1110>/dist/management-mutations-C4la5R4f.mjs`).
+ */
+export const LOOKUP_FAILED = `updated plugin missing from refreshed registry: ${ID}`;
 
 export type Call = { method: string; params: Json };
 /** What a test does at a call: before the gateway handles it, or instead of its reply. */
@@ -137,6 +149,8 @@ export type Hook = {
   lose?: "before" | "after";
   /** The gateway answers this refusal instead (from the captured errors, by name). */
   refuse?: string | Json;
+  /** The request is never answered: the device's process ends while it waits. */
+  hang?: boolean;
   /** The gateway handles the call, then answers this error: a change that committed anyway. */
   refuseAfter?: string | Json;
   /** Answer with this instead (for a field missing, or an answer the run never saw). */
@@ -159,6 +173,18 @@ export class FakeGateway {
   busy = false;
   /** Sessions served a page at a time, as the gateway pages `sessions.list`; one page when null. */
   sessionPages: Json[][] | null = null;
+  /** Sessions served by offset and limit from one list, as the gateway pages it, when set. */
+  sessionRows: Json[] | null = null;
+  /**
+   * An enable whose request timed out on the client and is still under way: it holds the
+   * lifecycle lease, so the next plugin or config change is answered "already running", and it
+   * publishes when the lease ends (at that change, or at `finishDelayed`).
+   */
+  delayedEnable = false;
+  /** Changes the delayed enable's lease refuses before it ends and the enable publishes. */
+  delayedRefusals = 0;
+  /** The listing's runtime state, when it differs from what the entry and stage make it. */
+  runtimeState: string | null = null;
   /** A routine's run going, which `cron.list` shows and `sessions.list` never does. */
   routineRunning = false;
   /** Routines served a page at a time, as the gateway pages `cron.list`; one page when null. */
@@ -205,6 +231,15 @@ export class FakeGateway {
     return answer;
   }
 
+  /** The delayed enable publishes: its lease has ended. */
+  finishDelayed() {
+    if (!this.delayedEnable) return;
+    this.delayedEnable = false;
+    this.entry = { ...(this.entry ?? {}), enabled: true };
+    this.hash += 1;
+    this.settle();
+  }
+
   private listAnswer(): Json {
     const answer = clone(this.f.list);
     if (this.staged) {
@@ -212,7 +247,7 @@ export class FakeGateway {
       row.version = this.staged.version;
       row.enabled = this.loaded;
       row.state = this.loaded ? "enabled" : "disabled";
-      row.runtime = { state: this.loaded ? "active" : "unloaded" };
+      row.runtime = { state: this.runtimeState ?? (this.loaded ? "active" : "unloaded") };
       answer.plugins.push(row);
     }
     return answer;
@@ -243,14 +278,29 @@ export class FakeGateway {
         return this.listAnswer();
       case "sessions.list": {
         const answer = clone(this.f.sessions);
+        if (this.sessionRows) {
+          const at = typeof params.offset === "number" ? params.offset : 0;
+          const limit = typeof params.limit === "number" ? params.limit : this.sessionRows.length;
+          answer.sessions = this.sessionRows.slice(at, at + limit);
+          answer.offset = at;
+          answer.count = answer.sessions.length;
+          answer.totalCount = this.sessionRows.length;
+          answer.hasMore = at + answer.sessions.length < this.sessionRows.length;
+          answer.nextOffset = answer.hasMore ? at + answer.sessions.length : null;
+          return answer;
+        }
         if (this.sessionPages) {
           const at = typeof params.offset === "number" ? params.offset : 0;
           answer.sessions = this.sessionPages[at] ?? [];
+          answer.count = answer.sessions.length;
+          answer.totalCount = this.sessionPages.flat().length;
           answer.hasMore = at + 1 < this.sessionPages.length;
           answer.nextOffset = answer.hasMore ? at + 1 : null;
           return answer;
         }
         answer.sessions = this.busy ? [{ key: "agent:main:main", hasActiveRun: true }] : [];
+        answer.count = answer.sessions.length;
+        answer.totalCount = answer.sessions.length;
         return answer;
       }
       case "cron.list": {
@@ -370,6 +420,19 @@ export class FakeGateway {
       (h) => h.method === method && (h.nth === undefined || h.nth === n),
     );
     hook?.before?.(this);
+    if (hook?.hang) return new Promise(() => {});
+    if (
+      this.delayedEnable &&
+      ["config.patch", "plugins.install", "plugins.setEnabled"].includes(method)
+    ) {
+      // The lease is the earlier enable's: refused while it holds it; then that enable publishes
+      // and this change goes through after it.
+      if (this.delayedRefusals > 0) {
+        this.delayedRefusals -= 1;
+        throw this.refusal("busy");
+      }
+      this.finishDelayed();
+    }
     if (hook?.refuse) throw this.refusal(hook.refuse);
     if (hook?.lose === "before") throw new LostReply(`${method}: the reply didn't come`);
     let answer = this.handle(method, p);
