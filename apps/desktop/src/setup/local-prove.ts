@@ -115,6 +115,7 @@ export type ProveOptions = {
   /** Whether this run must be sandboxed (`mustSandbox`): the home rule of the reader. */
   sandboxed: boolean;
   deadlineMs?: number;
+  retryHelperTimeout?: () => boolean;
 };
 
 const no = (why: ProveRefusal): Refused => ({ proved: false, why });
@@ -230,7 +231,7 @@ async function viaHelper(
     ...identity,
   ];
   const deadlineMs = options.deadlineMs ?? READ_DEADLINE_MS;
-  const output = await runHelper(helper, home, args, limit, deadlineMs);
+  const output = await runHelper(helper, home, args, limit, deadlineMs, options.retryHelperTimeout);
   if (!output) return no("helper");
   const text = output.subarray(0, HEADER_LIMIT).toString("latin1");
   const refusal = output.length <= 32 ? HELPER_REFUSAL.exec(output.toString("latin1"))?.[1] : null;

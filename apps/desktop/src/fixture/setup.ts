@@ -196,7 +196,12 @@ export const SETUP_STATES: Record<string, SetupState> = {
     phase: "install-failed",
   },
   "install-recovery-inspect": {
-    ...installing({ step: 2, nodeChecked: true, recovery: "inspect", recoveryLocation: "profile" }),
+    ...installing({
+      step: 0,
+      nodeChecked: false,
+      recovery: "inspect",
+      recoveryLocation: "profile",
+    }),
     phase: "install-failed",
   },
   "install-download": installFailed("download", 0, { cleanup: "removed" }),

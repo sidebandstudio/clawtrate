@@ -973,13 +973,15 @@ function Installing({
         <Hint>Starting again moves the program and gateway folders to the Trash.</Hint>
       )}
       {install.foldersTrashed && <Hint>The unfinished setup folders are in the Trash.</Hint>}
-      <Steps
-        steps={INSTALL_STEPS}
-        current={current}
-        failed={!!failure}
-        paused={!!install.recovery}
-        details={details}
-      />
+      {recovery !== "inspect" && (
+        <Steps
+          steps={INSTALL_STEPS}
+          current={current}
+          failed={!!failure}
+          paused={!!install.recovery}
+          details={details}
+        />
+      )}
       {failure && (
         <>
           <Note tone="danger" lead={lead}>

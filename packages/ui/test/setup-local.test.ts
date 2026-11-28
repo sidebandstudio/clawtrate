@@ -414,6 +414,8 @@ describe("removing an unfinished OpenClaw setup", () => {
     expect(html).toMatch(/<button[^>]*>Look again<\/button>/);
     expect(html).toMatch(/<button[^>]*>Advanced<\/button>/);
     expect(html).not.toContain("Remove and start again");
+    expect(html).not.toContain('data-testid="setup-step-list"');
+    expect(html).not.toContain(", checked");
   });
 
   it("F-505: when Trash refuses the profile, explains the refusal and still offers Continue", () => {

@@ -118,9 +118,9 @@ exit 127
 `;
 
 /** The status wait after the service is installed (§10). */
-export const STATUS_WAIT_MS = 60_000;
+export const STATUS_WAIT_MS = 150_000;
 const STATUS_EVERY_MS = 2_000;
-const STATUS_RUN_MS = 15_000;
+const STATUS_RUN_MS = 30_000;
 const MAX_DOWNLOAD_BYTES = 512 * 1024 * 1024;
 const DOWNLOAD_STALL_MS = 60_000;
 /** `launchctl print` for a service its domain doesn't have. */
@@ -1519,7 +1519,7 @@ export class Installer {
     return { id: saved.id, receipt, record, moves, bundleGone: false };
   }
 
-  private async clearRemoval(receipt: Owned): Promise<boolean> {
+  private async clearRemoval(receipt: Owned | null): Promise<boolean> {
     const { root, receipt: file, bundle } = this.removalPaths;
     if ((await presence(bundle)) !== "absent") {
       try {
@@ -1528,9 +1528,33 @@ export class Installer {
         return false;
       }
     }
-    if (!(await unlinkIfSame(file, receipt.stat))) return false;
+    if (receipt && !(await unlinkIfSame(file, receipt.stat))) return false;
     await rmdir(root).catch(() => {});
     return (await presence(root)) === "absent";
+  }
+
+  /** No folders were moved, or both were already restored. Empty bookkeeping can go. */
+  private async clearUnusedRemoval(id: string): Promise<boolean> {
+    const paths = this.removalPaths;
+    if (!(await lstat(paths.root).catch(() => null))?.isDirectory()) return false;
+    const receipt = await readOwn(paths.receipt);
+    if (receipt) {
+      if ((await presence(paths.bundle)) !== "absent") return false;
+      const saved = parsed(receipt.text);
+      const proof = await this.prove("onboarded");
+      if (
+        !proof ||
+        proof.id !== id ||
+        saved?.id !== id ||
+        saved.record !== identity(proof.record.stat) ||
+        saved.program !== identity(proof.dir) ||
+        saved.marker !== identity(proof.marker.stat)
+      )
+        return false;
+    } else if ((await presence(paths.receipt)) !== "absent") {
+      return false;
+    }
+    return this.clearRemoval(receipt);
   }
 
   private async restoreRemoval(removal: Removal): Promise<boolean> {
@@ -1808,9 +1832,12 @@ export class Installer {
         action: staged.bundleGone ? "finish" : "staged",
         location: "staging",
       };
-    if ((await presence(this.removalPaths.root)) !== "absent")
-      return { action: "inspect", location: "staging" };
     const pending = await this.pending();
+    if (
+      (await presence(this.removalPaths.root)) !== "absent" &&
+      (!pending || !(await this.clearUnusedRemoval(pending.id)))
+    )
+      return { action: "inspect", location: "staging" };
     if (pending) return { id: pending.id, action: pending.canRemove ? "replace" : "continue" };
     if ((await this.prove("installed")) || (await this.leftoverProgram())) return null;
     const locations = [
@@ -1861,7 +1888,8 @@ export class Installer {
     if (action) {
       if (!expectedId || this.closing) return stopped("changed", -1);
       const saved = await this.removal();
-      if (saved && saved.id !== expectedId) return stopped("changed", -1);
+      if (saved ? saved.id !== expectedId : (await presence(this.removalPaths.root)) !== "absent")
+        return stopped("changed", -1);
       if (action === "continue") {
         if (saved && !(await this.restoreRemoval(saved))) return stopped("restore", -1);
         const pending = await this.pending();
@@ -2122,18 +2150,19 @@ export class Installer {
     const until = now() + (this.options.statusWaitMs ?? STATUS_WAIT_MS);
     for (;;) {
       const left = until - now();
+      if (left <= 0 || this.closing) return kept("not-answering", {}, 3);
       const status = await this.exec(
         {
           program: this.at.openclaw,
           args: [...PROFILE_ARGS, "gateway", "status", "--json"],
           env: this.env(),
           cwd: place.home,
-          timeoutMs: Math.max(1_000, Math.min(STATUS_RUN_MS, left)),
+          timeoutMs: Math.min(STATUS_RUN_MS, left),
           maxBytes: 1024 * 1024,
         },
         port,
       );
-      if (ok(status) && readAnswering(status.stdout, port, pins.version)) break;
+      if (ok(status) && now() <= until && readAnswering(status.stdout, port, pins.version)) break;
       if (now() >= until || this.closing) return kept("not-answering", {}, 3);
       await sleep(Math.min(STATUS_EVERY_MS, Math.max(0, until - now())));
     }

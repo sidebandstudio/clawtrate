@@ -123,6 +123,7 @@ export type ReaderOptions = {
   /** The parse worker's module (settings-parse.ts, or its bundled copy). */
   worker: URL;
   deadlineMs?: number;
+  retryHelperTimeout?: () => boolean;
 };
 
 const refused = (why: (typeof UNSAFE_WHY)[number]): Refusal => ({
@@ -269,6 +270,7 @@ export async function openSettingsFile(options: {
   helper: string | null;
   sandboxed: boolean;
   deadlineMs?: number;
+  retryHelperTimeout?: () => boolean;
 }): Promise<Opened> {
   const { home, folder, file, platform } = options;
   // No local proof on any other system: nothing is looked up, resolved or opened there.
@@ -288,6 +290,7 @@ export async function openSettingsFile(options: {
           // ordinary home rule.
           [checked ? "read-private" : "read", folder, file],
           options.deadlineMs,
+          options.retryHelperTimeout,
         )
       : await readThroughProc(held.handle, folder, file);
   } finally {
@@ -345,8 +348,16 @@ async function readWithHelper(
   home: FileHandle,
   args: string[],
   deadlineMs = READ_DEADLINE_MS,
+  retryHelperTimeout?: () => boolean,
 ): Promise<Opened> {
-  const output = await runHelper(helper, home, args, HELPER_OUTPUT_LIMIT, deadlineMs);
+  const output = await runHelper(
+    helper,
+    home,
+    args,
+    HELPER_OUTPUT_LIMIT,
+    deadlineMs,
+    retryHelperTimeout,
+  );
   if (!output) return refused("helper");
   try {
     return helperAnswer(output);
@@ -360,19 +371,37 @@ async function readWithHelper(
  * no input: its whole output, or null for a missing helper, a timeout, a
  * failed exit, or more than `limit` bytes.
  */
-export function runHelper(
+export async function runHelper(
   helper: string,
   home: FileHandle,
   args: string[],
   limit: number,
   deadlineMs = READ_DEADLINE_MS,
+  retryTimeout?: () => boolean,
 ): Promise<Buffer | null> {
-  return new Promise<Buffer | null>((done) => {
+  for (;;) {
+    const output = await runHelperOnce(helper, home, args, limit, deadlineMs);
+    if (output !== HELPER_TIMEOUT) return output;
+    if (!retryTimeout?.()) return null;
+  }
+}
+
+const HELPER_TIMEOUT = Symbol("helper timeout");
+type HelperOutput = Buffer | null | typeof HELPER_TIMEOUT;
+
+function runHelperOnce(
+  helper: string,
+  home: FileHandle,
+  args: string[],
+  limit: number,
+  deadlineMs: number,
+): Promise<HelperOutput> {
+  return new Promise<HelperOutput>((done) => {
     const chunks: Buffer[] = [];
     let size = 0;
     let settled = false;
     let child: ReturnType<typeof spawn>;
-    const settle = (result: Buffer | null) => {
+    const settle = (result: HelperOutput) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -382,7 +411,7 @@ export function runHelper(
       done(result);
     };
     // Its own deadline: a descendant holding the pipe open can't delay the answer.
-    const timer = setTimeout(() => settle(null), deadlineMs);
+    const timer = setTimeout(() => settle(HELPER_TIMEOUT), deadlineMs);
     try {
       child = spawn(helper, args, {
         env: { PATH: "/usr/bin:/bin" },

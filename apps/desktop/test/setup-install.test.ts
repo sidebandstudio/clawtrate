@@ -52,6 +52,7 @@ import {
   rmdirIfSame,
   runsCheckedInstall,
   serviceArgv,
+  STATUS_WAIT_MS,
   stagingDir,
   unlinkIfSame,
   type InstallOptions,
@@ -91,7 +92,7 @@ function installer(
     personsApp: false,
     accountHome: homedir(),
     env: {},
-    statusWaitMs: 300,
+    statusWaitMs: 1_000,
     trashSetup: async (bundle) => {
       const trash = join(stand.root, "Trash");
       mkdirSync(trash, { recursive: true });
@@ -689,6 +690,63 @@ describe("F-502 F-503: each failure, named, with what the attempt left", () => {
     },
   );
 
+  it.each(["before receipt", "after restoring", "unknown contents"] as const)(
+    "F-505: a look handles unfinished removal bookkeeping (%s)",
+    async (window) => {
+      const stand = await make();
+      const stop = new AbortController();
+      const interrupted = installer(stand, {
+        signal: stop.signal,
+        run: async (request, check) => {
+          const result = await runner.run(request, check);
+          if (request.args.includes("onboard")) stop.abort();
+          return result;
+        },
+      });
+      await runAll(interrupted);
+      const awake = installer(stand);
+      const pending = await awake.recovery();
+      const root = join(dirname(stand.place.programDir), ".openclaw-removing");
+      const bundle = join(root, "Unfinished OpenClaw setup");
+      mkdirSync(root, { mode: 0o700 });
+      mkdirSync(bundle, { mode: 0o700 });
+      const identity = (path: string) => {
+        const { dev, ino } = statSync(path);
+        return `${dev}:${ino}`;
+      };
+      const program = identity(stand.place.programDir);
+      const profile = identity(stand.place.stateDir);
+      if (window === "after restoring") {
+        writeFileSync(
+          join(root, "receipt.json"),
+          JSON.stringify({
+            id: pending?.id,
+            record: identity(stand.place.recordFile),
+            program,
+            marker: identity(join(stand.place.programDir, ".clawtrate-install.json")),
+            bundle: identity(bundle),
+          }),
+          { mode: 0o600 },
+        );
+        rmdirSync(bundle);
+      } else if (window === "unknown contents") {
+        writeFileSync(join(bundle, "notes.txt"), "don't touch");
+      }
+      if (window === "unknown contents") {
+        expect(await awake.recovery()).toEqual({ action: "inspect", location: "staging" });
+        expect(await awake.run(() => {}, "continue", pending?.id)).toMatchObject({ ok: false });
+        expect(readFileSync(join(bundle, "notes.txt"), "utf8")).toBe("don't touch");
+      } else {
+        expect(await awake.recovery()).toEqual(pending);
+        expect(existsSync(root)).toBe(false);
+      }
+      expect(identity(stand.place.programDir)).toBe(program);
+      expect(identity(stand.place.stateDir)).toBe(profile);
+      if (window !== "unknown contents")
+        expect(await awake.run(() => {}, "continue", pending?.id)).toMatchObject({ ok: true });
+    },
+  );
+
   it("F-505: an orphaned profile and service are reported and left as they are", async () => {
     const stand = await make();
     mkdirSync(stand.place.stateDir);
@@ -763,6 +821,39 @@ describe("F-502 F-503: each failure, named, with what the attempt left", () => {
     expect(existsSync(stand.place.recordFile)).toBe(false);
   });
 
+  it("F-505: a gateway that first answers after ninety seconds can still finish setup", async () => {
+    const stand = await make();
+    let clock = 0;
+    const budgets: number[] = [];
+    const slow = installer(stand, {
+      statusWaitMs: STATUS_WAIT_MS,
+      now: () => clock,
+      sleep: async (ms) => {
+        clock += ms;
+      },
+      run: async (request, check) => {
+        if (request.args.slice(2, 4).join(" ") === "gateway status") {
+          check(request);
+          budgets.push(request.timeoutMs);
+          if (clock < 90_000)
+            return {
+              exitCode: 0,
+              stdout: "{}",
+              timedOut: false,
+              tooLarge: false,
+              stopped: false,
+              failed: false,
+              lingering: false,
+            };
+        }
+        return runner.run(request, check);
+      },
+    });
+    expect((await runAll(slow)).outcome).toMatchObject({ ok: true });
+    expect(clock).toBe(90_000);
+    expect(budgets[0]).toBe(30_000);
+  });
+
   it("F-502: a gateway that doesn't answer within the wait is named at the last step", async () => {
     const stand = await make({ scenario: "not-answering" });
     // A clock of the test's: each wait moves it, so the retries and the deadline don't depend on speed.
@@ -780,8 +871,8 @@ describe("F-502 F-503: each failure, named, with what the attempt left", () => {
       ok: false,
       failure: { kind: "not-answering", step: 3, retry: false, cleanup: "kept" },
     });
-    // At 0, 2, 4 and 5 s of the test's clock: retried, and stopped at the wait's end.
-    expect(stand.calls().filter((line) => line.endsWith("gateway status --json"))).toHaveLength(4);
+    // At 0, 2 and 4 s. The deadline stops any further query.
+    expect(stand.calls().filter((line) => line.endsWith("gateway status --json"))).toHaveLength(3);
   });
 });
 

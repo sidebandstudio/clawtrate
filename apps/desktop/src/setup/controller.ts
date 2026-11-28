@@ -47,6 +47,9 @@ import { guardPort, programPath, SetupRefusedError } from "./world.ts";
 
 /** A prepared operation expires after this long and can't be repeated (§2). */
 export const OPERATION_LIFETIME_MS = 2 * 60_000;
+/** Two extra invocations at the helper's existing deadline, shared by the install handover. */
+const INSTALL_HELPER_RETRIES = 2;
+type InstallProofRetries = { remaining: number };
 /** After this long, the look says it is still looking (§4). */
 export const SLOW_LOOK_MS = 8_000;
 const QR_LIMIT = { timeoutMs: 20_000, maxBytes: 16 * 1024 };
@@ -250,7 +253,7 @@ export class SetupController implements SetupHost {
     return this.lookNow();
   }
 
-  private async lookNow(): Promise<void> {
+  private async lookNow(proofRetries?: InstallProofRetries): Promise<void> {
     this.stopWatching();
     // Another look: the earlier one's programs end before this one asks anything.
     this.options.stopPrograms();
@@ -259,7 +262,8 @@ export class SetupController implements SetupHost {
     this.localFound = null;
     this.clearSlow();
     const local = this.options.localConnect;
-    if (local) return this.lookLocally(local, attempt);
+    if (local)
+      return this.lookLocally(this.installProofRetries(local, attempt, proofRetries), attempt);
     let opened: Opened;
     try {
       opened = await this.open();
@@ -358,6 +362,29 @@ export class SetupController implements SetupHost {
     return this.operation ?? Promise.resolve();
   }
 
+  private installProofRetries(
+    local: LocalConnect & { worker: URL },
+    attempt: number,
+    retries?: InstallProofRetries,
+  ): LocalConnect & { worker: URL } {
+    if (!retries) return local;
+    return {
+      ...local,
+      retryHelperTimeout: () => {
+        const { phase } = this.state;
+        if (
+          this.closed ||
+          this.attempt !== attempt ||
+          retries.remaining <= 0 ||
+          (phase !== "looking" && phase !== "connecting")
+        )
+          return false;
+        retries.remaining -= 1;
+        return true;
+      },
+    };
+  }
+
   /** The installer this host offers, or null: with local connect only. */
   private get installer(): (() => Installer) | null {
     return this.options.installer ?? null;
@@ -417,8 +444,8 @@ export class SetupController implements SetupHost {
         phase: "install-failed",
         look,
         install: {
-          step: 2,
-          nodeChecked: true,
+          step: recovery.action === "inspect" ? 0 : 2,
+          nodeChecked: recovery.action !== "inspect",
           failure: null,
           recovery: recovery.action,
           ...(recovery.location ? { recoveryLocation: recovery.location } : {}),
@@ -576,7 +603,8 @@ export class SetupController implements SetupHost {
     if (!make || !confirm || !local) throw new Error("This host doesn't set OpenClaw up.");
     if (this.closed) return;
     this.busy = true;
-    const operation = this.installHeld(make, confirm, action);
+    const proofRetries = { remaining: INSTALL_HELPER_RETRIES };
+    const operation = this.installHeld(make, confirm, proofRetries, action);
     this.operation = operation.then(
       () => {},
       () => {},
@@ -589,13 +617,14 @@ export class SetupController implements SetupHost {
       this.operation = null;
     }
     // The gateway just set up, proved: the press and the dialog were the consent (§10).
-    if (connectNow && !this.closed) await this.connectLocally(local);
+    if (connectNow && !this.closed) await this.connectLocally(local, proofRetries);
   }
 
   /** The install from its dialog to the look that follows; true when Connect may follow. */
   private async installHeld(
     make: () => Installer,
     confirm: (confirmation: Confirmation) => Promise<boolean>,
+    proofRetries: InstallProofRetries,
     action?: InstallAction,
   ): Promise<boolean> {
     const { look } = this.state;
@@ -699,6 +728,7 @@ export class SetupController implements SetupHost {
         install: {
           ...(this.state.install ?? start),
           failure: outcome.failure,
+          ...(recovery?.action === "inspect" ? { step: 0, nodeChecked: false } : {}),
           ...(recovery ? { recovery: recovery.action } : {}),
           ...(recovery?.location ? { recoveryLocation: recovery.location } : {}),
         },
@@ -706,7 +736,7 @@ export class SetupController implements SetupHost {
       return false;
     }
     // The look finds what was set up; Connect follows only for that gateway, on its port.
-    await this.lookNow();
+    await this.lookNow(proofRetries);
     const found = this.localFound;
     return (
       !this.closed &&
@@ -915,7 +945,10 @@ export class SetupController implements SetupHost {
    * folder and that folder's identity as its route (`routeOf`), never as a typed
    * address.
    */
-  private async connectLocally(local: LocalConnect & { worker: URL }): Promise<void> {
+  private async connectLocally(
+    local: LocalConnect & { worker: URL },
+    proofRetries?: InstallProofRetries,
+  ): Promise<void> {
     const found = this.localFound;
     const phase = this.state.phase;
     if (
@@ -932,10 +965,11 @@ export class SetupController implements SetupHost {
     const at = this.now();
     const current = () => attempt === this.attempt;
     const consent = () => current() && this.now() - at <= OPERATION_LIFETIME_MS;
+    const scoped = this.installProofRetries(local, attempt, proofRetries);
     this.publish({ ...this.state, phase: "connecting", step: 0, failure: null, unasked: false });
     let token: HeldToken | null = null;
     try {
-      token = await readToken(local, local.worker, found);
+      token = await readToken(scoped, scoped.worker, found);
       if (!current()) return;
       if (!token) return this.fail({ kind: "changed" });
       // The earlier gateway isn't let go: the client replaces it only once this device is
@@ -952,7 +986,7 @@ export class SetupController implements SetupHost {
         void this.closeOwned();
         this.fail({ kind: "unverified", port: found.port, reason: refusalKind(why) });
       };
-      const proveOne = proveFor(local, found, found.port, unverified);
+      const proveOne = proveFor(scoped, found, found.port, unverified);
       const prove = async (localPort: number, live: () => boolean = () => true) => {
         const proved = await proveOne(localPort, live);
         if (proved && live()) latest = null;
