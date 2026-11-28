@@ -140,6 +140,8 @@ export const SCENES = [
   "pairing",
   "reconnecting",
   "reconnecting-unloaded",
+  "restarting",
+  "restart-late",
   "offline",
   "offline-long-address",
   "catching-up",
@@ -501,6 +503,21 @@ function scene(name: SceneName, now: number): { initial: ClawtrateState; steps: 
       return { initial: pairing(), steps: [] };
     case "reconnecting":
       return { initial: reconnecting(base), steps: [] };
+    // The gateway said it is restarting (#913): within the wait, and past it.
+    case "restarting":
+      return {
+        initial: withConnection(base, {
+          status: "reconnecting",
+          retryAt: null,
+          restart: "restarting",
+        }),
+        steps: [],
+      };
+    case "restart-late":
+      return {
+        initial: withConnection(base, { status: "reconnecting", retryAt: null, restart: "late" }),
+        steps: [],
+      };
     case "reconnecting-unloaded": {
       const transcripts = { ...base.transcripts };
       delete transcripts[OPEN_TASK];

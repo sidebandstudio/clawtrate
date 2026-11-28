@@ -137,6 +137,11 @@ export type ConnectionState = {
   retryAt: number | null;
   /** Epoch ms of the latest hello: what was loaded before it is not yet in sync. */
   connectedAt: number | null;
+  /**
+   * The gateway said it is restarting (its `shutdown` event with `restartExpectedMs`):
+   * "restarting" until the next hello, "late" once `RESTART_WAIT_MS` has passed without one.
+   */
+  restart: "restarting" | "late" | null;
   /** True once this device holds a device token for the current gateway. */
   paired: boolean;
   /**
@@ -775,6 +780,7 @@ export const initialConnectionState: ConnectionState = {
   error: null,
   retryAt: null,
   connectedAt: null,
+  restart: null,
   paired: false,
   sendLimits: null,
 };

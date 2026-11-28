@@ -138,15 +138,16 @@ export function stripFor(
   switch (connection.status) {
     case "reconnecting":
     case "connecting": {
-      // OpenClaw updating on this gateway, as the update engine knows it (#590).
+      // OpenClaw updating on this gateway, as the update engine knows it (#590), or restarting,
+      // as the gateway said (#913).
       const updating = updatingHere(state);
       if (updating) {
         const words = updatingStripWords(updating);
         return {
-          tone: updating.stage === "away" ? "danger" : "warn",
+          tone: updating.stage === "away" || updating.stage === "not-back" ? "danger" : "warn",
           text: words.text,
           short: words.short,
-          more: "showing saved messages",
+          more: words.more ?? "showing saved messages",
           action: words.retry ? "retry" : null,
           countdown: false,
         };

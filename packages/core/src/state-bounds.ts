@@ -822,6 +822,7 @@ const connection = object<ConnectionState>()({
   error: connectionError,
   retryAt: NUMBER,
   connectedAt: NUMBER,
+  restart: ENUM,
   target: NUMBER,
   paired: FLAG,
   sendLimits: object<SendLimits>()({

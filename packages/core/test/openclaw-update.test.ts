@@ -43,6 +43,7 @@ import {
 import { ADMIN_SCOPES } from "../src/scopes.ts";
 import { MAX_UPDATED_RUNS, UPDATED_RUN_MAX_AGE_MS } from "../src/update-notice.ts";
 import { createBridgeSession } from "../src/bridge.ts";
+import type { ClientOptions } from "../src/client.ts";
 import { openTask, URL_A, grantingGateway } from "./client-harness.ts";
 import { deferred, helloOk, memoryStorage, until } from "./fake-gateway.ts";
 
@@ -1445,57 +1446,66 @@ describe("F-589: Update is held until what this device keeps is read", () => {
   });
 });
 
+/** A client on an admin connection that pressed Update; `finish` makes the restarted gateway's record say it succeeded. */
+async function pressedUpdate(options?: ClientOptions) {
+  const gateway = grantingGateway();
+  let version = OLD;
+  gateway.connectReply = (params) => {
+    const { scopes, auth } = params as { scopes: string[]; auth?: { deviceToken?: string } };
+    const hello = helloOk(scopes, auth?.deviceToken ?? "device-token");
+    return {
+      ok: true,
+      payload: {
+        ...hello,
+        server: { ...hello.server, version },
+        snapshot: {
+          ...hello.snapshot,
+          updateAvailable:
+            version === OLD ? { currentVersion: OLD, latestVersion: NEW, channel: "latest" } : null,
+        },
+      },
+    };
+  };
+  gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gw-a" });
+  let run = record();
+  gateway.handlers["update.status"] = () => ({
+    sentinel: null,
+    updateAvailable: null,
+    ...(run.status === "running" && gateway.calls("update.run").length ? { activeRun: run } : {}),
+  });
+  gateway.handlers["update.run"] = () => started();
+  gateway.handlers["update.runs.get"] = () => ({ run });
+  const { client } = await openTask({
+    gateway,
+    held: ADMIN_SCOPES,
+    ...(options ? { client: options } : {}),
+    storage: memoryStorage({
+      connection: JSON.stringify({ url: URL_A, token: null }),
+      [`deviceToken:${encodeURIComponent(URL_A)}:device-1:operator`]: JSON.stringify({
+        token: "device-token",
+        grantedScopes: ADMIN_SCOPES,
+        heldScopes: ADMIN_SCOPES,
+        adminHeld: true,
+      }),
+    }),
+  });
+  await until(() => client.state.connection.gatewayId === "gw-a");
+  expect(client.state.connection.openclawUpdate).toMatchObject({ latest: NEW });
+  const session = createBridgeSession(client);
+  await session.apply({
+    type: "startOpenClawUpdate",
+    stamp: gatewayStamp(client.state.connection),
+  });
+  const finish = () => {
+    run = record({ phase: "finished", status: "succeeded", after: { version: NEW } });
+    version = NEW;
+  };
+  return { client, gateway, finish };
+}
+
 describe("F-589: the client follows an update across the gateway's restart", () => {
   it("F-589: Update sends one update.run to the gateway shown, the event and the reconnect are followed, and the provider accounts and models are read again", async () => {
-    const gateway = grantingGateway();
-    let version = OLD;
-    gateway.connectReply = (params) => {
-      const { scopes, auth } = params as { scopes: string[]; auth?: { deviceToken?: string } };
-      const hello = helloOk(scopes, auth?.deviceToken ?? "device-token");
-      return {
-        ok: true,
-        payload: {
-          ...hello,
-          server: { ...hello.server, version },
-          snapshot: {
-            ...hello.snapshot,
-            updateAvailable:
-              version === OLD
-                ? { currentVersion: OLD, latestVersion: NEW, channel: "latest" }
-                : null,
-          },
-        },
-      };
-    };
-    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gw-a" });
-    let run = record();
-    gateway.handlers["update.status"] = () => ({
-      sentinel: null,
-      updateAvailable: null,
-      ...(run.status === "running" && gateway.calls("update.run").length ? { activeRun: run } : {}),
-    });
-    gateway.handlers["update.run"] = () => started();
-    gateway.handlers["update.runs.get"] = () => ({ run });
-    const { client } = await openTask({
-      gateway,
-      held: ADMIN_SCOPES,
-      storage: memoryStorage({
-        connection: JSON.stringify({ url: URL_A, token: null }),
-        [`deviceToken:${encodeURIComponent(URL_A)}:device-1:operator`]: JSON.stringify({
-          token: "device-token",
-          grantedScopes: ADMIN_SCOPES,
-          heldScopes: ADMIN_SCOPES,
-          adminHeld: true,
-        }),
-      }),
-    });
-    await until(() => client.state.connection.gatewayId === "gw-a");
-    expect(client.state.connection.openclawUpdate).toMatchObject({ latest: NEW });
-    const session = createBridgeSession(client);
-    await session.apply({
-      type: "startOpenClawUpdate",
-      stamp: gatewayStamp(client.state.connection),
-    });
+    const { client, gateway, finish } = await pressedUpdate();
     // One press, carrying only its tag on the gateway's internal channel.
     expect(gateway.calls("update.run")).toEqual([
       { requester: { channel: "webchat", senderId: expect.stringMatching(/^clawtrate-update:/) } },
@@ -1510,12 +1520,34 @@ describe("F-589: the client follows an update across the gateway's restart", () 
     // The gateway restarts on the new version, and its record says succeeded.
     // The model list is read the way the app reads it (`accounts.load`): the config, then auth.
     const accountReads = gateway.calls("models.authStatus").length;
-    run = record({ phase: "finished", status: "succeeded", after: { version: NEW } });
-    version = NEW;
+    finish();
     gateway.dropAll();
     await until(() => client.state.openclawUpdating?.run?.outcome === "updated");
     expect(client.state.openclawUpdating?.run).toMatchObject({ from: OLD, to: NEW });
     await until(() => gateway.calls("models.authStatus").length > accountReads);
+    expect(gateway.calls("update.run")).toHaveLength(1);
+    client.stop();
+  });
+
+  it("F-603: an update this app started, whose restart the gateway announces: the run is still followed, and every attempt waits the first delay until the gateway is back", async () => {
+    const { client, gateway, finish } = await pressedUpdate({
+      reconnect: { initialMs: 20, maxMs: 2_000 },
+    });
+    const waits: number[] = [];
+    client.store.subscribe(({ connection }) => {
+      if (connection.retryAt !== null) waits.push(connection.retryAt - Date.now());
+    });
+    gateway.emit("shutdown", { reason: "gateway restarting", restartExpectedMs: 1500 });
+    gateway.refuseConnections = true;
+    gateway.dropAll();
+    await until(() => waits.length >= 6);
+    expect(client.state.connection.restart).toBe("restarting");
+    expect(client.state.openclawUpdating?.run?.outcome).toBe("running");
+    expect(Math.max(...waits)).toBeLessThan(30);
+    finish();
+    gateway.refuseConnections = false;
+    await until(() => client.state.openclawUpdating?.run?.outcome === "updated");
+    expect(client.state.connection.restart).toBeNull();
     expect(gateway.calls("update.run")).toHaveLength(1);
     client.stop();
   });
