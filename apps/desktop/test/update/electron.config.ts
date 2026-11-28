@@ -15,6 +15,9 @@ export default {
         "../private-update-directory.ts": fileURLToPath(
           new URL("./screen-test-directory.ts", import.meta.url),
         ),
+        "../inspect-update-file.ts": fileURLToPath(
+          new URL("./screen-test-inspect.ts", import.meta.url),
+        ),
         "./update/build-info.ts": fileURLToPath(new URL("./screen-test-host.ts", import.meta.url)),
       },
     },

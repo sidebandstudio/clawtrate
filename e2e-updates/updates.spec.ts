@@ -1,6 +1,6 @@
 // The same main entry, sandboxed preload and renderer as the launch check.
 // Only this temporary build links the service to the test's own feed.
-import { expect, test as base, type Page, type TestInfo } from "@playwright/test";
+import { expect, test as base, type Page } from "@playwright/test";
 import { once } from "node:events";
 import { execFileSync, spawn, type ChildProcess } from "node:child_process";
 import {
@@ -14,15 +14,16 @@ import {
   symlinkSync,
   rmSync,
   writeFileSync,
-  mkdirSync,
   cpSync,
 } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import type { DesktopUpdates } from "../packages/core/src/desktop-updates.ts";
-import { setTimeout as pause } from "node:timers/promises";
 import { join } from "node:path";
 import { sidebarGateway } from "../apps/desktop/test/update/sidebar-gateway.ts";
+import { captureHostState } from "../apps/desktop/test/update/host-state.ts";
+import { readSteps } from "../apps/desktop/test/update/screen-test-steps.ts";
+import { observeRefusal } from "../apps/desktop/test/update/refusal-observation.ts";
 import { feedFor, feedServer, json, payload } from "../apps/desktop/test/update/harness.ts";
 import { fileKeyFor, FILE_EXTENSION } from "../apps/desktop/src/main/update/feed.ts";
 import { PRIVATE_DIRECTORIES_TIMEOUT_MS } from "../apps/desktop/src/main/private-update-directory.ts";
@@ -203,16 +204,18 @@ const test = base.extend<{
         manifest,
         rendererRequests,
       });
-      if (testInfo.status !== testInfo.expectedStatus && !page.isClosed()) {
-        const reading = await page.evaluate(async () => {
-          const { state, preferenceIssue } = await (
-            window as unknown as ProbeWindow
-          ).clawtrateHost.desktopUpdates.get();
-          return { state, preferenceIssue };
-        });
-        console.log(
-          "Update status at failure",
-          JSON.stringify({ requests: server.requests, ...reading }),
+      if (testInfo.status === testInfo.expectedStatus) {
+        // So the log measures each PowerShell step on this machine (#577).
+        const steps = readSteps(profile);
+        if (steps) console.log("Update steps", JSON.stringify(steps));
+      } else {
+        // The failure's one capture, which printed its steps and the host's status.
+        await captureHostState(
+          testInfo,
+          profile,
+          server.requests,
+          rendererRequests,
+          hostReading(page),
         );
       }
     } finally {
@@ -233,10 +236,19 @@ const test = base.extend<{
 // A failure may be visible only in the host's state, which fixture teardown closes away.
 test.afterEach(async ({ desktopApp }, testInfo) => {
   if (testInfo.status === "passed" || testInfo.status === "skipped") return;
-  // A test that captured before its own cleanup keeps that snapshot.
-  if (testInfo.attachments.some((each) => each.name === "host-state")) return;
-  await captureHostState(desktopApp.page, testInfo, desktopApp.server, desktopApp.rendererRequests);
+  // A test that captured before its own cleanup gets that capture, still under way or done.
+  await captureHostState(
+    testInfo,
+    desktopApp.profile,
+    desktopApp.server.requests,
+    desktopApp.rendererRequests,
+    hostReading(desktopApp.page),
+  );
 });
+
+/** Asks the host for its update state. */
+const hostReading = (page: Page) => () =>
+  page.evaluate(() => (window as unknown as ProbeWindow).clawtrateHost.desktopUpdates.get());
 
 /** The feed's and the files' requests; a check also asks once for the lists beside the feed (F-554). */
 const feedRequests = (server: { requests: string[] }) =>
@@ -396,34 +408,6 @@ test("F-231: checks only the chosen feed and downloads matching bytes on request
   expect(rendererRequests).toEqual([]);
 });
 
-/** A failure may be visible only in the host's state, which teardown closes away. */
-async function captureHostState(
-  page: Page,
-  info: TestInfo,
-  server: TestApp["server"],
-  rendererRequests: string[],
-) {
-  try {
-    const reading = await Promise.race([
-      page.evaluate(() => (window as unknown as ProbeWindow).clawtrateHost.desktopUpdates.get()),
-      pause(10_000).then(() => null),
-    ]).catch((cause) => ({ error: String(cause) }));
-    const file = join(info.outputDir, "host-state.json");
-    mkdirSync(info.outputDir, { recursive: true });
-    writeFileSync(
-      file,
-      JSON.stringify(
-        { reading, requests: server.requests, rendererRequests, notes: info.annotations },
-        null,
-        2,
-      ),
-    );
-    await info.attach("host-state", { path: file, contentType: "application/json" });
-  } catch {
-    // The failure under diagnosis still outranks the diagnostics.
-  }
-}
-
 /** Which element has focus, in words, for a failure's notes. */
 const focusedElement = (page: Page) =>
   page.evaluate(() => {
@@ -557,7 +541,13 @@ for (const stage of ["check", "download"] as const) {
       );
     } catch (error) {
       // Cleanup releases the held choice, so the failure's state is read first.
-      await captureHostState(page, test.info(), server, desktopApp.rendererRequests);
+      await captureHostState(
+        test.info(),
+        profile,
+        server.requests,
+        desktopApp.rendererRequests,
+        hostReading(page),
+      );
       throw error;
     } finally {
       delayed.resolve();
@@ -901,19 +891,22 @@ test.describe("installer refusals", () => {
           timeout: folderWait,
         })
         .toBeGreaterThan(fetched);
-      await expect
-        .poll(() =>
-          page.evaluate(async () => {
-            const s = await (window as unknown as ProbeWindow).clawtrateHost.desktopUpdates.get();
-            return (
-              (s.state.kind === "verified" ||
-                (s.state.kind === "failed" && s.state.reason === "artifact-changed")) &&
-              s.install.kind === "unavailable-in-this-build" &&
-              s.install.reason
-            );
-          }),
-        )
-        .toBe(reason);
+      // Timed, so the log says how long the host took to report it or that the wait ran out (#577).
+      await observeRefusal(reason, () =>
+        expect
+          .poll(() =>
+            page.evaluate(async () => {
+              const s = await (window as unknown as ProbeWindow).clawtrateHost.desktopUpdates.get();
+              return (
+                (s.state.kind === "verified" ||
+                  (s.state.kind === "failed" && s.state.reason === "artifact-changed")) &&
+                s.install.kind === "unavailable-in-this-build" &&
+                s.install.reason
+              );
+            }),
+          )
+          .toBe(reason),
+      );
       await expect(page.locator(".update-result dd")).toContainText(
         reason === "artifact-changed"
           ? "Couldn't verify the saved update again."
