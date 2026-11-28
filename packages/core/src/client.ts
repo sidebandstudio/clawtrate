@@ -671,11 +671,8 @@ export const MAX_PENDING_APPROVALS_PER_TASK = MAX_PENDING_APPROVAL_COUNT;
 export const REQUEST_TIMEOUT_MS = 60_000;
 
 /** The statuses a restart may be said beside: the connection is up, or coming back by itself. */
-const COMING_BACK: ReadonlySet<ConnectionState["status"]> = new Set([
-  "connected",
-  "connecting",
-  "reconnecting",
-]);
+const comingBack = (status: ConnectionState["status"]) =>
+  status === "connected" || status === "connecting" || status === "reconnecting";
 
 /** How long Stop waits for the gateway to answer the withdrawal of the run's steers. */
 export const STEER_WITHDRAWAL_WAIT_MS = 2_000;
@@ -12532,7 +12529,7 @@ export class ClawtrateClient {
       this.restarts.end();
     }
     // A connection that stops, or waits for its owner, is said as it is: no restart is waited for.
-    if (patch.status !== undefined && !COMING_BACK.has(patch.status)) this.restarts.end();
+    if (patch.status !== undefined && !comingBack(patch.status)) this.restarts.end();
     const scrubbed = this.scrubConnection(patch);
     this.store.update((state) => ({ ...state, connection: { ...state.connection, ...scrubbed } }));
   }
