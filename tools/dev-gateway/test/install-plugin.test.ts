@@ -40,7 +40,6 @@ import {
   ARCHIVE,
   FakeGateway,
   ID,
-  PIN,
   Refusal,
   TARBALLS,
 } from "../../../packages/core/test/plugin-gateway.ts";
@@ -259,11 +258,18 @@ describe("--install-plugin", () => {
     return fake as unknown as OperatorSession;
   }
 
-  /** The app's packing, in a folder this file keeps to its end, known to the stand-in gateway. */
+  // The packed bytes can differ with the runtime's gzip implementation. The stand-in
+  // reports the integrity of this packing alongside the recorded digest of its source.
+  const registerPacking = ({ archive, pin }: Packed) => {
+    const tarball = { ...TARBALLS[ARCHIVE]!, integrity: pin.integrity };
+    TARBALLS[archive] = tarball;
+    return tarball;
+  };
+
+  /** The app's packing, in a folder this file keeps to its end. */
   let packing: Packed;
   beforeAll(() => {
     packing = packCarried(CHECKOUT, realpathSync(tempDir("install-plugin-pack-")), ID);
-    TARBALLS[packing.archive] = TARBALLS[ARCHIVE]!;
   }, 40_000);
   const packedOnce = (): Packed => packing;
 
@@ -272,7 +278,7 @@ describe("--install-plugin", () => {
     expect(verifyPacked(packed)).toEqual({
       path: packed.archive,
       root: packed.dir,
-      integrity: PIN.integrity,
+      integrity: packed.pin.integrity,
     });
     const link = join(realpathSync(tempDir("install-plugin-link-")), "pack");
     symlinkSync(packed.dir, link);
@@ -282,13 +288,15 @@ describe("--install-plugin", () => {
   });
 
   it("resumes an attempt it left, and never turns its stop into a fresh enable", async () => {
+    const packed = packedOnce();
     const gateway = FakeGateway.at("2026.10.6", "off");
+    gateway.staged = registerPacking(packed);
     const records = new Map<string, PluginRecord | null>([
       [
         ID,
         {
           mode: "install",
-          integrity: PIN.integrity,
+          integrity: packed.pin.integrity,
           step: 6,
           pending: 7,
           turningOff: false,
@@ -297,7 +305,7 @@ describe("--install-plugin", () => {
         },
       ],
     ]);
-    const outcome = await installPlugin(session(gateway), packedOnce(), recordMap(records));
+    const outcome = await installPlugin(session(gateway), packed, recordMap(records));
     // A lost enable with the entry still off is a stop (#832): no Turn on after it.
     expect(outcome).toMatchObject({ kind: "stopped", stop: "listed-off" });
     // Only the disable that proves the lost enable can no longer publish; never an enable.
@@ -309,9 +317,7 @@ describe("--install-plugin", () => {
   it("the command run again on the same instance resumes the attempt the first run left", async () => {
     const home = realpathSync(tempDir("install-plugin-instance-"));
     const inst = openInstance("install-check", { home, runRoot: join(home, "run") });
-    // Its packing lands where every run packs: known to the stand-in gateway as the app's.
-    TARBALLS[join(inst.runDir, "carried-plugins", "clawtrate-clawtrate-voice-0.1.0.tgz")] =
-      TARBALLS[ARCHIVE]!;
+    registerPacking(packCarried(CHECKOUT, join(inst.runDir, "carried-plugins"), ID));
     const gateway = FakeGateway.at("2026.10.6", "fresh");
     // The enable applies and its reply is lost.
     gateway.hooks.push({ method: "plugins.setEnabled", nth: 1, lose: "after" });
