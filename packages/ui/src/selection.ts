@@ -223,6 +223,17 @@ export function unreadSeenOf(
  * them; a read-only connection, whose reads the gateway never hears, keeps its
  * own memory of what it read.
  */
+/**
+ * Whether opening `bot` keeps it open, and in the sidebar, while F-562 would leave it out, until
+ * another bot is opened: the gateway's own bot (one that isn't `selectionRequired`'s first), shown
+ * or not when it is opened. A verdict on its files that arrives after it was opened, or the switch
+ * turned off, never closes it (`docs/decisions.md`, "Nothing dangles"). A bot that came on screen
+ * by itself is never opened by the person, so it isn't kept.
+ */
+export function keptWhenOpened(bot: Bot | undefined): boolean {
+  return bot !== undefined && bot.isDefault && bot.ownerless !== true;
+}
+
 export function useSelection(
   state: ClawtrateState,
   gatewayOwnsUnread = false,
@@ -311,16 +322,13 @@ export function useSelection(
   const keepIfLeftOut = useCallback(
     (id: string) => {
       const opened = state.bots.find((each) => each.id === id);
-      // Another task of the bot kept open keeps it, whatever the switch says now; only opening
-      // another bot lets it go.
+      // Another task of the bot kept open keeps it, whatever the switch or its files say now;
+      // only opening another bot lets it go.
       setKeptOpen((kept) =>
-        here(kept) === id ||
-        (opened && gatewayBotHidden(opened, state.bots, showGatewayBot, state.untouchedGatewayBot))
-          ? { id, gatewayId, target }
-          : null,
+        here(kept) === id || keptWhenOpened(opened) ? { id, gatewayId, target } : null,
       );
     },
-    [state.bots, showGatewayBot, state.untouchedGatewayBot, gatewayId, target, here],
+    [state.bots, gatewayId, target, here],
   );
   const { openclawUpdating, tasksByBot, transcripts, bots, connection } = state;
   const unreadSeen = useMemo(

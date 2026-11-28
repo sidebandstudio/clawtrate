@@ -20,6 +20,12 @@ import { asRecord } from "./mapping.ts";
 export const FILES_LIST = "agents.files.list";
 /** The longest a files read is waited for; past it, the answer counts as lost and the bot shows. */
 export const FILES_READ_TIMEOUT_MS = 5_000;
+/**
+ * The starting files both versions list for a bot before its first turn, all missing
+ * (`agents.files.list`, a development gateway of 2026.10.6 and of 2026.11.10): an all-missing
+ * answer counts as untouched only when it names these.
+ */
+const STARTING_FILES = ["AGENTS.md", "SOUL.md", "USER.md"];
 
 /**
  * Whether an `agents.files.list` answer for `botId` says the bot is untouched: true only for an
@@ -33,17 +39,21 @@ export function filesSayUntouched(answer: unknown, botId: string): boolean {
   let bootstrap = false;
   let memory = false;
   let anyPresent = false;
+  let starting = 0;
   for (const entry of record.files) {
     const file = asRecord(entry);
     if (!file || typeof file.name !== "string") return false;
     if (file.missing !== undefined && typeof file.missing !== "boolean") return false;
+    if (STARTING_FILES.includes(file.name)) starting += 1;
     if (file.missing === true) continue;
     anyPresent = true;
     if (file.name === "BOOTSTRAP.md") bootstrap = true;
     if (file.name === "MEMORY.md") memory = true;
   }
   if (record.files.length === 0 || memory) return false;
-  return bootstrap || !anyPresent;
+  // Every file missing is a bot before its first turn only when the answer names its starting
+  // files; a partial or changed answer is a doubt.
+  return bootstrap || (!anyPresent && starting === STARTING_FILES.length);
 }
 
 type Deps = {
@@ -52,6 +62,8 @@ type Deps = {
   generation: () => number;
   /** The gateway's own version as `hello-ok` reported it. */
   serverVersion: () => string | null | undefined;
+  /** The identity of the gateway this connection reached (`gateway.identity.get`), or null. */
+  gatewayId: () => string | null;
   /** Publish the verdict: the id of the gateway's own bot when untouched, otherwise null. */
   publish: (untouched: string | null) => void;
   /** How long a read is waited for (`FILES_READ_TIMEOUT_MS`; shorter in tests). */
@@ -73,8 +85,10 @@ export class GatewayBotFiles {
   private wanted: string | null = null;
   /** The generation of the read under way, or null when none is. */
   private reading: number | null = null;
-  /** The bot a read last answered about on this gateway: its verdict is kept until the next. */
+  /** The bot a read last answered about, and the gateway it answered on: its verdict is kept
+   * until the next read, and only for that gateway. */
   private answeredFor: string | null = null;
+  private answeredOn: string | null = null;
 
   private readonly deps: Deps;
 
@@ -92,6 +106,7 @@ export class GatewayBotFiles {
     this.asked += 1;
     this.wanted = null;
     this.answeredFor = null;
+    this.answeredOn = null;
     this.deps.publish(null);
   }
 
@@ -111,7 +126,8 @@ export class GatewayBotFiles {
       return;
     }
     // No answer about this bot yet: it stays out of view, as before this rule, while it is read.
-    if (this.answeredFor !== this.wanted) this.deps.publish(this.wanted);
+    if (this.answeredFor !== this.wanted || this.answeredOn !== this.deps.gatewayId())
+      this.deps.publish(this.wanted);
     const generation = this.deps.generation();
     // A read under way on this connection reads the newest list's bot when it answers.
     if (this.reading === generation) return;
@@ -148,6 +164,7 @@ export class GatewayBotFiles {
         if (generation !== this.deps.generation()) return;
         if (asked === this.asked) {
           this.answeredFor = botId;
+          this.answeredOn = this.deps.gatewayId();
           this.deps.publish(untouched ? botId : null);
           return;
         }

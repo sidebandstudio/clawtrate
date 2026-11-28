@@ -370,6 +370,12 @@ describe("F-562: the gateway's own bot is left out only while untouched (main-bo
       { files: [{ name: "BOOTSTRAP.md", missing: "no" }] },
       { files: [null] },
       { ...untouched("pip") },
+      // Every file missing, but not the starting files: a partial or changed answer.
+      { agentId: "atlas", files: [{ name: "notes.txt", missing: true }] },
+      files("atlas", [
+        ["AGENTS.md", true],
+        ["SOUL.md", true],
+      ]),
     ])
       expect(filesSayUntouched(answer, "atlas")).toBe(false);
   });
@@ -499,6 +505,32 @@ describe("F-562: reading whether the gateway's own bot is untouched", () => {
     held.resolve(untouched("atlas"));
     await sleep(30);
     expect(ids(listedBots(client.state))).toContain("atlas");
+    client.stop();
+  });
+
+  it("F-562: a verdict belongs to the gateway it was read on: another answering at the same address doesn't inherit it", async () => {
+    let identity = "gateway-a";
+    let answer: () => unknown = () => used("atlas");
+    const { client, gateway } = await connected({}, (gateway) => {
+      gateway.connectReply = () => hello();
+      gateway.handlers["gateway.identity.get"] = () => ({ deviceId: identity });
+      gateway.handlers["agents.files.list"] = () => answer();
+    });
+    await until(() => client.state.connection.gatewayId === "gateway-a");
+    await until(() => ids(listedBots(client.state)).includes("atlas"));
+    // Another gateway now answers at the same address; its files read is out.
+    const held = deferred<unknown>();
+    identity = "gateway-b";
+    answer = () => held.promise;
+    const asked = gateway.calls("agents.files.list").length;
+    gateway.dropAll();
+    await until(() => gateway.calls("agents.files.list").length > asked);
+    expect(client.state.connection.gatewayId).toBe("gateway-b");
+    // Not gateway A's "used": its own bot stays out of view while its own read is out.
+    expect(ids(listedBots(client.state))).toEqual(["main", "pip"]);
+    held.resolve(untouched("atlas"));
+    await until(() => client.state.untouchedGatewayBot === "atlas");
+    expect(ids(listedBots(client.state))).toEqual(["main", "pip"]);
     client.stop();
   });
 

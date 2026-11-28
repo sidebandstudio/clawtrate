@@ -2177,6 +2177,7 @@ export class ClawtrateClient {
     request: (method, params) => this.request(method, params),
     generation: () => this.generation,
     serverVersion: () => this.state.connection.serverVersion,
+    gatewayId: () => this.state.connection.gatewayId ?? null,
     publish: (untouched) => {
       if ((this.state.untouchedGatewayBot ?? null) === untouched) return;
       this.store.update((state) => ({ ...state, untouchedGatewayBot: untouched }));
