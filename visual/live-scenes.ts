@@ -164,6 +164,14 @@ export const LIVE_VIEWS: Array<{
       ),
   },
   {
+    scene: "not-run-files-gone",
+    rows: "F-480",
+    ready: (page) =>
+      expect(page.getByTestId("turn-error")).toContainText(
+        "This device can no longer resend the files. To try again, attach them to a new message.",
+      ),
+  },
+  {
     scene: "not-run-computer-use",
     rows: "F-480",
     ready: (page) =>

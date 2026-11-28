@@ -4390,7 +4390,7 @@ export class ClawtrateClient {
       !run ||
       !transcript ||
       notRunCause(run.error?.message)?.kind !== "computer-use-timeout" ||
-      !repeatedNotRun(run, transcript.runs)
+      !repeatedNotRun(run, transcript.runs, transcript.items)
     ) {
       return "not-sent";
     }

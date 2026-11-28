@@ -1422,6 +1422,26 @@ describe("F-480 #988: recovering a message that never ran", () => {
     expect(repeatedNotRun(unsaid, [unsaid, { ...unsaid, id: "g", startedAt: 5 }])).toBe(false);
   });
 
+  it("uses keyed message order when an earlier failure was written after a successful run", () => {
+    const reason = "The backend could not prepare.";
+    const items = mapHistory(["a", "b", "c"].map((id) => userRow(id, id)));
+    const runs = ["c", "a", "b"].map((id, index) =>
+      newRun(
+        id,
+        {
+          state: id === "b" ? "completed" : "failed",
+          origin: "history",
+          anchorKeyed: true,
+          anchorItemId: items.find((item) => item.id.startsWith(`u-${id}:`))!.id,
+          error: id === "b" ? null : { message: reason, kind: null, beforeReply: true },
+        },
+        10 + index,
+      ),
+    );
+    expect(repeatedNotRun(runs[0]!, runs, items)).toBe(false);
+    expect(repeatedNotRun(runs[0]!, runs.slice(0, 2), items)).toBe(true);
+  });
+
   it("gives up the oldest retry copy at the count and decoded size limits", () => {
     const files = new NotRunFiles();
     const entry = (runId: string, bytes: number) => ({

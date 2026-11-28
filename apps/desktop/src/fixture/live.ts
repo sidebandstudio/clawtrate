@@ -46,6 +46,7 @@ export const LIVE_SCENES = [
   "run-failed",
   "not-run-api-key",
   "not-run-other",
+  "not-run-files-gone",
   "not-run-computer-use",
   "not-run-computer-use-repeat",
   "not-run-computer-use-off",
@@ -798,6 +799,36 @@ export function liveScene(
         }),
         steps: [],
       };
+    case "not-run-files-gone": {
+      const anchor = "retry-file-message";
+      const state = withRun(base, now, {
+        state: "failed",
+        reportedStartAt: null,
+        endedAt: now - 2 * SECOND,
+        messageId: null,
+        anchorItemId: anchor,
+        anchorKeyed: true,
+        retryFiles: "gone",
+        error: { message: "Error: The session is being moved to another machine.", kind: null },
+      });
+      return {
+        initial: withTranscript(state, (transcript) => ({
+          ...transcript,
+          outbox: [],
+          items: [
+            ...transcript.items,
+            {
+              id: anchor,
+              role: "user",
+              timestamp: now - 42 * SECOND,
+              model: null,
+              blocks: [{ kind: "text", text: "Can you read the attached backup log?" }],
+            },
+          ],
+        })),
+        steps: [],
+      };
+    }
     case "not-run-computer-use":
     case "not-run-computer-use-repeat":
     case "not-run-computer-use-off":
@@ -806,8 +837,8 @@ export function liveScene(
         message: "Codex Computer Use readiness failed: plugin/list timed out",
         kind: null,
       };
-      const earlier = scene !== "not-run-computer-use";
-      const canAdmin = scene !== "not-run-computer-use-access";
+      const earlier = name !== "not-run-computer-use";
+      const canAdmin = name !== "not-run-computer-use-access";
       const state = withRun(
         base,
         now,
@@ -840,7 +871,7 @@ export function liveScene(
         initial: {
           ...state,
           connection: { ...state.connection, canAdmin },
-          ...(scene === "not-run-computer-use-off"
+          ...(name === "not-run-computer-use-off"
             ? {
                 computerUseUndo: {
                   taskKey: OPEN_TASK,

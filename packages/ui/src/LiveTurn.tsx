@@ -220,7 +220,8 @@ function keyedAnchor(run: Run, transcript: Transcript) {
 
 /**
  * What "Try again" sends for a failed run, if anything (#686). Nothing goes out without its files:
- * - `again`: this device still holds the message, and its words and files go again together;
+ * - `again`: the outbox still holds the message and its files;
+ * - `retained`: the host still holds the text, reply and files for a send history confirmed;
  * - `text`: only history has it, and it was words alone;
  * - `files-gone`: only history has it, and it had files this device no longer holds: no Try
  *   again, and the line says to send it again with them;
@@ -241,14 +242,18 @@ export type RetryPlan =
 
 export function retryPlan(run: Run, transcript: Transcript): RetryPlan {
   if (run.retryFiles === "held") return { kind: "retained", runId: run.id };
-  if (run.retryFiles === "gone") return { kind: "files-gone" };
-  if (run.messageId && transcript.outbox.some((message) => message.id === run.messageId))
+  if (
+    run.messageId &&
+    run.retryFiles !== "gone" &&
+    transcript.outbox.some((message) => message.id === run.messageId)
+  )
     return { kind: "again", messageId: run.messageId };
   const anchor = keyedAnchor(run, transcript);
-  if (!anchor) return null;
   // Nor do words that may be only their start, which a files plan says as well.
-  const cut = wordsCut(anchor) ? ({ wordsCut: true } as const) : {};
-  if ((anchor.attachments?.length ?? 0) > 0) return { kind: "files-gone", ...cut };
+  const cut = anchor && wordsCut(anchor) ? ({ wordsCut: true } as const) : {};
+  if (run.retryFiles === "gone" || (anchor?.attachments?.length ?? 0) > 0)
+    return { kind: "files-gone", ...cut };
+  if (!anchor) return null;
   // Words alone go again only when the message is known to have had no files.
   if (attachmentsCut(anchor)) return { kind: "files-unknown", ...cut };
   if ("wordsCut" in cut) return { kind: "words-cut" };
@@ -412,7 +417,8 @@ export function RunEnding({
     ending.kind === "not-run" || ending.kind === "not-started"
       ? notRunWords(ending, bot.name, earlier)
       : null;
-  const repeated = ending.kind === "not-run" && repeatedNotRun(run, transcript.runs);
+  const repeated =
+    ending.kind === "not-run" && repeatedNotRun(run, transcript.runs, transcript.items);
   const cause = ending.kind === "not-run" ? ending.cause : null;
   const details = cause?.words;
   const computerUse = cause?.kind === "computer-use-timeout";
@@ -586,8 +592,7 @@ export function RunEnding({
       )}
       {retry?.kind === "files-gone" && (
         <p className="turn-error-reason" data-testid="retry-files-gone">
-          This message had files, and this device no longer holds them. To try again, send it again
-          with its files.
+          This device can no longer resend the files. To try again, attach them to a new message.
         </p>
       )}
       {retry?.kind === "files-unknown" && (

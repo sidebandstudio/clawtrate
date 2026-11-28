@@ -9,6 +9,7 @@ import { cleanLine } from "./gateway-names.ts";
 import { asRecord } from "./mapping.ts";
 import type { OutgoingAttachment } from "./client.ts";
 import type { OutgoingMessage, Run } from "./runs.ts";
+import type { TranscriptItem } from "./types.ts";
 
 /** The longest the gateway's own words are shown, in characters. */
 export const MAX_NOT_RUN_WORDS = 300;
@@ -208,22 +209,40 @@ export function neverStarted(run: Run): boolean {
 }
 
 /** The previous outcome with the same reported reason, in message order. */
-export function repeatedNotRun(run: Run, runs: readonly Run[]): boolean {
+export function repeatedNotRun(
+  run: Run,
+  runs: readonly Run[],
+  items: readonly TranscriptItem[] = [],
+): boolean {
   if (!neverRan(run)) return false;
   const reason = notRunCause(run.error?.message);
   if (!reason || reason.kind === "unsaid") return false;
-  const at = run.startedAt ?? run.endedAt;
-  if (at === null) return false;
+  const order = (each: Run, index: number) => {
+    const anchor = each.anchorKeyed ? items.findIndex((item) => item.id === each.anchorItemId) : -1;
+    const at = items[anchor]?.timestamp ?? each.startedAt ?? each.endedAt;
+    return { anchor, at, index };
+  };
+  type Order = ReturnType<typeof order>;
+  const compare = (a: Order, b: Order): number | null => {
+    // Use the order of keyed messages even if a failure was written well after its send.
+    if (a.anchor >= 0 && b.anchor >= 0 && a.anchor !== b.anchor) return a.anchor - b.anchor;
+    if (a.at === null || b.at === null) return null;
+    return a.at - b.at || a.index - b.index;
+  };
+  const current = order(
+    run,
+    runs.findIndex((each) => each.id === run.id),
+  );
   let previous: Run | undefined;
-  let previousAt = -Infinity;
-  const current = runs.findIndex((each) => each.id === run.id);
+  let previousOrder: Order | undefined;
   for (const [index, each] of runs.entries()) {
     if (each.id === run.id || each.state === "queued") continue;
-    const eachAt = each.startedAt ?? each.endedAt;
-    if (eachAt === null || eachAt > at || (eachAt === at && index >= current)) continue;
-    if (eachAt >= previousAt) {
+    const candidate = order(each, index);
+    const before = compare(candidate, current);
+    if (before === null || before >= 0) continue;
+    if (!previousOrder || (compare(candidate, previousOrder) ?? -1) >= 0) {
       previous = each;
-      previousAt = eachAt;
+      previousOrder = candidate;
     }
   }
   if (!previous || !neverRan(previous)) return false;

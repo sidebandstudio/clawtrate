@@ -2307,6 +2307,8 @@ test("F-480 #988: after a repeated Computer Use timeout the card can turn it off
   await actions.nth(0).click();
   await expect(card.getByText("Computer Use is off on this gateway.")).toBeVisible();
   await expect(actions.nth(0)).toHaveText("Try again");
+  await expect(actions.nth(0)).toBeFocused();
   await card.getByRole("button", { name: "Put back" }).click();
   await expect(card.getByText("The previous Computer Use setting is back.")).toBeVisible();
+  await expect(actions.nth(0)).toBeFocused();
 });

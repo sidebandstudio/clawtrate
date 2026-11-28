@@ -382,6 +382,34 @@ describe("#686: a not-run line sits only under the message its run is known to h
     });
   });
 
+  it("F-480 #988: a dropped retry copy keeps its files from being resent as text alone", () => {
+    const { run, transcript } = reloaded([
+      userRow("run-a", "Back up the photos.", 1),
+      failedRow("run-a", 2),
+    ]);
+    expect(retryPlan({ ...run, retryFiles: "held" }, transcript)).toEqual({
+      kind: "retained",
+      runId: run.id,
+    });
+    const dropped: Run = { ...run, retryFiles: "gone" };
+    expect(retryPlan(dropped, transcript)).toEqual({ kind: "files-gone" });
+    const html = renderToStaticMarkup(
+      createElement(BridgeProvider, {
+        bridge: { getState: () => ({ bots: [] }) } as unknown as ClawtrateBridge,
+        children: createElement(RunEndingCard, {
+          run: dropped,
+          bot: { id: "otto", name: "Otto" } as Bot,
+          transcript,
+          taskKey: KEY,
+        }),
+      }),
+    );
+    expect(html).toContain(
+      "This device can no longer resend the files. To try again, attach them to a new message.",
+    );
+    expect(html).not.toContain(">Try again</button>");
+  });
+
   it("words alone go again only when the message is known to have had no files", () => {
     const { transcript } = reloaded([
       userRow("run-a", "Back up the photos.", 1),
