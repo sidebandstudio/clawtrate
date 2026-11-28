@@ -50,6 +50,15 @@ const freshDraft = (): Draft => ({
 /** Kept until the app quits: closing the dialog does not lose what was entered. */
 type Kept = { draft: Draft; step: "look" | "account" | "connect" };
 const KEPT = "new-bot";
+const FIRST_KEPT = "first-bot";
+type FirstDraft = { target: number; url: string | null; name: string };
+
+function firstDraftName(connection: ConnectionState): string {
+  const kept = recall<FirstDraft>(FIRST_KEPT);
+  return kept?.target === connection.target && kept.url === connection.gatewayUrl
+    ? kept.name
+    : "Juniper";
+}
 
 export function NewBot({
   accounts,
@@ -66,11 +75,13 @@ export function NewBot({
   info: HostInfo;
   first?: boolean;
   onClose: () => void;
-  onCreated: (botId: string) => void;
+  onCreated: (botId: string, taskKey?: string) => void;
 }) {
   const bridge = useBridge();
   const [draft, setDraftState] = useState<Draft>(() =>
-    first ? { ...freshDraft(), name: "Juniper" } : (recall<Kept>(KEPT)?.draft ?? freshDraft()),
+    first
+      ? { ...freshDraft(), name: firstDraftName(connection) }
+      : (recall<Kept>(KEPT)?.draft ?? freshDraft()),
   );
   const [step, setStepState] = useState<"look" | "account" | "connect">(
     () => recall<Kept>(KEPT)?.step ?? "look",
@@ -132,7 +143,8 @@ export function NewBot({
   const setDraft = (change: (draft: Draft) => Draft) =>
     setDraftState((was) => {
       const next = change(was);
-      if (!first) remember(KEPT, { draft: next, step: recall<Kept>(KEPT)?.step ?? step });
+      if (first) remember(FIRST_KEPT, { target, url: gateway, name: next.name });
+      else remember(KEPT, { draft: next, step: recall<Kept>(KEPT)?.step ?? step });
       return next;
     });
   const focusStep = () => {
@@ -175,14 +187,30 @@ export function NewBot({
     accounts.readOn?.target === target &&
     accounts.readOn?.connectedAt === connection.connectedAt;
   const firstChoice = first && ready ? firstBotModel(accounts, signedIn) : null;
+  const keptAccount = accounts.accounts.find(
+    (account) =>
+      account.keptBy !== null &&
+      (signedIn === null || account.id === signedIn) &&
+      bots.some((bot) => bot.id === account.keptBy),
+  );
   if (first && firstConnect === null && ready && canSubmitHere && admin)
-    setFirstConnect(firstChoice === null && accounts.mainShared);
-  const showFirstConnect = first && firstConnect === true && canSubmitHere && admin;
+    setFirstConnect(firstChoice === null && !keptAccount);
+  const showFirstConnect =
+    first &&
+    firstConnect === true &&
+    connection.gatewayUrl === gateway &&
+    connection.target === target &&
+    (connection.gatewayId === null || connection.gatewayId === openedOn) &&
+    (admin || connection.status !== "connected");
 
   // The gateway's default model names an account: it is chosen at first (section 4).
   const named = defaultAccount(accounts);
   const shared = accounts.accounts.filter((a) => a.keptBy === null);
-  const name = draft.name.trim() || (first ? "Juniper" : "New bot");
+  const creation = accounts.creation;
+  const name =
+    first && creation?.status === "failed" && creation.uncertain
+      ? creation.name
+      : draft.name.trim() || (first ? "Juniper" : "New bot");
   const gw = defaultRef(accounts);
   const providerOf = (value: string | null) =>
     value === GATEWAY_CHOICE
@@ -245,8 +273,23 @@ export function NewBot({
   const listedChoice =
     draft.account === GATEWAY_CHOICE ||
     (accounts.status === "ready" && shared.some((a) => a.id === draft.account));
-  const creation = accounts.creation;
   const busy = creation?.status === "creating" || creation?.status === "checking";
+  const [existingBotError, setExistingBotError] = useState(false);
+  const startExistingConversation = async (botId: string) => {
+    if (pending.current || !stands()) return;
+    pending.current = true;
+    setPreparing(true);
+    setExistingBotError(false);
+    try {
+      const { key } = await bridge.invoke({ type: "newMainTask", botId });
+      if (stands()) onCreated(botId, key);
+    } catch {
+      if (stands()) setExistingBotError(true);
+    } finally {
+      pending.current = false;
+      if (stands()) setPreparing(false);
+    }
+  };
   const create = async () => {
     const sent = first
       ? {
@@ -295,6 +338,7 @@ export function NewBot({
         provider,
         model: sent.model,
         effort: sent.effort,
+        ...(first ? { verifyAccountModel: true } : {}),
         // The host refuses it unless this is still the gateway, and the target, it names.
         stamp: { gatewayId: now$.current.gatewayId, target },
       });
@@ -307,6 +351,7 @@ export function NewBot({
         announce(`Created ${name}, not finished`);
         return;
       }
+      if (first) remember(FIRST_KEPT, null);
       announce(`Created ${name}`);
       void bridge.send({ type: "dismissBotCreation" }).catch(() => {});
       onCreated(botId);
@@ -330,6 +375,7 @@ export function NewBot({
         stamp: { gatewayId: now$.current.gatewayId, target },
       });
       if (!stands() || missing.length > 0) return;
+      if (first) remember(FIRST_KEPT, null);
       announce(`Created ${partial.name}`);
       void bridge.send({ type: "dismissBotCreation" }).catch(() => {});
       onCreated(botId);
@@ -383,7 +429,11 @@ export function NewBot({
             <p>{partial.name} was created. Choose Finish to complete its setup.</p>
           </Note>
         ) : !canSubmitHere || !admin ? (
-          <p role="status">Reconnect to this gateway with full control to finish setting up.</p>
+          <p role="status">
+            {connection.status !== "connected" && connection.target === target
+              ? "Waiting for your gateway to reconnect. Setup will continue when it returns."
+              : "Reconnect to this gateway with full control to finish setting up."}
+          </p>
         ) : failed ? (
           <Note tone="warn">
             <p>Couldn’t load this gateway’s accounts and models.</p>
@@ -393,7 +443,6 @@ export function NewBot({
           <p role="status">Checking which models your gateway can use…</p>
         ) : firstChoice ? (
           <>
-            <PicturePreview draft={STARTER} label={null} small />
             <label className="b-field">
               Name
               <input
@@ -401,7 +450,7 @@ export function NewBot({
                 autoComplete="off"
                 maxLength={40}
                 placeholder="Juniper"
-                value={draft.name}
+                value={creation?.uncertain ? creation.name : draft.name}
                 disabled={busy || preparing || creation?.uncertain}
                 onChange={(event) => setDraft((was) => ({ ...was, name: event.target.value }))}
               />
@@ -411,8 +460,8 @@ export function NewBot({
         ) : (
           <Note tone="warn">
             <p>
-              {!accounts.mainShared
-                ? "This gateway keeps the sign-in for its own bot. New bots need their own account."
+              {keptAccount && !accounts.mainShared
+                ? "This gateway keeps the sign-in for its own bot. You can use it with that bot."
                 : signedInAccount
                   ? `Your gateway has no ${providerName(signedInAccount.provider)} model this bot can use. Connect another account.`
                   : "No account is ready to use. Connect an account to continue."}
@@ -436,6 +485,7 @@ export function NewBot({
             </p>
           </Note>
         )}
+        {existingBotError && <p role="alert">Couldn’t open a conversation. Try again.</p>}
       </>
     );
     foot = partial ? (
@@ -450,6 +500,16 @@ export function NewBot({
       </button>
     ) : (
       <>
+        {!firstChoice && keptAccount?.keptBy && !accounts.mainShared && canSubmitHere && admin && (
+          <button
+            type="button"
+            className="button"
+            disabled={preparing}
+            onClick={() => void startExistingConversation(keptAccount.keptBy!)}
+          >
+            Start a conversation with this bot
+          </button>
+        )}
         {firstChoice && (
           <button
             type="button"
@@ -464,7 +524,6 @@ export function NewBot({
           </button>
         )}
         {ready &&
-          accounts.mainShared &&
           canSubmitHere &&
           admin &&
           !busy &&
@@ -803,6 +862,7 @@ export function NewBot({
           info={info}
           announce={announce}
           skipLabel={first}
+          waitingForGateway={first && !canSubmitHere}
           onDone={(account) => {
             if (first) {
               setSignedIn(account);

@@ -15,6 +15,7 @@ import {
   type GatewayAccount,
   type HostInfo,
   type SignInFlow,
+  type SignInState,
 } from "@clawtrate/core";
 
 export { providerName };
@@ -303,7 +304,9 @@ export function firstBotModel(accounts: AccountsState, signedIn: string | null) 
   );
   const withModel = (account: GatewayAccount | undefined) => {
     if (!account) return null;
-    const model = firstModel(accounts, account.provider, true);
+    const model = accounts.firstBotModels
+      ? (accounts.firstBotModels.find((row) => row.provider === account.provider)?.model ?? null)
+      : firstModel(accounts, account.provider, true);
     return model ? { account, model } : null;
   };
   const preferred = withModel(eligible.find((account) => account.id === named));
@@ -313,6 +316,21 @@ export function firstBotModel(accounts: AccountsState, signedIn: string | null) 
     if (choice) return choice;
   }
   return null;
+}
+
+/** The refreshed read after an interruption can still confirm a single new shared account. */
+export function recoveredSignInAccount(
+  signIn: Pick<SignInState, "stage" | "method" | "result"> | null,
+  method: string,
+): string | null {
+  const result = signIn?.result;
+  return signIn?.stage === "ended" &&
+    signIn.method === method &&
+    result?.landed === "shared" &&
+    !result.readFailed &&
+    result.added.length === 1
+    ? result.added[0]!
+    : null;
 }
 
 /**

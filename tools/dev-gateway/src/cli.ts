@@ -295,15 +295,21 @@ export const CODING_AGENT_SCRIPT = fileURLToPath(new URL("./coding-agent-mcp.ts"
  * which asks a person about every command it has no approved rule for. Only
  * the messaging pair may message each other.
  */
-function botEntries(stateDir: string, browserBots: readonly string[] | null, onlyMain = false) {
+function botEntries(stateDir: string, browserBots: readonly string[] | null, firstBot = false) {
   const entries: Record<
     string,
-    { workspace: string; tools: Record<string, unknown>; subagents?: { allowAgents: string[] } }
+    {
+      workspace: string;
+      agentDir?: string;
+      tools: Record<string, unknown>;
+      subagents?: { allowAgents: string[] };
+    }
   > = {};
   for (const bot of SEED_BOTS) {
-    if (onlyMain && bot.id !== "main") continue;
+    if (firstBot && bot.id !== "main") continue;
     const partner = messagingPartner(bot.id);
     entries[bot.id] = {
+      ...(firstBot ? { agentDir: join(stateDir, "agents", "main", "agent") } : {}),
       // Where `agents add` used to put them: the built-in bot in workspace/, the others in workspaces/<id>.
       workspace:
         bot.id === "main" ? join(stateDir, "workspace") : join(stateDir, "workspaces", bot.id),
@@ -944,13 +950,52 @@ function writeFreshConfig(
   options: StartOptions = {},
 ): DevConnection {
   const token = randomBytes(24).toString("base64url");
-  writeFileSync(
-    inst.configPath,
-    `${JSON.stringify(devConfig(token, ports, inst.stateDir, plugins, options), null, 2)}\n`,
-    {
-      mode: 0o600,
-    },
-  );
+  const config = devConfig(token, ports, inst.stateDir, plugins, options);
+  const onboard = options.firstBot
+    ? inst.runner.runSync([
+        "onboard",
+        "--non-interactive",
+        "--accept-risk",
+        "--auth-choice",
+        "skip",
+        "--gateway-bind",
+        "loopback",
+        "--gateway-auth",
+        "token",
+        "--gateway-port",
+        String(ports.gatewayPort),
+        "--workspace",
+        join(inst.stateDir, "workspace"),
+        "--no-install-daemon",
+        "--skip-health",
+        "--skip-skills",
+        "--json",
+      ])
+    : null;
+  if (onboard && onboard.status !== 0) {
+    throw new Error(`first-bot onboarding failed:\n${onboard.stdout}${onboard.stderr}`);
+  }
+  if (onboard) {
+    const fresh = JSON.parse(readFileSync(inst.configPath, "utf8")) as {
+      agents?: { entries?: Record<string, { agentDir?: string }> };
+      auth?: { profiles?: Record<string, unknown> };
+    };
+    const entries = fresh.agents?.entries ?? {};
+    if (
+      Object.keys(entries).some((id) => id !== "main") ||
+      entries.main?.agentDir !== config.agents.entries.main?.agentDir ||
+      Object.keys(fresh.auth?.profiles ?? {}).length > 0
+    ) {
+      throw new Error(
+        "The first-bot fixture no longer matches the onboarding roster and accounts.",
+      );
+    }
+  }
+  // Keep the roster and account store as onboard created them, with the dev tool's
+  // model, network and tool policies in force before the gateway starts.
+  writeFileSync(inst.configPath, `${JSON.stringify(config, null, 2)}\n`, {
+    mode: 0o600,
+  });
   const connection = {
     url: `ws://127.0.0.1:${ports.gatewayPort}`,
     token,

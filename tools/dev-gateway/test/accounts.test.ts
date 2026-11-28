@@ -61,6 +61,7 @@ it("F-504: first-bot setup starts with only main and no saved or configured cred
   const options = { firstBot: true };
   const config = devConfig("token", PORTS, STATE, [], options);
   expect(Object.keys(config.agents.entries)).toEqual(["main"]);
+  expect(config.agents.entries.main?.agentDir).toBe(join(STATE, "agents", "main", "agent"));
   expect(config.auth).toEqual({ profiles: {} });
   expect(config.models.providers).toHaveProperty("acme");
   expect(Object.values(config.models.providers).every((provider) => !("apiKey" in provider))).toBe(

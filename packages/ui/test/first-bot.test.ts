@@ -1,6 +1,6 @@
 import { initialAccountsState, type AccountsState, type GatewayAccount } from "@clawtrate/core";
 import { describe, expect, it } from "vitest";
-import { firstBotModel } from "../src/bots/words.ts";
+import { firstBotModel, recoveredSignInAccount } from "../src/bots/words.ts";
 import { settlement } from "../src/bots/settings-request.ts";
 
 function account(id: string, changes: Partial<GatewayAccount> = {}): GatewayAccount {
@@ -97,4 +97,34 @@ it("F-480: Connect an account waits for the right bot's provider screen and focu
   expect(settlement(request, "other", drawn)).toBeNull();
   expect(settlement(request, "juniper", () => null)).toBeNull();
   expect(settlement(request, "juniper", drawn)).toEqual({ focus: "[data-bs-connect]" });
+});
+
+it("F-504: setup resumes only after its interrupted sign-in reads back one shared account", () => {
+  const signIn = {
+    stage: "ended",
+    method: "acme/sign-in",
+    result: {
+      added: ["acme:new"],
+      landed: "shared",
+      keptBy: null,
+      readFailed: false,
+      locks: [],
+    },
+  } as const;
+  const confirmed = { ...signIn, result: { ...signIn.result, added: ["acme:new"], locks: [] } };
+  expect(recoveredSignInAccount(confirmed, "acme/sign-in")).toBe("acme:new");
+  expect(recoveredSignInAccount(confirmed, "globex/sign-in")).toBeNull();
+  expect(recoveredSignInAccount({ ...confirmed, result: null }, "acme/sign-in")).toBeNull();
+  expect(
+    recoveredSignInAccount(
+      { ...confirmed, result: { ...confirmed.result, readFailed: true } },
+      "acme/sign-in",
+    ),
+  ).toBeNull();
+  expect(
+    recoveredSignInAccount(
+      { ...confirmed, result: { ...confirmed.result, added: ["acme:new", "acme:other"] } },
+      "acme/sign-in",
+    ),
+  ).toBeNull();
 });

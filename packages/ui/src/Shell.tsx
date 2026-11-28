@@ -46,6 +46,7 @@ import { isWorkTab, WorkPanel, type WorkTab } from "./WorkPanel.tsx";
 import { setUsageOpener } from "./usage/navigation.ts";
 import { setBotSettingsOpener } from "./bots/settings-request.ts";
 import { NewBot } from "./bots/NewBot.tsx";
+import { firstBotModel } from "./bots/words.ts";
 import { FullControlOffer } from "./FullControl.tsx";
 import { DeleteBot } from "./bots/DeleteBot.tsx";
 import "./bots/bots.css";
@@ -261,6 +262,17 @@ export function Shell({
   );
   // New bot, from the "+" menu and ⌘N, where the connection may write (bots.md section 3).
   const [newBot, setNewBot] = useState<"first" | "regular" | null>(null);
+  const [firstPromptedTarget, setFirstPromptedTarget] = useState<number | null>(null);
+  const focusCreatedComposer = useRef<{ botId: string; target: number } | null>(null);
+  const [firstConversation, setFirstConversation] = useState<{
+    botId: string;
+    target: number;
+  } | null>(null);
+  const {
+    target: firstTarget,
+    connectedAt: firstHello,
+    gatewayId: firstGateway,
+  } = state.connection;
   const onlyBot = state.bots[0];
   const firstBotSetup =
     interactive &&
@@ -283,10 +295,37 @@ export function Shell({
   // another, by a shortcut or by itself.
   const shellDialogOpen =
     offerOpen || shortcuts || searchOpen || newBot !== null || deletingOpen || deviceSheetOpen;
-  const openNewBot = useCallback(
-    () => setNewBot(firstBotSetup ? "first" : "regular"),
-    [firstBotSetup],
-  );
+  useEffect(() => {
+    if (firstBotSetup && firstGateway !== null)
+      void send({ type: "refreshAccounts" }).catch(() => {});
+  }, [firstBotSetup, firstTarget, firstHello, firstGateway, send]);
+  const accountRead = state.accounts.readOn;
+  if (
+    firstBotSetup &&
+    firstGateway !== null &&
+    firstPromptedTarget !== firstTarget &&
+    !shellDialogOpen &&
+    !inert &&
+    !drawerOpen &&
+    !routinesOpen &&
+    state.connection.fullOffer !== "offer" &&
+    state.accounts.status === "ready" &&
+    state.accounts.modelsStatus === "ready" &&
+    accountRead?.gatewayId === firstGateway &&
+    accountRead.target === firstTarget &&
+    accountRead.connectedAt === firstHello &&
+    !firstBotModel(state.accounts, null)
+  ) {
+    setFirstPromptedTarget(firstTarget);
+    setNewBot("first");
+  }
+  const finishingFirstBot =
+    firstPromptedTarget === firstTarget &&
+    (state.accounts.creation?.status === "partial" || state.accounts.creation?.uncertain === true);
+  const openNewBot = useCallback(() => {
+    if (firstBotSetup) setFirstPromptedTarget(firstTarget);
+    setNewBot(firstBotSetup || finishingFirstBot ? "first" : "regular");
+  }, [firstBotSetup, finishingFirstBot, firstTarget]);
   const mac = isMac();
   useEffect(() => {
     if (inert || shellDialogOpen) return;
@@ -384,6 +423,24 @@ export function Shell({
   // Only the latest open of a task decides its refusal: a late answer to an earlier
   // one says nothing about now.
   const taskKey = task?.key ?? null;
+  useEffect(() => {
+    const wanted = focusCreatedComposer.current;
+    if (
+      newBot ||
+      !wanted ||
+      !taskKey ||
+      !interactive ||
+      wanted.botId !== bot?.id ||
+      wanted.target !== firstTarget
+    )
+      return;
+    const frame = requestAnimationFrame(() => {
+      const composer = mainRef.current?.querySelector<HTMLElement>(".composer-input");
+      composer?.focus();
+      if (composer && document.activeElement === composer) focusCreatedComposer.current = null;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [newBot, taskKey, bot?.id, interactive, firstTarget, view]);
   const [refusals, setRefusals] = useState<ReadonlyMap<string, string>>(() => new Map());
   const opens = useRef({ count: 0, latest: new Map<string, number>() });
   const setRefusal = useCallback((key: string, error: string | null) => {
@@ -984,6 +1041,10 @@ export function Shell({
                   onShowComputer={showComputer}
                   updatingWords={updating ? updatingStripWords(updating).text : null}
                   onFirstBot={firstBotSetup ? openNewBot : null}
+                  firstConversation={
+                    firstConversation?.botId === bot?.id &&
+                    firstConversation?.target === firstTarget
+                  }
                 />
               </WorkLinksContext.Provider>
             </OpenTaskContext.Provider>
@@ -1064,13 +1125,13 @@ export function Shell({
             info={info}
             first={newBot === "first"}
             onClose={() => setNewBot(null)}
-            onCreated={(id) => {
+            onCreated={(id, key) => {
+              if (newBot === "first") setFirstConversation({ botId: id, target: firstTarget });
+              focusCreatedComposer.current = { botId: id, target: firstTarget };
               setNewBot(null);
-              selection.selectBot(id);
+              if (key) selection.selectTask(id, key);
+              else selection.selectBot(id);
               openDetail({ composer: true });
-              requestAnimationFrame(() =>
-                document.querySelector<HTMLElement>(".composer-input")?.focus(),
-              );
             }}
           />
         )}
