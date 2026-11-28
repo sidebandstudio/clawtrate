@@ -375,6 +375,7 @@ function CheckInsDialog({
   const inheritedPrompt = checkIns.defaults?.prompt ?? null;
   // Said from what is known of the prompt in effect, never from its wording.
   const kind = promptKind(prompt.trim() === "" ? null : prompt, checkIns.defaults);
+  const fallback = promptKind(null, checkIns.defaults);
   const typed = kind === "own";
   const checkedHere = save?.status === "unknown" && draft.rebased === save.id;
   const title = `${bot.name}'s check-ins`;
@@ -453,7 +454,9 @@ function CheckInsDialog({
                 value={prompt}
                 readOnly={base.promptCut || saving}
                 maxLength={MAX_CHECKIN_PROMPT_CHARS}
-                placeholder={inheritedPrompt ?? DEFAULT_PROMPT}
+                placeholder={
+                  inheritedPrompt ?? (fallback === "builtin" ? DEFAULT_PROMPT : undefined)
+                }
                 aria-describedby={[
                   typed ? "ci-prompt-note" : null,
                   base.promptCut ? "ci-prompt-cut" : null,
@@ -466,14 +469,16 @@ function CheckInsDialog({
                 }
               />
               <InfoCard id="ci-prompt-hint">
-                {inheritedPrompt !== null
+                {fallback === "default"
                   ? "Empty uses the prompt the gateway sets for every bot."
-                  : "Empty uses the gateway's built-in prompt, which asks the bot to reply NO_REPLY when nothing needs attention."}{" "}
+                  : fallback === "builtin"
+                    ? "Empty uses the gateway's built-in prompt, which asks the bot to reply NO_REPLY when nothing needs attention."
+                    : "Empty uses the gateway's own prompt."}{" "}
                 Up to {MAX_CHECKIN_PROMPT_CHARS.toLocaleString("en-US")} characters.
               </InfoCard>
               {typed && (
                 <p className="ci-hint" id="ci-prompt-note" data-testid="prompt-note">
-                  {promptKind(null, checkIns.defaults) === "builtin"
+                  {fallback === "builtin"
                     ? `This prompt replaces the gateway's own, which asks ${bot.name} to reply NO_REPLY when nothing needs attention.`
                     : "This prompt replaces the gateway's default for this bot."}{" "}
                   Whether {bot.name} stays quiet depends on what this prompt asks.

@@ -77,7 +77,7 @@ async function covered(scope: Locator | Page, open: Locator) {
   return under;
 }
 
-test.describe("the explanation behind an i", () => {
+test.describe("F-613: the explanation behind an i", () => {
   test.use(contextFor(WIDE, "dark"));
 
   test("each moved explanation is its control's description, in its exact words, while closed", async ({
@@ -296,7 +296,7 @@ test.describe("the explanation behind an i", () => {
   });
 });
 
-test.describe("at phone width", () => {
+test.describe("F-613: at phone width", () => {
   test.use(contextFor(PHONE, "dark"));
 
   test("a tap opens it, fitting the screen; a second tap or a tap elsewhere puts it away", async ({
@@ -332,14 +332,14 @@ for (const size of [WIDE, PHONE]) {
       ["conversation", "Conversation", "Turn time limit"],
       ["advanced", "Advanced", "Show external channel chats"],
     ] as const) {
-      test(`#798: ${sectionName} with one "i" open`, async ({ page }) => {
+      test(`F-613: ${sectionName} with one "i" open`, async ({ page }) => {
         const settings = await section(page, sectionName);
         await info(settings, about).click();
         await settle(page);
         await expect(page).toHaveScreenshot(`settings-info-${name}-dark-${size.name}.png`);
       });
     }
-    test(`#798: a budget's tokens with its "i" open`, async ({ page }) => {
+    test(`F-613: a budget's tokens with its "i" open`, async ({ page }) => {
       await openFixture(
         page,
         `scene=main&${OTTO_DISK}&panel=open&tab=settings&access=write&uview=usage&budget=none`,
@@ -350,7 +350,7 @@ for (const size of [WIDE, PHONE]) {
       await settle(page);
       await expect(page).toHaveScreenshot(`settings-info-budget-dark-${size.name}.png`);
     });
-    test(`#798: a check-in's prompt with its "i" open`, async ({ page }) => {
+    test(`F-613: a check-in's prompt with its "i" open`, async ({ page }) => {
       await openFixture(page, `scene=main&${OTTO_DISK}&access=admin&checkins=every`, "dark");
       await checkIns(page);
       await page.getByRole("button", { name: "Change Otto's check-ins" }).click();
