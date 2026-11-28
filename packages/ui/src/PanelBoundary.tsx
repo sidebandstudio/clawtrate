@@ -24,12 +24,13 @@ export class PanelBoundary extends Component<Props, { failed: boolean }> {
     return { failed: true };
   }
 
+  // Called after the fallback is drawn, on a panel's first draw too: the drawer's focus goes there.
   override componentDidCatch(): void {
     this.props.onFailed?.(true);
+    if (this.props.rootRef) this.tryAgain.current?.focus();
   }
 
   override componentDidUpdate(_: Props, before: { failed: boolean }): void {
-    if (!before.failed && this.state.failed && this.props.rootRef) this.tryAgain.current?.focus();
     // Said only once the panel has drawn again: a Try again that fails again never got here.
     if (before.failed && !this.state.failed) this.props.onFailed?.(false);
   }

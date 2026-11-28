@@ -240,3 +240,22 @@ test("a failed conversation's Try again that fails again, or a reply that comes 
   await page.waitForTimeout(300);
   expect(await reads()).toBe(before);
 });
+
+test("a Work drawer that fails as it first opens takes focus to its Try again", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 800, height: 900 });
+  await openFixture(page, `scene=main&${OTTO_DISK}&panel=closed`, "light");
+  await expect(page.getByTestId("transcript")).toBeVisible();
+  await page.evaluate(() => {
+    const fixture = (
+      window as unknown as {
+        clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+      }
+    ).clawtrateFixture;
+    fixture.setState((state) => ({ ...state, accounts: null as never }));
+  });
+  await page.keyboard.press("ControlOrMeta+\\");
+  const failed = page.getByTestId("panel-failed").last();
+  await expect(failed.getByRole("button", { name: "Try again" })).toBeFocused();
+});
