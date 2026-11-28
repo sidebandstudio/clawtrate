@@ -7287,8 +7287,8 @@ export class ClawtrateClient {
     return this.accounts.checkLock(botId);
   }
 
-  startSignIn(methodId: string, botId: string | null): Promise<void> {
-    return this.accounts.startSignIn(methodId, botId);
+  startSignIn(methodId: string, botId: string | null, id?: string): Promise<void> {
+    return this.accounts.startSignIn(methodId, botId, id);
   }
 
   /** A code or address pasted back, or a company address: sent once, kept nowhere. */
@@ -7297,8 +7297,8 @@ export class ClawtrateClient {
   }
 
   /** Cancel the sign-in under way; `cancelled` only when the gateway confirmed it. */
-  cancelSignIn(): Promise<{ cancelled: boolean }> {
-    return this.accounts.cancelSignIn();
+  cancelSignIn(id?: string): Promise<{ cancelled: boolean }> {
+    return this.accounts.cancelSignIn(id);
   }
 
   /** Let go of a sign-in that has ended; one under way is kept unless the gateway confirms its cancel. */

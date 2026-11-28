@@ -1158,7 +1158,7 @@ export function accountCommand(
     case "startSignIn": {
       const method = accounts().methods.find((m) => m.id === command.methodId)!;
       const base: SignInState = {
-        id: "fixture-signin",
+        id: command.signInId ?? "fixture-signin",
         method: method.id,
         provider: method.provider,
         label: method.label,
@@ -1356,7 +1356,7 @@ export function accountCommand(
           return Promise.resolve();
         }
         signIn({ stage: "checking", error: null });
-        later(400, () => planConnected());
+        later(400, () => planConnected(current.id));
         return Promise.resolve();
       }
       signIn({ stage: "checking" });
@@ -1365,6 +1365,8 @@ export function accountCommand(
       return Promise.resolve();
     }
     case "cancelSignIn":
+      if (command.signInId !== undefined && accounts().signIn?.id !== command.signInId)
+        return Promise.resolve({ cancelled: false });
       // signin=cancel-unknown: the gateway's answer to the cancel says nothing.
       if (params.signin === "cancel-unknown") {
         signIn({ cancelUnknown: true });
@@ -1378,6 +1380,8 @@ export function accountCommand(
       return Promise.resolve({ cancelled: true });
     case "dismissSignIn": {
       const current = accounts().signIn;
+      if (command.signInId !== undefined && current?.id !== command.signInId)
+        return Promise.resolve({ dismissed: false });
       if (params.signin === "cancel-unknown" && current && current.result === null)
         return Promise.resolve({ dismissed: false });
       put((a) => ({ ...a, signIn: null }));
@@ -1787,9 +1791,9 @@ export function accountCommand(
       return undefined;
   }
 
-  function planConnected() {
+  function planConnected(signInId: string) {
     const current = accounts().signIn;
-    if (!current) return;
+    if (current?.id !== signInId || current.stage !== "checking") return;
     const id = "anthropic:setup-fixture";
     const before = accounts().bindings.find((b) => b.botId === current.forBot)?.primary ?? null;
     const after = `anthropic/claude-sonnet-5-5@${id}`;

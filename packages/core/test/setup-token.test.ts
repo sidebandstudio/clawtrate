@@ -202,6 +202,107 @@ describe("a Claude plan's setup token (#932)", () => {
     client.stop();
   });
 
+  it("records the model the gateway has now, even when the last accounts read is stale", async () => {
+    const { fake } = setupGateway();
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    try {
+      expect(accounts().bindings.find((b) => b.botId === "main")?.primary).toBeNull();
+      const before = "acme/dev-1@acme:work";
+      const entries = (fake.config.agents as { entries: Record<string, Json> }).entries;
+      entries.main = { ...entries.main, model: { primary: before } };
+      await client.startSignIn(SETUP_TOKEN_METHOD, null);
+      await client.answerSignIn(TOKEN);
+      await until(() => accounts().signIn?.result?.modelChange != null);
+      expect(accounts().signIn?.result?.modelChange).toEqual({ before, after: MODEL });
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("retains the previous model through a failed verification and Check again", async () => {
+    const { fake } = setupGateway();
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    try {
+      const before = "acme/dev-1";
+      const entries = (fake.config.agents as { entries: Record<string, Json> }).entries;
+      entries.main = { ...entries.main, model: { primary: before } };
+      await client.startSignIn(SETUP_TOKEN_METHOD, null);
+      fake.unavailable = true;
+      await client.answerSignIn(TOKEN);
+      await until(() => accounts().signIn?.stage === "unverified");
+      fake.unavailable = false;
+      await client.recheckSignIn();
+      await until(() => accounts().signIn?.stage === "connected");
+      expect(accounts().signIn?.result?.modelChange).toEqual({ before, after: MODEL });
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("cancels by id while setup is still reading the model, before opening a gateway session", async () => {
+    const { fake } = setupGateway();
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    try {
+      const get = fake.gateway.handlers["config.get"]!;
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      fake.gateway.handlers["config.get"] = async (params) => {
+        await held;
+        return get(params);
+      };
+      const id = "clawtrate-close-during-read";
+      const started = client.startSignIn(SETUP_TOKEN_METHOD, null, id);
+      try {
+        await until(() => accounts().signIn?.id === id);
+        await expect(client.cancelSignIn("a-previous-sign-in")).resolves.toEqual({
+          cancelled: false,
+        });
+        await expect(client.cancelSignIn(id)).resolves.toEqual({ cancelled: true });
+      } finally {
+        release();
+        await started;
+      }
+      expect(fake.gateway.calls(SETUP_AUTH_START)).toEqual([]);
+      expect(fake.gateway.calls("wizard.cancel")).toEqual([]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("waits for an admitted setup before cancelling the same session", async () => {
+    const { fake } = setupGateway();
+    const { client } = await accountsClient({ gateway: fake });
+    try {
+      const setup = fake.gateway.handlers[SETUP_AUTH_START]!;
+      let release!: () => void;
+      const held = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      fake.gateway.handlers[SETUP_AUTH_START] = async (params) => {
+        await held;
+        return setup(params);
+      };
+      const id = "clawtrate-close-during-start";
+      const started = client.startSignIn(SETUP_TOKEN_METHOD, null, id);
+      try {
+        await until(() => fake.gateway.calls(SETUP_AUTH_START).length === 1);
+        const cancel = client.cancelSignIn(id);
+        expect(fake.gateway.calls("wizard.cancel")).toEqual([]);
+        release();
+        await expect(cancel).resolves.toEqual({ cancelled: true });
+      } finally {
+        release();
+        await started;
+      }
+      expect(fake.gateway.calls("wizard.cancel")).toEqual([{ sessionId: id }]);
+      expect(fake.gateway.calls("wizard.next")).toEqual([]);
+    } finally {
+      client.stop();
+    }
+  });
+
   it("Put back gives the bot its earlier model, only while it still has the one the sign-in gave it", async () => {
     const { fake } = setupGateway();
     const { client, accounts } = await accountsClient({ gateway: fake });

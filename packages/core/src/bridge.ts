@@ -355,10 +355,10 @@ export type BridgeCommand =
   /** Read one bot's stored order again: the lock's evidence. */
   | { type: "checkLock"; botId: string }
   /** Start one of the gateway's sign-ins, for the bot the person works on (or null). */
-  | { type: "startSignIn"; methodId: string; botId: string | null }
+  | { type: "startSignIn"; methodId: string; botId: string | null; signInId?: string }
   /** The code or address pasted back, or a company address. Sent once and kept nowhere. */
   | { type: "answerSignIn"; value: string }
-  | { type: "cancelSignIn" }
+  | { type: "cancelSignIn"; signInId?: string }
   /** With `signInId`, only that sign-in is let go. */
   | { type: "dismissSignIn"; signInId?: string }
   /** Read again where a finished sign-in's account landed, after that read failed. */
@@ -1361,11 +1361,11 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "readGatewayHooks":
       return { type: "readGatewayHooks" };
     case "dismissSignIn":
-      return command.signInId === undefined
-        ? { type: "dismissSignIn" }
-        : { type: "dismissSignIn", signInId: id(command.signInId, "sign-in") };
-    case "refreshAccounts":
     case "cancelSignIn":
+      return command.signInId === undefined
+        ? { type: command.type }
+        : { type: command.type, signInId: id(command.signInId, "sign-in") };
+    case "refreshAccounts":
     case "recheckSignIn":
     case "dismissBotCreation":
       return { type: command.type };
@@ -1427,6 +1427,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       return {
         type: "startSignIn",
         methodId: id(command.methodId, "sign-in method"),
+        ...(command.signInId === undefined ? {} : { signInId: id(command.signInId, "sign-in") }),
         botId: command.botId === null || command.botId === undefined ? null : botId(command.botId),
       };
     case "answerSignIn":
@@ -2339,11 +2340,11 @@ class ViewerSession implements BridgeSession {
       case "checkLock":
         return client.checkLock(command.botId);
       case "startSignIn":
-        return client.startSignIn(command.methodId, command.botId);
+        return client.startSignIn(command.methodId, command.botId, command.signInId);
       case "answerSignIn":
         return client.answerSignIn(command.value);
       case "cancelSignIn":
-        return client.cancelSignIn();
+        return client.cancelSignIn(command.signInId);
       case "dismissSignIn":
         return client.dismissSignIn(command.signInId);
       case "recheckSignIn":

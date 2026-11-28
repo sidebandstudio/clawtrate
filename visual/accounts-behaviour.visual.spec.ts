@@ -2455,6 +2455,98 @@ test("#932: without admin access, the plan's way says it needs full control and 
   await expect(ways.getByRole("button", { name: /^API key/ })).toBeVisible();
 });
 
+test("F-474 #932: cancelling while the fixture checks a setup token prevents its completion", async ({
+  page,
+}) => {
+  await page.clock.install({ time: NOW });
+  await openFixture(page, ADMIN, "light");
+  await connectFromNewBot(page);
+  await newBot(page)
+    .getByRole("button", { name: /^Claude\b/ })
+    .click();
+  await newBot(page)
+    .getByRole("button", { name: /^Paste a setup token/ })
+    .click();
+  await page.getByTestId("paste").fill("made-up-setup-token-for-a-check");
+  await page.clock.pauseAt(new Date(NOW.getTime() + 60_000));
+  await newBot(page)
+    .getByRole("button", { name: "Continue" })
+    .evaluate((button) => (button as HTMLButtonElement).click());
+  await newBot(page)
+    .getByRole("button", { name: "Cancel", exact: true })
+    .evaluate((button) => (button as HTMLButtonElement).click());
+  await page.clock.runFor(500);
+  await expect(newBot(page).getByRole("heading", { name: "Sign-in cancelled" })).toBeVisible();
+  const state = await page.evaluate(() =>
+    (window as unknown as { clawtrateFixture: ClawtrateBridge }).clawtrateFixture.getState(),
+  );
+  expect(state.accounts.accounts.some((account) => account.id === "anthropic:setup-fixture")).toBe(
+    false,
+  );
+});
+
+test("F-474 #932: closing Connect while dismissal waits prevents the setup from starting", async ({
+  page,
+}) => {
+  await openFixture(page, ADMIN, "light");
+  await connectFromNewBot(page);
+  await newBot(page)
+    .getByRole("button", { name: /^Claude\b/ })
+    .click();
+  await page.evaluate(() => {
+    const w = window as unknown as {
+      clawtrateFixture: ClawtrateBridge;
+      releaseDismiss?: () => void;
+    };
+    const send = w.clawtrateFixture.send;
+    w.clawtrateFixture.send = async (command) => {
+      if (command.type === "dismissSignIn")
+        await new Promise<void>((resolve) => {
+          w.releaseDismiss = resolve;
+        });
+      await send(command);
+    };
+  });
+  await newBot(page)
+    .getByRole("button", { name: /^Paste a setup token/ })
+    .click();
+  await page.waitForFunction(
+    () =>
+      typeof (window as unknown as { releaseDismiss?: () => void }).releaseDismiss === "function",
+  );
+  await page.keyboard.press("Escape");
+  await expect(newBot(page)).toBeHidden();
+  await page.evaluate(() => (window as unknown as { releaseDismiss: () => void }).releaseDismiss());
+  await settle(page);
+  expect((await sent(page)).filter((each) => each.type === "startSignIn")).toEqual([]);
+});
+
+test("F-474 #932: each setup has its own Put back after another setup in the same dialog", async ({
+  page,
+}) => {
+  await openFixture(page, ADMIN, "light");
+  await connectFromNewBot(page);
+  const openPlan = async () => {
+    await newBot(page)
+      .getByRole("button", { name: /^Claude\b/ })
+      .click();
+    await newBot(page)
+      .getByRole("button", { name: /^Paste a setup token/ })
+      .click();
+    await page.getByTestId("paste").fill("made-up-setup-token-for-a-check");
+    await newBot(page).getByRole("button", { name: "Continue" }).click();
+    await expect(page.getByRole("heading", { name: "Connected to Anthropic" })).toBeVisible();
+  };
+  await openPlan();
+  const change = page.getByTestId("model-change");
+  await change.getByRole("button", { name: /^Put back/ }).click();
+  await expect(change).toContainText(/again\./);
+  await newBot(page).getByRole("button", { name: "Back to sign-in methods" }).click();
+  await openPlan();
+  await expect(change).toContainText(/now uses claude-sonnet-5-5/);
+  await expect(change.getByRole("button", { name: /^Put back/ })).toBeVisible();
+});
+
 test.describe("phone, a key", () => {
   test.use(contextFor(PHONE, "light"));
   test("F-474: on a phone, opening the API key path brings its fields into view", async ({

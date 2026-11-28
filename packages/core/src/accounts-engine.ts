@@ -273,6 +273,8 @@ export class AccountsEngine {
    * gateway it was started on: only that gateway's session is ended and its saved token removed.
    */
   private modelBefore: { id: string; model: string | null; gateway: string | null } | null = null;
+  /** A cancel during setup admission waits for this request, then cancels that session. */
+  private setupStarting: { id: string; reply: Promise<unknown> } | null = null;
   /**
    * What the person typed into the sign-in under way (a key, a pasted code or
    * address), in the forms the gateway may echo it, held only while that
@@ -1268,7 +1270,7 @@ export class AccountsEngine {
   }
 
   /** Start one of the gateway's sign-ins (`models.authLogin`) and follow it (`wizard.next`). */
-  async startSignIn(methodId: string, botId: string | null): Promise<void> {
+  async startSignIn(methodId: string, botId: string | null, id?: string): Promise<void> {
     this.requireAdmin("Connecting an account");
     const method = this.ctx.get().methods.find((each) => each.id === methodId);
     if (!method) throw new Error("The gateway does not offer that sign-in.");
@@ -1277,7 +1279,7 @@ export class AccountsEngine {
     const forBot = this.signInTarget(botId);
     await this.begin(
       {
-        id: `clawtrate-${this.ctx.randomId()}`,
+        id: id ?? `clawtrate-${this.ctx.randomId()}`,
         method: method.id,
         provider: method.provider,
         label: method.label,
@@ -1310,21 +1312,10 @@ export class AccountsEngine {
     this.forgetSecrets();
     if (key !== null) this.holdSecret(key);
     ctx.update((a) => ({ ...a, signIn: { ...signIn, known: before } }));
-    // The setup sign-in sets the bot's model as it connects (#932): what it was, to say and put back.
-    if (signIn.flow === "token")
-      this.modelBefore = {
-        id: signIn.id,
-        model: ctx.get().bindings.find((b) => b.botId === signIn.forBot)?.primary ?? null,
-        gateway: ctx.gatewayNow(),
-      };
     try {
-      if (signIn.flow === "token")
-        await ctx.request(SETUP_AUTH_START, {
-          sessionId: signIn.id,
-          authChoice: "setup-token",
-          agentId: signIn.forBot,
-        });
-      else
+      if (signIn.flow === "token") {
+        if (!(await this.startSetupSignIn(signIn))) return;
+      } else
         await ctx.request("models.authLogin", {
           sessionId: signIn.id,
           authChoice: signIn.method,
@@ -1332,11 +1323,49 @@ export class AccountsEngine {
         });
     } catch (error) {
       const message = this.scrub(errorText(error));
-      this.setSignIn(signIn.id, { stage: isBusy(message) ? "busy" : "failed", error: message });
-      this.forgetSecrets();
+      const current = ctx.get().signIn;
+      if (current?.id === signIn.id && isActive(current)) {
+        this.setSignIn(signIn.id, { stage: isBusy(message) ? "busy" : "failed", error: message });
+        if (this.modelBefore?.id === signIn.id) this.modelBefore = null;
+        this.forgetSecrets();
+      }
       return;
     }
     await this.paused((pause) => this.follow(signIn.id, null, key, before, pause), untilEnd);
+  }
+
+  private async startSetupSignIn(signIn: SignInState): Promise<boolean> {
+    const { ctx } = this;
+    const opened = ctx.readStamp();
+    const config = asRecord(asRecord(await ctx.request("config.get", {}))?.config);
+    const current = ctx.get().signIn;
+    if (current?.id !== signIn.id || !isActive(current)) return false;
+    const now = ctx.readStamp();
+    if (
+      !config ||
+      !ctx.connected() ||
+      !sameStamp(opened, now) ||
+      opened.connectedAt !== now.connectedAt
+    )
+      throw new Error("Clawtrate could not read the bot's model on this connection.");
+
+    const entries = asRecord(asRecord(config.agents)?.entries);
+    const model = readModelConfig(asRecord(entries?.[signIn.forBot])?.model).primary;
+    this.modelBefore = { id: signIn.id, model, gateway: now.gatewayId };
+    const reply = ctx.request(SETUP_AUTH_START, {
+      sessionId: signIn.id,
+      authChoice: "setup-token",
+      agentId: signIn.forBot,
+    });
+    const starting = { id: signIn.id, reply };
+    this.setupStarting = starting;
+    try {
+      await reply;
+      const admitted = ctx.get().signIn;
+      return admitted?.id === signIn.id && isActive(admitted) && !admitted.cancelling;
+    } finally {
+      if (this.setupStarting === starting) this.setupStarting = null;
+    }
   }
 
   /**
@@ -1564,10 +1593,36 @@ export class AccountsEngine {
    * late to cancel"; any other answer leaves it unknown, and the accounts are
    * read again.
    */
-  async cancelSignIn(): Promise<{ cancelled: boolean }> {
+  async cancelSignIn(id?: string): Promise<{ cancelled: boolean }> {
     const signIn = this.ctx.get().signIn;
+    if (id !== undefined && signIn?.id !== id) return { cancelled: false };
     if (!signIn || !isActive(signIn)) return { cancelled: signIn?.stage === "cancelled" };
+    if (signIn.cancelling) return { cancelled: false };
+    if (
+      signIn.flow === "token" &&
+      signIn.stage === "starting" &&
+      this.modelBefore?.id !== signIn.id
+    ) {
+      // The config read is still pending. There is no gateway session to cancel.
+      this.setSignIn(signIn.id, { stage: "cancelled", step: null });
+      this.forgetSecrets();
+      return { cancelled: true };
+    }
     this.setSignIn(signIn.id, { cancelling: true, cancelUnknown: false });
+    const starting = this.setupStarting;
+    if (starting?.id === signIn.id) {
+      const opened = this.ctx.readStamp();
+      await starting.reply.catch(() => {});
+      const current = this.ctx.get().signIn;
+      const now = this.ctx.readStamp();
+      if (
+        current?.id !== signIn.id ||
+        !this.ctx.connected() ||
+        !sameStamp(opened, now) ||
+        opened.connectedAt !== now.connectedAt
+      )
+        return { cancelled: false };
+    }
     let answer: RawRecord | null = null;
     let failure: unknown = null;
     try {
@@ -1640,8 +1695,10 @@ export class AccountsEngine {
   async dismissSignIn(id?: string): Promise<{ dismissed: boolean }> {
     const signIn = this.ctx.get().signIn;
     if (id !== undefined && signIn?.id !== id) return { dismissed: false };
-    if (signIn && isActive(signIn) && !(await this.cancelSignIn()).cancelled)
+    if (signIn && isActive(signIn) && !(await this.cancelSignIn(signIn.id)).cancelled)
       return { dismissed: false };
+    if (this.ctx.get().signIn?.id !== signIn?.id) return { dismissed: false };
+    if (this.modelBefore?.id === signIn?.id) this.modelBefore = null;
     this.forgetSecrets();
     this.ctx.update((a) => ({ ...a, signIn: null }));
     return { dismissed: true };
@@ -1734,8 +1791,10 @@ export class AccountsEngine {
       await this.load();
       if (ended.flow === "token" && stage === "connected") this.noteModelChange(id);
     } finally {
-      if (this.modelBefore?.id === id) this.modelBefore = null;
-      if (ctx.get().signIn?.id === id) this.forgetSecrets();
+      const current = ctx.get().signIn;
+      if (this.modelBefore?.id === id && (current?.id !== id || stage !== "unverified"))
+        this.modelBefore = null;
+      if (current?.id === id) this.forgetSecrets();
     }
   }
 
@@ -1778,8 +1837,8 @@ export class AccountsEngine {
         agentId: botId,
       });
       return inactive;
-    } catch (error) {
-      this.log(`a setup sign-in's saved token was not removed: ${errorText(error)}`);
+    } catch {
+      this.log("a setup sign-in's saved token was not removed");
       return [];
     }
   }
@@ -1795,7 +1854,13 @@ export class AccountsEngine {
   /** The bot's own model, as read after the sign-in, beside what it was before it. */
   private noteModelChange(id: string): void {
     const signIn = this.ctx.get().signIn;
-    if (signIn?.id !== id || !signIn.result || this.modelBefore?.id !== id) return;
+    if (
+      signIn?.id !== id ||
+      !signIn.result ||
+      this.modelBefore?.id !== id ||
+      !this.onSetupGateway(id)
+    )
+      return;
     const before = this.modelBefore.model;
     const after = this.ctx.get().bindings.find((b) => b.botId === signIn.forBot)?.primary ?? null;
     if (after === before) return;
@@ -2973,6 +3038,8 @@ export class AccountsEngine {
 
   /** Another gateway: nothing read from this one is kept. */
   reset(): void {
+    this.modelBefore = null;
+    this.setupStarting = null;
     // A write under way belongs to the gateway it was asked of: retired, it sends nothing more.
     this.resets += 1;
     // An Unlock's line is about the gateway it was pressed for.

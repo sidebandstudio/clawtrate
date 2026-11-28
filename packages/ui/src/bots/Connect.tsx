@@ -9,6 +9,7 @@ import {
   labelProblem,
   normalizeLabel,
   parseModelRef,
+  SETUP_TOKEN_METHOD,
   type AccountsState,
   type Bot,
   type ConnectionState,
@@ -16,7 +17,15 @@ import {
   type HostInfo,
   type SignInState,
 } from "@clawtrate/core";
-import { Fragment, useCallback, useEffect, useRef, useState, type ReactNode } from "react";
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import { useBridge } from "../bridge.tsx";
 import { screenStamp, shownStamp } from "../stamp.ts";
 import { ChevronIcon, ExternalIcon, LockIcon } from "../icons.tsx";
@@ -131,23 +140,21 @@ export function useConnect({
   // A label save that answers after Connect has gone with its bot finishes nothing: the sign-in it
   // would dismiss may be another bot's by then (#781).
   const mounted = useRef(true);
-  useEffect(() => {
+  const openedSetup = useRef<string | null>(null);
+  const visibleSetup = useRef<string | null>(null);
+  const visibleSignIn = useRef<string | null>(null);
+  useLayoutEffect(() => {
+    visibleSignIn.current = signIn?.id ?? null;
+    visibleSetup.current = signIn?.flow === "token" && isSignInActive(signIn) ? signIn.id : null;
+  }, [signIn]);
+  useLayoutEffect(() => {
     mounted.current = true;
     return () => {
       mounted.current = false;
+      const signInId = openedSetup.current ?? visibleSetup.current;
+      if (signInId) void bridge.send({ type: "cancelSignIn", signInId }).catch(() => {});
     };
-  }, []);
-  // A plan's setup sign-in never outlives Connect (#932): closed, it is cancelled on the gateway.
-  const setupUnderWay = useRef<boolean>(false);
-  useEffect(() => {
-    setupUnderWay.current = Boolean(signIn && signIn.flow === "token" && isSignInActive(signIn));
-  });
-  useEffect(
-    () => () => {
-      if (setupUnderWay.current) void bridge.send({ type: "cancelSignIn" }).catch(() => {});
-    },
-    [bridge],
-  );
+  }, [bridge]);
   const [confirmDrop, setConfirmDrop] = useState<string | null>(null);
   // The grid: the tiles after the first few once "Show more" is pressed, and the tile last left,
   // which takes focus when the grid comes back.
@@ -158,6 +165,7 @@ export function useConnect({
   const [dropError, setDropError] = useState<string | null>(null);
   // Put back of the model a setup sign-in gave the bot (#932).
   const [putBack, setPutBack] = useState<{
+    signInId: string;
     status: "saving" | "done" | "failed";
     change: { before: string | null; after: string | null };
   } | null>(null);
@@ -194,7 +202,20 @@ export function useConnect({
   const begin = useCallback(
     async (id: string) => {
       await bridge.send({ type: "dismissSignIn" }).catch(() => {});
-      await bridge.send({ type: "startSignIn", methodId: id, botId: forBot }).catch(() => {});
+      if (!mounted.current) return;
+      const signInId =
+        id === SETUP_TOKEN_METHOD
+          ? `clawtrate-${Array.from(crypto.getRandomValues(new Uint8Array(16)), (byte) => byte.toString(16).padStart(2, "0")).join("")}`
+          : null;
+      if (signInId) openedSetup.current = signInId;
+      await bridge
+        .send({
+          type: "startSignIn",
+          methodId: id,
+          botId: forBot,
+          ...(signInId === null ? {} : { signInId }),
+        })
+        .catch(() => {});
     },
     [bridge, forBot],
   );
@@ -661,8 +682,9 @@ export function useConnect({
         : "Clawtrate hasn't seen it in the gateway's lists yet, so it can't say which bots can use it.";
     const locks = signIn?.result?.locks ?? [];
     // What the setup sign-in changed on the bot besides the account, with Put back (#932).
-    const change = putBack?.change ?? landing?.modelChange ?? null;
-    const putStatus = putBack?.status ?? "idle";
+    const ownPutBack = putBack?.signInId === signIn?.id ? putBack : null;
+    const change = ownPutBack?.change ?? landing?.modelChange ?? null;
+    const putStatus = ownPutBack?.status ?? "idle";
     const changedBot = bots.find((bot) => bot.id === signIn?.forBot)?.name ?? "The bot";
     const modelWords = (ref: string) => {
       const parsed = parseModelRef(ref);
@@ -673,7 +695,8 @@ export function useConnect({
     };
     const putModelBack = async (what: { before: string | null; after: string | null }) => {
       if (!signIn) return;
-      setPutBack({ status: "saving", change: what });
+      const signInId = signIn.id;
+      setPutBack({ signInId, status: "saving", change: what });
       try {
         await bridge.invoke({
           type: "putBackModel",
@@ -682,10 +705,12 @@ export function useConnect({
           after: what.after,
           stamp: await screenStamp(bridge, openedOn),
         });
-        setPutBack({ status: "done", change: what });
+        if (!mounted.current || visibleSignIn.current !== signInId) return;
+        setPutBack({ signInId, status: "done", change: what });
         announce("Model put back");
       } catch {
-        setPutBack({ status: "failed", change: what });
+        if (mounted.current && visibleSignIn.current === signInId)
+          setPutBack({ signInId, status: "failed", change: what });
       }
     };
     const done = async () => {
