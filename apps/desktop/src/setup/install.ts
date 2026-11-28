@@ -1849,6 +1849,9 @@ export class Installer {
         location: "staging",
       };
     const pending = await this.pending();
+    // A removal ends by unlinking its receipt, then the folder that held it. An empty folder is
+    // what a stop between the two leaves: nothing is under way, and rmdir takes only an empty one.
+    if (!pending) await rmdir(this.removalPaths.root).catch(() => {});
     if (
       (await presence(this.removalPaths.root)) !== "absent" &&
       (!pending || !(await this.clearUnusedRemoval(pending.id)))

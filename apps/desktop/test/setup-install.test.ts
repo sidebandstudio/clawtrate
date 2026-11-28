@@ -756,6 +756,37 @@ describe("F-502 F-503: each failure, named, with what the attempt left", () => {
       expect(await awake.run(() => {}, "continue", pending?.id)).toMatchObject({ ok: true });
   });
 
+  it("F-505: a removal stopped after its receipt went, before its folder did, starts clean", async () => {
+    const stand = await make();
+    const stop = new AbortController();
+    await runAll(
+      installer(stand, {
+        signal: stop.signal,
+        run: async (request, check) => {
+          const result = await runner.run(request, check);
+          if (request.args.includes("onboard")) stop.abort();
+          return result;
+        },
+      }),
+    );
+    // What the Trash move and the record's and receipt's unlinks leave: an empty removal folder.
+    const trash = join(stand.root, "Trash");
+    mkdirSync(trash, { recursive: true });
+    renameSync(stand.place.programDir, join(trash, "program"));
+    renameSync(stand.place.stateDir, join(trash, "profile"));
+    unlinkSync(stand.place.recordFile);
+    const root = join(dirname(stand.place.programDir), ".openclaw-removing");
+    mkdirSync(root, { mode: 0o700 });
+    const awake = installer(stand);
+    expect(await awake.recovery()).toBeNull();
+    expect(existsSync(root)).toBe(false);
+    // Anything inside keeps it named and left alone.
+    mkdirSync(root, { mode: 0o700 });
+    writeFileSync(join(root, "notes.txt"), "don't touch");
+    expect(await awake.recovery()).toEqual({ action: "inspect", location: "staging" });
+    expect(readFileSync(join(root, "notes.txt"), "utf8")).toBe("don't touch");
+  });
+
   it("F-505: an orphaned profile and service are reported and left as they are", async () => {
     const stand = await make();
     mkdirSync(stand.place.stateDir);
