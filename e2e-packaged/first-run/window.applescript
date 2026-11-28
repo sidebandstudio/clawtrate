@@ -30,36 +30,41 @@ on labelOf(itemRef, roleName)
   end tell
 end labelOf
 
--- The command line tools prompt belongs to macOS, outside Clawtrate's process.
-on developerToolDialogs()
+-- macOS permission and developer tools prompts belong to their own processes.
+on systemDialogs(appPid)
   set dialogRows to ""
   tell application "System Events"
-    set installers to every application process whose name contains "Developer Tools" or name is "CoreServicesUIAgent" or name is "Software Update" or name is "SoftwareUpdateNotificationManager" or name is "UserNotificationCenter" or bundle identifier is "com.apple.dt.CommandLineTools.installondemand"
-    repeat with installer in installers
+    set issuers to every application process whose unix id is not appPid and (visible is true or name contains "Developer Tools" or name is "CoreServicesUIAgent" or name is "Software Update" or name is "SoftwareUpdateNotificationManager" or name is "UserNotificationCenter" or name is "NotificationCenter" or bundle identifier is "com.apple.dt.CommandLineTools.installondemand")
+    repeat with issuer in issuers
       try
-        set issuerName to name of installer
-        repeat with promptWindow in windows of installer
+        set issuerName to name of issuer
+        repeat with promptWindow in windows of issuer
           set promptText to my labelOf(contents of promptWindow, "AXWindow")
           repeat with promptItem in entire contents of promptWindow
             set promptElement to contents of promptItem
-            if value of attribute "AXRole" of promptElement is "AXStaticText" then
-              set promptText to promptText & " " & my labelOf(promptElement, "AXStaticText")
-            end if
+            try
+              set promptRole to value of attribute "AXRole" of promptElement
+              if promptRole is in {"AXHeading", "AXStaticText"} then
+                set promptText to promptText & " " & my labelOf(promptElement, promptRole)
+              end if
+            end try
           end repeat
-          set dialogRows to dialogRows & "AXSystemDialog" & tab & issuerName & " " & my flat(promptText) & linefeed
+          if promptText contains "command line tools" or promptText contains "command line developer tools" or promptText contains "local network" then
+            set dialogRows to dialogRows & "AXSystemDialog" & tab & issuerName & " " & my flat(promptText) & linefeed
+          end if
         end repeat
       end try
     end repeat
   end tell
   return dialogRows
-end developerToolDialogs
+end systemDialogs
 
 on run argv
   set pid to item 1 of argv as integer
   set mode to item 2 of argv
   set target to item 3 of argv
   set output to ""
-  if mode is "read" then set output to my developerToolDialogs()
+  if mode is "read" then set output to my systemDialogs(pid)
   tell application "System Events"
     set matches to application processes whose unix id is pid
     if (count of matches) is 0 then return output

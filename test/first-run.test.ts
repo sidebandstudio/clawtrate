@@ -37,6 +37,7 @@ describe("Packaged first run forbidden screens", () => {
       "AXSystemDialog",
       "The git command requires the command line developer tools. Would you like to install the tools now?",
     ],
+    ["AXSystemDialog", "Allow “node” to find devices on local networks?"],
     ["AXStaticText", "A pairing request is waiting for the gateway owner."],
     ["AXHeading", "Approval required"],
     ["AXButton", "Allow once"],

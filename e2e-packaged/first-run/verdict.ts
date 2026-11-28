@@ -31,8 +31,9 @@ export function forbiddenScreen(elements: readonly Element[]): string | null {
   const forbidden = elements.find(({ role, text }) => {
     if (role === "AXSystemDialog") {
       return (
-        /\bcommand line (?:developer )?tools\b/i.test(text) &&
-        /\b(?:install|download|required|requires)\b/i.test(text)
+        /\ballow\b.*\bfind devices on local networks?\b/i.test(text) ||
+        (/\bcommand line (?:developer )?tools\b/i.test(text) &&
+          /\b(?:install|download|required|requires)\b/i.test(text))
       );
     }
     if (/^AX(?:TextField|TextArea|SecureTextField|ComboBox)$/.test(role)) {
