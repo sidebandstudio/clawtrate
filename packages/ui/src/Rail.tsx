@@ -80,6 +80,7 @@ import {
 } from "./selection.ts";
 import type { SettingsSection } from "./Settings.tsx";
 import { updatingPresence, type UpdatingHere } from "./bots/update-words.ts";
+import { RESTARTING_WORDS, restartingNow } from "./restarting.ts";
 import { isUnread } from "./unread.ts";
 
 /**
@@ -92,6 +93,7 @@ export function presenceWords(
   updating: UpdatingHere | null = null,
 ): string {
   if (updating) return updatingPresence(updating);
+  if (restartingNow(connection)) return RESTARTING_WORDS;
   switch (connection.status) {
     case "connected":
       return catchingUp ? "Catching up" : "Connected";
@@ -111,7 +113,9 @@ export function presenceWords(
 
 /** The footer dot: the gateway's presence, never a single task's trouble. */
 function presenceDot(connection: ConnectionState, catchingUp: boolean): string {
-  return connection.status === "connected" && catchingUp ? "connecting" : connection.status;
+  return connection.status === "connected" && (catchingUp || restartingNow(connection))
+    ? "connecting"
+    : connection.status;
 }
 
 /** Re-render once a minute, so relative times stay true. */

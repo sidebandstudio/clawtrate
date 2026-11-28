@@ -2,6 +2,7 @@ import { LIVE_UPDATES_NOT_STARTED, type ClawtrateState, type Transcript } from "
 import { useEffect, useId, useState } from "react";
 import { updatingHere, updatingStripWords } from "./bots/update-words.ts";
 import { gatewayTitle } from "./format.ts";
+import { RESTARTING_WORDS, restartingNow } from "./restarting.ts";
 import { ChevronIcon } from "./icons.tsx";
 
 /**
@@ -151,6 +152,15 @@ export function stripFor(
           countdown: false,
         };
       }
+      // The gateway is restarting (#913): said, with no countdown, until its wait runs out.
+      if (restartingNow(connection))
+        return {
+          tone: "warn",
+          text: RESTARTING_WORDS,
+          more: "showing saved messages",
+          action: "retry",
+          countdown: false,
+        };
       return {
         tone: "warn",
         text: "Reconnecting",
@@ -177,6 +187,9 @@ export function stripFor(
         countdown: false,
       };
     case "connected":
+      // Announced, before the gateway closes this connection (#913).
+      if (restartingNow(connection))
+        return { tone: "warn", text: RESTARTING_WORDS, more: null, action: null, countdown: false };
       break;
     default:
       return null;

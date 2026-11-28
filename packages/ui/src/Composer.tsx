@@ -183,6 +183,7 @@ export function Composer({
   taskKey,
   transcript,
   connected,
+  restarting = false,
   notices,
   needsYou,
   onReview,
@@ -199,6 +200,8 @@ export function Composer({
   taskKey: string;
   transcript: Transcript | undefined;
   connected: boolean;
+  /** The gateway is restarting (`restarting.ts`): offline, the placeholder says so. */
+  restarting?: boolean;
   notices: Notice[];
   needsYou: NeedsYou;
   onReview: () => void;
@@ -271,6 +274,7 @@ export function Composer({
     bot: bot.name,
     connected,
     chosen: chosen && chosen.run === runId ? chosen.mode : null,
+    restarting,
   });
 
   // Checked as drawn, against the gateway's current policy: a reconnect that changed it
