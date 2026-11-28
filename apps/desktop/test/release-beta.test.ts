@@ -2538,14 +2538,14 @@ describe("stopping a release while it builds", () => {
 });
 
 describe("the beta's release notes", () => {
-  it("say an existing OpenClaw is connected with its address and token under Advanced, and why", () => {
+  it("say OpenClaw is set up on a Mac without it, connected when found, and reached under Advanced elsewhere", () => {
     const notes = releaseNotes("0.2.0-beta.1", "0123456789abcdef", [
       { name: "Clawtrate-0.2.0-beta.1-mac-arm64.zip", sha256: "a".repeat(64) },
     ]);
-    expect(notes).toContain("asks for your gateway's address and token under Advanced");
-    expect(notes).toContain("running OpenClaw's own program before you agree");
-    // Nothing offers a connection without typing on an existing install.
-    expect(notes).not.toMatch(/without typing|automatically|one click/i);
+    expect(notes.split("\n")).toContain(
+      'If OpenClaw is not on your Mac, choose "Set up OpenClaw here" and confirm once when asked. Clawtrate downloads and installs OpenClaw for your account, starts it, and connects in two to four minutes with nothing to type. If OpenClaw is already running on your Mac, Clawtrate finds it and connects with one click. For OpenClaw on another computer, enter that gateway\'s address and token under "Advanced".',
+    );
+    expect(notes).not.toContain("doesn't connect to it by itself");
   });
 });
 
