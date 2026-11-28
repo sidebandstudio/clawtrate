@@ -15,7 +15,7 @@ import {
 } from "@clawtrate/core";
 import { describe, expect, it } from "vitest";
 import { addressAttemptInProgress, addressSubmission } from "../src/address.ts";
-import { homeModel, taskRows } from "../src/lists.ts";
+import { homeModel, keptAfterOpening, taskRows } from "../src/lists.ts";
 import { back, connectView, current, HOME, inShell, keptMismatch } from "../src/navigation.ts";
 import { gatewayActions, gatewayState, pairingNote } from "../src/presentation/gateway-state.ts";
 import { chatRows, runningWords } from "../src/transcript.ts";
@@ -286,6 +286,41 @@ describe("the iPhone app's screens", () => {
     expect(alone.rows).toHaveLength(1);
     expect(alone.rows[0]).toMatchObject({ primary: true });
     expect(alone.rows[0]!.spoken).toBe("Main, 1 task, primary bot");
+  });
+
+  it("F-562: turning the switch off takes the gateway's own bot off Home after the person opened it; one opened while it waited stays until another bot is opened, as on the desktop", () => {
+    const own = bot("main", { isDefault: true });
+    const juniper = bot("clawtrate-main-bot", { name: "Juniper" });
+    const ownTask = task("agent:main:main", NOW - 60_000);
+    const off = state({
+      bots: [own, juniper],
+      tasksByBot: {
+        main: [ownTask],
+        "clawtrate-main-bot": [task("agent:clawtrate-main-bot:a", NOW - 120_000)],
+      },
+    });
+    const on = { ...off, showGatewayBot: true };
+    const ids = (s: ClawtrateState, kept: string | null) =>
+      homeModel(s, {}, NOW, kept).rows.map((row) => row.bot.id);
+
+    // Opened while the switch lists it, then the switch turned off: it leaves Home.
+    const opened = keptAfterOpening(on, null, "main");
+    expect(ids(on, opened)).toEqual(["main", "clawtrate-main-bot"]);
+    expect(ids(off, opened)).toEqual(["clawtrate-main-bot"]);
+    // Waiting on the person, or the only bot, it stays listed with the switch off.
+    const waiting = { ...ownTask, status: "waiting" as const, waitingFor: "approval" as const };
+    const waits = { ...off, tasksByBot: { ...off.tasksByBot, main: [waiting] } };
+    expect(ids(waits, opened)).toEqual(["main", "clawtrate-main-bot"]);
+    expect(ids({ ...off, bots: [own] }, opened)).toEqual(["main"]);
+
+    // Opened while it waited with the switch off: kept after the wait ends, through the switch
+    // going on and off and through opening it again, until another bot is opened.
+    const kept = keptAfterOpening(waits, null, "main");
+    expect(ids(off, kept)).toEqual(["main", "clawtrate-main-bot"]);
+    expect(ids(off, keptAfterOpening(on, kept, "main"))).toEqual(["main", "clawtrate-main-bot"]);
+    expect(ids(off, keptAfterOpening(off, kept, "clawtrate-main-bot"))).toEqual([
+      "clawtrate-main-bot",
+    ]);
   });
 
   it("gives each task row its title, time and one mark, newest first as the engine orders them", () => {

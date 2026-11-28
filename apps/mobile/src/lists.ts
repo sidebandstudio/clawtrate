@@ -1,7 +1,14 @@
 // What Home and a bot's task list show, from the engine's state.
 // Pure, so the unit tests cover it.
 
-import { listedBots, listedTasks, type Bot, type ClawtrateState, type Task } from "@clawtrate/core";
+import {
+  gatewayBotHidden,
+  listedBots,
+  listedTasks,
+  type Bot,
+  type ClawtrateState,
+  type Task,
+} from "@clawtrate/core";
 import { arrange, fromSidebar, type RosterPrefs } from "./presentation/arrangement.ts";
 import {
   botLabel,
@@ -95,7 +102,7 @@ export function botRow(state: ClawtrateState, bot: Bot, seen: SeenMap, now: numb
  * Hidden bots are not listed, nor, as on the desktop (F-562), the gateway's own
  * bot while another exists and "Show the gateway's own bot" is off: it comes
  * back while one of its tasks waits on the person, and stays while the person
- * keeps it open (`kept`).
+ * keeps it (`kept`, `keptAfterOpening`).
  */
 export function homeModel(
   state: ClawtrateState,
@@ -114,6 +121,24 @@ export function homeModel(
       rows: section.bots.map(row),
     })),
   };
+}
+
+/**
+ * The bot Home keeps listed after the person opens `botId`, as the desktop keeps
+ * the bot open (F-562): the gateway's own bot when the rule leaves it out, so
+ * shown only because it waits, and the bot already kept when it is opened again.
+ * A bot the switch lists isn't kept, so turning the switch off takes it off
+ * Home. Opening another bot lets the kept one go.
+ */
+export function keptAfterOpening(
+  state: Pick<ClawtrateState, "bots" | "showGatewayBot">,
+  kept: string | null,
+  botId: string,
+): string | null {
+  const opened = state.bots.find((bot) => bot.id === botId);
+  const leftOut =
+    opened !== undefined && gatewayBotHidden(opened, state.bots, state.showGatewayBot === true);
+  return kept === botId || leftOut ? botId : null;
 }
 
 export type TaskRow = {
