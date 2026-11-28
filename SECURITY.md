@@ -14,7 +14,7 @@ The desktop app, the web preview host, `@clawtrate/core`, `@clawtrate/ui`, the p
 
 ## Versions
 
-Clawtrate has no release yet. Fixes land on `main`.
+Clawtrate is in beta on macOS. Fixes land on `main`.
 
 ## Known limits
 

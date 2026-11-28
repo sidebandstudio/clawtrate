@@ -12,7 +12,6 @@ import { BudgetPart } from "./Budget.tsx";
 import { settleUsageRequest, useUsageRequest } from "./navigation.ts";
 import { Bars, PeriodChoice, useNow, useUsageReport } from "./parts.tsx";
 import {
-  asOf,
   budgetLine,
   budgetOf,
   CONTEXT_HINT,
@@ -23,7 +22,6 @@ import {
   full,
   moreTasks,
   refreshFailed,
-  reportWindow,
   sourceBars,
   USAGE_WAITING,
   sourcesNote,
@@ -190,6 +188,7 @@ export function BotUsagePage({
   const r = report.report!;
   const figure = r.figure;
   const counting = figure.counting || r.detailCounting;
+  const costNote = costHint(figure.cost, figure.asOf, figure.counting);
   const sources = r.sources;
   const context = task && task.botId === bot.id ? task : null;
   return (
@@ -210,11 +209,11 @@ export function BotUsagePage({
           </button>
         </p>
       )}
-      <p className="b-hint" data-testid="usage-source">
-        From the gateway's usage records for {name} {reportWindow(r.period, r.range)},{" "}
-        {asOf(figure.asOf)}.
-        {counting ? " Some of the gateway's records are still being counted." : ""}
-      </p>
+      {counting && (
+        <p className="b-hint" data-testid="usage-counting">
+          Some of the gateway's records are still being counted.
+        </p>
+      )}
       <dl className="facts" data-testid="usage-tokens">
         <div>
           <dt>Input</dt>
@@ -243,9 +242,11 @@ export function BotUsagePage({
           <dd data-testid="usage-cost">{costValue(figure.cost, figure.counting)}</dd>
         </div>
       </dl>
-      <p className="b-hint" data-testid="usage-cost-hint">
-        {costHint(figure.cost, figure.asOf, figure.counting)}
-      </p>
+      {costNote && (
+        <p className="b-hint" data-testid="usage-cost-hint">
+          {costNote}
+        </p>
+      )}
       <h4 className="b-group">By source</h4>
       {sources ? (
         <>
