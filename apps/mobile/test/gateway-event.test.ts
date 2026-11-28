@@ -3,18 +3,24 @@
 
 import {
   emptyActivity,
+  initialState,
   mapHistory,
+  type Bot,
   type Task,
   type Transcript,
   type TranscriptItem,
 } from "@clawtrate/core";
 import type * as ReactModule from "react";
 import { Children, isValidElement, type ReactElement, type ReactNode } from "react";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { LayoutChangeEvent } from "react-native";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { grantingGateway, KEY, openTask } from "../../../packages/core/test/client-harness.ts";
 import { helloOk, until } from "../../../packages/core/test/fake-gateway.ts";
+import { PROTECTED_BAND } from "../src/components/Top.tsx";
 import { GatewayEvent } from "../src/components/GatewayEvent.tsx";
 import { Txt } from "../src/components/ui.tsx";
+import { createSecrets, REDACTED } from "../src/host/secrets.ts";
+import { Chat } from "../src/screens/Chat.tsx";
 import type * as ThemeModule from "../src/theme/index.ts";
 import { chatRows, type ChatRow } from "../src/transcript.ts";
 
@@ -28,15 +34,35 @@ const NOTE =
 
 // Render the iPhone component's element tree without a native runtime. Keep its
 // initial state and apply the state update the real button sends on each press.
-const useOpen = vi.hoisted(() =>
-  vi.fn<(initial: boolean) => [boolean, (update: (open: boolean) => boolean) => void]>(),
+const useState = vi.hoisted(() =>
+  vi.fn<(initial: unknown) => [unknown, (next: unknown) => void]>(),
 );
+const redact = vi.hoisted(() => vi.fn<(text: string) => string>());
 vi.mock("react", async (load) => ({
   ...(await load<typeof ReactModule>()),
-  useState: useOpen,
+  useState,
+  useRef: (initial: unknown) => ({ current: initial }),
+  useEffect: () => {},
 }));
-vi.mock("react-native", () => ({ Pressable: "Pressable", Text: "Text", View: "View" }));
-vi.mock("../src/components/icons.tsx", () => ({ ChevronIcon: "ChevronIcon" }));
+vi.mock("react-native", () => ({
+  Pressable: "Pressable",
+  Text: "Text",
+  View: "View",
+  ScrollView: "ScrollView",
+}));
+vi.mock("react-native-safe-area-context", () => ({ SafeAreaView: "SafeAreaView" }));
+vi.mock("../src/components/BotFiles.tsx", () => ({ BotFiles: "BotFiles" }));
+vi.mock("../src/components/Markdown.tsx", () => ({ Markdown: "Markdown" }));
+vi.mock("../src/components/SentFiles.tsx", () => ({ SentFiles: "SentFiles" }));
+vi.mock("../src/components/Avatar.tsx", () => ({ Avatar: "Avatar" }));
+vi.mock("../src/components/Strip.tsx", () => ({ StatusStrip: "StatusStrip" }));
+vi.mock("../src/components/icons.tsx", () => ({
+  BackIcon: "BackIcon",
+  ChevronIcon: "ChevronIcon",
+  EyeIcon: "EyeIcon",
+  SettingsIcon: "SettingsIcon",
+}));
+vi.mock("../src/runtime.ts", () => ({ useRuntime: () => ({ readOn: () => null, redact }) }));
 vi.mock("../src/theme/index.ts", async (load) => {
   const theme = await load<typeof ThemeModule>();
   return { ...theme, useTheme: () => theme.themeFor("light") };
@@ -44,16 +70,26 @@ vi.mock("../src/theme/index.ts", async (load) => {
 
 beforeEach(() => {
   let open: boolean | undefined;
-  useOpen.mockImplementation((initial) => {
-    const current = (open ??= initial);
-    return [current, (update) => (open = update(current))];
+  useState.mockImplementation((initial) => {
+    const current = (open ??= Boolean(initial));
+    return [current, (next) => (open = Boolean(next))];
   });
+  redact.mockImplementation((text) => text);
+});
+
+afterEach(() => {
+  vi.unstubAllGlobals();
 });
 
 type NativeProps = {
   children?: ReactNode;
   testID?: string;
   onPress?: () => void;
+  accessibilityLabel?: string;
+  allowFontScaling?: boolean;
+  numberOfLines?: number;
+  onLayout?: (event: LayoutChangeEvent) => void;
+  row?: ChatRow;
 };
 type NativeElement = ReactElement<NativeProps>;
 
@@ -134,7 +170,178 @@ const shown = (rows: ChatRow[]) => rows.filter((row) => row.kind !== "stamp");
 const rowsOf = (raw: unknown[], events: boolean) =>
   shown(chatRows(TASK, transcript(mapHistory(raw, { gatewayEvents: events })), "Otto", 0, LINK));
 
+const BOT: Bot = {
+  id: TASK.botId,
+  name: "Otto",
+  emoji: null,
+  avatarUrl: null,
+  theme: null,
+  model: null,
+  isDefault: true,
+};
+
+type ScrollTo = (options: { y: number; animated: boolean }) => void;
+type ScrollToEnd = (options: { animated: boolean }) => void;
+type ScrollProps = NativeProps & {
+  ref: { current: { scrollTo: ScrollTo; scrollToEnd: ScrollToEnd } | null };
+  onScroll: (event: {
+    nativeEvent: {
+      contentOffset: { y: number };
+      contentSize: { height: number };
+      layoutMeasurement: { height: number };
+    };
+  }) => void;
+  onContentSizeChange: (width: number, height: number) => void;
+  onScrollBeginDrag: () => void;
+};
+
+const layout = (y: number, height: number): LayoutChangeEvent =>
+  ({ nativeEvent: { layout: { x: 0, y, width: 390, height } } }) as LayoutChangeEvent;
+
+function renderChild(element: NativeElement): NativeElement {
+  if (typeof element.type !== "function") throw new Error("Expected a component");
+  return (element.type as (props: NativeProps) => NativeElement)(element.props);
+}
+
+/** Drive the real Chat and RowView while native sections are plain elements. */
+function eventInChat(raw: unknown) {
+  const useDisclosureState = useState.getMockImplementation()!;
+  useState.mockImplementation((initial) => [
+    typeof initial === "function" ? initial() : initial,
+    () => {},
+  ]);
+  let screen: NativeElement;
+  try {
+    screen = Chat({
+      state: {
+        ...initialState,
+        connection: { ...initialState.connection, status: "connected" },
+        transcripts: { [TASK.key]: transcript(mapHistory([raw], { gatewayEvents: true })) },
+      },
+      bot: BOT,
+      task: TASK,
+      now: 0,
+      onBack: () => {},
+      onRead: () => {},
+    });
+  } finally {
+    useState.mockImplementation(useDisclosureState);
+  }
+  const [pane] = childrenOf(screen);
+  const [scroller] = childrenOf(pane!) as ReactElement<ScrollProps>[];
+  expect(scroller?.props.testID).toBe("transcript");
+  const [, body] = childrenOf(scroller!);
+  const row = childrenOf(body!).find(
+    (element) => childrenOf(element)[0]?.props.row?.kind === "event",
+  );
+  if (!row) throw new Error("Expected an event row in the transcript");
+  const component = renderChild(childrenOf(row)[0]!);
+  return {
+    scroll: scroller!.props,
+    body: body!.props,
+    row: row.props,
+    event: () => renderChild(component),
+  };
+}
+
+function pressEvent(event: () => NativeElement): NativeElement {
+  const toggle = childrenOf(event()).find((child) => child.props.testID === "event-text-toggle");
+  expect(toggle?.props.onPress).toBeTypeOf("function");
+  toggle!.props.onPress!();
+  return event();
+}
+
 describe("iPhone gateway events (#699)", () => {
+  it("F-613: Chat opens event text after redacting a held token", () => {
+    const token = "example-event-credential";
+    const secrets = createSecrets();
+    secrets.learn("connection", JSON.stringify({ token }));
+    redact.mockImplementation(secrets.redact);
+    const { event } = eventInChat(eventRow(`output ${token}`));
+    const [, , details] = childrenOf(pressEvent(event));
+    expect(details?.props.accessibilityLabel).toBe(`${NOTE} output ${REDACTED}`);
+    expect(childrenOf(details!)[1]?.props.children).toBe(`output ${REDACTED}`);
+  });
+
+  it.each([
+    ["empty", eventRow("")],
+    ["whitespace-only", eventRow("  \n\t")],
+    ["differently shaped", { ...eventRow(EXEC), idempotencyKey: "client:user" }],
+  ])("F-613: a %s event stays a single system line", (_case, raw) => {
+    const line = eventInChat(raw).event();
+    expect(line.type).toBe(Txt);
+    expect(line.props.children).toBe(LINE);
+  });
+
+  it("F-613: the event and attribution can wrap across lines", () => {
+    const { event } = eventInChat(eventRow(EXEC));
+    const [, , details] = childrenOf(pressEvent(event));
+    for (const line of childrenOf(details!)) {
+      const nativeText = renderChild(line);
+      expect(nativeText.type).toBe("Text");
+      expect(nativeText.props.numberOfLines ?? 0).toBe(0);
+    }
+  });
+
+  it("F-613: the disclosure keeps native font scaling on", () => {
+    const { event } = eventInChat(eventRow(EXEC));
+    const [line, toggle, details] = childrenOf(pressEvent(event));
+    for (const text of [line!, childrenOf(toggle!)[0]!, ...childrenOf(details!)])
+      expect(renderChild(text).props.allowFontScaling ?? true).toBe(true);
+  });
+
+  it("F-613: the system line is read without the event body", () => {
+    const { event } = eventInChat(eventRow(EXEC));
+    const [closedLine] = childrenOf(event());
+    const [openedLine] = childrenOf(pressEvent(event));
+    for (const line of [closedLine!, openedLine!]) {
+      const { accessibilityLabel, children } = renderChild(line).props;
+      expect(accessibilityLabel ?? children).toBe(LINE);
+    }
+  });
+
+  it("F-613: opening a long event keeps its button and attribution in view", () => {
+    const { scroll, body, row, event } = eventInChat(eventRow(EXEC.repeat(20)));
+    const frames: FrameRequestCallback[] = [];
+    vi.stubGlobal("requestAnimationFrame", (callback: FrameRequestCallback) =>
+      frames.push(callback),
+    );
+    const scrollTo = vi.fn<ScrollTo>();
+    const scrollToEnd = vi.fn<ScrollToEnd>();
+    scroll.ref.current = { scrollTo, scrollToEnd };
+    const viewHeight = 500;
+    const sendScroll = (y: number, height: number) =>
+      scroll.onScroll({
+        nativeEvent: {
+          contentOffset: { y },
+          contentSize: { height },
+          layoutMeasurement: { height: viewHeight },
+        },
+      });
+
+    scroll.onLayout!(layout(0, viewHeight));
+    scroll.onContentSizeChange(390, 1_500);
+    body.onLayout!(layout(100, 1_400));
+    row.onLayout!(layout(1_270, 74));
+    sendScroll(1_000, 1_500);
+    const toggle = childrenOf(event())[1]!;
+    toggle.props.onLayout!(layout(30, 44));
+    toggle.props.onPress!();
+    // A queued event for the old scroll extent still reports that the reader is at the end.
+    sendScroll(1_000, 1_500);
+
+    row.onLayout!(layout(1_270, 854));
+    scroll.onContentSizeChange(390, 2_280);
+    for (const frame of frames.splice(0)) frame(0);
+    expect(scrollToEnd).not.toHaveBeenCalled();
+    expect(scrollTo).toHaveBeenLastCalledWith({ y: 1_400 - PROTECTED_BAND, animated: false });
+
+    scroll.onScrollBeginDrag();
+    sendScroll(1_780, 2_280);
+    scroll.onContentSizeChange(390, 2_320);
+    expect(scrollToEnd).toHaveBeenCalledWith({ animated: false });
+  });
+
   it("#699: keeps the centred gateway line apart from the event text", () => {
     for (const source of ["cron", "exec", "node", "hook", "plugin", "task", "session"])
       expect(rowsOf([eventRow(EXEC, source)], true), source).toEqual([
@@ -167,6 +374,7 @@ describe("iPhone gateway events (#699)", () => {
       accessibilityRole: "button",
       accessibilityLabel: LABEL,
       accessibilityState: { expanded: false },
+      accessibilityValue: { text: "collapsed" },
     });
     expect(childrenOf(toggle)[0]?.props.children).toBe(LABEL);
   });
@@ -174,7 +382,10 @@ describe("iPhone gateway events (#699)", () => {
   it("#699: opening the disclosure shows and reads the attribution before the event text", () => {
     pressToggle();
     const [, toggle, body] = childrenOf(renderEvent());
-    expect(toggle?.props).toMatchObject({ accessibilityState: { expanded: true } });
+    expect(toggle?.props).toMatchObject({
+      accessibilityState: { expanded: true },
+      accessibilityValue: undefined,
+    });
     expect(body?.props).toMatchObject({
       testID: "event-text",
       accessible: true,

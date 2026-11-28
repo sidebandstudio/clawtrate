@@ -1,17 +1,22 @@
-import { useState } from "react";
+import { GATEWAY_EVENT_WORDS as W } from "@clawtrate/core";
+import { useRef, useState } from "react";
 import { Pressable, View } from "react-native";
 import { S, TOUCH, useTheme } from "../theme/index.ts";
 import { ChevronIcon } from "./icons.tsx";
 import { Txt } from "./ui.tsx";
 
-// Keep the disclosure copy in step with packages/ui/src/GatewayEventLine.tsx.
-const LABEL = "Text that came with it";
-const ATTRIBUTION =
-  "Written by whatever started this turn (a command, a bot or another app), not by the gateway or Clawtrate.";
-
-export function GatewayEvent({ line, text }: { line: string; text: string | undefined }) {
+export function GatewayEvent({
+  line,
+  text,
+  onDisclosureChange,
+}: {
+  line: string;
+  text: string | undefined;
+  onDisclosureChange?: (open: boolean, toggleY: number | null) => void;
+}) {
   const { c } = useTheme();
   const [open, setOpen] = useState(false);
+  const toggleY = useRef<number | null>(null);
   const systemLine = (
     <Txt testID="event-line" size={S["text-sm"]} color="text-faint" style={{ textAlign: "center" }}>
       {line}
@@ -25,9 +30,16 @@ export function GatewayEvent({ line, text }: { line: string; text: string | unde
       <Pressable
         testID="event-text-toggle"
         accessibilityRole="button"
-        accessibilityLabel={LABEL}
+        accessibilityLabel={W.label}
         accessibilityState={{ expanded: open }}
-        onPress={() => setOpen((was) => !was)}
+        accessibilityValue={open ? undefined : { text: "collapsed" }}
+        onLayout={({ nativeEvent }) => {
+          toggleY.current = nativeEvent.layout.y;
+        }}
+        onPress={() => {
+          onDisclosureChange?.(!open, toggleY.current);
+          setOpen(!open);
+        }}
         style={({ pressed }) => ({
           flexDirection: "row",
           alignItems: "center",
@@ -40,7 +52,7 @@ export function GatewayEvent({ line, text }: { line: string; text: string | unde
         })}
       >
         <Txt size={S["text-sm"]} color="text-faint" style={{ flexShrink: 1 }}>
-          {LABEL}
+          {W.label}
         </Txt>
         <View style={{ transform: [{ rotate: open ? "90deg" : "0deg" }] }}>
           <ChevronIcon color={c["text-faint"]} size={13} />
@@ -50,7 +62,7 @@ export function GatewayEvent({ line, text }: { line: string; text: string | unde
         <View
           testID="event-text"
           accessible
-          accessibilityLabel={`${ATTRIBUTION} ${text}`}
+          accessibilityLabel={`${W.attribution} ${text}`}
           style={{
             alignSelf: "stretch",
             gap: S["space-2"],
@@ -61,7 +73,7 @@ export function GatewayEvent({ line, text }: { line: string; text: string | unde
           }}
         >
           <Txt size={S["text-sm"]} color="text-muted">
-            {ATTRIBUTION}
+            {W.attribution}
           </Txt>
           <Txt color="text-muted">{text}</Txt>
         </View>

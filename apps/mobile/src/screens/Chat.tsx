@@ -68,11 +68,14 @@ const NEAR_END = 96;
 const TASK_LINE = "task-line";
 const rowKey = (row: ChatRow) => `${row.kind}:${row.id}`;
 
+type OpenedEvent = { key: string; toggleY: number | null; positioned: boolean };
+
 function RowView({
   row,
   taskKey = "",
   onScreen = false,
   files,
+  onEventDisclosureChange,
 }: {
   row: ChatRow;
   taskKey?: string;
@@ -80,6 +83,7 @@ function RowView({
   onScreen?: boolean;
   /** For a bot's files: where the history they come from was read, and whether this connection loads them. */
   files?: { drawnOn: ShownStamp; canLoad: boolean } | undefined;
+  onEventDisclosureChange?: (key: string, open: boolean, toggleY: number | null) => void;
 }) {
   const { c } = useTheme();
   switch (row.kind) {
@@ -175,7 +179,15 @@ function RowView({
         </Txt>
       );
     case "event":
-      return <GatewayEvent line={row.text} text={row.eventText} />;
+      return (
+        <GatewayEvent
+          line={row.text}
+          text={row.eventText}
+          onDisclosureChange={(open, toggleY) =>
+            onEventDisclosureChange?.(rowKey(row), open, toggleY)
+          }
+        />
+      );
     case "running":
       return (
         <View
@@ -364,6 +376,7 @@ export function Chat({
   // A task opens at its start, its title in view; the reader follows the end
   // once they reach it, as section 18 has it.
   const following = useRef(false);
+  const openedEvent = useRef<OpenedEvent | null>(null);
   const [atEnd, setAtEnd] = useState(false);
   const [contentHeight, setContentHeight] = useState(0);
   const [viewHeight, setViewHeight] = useState(0);
@@ -456,6 +469,32 @@ export function Chat({
     setOnScreen((was) =>
       visible.every((key) => was.has(key)) ? was : new Set([...was, ...visible]),
     );
+  };
+
+  const eventDisclosureChanged = (key: string, open: boolean, toggleY: number | null) => {
+    if (open) {
+      openedEvent.current = { key, toggleY, positioned: false };
+      following.current = false;
+      returning.current = null;
+    } else if (openedEvent.current?.key === key) {
+      openedEvent.current = null;
+    }
+  };
+
+  const showOpenedEvent = (opened: OpenedEvent) => {
+    if (openedEvent.current !== opened || opened.positioned) return;
+    opened.positioned = true;
+    const box = boxes.current.get(opened.key);
+    const { view, content } = extent.current;
+    if (!box || opened.toggleY === null || view <= PROTECTED_BAND) return;
+    const top = bodyTop.current + box.y + opened.toggleY;
+    const bottom = bodyTop.current + box.y + box.height;
+    // Show as much as fits without moving the button behind the floating header.
+    const maxY = Math.min(content - view, top - PROTECTED_BAND);
+    const y = Math.max(0, Math.min(maxY, Math.max(scrollY.current, bottom - view)));
+    scroller.current?.scrollTo({ y, animated: false });
+    scrollY.current = y;
+    setAtEnd(content - (y + view) < NEAR_END);
   };
 
   let body: ReactNode;
@@ -554,6 +593,7 @@ export function Chat({
                 taskKey={task.key}
                 onScreen={onScreen.has(rowKey(row))}
                 files={files}
+                onEventDisclosureChange={eventDisclosureChanged}
               />
             </View>
           );
@@ -563,6 +603,7 @@ export function Chat({
   }
 
   const toEnd = () => {
+    openedEvent.current = null;
     following.current = true;
     returning.current = nextReturning(returning.current, { kind: "reader-scrolled" });
     scroller.current?.scrollToEnd({ animated: true });
@@ -590,13 +631,16 @@ export function Chat({
             if (layoutMeasurement.height === 0) return;
             const end =
               contentSize.height - (contentOffset.y + layoutMeasurement.height) < NEAR_END;
-            following.current = end;
+            // A scroll event from before expansion can still report the old end.
+            if (!end && openedEvent.current?.positioned) openedEvent.current = null;
+            following.current = end && openedEvent.current === null;
             setAtEnd(end);
             scrollY.current = contentOffset.y;
             place.current = keptPlace(returning.current, place.current, laidOut(), scrollY.current);
             look();
           }}
           onScrollBeginDrag={() => {
+            openedEvent.current = null;
             returning.current = nextReturning(returning.current, { kind: "reader-scrolled" });
           }}
           onLayout={({ nativeEvent }) => {
@@ -628,8 +672,10 @@ export function Chat({
             else returnToPlace();
             // The rows moved without a scroll (a message grew): once they have
             // reported, read the place again from where the view is.
-            if (returning.current === null)
+            if (returning.current === null) {
+              const opened = openedEvent.current;
               requestAnimationFrame(() => {
+                if (opened !== null) showOpenedEvent(opened);
                 place.current = keptPlace(
                   returning.current,
                   place.current,
@@ -637,6 +683,7 @@ export function Chat({
                   scrollY.current,
                 );
               });
+            }
             settle();
           }}
         >
