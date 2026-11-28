@@ -2363,13 +2363,18 @@ test("F-480 #988: Put back leaves at its expiry, and a read-back after a lost re
   type Fixture = {
     clawtrateFixture: { setState: (update: (state: ClawtrateState) => ClawtrateState) => void };
   };
-  // The host refuses Put back after its week; the card stops offering it then too.
-  await page.evaluate(() =>
-    (window as unknown as Fixture).clawtrateFixture.setState((state) => ({
-      ...state,
-      computerUseUndo: { ...state.computerUseUndo!, expiresAt: Date.now() + 1000 },
-    })),
+  // The host refuses Put back after its week; the card stops offering it then too. The fixture's
+  // clock is fixed, so it moves past the expiry before the card's timer reads it.
+  const now = await page.evaluate(() => Date.now());
+  await page.evaluate(
+    (expiresAt) =>
+      (window as unknown as Fixture).clawtrateFixture.setState((state) => ({
+        ...state,
+        computerUseUndo: { ...state.computerUseUndo!, expiresAt },
+      })),
+    now + 1500,
   );
+  await page.clock.setFixedTime(now + 60_000);
   await expect(putBack).toHaveCount(0);
   // A disable whose reply was lost, read back as off: what is true, and no Put back.
   await page.evaluate(() =>
