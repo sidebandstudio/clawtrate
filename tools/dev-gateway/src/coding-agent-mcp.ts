@@ -10,6 +10,7 @@
 //   slow_task    { seconds }                            -> { status: "done", seconds }
 //   long_output  { lines }                              -> many numbered lines of text
 //   received_notifications {}                           -> notifications the gateway sent
+//   show_board   {}                                     -> an MCP App: the board at BOARD_URI
 
 import { createInterface } from "node:readline";
 
@@ -17,6 +18,10 @@ export const CODING_AGENT_SERVER = "coder";
 export const THREAD_URL_BASE = "https://coding-agent.example/threads/";
 /** The text send_message returns beside its structured content. */
 export const SEND_MESSAGE_TEXT = "Opened a branch and drafted the change.";
+/** The App resource show_board names: a page with no script and no outside address. */
+export const BOARD_URI = "ui://coder/board";
+const BOARD_HTML =
+  '<!doctype html><meta charset="utf-8"><title>Board</title><h1>Coding board</h1><p>Two threads open.</p>';
 
 type JsonRpcMessage = { id?: number | string; method?: string; params?: Record<string, unknown> };
 type ToolResult = {
@@ -71,6 +76,12 @@ export const TOOLS = [
     name: "received_notifications",
     description: "List the notifications this server has received, such as cancellations.",
     inputSchema: { type: "object", properties: {} },
+  },
+  {
+    name: "show_board",
+    description: "Show the coding board as an interactive app.",
+    inputSchema: { type: "object", properties: {} },
+    _meta: { ui: { resourceUri: BOARD_URI } },
   },
 ];
 
@@ -137,6 +148,7 @@ export function createCodingAgent() {
     if (name === "received_notifications") {
       return json({ notifications: notifications.slice(-20) });
     }
+    if (name === "show_board") return json({ threads: threads.size });
     throw Object.assign(new Error(`unknown tool ${name}`), { code: -32602 });
   }
 
@@ -173,6 +185,14 @@ export function createCodingAgent() {
         }
       case "resources/list":
         return reply({ resources: [] });
+      case "resources/read":
+        return params?.uri === BOARD_URI
+          ? reply({
+              contents: [
+                { uri: BOARD_URI, mimeType: "text/html;profile=mcp-app", text: BOARD_HTML },
+              ],
+            })
+          : fail(-32002, `resource not found: ${String(params?.uri)}`);
       case "prompts/list":
         return reply({ prompts: [] });
       default:

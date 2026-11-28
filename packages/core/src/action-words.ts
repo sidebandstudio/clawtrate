@@ -533,6 +533,8 @@ export const LABELS = {
   to: "To",
   server: "Server",
   tool: "Tool",
+  /** The result block's label when the gateway marked the result as an MCP App. */
+  appFrom: (server: string) => `An app from ${server}`,
   gatewayCallsIt: "The gateway calls it",
   question: "Question",
   plan: "Plan",

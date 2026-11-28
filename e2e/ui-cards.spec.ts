@@ -870,6 +870,17 @@ test.describe("tool-server calls on a real gateway", () => {
     expect(Object.keys(map).every((name) => name.startsWith("coder__"))).toBe(true);
   });
 
+  test("F-615: a result the gateway marks as an MCP App says which server's app it is, live and from history, with no Open app", async () => {
+    const t = await called("mcp-app", "#mcp-app");
+    await openTask(page, "Juniper", t.title);
+    await clients.plain.terminal(t.runId);
+    const step = await ordinaryStep(page, "An app from coder");
+    await expect(step).toContainText('"threads"');
+    await expect(page.getByRole("button", { name: /open app/i })).toHaveCount(0);
+    await reload(page, "Juniper", t.title);
+    await ordinaryStep(page, "An app from coder");
+  });
+
   test("F-314: an error result is an ordinary failed step", async () => {
     const t = await called("mcp-error", "#mcp-error");
     await clients.plain.terminal(t.runId);

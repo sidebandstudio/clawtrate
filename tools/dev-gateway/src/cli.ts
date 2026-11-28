@@ -613,6 +613,9 @@ export function devConfig(
       // server for each task, three processes and about 270 MB each (#845). It ends a
       // server once its task has been idle this long, checking once a minute.
       sessionIdleTtlMs: CODING_AGENT_IDLE_MS,
+      // MCP Apps, for show_board: the gateway serves them from its own sandbox listener on the
+      // port after its own, which an instance's port block keeps free.
+      apps: { enabled: true },
       servers: {
         [CODING_AGENT_SERVER]: {
           transport: "stdio",

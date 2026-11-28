@@ -1180,6 +1180,13 @@ export const SCENARIOS: Scenario[] = [
     ],
   },
   {
+    name: "mcp-app",
+    phrase: "show the coding board",
+    summary:
+      "A call to the coding agent's show_board, an MCP App: its result names a view the gateway can open.",
+    steps: () => [mcp("show_board", {}), say("Here is the coding board.")],
+  },
+  {
     name: "mcp-slow",
     phrase: "ask the coding agent something slow",
     defaultArg: 20,

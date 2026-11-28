@@ -64,6 +64,7 @@ Every document in the repository, by what you want to do.
 - `research/bot-self-management/`: a gateway-free stand-in for the contract that note leads to.
 - [Addresses a gateway hands the client](research/remote-content.md): every picture, link, file, page and sign-in address a gateway can hand Clawtrate, who writes it, what each app does with it today, and what Electron, the browser and iOS can enforce.
 - [The model list](research/model-catalog.md): where a bot's model list comes from, what the gateway's picker leaves out, what OpenClaw 2026.10.6 and 2026.11.6 know about OpenAI's models, model ids the catalogue doesn't list, using a model newer than the list, and the gateway's update signals.
+- [MCP Apps](research/mcp-apps.md): what the gateway tells a client about an MCP App result, what showing one needs, and the gateway change that would let a paired device open it.
 - `research/dev-gateway/`: the probes and prototypes behind the capability map.
 
 ## Writing docs

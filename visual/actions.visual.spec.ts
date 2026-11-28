@@ -581,6 +581,18 @@ test.describe("action cards", () => {
     );
   });
 
+  test("F-615: a result the gateway marks as an MCP App says which server's app it is, keeps its result, and offers no Open app", async ({
+    page,
+  }) => {
+    await open(page, "actions-app");
+    const card = cards(page).first();
+    await line(card).click();
+    const view = card.getByRole("tabpanel");
+    await expect(view).toContainText("An app from coder");
+    await expect(view).toContainText('{"threads":2}');
+    await expect(page.getByRole("button", { name: /open app/i })).toHaveCount(0);
+  });
+
   test("F-093: Raw shows the tool, arguments, result, timing and ids, each copyable; the tabs are one tab stop", async ({
     page,
   }) => {

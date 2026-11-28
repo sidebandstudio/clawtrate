@@ -303,7 +303,8 @@ export type ToolResult = {
   text: string;
   /**
    * What the reading reads of the few `details` the gateway's history keeps
-   * (`exitCode`, `ok`, `changed`, `created`, and a diff's line counts), so a
+   * (`exitCode`, `ok`, `changed`, `created`, a diff's line counts, and the MCP
+   * App a result names, `mcpApp`), so a
    * call history alone holds reads as its step does. Absent when none was kept.
    */
   facts?: Record<string, unknown>;

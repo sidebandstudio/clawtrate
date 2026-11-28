@@ -40,6 +40,7 @@ export const ACTION_SCENES = [
   "actions-retained-history",
   "actions-outcomes",
   "actions-repeat",
+  "actions-app",
 ] as const;
 
 export type ActionScene = (typeof ACTION_SCENES)[number];
@@ -185,6 +186,39 @@ function scene(name: ActionScene): Turn[] {
             {
               text: "Yes. The log is there, and the backup finished at 3:25 AM. The next run is tonight at 2:14.",
             },
+          ],
+        },
+      ];
+    case "actions-app":
+      // A tool-server call whose result the gateway marked as an MCP App (`mcpAppPreview`), as
+      // OpenClaw 2026.10.6 sends it live and keeps it in history.
+      return [
+        {
+          user: "Show me the coding board.",
+          parts: [
+            {
+              call: {
+                name: "coder__show_board",
+                args: {},
+                text: '{"threads":2}',
+                details: {
+                  mcpServer: "coder",
+                  mcpTool: "show_board",
+                  mcpAppPreview: {
+                    kind: "canvas",
+                    view: { id: "mcp-app-1" },
+                    mcpApp: {
+                      viewId: "mcp-app-1",
+                      serverName: "coder",
+                      toolName: "show_board",
+                      uiResourceUri: "ui://coder/board",
+                      toolCallId: "call_1_01",
+                    },
+                  },
+                },
+              },
+            },
+            { text: "Here is the coding board. It has two threads open." },
           ],
         },
       ];

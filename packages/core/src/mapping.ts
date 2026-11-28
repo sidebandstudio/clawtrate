@@ -1087,8 +1087,8 @@ export function liveTextFromChatMessage(message: unknown): string {
 
 /**
  * The detail keys of a history row the reading reads: those the gateway's
- * chat display projection keeps that say how a call ended, and a diff's line
- * counts (the diff itself is in the step's raw payload).
+ * chat display projection keeps that say how a call ended, a diff's line
+ * counts (the diff itself is in the step's raw payload), and the MCP App it names.
  */
 function historyFacts(details: unknown): Record<string, unknown> | null {
   const d = asRecord(details);
@@ -1104,7 +1104,33 @@ function historyFacts(details: unknown): Record<string, unknown> | null {
       removed: rows.filter((l) => l.startsWith("-") && !l.startsWith("---")).length,
     };
   }
+  const app = mcpAppOf(d);
+  if (app) out.mcpApp = app;
   return Object.keys(out).length ? out : null;
+}
+
+/** An MCP App's server and tool names, and its view id, in JSON characters. */
+export const MAX_MCP_APP_NAME_CHARS = 64;
+export const MAX_MCP_APP_VIEW_ID_CHARS = 130;
+
+/**
+ * The MCP App a tool result's `details` name (`mcpAppPreview.mcpApp`, OpenClaw 2026.10.6), as its
+ * server, its tool and its view, each cut to its bound. A view id past its bound is left out, since
+ * cut it would name another view; the gateway's own limit (128 characters) keeps it within.
+ */
+export function mcpAppOf(
+  details: unknown,
+): { serverName: string; toolName: string; viewId?: string } | null {
+  const app = asRecord(asRecord(asRecord(details)?.mcpAppPreview)?.mcpApp);
+  const serverName = str(app?.serverName);
+  const toolName = str(app?.toolName);
+  if (!serverName || !toolName) return null;
+  const viewId = str(app?.viewId);
+  return {
+    serverName: cutText(serverName, MAX_MCP_APP_NAME_CHARS),
+    toolName: cutText(toolName, MAX_MCP_APP_NAME_CHARS),
+    ...(viewId && jsonTextLength(viewId) <= MAX_MCP_APP_VIEW_ID_CHARS ? { viewId } : {}),
+  };
 }
 
 /**
