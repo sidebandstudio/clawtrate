@@ -180,9 +180,10 @@ export type SetupPhase =
   /** A step of setting OpenClaw up failed, or the install couldn't start. */
   | "install-failed";
 
-/** The pinned Node.js that setting up installs beside OpenClaw (§10). */
+/** The pinned OpenClaw release used by the desktop installer. */
 export const INSTALL_OPENCLAW_VERSION = "2026.11.10";
 
+/** The pinned Node.js that setup installs beside OpenClaw. */
 export const INSTALL_NODE_VERSION = "24.22.1";
 
 /**
@@ -229,9 +230,8 @@ export type InstallFailureKind =
 
 /**
  * What a failed attempt left: nothing made (`none`); removed and proven
- * removed (`removed`, the only case that offers Try again); a cleanup that
- * couldn't be proven (`unproven`); or an attempt that had begun onboarding,
- * which this version doesn't remove (`kept`).
+ * removed (`removed`); a cleanup that couldn't be proven (`unproven`); or files
+ * intentionally kept after onboarding (`kept`).
  */
 export type InstallCleanup = "none" | "removed" | "unproven" | "kept";
 
@@ -252,8 +252,8 @@ export type InstallFailure = {
   exitCode: number | null;
   classification: OnboardClassification | null;
   /**
-   * Whether "Try again" is offered: the attempt never reached onboarding and
-   * the host removed, and checked it removed, everything it had made.
+   * Whether Try again can start a new installation immediately. The host
+   * confirmed the previous attempt’s files were removed.
    */
   retry: boolean;
   cleanup: InstallCleanup;

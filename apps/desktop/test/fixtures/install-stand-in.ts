@@ -240,7 +240,8 @@ case "$1" in
         printf '%s\\n' '{"ok":true,"action":"install","result":"already-installed"}'
         exit 0
       fi
-      if [[ "$SCENARIO" == "service-fails" ]]; then
+      if [[ "$SCENARIO" == "service-fails" && ! -e "$HOME/stand-in-service-failed" ]]; then
+        : > "$HOME/stand-in-service-failed"
         printf '%s\\n' '{"ok":false,"action":"install","error":"redacted"}'
         exit 1
       fi

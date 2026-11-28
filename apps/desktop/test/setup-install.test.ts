@@ -436,13 +436,56 @@ describe("F-502 F-503: each failure, named, with what the attempt left", () => {
     expect(again.outcome).toMatchObject({ ok: false, failure: { kind: "exists", step: -1 } });
   });
 
-  it("F-505: a service OpenClaw couldn't install is named, and the attempt is kept", async () => {
+  it("F-505: if the service install leaves no job or definition, the owned profile is rolled back and retry works", async () => {
     const stand = await make({ scenario: "service-fails" });
     const { outcome } = await runAll(installer(stand));
     expect(outcome).toMatchObject({
       ok: false,
-      failure: { kind: "service", step: 2, exitCode: 1, retry: false, cleanup: "kept" },
+      failure: { kind: "service", step: 2, exitCode: 1, retry: true, cleanup: "removed" },
     });
+    for (const path of [stand.place.stateDir, stand.place.programDir, stand.place.recordFile])
+      expect(existsSync(path)).toBe(false);
+    expect(stand.calls().some((line) => line.includes("uninstall"))).toBe(false);
+    expect((await runAll(installer(stand))).outcome.ok).toBe(true);
+  });
+
+  it("F-505: a replaced profile owner record is kept when service install fails", async () => {
+    const stand = await make({ scenario: "service-fails" });
+    const owner = layout(stand.place, stand.pins).owner;
+    const installed = installer(stand, {
+      run: async (request, check) => {
+        const result = await runner.run(request, check);
+        if (request.args.slice(2, 4).join(" ") === "gateway install") {
+          unlinkSync(owner);
+          writeFileSync(owner, "another owner", { mode: 0o600 });
+        }
+        return result;
+      },
+    });
+    expect((await runAll(installed)).outcome).toMatchObject({
+      ok: false,
+      failure: { kind: "service", retry: false, cleanup: "unproven" },
+    });
+    expect(readFileSync(owner, "utf8")).toBe("another owner");
+    expect(existsSync(stand.place.programDir)).toBe(true);
+  });
+
+  it("F-505: a loaded service without a definition prevents rollback", async () => {
+    const stand = await make({ scenario: "service-fails" });
+    const installed = installer(stand, {
+      run: async (request, check) => {
+        const result = await runner.run(request, check);
+        if (request.args.slice(2, 4).join(" ") === "gateway install")
+          writeFileSync(join(stand.home, "stand-in-loaded"), "");
+        return result;
+      },
+    });
+    expect((await runAll(installed)).outcome).toMatchObject({
+      ok: false,
+      failure: { kind: "service", retry: false, cleanup: "unproven" },
+    });
+    expect(existsSync(stand.place.stateDir)).toBe(true);
+    expect(existsSync(stand.place.programDir)).toBe(true);
   });
 
   it("F-502: on Linux, a session without a reachable user manager stops before anything is downloaded or made", async () => {

@@ -845,8 +845,9 @@ function installCause(failure: InstallFailure): string {
 const CLEANUP: Record<InstallFailure["cleanup"], string> = {
   none: "",
   removed: " Clawtrate removed this attempt's program files and install record.",
-  unproven: " Clawtrate couldn't confirm which files this attempt left.",
-  kept: " Clawtrate kept the gateway files and will check what is running before continuing.",
+  unproven:
+    " Check the clawtrate profile and Clawtrate’s app data. Some setup files may still be there.",
+  kept: " Clawtrate kept the gateway files in the clawtrate profile and its app data.",
 };
 
 /** A failure before the first step: its own lead, and no step drawn as failed. */
@@ -904,7 +905,9 @@ function Installing({ setup, onBack }: { setup: SetupState; onBack: () => void }
         <>
           <Note tone="danger" lead={lead}>
             {installCause(failure)}
-            {CLEANUP[failure.cleanup]}
+            {failure.kind === "service" && failure.cleanup === "removed"
+              ? " Clawtrate removed this attempt’s gateway profile and program files."
+              : CLEANUP[failure.cleanup]}
           </Note>
           {failure.step >= 0 && failure.kind !== "changed" && (
             <details className="b-disclosure s-disclosure" data-testid="setup-install-details">

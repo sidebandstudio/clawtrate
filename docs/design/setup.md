@@ -336,7 +336,7 @@ The steps are “Download and check OpenClaw 2026.11.10”, “Install Node.js a
 
 Once the local look proves the new profile and port, Clawtrate pairs with full control using the same checks as [local connect](setup-effortless.md#3-connect-to-openclaw-on-this-mac). The native confirmation covers that connection. Clawtrate starts no connection to a different profile or port on that consent.
 
-Failures use fixed copy and offer a retry. Before onboarding, a fresh attempt can remove files it proves the earlier attempt made. After onboarding starts, a retry checks what's there and keeps gateway files. Cancelling a running install and removing an installed gateway from Settings are separate work. The Linux installer is covered by stand-ins. Install is offered on macOS.
+Failures use fixed copy and offer a retry. Before onboarding, a fresh attempt can remove files it proves the earlier attempt made. If service installation fails and leaves no service, Clawtrate verifies the new profile's ownership and can remove it with the rest of the attempt. If a service exists or the ownership check fails, a retry checks what's there and keeps the gateway files. Cancelling a running install and removing an installed gateway from Settings are separate work. The Linux installer is covered by stand-ins. Install is offered on macOS.
 
 ## 11. Removing OpenClaw, or leaving it (not in this version)
 

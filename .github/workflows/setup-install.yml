@@ -54,3 +54,9 @@ jobs:
           test ! -e "$HOME/.openclaw-clawtrate"
       - name: Install, pair with full control, and verify the profile is removed
         run: node apps/desktop/test/hosted/real-install.ts
+      - name: Upload install evidence
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: setup-install-${{ matrix.os }}
+          path: ${{ runner.temp }}/clawtrate-setup-install/
