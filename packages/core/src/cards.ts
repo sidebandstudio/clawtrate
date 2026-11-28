@@ -722,19 +722,30 @@ export function linkedRunOf(run: Run, sessionKey: string): LinkedRun {
   };
 }
 
-/** The recipients a task's `sessions_send` results name: the recipient's run and session, as sent. */
+/**
+ * The recipients a task's `sessions_send` results name: the recipient's run and session, as sent,
+ * and whether the result left the reply to come later (`delivery.status: "pending"`). For such a
+ * send the gateway itself starts a turn in the sending task once the recipient's run ends: the
+ * reply when that run ended well, a note that the delivery failed when it did not (2026.10.6 and
+ * 2026.11.10, `runSessionsSendA2AFlow`).
+ */
 export function recipientLinks(
   runs: Run[],
   rawOf: (step: Step) => StepRaw | null,
-): Array<{ runId: string | null; sessionKey: string | null }> {
-  const links: Array<{ runId: string | null; sessionKey: string | null }> = [];
+): Array<{ runId: string | null; sessionKey: string | null; deliveryPending: boolean }> {
+  const links: Array<{
+    runId: string | null;
+    sessionKey: string | null;
+    deliveryPending: boolean;
+  }> = [];
   for (const run of runs) {
     for (const step of run.steps) {
       if (step.toolName !== BOT_MESSAGE_TOOL) continue;
       const details = sendDetails(resultBody(rawOf(step)));
       const runId = str(details?.runId);
       const sessionKey = str(details?.sessionKey);
-      if (runId || sessionKey) links.push({ runId, sessionKey });
+      const deliveryPending = str(asRecord(details?.delivery)?.status) === "pending";
+      if (runId || sessionKey) links.push({ runId, sessionKey, deliveryPending });
     }
   }
   return links;

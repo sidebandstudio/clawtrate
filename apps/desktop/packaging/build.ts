@@ -20,6 +20,7 @@ import { createRequire } from "node:module";
 import { isAbsolute, join } from "node:path";
 import { build, Platform } from "electron-builder";
 import { LOGO_PATH, MANIFEST_PATH, sha256 } from "../../../tools/brand/src/make-icons.ts";
+import { BUILD_OUT, packCarried } from "./carried-plugins.ts";
 import { APP_ID, builderConfig, PRODUCT_NAME } from "./config.ts";
 import { OUTPUT_VARIABLE, packageOutput } from "./output.ts";
 import { checkMacSignature, signingPlan, signingProblems, signingSummary } from "./signing.ts";
@@ -52,6 +53,16 @@ for (const file of ["out/main/index.js", "out/preload/index.cjs", "out/renderer/
     console.error(`${file} is missing. Run \`electron-vite build\` first.`);
     process.exit(1);
   }
+}
+
+// The plugins the app carries, packed from this checkout. A plugin whose files
+// changed without a new version stops the build here, before anything is built.
+try {
+  for (const plugin of packCarried(BUILD_OUT).plugins)
+    console.log(`Carrying ${plugin.packageName} ${plugin.version}, ${plugin.integrity}.`);
+} catch (error) {
+  console.error((error as Error).message);
+  process.exit(1);
 }
 
 // Signing runs only with the owner's identities in the environment; a partial

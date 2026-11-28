@@ -26,7 +26,7 @@ const INSTANCE = process.env.CLAWTRATE_DEV_INSTANCE!;
 const STATIC = process.env.CLAWTRATE_E2E_STATIC!;
 const SINCE = Date.now();
 const STAMP = SINCE.toString(36);
-const PARENT = `agent:main:e2e-started-${STAMP}`;
+const PARENT = `agent:clawtrate-main-bot:e2e-started-${STAMP}`;
 const PARENT_TITLE = "Plan the Saturday walk";
 const ASKED = `agent:otto:e2e-card-${STAMP}`;
 const ASKED_TITLE = "Saturday walk maps";
@@ -138,7 +138,7 @@ test("F-565: a task a bot started opens under the bot with its label, says who s
   await sender.terminal(sent.runId, 60_000);
   await gatewayCall("sessions.patch", { key: PARENT, label: PARENT_TITLE });
   const listed = await gatewayCall<{ sessions: Array<Record<string, unknown>> }>("sessions.list", {
-    agentId: "main",
+    agentId: "clawtrate-main-bot",
     excludeCron: true,
     excludeSubagents: true,
     limit: 200,

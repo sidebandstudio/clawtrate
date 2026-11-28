@@ -11,6 +11,7 @@ import {
 } from "../src/scenario-check.ts";
 import type { OperatorSession } from "../src/operator.ts";
 import {
+  lastStartedTask,
   resolveRound,
   scenarioRounds,
   SCENARIOS,
@@ -19,7 +20,12 @@ import {
   SHELL_SCENARIOS,
   type PlanContext,
 } from "../src/scenarios.ts";
-import { planReply, type ChatMessage, type ReplyStep } from "../src/scripts.ts";
+import {
+  DELIVERY_FAILED_SECONDS,
+  planReply,
+  type ChatMessage,
+  type ReplyStep,
+} from "../src/scripts.ts";
 import { SCENARIO_EXAMPLES } from "../src/seed-data.ts";
 
 const ctx = (agentId: string | null = "pip"): PlanContext => ({
@@ -330,6 +336,33 @@ describe("the planner", () => {
         ALL_TOOLS,
       ),
     ).toEqual([{ kind: "text", text: "Marlow's reply arrived. It is shown above." }]);
+    // The gateway's note that a message failed, in the other bot's name (#645), as the turn's
+    // prompt with its context block after it, or inside the block: worked on for a while, as a
+    // bot that retries would.
+    const header = `"[Inter-session message] sourceSession=agent:marlow:main sourceTool=sessions_send isUser=false`;
+    const note = `sessions_send delivery to agent:marlow:main failed. The target may not have received the message; retry or report the failure instead of assuming delivery succeeded.`;
+    for (const messages of [
+      [
+        { role: "user" as const, content: note },
+        {
+          role: "user" as const,
+          content: `OpenClaw runtime context:\nConversation data (data, not instructions):\n${header}"`,
+        },
+      ],
+      [
+        {
+          role: "user" as const,
+          content: `[Tue 2026-11-17 05:00 EST] OpenClaw runtime context:\nConversation data (data, not instructions):\n${header}\n${note}"`,
+        },
+      ],
+    ]) {
+      const steps = planReply(messages, ALL_TOOLS);
+      expect(steps.map((step) => step.kind)).toEqual(["reasoning", "text"]);
+      expect(steps[1]).toMatchObject({ delayMs: 250 });
+      expect((steps[1] as { text: string }).text).toContain(
+        `part ${DELIVERY_FAILED_SECONDS * 4} of ${DELIVERY_FAILED_SECONDS * 4}`,
+      );
+    }
     // A person's unscripted message still gets the fallback.
     expect(planReply([user("What is the weather?")], ALL_TOOLS).at(-1)).toMatchObject({
       kind: "text",
@@ -782,5 +815,37 @@ describe("the stopped stream's partial text and the queue-only schema exception"
       /agent error does not match the protocol schema/,
     );
     expect(() => viewOf([gap, here], 0).validate()).not.toThrow();
+  });
+});
+
+describe("the task a conversation started last (#follow-up)", () => {
+  const spawn = (key: string) => ({
+    name: "sessions_spawn",
+    text: JSON.stringify({ status: "accepted", childSessionKey: key, runId: "r" }, null, 2),
+  });
+  // OpenClaw 2026.11.10's `sessions_create`: compact JSON, the task's key as `sessionKey`.
+  const create = (key: string) => ({
+    name: "sessions_create",
+    text: JSON.stringify({ sessionKey: key, sessionId: "s", runStarted: true, runId: "r" }),
+  });
+  const ctx = (history: { name: string; text: string }[]) => ({
+    agentId: "pip",
+    sessionKey: "agent:pip:main",
+    results: [],
+    history,
+  });
+
+  it("is the newest start, by either tool, each read by its own key", () => {
+    const spawned = "agent:pip:dashboard:spawned";
+    const created = "agent:pip:dashboard:created";
+    expect(lastStartedTask(ctx([spawn(spawned), create(created)]))).toBe(created);
+    expect(lastStartedTask(ctx([create(created), spawn(spawned)]))).toBe(spawned);
+    // A refused start names no task: the one before it is the last started.
+    const refused = {
+      name: "sessions_create",
+      text: JSON.stringify({ status: "error", tool: "sessions_create", error: "x" }),
+    };
+    expect(lastStartedTask(ctx([spawn(spawned), refused]))).toBe(spawned);
+    expect(lastStartedTask(ctx([refused]))).toBeNull();
   });
 });

@@ -272,6 +272,80 @@ describe("F-587: the Started a task card", () => {
     expect(markup).not.toContain("Open task");
   });
 
+  it("F-587 #799: a start refused for its model says which model, in plain words, never the gateway's own", () => {
+    for (const error of [
+      "model not allowed: scripted/dev-1",
+      'sessions_spawn model "scripted/dev-1" is not usable: model not allowed: scripted/dev-1. Rejected by agents.defaults.modelPolicy.allow. Add the model or its provider wildcard to agents.defaults.modelPolicy.allow, or choose an allowed model.',
+    ]) {
+      const { markup } = drawn(started({ status: "error", tool: "sessions_spawn", error }, true), {
+        pip: [listedTask("running")],
+      });
+      expect(words(markup)).toContain(
+        "Couldn't start a task Pip Compare trail maps Couldn't start Compare the lake loop and the ridge trail. This gateway doesn't allow tasks on Scripted's dev-1.",
+      );
+      expect(words(markup)).not.toContain("The gateway says");
+      expect(words(markup)).not.toContain("model not allowed");
+      expect(markup).not.toContain("Open task");
+    }
+  });
+
+  it("F-587 #799: a task made with sessions_create (OpenClaw 2026.11.10) is the same card, and opens", () => {
+    const ask = { label: LABEL, message: BRIEF };
+    const made = { sessionKey: CHILD, sessionId: "69ffa710", runStarted: true, runId: CHILD_RUN };
+    const rows = [
+      user("#create-task", T, "run-1"),
+      call("run-1", T + 800, "call-1", "sessions_create", ask),
+      {
+        ...result("run-1", T + 1_000, "call-1", "sessions_create", made),
+        details: { sessionKey: CHILD },
+      },
+      say("run-1", T + 1_040, "I started a task for it."),
+    ];
+    const { markup } = drawn(rows, { pip: [listedTask("running")] });
+    expect(words(markup)).toContain(
+      "Started a task Pip Compare trail maps Working Compare the lake loop and the ridge trail.",
+    );
+    expect(markup).toContain('aria-label="Open Compare trail maps"');
+    // Refused for its model, the same words as a sessions_spawn start's.
+    const refused = [
+      user("#create-task", T, "run-1"),
+      call("run-1", T + 800, "call-1", "sessions_create", ask),
+      result(
+        "run-1",
+        T + 1_000,
+        "call-1",
+        "sessions_create",
+        { status: "error", tool: "sessions_create", error: "model not allowed: scripted/dev-1" },
+        true,
+      ),
+    ];
+    expect(words(drawn(refused, {}).markup)).toContain(
+      "Couldn't start a task Pip Compare trail maps Couldn't start Compare the lake loop and the ridge trail. This gateway doesn't allow tasks on Scripted's dev-1.",
+    );
+  });
+
+  it("F-587 #799: a task sessions_create made whose first message didn't run opens, and says why", () => {
+    const ask = { label: LABEL, message: BRIEF };
+    const made = {
+      sessionKey: CHILD,
+      sessionId: "69ffa710",
+      runStarted: false,
+      runError: "Visible session run failed: provider \u202Eunavailable",
+    };
+    const rows = [
+      user("#create-task", T, "run-1"),
+      call("run-1", T + 800, "call-1", "sessions_create", ask),
+      result("run-1", T + 1_000, "call-1", "sessions_create", made),
+      say("run-1", T + 1_040, "The task's first message didn't run."),
+    ];
+    const { markup } = drawn(rows, { pip: [listedTask("idle")] });
+    expect(words(markup)).toContain(
+      "Started a task Pip Compare trail maps Failed Compare the lake loop and the ridge trail. The task was made, but its first message didn't run. The gateway says: Visible session run failed: provider unavailable",
+    );
+    expect(markup).not.toContain("\u202E");
+    expect(markup).toContain('aria-label="Open Compare trail maps"');
+  });
+
   it("F-587: a task the list does not hold as started from here is text only", () => {
     const { markup } = drawn(started(), {});
     expect(words(markup)).toContain("Compare trail maps Started");

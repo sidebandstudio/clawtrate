@@ -29,6 +29,7 @@ import { flushSync } from "react-dom";
 import type { useDesktopUpdateSnapshot } from "./update-reading.ts";
 import { Updates } from "./Updates.tsx";
 import { BotGuidesPane } from "./BotGuides.tsx";
+import { InfoCard, InfoTip } from "./InfoTip.tsx";
 import { useBridge, useClawtrateState, useCommand } from "./bridge.tsx";
 import { useAccountsSection } from "./bots/AccountsSection.tsx";
 import { useCheckInsSection } from "./check-ins/CheckIns.tsx";
@@ -181,7 +182,10 @@ function DeviceSwitch({
   return (
     <div className="b-field device-switch">
       <span className="device-switch-row">
-        <span id={`${id}-label`}>{label}</span>
+        <span>
+          <span id={`${id}-label`}>{label}</span>
+          <InfoTip id={`${id}-note`} about={label} />
+        </span>
         <button
           type="button"
           className="b-switch"
@@ -196,9 +200,7 @@ function DeviceSwitch({
           }}
         />
       </span>
-      <p className="b-hint" id={`${id}-note`}>
-        {note}
-      </p>
+      <InfoCard id={`${id}-note`}>{note}</InfoCard>
     </div>
   );
 }
@@ -254,7 +256,10 @@ function AdvancedPane({ announce }: { announce: (text: string) => void }) {
         announce={announce}
       />
       <div className="b-field channel-chats-field">
-        <span id="channel-chats-label">Show external channel chats</span>
+        <span>
+          <span id="channel-chats-label">Show external channel chats</span>
+          <InfoTip id="channel-chats-note" about="Show external channel chats" />
+        </span>
         <button
           type="button"
           className="b-switch"
@@ -266,20 +271,22 @@ function AdvancedPane({ announce }: { announce: (text: string) => void }) {
           onClick={toggleChannelChats}
         />
       </div>
-      <p className="b-hint" id="channel-chats-note">
-        Off by default. Chats that reach a bot through Discord, Telegram, Slack, iMessage, WhatsApp,
-        Signal or another channel stay out of the task list, its previews and its unread marks. A
-        bot's main conversation always shows. If the gateway sends a channel's direct messages to
-        it, which it does unless its <code>session.dmScope</code> setting gives each channel
-        conversation its own session, those messages still appear there.
-      </p>
+      <InfoCard id="channel-chats-note">
+        Chats that reach a bot through Discord, Telegram, Slack, iMessage, WhatsApp, Signal or
+        another channel. While it&apos;s off they stay out of the task list, its previews and its
+        unread marks. A bot&apos;s main conversation always shows, with any channel messages the
+        gateway puts in it.
+      </InfoCard>
       {channelError && (
         <div className="form-error" role="alert">
           {channelError}
         </div>
       )}
       <div className="b-field channel-chats-field">
-        <span id="other-tools-label">Show sessions from other tools</span>
+        <span>
+          <span id="other-tools-label">Show sessions from other tools</span>
+          <InfoTip id="other-tools-note" about="Show sessions from other tools" />
+        </span>
         <button
           type="button"
           className="b-switch"
@@ -291,11 +298,12 @@ function AdvancedPane({ announce }: { announce: (text: string) => void }) {
           onClick={toggleOtherTools}
         />
       </div>
-      <p className="b-hint" id="other-tools-note">
-        Off by default. Sessions that an API client, a scheduled routine or another tool started
-        with a bot stay out of the task list, its previews and its unread marks. A routine&apos;s
-        runs open from Routines. One that is waiting for your approval or answer always shows.
-      </p>
+      <InfoCard id="other-tools-note">
+        Sessions an API client, a scheduled routine or another tool started with a bot. While
+        it&apos;s off they stay out of the task list, its previews and its unread marks. A
+        routine&apos;s runs open from Routines, and one waiting for your approval or answer always
+        shows.
+      </InfoCard>
       {otherToolsError && (
         <div className="form-error" role="alert">
           {otherToolsError}
@@ -322,7 +330,10 @@ function GatewayBotSwitch({ announce }: { announce: (text: string) => void }) {
   return (
     <>
       <div className="b-field channel-chats-field">
-        <span id="gateway-bot-label">Show the gateway&apos;s own bot</span>
+        <span>
+          <span id="gateway-bot-label">Show the gateway&apos;s own bot</span>
+          <InfoTip id="gateway-bot-note" about="Show the gateway's own bot" />
+        </span>
         <button
           type="button"
           className="b-switch"
@@ -334,11 +345,11 @@ function GatewayBotSwitch({ announce }: { announce: (text: string) => void }) {
           onClick={toggle}
         />
       </div>
-      <p className="b-hint" id="gateway-bot-note">
-        Off by default. Every gateway has a bot of its own, its default bot: channel messages, other
-        tools&apos; calls and scheduled runs that name no bot land on it. While you have another
-        bot, it stays out of the sidebar unless it is waiting on you.
-      </p>
+      <InfoCard id="gateway-bot-note">
+        Every gateway has a default bot: channel messages, other tools&apos; calls and scheduled
+        runs that name no bot land on it. While it&apos;s off and you have another bot, it stays out
+        of the sidebar unless it is waiting on you.
+      </InfoCard>
       {error && (
         <div className="form-error" role="alert">
           {error}
@@ -355,9 +366,12 @@ function GatewayBotSwitch({ announce }: { announce: (text: string) => void }) {
 function ConversationPane({
   announce,
   canWrite,
+  canAdmin,
 }: {
   announce: (text: string) => void;
   canWrite: boolean;
+  /** Whether this device writes the bots' files: admin access, and not a read-only viewer. */
+  canAdmin: boolean;
 }) {
   const send = useCommand();
   const state = useClawtrateState();
@@ -381,10 +395,16 @@ function ConversationPane({
   };
   return (
     <>
-      <label className="b-field">
-        <span>Turn time limit</span>
+      <div className="b-field">
+        <span>
+          <label htmlFor="turn-limit-input" id="turn-limit-label">
+            Turn time limit
+          </label>
+          <InfoTip id="turn-limit-note" about="Turn time limit" />
+        </span>
         <span className="turn-limit-field">
           <input
+            id="turn-limit-input"
             className="input"
             type="number"
             inputMode="numeric"
@@ -393,6 +413,8 @@ function ConversationPane({
             step={1}
             value={draft ?? String(minutes)}
             data-testid="turn-limit"
+            // Its unit is part of its name: "minutes" beside it is hidden from a screen reader.
+            aria-labelledby="turn-limit-label turn-limit-unit"
             aria-describedby="turn-limit-note"
             aria-invalid={error ? true : undefined}
             onChange={(event) => setDraft(event.target.value)}
@@ -401,30 +423,30 @@ function ConversationPane({
               if (event.key === "Enter") commit();
             }}
           />
-          <span aria-hidden="true">minutes</span>
+          <span aria-hidden="true" id="turn-limit-unit">
+            minutes
+          </span>
         </span>
-      </label>
-      <p className="b-hint" id="turn-limit-note">
-        Minutes. 50 by default. At the limit Clawtrate asks the gateway to stop the turn so it does
-        not hang, and once the gateway confirms, the turn ends with a note naming the limit. Send a
-        message to pick up where it left off. It applies to turns this device starts.
-      </p>
+      </div>
+      <InfoCard id="turn-limit-note">
+        At the limit Clawtrate asks the gateway to stop the turn, so it doesn&apos;t hang. Once the
+        gateway confirms, the turn ends with a note naming the limit. Send a message to pick up
+        where it left off. It applies to turns this device starts.
+      </InfoCard>
       {error && (
         <div className="form-error" role="alert">
           {error}
         </div>
       )}
       <BotVoicePane canWrite={canWrite} announce={announce} />
-      <BotGuidesPane announce={announce} />
+      <BotGuidesPane canWrite={canAdmin} />
     </>
   );
 }
 
-/** The voice plugin's page in Clawtrate's own repository: how to set it up, and what it covers. */
-const VOICE_README =
-  "https://github.com/sidebandstudio/clawtrate/blob/main/plugins/clawtrate-voice/README.md";
-const VOICE_SETUP = `${VOICE_README}#turning-it-on-for-a-gateway`;
-const VOICE_LIMITS = `${VOICE_README}#where-the-guide-doesnt-reach`;
+/** Where the voice plugin's guide doesn't reach, in its page in Clawtrate's own repository. */
+const VOICE_LIMITS =
+  "https://github.com/sidebandstudio/clawtrate/blob/main/plugins/clawtrate-voice/README.md#where-the-guide-doesnt-reach";
 
 function VoiceLink({ href, children }: { href: string; children: ReactNode }) {
   return (
@@ -440,8 +462,6 @@ function VoiceLink({ href, children }: { href: string; children: ReactNode }) {
     </a>
   );
 }
-
-const VoiceSetupLink = () => <VoiceLink href={VOICE_SETUP}>How to set it up</VoiceLink>;
 
 /** One of the two hook settings, what it must be, and whether it blocks the hook now. */
 function HookSetting({
@@ -468,7 +488,10 @@ function HookSetting({
  * changes what the bots are asked to do; nothing here rewrites what a bot wrote. The value is
  * read again after every new hello, after the gateway reports a change (the plugin's event, or
  * its plugins changing), and after a save that failed. Until then whatever was read last, a
- * missing plugin and a refusal included, is shown as unconfirmed.
+ * refusal included, is shown as unconfirmed. A gateway without the plugin shows nothing here
+ * (#796): every bot already gets the same voice guide from Clawtrate's section in its
+ * instructions, and there is nothing a person could do from here until Clawtrate installs its
+ * plugins itself.
  */
 function BotVoicePane({
   canWrite,
@@ -613,23 +636,10 @@ function BotVoicePane({
     </div>
   );
 
-  if (voice.status === "missing")
-    return (
-      <div className="bot-voice" data-testid="bot-voice" data-confirmed={confirmed}>
-        {freshness}
-        <div className="b-note">
-          <div>
-            <p>
-              Bot voice needs Clawtrate's voice plugin, <code>clawtrate-voice</code>, on the
-              gateway. Without it the bots talk the way their own instructions say.
-            </p>
-            <div className="b-actions">
-              <VoiceSetupLink />
-            </div>
-          </div>
-        </div>
-      </div>
-    );
+  // No plugin, or a refusal from a gateway that lists no methods, which is how one without it
+  // answers: nothing to show.
+  if (voice.status === "missing" || (voice.status === "refused" && voice.advertised === null))
+    return null;
   if (voice.status === "refused")
     return (
       <div className="bot-voice" data-testid="bot-voice" data-confirmed={confirmed}>
@@ -637,14 +647,10 @@ function BotVoicePane({
         <div className="b-note" data-tone="warn">
           <div>
             <p data-testid="bot-voice-refused">
-              {voice.advertised
-                ? "The gateway has Clawtrate's voice plugin, but it won't show this connection the setting. The plugin on the gateway may be a different version from the one this Clawtrate works with."
-                : "Clawtrate can't tell whether the gateway has its voice plugin. The gateway refused to show the setting, which it also does when the plugin isn't there."}{" "}
-              The gateway said: {voice.message}
+              The gateway has Clawtrate's voice plugin, but it won't show this connection the
+              setting. The plugin on the gateway may be a different version from the one this
+              Clawtrate works with. The gateway said: {voice.message}
             </p>
-            <div className="b-actions">
-              <VoiceSetupLink />
-            </div>
           </div>
         </div>
       </div>
@@ -695,7 +701,10 @@ function BotVoicePane({
       <div className="facts">
         <div className="b-row">
           <span className="b-row-main">
-            <span id="bot-voice-label">Bot voice</span>
+            <span>
+              <span id="bot-voice-label">Bot voice</span>
+              <InfoTip id="bot-voice-note" about="Bot voice" />
+            </span>
             <small data-testid="bot-voice-state">
               {confirmed
                 ? `${onOff}, as the gateway reads it${voice.changedAt === null ? ", by default" : ""}.`
@@ -710,7 +719,7 @@ function BotVoicePane({
             role="switch"
             aria-checked={voice.on}
             aria-labelledby="bot-voice-label"
-            aria-describedby="bot-voice-note"
+            aria-describedby={canWrite ? "bot-voice-note" : "bot-voice-note bot-voice-write"}
             aria-busy={saving || undefined}
             // Unavailable while its own save is on its way, and still focused.
             aria-disabled={saving || undefined}
@@ -722,12 +731,17 @@ function BotVoicePane({
           />
         </div>
       </div>
-      <p className="b-hint" id="bot-voice-note">
-        While it's on, a voice guide is added to a bot's system prompt each time the gateway runs
-        the plugin's hook, if its config permits the hook. The guide asks the bots to talk plainly
-        and kindly, with no em dashes. Turned off, each bot talks the way its own instructions say.
-        {!canWrite && " Changing it needs write access."}
-      </p>
+      <InfoCard id="bot-voice-note">
+        While it&apos;s on, a voice guide is added to a bot&apos;s system prompt each time the
+        gateway runs the plugin&apos;s hook, if its config permits the hook. The guide asks the bots
+        to talk plainly and kindly, with no em dashes.
+      </InfoCard>
+      {/* Why the switch can't be pressed: status, so it stays in view. */}
+      {!canWrite && (
+        <p className="b-hint" id="bot-voice-write">
+          Changing it needs write access.
+        </p>
+      )}
       <dl className="facts bot-voice-hook">
         <div>
           <dt>Prompt hook permitted</dt>
@@ -743,9 +757,9 @@ function BotVoicePane({
         <div className="b-note" data-tone="warn" data-testid="bot-voice-blocked">
           <div>
             <p>
-              The gateway's config doesn't permit the voice plugin's prompt hook, so no bot gets the
-              guide. Under <code>plugins.entries.clawtrate-voice.hooks</code> both of these must
-              permit it:
+              The gateway's config doesn't permit the voice plugin's prompt hook, so the plugin adds
+              its guide to no bot's system prompt. Under{" "}
+              <code>plugins.entries.clawtrate-voice.hooks</code> both of these must permit it:
             </p>
             <ul>
               <HookSetting
@@ -760,9 +774,6 @@ function BotVoicePane({
               />
             </ul>
             <p>Then restart the gateway. Clawtrate doesn't change the gateway's config.</p>
-            <div className="b-actions">
-              <VoiceSetupLink />
-            </div>
           </div>
         </div>
       )}
@@ -1218,6 +1229,7 @@ export function Settings({
                   <ConversationPane
                     announce={announce}
                     canWrite={connection.canWrite && !info.readOnly}
+                    canAdmin={connection.canAdmin && !info.readOnly}
                   />
                 ),
                 foot: null,

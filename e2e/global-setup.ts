@@ -21,6 +21,7 @@ import { randomBytes } from "node:crypto";
 import { existsSync, mkdtempSync, readFileSync, writeFileSync, writeSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { childrenReport, readProcessTable } from "../tools/dev-gateway/src/children.ts";
 import { gatedSpawn, type Gated } from "../tools/dev-gateway/src/env.ts";
 import {
   newRunId,
@@ -28,7 +29,14 @@ import {
   processIdentity,
   processState,
 } from "../tools/dev-gateway/src/state-guard.ts";
-import { cleanUp, recoverDeadRuns, saveRecord, TEMP_PREFIX, type RunRecord } from "./run-record.ts";
+import {
+  cleanUp,
+  pruneRunOutputs,
+  recoverDeadRuns,
+  saveRecord,
+  TEMP_PREFIX,
+  type RunRecord,
+} from "./run-record.ts";
 
 const ROOT = join(import.meta.dirname, "..");
 const CLI = join(ROOT, "tools/dev-gateway/src/cli.ts");
@@ -115,6 +123,26 @@ export const resetInstance = (name: string, runId: string) => {
   }
 };
 
+/**
+ * What each of this run's running gateways holds after the specs, before the reset stops it: the
+ * count grows with the tasks the specs ran turns in when servers are kept (#845). Said, never
+ * thrown: a loaded machine can be slow to end a server.
+ */
+function reportGatewayChildren(own: string[]): void {
+  try {
+    const rows = readProcessTable();
+    for (const row of listInstances()) {
+      if (row.name === null || !own.includes(row.name) || row.gatewayState !== "alive") continue;
+      if (row.gatewayPid === null) continue;
+      const { line, warning } = childrenReport(rows, row.gatewayPid);
+      console.log(`Gateway children of ${row.name}: ${line}`);
+      if (warning) console.log(`Warning: ${warning}`);
+    }
+  } catch (error) {
+    console.log(`Could not count the gateways' children: ${String(error)}`);
+  }
+}
+
 const sleepSync = (ms: number) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 
 /** Stop a child we started: SIGTERM, a bounded wait, then SIGKILL. */
@@ -154,9 +182,10 @@ function showGatewayBot(dataDir: string): void {
  * recorded. A test that quits and restarts a client starts its own with this,
  * on its own copy of the host's data, and stops it by its process.
  *
- * Unless `gatewayBot: "default"`, a host with no choice of its own starts with "Show the
- * gateway's own bot" on (F-562): the checks of other flows work on Juniper, the development
- * gateway's own bot. `e2e/gateway-bot.spec.ts` checks the default.
+ * A host with no choice of its own starts with "Show the gateway's own bot" at its default, off
+ * (F-562), as a person starts: the development gateway's own bot `main` is out of view beside
+ * Juniper, the Main Bot, and the other bots. `gatewayBot: "shown"` turns it on.
+ * `e2e/gateway-bot.spec.ts` checks the default.
  */
 export function startHost(
   instance: string,
@@ -168,7 +197,7 @@ export function startHost(
     gatewayBot?: "shown" | "default";
   } = {},
 ) {
-  if (options.gatewayBot !== "default") showGatewayBot(dataDir);
+  if (options.gatewayBot === "shown") showGatewayBot(dataDir);
   const gated: Gated = gatedSpawn(
     spawn,
     process.execPath,
@@ -234,6 +263,8 @@ export default async function globalSetup() {
   process.env.CLAWTRATE_E2E_SENTINEL = sentinel;
 
   recoverDeadRuns(RECORDS, resetInstance);
+  // A failed run's output stays for reading (playwright.config.ts); see pruneRunOutputs.
+  pruneRunOutputs(join(ROOT, "test-results"), run);
 
   // Registered before anything is started.
   const record: RunRecord = {
@@ -318,6 +349,7 @@ export default async function globalSetup() {
   const alreadyRunning = runningOthers(own);
   const teardown = async () => {
     if (host) await stopChild(host);
+    reportGatewayChildren(own);
     const problems = [...cleanUpOnce()];
     const after = runningOthers(own);
     const gone = alreadyRunning.filter((row) => !after.includes(row));

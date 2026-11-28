@@ -311,7 +311,7 @@ export function fixtureRoutineList(now: number, params: RoutineParams): Routine[
     }),
     base({
       id: "routine-stretch",
-      botId: "main",
+      botId: "clawtrate-main-bot",
       name: "Stretch break",
       schedule: schedule({ kind: "every", everyMs: 2 * HOUR }),
       payload: "systemEvent",
@@ -597,7 +597,10 @@ export function routineCommands(now: number, params: RoutineParams) {
               ? { ...made, text: `${made.text} Keep it to three lines.`, updatedAt: now + 1 }
               : made,
           );
-          return later(400, () => ({ status: "unknown", error: "gateway request timed out" }));
+          return later(400, () => ({
+            status: "unknown",
+            error: "The gateway didn't answer in time.",
+          }));
         }
         return later(400, () => {
           // A retry that lands supersedes an earlier create in doubt with this key.
@@ -661,7 +664,10 @@ export function routineCommands(now: number, params: RoutineParams) {
           }));
         if (end === "noanswer") {
           replace(applied(routine, command.original, command.edit));
-          return later(400, () => ({ status: "unknown", error: "gateway request timed out" }));
+          return later(400, () => ({
+            status: "unknown",
+            error: "The gateway didn't answer in time.",
+          }));
         }
         return later(400, () => {
           // Deleted while the update was out: the gateway no longer has it to update.

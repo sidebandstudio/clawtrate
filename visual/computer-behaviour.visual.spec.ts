@@ -338,7 +338,7 @@ test.describe("the full view on the desktop", () => {
           }
         ).clawtrateFixture
           .getState()
-          .transcripts["agent:main:ebook-apps"]!.questions.find(
+          .transcripts["agent:clawtrate-main-bot:ebook-apps"]!.questions.find(
             (q) => q.id === "ask_library_sign_in",
           )?.answers,
     );
@@ -700,7 +700,7 @@ test.describe("the computer button, recovery and the machine", () => {
   }) => {
     await openFixture(
       page,
-      `scene=main&bot=main&task=agent:main:ebook-apps&panel=closed&tab=files&computer=active`,
+      `scene=main&bot=clawtrate-main-bot&task=agent:clawtrate-main-bot:ebook-apps&panel=closed&tab=files&computer=active`,
       "light",
     );
     const button = page.getByTestId("computer-button");
@@ -748,7 +748,7 @@ test.describe("the computer button, recovery and the machine", () => {
         const { clawtrateFixture } = window as unknown as { clawtrateFixture: ClawtrateBridge };
         return clawtrateFixture
           .getState()
-          .transcripts["agent:main:ebook-apps"]?.questions.find(
+          .transcripts["agent:clawtrate-main-bot:ebook-apps"]?.questions.find(
             (question) => question.id === "ask_library_sign_in",
           )?.status;
       });

@@ -88,7 +88,13 @@ const WEEK: Record<
   { input: number; output: number; cacheRead: number; cacheWrite: number; cost: number }
 > = {
   otto: { input: 322_000, output: 51_000, cacheRead: 1_244_900, cacheWrite: 22_100, cost: 3.29 },
-  main: { input: 498_000, output: 91_000, cacheRead: 1_610_000, cacheWrite: 40_000, cost: 5.92 },
+  "clawtrate-main-bot": {
+    input: 498_000,
+    output: 91_000,
+    cacheRead: 1_610_000,
+    cacheWrite: 40_000,
+    cost: 5.92,
+  },
   marlow: { input: 120_000, output: 31_000, cacheRead: 402_000, cacheWrite: 9_000, cost: 1.1 },
   pip: { input: 90_000, output: 22_000, cacheRead: 260_000, cacheWrite: 7_000, cost: 0.74 },
 };
@@ -98,7 +104,7 @@ const SOURCES: Record<
   { people: number; routines: number; bots: number; unattributed: number }
 > = {
   otto: { people: 1_240_000, routines: 312_000, bots: 41_200, unattributed: 46_800 },
-  main: { people: 2_239_000, routines: 0, bots: 0, unattributed: 0 },
+  "clawtrate-main-bot": { people: 2_239_000, routines: 0, bots: 0, unattributed: 0 },
   marlow: { people: 520_000, routines: 0, bots: 42_000, unattributed: 0 },
   pip: { people: 379_000, routines: 0, bots: 0, unattributed: 0 },
 };

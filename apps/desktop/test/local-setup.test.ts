@@ -67,7 +67,10 @@ beforeAll(() => {
   chmodSync(scratch, 0o700);
   if (mac) {
     helper = join(scratch, "helper");
-    execFileSync("/usr/bin/xcrun", localGatewayBuild(helper));
+    // clang's two-architecture build leaves empty folders in TMPDIR: the scratch folder takes them.
+    execFileSync("/usr/bin/xcrun", localGatewayBuild(helper), {
+      env: { ...process.env, TMPDIR: scratch },
+    });
   }
 });
 afterAll(() => rmSync(scratch, { recursive: true, force: true }));
@@ -251,8 +254,13 @@ function localApp(local: LocalConnect, options: { secure?: boolean; dataDir?: st
   const writes: { key: string; value: string | null }[] = [];
   // A write the test says the store refuses, before anything is kept.
   let refuse: ((key: string, value: string) => boolean) | null = null;
+  // How long each read waits before the store answers, as a store on a busy computer can.
+  let readDelayMs = 0;
   const storage = {
-    get: (key: string) => host.storage.get(key),
+    get: async (key: string) => {
+      if (readDelayMs > 0) await sleep(readDelayMs);
+      return host.storage.get(key);
+    },
     delete: async (key: string) => {
       writes.push({ key, value: null });
       await host.storage.delete(key);
@@ -292,6 +300,7 @@ function localApp(local: LocalConnect, options: { secure?: boolean; dataDir?: st
     writes,
     local,
     refuseWrites: (rule: (key: string, value: string) => boolean) => (refuse = rule),
+    slowReads: (ms: number) => (readDelayMs = ms),
   };
 }
 
@@ -657,43 +666,103 @@ describe.skipIf(!mac)(
       }
     });
 
-    it("F-602: settings changed in place to TLS off while the gateway still serves TLS: Connect fails with its ways on, and isn't retried", async () => {
-      // What the reader knows is the settings file; the gateway runs on what it loaded when it
-      // started. A file edited to TLS off since then names a listener that still speaks TLS.
+    for (const slow of [false, true])
+      it(`F-602: settings changed in place to TLS off while the gateway still serves TLS: Connect fails with its ways on, and isn't retried${slow ? ", also when setup's disconnect is slower than the client's own retry" : ""}`, async () => {
+        // What the reader knows is the settings file; the gateway runs on what it loaded when it
+        // started. A file edited to TLS off since then names a listener that still speaks TLS.
+        const home = newHome();
+        execFileSync(
+          "/usr/bin/openssl",
+          [
+            "req",
+            "-x509",
+            "-newkey",
+            "rsa:2048",
+            "-nodes",
+            "-days",
+            "1",
+            "-subj",
+            "/CN=127.0.0.1",
+            "-keyout",
+            join(home, "tls-key.pem"),
+            "-out",
+            join(home, "tls-cert.pem"),
+          ],
+          { stdio: "ignore" },
+        );
+        let plaintext = 0;
+        let dials = 0;
+        const listener = createTlsServer(
+          {
+            key: readFileSync(join(home, "tls-key.pem")),
+            cert: readFileSync(join(home, "tls-cert.pem")),
+          },
+          (socket) => socket.destroy(),
+        );
+        listener.on("tlsClientError", () => (plaintext += 1));
+        // Every TCP connection, counted apart from the TLS errors it may end in.
+        // And how many of them the listener still has open: none once each has closed its side.
+        let open = 0;
+        listener.on("connection", (socket) => {
+          dials += 1;
+          open += 1;
+          socket.once("close", () => (open -= 1));
+        });
+        await new Promise<void>((done) => listener.listen(0, "127.0.0.1", done));
+        const port = (listener.address() as AddressInfo).port;
+        const local: LocalConnect = {
+          home,
+          helper: standInHelper(home),
+          platform,
+          sandboxed: true,
+          deadlineMs: SLOW,
+        };
+        settingsFile(home, ".openclaw", tokenSettings(port, "a-gateway-token"));
+        proofFile(home, ".openclaw", provedAnswer(home, ".openclaw", port));
+        const { client, setup, slowReads } = localApp(local);
+        try {
+          await client.start({ resume: false });
+          await setup.look();
+          expect(setup.current.look).toMatchObject({ outcome: "running", port });
+          // From after the look: what Connect itself dials. The look's socket is counted once the
+          // listener has closed it, with any TLS error it ended in, before the counts are taken.
+          await until(() => open === 0, 15_000);
+          const dialsBefore = dials;
+          const plaintextBefore = plaintext;
+          // The failed attempt's disconnect reads the store before it closes anything: held well
+          // past the client's own first retry (50 to 60 ms here), that retry comes due first.
+          if (slow) slowReads(500);
+          await setup.connect();
+          // Not left on Connecting, and not retried for ever: failed, with Look again and Advanced
+          // (the card's ways on after a failed Connect).
+          await until(() => setup.current.phase === "failed", 60_000);
+          expect(setup.current.failure).toMatchObject({ kind: "unanswered", port });
+          await until(() => client.state.connection.status === "idle", 15_000);
+          // One dial, its plaintext refused by the TLS listener, and no retry before idle or after.
+          expect(dials - dialsBefore).toBe(1);
+          expect(plaintext - plaintextBefore).toBe(1);
+          await sleep(1_000);
+          expect(dials - dialsBefore).toBe(1);
+          expect(plaintext - plaintextBefore).toBe(1);
+          // A look again finds it as before, and Connect may be pressed again.
+          await setup.look();
+          expect(setup.current.look).toMatchObject({ outcome: "running", port });
+        } finally {
+          client.stop();
+          await new Promise((done) => listener.close(done));
+        }
+      });
+
+    it("F-602: paired, then a drop while the bots load and a reconnect nothing answers: setup goes on watching, and is done once the bots are read", async () => {
       const home = newHome();
-      execFileSync(
-        "/usr/bin/openssl",
-        [
-          "req",
-          "-x509",
-          "-newkey",
-          "rsa:2048",
-          "-nodes",
-          "-days",
-          "1",
-          "-subj",
-          "/CN=127.0.0.1",
-          "-keyout",
-          join(home, "tls-key.pem"),
-          "-out",
-          join(home, "tls-cert.pem"),
-        ],
-        { stdio: "ignore" },
-      );
-      let plaintext = 0;
-      let dials = 0;
-      const listener = createTlsServer(
-        {
-          key: readFileSync(join(home, "tls-key.pem")),
-          cert: readFileSync(join(home, "tls-cert.pem")),
-        },
-        (socket) => socket.destroy(),
-      );
-      listener.on("tlsClientError", () => (plaintext += 1));
-      // Every TCP connection, counted apart from the TLS errors it may end in.
-      listener.on("connection", () => (dials += 1));
-      await new Promise<void>((done) => listener.listen(0, "127.0.0.1", done));
-      const port = (listener.address() as AddressInfo).port;
+      const gateway = silentGateway();
+      // The first read of the bots is held: the drop comes while they load. Later reads answer.
+      const held = deferred<unknown>();
+      const answer = gateway.handlers["agents.list"]!;
+      let lists = 0;
+      gateway.handlers["agents.list"] = (params) =>
+        (lists += 1) === 1 ? held.promise : answer(params);
+      const server = await bridged(gateway);
       const local: LocalConnect = {
         home,
         helper: standInHelper(home),
@@ -701,35 +770,41 @@ describe.skipIf(!mac)(
         sandboxed: true,
         deadlineMs: SLOW,
       };
-      settingsFile(home, ".openclaw", tokenSettings(port, "a-gateway-token"));
-      proofFile(home, ".openclaw", provedAnswer(home, ".openclaw", port));
+      settingsFile(home, ".openclaw", tokenSettings(server.port, "a-gateway-token"));
+      proofFile(home, ".openclaw", provedAnswer(home, ".openclaw", server.port));
       const { client, setup } = localApp(local);
+      const phases: string[] = [];
+      const stop = client.store.subscribe((state) => {
+        const phase = state.setup?.phase;
+        if (phase && phases.at(-1) !== phase) phases.push(phase);
+      });
       try {
         await client.start({ resume: false });
         await setup.look();
-        expect(setup.current.look).toMatchObject({ outcome: "running", port });
-        // From after the look: what Connect itself dials.
-        await sleep(200);
-        const dialsBefore = dials;
-        const plaintextBefore = plaintext;
         await setup.connect();
-        // Not left on Connecting, and not retried for ever: failed, with Look again and Advanced
-        // (the card's ways on after a failed Connect).
-        await until(() => setup.current.phase === "failed", 60_000);
-        expect(setup.current.failure).toMatchObject({ kind: "unanswered", port });
-        await until(() => client.state.connection.status === "idle", 15_000);
-        // One dial, its plaintext refused by the TLS listener, and no retry before idle or after.
-        expect(dials - dialsBefore).toBe(1);
-        expect(plaintext - plaintextBefore).toBe(1);
-        await sleep(1_000);
-        expect(dials - dialsBefore).toBe(1);
-        expect(plaintext - plaintextBefore).toBe(1);
-        // A look again finds it as before, and Connect may be pressed again.
-        await setup.look();
-        expect(setup.current.look).toMatchObject({ outcome: "running", port });
+        // The first paired hello: the connection is the person's now, its bots still loading.
+        await until(() => client.state.connection.status === "connected", 60_000);
+        expect(client.state.discovery.status).toBe("loading");
+        expect(setup.current.phase).toBe("connecting");
+        // It drops, and the next socket ends before anything answers.
+        gateway.refuseConnections = true;
+        gateway.dropAll();
+        await until(
+          () =>
+            client.state.connection.status === "reconnecting" &&
+            client.state.connection.error?.code === "UNREACHABLE",
+          60_000,
+        );
+        // The gateway answers again: the client's own retry connects and reads the bots.
+        gateway.refuseConnections = false;
+        await until(() => setup.current.phase === "done", 60_000);
+        expect(client.state.connection.status).toBe("connected");
+        expect(client.state.bots.length).toBeGreaterThan(0);
+        expect(phases).not.toContain("failed");
       } finally {
+        stop();
         client.stop();
-        await new Promise((done) => listener.close(done));
+        await server.close();
       }
     });
 
@@ -1235,48 +1310,51 @@ describe.skipIf(!mac)(
       }
     });
 
-    it("F-602: Use This computer, then Connect at the same address with the bots kept, and nothing answers: Connect fails with its ways on, and isn't retried", async () => {
-      const run = await refusedThenStaged("replaced");
-      const statuses: string[] = [];
-      const stop = run.app.client.store.subscribe((state) => {
-        const { status } = state.connection;
-        if (statuses.at(-1) !== status) statuses.push(status);
-      });
-      // Something of the test's own on the same port now: it accepts and ends every connection
-      // before anything answers.
-      let accepted = 0;
-      const ender = createServer((socket) => {
-        accepted += 1;
-        socket.destroy();
-      });
-      try {
-        await run.press();
-        expect(run.app.setup.current.look).toMatchObject({ outcome: "running" });
-        // The bots the earlier connection read are still shown: a new connection at the same
-        // address with them is `reconnecting`, not `connecting`.
-        expect(run.app.client.state.bots.length).toBeGreaterThan(0);
-        await run.server.close();
-        await new Promise<void>((done) => ender.listen(run.server.port, "127.0.0.1", done));
-        statuses.length = 0;
-        await run.session.apply({ type: "setupConnect" });
-        await until(() => run.app.setup.current.phase === "failed", 60_000);
-        expect(run.app.setup.current.failure).toMatchObject({
-          kind: "unanswered",
-          port: run.server.port,
+    for (const slow of [false, true])
+      it(`F-602: Use This computer, then Connect at the same address with the bots kept, and nothing answers: Connect fails with its ways on, and isn't retried${slow ? ", also when setup's disconnect is slower than the client's own retry" : ""}`, async () => {
+        const run = await refusedThenStaged("replaced");
+        const statuses: string[] = [];
+        const stop = run.app.client.store.subscribe((state) => {
+          const { status } = state.connection;
+          if (statuses.at(-1) !== status) statuses.push(status);
         });
-        expect(statuses).toContain("reconnecting");
-        // Not retried behind Connecting: no further connection after a second.
-        await sleep(500);
-        const tries = accepted;
-        expect(tries).toBeGreaterThan(0);
-        await sleep(1_000);
-        expect(accepted).toBe(tries);
-      } finally {
-        stop();
-        run.app.client.stop();
-        await new Promise((done) => ender.close(done));
-      }
-    });
+        // Something of the test's own on the same port now: it accepts and ends every connection
+        // before anything answers.
+        let accepted = 0;
+        const ender = createServer((socket) => {
+          accepted += 1;
+          socket.destroy();
+        });
+        try {
+          await run.press();
+          expect(run.app.setup.current.look).toMatchObject({ outcome: "running" });
+          // The bots the earlier connection read are still shown: a new connection at the same
+          // address with them is `reconnecting`, not `connecting`.
+          expect(run.app.client.state.bots.length).toBeGreaterThan(0);
+          await run.server.close();
+          await new Promise<void>((done) => ender.listen(run.server.port, "127.0.0.1", done));
+          statuses.length = 0;
+          // Held past the client's own first retry, as in the TLS case above.
+          if (slow) run.app.slowReads(500);
+          await run.session.apply({ type: "setupConnect" });
+          await until(() => run.app.setup.current.phase === "failed", 60_000);
+          expect(run.app.setup.current.failure).toMatchObject({
+            kind: "unanswered",
+            port: run.server.port,
+          });
+          expect(statuses).toContain("reconnecting");
+          // Not retried: one connection, until setup's disconnect selected the earlier gateway
+          // again, and none after.
+          await until(() => run.app.client.state.connection.status === "disconnected", 15_000);
+          expect(accepted).toBe(1);
+          await sleep(1_000);
+          expect(accepted).toBe(1);
+        } finally {
+          stop();
+          run.app.client.stop();
+          await new Promise((done) => ender.close(done));
+        }
+      });
 
     /**
      * After a refused reconnect, Use This computer finds a second gateway of this account's

@@ -23,9 +23,14 @@ export type Shape = {
   migrations: readonly string[];
   /** Tools offered unless denied, on top of the ones every listed version has. */
   extraDeniedTools: readonly string[];
+  /** Offered as well: a tool only this version has that a scenario uses (`sessions_create`, `#create-task`). */
+  extraAllowedTools: readonly string[];
   /**
    * The background skill review runs after a turn the CLI sent (`gateway call chat.send`).
-   * 2026.11.10 reviews only a turn an `operator.admin` connection sent.
+   * 2026.11.10 reviews a turn only when it was offered `skill_workshop`. A paired client, which
+   * has a user profile, is offered it only with `operator.admin` on a gateway with one profile;
+   * otherwise `skill_library`, the person's own library, takes its place. The CLI's shared token
+   * has no profile, and its turns weren't reviewed either.
    */
   reviewsCliTurns: boolean;
   /** The tools a start with the background skill review allows. */
@@ -103,6 +108,7 @@ const SHAPES: Record<OpenclawVersion, Shape> = {
     heartbeat: true,
     migrations: ["modelPolicyAllowlist", "utilityModelSeparation"],
     extraDeniedTools: [],
+    extraAllowedTools: [],
     skillReviewTools: ["skill_workshop"],
     reviewsCliTurns: true,
     compactToolJson: false,
@@ -145,6 +151,7 @@ const SHAPES: Record<OpenclawVersion, Shape> = {
     ],
     // Offered unless denied, or reaching the network, as DENIED_TOOLS' own are.
     extraDeniedTools: ["skill_library", "deep_research", "github_read", "github_search"],
+    extraAllowedTools: ["sessions_create"],
     skillReviewTools: ["skill_workshop", "skill_library"],
     reviewsCliTurns: false,
     compactToolJson: true,

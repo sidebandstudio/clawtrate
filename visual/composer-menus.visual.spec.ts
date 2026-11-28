@@ -33,7 +33,7 @@ const sends = (page: Page) =>
 test.describe("the composer's menus", () => {
   test.use(contextFor(WIDE, "light"));
 
-  test("F-071: typing / lists the bot's skills and the gateway's commands, each tagged Skill or Command", async ({
+  test("F-071: typing / lists the task's library skills, the bot's skills and the gateway's commands, each tagged with whose it is", async ({
     page,
   }) => {
     await open(page);
@@ -41,11 +41,16 @@ test.describe("the composer's menus", () => {
     await page.keyboard.type("/");
     const list = page.getByRole("listbox", { name: "Skills and commands" });
     const rows = list.getByRole("option");
-    await expect(rows).toHaveCount(4);
-    await expect(rows.nth(0)).toContainText("/healthcheck");
-    await expect(rows.nth(0).locator(".composer-menu-tag")).toHaveText("Skill");
-    await expect(rows.nth(2)).toContainText("/status");
-    await expect(rows.nth(2).locator(".composer-menu-tag")).toHaveText("Command");
+    await expect(rows).toHaveCount(6);
+    // A library skill shows its name, not the generated command it inserts.
+    await expect(rows.nth(0).locator(".composer-menu-name")).toHaveText("tide-table");
+    await expect(rows.nth(0).locator(".composer-menu-tag")).toHaveText("Your skill");
+    await expect(rows.nth(1).locator(".composer-menu-name")).toHaveText("ferry-times");
+    await expect(rows.nth(1).locator(".composer-menu-tag")).toHaveText("Team skill");
+    await expect(rows.nth(2)).toContainText("/healthcheck");
+    await expect(rows.nth(2).locator(".composer-menu-tag")).toHaveText("Bot skill");
+    await expect(rows.nth(4)).toContainText("/status");
+    await expect(rows.nth(4).locator(".composer-menu-tag")).toHaveText("Command");
     await expect(field(page)).toHaveAttribute("aria-expanded", "true");
     await expect(field(page)).toHaveAttribute("aria-activedescendant", "composer-menu-0");
     // What follows the trigger narrows the list.
@@ -63,10 +68,13 @@ test.describe("the composer's menus", () => {
     await page.keyboard.type("/");
     await page.keyboard.press("ArrowDown");
     await expect(field(page)).toHaveAttribute("aria-activedescendant", "composer-menu-1");
+    await page.keyboard.press("ArrowDown");
+    await page.keyboard.press("ArrowDown");
+    await expect(field(page)).toHaveAttribute("aria-activedescendant", "composer-menu-3");
     await page.keyboard.press("Enter");
     await expect(page.getByRole("listbox")).toHaveCount(0);
     const chip = page.getByTestId("token-chip");
-    await expect(chip).toHaveText(/Skill\s*\/weather/);
+    await expect(chip).toHaveText(/Bot skill\s*\/weather/);
     await expect(field(page)).toHaveValue("");
     // Nothing was sent by choosing.
     expect(await sends(page)).toEqual([]);
@@ -163,12 +171,30 @@ test.describe("the composer's menus", () => {
     await expect(page.getByTestId("token-chip")).toHaveCount(0);
     await page.keyboard.type("/");
     await page.keyboard.press("Tab");
-    await page.getByRole("button", { name: "Remove /healthcheck" }).click();
+    await page.getByRole("button", { name: "Remove tide-table" }).click();
     await expect(page.getByTestId("token-chip")).toHaveCount(0);
     // A slash later in a sentence is only a slash.
     await field(page).fill("");
     await page.keyboard.type("either this /");
     await expect(page.getByRole("listbox")).toHaveCount(0);
+  });
+
+  test("F-071: a library skill's chip shows its name and whose it is, and the message runs it by its command", async ({
+    page,
+  }) => {
+    await open(page);
+    await record(page);
+    await field(page).click();
+    await page.keyboard.type("/tide");
+    await expect(page.getByRole("option", { name: /tide-table/ })).toBeVisible();
+    await page.keyboard.press("Enter");
+    const chip = page.getByTestId("token-chip");
+    await expect(chip).toHaveText(/Your skill\s*tide-table/);
+    await page.keyboard.type("for Saturday");
+    await page.keyboard.press("Enter");
+    expect(await sends(page)).toMatchObject([
+      { text: "/skill s_tide_tabl_5ace502a23c5418a9319 for Saturday" },
+    ]);
   });
 
   test("F-070: typing @ lists the bots and the gateway's routines, tagged, and puts the chosen name where it was typed", async ({
@@ -201,7 +227,7 @@ for (const size of SIZES) {
         await open(page, theme);
         await field(page).click();
         await page.keyboard.type("/");
-        await expect(page.getByRole("option")).toHaveCount(4);
+        await expect(page.getByRole("option")).toHaveCount(6);
         await settle(page);
         await expect(page).toHaveScreenshot(`composer-menu-${theme}-${size.name}.png`);
       });

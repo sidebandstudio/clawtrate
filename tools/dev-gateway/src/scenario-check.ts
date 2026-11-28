@@ -43,12 +43,20 @@ import {
 import { MESSAGING_PAIR, SHELL_BOT } from "./seed-data.ts";
 import {
   IMAGE_PROMPT,
+  SAME_CALL_REPLY_SECONDS,
+  SAME_CALL_RUN_MS,
   SEND_KEYED_KEY,
   SEND_KEYED_TEXT,
   SEND_PICTURE_AFTER,
   SEND_PICTURE_TEXT,
 } from "./scenarios.ts";
-import { FOLLOW_UP_MESSAGE, HAND_OFF, HAND_OFF_HIDDEN, HAND_OFF_PARTNER } from "./scenarios.ts";
+import {
+  CREATE_TASK,
+  FOLLOW_UP_MESSAGE,
+  HAND_OFF,
+  HAND_OFF_HIDDEN,
+  HAND_OFF_PARTNER,
+} from "./scenarios.ts";
 import { startedTaskReply } from "./scripts.ts";
 import { FILES_BOT, PICTURE_PATH, trailMap } from "./seed-files.ts";
 import {
@@ -1113,6 +1121,9 @@ export const EXPECTED_OFFERED_TOOLS = [
   "write",
 ].sort();
 
+/** The tools offered on the version that runs: the list above and the ones only it has. */
+const offeredTools = () => [...EXPECTED_OFFERED_TOOLS, ...shape().extraAllowedTools].sort();
+
 /** What `tools.effective` reports available; it lists owner-only tools whoever asks. */
 export const EXPECTED_EFFECTIVE_TOOLS = [
   "apply_patch",
@@ -1158,6 +1169,7 @@ const BARE_TITLES: Record<string, string> = {
   sessions_list: "Sessions",
   sessions_send: "Send to session",
   sessions_spawn: "Start subagent",
+  sessions_create: "New session",
   sessions_history: "Read session history",
   image_generate: IMAGE_CALL_TITLE,
   message: "Message",
@@ -2305,11 +2317,16 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
     covers: ["#message", "#reply"],
     run: async (h) => {
       const { view } = await messageCheck(h, "#message");
-      await h.wait(view, 60_000);
+      // The sender's run ends after its call, which may wait for the answer the whole limit.
+      await h.wait(view, SAME_CALL_RUN_MS);
       const start = view.tool("start", "sessions_send")[0]!;
       same(
         view.data(start).args,
-        { agentId: RECIPIENT, message: "#reply Could you look over the plan?", timeoutSeconds: 30 },
+        {
+          agentId: RECIPIENT,
+          message: "#reply Could you look over the plan?",
+          timeoutSeconds: SAME_CALL_REPLY_SECONDS,
+        },
         "sessions_send args",
       );
       const result = view.result("sessions_send");
@@ -2352,7 +2369,7 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       );
       await recordFamily(h, "messaging between bots", "#message", view, "sessions_send", {
         args: scriptedArgs("#message", "sessions_send", "pip"),
-        title: "Session Send agent marlow, timeout 30",
+        title: `Session Send agent marlow, timeout ${SAME_CALL_REPLY_SECONDS}`,
         argsShape: "{agentId: string, message: string, timeoutSeconds: number}",
         resultShape:
           "content text; details {runId: string, sessionKey: string, status: string, delivery: {…}, reply: string}",
@@ -2374,7 +2391,7 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
             reply: RECIPIENT_REPLY,
           },
           false,
-          "Session Send agent marlow, timeout 30",
+          `Session Send agent marlow, timeout ${SAME_CALL_REPLY_SECONDS}`,
         ),
       ]);
       view.expectEnd("final", `Marlow replied:\n\n> ${RECIPIENT_REPLY}`);
@@ -2406,7 +2423,7 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
             sessionKey: RECIPIENT_SESSION,
           },
           true,
-          "Session Send agent marlow, timeout 30",
+          `Session Send agent marlow, timeout ${SAME_CALL_REPLY_SECONDS}`,
         ),
       ]);
       view.expectEnd("final", "The message to Marlow did not get through (forbidden).");
@@ -3504,6 +3521,59 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
     },
   },
   {
+    name: "a task a bot starts with sessions_create, on OpenClaw 2026.11.10 only",
+    covers: ["#create-task"],
+    run: async (h) => {
+      const key = await h.session("pip", "create-task");
+      const view = await h.run("plain", key, "#create-task");
+      const args = { label: CREATE_TASK.label, message: CREATE_TASK.message };
+      if (!shape().extraAllowedTools.includes("sessions_create")) {
+        // 2026.10.6 has no such tool: the call is refused as unknown and nothing is made.
+        view.expectCalls([{ ...refusedCall("sessions_create", args), title: "Sessions Create" }]);
+        view.expectEnd("final", "The task did not start (unknown)");
+        return;
+      }
+      // A task made is its key, its id and its first run, with no status, in the text and the
+      // details alike.
+      let made: JsonRecord | undefined;
+      view.expectCalls([
+        {
+          name: "sessions_create",
+          args,
+          isError: false,
+          details: (d: JsonRecord | undefined, where: string) => {
+            made = d;
+            detailsLike({
+              sessionKey: matchesPattern(/^agent:pip:dashboard:/),
+              sessionId: matchesPattern(UUID),
+              runStarted: true,
+              runId: matchesPattern(UUID),
+            })(d, where);
+          },
+          content: (texts: string[], where: string) =>
+            textsLike([jsonText(where, () => made!)])(texts, where),
+          title: "Sessions Create",
+        },
+      ]);
+      const childKey = String(made!.sessionKey);
+      view.expectEnd("final", `I started a task for it: ${CREATE_TASK.label}.`);
+      // The task's first run is its brief, answered as any plain message.
+      LEDGER.add(childKey);
+      const child = new RunView(h.op("plain"), String(made!.runId), childKey, view.from);
+      await h.wait(child, 60_000);
+      child.expectCalls([]);
+      child.expectEnd("final", scriptedFinalText("#text"));
+      // Listed as a task started from this conversation, by the same fields as sessions_spawn's.
+      const row = await listedRow(h, childKey);
+      expect(row, "the task is in the task list");
+      same(
+        [row.agentId, row.label, row.createdVia, row.spawnedBy],
+        ["pip", CREATE_TASK.label, "spawn", key],
+        "the task's row",
+      );
+    },
+  },
+  {
     name: "a hidden helper a bot starts stays out of the task list",
     covers: ["#hand-off-hidden"],
     run: async (h) => {
@@ -3657,7 +3727,7 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
         "the partner's task: listed under Marlow, started by Pip from Pip's task",
       );
       await checkBrief(h, started.key, started.firstRun, HAND_OFF_PARTNER.task);
-      // Juniper may start tasks only under itself.
+      // The gateway's own bot may start tasks only under itself.
       const outside = await h.run(
         "plain",
         await h.session("main", "hand-off-outside"),
@@ -3709,9 +3779,7 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       same(
         await h.offeredTools(paired),
         withImages(
-          shape().pairedAutomations
-            ? [...EXPECTED_OFFERED_TOOLS, "automations"].sort()
-            : EXPECTED_OFFERED_TOOLS,
+          shape().pairedAutomations ? [...offeredTools(), "automations"].sort() : offeredTools(),
         ),
         "tools offered in a paired client's run",
       );
@@ -3721,7 +3789,7 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       ownerRun.expectEnd("final", scriptedFinalText("#text"));
       same(
         await h.offeredTools(ownerKey),
-        withImages([...EXPECTED_OFFERED_TOOLS, "automations"].sort()),
+        withImages([...offeredTools(), "automations"].sort()),
         "tools offered in an owner's run",
       );
       // What the gateway reports as available, which does not know the sender.
@@ -3737,7 +3805,7 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
           .filter((t) => t.status === "available")
           .map((t) => String(t.id))
           .sort(),
-        withImages(EXPECTED_EFFECTIVE_TOOLS),
+        withImages([...EXPECTED_EFFECTIVE_TOOLS, ...shape().extraAllowedTools].sort()),
         "tools.effective available tools",
       );
       for (const tool of [...DENIED_TOOLS, ...shape().extraDeniedTools].filter(
