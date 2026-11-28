@@ -1683,6 +1683,22 @@ describe("sign-ins, through the gateway's own methods", () => {
     }
   });
 
+  it("a step it can't read has its session cancelled on the same gateway, and stays unsure", async () => {
+    const fake = new AccountsGateway();
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    try {
+      await client.startSignIn(CHOICES.browser, null);
+      const id = accounts().signIn!.id;
+      fake.gateway.handlers["wizard.next"] = () => ({ done: false, step: { type: "text" } });
+      await client.answerSignIn("made-up-code");
+      await until(() => accounts().signIn?.result != null);
+      expect(fake.gateway.calls("wizard.cancel")).toEqual([{ sessionId: id }]);
+      expect(accounts().signIn).toMatchObject({ id, stage: "failed", unsure: true });
+    } finally {
+      client.stop();
+    }
+  });
+
   it("an unsure ending leaves out a model read back that carries what was typed", async () => {
     const fake = new AccountsGateway();
     const { client, accounts } = await accountsClient({ gateway: fake });

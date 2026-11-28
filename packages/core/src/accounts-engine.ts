@@ -1603,6 +1603,8 @@ export class AccountsEngine {
       if (!step) {
         // Its session may still be open: ended on this gateway, as the safety stop does. Whether
         // the account connected stays unsure either way.
+        await ctx.request("wizard.cancel", { sessionId: id }).catch(() => undefined);
+        if (!stillMine()) return;
         this.setSignIn(id, {
           stage: "failed",
           step: null,
