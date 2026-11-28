@@ -621,6 +621,33 @@ test("F-201: an inherited custom prompt is what an empty prompt means, and no wo
   );
 });
 
+test("F-201: with the gateway's config unread, the prompt field names no prompt as the gateway's", async ({
+  page,
+}) => {
+  await openFixture(page, ADMIN, "light");
+  await checkIns(page);
+  // What a failed config read leaves: no settings and no defaults, the jobs still read.
+  await change(
+    page,
+    "return { ...state, checkIns: { ...state.checkIns, settings: null, defaults: null } };",
+  );
+  await page.getByRole("button", { name: "Change Pip's check-ins" }).click();
+  const pip = dialog(page, "Pip");
+  await expect(pip.getByRole("radio", { name: /^As needed/ })).toContainText(
+    "Clawtrate can't read its prompt.",
+  );
+  await pip.getByText("What to check").click();
+  const prompt = pip.getByRole("textbox", { name: "Prompt" });
+  await expect(prompt).not.toHaveAttribute("placeholder");
+  await expect(prompt).toHaveAccessibleDescription(
+    "Empty uses the gateway's own prompt. Up to 4,000 characters.",
+  );
+  await prompt.fill("Look at the calendar.");
+  await expect(pip.getByTestId("prompt-note")).toHaveText(
+    "This prompt replaces the gateway's default for this bot. Whether Pip stays quiet depends on what this prompt asks.",
+  );
+});
+
 test("F-201: As needed says the prompt asks for quiet only for the gateway's own prompt, not for a custom one that names NO_REPLY", async ({
   page,
 }) => {
