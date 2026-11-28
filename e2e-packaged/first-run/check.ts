@@ -80,8 +80,6 @@ let systemPromptVisible = false;
 let connectedAt: number | undefined;
 let provider: Server | undefined;
 let accountSavedAt: number | undefined;
-let accountPickerClosedForInspection = false;
-let accountPickerBeforeSave = false;
 let accountSheet: AccountSheetResult | null = null;
 let accountProbe: { checkingScreenObserved: boolean; scriptedResponses: number } | null = null;
 let notFoundAdvancedCount: number | null = null;
@@ -527,50 +525,21 @@ try {
     return heading() ?? "OpenClaw installed";
   });
   await step(3, async () => {
-    await waitFor("the automatically connected app", shellVisible, 90);
+    await waitFor("the automatically opened account picker", accountPicker, 90);
     connectedAt = performance.now();
-    if (accountPicker()) {
-      await screenshot("04-account-picker-before-scopes.png");
-      record({
-        kind: "inspection",
-        text: "Connect an account opened automatically. Closing it to inspect the grant in Settings.",
-      });
-      await press("Close", "inspection");
-      accountPickerClosedForInspection = true;
-      await waitFor("Settings after closing the account picker", () => hasButton("Settings"));
-    }
-    await press("Settings", "inspection");
-    await waitFor("Gateway settings", () => hasButton("Gateway") || hasText(/^Granted scopes$/));
-    if (!hasText(/^Granted scopes$/)) await press("Gateway", "inspection");
-    await waitFor("the six granted scopes", () =>
-      FULL_SCOPES.every((scope) => latest.some(({ text }) => text.split(/[, ]+/).includes(scope))),
-    );
-    await screenshot("04-granted-scopes.png");
-    await press("Close settings", "inspection");
-    return "OpenClaw granted all six operator scopes.";
+    return "Connect an account opened automatically. Scopes will be inspected after the first reply.";
   });
   await step(4, async () => {
     if (!appData) throw new Error("The packaged app has no data folder for this run.");
-    await waitFor(
-      "the account picker, first-bot welcome or empty conversation",
-      () => accountPicker() || firstBotWelcome() || composer() || hasText(/^No tasks yet$/),
-    );
-    await screenshot("05-before-scripted-account.png");
-    if (!accountPicker() && firstBotWelcome()) {
-      await press("Get started", accountPickerClosedForInspection ? "inspection" : "person");
-      await waitFor("Connect an account on the fresh gateway", accountPicker);
-    }
-    accountPickerBeforeSave = accountPicker();
-    if (accountPickerBeforeSave) {
-      await screenshot("05-account-picker.png");
-    }
+    await waitFor("the untouched account picker", accountPicker);
+    await screenshot("05-account-picker.png");
     await configureAccount(profile, appData);
     await readWindow();
     await screenshot("05-after-scripted-account.png");
     return heading() ?? "The scripted model is configured on loopback.";
   });
   await step(5, async () => {
-    if (accountSavedAt !== undefined && (accountPickerBeforeSave || accountPicker())) {
+    if (accountSavedAt !== undefined) {
       accountSheet = await observeAccountSheet(accountSavedAt);
       await screenshot("06-account-sheet-after-observation.png");
       if (accountSheet.outcome === "gateway-unavailable") {
@@ -583,17 +552,15 @@ try {
           "Connect an account stayed open for two minutes after the gateway was available.",
         );
       }
+      if (accountSheet.outcome === "closed-without-press") {
+        throw new Error("The account picker closed without opening the first-bot screen.");
+      }
     }
     await waitFor(
       "a first conversation or a first-bot button",
-      () => composer() || !!firstBotAction() || firstBotWelcome(),
+      () => composer() || !!firstBotAction(),
       60,
     );
-    if (firstBotWelcome()) {
-      await screenshot("06-first-bot-welcome.png");
-      await press("Get started");
-      await waitFor("the first-bot creation button", () => !!firstBotAction());
-    }
     const action = firstBotAction();
     if (action) {
       if (!provider) throw new Error("The scripted provider was not started.");
@@ -629,6 +596,16 @@ try {
     await ax("type", FIRST_MESSAGE);
     await press("Return", "person", "enter");
     await waitFor("the scripted reply", () => replies() > beforeSending, 120);
+    await screenshot("06-reply-before-scopes.png");
+    await press("Settings", "inspection");
+    await waitFor("Gateway settings", () => hasButton("Gateway") || hasText(/^Granted scopes$/));
+    if (!hasText(/^Granted scopes$/)) await press("Gateway", "inspection");
+    await waitFor("the six granted scopes", () =>
+      FULL_SCOPES.every((scope) => latest.some(({ text }) => text.split(/[, ]+/).includes(scope))),
+    );
+    await screenshot("06-granted-scopes.png");
+    await press("Close settings", "inspection");
+    await waitFor("the conversation after the scope inspection", () => replies() > beforeSending);
     return SCRIPTED_REPLY;
   });
 } catch {
