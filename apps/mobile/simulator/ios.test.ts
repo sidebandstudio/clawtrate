@@ -2157,7 +2157,9 @@ describe("the iOS app", () => {
     }
   });
 
-  it("F-115: on iPhone, a file a bot attaches shows under its message with a document icon, its name and size, and Save opens the share sheet for it at once, from a file of the app's own that is gone once the sheet closes", async () => {
+  it("F-115: on iPhone, a file a bot attaches shows under its message with a document icon, its name and size, and Save opens the share sheet for it at once, from a file of the app's own that is gone once the sheet closes", async ({
+    annotate,
+  }) => {
     // The scripted bot writes a two-page PDF and a text note and hands both over (`#attach`).
     const own = await gatewayTask("pip", "File check");
     let front: Awaited<ReturnType<typeof protectedFront>> | null = null;
@@ -2268,11 +2270,20 @@ describe("the iOS app", () => {
       expect(more).toEqual([]);
       expect(again).toBeDefined();
       expect(again).not.toBe(folder);
+      // On the Simulator iOS can end Save to Files without a picker; where one shows, it is
+      // cancelled, and a sheet left up to choose again is closed with a tap outside it.
       await steps("file-save-to-files-cancelled", [
         tap("Save to Files"),
-        // On the Simulator iOS can end Save to Files without a picker; where one shows, it is
-        // cancelled, and a sheet left up to choose again is closed with a tap outside it.
         { extendedWaitUntil: { visible: "Cancel", timeout: 15_000, optional: true } },
+      ]);
+      // Which of the two this run tested, said in the run's report (a notice on CI): a look of
+      // its own, so every assertion below holds whichever it was.
+      const picker = (await screenText()).includes('"Cancel"');
+      await annotate(
+        picker ? "the picker was shown and cancelled" : "Save to Files ended without a picker",
+        "notice",
+      );
+      await steps("file-save-to-files-picker", [
         { runFlow: { when: { visible: "Cancel" }, commands: [tap("Cancel")] } },
         { runFlow: { when: { visible: "Save to Files" }, commands: [tapOutside] } },
       ]);
