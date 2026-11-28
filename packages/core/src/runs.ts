@@ -17,6 +17,7 @@ import { projectArgs, projectDetails } from "./actions.ts";
 import { asRecord, liveTextFromChatMessage, type RawRecord } from "./mapping.ts";
 import { filePathsOf } from "./file-paths.ts";
 import { startSeen } from "./not-run.ts";
+import type { TranscriptItem } from "./types.ts";
 import { capId, digestOf, extendDigest, jsonLength, sameDigest, type Digest } from "./bounds.ts";
 import {
   MAX_CLOSED_CARDS_PER_RUN,
@@ -488,6 +489,20 @@ export type Run = {
    * beside itself, nor does that message's preamble item take it.
    */
   textEarlier?: true;
+  /**
+   * Since when this connection has followed the run's `agent` stream as it came: the live start
+   * of the call `call`, or the run's own `lifecycle` start (`call: null`), and how many `assistant`
+   * items began since. A connection drops nothing silently (a gap closes it), so nothing came
+   * between that this client did not see. Forgotten on every read that subscribes again
+   * (`unfollowed`): a client that was away, or opened the task late, may have missed an item.
+   */
+  followed?: { call: string | null; items: number };
+  /**
+   * The run's text item was the first to begin after `followed`'s point: after the start of the
+   * call `call`, or of the run (`call: null`). Where history holds it is then known by that call
+   * (`replyRow`). Absent otherwise.
+   */
+  textAfter?: { call: string | null };
   /** True once the gateway reported the reply complete. */
   textComplete: boolean;
   steps: Step[];
@@ -2490,6 +2505,10 @@ function applyLifecycle(run: Run, data: RawRecord, ts: number, ctx: EngineContex
         ...run,
         startedAt: num(data.startedAt) ?? run.startedAt ?? ts,
         reportedStartAt: num(data.startedAt) ?? ts,
+        // Followed from its start only when nothing of it came before.
+        ...(!run.followed && run.steps.length === 0 && run.textItemId === null
+          ? { followed: { call: null, items: 0 } }
+          : {}),
       };
     case "model": {
       // Each model call starts a new reasoning segment, and a new message: text still streaming
@@ -2836,13 +2855,35 @@ function applyAssistant(run: Run, data: RawRecord, ts: number, ctx: EngineContex
   // Text cut to its bound is not extended by deltas: they would join non-adjacent text.
   if (cumulative === null && sameItem && closed.cut?.includes("text")) return closed;
   const text = cumulative ?? (sameItem ? closed.text + delta : delta);
-  const { textEarlier: _earlier, ...rest } = closed;
+  const { textEarlier: _earlier, textAfter: _after, ...rest } = closed;
+  if (sameItem) return { ...closed, textSource: "agent", text };
+  // A new item: the first since the point the stream is followed from is that point's text.
+  const followed = closed.followed && { ...closed.followed, items: closed.followed.items + 1 };
   return {
-    ...(sameItem ? closed : rest),
+    ...rest,
+    ...(followed ? { followed } : {}),
+    ...(followed?.items === 1 ? { textAfter: { call: followed.call } } : {}),
     textSource: "agent",
-    textItemId: itemId ?? closed.textItemId,
+    textItemId: itemId,
     text,
   };
+}
+
+/**
+ * A call's step first appears live: the stream is followed from its start. The same call's later
+ * frames (its `item` start and its `tool` start both come) keep the count.
+ */
+function followFrom(run: Run, toolCallId: string): Run {
+  return run.followed?.call === toolCallId
+    ? run
+    : { ...run, followed: { call: toolCallId, items: 0 } };
+}
+
+/** The run as a read that subscribes again leaves it: what the stream brought is not known whole. */
+export function unfollowed(run: Run): Run {
+  if (!run.followed && !run.textAfter) return run;
+  const { followed: _followed, textAfter: _after, ...rest } = run;
+  return rest;
 }
 
 function toolStepId(toolCallId: string): string {
@@ -2900,7 +2941,7 @@ function applyTool(run: Run, data: RawRecord, ts: number, ctx: EngineContext): R
       ctx.raw.set(ctx.sessionKey, id, { source: "live", runId: run.id, call: data, result: null });
       // The call is known now; carry it inline while the tool runs when it is small.
       return upsertStep(
-        existing ? current : textBesideCall(current),
+        followFrom(existing ? current : textBesideCall(current), toolCallId),
         settleRaw(
           {
             ...step,
@@ -2979,7 +3020,8 @@ function applyItem(run: Run, data: RawRecord, ts: number, ctx: EngineContext): R
   if (!existing && data.phase !== "start") return run;
   const step = existing ?? blankToolStep(toolCallId, str(data.name), num(data.startedAt));
   const title = str(data.title);
-  return upsertStep(existing ? run : textBesideCall(run), {
+  const started = data.phase === "start" ? followFrom(run, toolCallId) : run;
+  return upsertStep(existing ? started : textBesideCall(started), {
     ...step,
     ...(data.commandBearing === true ? { commandBearing: true } : {}),
     ...(title ? { gatewayTitle: title } : {}),
@@ -3023,6 +3065,56 @@ function textBesideCall(run: Run): Run {
 export function textPlaced(run: Pick<Run, "textItemId" | "preambles">): boolean {
   const itemId = run.textItemId;
   return itemId !== null && (run.preambles ?? []).some((p) => p.item === itemId);
+}
+
+/**
+ * The text block of history that holds the run's reply while the engine still draws it, or null.
+ * No row names an item of the `assistant` stream, so it is known by where it stands, never by its
+ * words: the reply's item was the first to begin after a call this connection saw start, or after
+ * the run's own start (`Run.textAfter`), with nothing missed since. A message's text streams
+ * before its row is written, so the first text history holds after that call's block (or, from
+ * the start, in the first row after the person's message the run is keyed to) is that item's,
+ * provided no other call comes between. It is not found when:
+ * - another call's block comes first, or the run's rows there end, or a person's message is in
+ *   between (a steer): a row of another message may be there;
+ * - that text is in a row the gateway wrote itself (`gatewayRow`), never streamed;
+ * - that text comes after a call in its own row (`afterCall`): the call's own message wrote it,
+ *   not the reply's, so it is the first text of no later message;
+ * - the gateway cut a row of that item, or put its placeholder for a message too large there
+ *   (`truncated`): the words there aren't the reply's whole words;
+ * - the reply is placed beside a call, or the run's start is not keyed to the person's row.
+ * So a row is given up only where it is the reply's own message, whose words the live reply shows.
+ * The engine's run then draws it, and history's row does too, until the run ends.
+ */
+export function replyRow(
+  run: Run,
+  items: readonly TranscriptItem[],
+): { itemId: string; block: number } | null {
+  const after = run.textAfter;
+  if (!after || !run.text.trim() || textPlaced(run)) return null;
+  let item: TranscriptItem | undefined;
+  let from = 0;
+  if (after.call !== null) {
+    for (let i = items.length - 1; i >= 0 && !item; i--) {
+      const at = items[i]!.blocks.findIndex(
+        (block) => block.kind === "tool-call" && block.callId === after.call,
+      );
+      if (at !== -1) [item, from] = [items[i], at + 1];
+    }
+  } else if (run.anchorKeyed && run.anchorItemId !== null) {
+    const anchor = items.findIndex((each) => each.id === run.anchorItemId);
+    if (anchor !== -1) item = items[anchor + 1];
+  }
+  // A row the gateway cut, or replaced with its placeholder for a message too large, holds other
+  // words than the reply's.
+  if (!item || item.role !== "assistant" || item.runless || item.truncated) return null;
+  for (let i = from; i < item.blocks.length; i++) {
+    const block = item.blocks[i]!;
+    if (block.kind === "tool-call") return null;
+    if (block.kind === "text" && block.text.trim())
+      return block.gatewayRow || block.afterCall ? null : { itemId: item.id, block: i };
+  }
+  return null;
 }
 
 /** Text beside a tool call: its updates replace its text in place; `end` ends it. */
@@ -3344,7 +3436,8 @@ export function runsFromHistory(
       if (event)
         activity = applyAgentEvent(activity, { ...event, runId: inFlightRunId }, ctx).activity;
     }
-    let run = activity.runs[0]!;
+    // The snapshot's events were not followed as they came on this connection (`Run.followed`).
+    let run = unfollowed(activity.runs[0]!);
     // A thinking block that is still the run's last activity may be the
     // segment streaming now: it stays open, as the live view has it, so the
     // next cumulative frame continues it rather than starting another.

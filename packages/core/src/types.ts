@@ -326,6 +326,18 @@ export type TranscriptBlock =
        * its thread. OpenClaw 2026.10.6 keeps one only on a row with no tool call.
        */
       replyToId?: string;
+      /**
+       * The row is one the gateway wrote itself (`provider: "openclaw"`: a delivery's mirror, an
+       * injected note, a command's answer), never streamed as a model's message. Present and true
+       * only then.
+       */
+      gatewayRow?: true;
+      /**
+       * In its own row this text comes after a tool call (the gateway keeps a message's blocks in
+       * order): text the model wrote after that call in the same message, never the first text of a
+       * later message. Present and true only then.
+       */
+      afterCall?: true;
     }
   | { kind: "reasoning"; text: string }
   | {
@@ -402,11 +414,6 @@ export type TranscriptItem = {
   pictures?: ChatPicture[];
   /** The other files the bot's messages of this item hand over, in their order. Absent when none. */
   files?: ChatFile[];
-  /**
-   * When the item's last row with text or files had only files: those files' names, the
-   * once-shown ones included, as the sidebar names them. Absent otherwise.
-   */
-  filesPreview?: string;
   /** The files a person's message carried, in the order sent. Absent when none. */
   attachments?: SentAttachment[];
   /**

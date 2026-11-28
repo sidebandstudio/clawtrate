@@ -3,7 +3,8 @@
 // transcript and the status strip overlays it under them, so nothing moves when
 // the strip comes or goes. A task opens at its start, its title first; the
 // stamps, your messages and the bot's as bubbles, the files you sent under your
-// message (a picture is read once it is on screen), the bot's markdown, each of
+// message (a picture is read once it is on screen), the bot's markdown, the files
+// it handed over under the message that carried them (Save, F-115), each of
 // its actions as one quiet line in the engine's words, and what a running task
 // is doing follow. Jump to latest takes a reader who is not at the end there,
 // and where the composer will be is the read-only explanation. Nothing shown
@@ -30,6 +31,7 @@ import {
 } from "../presentation/reading-place.ts";
 import { Pressable, ScrollView, View, type LayoutChangeEvent } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
+import { BotFiles } from "../components/BotFiles.tsx";
 import { Markdown } from "../components/Markdown.tsx";
 import { SentFiles } from "../components/SentFiles.tsx";
 import { EyeIcon } from "../components/icons.tsx";
@@ -37,7 +39,9 @@ import { BackButton, PROTECTED_BAND, Top } from "../components/Top.tsx";
 import { Button, Dot, Txt } from "../components/ui.tsx";
 import { useRuntime } from "../runtime.ts";
 import { S, TOUCH, useTheme } from "../theme/index.ts";
+import { canLoadFiles } from "../presentation/bot-files.ts";
 import { rowsOnScreen } from "../presentation/sent-files.ts";
+import type { ShownStamp } from "../../../../packages/ui/src/stamp.ts";
 import { chatRows, runningWords, type ChatRow } from "../transcript.ts";
 
 /** A row's words with any credential this host holds scrubbed out. */
@@ -49,6 +53,8 @@ function redactRow(row: ChatRow, redact: (text: string) => string): ChatRow {
       text: redact(row.text),
       files: row.files.map((file) => ({ ...file, fileName: redact(file.fileName) })),
     };
+  if (row.kind === "files")
+    return { ...row, files: row.files.map((file) => ({ ...file, name: redact(file.name) })) };
   return { ...row, text: redact(row.text) };
 }
 
@@ -63,11 +69,14 @@ function RowView({
   row,
   taskKey = "",
   onScreen = false,
+  files,
 }: {
   row: ChatRow;
   taskKey?: string;
   /** The row has come on screen: its pictures are read. */
   onScreen?: boolean;
+  /** For a bot's files: where the history they come from was read, and whether this connection loads them. */
+  files?: { drawnOn: ShownStamp; canLoad: boolean } | undefined;
 }) {
   const { c } = useTheme();
   switch (row.kind) {
@@ -130,6 +139,15 @@ function RowView({
           <Markdown text={row.text} />
         </View>
       );
+    case "files":
+      return files ? (
+        <BotFiles
+          taskKey={taskKey}
+          files={row.files}
+          drawnOn={files.drawnOn}
+          canLoad={files.canLoad}
+        />
+      ) : null;
     case "action":
       return (
         <Txt
@@ -339,9 +357,13 @@ export function Chat({
   /** The task has been read as of what it now shows. */
   onRead: (task: Task) => void;
 }) {
-  const { send, redact } = useRuntime();
+  const { send, redact, readOn } = useRuntime();
   const { c } = useTheme();
   const transcript = state.transcripts[task.key];
+  // A bot's files are read only from the gateway whose history drew them (`historyStamps`).
+  const files = transcript
+    ? { drawnOn: readOn(transcript.items), canLoad: canLoadFiles(state.connection.gatewayUrl) }
+    : undefined;
   const online = state.connection.status === "connected";
   const link = { connected: online, closed: state.connection.status === "disconnected" };
   const scroller = useRef<ComponentRef<typeof ScrollView>>(null);
@@ -533,7 +555,12 @@ export function Chat({
               style={{ marginTop: changes ? 12 : 0 }}
               onLayout={(event) => measure(rowKey(row), event)}
             >
-              <RowView row={row} taskKey={task.key} onScreen={onScreen.has(rowKey(row))} />
+              <RowView
+                row={row}
+                taskKey={task.key}
+                onScreen={onScreen.has(rowKey(row))}
+                files={files}
+              />
             </View>
           );
         })}

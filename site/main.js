@@ -1,4 +1,4 @@
-// The home page's script: the install commands, the approval demo, the questions,
+// The home page's script: the install commands, the film, the questions,
 // and the entrances. theme.js is the theme switch; claws.js adds the Claws and the logo row.
 // The page reads fully without either, in dark.
 // Screens follow the theme through CSS, so the first paint is already right.
@@ -71,61 +71,22 @@
   });
   choose("brew");
 
-  // The approval demo: Allow once or Deny, then reset.
-  const demo = document.querySelector(".demo");
-  const tag = demo.querySelector("[data-tag]");
-  const live = demo.querySelector(".demo-live");
-  const pill = demo.querySelector(".pill .claw-art");
-  const states = {
-    pending: { tag: "Needs approval", face: "waiting", say: "" },
-    allowed: {
-      tag: "Allowed once",
-      face: "done",
-      say: "Allowed once. Otto ran the command.",
-    },
-    denied: { tag: "Denied", face: "blocked", say: "Denied. Otto changed nothing." },
-  };
-  const runs = demo.querySelectorAll(".run");
-  function show(state, focus) {
-    demo.dataset.state = state;
-    runs.forEach((run) => (run.open = false));
-    tag.textContent = states[state].tag;
-    pill.dataset.state = states[state].face;
-    live.textContent = states[state].say;
-    if (focus) focus.focus();
-  }
-  // Reserve the tallest state's height, so answering never moves the page.
-  const win = demo.querySelector(".win");
-  function fit() {
-    const current = demo.dataset.state;
-    win.style.minHeight = "0px";
-    let tallest = 0;
-    for (const state of Object.keys(states)) {
-      demo.dataset.state = state;
-      tallest = Math.max(tallest, win.getBoundingClientRect().height);
-    }
-    demo.dataset.state = current;
-    win.style.minHeight = `${Math.ceil(tallest)}px`;
-  }
-  let fitting = 0;
-  window.addEventListener("resize", () => {
-    cancelAnimationFrame(fitting);
-    fitting = requestAnimationFrame(fit);
+  // The film: a play button over the poster. The video is fetched when it is pressed.
+  // Without script the video keeps its own controls.
+  const film = document.querySelector("[data-film]");
+  const video = film.querySelector("video");
+  const play = film.querySelector("[data-film-play]");
+  video.controls = false;
+  play.hidden = false;
+  play.addEventListener("click", () => {
+    play.hidden = true;
+    video.controls = true;
+    video.focus();
+    // A refused play leaves the video's own controls to start it.
+    video.play().catch(() => {});
   });
-  document.fonts.ready.then(fit);
-  fit();
-
-  demo.querySelectorAll("[data-answer]").forEach((button) => {
-    button.addEventListener("click", () => {
-      show(
-        button.dataset.answer === "allow" ? "allowed" : "denied",
-        demo.querySelector("[data-reset]"),
-      );
-    });
-  });
-  demo.querySelector("[data-reset]").addEventListener("click", () => {
-    show("pending", demo.querySelector('[data-answer="allow"]'));
-  });
+  video.addEventListener("play", () => (film.dataset.state = "playing"));
+  video.addEventListener("pause", () => (film.dataset.state = video.ended ? "ended" : "idle"));
 
   // Questions: one open at a time, chosen by click or arrow keys. On phones a
   // second click closes it.

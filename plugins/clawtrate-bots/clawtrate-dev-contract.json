@@ -1,5 +1,10 @@
 {
   "plugin": "clawtrate-bots",
   "settings": {},
-  "tools": []
+  "tools": [
+    { "name": "clawtrate_here", "kind": "plugin-tool" },
+    { "name": "clawtrate_tasks", "kind": "plugin-tool" },
+    { "name": "clawtrate_bots", "kind": "plugin-tool" }
+  ],
+  "hooks": { "allowConversationAccess": true }
 }

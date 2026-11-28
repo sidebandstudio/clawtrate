@@ -119,7 +119,11 @@ describe("on OpenClaw 2026.10.6", () => {
       "sdk",
     ]);
     expect(new Set([...lib.matchAll(/\boptions\.(\w+)/g)].map((m) => m[1]))).toEqual(
-      new Set(["effects", "journal", "monotonic", "now", "store", "sweepIntervalMs", "versions"]),
+      new Set([
+        ...["effects", "journal", "monotonic", "now", "store", "sweepIntervalMs", "versions"],
+        // lib/runs.js and lib/hooks.js: the run origins' stand-ins for the host (test/hooks.test.ts).
+        ...["config", "describeHolds", "sessions", "slots", "version"],
+      ]),
     );
   });
 });

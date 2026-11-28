@@ -347,11 +347,21 @@ function message(
   ];
 }
 
+/** The first lines of a tool's latest result, as the bot repeats them. */
+function answerOf(ctx: PlanContext, name: string, lines: number): string {
+  const found = [...ctx.results].reverse().find((result) => result.name === name);
+  return found ? found.text.split("\n").slice(0, lines).join("\n") : "";
+}
+
 /** What `#hand-off` and its siblings ask the gateway to start: a label and a brief, as a bot writes them. */
 export const HAND_OFF = {
   label: "Compare trail maps",
   task: "Compare the lake loop and the ridge trail on the trail map, and say which suits a relaxed Saturday. Reply in plain text.",
 } as const;
+/** What `#hand-off-here` starts: a task whose brief asks Clawtrate's plugin where it is. */
+export const HAND_OFF_HERE = { label: "Where is this", task: "#here" } as const;
+/** What `#hand-off-hidden-here` starts: the same, hidden. */
+export const HAND_OFF_HIDDEN_HERE = { label: "Where is this, hidden", task: "#here" } as const;
 export const HAND_OFF_HIDDEN = {
   label: "Check the forecast",
   task: "Check the forecast for Saturday on the ridge. Reply in plain text.",
@@ -364,6 +374,17 @@ export const HAND_OFF_READ = {
 export const HAND_OFF_PARTNER = {
   label: "Review the route",
   task: "Read over the Saturday route and say what you would change. Reply in plain text.",
+} as const;
+/** What `#hand-off-twice` starts twice: the second is refused, since a label is used once. */
+export const HAND_OFF_TWICE = {
+  label: "Pack the day bag",
+  task: "List what goes in the day bag. Reply in plain text.",
+} as const;
+/** What `#create-task` asks `sessions_create` (OpenClaw 2026.11.10) to start. */
+export const CREATE_TASK = {
+  label: "Plan the picnic",
+  message:
+    "Plan a picnic by the lake for Saturday: where to sit and what to bring. Reply in plain text.",
 } as const;
 /** What `#follow-up` sends to the task the bot started last. */
 export const FOLLOW_UP_MESSAGE = "Also say which route has more shade. Reply in plain text.";
@@ -395,11 +416,22 @@ const afterSpawn =
     return [say(`The task did not start (${String(result?.status ?? "unknown")})${reason}`)];
   };
 
+/** The reply after sessions_create: what started, or the gateway's reason it did not. */
+const afterCreate: Step = (ctx) => {
+  const result = lastResult(ctx, "sessions_create");
+  if (typeof result?.sessionKey === "string")
+    return [say(`I started a task for it: ${CREATE_TASK.label}.`)];
+  const reason = typeof result?.error === "string" ? `: ${result.error}` : "";
+  return [say(`The task did not start (${String(result?.status ?? "unknown")})${reason}`)];
+};
+
 /** The task the bot started last in this conversation, from its sessions_spawn results. */
 export function lastStartedTask(ctx: PlanContext): string | null {
   for (const found of [...(ctx.history ?? [])].reverse()) {
-    if (found.name !== "sessions_spawn") continue;
-    const key = lastResult({ ...ctx, results: [found] }, "sessions_spawn")?.childSessionKey;
+    // `sessions_spawn` names the task `childSessionKey`; 2026.11.10's `sessions_create`, `sessionKey`.
+    if (found.name !== "sessions_spawn" && found.name !== "sessions_create") continue;
+    const result = lastResult({ ...ctx, results: [found] }, found.name);
+    const key = found.name === "sessions_spawn" ? result?.childSessionKey : result?.sessionKey;
     if (typeof key === "string") return key;
   }
   return null;
@@ -741,6 +773,90 @@ export const SCENARIOS: Scenario[] = [
     steps: () => [tool("sessions_list", { limit: 5 }), say("Those are my recent tasks.")],
   },
   {
+    name: "catalog-call",
+    phrase: "find that tool in the catalog",
+    summary:
+      "The same look at the bot's sessions, called through Tool Search's catalog (`tool_call`), as a bot does when tool search hides the tool's schema.",
+    steps: () => [
+      tool("tool_call", { id: "sessions_list", args: { limit: 5 } }),
+      say("Those are my recent tasks, from the catalog."),
+    ],
+  },
+  {
+    name: "code-call",
+    phrase: "use a code cell",
+    summary:
+      "The same look at the bot's sessions, from a Code Mode cell (`exec` with JavaScript that calls `sessions_list`).",
+    steps: () => [
+      tool("exec", {
+        title: "Look at my tasks",
+        code: "return await sessions_list({ limit: 5 });",
+      }),
+      say("Those are my recent tasks, from a code cell."),
+    ],
+  },
+  {
+    name: "here",
+    phrase: "where are you talking with me",
+    summary:
+      "Asks Clawtrate's plugin where this conversation is and what the bot can do here (`clawtrate_here`), then says its first lines. Needs `--with-plugin clawtrate-bots`.",
+    bots: "any bot, with clawtrate-bots",
+    steps: () => [tool("clawtrate_here", {}), (ctx) => [say(answerOf(ctx, "clawtrate_here", 2))]],
+  },
+  {
+    name: "find-partner",
+    phrase: "find your partner by name",
+    summary:
+      "Looks the other bot of the pair up by the name it was given (`clawtrate_bots` with `find`), then says the answer's first line.",
+    bots: "Marlow or Pip, with clawtrate-bots",
+    steps: () => [
+      {
+        kind: "tool-from",
+        build: (ctx) =>
+          tool("clawtrate_bots", {
+            find: SEED_BOTS.find((bot) => bot.id === partnerOf(ctx))?.name ?? partnerOf(ctx),
+          }),
+      },
+      (ctx) => [say(answerOf(ctx, "clawtrate_bots", 2))],
+    ],
+  },
+  {
+    name: "list-bots",
+    phrase: "list the other bots",
+    summary: "Lists every other bot with its name (`clawtrate_bots` without `find`).",
+    bots: "any bot, with clawtrate-bots",
+    steps: () => [tool("clawtrate_bots", {}), (ctx) => [say(answerOf(ctx, "clawtrate_bots", 1))]],
+  },
+  {
+    name: "read-history",
+    phrase: "read what that task found",
+    summary:
+      "Reads the history of the task this conversation started last, or of this conversation when it started none (`sessions_history`), and says whether the read worked.",
+    steps: () => [
+      {
+        kind: "tool-from",
+        build: (ctx) =>
+          tool("sessions_history", {
+            // A session that exists: the task it started last, else this conversation.
+            sessionKey:
+              lastStartedTask(ctx) ?? ctx.sessionKey ?? `agent:${ctx.agentId ?? "main"}:main`,
+            limit: 3,
+          }),
+      },
+      // What the tool answered, read or not.
+      (ctx) => {
+        const last = ctx.results.at(-1);
+        return [
+          say(
+            last && !/"status":\s*"(error|forbidden)"|^Not done:/m.test(last.text)
+              ? "I read that task's history."
+              : `I couldn't read that task's history: ${(last?.text ?? "no answer").split("\n")[0]}`,
+          ),
+        ];
+      },
+    ],
+  },
+  {
     name: "schedule",
     phrase: "schedule a reminder",
     summary:
@@ -960,6 +1076,52 @@ export const SCENARIOS: Scenario[] = [
     steps: () => message("#read", "Could you check your instructions?", 0, { mode: "steer" }),
   },
   {
+    name: "message-here",
+    phrase: "ask your partner where they are",
+    bots: "Marlow or Pip, with clawtrate-bots",
+    summary:
+      "A message to the other bot, which asks Clawtrate's plugin where it is (`#here`): the answer for a run another bot's message started.",
+    steps: () => message("#here", "Where are you?", 30),
+  },
+  {
+    name: "hand-off-same",
+    phrase: "put that in a task again",
+    bots: "any bot",
+    summary: `Starts a task of the bot's own labelled "${HAND_OFF_TWICE.label}", once: after \`#hand-off-twice\`, the gateway refuses it, and nothing else follows in the run.`,
+    steps: () => [spawn(HAND_OFF_TWICE, { visible: true }), say("I tried to start it.")],
+  },
+  {
+    name: "hand-off-twice",
+    phrase: "put this in a task twice",
+    bots: "any bot",
+    summary: `Starts a task of the bot's own (\`visible: true\`) labelled "${HAND_OFF_TWICE.label}", then the same again: the gateway refuses the second (a label is used once), with \`status: "error"\` in its result.`,
+    steps: () => [
+      spawn(HAND_OFF_TWICE, { visible: true }),
+      spawn(HAND_OFF_TWICE, { visible: true }),
+      say("I tried to start it twice."),
+    ],
+  },
+  {
+    name: "hand-off-here",
+    phrase: "put where you are in a task",
+    bots: "any bot, with clawtrate-bots",
+    summary: `Starts a task of the bot's own (\`visible: true\`) labelled "${HAND_OFF_HERE.label}", whose brief is \`#here\`: the answer for a task's own run.`,
+    steps: () => [
+      spawn(HAND_OFF_HERE, { visible: true }),
+      afterSpawn(() => `I started ${HAND_OFF_HERE.label}.`),
+    ],
+  },
+  {
+    name: "hand-off-hidden-here",
+    phrase: "put where you are in a hidden task",
+    bots: "any bot, with clawtrate-bots",
+    summary: `Starts a hidden helper of the bot's own (no \`visible\`) labelled "${HAND_OFF_HIDDEN_HERE.label}", whose brief is \`#here\`.`,
+    steps: () => [
+      spawn(HAND_OFF_HIDDEN_HERE),
+      afterSpawn(() => `I started ${HAND_OFF_HIDDEN_HERE.label}.`),
+    ],
+  },
+  {
     name: "hand-off",
     phrase: "put this in a task",
     summary: `Starts a task of the bot's own with the gateway's \`sessions_spawn\` (\`visible: true\`), labelled "${HAND_OFF.label}", whose first message is the bot's brief. It runs at once, and the person can open it and write in it. Its end starts a turn in the task it came from.`,
@@ -985,6 +1147,16 @@ export const SCENARIOS: Scenario[] = [
     steps: () => [
       spawn(HAND_OFF_HIDDEN),
       afterSpawn(() => "I started a helper on it in the background."),
+    ],
+  },
+  {
+    name: "create-task",
+    phrase: "start a separate task",
+    bots: "any bot, on OpenClaw 2026.11.10",
+    summary: `Starts a task of the bot's own with \`sessions_create\`, the tool OpenClaw 2026.11.10 adds for a task a person asks for, labelled "${CREATE_TASK.label}", whose first message is the bot's brief. 2026.10.6 has no such tool.`,
+    steps: () => [
+      tool("sessions_create", { label: CREATE_TASK.label, message: CREATE_TASK.message }),
+      afterCreate,
     ],
   },
   {
@@ -1222,7 +1394,12 @@ export function resolveRound(round: Step[], ctx: PlanContext, callSeed: string):
 
 /** The scenarios that emit a shell command. They are meant for the shell bot only. */
 export const SHELL_SCENARIOS = SCENARIOS.filter((scenario) =>
-  scenario
-    .steps(scenario.defaultArg ?? 1)
-    .some((step) => typeof step !== "function" && step.kind === "tool" && step.name === "exec"),
+  scenario.steps(scenario.defaultArg ?? 1).some(
+    (step) =>
+      typeof step !== "function" &&
+      step.kind === "tool" &&
+      step.name === "exec" &&
+      // A Code Mode cell is `exec` with JavaScript, not a command.
+      "command" in step.arguments,
+  ),
 ).map((scenario) => scenario.name);

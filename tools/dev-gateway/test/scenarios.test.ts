@@ -11,6 +11,7 @@ import {
 } from "../src/scenario-check.ts";
 import type { OperatorSession } from "../src/operator.ts";
 import {
+  lastStartedTask,
   resolveRound,
   scenarioRounds,
   SCENARIOS,
@@ -113,7 +114,9 @@ describe("shell commands", () => {
       ...[5, 20, 120].map(SHELL_COMMANDS.sleep),
     ]);
     const all = SCENARIOS.flatMap((s) => shellSteps(s.name)).flatMap((step) =>
-      step.kind === "tool" && step.name === "exec" ? [String(step.arguments.command)] : [],
+      step.kind === "tool" && step.name === "exec" && "command" in step.arguments
+        ? [String(step.arguments.command)]
+        : [],
     );
     expect(all.length).toBeGreaterThan(0);
     for (const command of all) expect(allowed).toContain(command);
@@ -814,5 +817,37 @@ describe("the stopped stream's partial text and the queue-only schema exception"
       /agent error does not match the protocol schema/,
     );
     expect(() => viewOf([gap, here], 0).validate()).not.toThrow();
+  });
+});
+
+describe("the task a conversation started last (#follow-up)", () => {
+  const spawn = (key: string) => ({
+    name: "sessions_spawn",
+    text: JSON.stringify({ status: "accepted", childSessionKey: key, runId: "r" }, null, 2),
+  });
+  // OpenClaw 2026.11.10's `sessions_create`: compact JSON, the task's key as `sessionKey`.
+  const create = (key: string) => ({
+    name: "sessions_create",
+    text: JSON.stringify({ sessionKey: key, sessionId: "s", runStarted: true, runId: "r" }),
+  });
+  const ctx = (history: { name: string; text: string }[]) => ({
+    agentId: "pip",
+    sessionKey: "agent:pip:main",
+    results: [],
+    history,
+  });
+
+  it("is the newest start, by either tool, each read by its own key", () => {
+    const spawned = "agent:pip:dashboard:spawned";
+    const created = "agent:pip:dashboard:created";
+    expect(lastStartedTask(ctx([spawn(spawned), create(created)]))).toBe(created);
+    expect(lastStartedTask(ctx([create(created), spawn(spawned)]))).toBe(spawned);
+    // A refused start names no task: the one before it is the last started.
+    const refused = {
+      name: "sessions_create",
+      text: JSON.stringify({ status: "error", tool: "sessions_create", error: "x" }),
+    };
+    expect(lastStartedTask(ctx([spawn(spawned), refused]))).toBe(spawned);
+    expect(lastStartedTask(ctx([refused]))).toBeNull();
   });
 });
