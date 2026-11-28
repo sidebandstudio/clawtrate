@@ -9,6 +9,7 @@ import {
   initialState,
   mapHistory,
   RawTable,
+  awaitRows,
   readingContextOf,
   replyRow,
   unfollowed,
@@ -23,6 +24,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ActionScope, ItemFeed, RunFeed } from "../src/actions/feed.tsx";
 import { BridgeProvider } from "../src/bridge.tsx";
 import { CardScope } from "../src/cards/TranscriptCards.tsx";
+import { heldByEngine } from "../src/Conversation.tsx";
 import { RunReply } from "../src/LiveTurn.tsx";
 
 // "Show commands" and "Show thinking" read the device's storage, which a markup render has none
@@ -594,5 +596,68 @@ describe("#872: a reply history already holds is drawn once while its run goes o
     );
     expect(count(html, note)).toBe(1);
     expect(html).toContain('data-testid="live-turn"');
+  });
+});
+
+// At a run's end (#912): a run a live frame ended stays drawn from the engine until a history read
+// holds its rows, so its reply never leaves the screen; with #908's tie it is never drawn twice.
+describe("#912: a reply stays on screen when its run ends", () => {
+  const user = {
+    role: "user",
+    content: "Look for my old notes.",
+    __openclaw: { id: "u1", seq: 1 },
+  };
+  const row = (id: string, seq: number, content: unknown[]) => ({
+    role: "assistant",
+    content,
+    __openclaw: { id, seq, runId: RUN },
+  });
+  const text = (value: string) => ({ type: "text", text: value });
+  const toolCall = (id: string) => ({ type: "toolCall", id, name: "ls", arguments: { path: "." } });
+  /** The run as the engine holds it once its end came on a live frame. */
+  const endedLive = (transcript: Transcript, rows: unknown[] = []): Transcript => {
+    const live = {
+      ...transcript,
+      runs: transcript.runs.map((run) => ({ ...run, state: "running" as const })),
+    };
+    const after = awaitRows(live, transcript);
+    return {
+      ...transcript,
+      runs: after.runs,
+      items: rows.length ? mapHistory(rows) : transcript.items,
+    };
+  };
+  const events = [
+    ...start,
+    ...call("c1"),
+    ...said("m:1", "All clean."),
+    ["lifecycle", { phase: "end" }] as [string, Record<string, unknown>],
+  ];
+
+  it("until history holds its rows, the ended run is still drawn from the engine, and its reply with it", () => {
+    const transcript = endedLive(transcriptOf(events, [user, row("a1", 2, [toolCall("c1")])]));
+    const run = transcript.runs[0]!;
+    expect(run.state).toBe("completed");
+    expect(run.awaitsRows).toBe(true);
+    expect(heldByEngine(run, transcript)).toBe(true);
+    expect(count(draw(transcript), "All clean.")).toBe(1);
+  });
+
+  it("with its row in a read answered before the end, the reply is drawn once, not twice", () => {
+    const rows = [user, row("a1", 2, [toolCall("c1")]), row("a2", 4, [text("All clean.")])];
+    const transcript = endedLive(transcriptOf(events, rows), rows);
+    expect(heldByEngine(transcript.runs[0]!, transcript)).toBe(true);
+    expect(count(draw(transcript), "All clean.")).toBe(1);
+  });
+
+  it("once a read shows the run past its end, history draws it and the engine lets it go", () => {
+    const transcript = transcriptOf(events, [
+      user,
+      row("a1", 2, [toolCall("c1")]),
+      row("a2", 4, [text("All clean.")]),
+    ]);
+    const run = transcript.runs[0]!;
+    expect(run.awaitsRows).toBeUndefined();
+    expect(heldByEngine(run, transcript)).toBe(false);
   });
 });

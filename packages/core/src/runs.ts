@@ -503,6 +503,13 @@ export type Run = {
    * (`replyRow`). Absent otherwise.
    */
   textAfter?: { call: string | null };
+  /**
+   * The run ended on a live frame (its `lifecycle` end or error, or a terminal `chat` event) with
+   * a reply drawn from the engine, and no history read since has shown the gateway past it: its
+   * rows may not be in history yet, so the engine still draws it (#912). Cleared by the first
+   * history read that shows the run no longer in flight (`rowsRead`), or a read that fails.
+   */
+  awaitsRows?: true;
   /** True once the gateway reported the reply complete. */
   textComplete: boolean;
   steps: Step[];
@@ -2877,6 +2884,48 @@ function followFrom(run: Run, toolCallId: string): Run {
   return run.followed?.call === toolCallId
     ? run
     : { ...run, followed: { call: toolCallId, items: 0 } };
+}
+
+/**
+ * Each run a live frame just ended (`before` to `after`) whose reply the engine draws (`textPlaced`
+ * leaves text drawn beside a call, which history already holds) keeps it drawn until history holds
+ * its rows (`Run.awaitsRows`). Both versions write a message's row at its end, before the run's
+ * end, and the history read the end asks for comes after it.
+ */
+export function awaitRows(before: TaskActivity, after: TaskActivity): TaskActivity {
+  if (before.runs === after.runs) return after;
+  let changed = false;
+  const runs = after.runs.map((run) => {
+    const was = findRun(before, run.id);
+    if (!was || isTerminal(was.state) || !isTerminal(run.state) || run.awaitsRows) return run;
+    if (!run.text.trim() || textPlaced(run)) return run;
+    changed = true;
+    return { ...run, awaitsRows: true as const };
+  });
+  return changed ? { ...after, runs } : after;
+}
+
+/**
+ * The runs as a history read leaves them: a run the read shows no longer in flight is one the
+ * gateway answered after its end, so its rows are in the read (`Run.awaitsRows` clears). One it
+ * still shows in flight was answered before the end, and keeps waiting, but never past a read
+ * asked for while it already waited (`waitedAtAsk`): the end had come before that read was asked,
+ * so the gateway answered it after the end. `failed`: the read failed, and no row is waited for
+ * longer.
+ */
+export function rowsRead(
+  runs: Run[],
+  inFlightId: string | null,
+  waitedAtAsk: ReadonlySet<string> = new Set(),
+  failed = false,
+): Run[] {
+  if (!runs.some((run) => run.awaitsRows)) return runs;
+  return runs.map((run) => {
+    if (!run.awaitsRows) return run;
+    if (!failed && run.id === inFlightId && !waitedAtAsk.has(run.id)) return run;
+    const { awaitsRows: _awaits, ...rest } = run;
+    return rest;
+  });
 }
 
 /** The run as a read that subscribes again leaves it: what the stream brought is not known whole. */

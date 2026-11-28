@@ -648,8 +648,10 @@ type LiveParts = {
   onReview: () => void;
 };
 
-/** A terminal run's reply is shown from the engine only until history holds its message. */
-function heldByEngine(run: Run, transcript: Transcript): boolean {
+/** A terminal run is shown from the engine until history holds its message and its rows (#912). */
+export function heldByEngine(run: Run, transcript: Transcript): boolean {
+  // Its reply too, until a history read holds its rows: never off screen in between (#912).
+  if (run.awaitsRows) return true;
   return (
     run.messageId !== null && transcript.outbox.some((message) => message.id === run.messageId)
   );
