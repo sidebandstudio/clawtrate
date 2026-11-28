@@ -190,7 +190,7 @@ function judge(facts: Facts, stateDir: string, port: number): Proof {
     typeof lock.startTime === "number" &&
     // OpenClaw records the kernel's start time in whole seconds.
     Math.abs(lock.startTime - facts.start) <= 1 &&
-    // Both pinned versions write the settings file the gateway loaded into its lock.
+    // Every pinned version writes the settings file the gateway loaded into its lock.
     typeof lock.configPath === "string";
   if (!named) return no("named");
   // The settings the reader read are the ones this gateway loaded, or nothing they say about

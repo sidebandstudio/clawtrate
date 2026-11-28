@@ -387,13 +387,15 @@ export function noteBelow(
 
 /**
  * The OpenClaw versions on which what the config's model list limits was established, on a
- * development gateway of each: it limits what the gateway lists and what a task may switch to; a
- * bot's own model or the default only when it has a wildcard, which makes them run on a model it
- * names (docs/research/model-catalog.md, section 8).
+ * development gateway of 2026.10.6 and of 2026.11.10, and for 2026.11.11 by its published code,
+ * which resolves the list as 2026.11.10 does: it limits what the gateway lists and what a task may
+ * switch to; a bot's own model or the default only when it has a wildcard, which makes them run on
+ * a model it names (docs/research/model-catalog.md, section 8).
  */
 export const MODEL_LIMIT_VERSIONS: readonly (readonly [number, number, number])[] = [
   [2026, 10, 6],
   [2026, 11, 10],
+  [2026, 11, 11],
 ];
 
 /**
