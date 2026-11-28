@@ -260,13 +260,14 @@ export class OpenclawRunner {
   }
 
   /** Async variant, so several bots can be seeded at once. */
-  run(args: string[]): Promise<RunResult> {
+  run(args: string[], options: { signal?: AbortSignal } = {}): Promise<RunResult> {
     return new Promise((resolve, reject) => {
       this.assertAllowed();
       const { command, args: lead } = this.openclaw();
       const child = this.spawnImpl(command, [...lead, ...guardArgs(args, this.instance)], {
         ...this.baseOptions(),
         stdio: ["ignore", "pipe", "pipe"],
+        signal: options.signal,
       });
       let stdout = "";
       let stderr = "";
