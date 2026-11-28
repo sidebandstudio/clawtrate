@@ -195,6 +195,13 @@ async function creaturesAtFoot(screenId: string): Promise<boolean> {
 
 const hostOf = (url: string) => url.replace(/^ws:\/\//, "");
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+/**
+ * How long a scroll may take while the text is at its largest size. Each row is then several
+ * times taller, so reaching a row takes several times as many swipes, and on a hosted runner
+ * each look, swipe and settle takes about four times as long as locally (#541). Like the
+ * licenses step's five swipes, these scrolls get 180 s instead of `scrollTo`'s 30 s.
+ */
+const LARGEST_TEXT_SCROLL_MS = 180_000;
 
 function expectSwitcherCover({
   data,
@@ -1183,7 +1190,7 @@ describe("the iOS app", () => {
       await steps("largest-home", [
         waitFor({ id: "home" }),
         // At this size Otto's row may be below the fold.
-        scrollTo({ id: "bot-name-otto" }, "DOWN"),
+        scrollTo({ id: "bot-name-otto" }, "DOWN", LARGEST_TEXT_SCROLL_MS),
       ]);
       // Wait for the rows to take the new size: Otto's time under its name.
       await until("the rows at the largest size", async () => {
@@ -1209,7 +1216,11 @@ describe("the iOS app", () => {
         tap({ id: "bot-otto" }),
         waitFor({ id: "bot-tasks-otto" }, 20_000),
         // At this size a task may be below the fold too.
-        scrollTo({ id: `task-title-${lit("agent:otto:disk-space")}` }, "DOWN"),
+        scrollTo(
+          { id: `task-title-${lit("agent:otto:disk-space")}` },
+          "DOWN",
+          LARGEST_TEXT_SCROLL_MS,
+        ),
       ]);
       const tasks = await layout();
       const titles = [...tasks.keys()].filter((id) => id.startsWith("task-title-"));
@@ -1803,7 +1814,9 @@ describe("the iOS app", () => {
 
       textSize("accessibility-extra-extra-extra-large");
       // At the largest size each long text wraps: taller than two lines of its control.
-      await steps("long-tasks-largest", [scrollTo({ id: `task-title-${lit(DISK)}` }, "DOWN")]);
+      await steps("long-tasks-largest", [
+        scrollTo({ id: `task-title-${lit(DISK)}` }, "DOWN", LARGEST_TEXT_SCROLL_MS),
+      ]);
       await until("the task rows at the largest size", async () => {
         const at = await layout();
         const title = at.get(`task-title-${DISK}`)?.[0];
@@ -1811,7 +1824,9 @@ describe("the iOS app", () => {
         return title && time && time.y1 >= title.y2 - 1 ? true : null;
       });
       const title = await heightOf(`task-title-${DISK}`, LONG_TITLE);
-      await steps("long-control-title", [scrollTo({ id: `task-title-${lit(BACKUP)}` }, "DOWN")]);
+      await steps("long-control-title", [
+        scrollTo({ id: `task-title-${lit(BACKUP)}` }, "DOWN", LARGEST_TEXT_SCROLL_MS),
+      ]);
       expect(title).toBeGreaterThan(1.8 * (await heightOf(`task-title-${BACKUP}`, "Log")));
       await shoot("long-tasks-largest");
       await steps("long-home-largest", [
@@ -1819,7 +1834,7 @@ describe("the iOS app", () => {
         waitFor({ id: "home" }, 20_000),
         // The long pinned name can be taller than the screen: its short neighbour brings the
         // row of tiles into view, and the layout reads both.
-        scrollTo({ id: "pin-name-marlow" }, "UP"),
+        scrollTo({ id: "pin-name-marlow" }, "UP", LARGEST_TEXT_SCROLL_MS),
       ]);
       const pin = await heightOf("pin-name-pip", LONG_PIN);
       expect(pin).toBeGreaterThan(1.8 * (await heightOf("pin-name-marlow", "Mo")));
@@ -1829,13 +1844,15 @@ describe("the iOS app", () => {
           scrollUntilVisible: {
             element: { id: "bot-name-otto" },
             direction: "DOWN",
-            timeout: 30_000,
+            timeout: LARGEST_TEXT_SCROLL_MS,
             visibilityPercentage: 10,
           },
         },
       ]);
       const name = await heightOf("bot-name-otto", LONG_BOT);
-      await steps("long-control-row", [scrollTo({ id: `bot-name-${MAIN_BOT}` }, "DOWN")]);
+      await steps("long-control-row", [
+        scrollTo({ id: `bot-name-${MAIN_BOT}` }, "DOWN", LARGEST_TEXT_SCROLL_MS),
+      ]);
       expect(name).toBeGreaterThan(1.8 * (await heightOf(`bot-name-${MAIN_BOT}`, "Jo")));
       await shoot("home-long-largest");
     } finally {
