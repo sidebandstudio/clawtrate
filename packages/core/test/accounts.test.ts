@@ -334,7 +334,7 @@ describe("the Model menu's lists", () => {
     expect(otto().status).not.toBe("failed");
   });
 
-  it("F-592: a first load shows a bot's reading though another bot's read fails", async () => {
+  it("F-592: a first load that a bot's read fails publishes no bot's reading before the accounts are read", async () => {
     const fake = new AccountsGateway();
     const { engine, state } = engineOn(fake);
     const status = fake.gateway.handlers["models.authStatus"]!;
@@ -342,11 +342,10 @@ describe("the Model menu's lists", () => {
       if ((params as { agentId: string }).agentId === "main") throw new Error("not now");
       return status(params);
     };
-    // No binding yet for either bot: Otto's reading is shown all the same.
+    // Otto's reading isn't shown without its gateway's accounts: Clear order and Unlock aren't
+    // offered from it, so no press can be stamped as a gateway that answers later.
     await engine.load().catch(() => {});
-    const otto = state().bindings.find((b) => b.botId === "otto");
-    expect(otto?.evidence).toMatchObject({ error: null });
-    expect(otto?.evidence.readSeq ?? null).not.toBeNull();
+    expect(state().bindings.find((b) => b.botId === "otto")).toBeUndefined();
   });
 
   it("F-478: the default bot's model list answered after a gateway switch publishes nothing", async () => {

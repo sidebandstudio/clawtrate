@@ -351,19 +351,15 @@ export class AccountsEngine {
         if (config === null || resets !== this.resets) return;
         const entry = asRecord(asRecord(asRecord(config.config)?.agents)?.entries)?.[botId];
         const gateway = answeredBy(readOn, ctx.readStamp());
-        ctx.update((a) => {
-          const before = a.bindings.find((each) => each.botId === botId);
-          if (before && before.evidence.attemptSeq !== null && before.evidence.attemptSeq > own)
-            return a;
-          // A bot with no binding yet (a first load, a bot just added) gets one now too.
-          const next = this.binding(botId, asRecord(entry), view, before, startedAt, own, gateway);
-          return settleClear({
-            ...a,
-            bindings: before
-              ? a.bindings.map((each) => (each.botId === botId ? next : each))
-              : [...a.bindings, next],
-          });
-        });
+        ctx.update((a) =>
+          settleClear(
+            this.patchBinding(a, botId, (b) =>
+              b.evidence.attemptSeq !== null && b.evidence.attemptSeq > own
+                ? b
+                : this.binding(botId, asRecord(entry), view, b, startedAt, own, gateway),
+            ),
+          ),
+        );
       };
       const [config, views, prefs] = await Promise.all([
         configRead,
