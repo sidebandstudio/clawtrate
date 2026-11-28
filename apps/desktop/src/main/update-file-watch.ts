@@ -1,5 +1,4 @@
 import { lstatSync, watch } from "node:fs";
-import { dirname } from "node:path";
 
 function stamp(path: string) {
   const file = lstatSync(path, { bigint: true });
@@ -8,7 +7,11 @@ function stamp(path: string) {
 }
 
 /** Withdraw the displayed capability when the named download changes. The Mac
- * handoff itself reads a private unlinked copy held since inspection. */
+ * handoff itself reads a private unlinked copy held since inspection. The file, not its
+ * folder, is watched: on macOS a folder's watch is an FSEvents stream, and closing one
+ * blocks this thread until fseventsd answers, seconds when it is busy (#940). A file's is
+ * a kqueue descriptor. A new hard link to the file fires nothing on macOS, so the next
+ * read finds it instead. */
 export function watchUpdateFile(path: string, changed: () => void) {
   const original = stamp(path);
   if (!original) throw Error("Changed file");
@@ -21,7 +24,7 @@ export function watchUpdateFile(path: string, changed: () => void) {
       return false;
     }
   };
-  const watcher = watch(dirname(path), { persistent: false }, () => {
+  const watcher = watch(path, { persistent: false }, () => {
     if (!current()) changed();
   });
   const invalidate = () => {
