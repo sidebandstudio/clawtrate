@@ -1,0 +1,13 @@
+- status
+- main:
+  - button "Back"
+  - heading "Starting OpenClaw" [level=2]
+  - paragraph
+  - list "Steps":
+    - listitem "Starting OpenClaw, done": Starting OpenClaw
+    - listitem "Checking the gateway, failed": Checking the gateway
+  - alert:
+    - paragraph: The gateway didn't answer in time.
+  - button "Try again"
+  - button "Look again"
+  - paragraph: Starting OpenClaw

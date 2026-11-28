@@ -1,0 +1,9 @@
+- status
+- main:
+  - button "Back"
+  - heading "On this computer" [level=2]
+  - heading "Clawtrate couldn't tell what is on this computer" [level=3]
+  - paragraph: Clawtrate couldn't finish reading OpenClaw's settings.
+  - button "Use Advanced"
+  - button "Look again"
+  - paragraph: On this computer
