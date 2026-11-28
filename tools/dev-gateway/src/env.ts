@@ -26,6 +26,7 @@ import {
   stateDirFor,
   validateInstanceName,
 } from "./instance.ts";
+import { scriptedNodeDir } from "./scripted-node.ts";
 import {
   processIdentity,
   readMarker,
@@ -296,8 +297,10 @@ export class OpenclawRunner {
     this.assertAllowed();
     const base = this.baseOptions();
     const dir = env.OPENCLAW_STATE_DIR;
-    if (typeof dir !== "string" || !dir.startsWith(`${this.stateDir}/`)) {
-      throw new SpawnRefusedError("the node's state folder must be inside the instance's");
+    if (dir !== scriptedNodeDir(this.stateDir)) {
+      throw new SpawnRefusedError(
+        "the node's state folder must be its own folder inside the instance's",
+      );
     }
     const { command, args: lead } = this.openclaw();
     return gatedSpawn(this.spawnImpl, command, [...lead, ...guardArgs(args, this.instance)], {

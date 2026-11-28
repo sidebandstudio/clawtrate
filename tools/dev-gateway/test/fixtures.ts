@@ -17,6 +17,7 @@ import {
   MARKER_FILE,
   newRunId,
   processIdentity,
+  validPid,
   type Marker,
   type RunRecord,
 } from "../src/state-guard.ts";
@@ -73,8 +74,15 @@ export function childFor(pid: number): ChildProcess {
 
 /** A PID whose process has exited, with the identity it had. */
 export function deadProcess(): Proc {
-  const result = spawnSync("true");
-  return { pid: result.pid!, identity: "1970-01-01T00:00:00Z" };
+  // This Node by its own path, so no PATH lookup or shell; `--version` exits before any script loads.
+  const result = spawnSync(process.execPath, ["--version"], { stdio: "ignore" });
+  if (result.error || result.status !== 0 || !validPid(result.pid)) {
+    throw new Error(
+      `the stand-in process did not run: pid ${result.pid}, status ${result.status ?? result.signal}` +
+        (result.error ? `, ${result.error.message}` : ""),
+    );
+  }
+  return { pid: result.pid, identity: "1970-01-01T00:00:00Z" };
 }
 
 export function stopChildren(): void {
