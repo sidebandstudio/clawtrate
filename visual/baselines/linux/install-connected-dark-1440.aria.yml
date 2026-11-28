@@ -4,15 +4,34 @@
   - button "Routines"
   - 'button "Sort bots: Recent activity"'
   - button "Search"
+  - button "New"
   - list:
     - listitem:
-      - strong: No bots
-      - text: Bots appear here once the gateway has one.
+      - button "main, 0 tasks, primary bot": main
   - status
   - button "127.0.0.1:18789, connected. Open the gateway menu."
   - button "Settings"
 - region "Conversation":
-  - heading "No bots to show" [level=1]
-  - paragraph: This gateway has no bots yet.
+  - button "main, no task selected. Show details.": main
+  - button "Show work panel"
+  - heading "Set up your first bot" [level=1]
+  - button "Get started"
+  - status
+- dialog "Connect an account":
+  - banner:
+    - heading "Connect an account" [level=2]
+    - button "Close"
+  - paragraph: Sign in with a subscription you already pay for. Your gateway does the sign-in and keeps it; Clawtrate never sees your password and never keeps the sign-in.
+  - list "Providers":
+    - listitem:
+      - button "OpenAI"
+    - listitem:
+      - button "GitHub Copilot"
+    - listitem:
+      - button "xAI"
+    - listitem:
+      - button "OpenRouter Billed per token"
+  - button "Show more"
+  - group: Use an API key instead
   - status
 - status
