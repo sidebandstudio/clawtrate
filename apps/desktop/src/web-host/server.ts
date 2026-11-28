@@ -3,6 +3,7 @@
 // gateway token or the gateway socket; it only receives state and sends commands.
 
 import {
+  ACCESS_REFUSED_CLOSE_CODE,
   AttachmentTooLargeError,
   batchSnapshots,
   type HostInfo,
@@ -14,13 +15,22 @@ import {
   parseBridgeCommand,
   type BridgeServerMessage,
 } from "@clawtrate/core";
-import { randomBytes, timingSafeEqual } from "node:crypto";
+import { randomBytes } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import { extname, join, normalize, resolve, sep } from "node:path";
 import type { Duplex } from "node:stream";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { HostRuntime } from "../host/runtime.ts";
+import {
+  createAttemptLimit,
+  MAX_AUTH_BODY_BYTES,
+  type PrivateAccess,
+  safeEqual,
+  SESSION_MAX_AGE_S,
+  signSession,
+  verifySession,
+} from "./access.ts";
 
 export const ACCESS_COOKIE = "clawtrate_access";
 export const ATTACHMENTS_PATH = "/attachments";
@@ -227,12 +237,6 @@ export function createAccessToken(): string {
   return randomBytes(24).toString("base64url");
 }
 
-function safeEqual(a: string, b: string): boolean {
-  const left = Buffer.from(a);
-  const right = Buffer.from(b);
-  return left.length === right.length && timingSafeEqual(left, right);
-}
-
 /** A cookie's value, or null when it is absent or not validly encoded. */
 export function readCookie(req: IncomingMessage, name: string): string | null {
   for (const part of (req.headers.cookie ?? "").split(";")) {
@@ -247,10 +251,15 @@ export function readCookie(req: IncomingMessage, name: string): string | null {
   return null;
 }
 
-/** Same-origin check for the bridge socket, so another site cannot drive the host. */
-function sameOrigin(req: IncomingMessage): boolean {
+/**
+ * Same-origin check for the bridge socket, so another site cannot drive the
+ * host. A private host's `--public-origin` is its own too: the HTTPS proxy in
+ * front of it may pass on its own `Host`.
+ */
+function sameOrigin(req: IncomingMessage, publicOrigin: string | null): boolean {
   const origin = req.headers.origin;
   if (!origin) return true; // Non-browser clients send no Origin; they still need the token.
+  if (origin === publicOrigin) return true;
   try {
     return new URL(origin).host === req.headers.host;
   } catch {
@@ -259,15 +268,21 @@ function sameOrigin(req: IncomingMessage): boolean {
 }
 
 /**
- * The upload path's origin policy, stricter than the bridge's. A browser
- * sends `Origin` with every POST, so one without it is refused, and the
- * origin must be exactly this plain-HTTP listener's own: same scheme, host and
- * port. The host terminates no TLS, so an `https` origin is not its own.
+ * The origin policy for uploads, sign-in and sign-out, stricter than the
+ * bridge's. A browser sends `Origin` with every POST, so one without it is
+ * refused, and the origin must be exactly this plain-HTTP listener's own (same
+ * scheme, host and port) or a private host's `--public-origin`. The host
+ * terminates no TLS, so any other `https` origin is not its own.
  */
-export function uploadOriginAllowed(req: IncomingMessage): boolean {
+export function uploadOriginAllowed(
+  req: IncomingMessage,
+  publicOrigin: string | null = null,
+): boolean {
   const origin = req.headers.origin;
   const host = req.headers.host;
-  if (!origin || !host) return false;
+  if (!origin) return false;
+  if (origin === publicOrigin) return true;
+  if (!host) return false;
   try {
     const url = new URL(origin);
     return url.protocol === "http:" && url.host === host && url.origin === origin;
@@ -276,13 +291,44 @@ export function uploadOriginAllowed(req: IncomingMessage): boolean {
   }
 }
 
+const SIGN_IN_HEADERS = {
+  ...SECURITY_HEADERS,
+  "content-type": "text/html; charset=utf-8",
+  "cache-control": "no-store",
+  // The form's POST must carry its Origin; `no-referrer` would send `Origin: null`.
+  "referrer-policy": "same-origin",
+  "content-security-policy":
+    "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'; frame-ancestors 'none'; base-uri 'none'",
+};
+
+function signInPage(problem: string | null): string {
+  return (
+    `<!doctype html><html lang="en"><meta charset="utf-8">` +
+    `<meta name="viewport" content="width=device-width, initial-scale=1"><title>Sign in · Clawtrate</title>` +
+    `<style>body{font:15px/1.4 system-ui,sans-serif;background:#0b0e14;color:#e6ebe9;display:grid;place-items:center;min-height:100vh;margin:0;padding:0 16px;box-sizing:border-box}` +
+    `form{width:100%;max-width:360px;display:grid;gap:12px}h1{font-size:20px;margin:0}p{margin:0;color:#a9b3b0}` +
+    `input,button{font:inherit;border-radius:8px;padding:10px 12px;border:1px solid #2a313b}` +
+    `input{background:#151a22;color:inherit}button{background:#e6ebe9;color:#0b0e14;cursor:pointer}` +
+    `.problem{color:#f2a49b}</style>` +
+    `<form method="post" action="/auth"><h1>Sign in</h1>` +
+    `<p>Enter this host's access secret. It was printed when the host first started in private mode.</p>` +
+    (problem ? `<p class="problem" role="alert">${problem}</p>` : "") +
+    `<label for="secret">Access secret</label>` +
+    `<input id="secret" name="secret" type="password" autocomplete="current-password" required autofocus>` +
+    `<button type="submit">Sign in</button></form></html>`
+  );
+}
+
 export type WebHostOptions = {
   runtime: HostRuntime;
   staticDir: string;
   host: string;
   port: number;
-  /** null disables the access check (only allowed against the development gateway). */
-  accessToken: string | null;
+  /**
+   * The startup token, private mode's secret, or null, which disables the
+   * access check (only allowed against the development gateway).
+   */
+  accessToken: string | PrivateAccess | null;
   /** `UPLOAD_DEADLINE_MS` unless a test shortens it. */
   uploadDeadlineMs?: number;
   /** `SNAPSHOT_DRAIN_TIMEOUT_MS` unless a test shortens it. */
@@ -294,13 +340,96 @@ export function startWebHost(options: WebHostOptions) {
   const uploadDeadlineMs = options.uploadDeadlineMs ?? UPLOAD_DEADLINE_MS;
   const staticRoot = resolve(options.staticDir);
 
-  const authorized = (req: IncomingMessage, url: URL): "ok" | "redirect" | "denied" => {
-    if (accessToken === null) return "ok";
-    const fromQuery = url.searchParams.get("token");
-    if (fromQuery && safeEqual(fromQuery, accessToken)) return "redirect";
+  const privateAccess = typeof accessToken === "object" ? accessToken : null;
+  const publicOrigin = privateAccess?.publicOrigin ?? null;
+  const attempts = createAttemptLimit();
+  const secure = publicOrigin ? "; Secure" : "";
+
+  /** Until when the request's cookie admits it, in milliseconds, or null when it admits nothing. */
+  const admittedUntil = (req: IncomingMessage): number | null => {
+    if (accessToken === null) return Infinity;
     const fromCookie = readCookie(req, ACCESS_COOKIE);
-    if (fromCookie && safeEqual(fromCookie, accessToken)) return "ok";
-    return "denied";
+    if (!fromCookie) return null;
+    if (typeof accessToken !== "string") return verifySession(accessToken.secret, fromCookie);
+    return safeEqual(fromCookie, accessToken) ? Infinity : null;
+  };
+  const cookieValid = (req: IncomingMessage) => admittedUntil(req) !== null;
+
+  // A private host takes no token in the URL: its bare address is the bookmark.
+  const tokenInUrl = (url: URL): boolean => {
+    if (typeof accessToken !== "string") return false;
+    const fromQuery = url.searchParams.get("token");
+    return fromQuery !== null && safeEqual(fromQuery, accessToken);
+  };
+  const authorized = (req: IncomingMessage, url: URL): "ok" | "redirect" | "denied" =>
+    cookieValid(req) ? "ok" : tokenInUrl(url) ? "redirect" : "denied";
+
+  const signIn = async (req: IncomingMessage, res: ServerResponse, secret: string) => {
+    const answer = (status: number, problem: string, extra: Record<string, string> = {}) => {
+      res.writeHead(status, { ...SIGN_IN_HEADERS, connection: "close", ...extra });
+      res.end(signInPage(problem));
+      req.resume();
+    };
+    if (req.method !== "POST") return answer(405, "Sign in with the form.", { allow: "POST" });
+    if (!uploadOriginAllowed(req, publicOrigin))
+      return answer(403, "Sign in from this host's own page.");
+    // Counted before the body is read, so attempts in flight count too.
+    if (!attempts.allow()) {
+      return answer(429, "Too many attempts. Wait a minute, then try again.", {
+        "retry-after": "60",
+      });
+    }
+    const declared = Number(req.headers["content-length"]);
+    if (!Number.isSafeInteger(declared) || declared > MAX_AUTH_BODY_BYTES) {
+      return answer(413, "That was not a sign-in form.");
+    }
+    const chunks: Buffer[] = [];
+    let received = 0;
+    const complete = await new Promise<boolean>((resolveRead) => {
+      req.on("data", (chunk: Buffer) => {
+        received += chunk.length;
+        if (received > declared) {
+          req.destroy();
+          resolveRead(false);
+          return;
+        }
+        chunks.push(chunk);
+      });
+      req.on("end", () => resolveRead(received === declared));
+      req.on("close", () => resolveRead(false));
+      req.on("error", () => resolveRead(false));
+    });
+    if (!complete) {
+      if (!res.headersSent && !req.destroyed) answer(400, "That was not a sign-in form.");
+      return;
+    }
+    const given = new URLSearchParams(Buffer.concat(chunks).toString("utf8")).get("secret")?.trim();
+    if (!given || !safeEqual(given, secret)) return answer(401, "That secret is not right.");
+    res.writeHead(303, {
+      ...SECURITY_HEADERS,
+      "cache-control": "no-store",
+      "set-cookie": `${ACCESS_COOKIE}=${signSession(secret)}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_MAX_AGE_S}${secure}`,
+      location: "/",
+    });
+    res.end();
+  };
+
+  const signOut = (req: IncomingMessage, res: ServerResponse) => {
+    req.resume();
+    if (req.method !== "POST") {
+      res.writeHead(405, { ...SECURITY_HEADERS, allow: "POST" }).end();
+      return;
+    }
+    if (!uploadOriginAllowed(req, publicOrigin)) {
+      res.writeHead(403, SECURITY_HEADERS).end();
+      return;
+    }
+    res.writeHead(204, {
+      ...SECURITY_HEADERS,
+      "cache-control": "no-store",
+      "set-cookie": `${ACCESS_COOKIE}=; HttpOnly; SameSite=Strict; Path=/; Max-Age=0${secure}`,
+    });
+    res.end();
   };
 
   const serveStatic = async (res: ServerResponse, pathname: string) => {
@@ -334,13 +463,27 @@ export function startWebHost(options: WebHostOptions) {
       }
       if (url.pathname === ATTACHMENTS_PATH) {
         // Only the cookie admits an upload; the access link's token only establishes the cookie.
-        const fromCookie = readCookie(req, ACCESS_COOKIE);
-        const credential =
-          accessToken === null || (fromCookie !== null && safeEqual(fromCookie, accessToken));
-        await receiveAttachment(req, res, url, credential && uploadOriginAllowed(req));
+        await receiveAttachment(
+          req,
+          res,
+          url,
+          cookieValid(req) && uploadOriginAllowed(req, publicOrigin),
+        );
+        return;
+      }
+      if (privateAccess && url.pathname === "/auth") {
+        await signIn(req, res, privateAccess.secret);
+        return;
+      }
+      if (privateAccess && url.pathname === "/logout") {
+        signOut(req, res);
         return;
       }
       const access = authorized(req, url);
+      if (access === "denied" && privateAccess) {
+        res.writeHead(401, SIGN_IN_HEADERS).end(signInPage(null));
+        return;
+      }
       if (access === "denied") {
         res.writeHead(401, { ...SECURITY_HEADERS, "content-type": "text/html; charset=utf-8" });
         res.end(
@@ -354,7 +497,7 @@ export function startWebHost(options: WebHostOptions) {
         url.searchParams.delete("token");
         res.writeHead(302, {
           ...SECURITY_HEADERS,
-          "set-cookie": `${ACCESS_COOKIE}=${encodeURIComponent(accessToken!)}; HttpOnly; SameSite=Strict; Path=/`,
+          "set-cookie": `${ACCESS_COOKIE}=${encodeURIComponent(accessToken as string)}; HttpOnly; SameSite=Strict; Path=/`,
           location: `${url.pathname}${url.search}`,
         });
         res.end();
@@ -478,24 +621,32 @@ export function startWebHost(options: WebHostOptions) {
     socket.on("error", () => socket.destroy());
     // Everything about an unauthenticated upgrade is untrusted input: any
     // parsing failure is answered and the socket closed, never thrown.
-    let allowed: boolean;
+    // The cookie is read once: a session that expires during the upgrade admits nothing, and
+    // only the startup token's link admits without a cookie, never expiring.
+    let until: number | null = null;
     try {
       const url = new URL(req.url ?? "/", "http://placeholder");
-      allowed = url.pathname === "/bridge" && sameOrigin(req) && authorized(req, url) !== "denied";
+      if (url.pathname === "/bridge" && sameOrigin(req, publicOrigin))
+        until = admittedUntil(req) ?? (tokenInUrl(url) ? Infinity : null);
     } catch {
       refuseUpgrade(socket, "400 Bad Request");
       return;
     }
-    if (!allowed) {
+    if (until === null) {
       refuseUpgrade(socket, "401 Unauthorized");
       return;
     }
-    sockets.handleUpgrade(req, socket, head, (ws) => sockets.emit("connection", ws));
+    sockets.handleUpgrade(req, socket, head, (ws) => sockets.emit("connection", ws, until));
   });
 
-  sockets.on("connection", (ws: WebSocket) => {
+  sockets.on("connection", (ws: WebSocket, until: number) => {
     if (sockets.clients.size > MAX_WEB_VIEWERS) {
       ws.close(1013, "too many viewers");
+      return;
+    }
+    // A session that expired since it was checked gets nothing of the host's state.
+    if (Date.now() >= until) {
+      ws.close(ACCESS_REFUSED_CLOSE_CODE, "session expired");
       return;
     }
     // Each tab is its own viewer: its open transcripts are released when it goes away.
@@ -512,9 +663,18 @@ export function startWebHost(options: WebHostOptions) {
       options.snapshotDrainTimeoutMs ?? SNAPSHOT_DRAIN_TIMEOUT_MS,
     );
     channel.sendHello(runtime.info, runtime.client.state);
-    const stop = batchSnapshots(runtime.client.store.subscribe, (state) =>
-      channel.sendState(state),
-    );
+    const stop = batchSnapshots(runtime.client.store.subscribe, (state) => {
+      if (Date.now() < until) channel.sendState(state);
+    });
+    // A private session admits its socket only until the session expires.
+    let expiry: ReturnType<typeof setTimeout> | undefined;
+    const watchExpiry = () => {
+      const left = until - Date.now();
+      if (left <= 0) return ws.close(ACCESS_REFUSED_CLOSE_CODE, "session expired");
+      // setTimeout fires at once past 2^31 - 1 ms, which is shorter than a session.
+      expiry = setTimeout(watchExpiry, Math.min(left, 2 ** 31 - 1));
+    };
+    if (Number.isFinite(until)) watchExpiry();
     let ended = false;
     /**
      * Release everything this viewer held. Each step runs even if another
@@ -524,6 +684,7 @@ export function startWebHost(options: WebHostOptions) {
     const end = () => {
       if (ended) return;
       ended = true;
+      clearTimeout(expiry);
       for (const [name, step] of [
         ["snapshots", stop],
         ["channel", () => channel.stop()],
@@ -537,6 +698,8 @@ export function startWebHost(options: WebHostOptions) {
       }
     };
     ws.on("message", (data) => {
+      // Between the deadline and the socket's close, a command is not run.
+      if (Date.now() >= until) return;
       let id = "";
       try {
         const message = JSON.parse(String(data)) as {

@@ -44,6 +44,23 @@ The gateway connection, the device key and pairing all live in the preview host 
 - `pnpm preview:web --read-only` pins the connection to the read tier. The host asks the gateway for `operator.read` alone, even when its device was granted more, and never asks for more access; the interface shows the read-only conversation without "Request access", and every send, stop or answer is refused. Use it to show a gateway you only want watched.
 - `--port`, `--host` and `--data-dir` change where it listens and where it keeps the device identity.
 
+### A private web client
+
+The access token above changes at every start, so a bookmark stops working when the host restarts. To keep one browser client for your own gateway, start the host in private mode:
+
+```bash
+pnpm preview:web --private
+```
+
+It listens on `127.0.0.1:5310` only and keeps the device identity and one access secret in `--data-dir` (by default `~/.local/state/clawtrate/web-host`). The first start prints the secret once; it is kept in `<data-dir>/access-secret` if you need it again. Bookmark `http://127.0.0.1:5310/`, sign in with the secret, and the browser stays signed in for 30 days, across host and browser restarts. The paired device is reused, so the gateway doesn't ask to pair again.
+
+The host speaks plain HTTP, so it refuses to listen on anything but loopback in private mode. From another machine, use one of these:
+
+- An SSH tunnel: `ssh -L 5310:127.0.0.1:5310 <host>`, then open `http://localhost:5310/` on your machine.
+- An HTTPS proxy on the same machine that forwards to `127.0.0.1:5310`, WebSocket upgrades included. Tell the host its public address, so it accepts that origin and marks its cookie `Secure`: `pnpm preview:web --private --public-origin https://clawtrate.example`.
+
+To sign every browser out, stop the host and start it again with `--private --rotate-access-secret`. It prints the new secret once; the paired device stays. A page can sign its own browser out with a same-origin `POST /logout`. To remove the device itself, revoke it on the gateway. `--private` can't be combined with `--dev-gateway`, `--no-access-token` or `--setup-look`. It isn't available on Windows yet.
+
 ## The desktop app
 
 ```bash

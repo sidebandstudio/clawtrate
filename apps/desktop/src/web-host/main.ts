@@ -1,6 +1,8 @@
 // pnpm preview:web [--dev-gateway] [--no-access-token] [--instance <name>]
 //                  [--port 5310] [--host 0.0.0.0] [--data-dir <dir>] [--read-only]
 //                  [--setup-look --setup-sandbox <file>]
+// pnpm preview:web --private [--rotate-access-secret] [--public-origin https://host[:port]]
+//                  [--port 5310] [--host 127.0.0.1] [--data-dir <dir>] [--read-only]
 //
 // Serves the Clawtrate renderer to a browser on another machine. The gateway
 // connection, the device key and pairing all stay in this process.
@@ -13,6 +15,9 @@
 // default, runs only in the sandbox `--setup-sandbox` names, keeps its data in
 // that sandbox's run folder, never resumes a saved gateway, and never pairs,
 // since this host has no dialog of its own to ask first (docs/decisions.md).
+// `--private` keeps one access secret in the data folder instead of a token per
+// start, so the bare URL stays the bookmark across restarts; browsers sign in
+// with the secret. It listens on loopback only (access.ts).
 
 import { realpathSync } from "node:fs";
 import type { AddressInfo } from "node:net";
@@ -22,6 +27,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { readDevConnection, selectInstance, startHostRuntime } from "../host/runtime.ts";
 import { createAccessToken, startWebHost } from "./server.ts";
+import { listenChoice, loadAccessSecret, type PrivateAccess } from "./access.ts";
 import { setupLookChoice } from "./setup-look.ts";
 import { webStartup } from "../setup/startup.ts";
 import { SetupController } from "../setup/controller.ts";
@@ -35,7 +41,7 @@ const REPO_ROOT = join(APP_ROOT, "../..");
 
 const { values } = parseArgs({
   options: {
-    host: { type: "string", default: "0.0.0.0" },
+    host: { type: "string" },
     port: { type: "string", default: "5310" },
     "data-dir": { type: "string" },
     "static-dir": { type: "string", default: join(APP_ROOT, "out/web") },
@@ -45,6 +51,9 @@ const { values } = parseArgs({
     "read-only": { type: "boolean", default: false },
     "setup-look": { type: "boolean", default: false },
     "setup-sandbox": { type: "string" },
+    private: { type: "boolean", default: false },
+    "rotate-access-secret": { type: "boolean", default: false },
+    "public-origin": { type: "string" },
   },
   allowPositionals: false,
 });
@@ -69,6 +78,7 @@ async function main(): Promise<void> {
     home: accountHome(),
     uid: process.getuid?.() ?? null,
   };
+  const listen = listenChoice(values);
   const setupLook = setupLookChoice(values, context);
   if (setupLook.kind === "refused") throw new Error(setupLook.message);
   const instance = setupLook.kind === "off" ? selectInstance(values.instance, process.env) : null;
@@ -86,6 +96,13 @@ async function main(): Promise<void> {
     );
   }
   const port = Number(values.port);
+  let privateAccess: PrivateAccess | null = null;
+  let newSecret = false;
+  if (values.private) {
+    const { secret, created } = loadAccessSecret(start.dataDir, values["rotate-access-secret"]);
+    privateAccess = { secret, publicOrigin: listen.publicOrigin };
+    newSecret = created;
+  }
   const runtime = await startHostRuntime({
     kind: "web",
     displayName: "Clawtrate Web",
@@ -123,11 +140,11 @@ async function main(): Promise<void> {
     });
     runtime.info.setup = { look: true, pair: false, platform: process.platform };
   }
-  const accessToken = tokenDisabled ? null : createAccessToken();
+  const accessToken = privateAccess ?? (tokenDisabled ? null : createAccessToken());
   const host = startWebHost({
     runtime,
     staticDir: values["static-dir"]!,
-    host: values.host!,
+    host: listen.host,
     port,
     accessToken,
   });
@@ -135,6 +152,20 @@ async function main(): Promise<void> {
   host.server.once("listening", () => {
     // With --port 0 the system chooses; print the port actually bound.
     const bound = (host.server.address() as AddressInfo).port;
+    if (privateAccess) {
+      const local = listen.host.includes(":") ? `[${listen.host}]` : listen.host;
+      console.log("\nClawtrate private web client");
+      console.log(`  Local    http://${local}:${bound}/`);
+      if (privateAccess.publicOrigin) console.log(`  Public   ${privateAccess.publicOrigin}/`);
+      console.log(
+        newSecret
+          ? `\nAccess secret, shown this once (also kept in ${start.dataDir}):\n  ${privateAccess.secret}`
+          : "\nSign in with the access secret printed when it was made. --rotate-access-secret replaces it.",
+      );
+      if (values["read-only"])
+        console.log("Read-only: this host never sends and never asks for more access.");
+      return;
+    }
     const query = accessToken ? `?token=${accessToken}` : "";
     console.log("\nClawtrate web preview");
     console.log(`  Local    http://localhost:${bound}/${query}`);
