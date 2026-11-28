@@ -136,7 +136,10 @@ function sharedState(dir, options) {
        * bots' messages a send's result placed before they were written ("steered" or
        * "ended"), by task and run; `forgotten` the runs and tasks whose bot's mark was let
        * go past a bound, which count as a bot's; `people` the runs a person's message
-       * names; `lostTrack` whether a bot's mark was let go with nowhere left to keep it.
+       * names; `steeredTasks` the tasks a bot's message was steered into, `{ bot, at }`, whose
+       * runs noted before `at` are the bot's until the task's next run starts; `notedAt` when
+       * each run was noted, on `clock`; `lostTrack` whether a bot's mark was let go with
+       * nowhere left to keep it.
        */
       origins: {
         sessions: new Map(),
@@ -148,6 +151,8 @@ function sharedState(dir, options) {
         clock: 0,
         forgotten: new Map(),
         people: new Map(),
+        steeredTasks: new Map(),
+        notedAt: new Map(),
         lostTrack: false,
       },
       /**
@@ -756,6 +761,21 @@ export function createToolRules(api, options = {}) {
   const steerKey = (sessionKey, run) => `${sessionKey}\n${run}`;
 
   /**
+   * A bot's message steered into a task: the plugin may not hold the run that
+   * took it (the task's latest run let go past a bound, or not noted yet), so
+   * every run of the task noted before now is the bot's, until a run first
+   * seen after it starts there. Let go past the bound, the task counts as a
+   * bot's for its next run.
+   */
+  const steeredInto = (sessionKey, bot) =>
+    remember(
+      origins.steeredTasks,
+      sessionKey,
+      { bot, at: origins.clock },
+      { letGo: keepForgotten },
+    );
+
+  /**
    * A task's waiting marks once a bot's message was steered into a run under
    * way: if a person wrote there after its latest run was noted, that run may
    * not be noted yet, so the next run noted is the bot's too.
@@ -811,8 +831,10 @@ export function createToolRules(api, options = {}) {
       if (early) {
         origins.early.delete(steerKey(sessionKey, named));
         // Steered: it starts no run of its own, so it waits only as a steer's does.
-        if (early === "steered")
+        if (early === "steered") {
           keepWaiting(sessionKey, afterSteer(sessionKey, origin.bot, waiting));
+          steeredInto(sessionKey, origin.bot);
+        }
         // Ended: nothing waits; its run, should it start, is still the bot's.
         else keepForgotten(named, origin);
         return undefined;
@@ -861,8 +883,13 @@ export function createToolRules(api, options = {}) {
     const runId = text(ctx?.runId) ?? text(event?.runId);
     const sessionKey = text(ctx?.sessionKey) ?? text(event?.sessionKey);
     if (!runId || !sessionKey || origins.runs.has(runId)) return;
+    // A run first seen now: a task runs one run at a time, so the runs going when a bot's
+    // message was steered in have ended.
+    const known = origins.notedAt.has(runId);
+    if (!known) origins.steeredTasks.delete(sessionKey);
     remember(origins.current, sessionKey, runId);
     stamp(sessionKey, "noted");
+    if (!known) remember(origins.notedAt, runId, origins.clock);
     // An expired mark's run goes among the forgotten first; a bot's run let go stays there.
     waitingIn(sessionKey);
     if (forgotten.has(runId)) return;
@@ -901,6 +928,7 @@ export function createToolRules(api, options = {}) {
       const rest = waiting.filter((m) => m !== mark);
       if (ended) keepForgotten(run, mark);
       keepWaiting(sessionKey, steered ? afterSteer(sessionKey, mark.bot, rest) : rest);
+      if (steered) steeredInto(sessionKey, mark.bot);
     } catch {
       // Noting where a message went is never a reason to fail a call.
     }
@@ -920,6 +948,9 @@ export function createToolRules(api, options = {}) {
     const waiting = sessionKey ? waitingIn(sessionKey) : [];
     const note = runId ? noteOf(origins.runs, runId) : undefined;
     if (note) return note;
+    // A steer the plugin could not tie to a run: every run going then is the bot's.
+    const steered = sessionKey ? origins.steeredTasks.get(sessionKey) : undefined;
+    if (steered && !(runId && origins.notedAt.get(runId) > steered.at)) return { bot: steered.bot };
     const mark = waiting.find((m) => m.run === runId) ?? waiting[0];
     if (mark) return { bot: mark.bot };
     const lost = sessionKey ? forgotten.get(sessionKey) : undefined;

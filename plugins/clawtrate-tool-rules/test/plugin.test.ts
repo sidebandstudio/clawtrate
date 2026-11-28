@@ -1150,6 +1150,31 @@ describe("a run another bot's message started or reached (#606)", () => {
     refusedFor(h, "run-s");
   });
 
+  it("a steer the plugin cannot tie to the run under way makes every run already going the bot's until the task's next run starts", async () => {
+    let clock = 1_800_000_000_000;
+    const h = host({ now: () => clock });
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    personRun(h, "run-busy");
+    // As past MEMORY_LIMIT tasks' latest runs: the plugin no longer holds this task's run.
+    h.handle.shared.origins.current.delete(PIP);
+    // A person writes, then Marlow steers: the write could not mark the run under way.
+    h.write(PIP, fromPerson("run-next"));
+    h.write(PIP, fromMarlow("run-s"));
+    h.sent(MARLOW, {
+      status: "accepted",
+      runId: "run-s",
+      sessionKey: PIP,
+      targetDisposition: "steered",
+    });
+    // The mark kept for the next run expires before any run starts.
+    clock += MARK_EXPIRY_MS + 1;
+    refusedFor(h, "run-busy");
+    expect(pending(h)).toEqual([]);
+    // A run a person starts afterwards: the run that took the steer has ended.
+    h.modelCall("run-next", PIP);
+    asks(h, "run-next");
+  });
+
   it("a run that matches its own mark also uses up a mark kept only for the next run", async () => {
     const h = host();
     await h.save("pip", [{ action: "ask", tools: ["read"] }]);
