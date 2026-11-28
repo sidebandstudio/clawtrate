@@ -8,6 +8,7 @@ const passed = () =>
     seconds: 1,
     text: "Visible text",
     screenshot: "step.png",
+    screenScreenshot: "step-screen.png",
   }));
 
 describe("Packaged first run verdict", () => {
@@ -33,6 +34,12 @@ describe("Packaged first run verdict", () => {
 describe("Packaged first run forbidden screens", () => {
   it.each([
     ["AXHeading", "Approve this device"],
+    [
+      "AXSystemDialog",
+      "The git command requires the command line developer tools. Would you like to install the tools now?",
+    ],
+    ["AXSystemDialog", "Allow “node” to find devices on local networks?"],
+    ["SystemPermissionWindow", "macOS permission window owned by UserNotificationCenter"],
     ["AXStaticText", "A pairing request is waiting for the gateway owner."],
     ["AXHeading", "Approval required"],
     ["AXButton", "Allow once"],

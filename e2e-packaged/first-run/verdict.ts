@@ -14,6 +14,7 @@ export type StepResult = {
   seconds: number;
   text: string | null;
   screenshot: string | null;
+  screenScreenshot: string | null;
 };
 
 export function verdict(results: readonly StepResult[]): "passed" | "failed" {
@@ -29,6 +30,14 @@ export type Element = { role: string; text: string };
 
 export function forbiddenScreen(elements: readonly Element[]): string | null {
   const forbidden = elements.find(({ role, text }) => {
+    if (role === "SystemPermissionWindow") return true;
+    if (role === "AXSystemDialog") {
+      return (
+        /\ballow\b.*\bfind devices on local networks?\b/i.test(text) ||
+        (/\bcommand line (?:developer )?tools\b/i.test(text) &&
+          /\b(?:install|download|required|requires)\b/i.test(text))
+      );
+    }
     if (/^AX(?:TextField|TextArea|SecureTextField|ComboBox)$/.test(role)) {
       return /\b(?:gateway address|(?:gateway |pairing |bootstrap )?token)\b/i.test(text);
     }
