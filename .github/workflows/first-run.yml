@@ -45,7 +45,10 @@ jobs:
         if: github.event_name == 'pull_request'
         run: |
           pnpm package:mac
-          echo "APP=$PWD/apps/desktop/dist/mac-arm64/Clawtrate.app" >> "$GITHUB_ENV"
+          app="$PWD/apps/desktop/dist/mac-arm64/Clawtrate.app"
+          helper_source=$(node e2e-packaged/first-run/add-local-gateway-helper.ts "$app")
+          echo "APP=$app" >> "$GITHUB_ENV"
+          echo "FIRST_RUN_HELPER_SOURCE=$helper_source" >> "$GITHUB_ENV"
       - name: Get the published app
         if: github.event_name == 'workflow_dispatch'
         env:

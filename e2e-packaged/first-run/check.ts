@@ -332,7 +332,11 @@ try {
       ({ stdout }) => stdout.trim(),
       () => null,
     ),
-    localGatewayHelperPresent: existsSync(join(app, "Contents/Helpers/ClawtrateLocalGateway")),
+    localGatewayHelper: existsSync(join(app, "Contents/Helpers/ClawtrateLocalGateway"))
+      ? process.env.FIRST_RUN_HELPER_SOURCE === "added-by-check"
+        ? "added-by-check"
+        : "bundled"
+      : "missing",
   };
   const answer = { verdict: verdict(stepResults), steps: stepResults, trace, diagnostics };
   writeFileSync(join(out, "result.json"), JSON.stringify(answer, null, 2) + "\n");
