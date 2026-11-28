@@ -309,6 +309,45 @@ describe("the Model menu's lists", () => {
     expect(JSON.stringify(state())).not.toContain("clawtrate-dev-key");
   });
 
+  it("F-592: a load cut off after one bot's reading was shown leaves that reading, not a failure", async () => {
+    const fake = new AccountsGateway();
+    let connected = true;
+    const { engine, state } = engineOn(fake, { connected: () => connected });
+    await engine.load();
+    const status = fake.gateway.handlers["models.authStatus"]!;
+    const held = deferred<void>();
+    fake.gateway.handlers["models.authStatus"] = async (params) => {
+      if ((params as { agentId: string }).agentId !== "main") return status(params);
+      await held.promise;
+      throw new Error("connection closed");
+    };
+    const otto = () => state().bindings.find((b) => b.botId === "otto")!.evidence;
+    const first = otto().readSeq ?? 0;
+    const loading = engine.load();
+    await until(() => (otto().readSeq ?? 0) > first);
+    connected = false;
+    held.resolve();
+    await loading;
+    const main = state().bindings.find((b) => b.botId === "main")!.evidence;
+    expect(main).toMatchObject({ status: "failed", error: ACCOUNTS_READ_CUT_OFF });
+    expect(otto()).toMatchObject({ error: null, attemptSeq: otto().readSeq });
+    expect(otto().status).not.toBe("failed");
+  });
+
+  it("F-592: a first load that a bot's read fails publishes no bot's reading before the accounts are read", async () => {
+    const fake = new AccountsGateway();
+    const { engine, state } = engineOn(fake);
+    const status = fake.gateway.handlers["models.authStatus"]!;
+    fake.gateway.handlers["models.authStatus"] = async (params) => {
+      if ((params as { agentId: string }).agentId === "main") throw new Error("not now");
+      return status(params);
+    };
+    // Otto's reading isn't shown without its gateway's accounts: Clear order and Unlock aren't
+    // offered from it, so no press can be stamped as a gateway that answers later.
+    await engine.load().catch(() => {});
+    expect(state().bindings.find((b) => b.botId === "otto")).toBeUndefined();
+  });
+
   it("F-478: the default bot's model list answered after a gateway switch publishes nothing", async () => {
     const fake = new AccountsGateway();
     const held = deferred<void>();

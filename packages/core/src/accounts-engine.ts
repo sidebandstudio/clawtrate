@@ -344,6 +344,23 @@ export class AccountsEngine {
             throw error;
           }),
       );
+      // Each bot's reading is shown as it arrives, whatever becomes of the others': a press on the
+      // bot is held back only by a read of its own still out or failed.
+      const arrived = async (botId: string, view: BotView, own: number) => {
+        const config = await configRead;
+        if (config === null || resets !== this.resets) return;
+        const entry = asRecord(asRecord(asRecord(config.config)?.agents)?.entries)?.[botId];
+        const gateway = answeredBy(readOn, ctx.readStamp());
+        ctx.update((a) =>
+          settleClear(
+            this.patchBinding(a, botId, (b) =>
+              b.evidence.attemptSeq !== null && b.evidence.attemptSeq > own
+                ? b
+                : this.binding(botId, asRecord(entry), view, b, startedAt, own, gateway),
+            ),
+          ),
+        );
+      };
       const [config, views, prefs] = await Promise.all([
         configRead,
         settle(
@@ -352,6 +369,7 @@ export class AccountsEngine {
             failed,
             sent,
             configRead,
+            arrived,
           ),
         ),
         ctx.request("users.prefs.get", {}).then(asRecord, () => null),
@@ -637,15 +655,17 @@ export class AccountsEngine {
   }
 
   /**
-   * Every bot's view, in chunks; each bot whose read fails or is unavailable goes in `failed`. Each
-   * chunk takes its number as it is sent, and stamps its bots with it (`sent`): a later chunk goes
-   * out after the earlier ones settle, maybe after a press's read before its send.
+   * Every bot's view, in chunks; each one read goes to `arrived` as it answers, and each bot whose
+   * read fails or is unavailable goes in `failed`. Each chunk takes its number as it is sent, and
+   * stamps its bots with it (`sent`): a later chunk goes out after the earlier ones settle, maybe
+   * after a press's read before its send.
    */
   private async readViews(
     botIds: string[],
     failed: BotReadFailure[] = [],
     sent: Map<string, number> = new Map(),
     config: Promise<RawRecord | null>,
+    arrived: (botId: string, view: BotView, seq: number) => Promise<void>,
   ): Promise<Map<string, BotView>> {
     const views = new Map<string, BotView>();
     // A few bots at a time. Sharing is decided only from refreshed answers (row 33).
@@ -655,12 +675,20 @@ export class AccountsEngine {
       // is still out when a Refresh that waits for the read asks (#565); no later chunk starts.
       const { seq, out } = this.statusRead(this.ctx, chunk, () =>
         Promise.allSettled(
-          chunk.map((agentId) => this.ctx.request("models.authStatus", { agentId, refresh: true })),
+          chunk.map((agentId) =>
+            this.ctx
+              .request("models.authStatus", { agentId, refresh: true })
+              .then(async (answer) => {
+                // The bot's own provider first, so its account stays within the caps (#823).
+                const view = readBotView(answer, providerOf(entryOf(await config, agentId)));
+                if (!view.unavailable) await arrived(agentId, view, seq);
+                return view;
+              }),
+          ),
         ),
       );
       for (const botId of chunk) sent.set(botId, seq);
       const settled = await out;
-      const read = await config;
       let first: unknown = null;
       for (let j = 0; j < chunk.length; j += 1) {
         const botId = chunk[j]!;
@@ -668,7 +696,7 @@ export class AccountsEngine {
         let view: BotView;
         try {
           if (each.status === "rejected") throw each.reason;
-          view = readBotView(each.value, providerOf(entryOf(read, botId)));
+          view = each.value;
         } catch (error) {
           failed.push({ botId, seq, status: "failed", error: this.scrub(errorText(error)) });
           first ??= error;
@@ -853,7 +881,8 @@ export class AccountsEngine {
   ): void {
     ctx.update((a) =>
       this.patchBinding(a, botId, (b) =>
-        b.evidence.attemptSeq !== null && b.evidence.attemptSeq > seq
+        // At its own number: this read was shown as it arrived, before the rest of its load failed.
+        b.evidence.attemptSeq !== null && b.evidence.attemptSeq >= seq
           ? b
           : { ...b, evidence: { ...b.evidence, status, error, attemptSeq: seq } },
       ),
@@ -1075,9 +1104,9 @@ export class AccountsEngine {
       return;
     }
     // Any read of the bot sent after this one (a load, Check now, a sign-in's read): only once the
-    // newest of them has been applied here as a reading may the press go on. Still out, failed, or
-    // dropped with the rest of its load, it confirmed nothing, so nothing is sent: what this rests
-    // on is when each read was sent, never whether a failure was recorded.
+    // newest of them has been applied here as a reading may the press go on. Still out or failed,
+    // it confirmed nothing, so nothing is sent: what this rests on is when each read was sent,
+    // never whether a failure was recorded.
     const started = latest?.evidence.startedSeq ?? null;
     if (started !== null && started > firstSeq && latest!.evidence.readSeq !== started) {
       publish({ status: "unsent", error: unconfirmedOrder(kind) });
