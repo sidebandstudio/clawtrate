@@ -67,6 +67,7 @@ import {
   type BotBinding,
   type CatalogModel,
   MAX_PROVIDER_MODELS,
+  SETUP_TOKEN_SIGN_IN_ENABLED,
   type ModelList,
   type ModelRefresh,
   type BridgeCommand,
@@ -150,7 +151,7 @@ export function accountParams(params: URLSearchParams): AccountParams {
     defacct: params.get("defacct") === "1",
     keyfails: params.get("keyfails") === "1",
     plugin: params.get("plugin") === "1",
-    plan: params.get("plan") !== "0",
+    plan: params.has("plan") ? params.get("plan") === "1" : SETUP_TOKEN_SIGN_IN_ENABLED,
     keyread: params.get("keyread") === "fail",
     picturesave:
       params.get("picturesave") === "hold" ||
@@ -208,7 +209,7 @@ export const NO_ACCOUNT_PARAMS: AccountParams = {
   labels: null,
   keyfails: false,
   plugin: false,
-  plan: true,
+  plan: SETUP_TOKEN_SIGN_IN_ENABLED,
   keyread: false,
   picturesave: null,
   finish: null,

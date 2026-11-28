@@ -926,6 +926,7 @@ const KNOWN_FLOWS: Record<string, SignInFlow> = {
 
 /** A Claude plan's setup token: the gateway's setup sign-in for Anthropic's `setup-token` choice. */
 export const SETUP_TOKEN_METHOD = "anthropic/setup-token";
+export const SETUP_TOKEN_SIGN_IN_ENABLED = false;
 /** The setup method that starts it, `operator.admin` on OpenClaw 2026.10.6 and 2026.11.10. */
 export const SETUP_AUTH_START = "openclaw.setup.auth.start";
 
@@ -959,7 +960,8 @@ export function readMethods(capabilities: RawRecord[]): SignInMethod[] {
     for (const raw of Array.isArray(capability.loginOptions) ? capability.loginOptions : []) {
       const option = asRecord(raw);
       const id = str(option?.id);
-      if (!option || !id || methods.length >= MAX_SIGNIN_METHODS) continue;
+      if (!option || !id || id === SETUP_TOKEN_METHOD || methods.length >= MAX_SIGNIN_METHODS)
+        continue;
       const kind = str(option.kind) ?? "oauth";
       const flow: SignInFlow =
         KNOWN_FLOWS[id] ?? (kind === "device-code" ? "code" : kind === "secret" ? "key" : "paste");
@@ -989,7 +991,7 @@ export function readKeyProviders(view: BotView | undefined): KeyProvider[] {
       continue;
     const secret = (Array.isArray(capability.loginOptions) ? capability.loginOptions : [])
       .map(asRecord)
-      .find((option) => option?.kind === "secret");
+      .find((option) => option?.kind === "secret" && option.id !== SETUP_TOKEN_METHOD);
     out.push({
       provider,
       hasKey: view.keyed.includes(provider),

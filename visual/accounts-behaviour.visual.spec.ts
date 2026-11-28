@@ -393,7 +393,7 @@ test("F-474: Connect an account is a grid of providers, each named, reached by k
   // The six most used first, each named by its provider; one the gateway has an account of says so.
   await expect(grid.getByRole("button")).toHaveText([
     /^OpenAI\s*Connected$/,
-    /^Claude\s*Connected$/,
+    /^Claude\s*Connected\s·\sAPI key\s·\sBilled per token$/,
     /^GitHub Copilot\s*Connected$/,
     /^xAI\s*Connected$/,
     /^OpenRouter\s*Billed per token$/,
@@ -429,21 +429,47 @@ test("F-474: Connect an account is a grid of providers, each named, reached by k
   });
 });
 
-test("F-474: Claude's tile, second, says it takes an API key billed per token, and opens the key's fields for Anthropic", async ({
+test("F-474 #932: the shipped Claude tile offers only the key and saves no setup command history", async ({
   page,
 }) => {
-  // A gateway without the setup sign-in: the key alone.
-  await openFixture(page, `${ADMIN}&plan=0`, "light");
+  // The shipped tile takes a key even on a gateway that supports setup.
+  await openFixture(page, `${ADMIN}&version=2026.11.10`, "light");
   await page.keyboard.press("ControlOrMeta+n");
   await page.getByRole("button", { name: "Next" }).click();
   await page.getByRole("button", { name: "Connect another account" }).click();
   const grid = newBot(page).getByRole("list", { name: "Providers" });
   const claude = grid.getByRole("button").nth(1);
   await expect(claude).toHaveText(/^Claude\s*Connected\s·\sAPI key\s·\sBilled per token$/);
+  const dormant = await page.evaluate(async () => {
+    const host = (window as unknown as { clawtrateFixture: ClawtrateBridge }).clawtrateFixture;
+    const value = "made-up-plan-input-for-the-disabled-path";
+    let refusal = "";
+    try {
+      await host.send({ type: "startSignIn", methodId: "anthropic/setup-token", botId: null });
+    } catch (error) {
+      refusal = error instanceof Error ? error.message : String(error);
+    }
+    await host.send({ type: "answerSignIn", value, setupToken: true });
+    await host.send({ type: "cancelSignIn", signInId: "made-up-session", setupToken: true });
+    return { refusal, signIn: (await host.getState()).accounts.signIn };
+  });
+  expect(dormant).toEqual({
+    refusal: "Connecting a Claude plan isn't available in this version.",
+    signIn: null,
+  });
+  expect(
+    (await sent(page)).filter(
+      (command) =>
+        command.type === "answerSignIn" ||
+        command.type === "cancelSignIn" ||
+        command.type === "startSignIn",
+    ),
+  ).toEqual([]);
   await expect(claude.locator('[data-logo="claude"] svg')).toBeVisible();
   // The key's provider list, folded, starts on another provider: the tile chooses Anthropic.
   await expect(newBot(page).locator("details.b-disclosure select")).toHaveValue("openai");
   await claude.press("Enter");
+  await expect(newBot(page).getByRole("button", { name: /^Paste a setup token/ })).toHaveCount(0);
   await expect(newBot(page).locator("details.b-disclosure")).toHaveAttribute("open", "");
   await expect(newBot(page).getByRole("combobox", { name: "Provider" })).toHaveValue("anthropic");
   await expect(page.getByTestId("api-key")).toBeFocused();
@@ -458,6 +484,7 @@ test("F-474: Claude's tile, second, says it takes an API key billed per token, a
         .map((each) => (each as { provider: string }).provider),
     )
     .toEqual(["anthropic"]);
+  expect(JSON.stringify(await sent(page)).includes("made-up-key-for-a-check")).toBe(false);
   // Sent once, then the key's field is gone with it.
   await expect(page.getByTestId("api-key")).toHaveCount(0);
 });
@@ -2259,6 +2286,16 @@ test("F-474: a key the gateway refused is tried again where a key is typed, for 
   await page.getByTestId("api-key").fill("made-up-key-for-a-check");
   await newBot(page).getByRole("button", { name: "Save key" }).click();
   await expect(newBot(page).getByRole("heading", { name: "Couldn't connect" })).toBeVisible();
+  await expect(newBot(page).getByText("xAI refused the key.")).toBeVisible();
+  const failedSignInId = await page.evaluate(
+    async () =>
+      (
+        await (
+          window as unknown as { clawtrateFixture: ClawtrateBridge }
+        ).clawtrateFixture.getState()
+      ).accounts.signIn?.id,
+  );
+  expect(failedSignInId).toBeTruthy();
   await newBot(page).getByRole("button", { name: "Try again" }).click();
   // Back where a key is typed: the disclosure open, xAI chosen, the field empty and focused.
   await expect(newBot(page).locator("details.b-disclosure")).toHaveAttribute("open", "");
@@ -2268,7 +2305,7 @@ test("F-474: a key the gateway refused is tried again where a key is typed, for 
   expect((await sent(page)).filter((each) => each.type === "startSignIn")).toEqual([]);
   // The key form lets go of the sign-in it replaces, by that sign-in's own id, and of no other.
   const dismissed = (await sent(page)).filter((each) => each.type === "dismissSignIn");
-  expect(dismissed.at(-1)).toMatchObject({ signInId: expect.stringMatching(/\S/) });
+  expect(dismissed.at(-1)).toMatchObject({ signInId: failedSignInId });
 });
 
 test("#932: a key typed for one provider is never sent as another's: the field empties when the provider changes", async ({
@@ -2301,7 +2338,7 @@ test("#932: a key typed for one provider is never sent as another's: the field e
 test("#932: a key typed for one provider is never sent as another's, through Claude's ways and Back", async ({
   page,
 }) => {
-  await openFixture(page, ADMIN, "light");
+  await openFixture(page, `${ADMIN}&plan=1`, "light");
   await connectFromNewBot(page);
   await newBot(page).getByText("Use an API key instead").click();
   const provider = newBot(page).getByRole("combobox", { name: "Provider" });
@@ -2329,7 +2366,7 @@ test("#932: a key typed for one provider is never sent as another's, through Cla
 test("#932: Claude's plan by a setup token: its ways, the plain step, a refusal, the model line and Put back", async ({
   page,
 }) => {
-  await openFixture(page, ADMIN, "light");
+  await openFixture(page, `${ADMIN}&plan=1`, "light");
   await connectFromNewBot(page);
   await newBot(page).getByRole("list", { name: "Providers" }).getByRole("button").nth(1).click();
   await expect(page.getByRole("heading", { name: "Claude", level: 2 })).toBeVisible();
@@ -2385,7 +2422,7 @@ test("#932: Claude's plan by a setup token: its ways, the plain step, a refusal,
 test("#932: the plan's setup sign-in is ended by Cancel, and its key way opens Anthropic's key", async ({
   page,
 }) => {
-  await openFixture(page, ADMIN, "light");
+  await openFixture(page, `${ADMIN}&plan=1`, "light");
   await connectFromNewBot(page);
   const claude = newBot(page).getByRole("list", { name: "Providers" }).getByRole("button").nth(1);
   await claude.click();
@@ -2407,7 +2444,7 @@ test("#932: the plan's setup sign-in is ended by Cancel, and its key way opens A
 });
 
 test("#932: closing Connect on the plan's step ends the setup sign-in", async ({ page }) => {
-  await openFixture(page, ADMIN, "light");
+  await openFixture(page, `${ADMIN}&plan=1`, "light");
   await connectFromNewBot(page);
   await newBot(page).getByRole("list", { name: "Providers" }).getByRole("button").nth(1).click();
   await newBot(page)
@@ -2425,7 +2462,7 @@ test("#932: closing Connect on the plan's step ends the setup sign-in", async ({
 test("#932: without admin access, the plan's way says it needs full control and the key way stays", async ({
   page,
 }) => {
-  await openFixture(page, ADMIN, "light");
+  await openFixture(page, `${ADMIN}&plan=1`, "light");
   await connectFromNewBot(page);
   // The Connect entry points require admin. Lose that grant while the dialog is open.
   await page.evaluate(() => {
@@ -2459,7 +2496,7 @@ test("F-474 #932: cancelling while the fixture checks a setup token prevents its
   page,
 }) => {
   await page.clock.install({ time: NOW });
-  await openFixture(page, ADMIN, "light");
+  await openFixture(page, `${ADMIN}&plan=1`, "light");
   await connectFromNewBot(page);
   await newBot(page)
     .getByRole("button", { name: /^Claude\b/ })
@@ -2488,7 +2525,7 @@ test("F-474 #932: cancelling while the fixture checks a setup token prevents its
 test("F-474 #932: closing Connect while dismissal waits prevents the setup from starting", async ({
   page,
 }) => {
-  await openFixture(page, ADMIN, "light");
+  await openFixture(page, `${ADMIN}&plan=1`, "light");
   await connectFromNewBot(page);
   await newBot(page)
     .getByRole("button", { name: /^Claude\b/ })
@@ -2524,7 +2561,7 @@ test("F-474 #932: closing Connect while dismissal waits prevents the setup from 
 test("F-474 #932: each setup has its own Put back after another setup in the same dialog", async ({
   page,
 }) => {
-  await openFixture(page, ADMIN, "light");
+  await openFixture(page, `${ADMIN}&plan=1`, "light");
   await connectFromNewBot(page);
   const openPlan = async () => {
     await newBot(page)

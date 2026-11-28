@@ -152,7 +152,8 @@ export function useConnect({
     return () => {
       mounted.current = false;
       const signInId = openedSetup.current ?? visibleSetup.current;
-      if (signInId) void bridge.send({ type: "cancelSignIn", signInId }).catch(() => {});
+      if (signInId)
+        void bridge.send({ type: "cancelSignIn", signInId, setupToken: true }).catch(() => {});
     };
   }, [bridge]);
   const [confirmDrop, setConfirmDrop] = useState<string | null>(null);
@@ -1088,7 +1089,9 @@ export function useConnect({
       if (!value.trim()) return;
       // Cleared as it is sent: the code goes to the gateway in this one request.
       if (pasteRef.current) pasteRef.current.value = "";
-      await bridge.send({ type: "answerSignIn", value }).catch(() => {});
+      await bridge
+        .send({ type: "answerSignIn", value, ...(plan ? { setupToken: true } : {}) })
+        .catch(() => {});
     };
     body =
       current.flow === "token" ? (
@@ -1204,9 +1207,10 @@ export function useConnect({
     body = (
       <>
         <Result tone="danger" mark="warning" title="Couldn't connect">
-          {plan
-            ? "The gateway didn't connect your Claude plan. The bot's model wasn't changed."
-            : (current.error ?? `${who} refused the sign-in.`)}
+          {current.error ??
+            (plan
+              ? "Clawtrate couldn't confirm that your Claude plan connected."
+              : `${who} refused the sign-in.`)}
         </Result>
         {reread(current)}
       </>

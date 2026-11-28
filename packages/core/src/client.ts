@@ -52,6 +52,7 @@ import {
 import { BotNames } from "./bot-names.ts";
 import {
   SETUP_AUTH_START,
+  SETUP_TOKEN_SIGN_IN_ENABLED,
   type ModelList,
   type ModelRefresh,
   type OrderClear,
@@ -822,6 +823,8 @@ export type ClientOptions = {
    * a saved one resumed at start and every retry.
    */
   allowGatewayUrl?: (url: string) => boolean;
+  /** Enable the setup-token path in tests. Shipped hosts use the core default. */
+  setupTokenSignIn?: boolean;
   /** Reconnect backoff. Tests shorten it. */
   reconnect?: { initialMs: number; maxMs: number };
   /** Turn limit for runs this client starts. */
@@ -1960,6 +1963,7 @@ export class ClawtrateClient {
   /** Provider accounts per bot (`accounts-engine.ts`); its state is `accounts`. */
   private readonly accounts = new AccountsEngine({
     offers: (method) => method === SETUP_AUTH_START && this.setupAuthAdvertised,
+    setupTokenSignIn: () => this.options.setupTokenSignIn ?? SETUP_TOKEN_SIGN_IN_ENABLED,
     request: (method, params, options) => {
       if (!this.protocol) return Promise.reject(new NotSentError());
       return this.protocol.request(method, params, options);
@@ -7293,13 +7297,13 @@ export class ClawtrateClient {
   }
 
   /** A code or address pasted back, or a company address: sent once, kept nowhere. */
-  answerSignIn(value: string): Promise<void> {
-    return this.accounts.answerSignIn(value);
+  answerSignIn(value: string, setupToken?: true): Promise<void> {
+    return this.accounts.answerSignIn(value, setupToken);
   }
 
   /** Cancel the sign-in under way; `cancelled` only when the gateway confirmed it. */
-  cancelSignIn(id?: string): Promise<{ cancelled: boolean }> {
-    return this.accounts.cancelSignIn(id);
+  cancelSignIn(id?: string, setupToken?: true): Promise<{ cancelled: boolean }> {
+    return this.accounts.cancelSignIn(id, setupToken);
   }
 
   /** Let go of a sign-in that has ended; one under way is kept unless the gateway confirms its cancel. */

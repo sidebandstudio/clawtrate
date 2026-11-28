@@ -193,7 +193,7 @@ const SCENES: Scene[] = [
   {
     // Claude's ways: the plan's setup token first, the key second (#932).
     name: "connect-claude-ways",
-    query: ADMIN,
+    query: `${ADMIN}&plan=1`,
     ready: async (page) => {
       await connectStep(page);
       await newBot(page)
@@ -206,7 +206,7 @@ const SCENES: Scene[] = [
   {
     // The plan's step: the one thing to do outside the app, and a made-up token typed, masked.
     name: "signin-token",
-    query: ADMIN,
+    query: `${ADMIN}&plan=1`,
     ready: async (page) => {
       await connectStep(page);
       await newBot(page)
@@ -222,7 +222,7 @@ const SCENES: Scene[] = [
   {
     // The plan connected: what changed on the bot, with Put back.
     name: "signin-token-done",
-    query: ADMIN,
+    query: `${ADMIN}&plan=1`,
     ready: async (page) => {
       await connectStep(page);
       await newBot(page)

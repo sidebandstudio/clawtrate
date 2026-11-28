@@ -53,6 +53,8 @@ import {
   readModelConfig,
   MAX_SIGNIN_METHODS,
   SETUP_AUTH_START,
+  SETUP_TOKEN_METHOD,
+  SETUP_TOKEN_SIGN_IN_ENABLED,
   setupTokenMethods,
   readStep,
   SIGNIN_WAIT_MS,
@@ -130,6 +132,7 @@ export type AccountsContext = {
   offers(method: string): boolean;
   /** The OpenClaw version the gateway reports, which says how it reads a model list (#799). */
   serverVersion?(): string | null;
+  setupTokenSignIn?(): boolean;
   /** Read the bot list again (`agents.list`). */
   refreshBots(): Promise<void>;
   /** The connected gateway's identity (`gateway.identity.get`), or null when it names none. */
@@ -849,7 +852,10 @@ export class AccountsEngine {
       accounts,
       methods: [
         ...readMethods(anyView?.capabilities ?? []),
-        ...setupTokenMethods(anyView?.capabilities ?? [], this.ctx.offers(SETUP_AUTH_START)),
+        ...setupTokenMethods(
+          anyView?.capabilities ?? [],
+          this.setupTokenEnabled() && this.ctx.offers(SETUP_AUTH_START),
+        ),
       ].slice(0, MAX_SIGNIN_METHODS),
       keyProviders: readKeyProviders(anyView),
       models: catalog,
@@ -1326,9 +1332,15 @@ export class AccountsEngine {
     return botId ?? bots.find((bot) => bot.isDefault)?.id ?? bots[0]?.id ?? "main";
   }
 
+  private setupTokenEnabled(): boolean {
+    return this.ctx.setupTokenSignIn?.() ?? SETUP_TOKEN_SIGN_IN_ENABLED;
+  }
+
   /** Start one of the gateway's sign-ins (`models.authLogin`) and follow it (`wizard.next`). */
   async startSignIn(methodId: string, botId: string | null, id?: string): Promise<void> {
     this.requireAdmin("Connecting an account");
+    if (methodId === SETUP_TOKEN_METHOD && !this.setupTokenEnabled())
+      throw new Error("Connecting a Claude plan isn't available in this version.");
     const method = this.ctx.get().methods.find((each) => each.id === methodId);
     if (!method) throw new Error("The gateway does not offer that sign-in.");
     const active = this.ctx.get().signIn;
@@ -1631,8 +1643,10 @@ export class AccountsEngine {
    * Answer the step that waits for the person: a code or address pasted back,
    * or a company address. Sent once in the next `wizard.next` and kept nowhere.
    */
-  async answerSignIn(value: string): Promise<void> {
+  async answerSignIn(value: string, setupToken = false): Promise<void> {
     const signIn = this.ctx.get().signIn;
+    if ((setupToken || signIn?.flow === "token") && !this.setupTokenEnabled()) return;
+    if (setupToken && signIn?.flow !== "token") return;
     if (!signIn || signIn.stage !== "entering" || !signIn.step)
       throw new Error("No sign-in is waiting for an answer.");
     if (typeof value !== "string" || value.length === 0 || value.length > MAX_SECRET_CHARS)
@@ -1650,8 +1664,11 @@ export class AccountsEngine {
    * late to cancel"; any other answer leaves it unknown, and the accounts are
    * read again.
    */
-  async cancelSignIn(id?: string): Promise<{ cancelled: boolean }> {
+  async cancelSignIn(id?: string, setupToken = false): Promise<{ cancelled: boolean }> {
     const signIn = this.ctx.get().signIn;
+    if ((setupToken || signIn?.flow === "token") && !this.setupTokenEnabled())
+      return { cancelled: false };
+    if (setupToken && signIn?.flow !== "token") return { cancelled: false };
     if (id !== undefined && signIn?.id !== id) return { cancelled: false };
     if (!signIn || !isActive(signIn)) return { cancelled: signIn?.stage === "cancelled" };
     if (signIn.cancelling) return { cancelled: false };
@@ -1861,7 +1878,7 @@ export class AccountsEngine {
    * saves it before checking it). Removed again, so nothing of it stays on the gateway.
    */
   private async dropSetupLeftovers(id: string, botId: string, added: string[]): Promise<string[]> {
-    if (!this.onSetupGateway(id)) return [];
+    if (!this.setupTokenEnabled() || !this.onSetupGateway(id)) return [];
     const candidates = added.filter((profile) => profile.startsWith("anthropic:setup-"));
     if (candidates.length === 0) return [];
 
@@ -1935,6 +1952,7 @@ export class AccountsEngine {
     after: string | null,
     beforeSend: (sent: boolean) => void,
   ): Promise<void> {
+    if (!this.setupTokenEnabled()) return;
     this.requireAdmin("Changing a bot's settings");
     const { ctx, check } = this.checked(beforeSend);
     const signInId = ctx.get().signIn?.id;
@@ -3477,7 +3495,12 @@ export class AccountsEngine {
   /** After a hello: a sign-in from the last connection has ended with it; read again. */
   onHello(): void {
     const signIn = this.ctx.get().signIn;
-    if (signIn && isActive(signIn)) {
+    if (signIn?.flow === "token" && !this.setupTokenEnabled()) {
+      this.modelBefore = null;
+      this.setupStarting = null;
+      this.forgetSecrets();
+      this.ctx.update((accounts) => ({ ...accounts, signIn: null }));
+    } else if (signIn && isActive(signIn)) {
       this.setSignIn(signIn.id, { stage: "ended", step: null, cancelling: false, saving: false });
     }
     const ended = this.ctx.get().signIn;
@@ -3485,7 +3508,7 @@ export class AccountsEngine {
       // The gateway's setup session isn't bound to a connection (#932): it is ended here, then
       // what it may have saved is removed; never on another gateway answering at the address.
       const cancelled =
-        ended.flow === "token" && this.onSetupGateway(ended.id)
+        this.setupTokenEnabled() && ended.flow === "token" && this.onSetupGateway(ended.id)
           ? this.ctx
               .request("wizard.cancel", { sessionId: ended.id })
               .then(() => undefined)

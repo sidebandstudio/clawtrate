@@ -358,8 +358,8 @@ export type BridgeCommand =
   /** Start one of the gateway's sign-ins, for the bot the person works on (or null). */
   | { type: "startSignIn"; methodId: string; botId: string | null; signInId?: string }
   /** The code or address pasted back, or a company address. Sent once and kept nowhere. */
-  | { type: "answerSignIn"; value: string }
-  | { type: "cancelSignIn"; signInId?: string }
+  | { type: "answerSignIn"; value: string; setupToken?: true }
+  | { type: "cancelSignIn"; signInId?: string; setupToken?: true }
   /** With `signInId`, only that sign-in is let go. */
   | { type: "dismissSignIn"; signInId?: string }
   /** Read again where a finished sign-in's account landed, after that read failed. */
@@ -1394,10 +1394,15 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "readGatewayHooks":
       return { type: "readGatewayHooks" };
     case "dismissSignIn":
-    case "cancelSignIn":
       return command.signInId === undefined
-        ? { type: command.type }
-        : { type: command.type, signInId: id(command.signInId, "sign-in") };
+        ? { type: "dismissSignIn" }
+        : { type: "dismissSignIn", signInId: id(command.signInId, "sign-in") };
+    case "cancelSignIn":
+      return {
+        type: "cancelSignIn",
+        ...(command.signInId === undefined ? {} : { signInId: id(command.signInId, "sign-in") }),
+        ...(command.setupToken === true ? { setupToken: true } : {}),
+      };
     case "refreshAccounts":
     case "recheckSignIn":
     case "dismissBotCreation":
@@ -1492,7 +1497,11 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         botId: command.botId === null || command.botId === undefined ? null : botId(command.botId),
       };
     case "answerSignIn":
-      return { type: "answerSignIn", value: secretText(command.value) };
+      return {
+        type: "answerSignIn",
+        value: secretText(command.value),
+        ...(command.setupToken === true ? { setupToken: true } : {}),
+      };
     case "saveApiKey":
       return {
         type: "saveApiKey",
@@ -2403,9 +2412,9 @@ class ViewerSession implements BridgeSession {
       case "startSignIn":
         return client.startSignIn(command.methodId, command.botId, command.signInId);
       case "answerSignIn":
-        return client.answerSignIn(command.value);
+        return client.answerSignIn(command.value, command.setupToken);
       case "cancelSignIn":
-        return client.cancelSignIn(command.signInId);
+        return client.cancelSignIn(command.signInId, command.setupToken);
       case "dismissSignIn":
         return client.dismissSignIn(command.signInId);
       case "recheckSignIn":
