@@ -16,15 +16,20 @@ import type { SentPictureShown } from "./presentation/sent-files.ts";
 type Send = <C extends BridgeCommand>(command: C) => Promise<BridgeResultFor<C>>;
 type StateSource = Parameters<typeof screenStamp>[0];
 
-/** Every part of a transfer joined: exactly `bytes` of them, or null. The transfer ends with its last part. */
+/**
+ * Every part of a transfer joined: exactly `bytes` of them, or null. The transfer ends with its
+ * last part. Once `stop` says so, between parts, no more are asked for and the transfer is let go.
+ */
 export async function collectPicture(
   send: Send,
   transfer: FileTransferStart,
   bytes: number,
+  stop: () => boolean = () => false,
 ): Promise<Uint8Array | null> {
   const parts: Uint8Array[] = [];
   try {
     for (let index = 0; index < transfer.chunks; index += 1) {
+      if (stop()) throw new Error("Stopped.");
       const data =
         index === 0
           ? transfer.data
