@@ -241,6 +241,7 @@ import {
   TIMEOUTS_IN_A_ROW,
   markStopAsked,
   markWithdrawn,
+  notLeft,
   MAX_RAW_ENTRY_CHARS,
   runErrorRawId,
   markTurnLimit,
@@ -303,6 +304,22 @@ import {
   type StepRead,
   type TaskActivity,
 } from "./runs.ts";
+import {
+  COMPUTER_USE_UNDO_MS,
+  computerUseHash,
+  type ComputerUseChange,
+  type ComputerUseUndo,
+  neverRan,
+  neverStarted,
+  notRunCause,
+  notRunRetryKey,
+  notRunRetryRecorded,
+  NotRunFiles,
+  readComputerUse,
+  repeatedNotRun,
+  retryPlan,
+  startSeen,
+} from "./not-run.ts";
 import {
   APPROVALS_SCOPE,
   ADMIN_SCOPE,
@@ -474,6 +491,14 @@ export const CONNECTION_CHANGED =
   "The connection changed since this screen was read, so nothing was sent. Look again, then try again.";
 /** Why a write stamped with one gateway's identity is not sent to another (`requireSameGateway`). */
 const ANOTHER_GATEWAY = "This change was made for another gateway, so nothing was sent.";
+/** A not-run retry the gateway withdrew from a turn: its one key is spent there. */
+const RETRY_WITHDRAWN =
+  "The gateway withdrew this retry and won't take it again. Send the message as a new one.";
+/** A queued message whose files went when its gateway was replaced at the same address. */
+const QUEUED_FOR_ANOTHER_GATEWAY =
+  "It was written for another gateway and its files aren't kept. To send it here, attach them to a new message.";
+/** A message that declares files this device no longer holds never goes without them. */
+const FILES_NOT_HELD = "Its files are no longer held; attach them again.";
 const UNNAMED_GATEWAY = "The gateway hasn't said which gateway it is, so nothing was sent.";
 /** The identity read failed or named none: a retry may read it, unlike another gateway's. */
 const IDENTITY_UNREAD =
@@ -597,8 +622,7 @@ export const MAX_OUTBOX_PER_TASK = MAX_OUTBOX;
 /**
  * Decoded bytes of files the client keeps for messages in outboxes, across
  * every task, until history confirms them or the user deletes them. With the
- * waiting uploads (`MAX_PENDING_ATTACHMENT_BYTES`) this is all the file
- * content the host keeps.
+ * waiting uploads and the separate retry budget, this bounds the file content the host keeps.
  */
 export const MAX_RETAINED_ATTACHMENT_BYTES = 32 * 1024 * 1024;
 /**
@@ -1813,6 +1837,7 @@ export class ClawtrateClient {
     string,
     {
       task: string;
+      gatewayId: string | null;
       /**
        * The bot its task was listed under when sent (`rowBotOf`): the read of the bots that drops
        * a deleted bot's rows can land before the gateway's answer to the delete.
@@ -1820,11 +1845,26 @@ export class ClawtrateClient {
       bot: string | null;
       files: OutgoingAttachment[];
       bytes: number;
+      /**
+       * With no gateway yet: the connection (`epoch`) it was sent on, whose identity, once read,
+       * becomes its gateway. Never a later connection's.
+       */
+      epoch?: number;
       /** Its task was deleted on this connection: history that holds it keeps none of its pictures. */
       taskDeleted?: true;
     }
   >();
   private attachmentBytes = 0;
+  private readonly notRunFiles = new NotRunFiles();
+  private notRunGatewayId: string | null = null;
+  private changingComputerUse = false;
+  private computerUseWrite: {
+    undo: ComputerUseUndo;
+    gatewayId: string;
+    beforeHash: string;
+    writtenHash: string | null;
+  } | null = null;
+  private computerUseCheckedEpoch = -1;
   /** Pictures of messages history confirmed, by message id, oldest first (`MAX_SENT_PICTURE_MESSAGES`). */
   private readonly sentPictures = new Map<
     string,
@@ -3855,6 +3895,15 @@ export class ClawtrateClient {
    * `SendTooLargeError` before anything is sent when it would break a ceiling.
    */
   sendMessage(key: string, text: string, options: SendOptions = {}): string {
+    return this.queueMessage(key, text, options);
+  }
+
+  private queueMessage(
+    key: string,
+    text: string,
+    options: SendOptions,
+    retry?: { id: string; gatewayId: string },
+  ): string {
     const transcript = this.state.transcripts[key];
     if (!transcript) throw new Error("Open the task before sending to it.");
     const body = text.trim();
@@ -3900,7 +3949,8 @@ export class ClawtrateClient {
     )
       throw new Error("That message can't be replied to.");
     const message: OutgoingMessage = {
-      id: this.randomId(),
+      id: retry?.id ?? this.randomId(),
+      ...(retry ? { retryGatewayId: retry.gatewayId } : {}),
       text: body,
       mode: resolved,
       status: held ? "held" : resolved === "queue" ? "queued" : "sending",
@@ -3920,9 +3970,11 @@ export class ClawtrateClient {
     if (attachments.length > 0) {
       this.attachmentContent.set(message.id, {
         task: key,
+        gatewayId: this.state.connection.gatewayId,
         bot: this.taskBot(key),
         files: attachments,
         bytes,
+        ...(this.state.connection.gatewayId ? {} : { epoch: this.epoch }),
       });
       this.attachmentBytes += bytes;
       // Pictures kept only to be shown give way to files still to go out, read-back ones first.
@@ -4011,6 +4063,7 @@ export class ClawtrateClient {
   private dropDeletedPictures(
     deleted: (record: { task: string; bot: string | null }) => boolean,
   ): void {
+    this.notRunFiles.dropWhere(deleted);
     for (const flight of this.pictureReadsInFlight) if (deleted(flight)) flight.dropped = true;
     for (const [id, kept] of this.sentPictures) if (deleted(kept)) this.dropSentPictures(id);
     for (const [id, kept] of this.readBackPictures) if (deleted(kept)) this.dropReadBackPicture(id);
@@ -4171,9 +4224,19 @@ export class ClawtrateClient {
         message.status !== "not-sent")
     )
       return;
+    if (
+      (message.retryGatewayId && message.retryGatewayId !== this.state.connection.gatewayId) ||
+      this.state.transcripts[key]?.runs.some(
+        (run) => run.messageId === messageId && run.retryGatewayChanged,
+      )
+    )
+      return;
     // The gateway keeps a withdrawn steer's id as aborted and answers a send under it with that
     // abort: it goes again under a new key, in its place on the shelf, with its files.
     if (message.steer === "withdrawn") {
+      // A retry goes under its message's one key, which the gateway keeps as aborted: it can't
+      // go again under that key, and another would let two devices send it twice.
+      if (message.retryGatewayId) throw new Error(RETRY_WITHDRAWN);
       const id = this.randomId();
       // The message a task waits to be named from goes under its new key.
       const naming = this.taskNames.get(key);
@@ -4329,12 +4392,333 @@ export class ClawtrateClient {
   sendAgain(key: string, messageId: string): string {
     const message = this.outgoing(key, messageId);
     if (!message) throw new Error("That message is no longer held here.");
+    const run = this.state.transcripts[key]?.runs.find((each) => each.messageId === messageId);
+    if (run?.retryGatewayChanged) throw new Error(ANOTHER_GATEWAY);
+    if (run && (neverRan(run) || neverStarted(run))) return this.retryNotRun(key, run.id);
     const files = this.attachmentContent.get(messageId)?.files ?? [];
     if (message.attachments.length > 0 && files.length === 0)
       throw new Error("Its files are no longer held; attach them again.");
     return this.sendMessage(key, message.text, {
       attachments: [...files],
       ...(message.replyToId ? { replyToId: message.replyToId } : {}),
+    });
+  }
+
+  /** One new send per not-run message, using the same key on every device. */
+  retryNotRun(key: string, runId: string, stamp = gatewayStamp(this.state.connection)): string {
+    const transcript = this.state.transcripts[key];
+    const run = transcript?.runs.find((each) => each.id === runId);
+    if (!transcript || !run || (!neverRan(run) && !neverStarted(run)))
+      throw new Error("That message is no longer available to retry.");
+    if (run.retryGatewayChanged || stamp.gatewayId !== this.state.connection.gatewayId)
+      throw new Error(ANOTHER_GATEWAY);
+    this.requireSameTarget(stamp);
+    if (!stamp.gatewayId || this.state.connection.status !== "connected")
+      throw new Error("Reconnect to the message's gateway to try again.");
+
+    const id = notRunRetryKey(key, run.id);
+    const earlier = this.outgoing(key, id);
+    // A cancelled retry never left this device: a new one takes its place under the same key.
+    if (earlier?.status === "cancelled")
+      this.updateActivity(key, (activity) => ({
+        ...removeMessage(activity, id),
+        runs: activity.runs.filter(
+          (each) => !(each.id === id && each.origin === "local" && !each.bound),
+        ),
+      }));
+    else if (earlier) {
+      this.retryMessage(key, id);
+      return id;
+    }
+    // Removing a cancelled row notifies listeners; one of them may have retried meanwhile.
+    if (this.outgoing(key, id)) return id;
+    if (notRunRetryRecorded(this.state.transcripts[key] ?? transcript, id)) return id;
+
+    const plan = retryPlan(run, transcript);
+    const kept = this.notRunFiles.get(key, runId);
+    const outgoing = plan?.kind === "again" ? this.outgoing(key, plan.messageId) : undefined;
+    const attached = outgoing ? this.attachmentContent.get(outgoing.id) : undefined;
+    if (
+      (kept && kept.gatewayId !== stamp.gatewayId) ||
+      (attached && attached.gatewayId !== stamp.gatewayId)
+    )
+      throw new Error(ANOTHER_GATEWAY);
+    const message = kept?.message ?? outgoing ?? (plan?.kind === "text" ? plan : null);
+    const files = kept?.files ?? attached?.files ?? [];
+    if (!message || (outgoing && outgoing.attachments.length !== files.length))
+      throw new Error("Its files are no longer held; attach them again.");
+    const sent = this.queueMessage(
+      key,
+      message.text,
+      { attachments: files, ...(message.replyToId ? { replyToId: message.replyToId } : {}) },
+      { id, gatewayId: stamp.gatewayId },
+    );
+    if (kept) kept.retriedAs = id;
+    return sent;
+  }
+
+  /** Dismissing a card gives up its local retry copy. History and the original message stay. */
+  dismissNotRun(key: string, runId: string): void {
+    const run = this.state.transcripts[key]?.runs.find((each) => each.id === runId);
+    if (!run || (!neverRan(run) && !neverStarted(run))) return;
+    if (!run.retryFiles && !this.attachmentContent.has(run.messageId ?? "")) return;
+    this.notRunFiles.drop(key, runId);
+    this.markRetryFilesGone(key, runId);
+  }
+
+  /**
+   * Change just the Computer Use setting from the card, against a read of the same gateway.
+   * `turnOn` is a new change, not an undo: with no Put back left for the card (its receipt was
+   * lost, or another writer turned it off, or its week ended), it writes `true` at a fresh read.
+   */
+  async changeNotRunComputerUse(
+    key: string,
+    runId: string,
+    restore: boolean,
+    stamp: GatewayStamp,
+    owner?: object,
+    turnOn = false,
+  ): Promise<ComputerUseChange> {
+    const admin = () =>
+      !this.options.readOnly && this.holds(ADMIN_SCOPE) && this.state.connection.canAdmin;
+    if (!admin()) throw new AdminNeededError("Changing Computer Use");
+    if (this.changingComputerUse) return "not-sent";
+    const transcript = this.state.transcripts[key];
+    const run = transcript?.runs.find((each) => each.id === runId);
+    const undo = this.state.computerUseUndo;
+    const prior = this.computerUseWrite;
+    if (run?.retryGatewayChanged) return "not-sent";
+    if (restore) {
+      if (
+        !prior?.writtenHash ||
+        prior.gatewayId !== stamp.gatewayId ||
+        undo?.taskKey !== key ||
+        undo.runId !== runId ||
+        undo.expiresAt <= this.now()
+      )
+        return "not-sent";
+    } else if (
+      (turnOn && undo?.taskKey === key && undo.runId === runId && undo.expiresAt > this.now()) ||
+      !run ||
+      !transcript ||
+      notRunCause(run.error?.message)?.kind !== "computer-use-timeout" ||
+      !repeatedNotRun(run, transcript.runs, transcript.items)
+    ) {
+      return "not-sent";
+    }
+    this.changingComputerUse = true;
+    const epoch = this.epoch;
+    try {
+      const { gatewayId } = await this.requireSameGateway(stamp);
+      if (this.state.transcripts[key]?.runs.find((each) => each.id === runId)?.retryGatewayChanged)
+        return "not-sent";
+      const sameConnection = this.sameConnection(stamp);
+      const read = async (sent: boolean) => {
+        sameConnection(sent);
+        const parsed = readComputerUse(await this.request("config.get", {}));
+        sameConnection(sent);
+        return parsed;
+      };
+      const before = await read(false).catch(() => null);
+      if (!before) return "not-sent";
+      // The gateway exposes a content hash. Put back can miss an edit that restores the same
+      // config bytes (both versions' `hash` is an HMAC of the file's content, #910's limit too).
+      if (restore && (before.value !== false || before.hash !== prior!.writtenHash)) {
+        this.clearComputerUseWrite();
+        return "changed";
+      }
+      if (!before.applied) return "not-sent";
+      // Already turned on elsewhere: nothing to write, and the card's "off" read-back goes. Only
+      // `true` is on; an unset value falls back to the plugin's environment, so it isn't claimed.
+      if (turnOn && before.value !== false) {
+        this.computerUseTurnedOn(key, runId);
+        return before.value === true ? "on" : "changed";
+      }
+      if (!restore && !turnOn && before.value === false) {
+        // This card's own disable whose read-back was lost settles against this read: Put back
+        // only at its receipt's hash.
+        if (
+          prior &&
+          prior === this.computerUseWrite &&
+          prior.gatewayId === gatewayId &&
+          prior.undo.taskKey === key &&
+          prior.undo.runId === runId &&
+          prior.undo.expiresAt > this.now() &&
+          !this.state.computerUseUndo
+        )
+          return this.settleComputerUseDisable(prior, before) ?? "already-off";
+        return "already-off";
+      }
+      // Put back can outlast its window while it reads: the deadline holds when the write leaves.
+      if (restore && undo!.expiresAt <= this.now()) return "not-sent";
+      const value = restore ? undo!.previous : turnOn;
+      sameConnection(false);
+      if (!admin()) throw new AdminNeededError("Changing Computer Use");
+      this.checkNotWithdrawn(owner);
+      const pending =
+        restore || turnOn
+          ? null
+          : {
+              undo: {
+                taskKey: key,
+                runId,
+                previous: before.value === true ? (true as const) : null,
+                expiresAt: this.now() + COMPUTER_USE_UNDO_MS,
+              },
+              gatewayId,
+              beforeHash: before.hash,
+              writtenHash: null as string | null,
+            };
+      if (pending) {
+        // Clearing another card's Put back notifies listeners, which may close this opening.
+        this.clearComputerUseWrite();
+        sameConnection(false);
+        if (!admin()) throw new AdminNeededError("Changing Computer Use");
+        this.checkNotWithdrawn(owner);
+        this.computerUseWrite = pending;
+      }
+      try {
+        const answer = await this.request("config.patch", {
+          baseHash: before.hash,
+          raw: JSON.stringify({
+            plugins: { entries: { codex: { config: { computerUse: { enabled: value } } } } },
+          }),
+        });
+        if (pending) pending.writtenHash = computerUseHash(answer);
+      } catch (error) {
+        const definite =
+          error instanceof NotSentError
+            ? "not-sent"
+            : error instanceof GatewayProtocolRequestError &&
+                [
+                  "INVALID_REQUEST",
+                  "INVALID_PARAMS",
+                  "FORBIDDEN",
+                  "UNAUTHORIZED",
+                  "CONFLICT",
+                ].includes(error.code)
+              ? "refused"
+              : null;
+        if (definite) {
+          if (pending && this.computerUseWrite === pending) this.clearComputerUseWrite();
+          return definite;
+        }
+        // Both releases may confirm the saved hash in the error when application is pending.
+        const savedHash =
+          error instanceof GatewayProtocolRequestError
+            ? computerUseHash(asRecord(error.details)?.persistedConfig)
+            : null;
+        if (pending && savedHash) pending.writtenHash = savedHash;
+        else return "unconfirmed";
+      }
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        const after = await read(true).catch(() => null);
+        if (!after) return "unconfirmed";
+        if (pending) {
+          const result = this.settleComputerUseDisable(pending, after);
+          if (result) return result;
+        } else if (after.applied && after.value === value && turnOn) {
+          this.computerUseTurnedOn(key, runId);
+          return "on";
+        } else if (after.applied && after.value === value) {
+          this.clearComputerUseWrite();
+          return "restored";
+        } else if (after.applied && after.hash !== before.hash) {
+          return "unconfirmed";
+        }
+        await new Promise<void>((resolve) => setTimeout(resolve, 250));
+      }
+      return "unconfirmed";
+    } finally {
+      this.changingComputerUse = false;
+      if (this.epoch !== epoch) this.recheckComputerUse();
+    }
+  }
+
+  /** Turned back on: the card no longer says it is off, and an expired Put back of it goes. */
+  private computerUseTurnedOn(key: string, runId: string): void {
+    const undo = this.state.computerUseUndo;
+    if (undo?.taskKey === key && undo.runId === runId) this.clearComputerUseWrite();
+    this.updateActivity(key, (activity) => ({
+      ...activity,
+      runs: activity.runs.map((run): Run => {
+        if (run.id !== runId || !run.computerUseReadback) return run;
+        const { computerUseReadback: _, ...rest } = run;
+        return rest;
+      }),
+    }));
+  }
+
+  private clearComputerUseWrite(): void {
+    this.computerUseWrite = null;
+    if (this.state.computerUseUndo) this.store.update(({ computerUseUndo: _, ...state }) => state);
+  }
+
+  private settleComputerUseDisable(
+    pending: NonNullable<ClawtrateClient["computerUseWrite"]>,
+    after: NonNullable<ReturnType<typeof readComputerUse>>,
+  ): ComputerUseChange | null {
+    if (this.computerUseWrite !== pending) return "unconfirmed";
+    if (!after.applied || after.hash === pending.beforeHash) return null;
+    if (after.value === false && after.hash === pending.writtenHash) {
+      this.store.update((state) => ({ ...state, computerUseUndo: pending.undo }));
+      return "off";
+    }
+    this.clearComputerUseWrite();
+    // A matching read can establish the setting is off. A missing receipt cannot establish who wrote it.
+    const result = after.value === false ? "already-off" : "changed";
+    this.updateActivity(pending.undo.taskKey, (activity) => ({
+      ...activity,
+      runs: activity.runs.map((run): Run =>
+        run.id === pending.undo.runId ? { ...run, computerUseReadback: result } : run,
+      ),
+    }));
+    return result;
+  }
+
+  /** On the next connection to the same gateway, read an unsettled disable without replaying it. */
+  private recheckComputerUse(): void {
+    const pending = this.computerUseWrite;
+    const { gatewayId, status } = this.state.connection;
+    const epoch = this.epoch;
+    if (
+      !pending ||
+      this.state.computerUseUndo ||
+      this.changingComputerUse ||
+      this.computerUseCheckedEpoch === epoch ||
+      pending.undo.expiresAt <= this.now() ||
+      gatewayId !== pending.gatewayId ||
+      status !== "connected"
+    )
+      return;
+    this.computerUseCheckedEpoch = epoch;
+    void (async () => {
+      for (let attempt = 0; attempt < 20; attempt += 1) {
+        if (this.epoch !== epoch || this.computerUseWrite !== pending || this.changingComputerUse)
+          return;
+        const after = readComputerUse(await this.request("config.get", {}));
+        if (
+          this.epoch !== epoch ||
+          this.computerUseWrite !== pending ||
+          this.changingComputerUse ||
+          !after ||
+          this.settleComputerUseDisable(pending, after)
+        )
+          return;
+        await new Promise<void>((resolve) => setTimeout(resolve, 250));
+      }
+    })().catch(() => {});
+  }
+
+  private markRetryFilesGone(key: string, runId: string): void {
+    this.store.update((state) => {
+      const transcript = state.transcripts[key];
+      if (!transcript?.runs.some((run) => run.id === runId && run.retryFiles !== "gone"))
+        return state;
+      const runs = transcript.runs.map((run): Run =>
+        run.id === runId ? { ...run, retryFiles: "gone" } : run,
+      );
+      return { ...state, transcripts: { ...state.transcripts, [key]: { ...transcript, runs } } };
     });
   }
 
@@ -4750,6 +5134,29 @@ export class ClawtrateClient {
     }
     let message = this.outgoing(key, messageId);
     if (!message || (message.status !== "sending" && message.status !== "awaiting-access")) return;
+    const retryStamp = message.retryGatewayId
+      ? { gatewayId: message.retryGatewayId, target: this.target }
+      : null;
+    let checkRetryConnection: ((sent: boolean) => void) | undefined;
+    if (retryStamp) {
+      try {
+        await this.requireSameGateway(retryStamp);
+        checkRetryConnection = this.sameConnection(retryStamp);
+      } catch (error) {
+        if (waiting()) this.failDelivery(key, messageId, error, false);
+        return;
+      }
+      message = this.outgoing(key, messageId);
+      if (!message || !waiting()) return;
+    }
+    const files = this.attachmentContent.get(messageId);
+    // Files this device no longer holds (their gateway was replaced) are never left out of a send.
+    if (message.attachments.length > 0 && !files) {
+      this.failDelivery(key, messageId, new Error(FILES_NOT_HELD), false);
+      return;
+    }
+    // Unbound files go out on this connection: its identity, once read, is theirs.
+    if (files && !files.gatewayId) files.epoch = this.epoch;
 
     // A pending question holds every send, whatever run it was meant for and whether or not
     // a run is still shown as active: the question's own state is the guard.
@@ -4822,13 +5229,15 @@ export class ClawtrateClient {
       // A send that starts its own run names that run's request: what a failed turn's
       // "Copy request ID" gives (F-301). A steer joins a run another frame started.
       const starts = message.mode !== "steer";
-      const send = (frame: typeof params) =>
-        this.request("chat.send", frame, {
+      const send = (frame: typeof params) => {
+        checkRetryConnection?.(false);
+        return this.request("chat.send", frame, {
           onSent: (requestId) => {
             if (!starts) return;
             this.updateActivity(key, (activity) => noteRunRequest(activity, messageId, requestId));
           },
         });
+      };
       const generation = this.generation;
       const sent = send(params).catch(async (error: unknown) => {
         // Refused for the marker alone: the same message once more without it, under the same
@@ -6180,7 +6589,7 @@ export class ClawtrateClient {
     // Kept under the id cap, as the state keeps ids.
     const sessionKey = capId(rawKey, MAX_ID_CHARS);
     const before = this.foreign.get(sessionKey) ?? emptyActivity;
-    let next = fn(before, { sessionKey, now: this.now(), raw: this.foreignRaw });
+    let next = fn(before, { ...this.context(sessionKey), raw: this.foreignRaw });
     if (next === before) return;
     if (next.runs.length > FOREIGN_RUNS_PER_SESSION) {
       next = { ...next, runs: next.runs.slice(-FOREIGN_RUNS_PER_SESSION) };
@@ -6662,7 +7071,7 @@ export class ClawtrateClient {
         asRecord(history?.inFlightRun),
         aliases,
       );
-      const ctx = { sessionKey, now: this.now(), raw: this.foreignRaw };
+      const ctx = { ...this.context(sessionKey), raw: this.foreignRaw };
       const busy = inFlight !== null || holdsInput(history);
       const found = runsFromHistory(messages, inFlight, ctx, { busy }).filter((run) =>
         ids.has(run.id),
@@ -8732,7 +9141,7 @@ export class ClawtrateClient {
   // Activity ------------------------------------------------------------------------
 
   private context(key: string): EngineContext {
-    return { sessionKey: key, now: this.now(), raw: this.raw };
+    return { sessionKey: key, now: this.now(), raw: this.raw, scrub: (text) => this.scrub(text) };
   }
 
   private updateActivity(
@@ -10088,6 +10497,7 @@ export class ClawtrateClient {
     this.botNames.reset();
     this.openclawUpdates.reset();
     this.deviceApprovals.reset();
+    this.clearComputerUseWrite();
     if (this.state.checkIns) this.store.update(({ checkIns: _, ...state }) => state);
     this.routines.reset();
     this.store.update((state) => ({ ...state, usage: initialUsage }));
@@ -10117,6 +10527,8 @@ export class ClawtrateClient {
     this.approvalReads.clear();
     for (const { bytes } of this.attachmentContent.values()) this.attachmentBytes -= bytes;
     this.attachmentContent.clear();
+    this.notRunFiles.clear();
+    this.notRunGatewayId = null;
     this.sentPictures.clear();
     this.sentPictureBytes = 0;
     this.readBackPictures.clear();
@@ -10507,16 +10919,79 @@ export class ClawtrateClient {
     if (id === null || !current()) return;
     // A route that answers as another gateway is stopped, and that identity isn't published.
     if (this.bindRouteIdentity(id, current) === "changed") return;
+    if (this.notRunGatewayId && this.notRunGatewayId !== id) this.clearNotRunForGatewayChange();
+    this.notRunGatewayId = id;
+    for (const kept of this.attachmentContent.values())
+      if (!kept.gatewayId && kept.epoch === this.epoch) {
+        kept.gatewayId = id;
+        delete kept.epoch;
+      }
     this.accounts.onGateway(id);
     // Clearing another gateway's creation can notify a host that stops the connection.
     if (current() && this.state.connection.gatewayId !== id) this.setConnection({ gatewayId: id });
-    if (current()) this.settleReadStamps(id);
+    if (current()) {
+      this.settleReadStamps(id);
+      this.recheckComputerUse();
+    }
     // The guide change after this connection's connect found it unnamed: once, now it is named.
     const unnamed = this.guidesUnnamed;
     if (current() && unnamed?.generation === this.generation && unnamed.epoch === this.epoch) {
       this.guidesUnnamed = null;
       void this.keepGuides(unnamed.generation, unnamed.epoch, { gatewayId: id });
     }
+  }
+
+  private clearNotRunForGatewayChange(): void {
+    this.notRunFiles.clear();
+    const undo = this.computerUseWrite?.undo;
+    this.computerUseWrite = null;
+    const transcripts = { ...this.state.transcripts };
+    // Files sent on this connection before its identity was read are this gateway's own.
+    const sentHere = (id: string | null | undefined) => {
+      const kept = id ? this.attachmentContent.get(id) : undefined;
+      return kept !== undefined && !kept.gatewayId && kept.epoch === this.epoch;
+    };
+    for (const [key, before] of Object.entries(transcripts)) {
+      // A message still waiting here whose files go with the old gateway waits too, never sent
+      // without them; it says why. (Other waiting messages and a gateway's identity: #1026.)
+      let transcript = before;
+      for (const message of before.outbox) {
+        if (!notLeft(message) || !this.attachmentContent.has(message.id) || sentHere(message.id))
+          continue;
+        this.dropAttachments(message.id);
+        transcript = {
+          ...transcript,
+          ...updateMessage(cancelQueuedRun(transcript, message.id, this.now()), message.id, {
+            status: "not-sent",
+            runId: null,
+            error: QUEUED_FOR_ANOTHER_GATEWAY,
+          }),
+        };
+      }
+      const runs = transcript.runs.map((run): Run => {
+        // A cancelled run (a parked message's own among them) is no not-run card to mark.
+        if (
+          startSeen(run) ||
+          run.ranInHistory ||
+          run.state === "cancelled" ||
+          sentHere(run.messageId)
+        )
+          return run;
+        const hadFiles =
+          run.retryFiles !== undefined || this.attachmentContent.has(run.messageId ?? "");
+        if (run.messageId) this.dropAttachments(run.messageId);
+        return {
+          ...run,
+          retryGatewayChanged: true,
+          ...(hadFiles ? { retryFiles: "gone" } : {}),
+          ...(undo?.taskKey === key && undo.runId === run.id
+            ? { computerUseGatewayChanged: true }
+            : {}),
+        };
+      });
+      transcripts[key] = { ...transcript, runs };
+    }
+    this.store.update(({ computerUseUndo: _, ...state }) => ({ ...state, transcripts }));
   }
 
   /** The host's words for why it refused the latest socket of this gateway's route: setup's or saved. */
@@ -11299,9 +11774,34 @@ export class ClawtrateClient {
   }
 
   private setTranscript(key: string, fn: (current: Transcript | undefined) => Transcript): void {
+    const next = fn(this.state.transcripts[key]);
+    // A late start or a reply in history wins over a failure that looked like it never ran.
+    this.notRunFiles.dropWhere(
+      (kept) =>
+        kept.task === key &&
+        next.runs.some(
+          (run) =>
+            (run.id === kept.runId || run.id === kept.retriedAs) &&
+            (startSeen(run) ||
+              run.ranInHistory === true ||
+              (run.state === "completed" && run.outcomeKnown)),
+        ),
+    );
+    const runs = next.runs.map((run): Run => {
+      if (this.notRunFiles.get(key, run.id))
+        return run.retryFiles === "held" ? run : { ...run, retryFiles: "held" };
+      // A run rebuilt from history after its copy went still had files: never words alone.
+      return run.retryFiles === "held" ||
+        (!run.retryFiles && this.notRunFiles.knownToHaveFiles(key, run.id))
+        ? { ...run, retryFiles: "gone" }
+        : run;
+    });
+    const transcriptWithFiles = runs.some((run, index) => run !== next.runs[index])
+      ? { ...next, runs }
+      : next;
     this.store.update((state) => ({
       ...state,
-      transcripts: { ...state.transcripts, [key]: fn(state.transcripts[key]) },
+      transcripts: { ...state.transcripts, [key]: transcriptWithFiles },
     }));
     // The rail describes a task the engine follows by the same runs the conversation shows.
     const transcript = this.state.transcripts[key];
@@ -11501,10 +12001,45 @@ export class ClawtrateClient {
         parkAfterStop(current, { ...current, runs }, this.now()),
         messages,
       );
-      // History holds these now: only their pictures are kept, to be shown.
+      // History may contain the send before the gateway finishes preparing it. Save its files
+      // while it can still end without a run, even if this read came before that failure.
+      // Copies this gives up are published with the rebuilt transcript, never between.
+      const evicted: Array<{ task: string; runId: string }> = [];
       for (const message of current.outbox) {
-        if (!reconciled.outbox.some((each) => each.id === message.id))
-          this.keepSentPictures(message);
+        if (reconciled.outbox.some((each) => each.id === message.id)) continue;
+        const kept = this.attachmentContent.get(message.id);
+        const run = runs.find((each) => each.messageId === message.id);
+        if (
+          run &&
+          kept &&
+          !kept.taskDeleted &&
+          run.retryFiles !== "gone" &&
+          !startSeen(run) &&
+          !run.ranInHistory &&
+          (!isTerminal(run.state) || neverRan(run) || neverStarted(run))
+        ) {
+          if (message.attachments.length > 0)
+            this.notRunFiles.noteFiles({ task: key, bot: kept.bot, runId: run.id });
+          if (kept.gatewayId && kept.gatewayId === this.state.connection.gatewayId) {
+            evicted.push(
+              ...this.notRunFiles.hold({
+                ...kept,
+                gatewayId: kept.gatewayId,
+                runId: run.id,
+                message,
+              }),
+            );
+          }
+          // Keep the knowledge that this send had files even if a gateway history row omits
+          // them, or the retry budget already let them go.
+          const index = reconciled.runs.findIndex((each) => each.id === run.id);
+          if (index >= 0)
+            reconciled.runs[index] = {
+              ...reconciled.runs[index]!,
+              retryFiles: this.notRunFiles.get(key, run.id) ? "held" : "gone",
+            };
+        }
+        this.keepSentPictures(message);
       }
       const activity = markUnconfirmed(reconciled);
       const items = mapHistory(messages, {
@@ -11533,6 +12068,7 @@ export class ClawtrateClient {
       };
       this.retainTaskRaw(key, rebuilt);
       this.setTranscript(key, () => withLive(rebuilt));
+      for (const each of evicted) this.markRetryFilesGone(each.task, each.runId);
       const left = quietToRead(rebuilt.runs.filter((run) => quietBefore.has(run.id)));
       if (left.size > 0) void this.settleQuietLater(key, left, generation);
       // A read is news of its own: the runs it leaves active are asked again.

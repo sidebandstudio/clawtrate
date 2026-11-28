@@ -13,6 +13,9 @@ import {
   hostWorstCase,
   hostWorstTotal,
   MAX_CHECKIN_PROMPT_CHARS,
+  MAX_NOT_RUN_FILE_BYTES,
+  MAX_NOT_RUN_FILE_EVIDENCE,
+  MAX_NOT_RUN_FILE_MESSAGES,
   MAX_PENDING_APPROVAL_COUNT,
   MAX_PENDING_QUESTIONS_PER_TASK,
   MAX_SETTLED_APPROVAL_COUNT,
@@ -348,6 +351,15 @@ describe("the documented retention totals", () => {
         `\`pnpm exec prettier --write docs/decisions.md\` to realign the tables.\n\n` +
         problems.join("\n\n"),
     );
+  });
+
+  it("state how many messages, bytes and runs with files the host holds for a retry before a run", () => {
+    const row = rows.find((cells) => cells[0] === "`notRunFiles`");
+    expect(figures(row?.[1] ?? "")).toEqual([
+      MAX_NOT_RUN_FILE_MESSAGES,
+      MAX_NOT_RUN_FILE_BYTES / 1024 / 1024,
+      MAX_NOT_RUN_FILE_EVIDENCE,
+    ]);
   });
 
   it("count each viewer's results at its command slots", () => {

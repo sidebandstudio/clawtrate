@@ -1148,7 +1148,8 @@ export function ShelfRow({
       <div className="shelf-row" data-kind="not-sent" data-testid="shelf-row">
         <span className="glyph" data-state="stopped" aria-hidden="true" />
         <span className="shelf-text">
-          <b>Not sent</b> <span>{message.text}</span>
+          <b>Not sent</b> {message.error && <span>{message.error}</span>}{" "}
+          <span>{message.text}</span>
         </span>
         <button
           type="button"

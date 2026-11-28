@@ -105,8 +105,10 @@
     - alert:
       - paragraph: The gateway couldn't run this message
       - button "Dismiss this error"
-      - paragraph: "The gateway said: The session is being moved to another machine. Try again in a minute."
+      - paragraph: Try again, or choose another model for this bot.
       - button "Try again"
+      - button "Change model"
+      - button "Details"
     - status
   - button "Attach files"
   - textbox "Message Otto"

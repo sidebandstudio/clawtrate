@@ -64,6 +64,7 @@ import {
   MAX_TRANSFER_BYTES,
 } from "./files.ts";
 import { MAX_ROUTINE_READS, MAX_ROUTINE_UPDATES } from "./routines.ts";
+import { MAX_NOT_RUN_FILE_EVIDENCE, MAX_NOT_RUN_FILE_MESSAGES } from "./not-run.ts";
 import { emptyActivity, MAX_QUEUE_ALIASES } from "./runs.ts";
 import {
   MAX_COMPUTER_PANES,
@@ -101,6 +102,7 @@ import {
   MAX_TRACKED_TASKS,
   MAX_UNROUTED,
   RUN,
+  OUTGOING,
   WORST_ROW_CHARS,
 } from "./state-bounds.ts";
 
@@ -289,7 +291,8 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // Files of outgoing messages: their content is `outboxFiles`; these are the names kept beside it.
   attachmentContent: {
     max: T * MAX_OUTBOX,
-    each: 3 * ID + MAX_ATTACHMENTS_PER_MESSAGE * 3 * MAX_FILE_NAME_CHARS,
+    // Its ids and, until its gateway is known, the connection it was sent on.
+    each: 4 * ID + N + MAX_ATTACHMENTS_PER_MESSAGE * 3 * MAX_FILE_NAME_CHARS,
     row: "outboxFiles",
   },
   "attachmentContent.*.files": {
@@ -297,6 +300,22 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
     each: 3 * MAX_FILE_NAME_CHARS,
     row: null,
     opaque: "file content, counted in `outboxFiles`",
+  },
+  "notRunFiles.entries": {
+    max: MAX_NOT_RUN_FILE_MESSAGES,
+    each:
+      7 * ID +
+      2 * N +
+      worstCase(OUTGOING) +
+      MAX_ATTACHMENTS_PER_MESSAGE * (3 * MAX_FILE_NAME_CHARS + 4),
+    row: "notRunFiles",
+    opaque: "the original message and files; file content shares MAX_NOT_RUN_FILE_BYTES",
+  },
+  // That a run's message had files, kept without them: its key, task, bot and run.
+  "notRunFiles.hadFiles": {
+    max: MAX_NOT_RUN_FILE_EVIDENCE,
+    each: 6 * ID + SHORT,
+    row: "notRunFiles",
   },
   // Pictures of messages history holds, kept to show: their content is in `outboxFiles`'s budget.
   sentPictures: {
@@ -476,6 +495,7 @@ export const CLIENT_PARTS: Record<string, string> = {
   machines: "MachinesEngine",
   waiting: "WaitingIndex",
   quietChecks: "QuietChecks",
+  notRunFiles: "NotRunFiles",
   computer: "ComputerViews",
 };
 

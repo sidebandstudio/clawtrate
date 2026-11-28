@@ -9,8 +9,10 @@ import {
   emptyActivity,
   INTERACTIVE_SCOPES,
   newRun,
+  notRunRetryKey,
   parseExecApproval,
   RawTable,
+  retryPlan,
   type ApprovalCard,
   type BridgeCommand,
   type ClawtrateState,
@@ -46,6 +48,13 @@ export const LIVE_SCENES = [
   "run-failed",
   "not-run-api-key",
   "not-run-other",
+  "not-run-files-gone",
+  "not-run-computer-use",
+  "not-run-computer-use-repeat",
+  "not-run-computer-use-off",
+  "not-run-computer-use-access",
+  "not-run-computer-use-unreceipted",
+  "not-run-computer-use-unreceipted-access",
   "not-started",
   "run-turn-limit",
   "stop-failed",
@@ -794,6 +803,101 @@ export function liveScene(
         }),
         steps: [],
       };
+    case "not-run-files-gone": {
+      const anchor = "retry-file-message";
+      const state = withRun(base, now, {
+        state: "failed",
+        reportedStartAt: null,
+        endedAt: now - 2 * SECOND,
+        messageId: null,
+        anchorItemId: anchor,
+        anchorKeyed: true,
+        retryFiles: "gone",
+        error: { message: "Error: The session is being moved to another machine.", kind: null },
+      });
+      return {
+        initial: withTranscript(state, (transcript) => ({
+          ...transcript,
+          outbox: [],
+          items: [
+            ...transcript.items,
+            {
+              id: anchor,
+              role: "user",
+              timestamp: now - 42 * SECOND,
+              model: null,
+              blocks: [{ kind: "text", text: "Can you read the attached backup log?" }],
+            },
+          ],
+        })),
+        steps: [],
+      };
+    }
+    case "not-run-computer-use":
+    case "not-run-computer-use-repeat":
+    case "not-run-computer-use-off":
+    case "not-run-computer-use-access":
+    case "not-run-computer-use-unreceipted":
+    case "not-run-computer-use-unreceipted-access": {
+      // `-unreceipted`: off after a disable whose receipt was lost; no Put back, a new change instead.
+      const error = {
+        message: "Codex Computer Use readiness failed: plugin/list timed out",
+        kind: null,
+      };
+      const earlier = name !== "not-run-computer-use";
+      const canAdmin =
+        name !== "not-run-computer-use-access" &&
+        name !== "not-run-computer-use-unreceipted-access";
+      const first = withRun(base, now, {
+        state: "failed",
+        reportedStartAt: null,
+        endedAt: now - 2 * SECOND,
+        error,
+        ...(name.startsWith("not-run-computer-use-unreceipted")
+          ? { computerUseReadback: "already-off" as const }
+          : {}),
+      });
+      const state = earlier
+        ? withTranscript(first, (transcript) => ({
+            ...transcript,
+            runs: [
+              newRun(
+                "run-prior",
+                {
+                  state: "failed",
+                  origin: "local",
+                  error,
+                  messageId: "msg-prior",
+                  endedAt: now - 64 * SECOND,
+                },
+                now - 70 * SECOND,
+              ),
+              ...transcript.runs,
+            ],
+            outbox: [
+              message("msg-prior", "Can you check the disk?", now - 70 * SECOND),
+              ...transcript.outbox,
+            ],
+          }))
+        : first;
+      return {
+        initial: {
+          ...state,
+          connection: { ...state.connection, canAdmin },
+          ...(name === "not-run-computer-use-off"
+            ? {
+                computerUseUndo: {
+                  taskKey: OPEN_TASK,
+                  runId: "run-live",
+                  previous: true,
+                  expiresAt: now + 86_400 * SECOND,
+                },
+              }
+            : {}),
+        },
+        steps: [],
+      };
+    }
     case "not-started":
       return {
         initial: withRun(base, now, {
@@ -1085,6 +1189,72 @@ export function liveCommand(
         return info;
       });
       return Promise.resolve({ text: taken.text, attachments });
+    }
+    case "dismissNotRun":
+      return Promise.resolve();
+    case "retryNotRun": {
+      const transcript = get().transcripts[OPEN_TASK];
+      const run = transcript?.runs.find((each) => each.id === command.runId);
+      if (!transcript || !run) return Promise.resolve();
+      const plan = retryPlan(run, transcript);
+      const original =
+        plan?.kind === "again"
+          ? transcript.outbox.find((each) => each.id === plan.messageId)
+          : plan?.kind === "text"
+            ? { text: plan.text, attachments: [] }
+            : undefined;
+      if (!original) return Promise.resolve();
+      const id = notRunRetryKey(command.key, run.id);
+      // A retry cancelled before it left gives way to a new one under the same key.
+      if (transcript.outbox.some((each) => each.id === id && each.status !== "cancelled"))
+        return Promise.resolve();
+      update((current) => ({
+        ...current,
+        outbox: [
+          ...current.outbox.filter((each) => each.id !== id),
+          message(id, original.text, now, {
+            runId: id,
+            attachments: original.attachments,
+            status: "sending",
+          }),
+        ],
+        runs: [
+          ...current.runs.filter((each) => each.id !== id),
+          newRun(id, { state: "running", origin: "local", bound: true, messageId: id }, now),
+        ],
+      }));
+      return Promise.resolve();
+    }
+    case "changeNotRunComputerUse": {
+      if (command.turnOn) {
+        // As the host: a Put back of this card's that is past its week goes with it.
+        const { computerUseUndo: undo, ...rest } = get();
+        if (undo?.taskKey === command.key && undo.runId === command.runId) set(rest);
+        update((transcript) => ({
+          ...transcript,
+          runs: transcript.runs.map((each) => {
+            if (each.id !== command.runId) return each;
+            const { computerUseReadback: _readback, ...rest } = each;
+            return rest;
+          }),
+        }));
+        return Promise.resolve("on");
+      }
+      const { computerUseUndo: _undo, ...state } = get();
+      set(
+        command.restore
+          ? state
+          : {
+              ...state,
+              computerUseUndo: {
+                taskKey: command.key,
+                runId: command.runId,
+                previous: true,
+                expiresAt: now + 86_400 * SECOND,
+              },
+            },
+      );
+      return Promise.resolve(command.restore ? "restored" : "off");
     }
     case "sendAgain": {
       const original = get().transcripts[OPEN_TASK]?.outbox.find(

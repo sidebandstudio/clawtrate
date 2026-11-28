@@ -1861,7 +1861,7 @@ test.describe("errors and resync", () => {
     expect(shown).toBe("b3f0c2a1-4d5e-4f60-8a71-92c3d4e5f607");
     // Raw is read when it is opened, and labelled as exactly what it holds.
     await expect(card.getByTestId("turn-error-raw")).toContainText(
-      "The chat event that ended the turn, as received",
+      "The chat event that ended the turn",
     );
     await expect(card.getByTestId("run-raw")).toContainText('"errorKind": "provider"');
     await page.evaluate(() => navigator.clipboard.writeText("something else"));
@@ -2305,4 +2305,369 @@ test.describe("the phone", () => {
     expect(sizes.length).toBeGreaterThan(4);
     expect(sizes.filter((each) => each.width < 44 || each.height < 44)).toEqual([]);
   });
+});
+
+test("F-480 #988: an unknown reason is behind Details", async ({ page }) => {
+  await open(page, "not-run-other");
+  const card = page.getByTestId("turn-error");
+  const raw = "The session is being moved to another machine. Try again in a minute.";
+  await expect(card.getByText(raw, { exact: true })).toHaveCount(0);
+  await expect(card.locator(".turn-error-actions button").nth(0)).toHaveText("Try again");
+  await card.getByRole("button", { name: "Details" }).click();
+  await expect(card.getByText(raw, { exact: true })).toBeVisible();
+});
+
+test("F-480 #988: Try again is disabled while the retry is in flight", async ({ page }) => {
+  await open(page, "not-run-other");
+  const card = page.getByTestId("turn-error");
+  const again = card.getByRole("button", { name: "Try again" });
+  await again.click();
+  await expect(again).toBeDisabled();
+});
+
+test("F-480 #988: Try again comes back once its queued retry is cancelled", async ({ page }) => {
+  await open(page, "not-run-other");
+  const card = page.getByTestId("turn-error");
+  const again = card.getByRole("button", { name: "Try again" });
+  await again.click();
+  await expect(again).toBeDisabled();
+  // The retry is cancelled before it left this device: nothing is on its way.
+  await page.evaluate(() =>
+    (
+      window as unknown as {
+        clawtrateFixture: { setState: (update: (state: ClawtrateState) => ClawtrateState) => void };
+      }
+    ).clawtrateFixture.setState((state) => {
+      const key = "agent:otto:disk-space";
+      const transcript = state.transcripts[key]!;
+      const sent = transcript.outbox.filter((each) => each.status === "sending").map((m) => m.id);
+      return {
+        ...state,
+        transcripts: {
+          ...state.transcripts,
+          [key]: {
+            ...transcript,
+            outbox: transcript.outbox.map((each) =>
+              sent.includes(each.id) ? { ...each, status: "cancelled" as const } : each,
+            ),
+            runs: transcript.runs.map((run) =>
+              sent.includes(run.id) ? { ...run, state: "cancelled" as const } : run,
+            ),
+          },
+        },
+      };
+    }),
+  );
+  await expect(again).toBeEnabled();
+  // Pressed again, a new attempt starts under the same key.
+  await again.click();
+  await expect(again).toBeDisabled();
+});
+
+test("F-480 #988: the card says its retry and setting belong to the previous gateway", async ({
+  page,
+}) => {
+  await open(page, "not-run-computer-use-off");
+  const card = page.locator('[data-testid="turn-error"][data-run="run-live"]');
+  await expect(card.getByRole("button", { name: "Put back" })).toBeVisible();
+  await page.evaluate(() => {
+    const fixture = (
+      window as unknown as {
+        clawtrateFixture: {
+          setState: (update: (state: ClawtrateState) => ClawtrateState) => void;
+        };
+      }
+    ).clawtrateFixture;
+    fixture.setState(({ computerUseUndo: _, ...state }) => {
+      const key = "agent:otto:disk-space";
+      const transcript = state.transcripts[key]!;
+      return {
+        ...state,
+        transcripts: {
+          ...state.transcripts,
+          [key]: {
+            ...transcript,
+            runs: transcript.runs.map((run) =>
+              run.id === "run-live"
+                ? {
+                    ...run,
+                    retryFiles: "gone",
+                    retryGatewayChanged: true,
+                    computerUseGatewayChanged: true,
+                  }
+                : run,
+            ),
+          },
+        },
+      };
+    });
+  });
+  await expect(
+    card.getByText(
+      "This message went to a different gateway. Its files are no longer available to retry.",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await expect(
+    card.getByText("The Computer Use setting belongs to the previous gateway.", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    card.getByRole("button", { name: /Try again|Put back|Turn off Computer Use/ }),
+  ).toHaveCount(0);
+});
+
+test("F-480 #988: Put back leaves at its expiry, and a read-back after a lost reply offers none", async ({
+  page,
+}) => {
+  await open(page, "not-run-computer-use-off");
+  const card = page.locator('[data-testid="turn-error"][data-run="run-live"]');
+  const putBack = card.getByRole("button", { name: "Put back" });
+  await expect(putBack).toBeVisible();
+  type Fixture = {
+    clawtrateFixture: { setState: (update: (state: ClawtrateState) => ClawtrateState) => void };
+  };
+  // The host refuses Put back after its week; the card stops offering it then too. The fixture's
+  // clock is fixed, so it moves past the expiry before the card's timer reads it.
+  const now = await page.evaluate(() => Date.now());
+  await page.evaluate(
+    (expiresAt) =>
+      (window as unknown as Fixture).clawtrateFixture.setState((state) => ({
+        ...state,
+        computerUseUndo: { ...state.computerUseUndo!, expiresAt },
+      })),
+    now + 1500,
+  );
+  await page.clock.setFixedTime(now + 60_000);
+  await expect(putBack).toHaveCount(0);
+  // Past its week, a new change is the way back.
+  await expect(card.getByRole("button", { name: "Turn it back on" })).toBeVisible();
+  // A disable whose reply was lost, read back as off: what is true, and no Put back.
+  await page.evaluate(() =>
+    (window as unknown as Fixture).clawtrateFixture.setState(({ computerUseUndo: _, ...state }) => {
+      const key = "agent:otto:disk-space";
+      const transcript = state.transcripts[key]!;
+      return {
+        ...state,
+        transcripts: {
+          ...state.transcripts,
+          [key]: {
+            ...transcript,
+            runs: transcript.runs.map((run) =>
+              run.id === "run-live" ? { ...run, computerUseReadback: "already-off" as const } : run,
+            ),
+          },
+        },
+      };
+    }),
+  );
+  await expect(
+    card.getByText("The Computer Use startup check is off on this gateway.", { exact: true }),
+  ).toBeVisible();
+  await expect(card.getByRole("button", { name: /Put back|Turn off Computer Use/ })).toHaveCount(0);
+  await expect(card.getByRole("button", { name: "Try again" })).toBeVisible();
+});
+
+test("F-480 #988: with no receipt, Turn it back on is a new change that turns the check on", async ({
+  page,
+}) => {
+  await open(page, "not-run-computer-use-unreceipted");
+  const card = page.locator('[data-testid="turn-error"][data-run="run-live"]');
+  await expect(
+    card.getByText("The Computer Use startup check is off on this gateway.", { exact: true }),
+  ).toBeVisible();
+  await expect(card.getByRole("button", { name: "Put back" })).toHaveCount(0);
+  await page.evaluate(() => {
+    const w = window as unknown as {
+      sent: unknown[];
+      clawtrateFixture: { invoke: (command: { type: string }) => unknown };
+    };
+    w.sent = [];
+    const invoke = w.clawtrateFixture.invoke.bind(w.clawtrateFixture);
+    w.clawtrateFixture.invoke = (command) => (w.sent.push(command), invoke(command));
+  });
+  const turnOn = card.getByRole("button", { name: "Turn it back on" });
+  await turnOn.press("Enter");
+  await expect(
+    card.getByText("The Computer Use startup check is back on.", { exact: true }),
+  ).toBeVisible();
+  const sent = await page.evaluate(() => (window as unknown as { sent: unknown[] }).sent);
+  expect(sent).toEqual([
+    expect.objectContaining({ type: "changeNotRunComputerUse", restore: false, turnOn: true }),
+  ]);
+  await expect(turnOn).toHaveCount(0);
+  const turnOff = card.getByRole("button", { name: "Turn off Computer Use on this gateway" });
+  await expect(turnOff).toBeFocused();
+});
+
+test("F-480 #988: after Put back's week, Turn it back on turns the check on and the card says so", async ({
+  page,
+}) => {
+  await open(page, "not-run-computer-use-off");
+  const card = page.locator('[data-testid="turn-error"][data-run="run-live"]');
+  await expect(card.getByRole("button", { name: "Put back" })).toBeVisible();
+  type Fixture = {
+    clawtrateFixture: { setState: (update: (state: ClawtrateState) => ClawtrateState) => void };
+  };
+  const now = await page.evaluate(() => Date.now());
+  await page.evaluate(
+    (expiresAt) =>
+      (window as unknown as Fixture).clawtrateFixture.setState((state) => ({
+        ...state,
+        computerUseUndo: { ...state.computerUseUndo!, expiresAt },
+      })),
+    now + 1500,
+  );
+  await page.clock.setFixedTime(now + 60_000);
+  const turnOn = card.getByRole("button", { name: "Turn it back on" });
+  await turnOn.click();
+  await expect(
+    card.getByText("The Computer Use startup check is back on.", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    card.getByText("The Computer Use startup check is off on this gateway.", { exact: true }),
+  ).toHaveCount(0);
+  await expect(turnOn).toHaveCount(0);
+});
+
+test("F-480 #988: a message held when its gateway was replaced says why on its row", async ({
+  page,
+}) => {
+  await open(page, "not-run-other");
+  await page.evaluate(() =>
+    (
+      window as unknown as {
+        clawtrateFixture: { setState: (update: (state: ClawtrateState) => ClawtrateState) => void };
+      }
+    ).clawtrateFixture.setState((state) => {
+      const key = "agent:otto:disk-space";
+      const transcript = state.transcripts[key]!;
+      return {
+        ...state,
+        transcripts: {
+          ...state.transcripts,
+          [key]: {
+            ...transcript,
+            outbox: [
+              ...transcript.outbox,
+              {
+                id: "msg-held-for-gateway",
+                text: "Read the attached notes.",
+                mode: "queue" as const,
+                status: "not-sent" as const,
+                runId: null,
+                messageSeq: null,
+                leftAt: null,
+                createdAt: Date.now(),
+                error:
+                  "It was written for another gateway and its files aren't kept. To send it here, attach them to a new message.",
+                attachments: [{ fileName: "notes.txt", mimeType: "text/plain", sizeBytes: 5 }],
+              },
+            ],
+          },
+        },
+      };
+    }),
+  );
+  const row = page.getByTestId("shelf-row").filter({ hasText: "Read the attached notes." });
+  await expect(row).toContainText(
+    "Not sent It was written for another gateway and its files aren't kept. To send it here, attach them to a new message.",
+  );
+});
+
+test("F-480 #988: a Turn it back on the gateway refuses leaves the card off and says so", async ({
+  page,
+}) => {
+  await open(page, "not-run-computer-use-unreceipted");
+  const card = page.locator('[data-testid="turn-error"][data-run="run-live"]');
+  await page.evaluate(() => {
+    const fixture = (
+      window as unknown as {
+        clawtrateFixture: { invoke: (command: { type: string; turnOn?: boolean }) => unknown };
+      }
+    ).clawtrateFixture;
+    const invoke = fixture.invoke.bind(fixture);
+    fixture.invoke = (command) =>
+      command.type === "changeNotRunComputerUse" && command.turnOn
+        ? Promise.resolve("refused")
+        : invoke(command);
+  });
+  const turnOn = card.getByRole("button", { name: "Turn it back on" });
+  await turnOn.click();
+  await expect(
+    card.getByText("The gateway refused the Computer Use change.", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    card.getByText("The Computer Use startup check is off on this gateway.", { exact: true }),
+  ).toBeVisible();
+  await expect(turnOn).toBeVisible();
+  await expect(card.getByRole("button", { name: /Turn off Computer Use/ })).toHaveCount(0);
+});
+
+test("F-480 #988: below admin, the card says where the check can be turned back on", async ({
+  page,
+}) => {
+  await open(page, "not-run-computer-use-unreceipted-access");
+  const card = page.locator('[data-testid="turn-error"][data-run="run-live"]');
+  await expect(
+    card.getByText("A device with full control of the gateway can turn it back on.", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(card.getByRole("button", { name: /Turn it back on|Put back/ })).toHaveCount(0);
+});
+
+test("F-480 #988: a Put back the gateway refuses says so, and Put back stays", async ({ page }) => {
+  await open(page, "not-run-computer-use-off");
+  const card = page.locator('[data-testid="turn-error"][data-run="run-live"]');
+  const putBack = card.getByRole("button", { name: "Put back" });
+  await expect(putBack).toBeVisible();
+  // The host answers `refused` and keeps the undo, as it does for CONFLICT or FORBIDDEN.
+  await page.evaluate(() => {
+    const fixture = (
+      window as unknown as {
+        clawtrateFixture: { invoke: (command: { type: string; restore?: boolean }) => unknown };
+      }
+    ).clawtrateFixture;
+    const invoke = fixture.invoke.bind(fixture);
+    fixture.invoke = (command) =>
+      command.type === "changeNotRunComputerUse" && command.restore
+        ? Promise.resolve("refused")
+        : invoke(command);
+  });
+  await putBack.click();
+  await expect(
+    card.getByText("The gateway refused the Computer Use change.", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    card.getByText("The Computer Use startup check is off on this gateway.", { exact: true }),
+  ).toBeVisible();
+  await expect(putBack).toBeVisible();
+});
+
+test("F-480 #988: after a repeated Computer Use timeout the card can turn it off and put it back", async ({
+  page,
+}) => {
+  await open(page, "not-run-computer-use-repeat");
+  const card = page.locator('[data-testid="turn-error"][data-run="run-live"]');
+  await expect(card).toContainText(
+    "This happened on the previous attempt too. Sending again is unlikely to help.",
+  );
+  await expect(
+    card.getByText(
+      "This skips the Computer Use check at startup and automatic installation. Native tools set up separately can still work.",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  const actions = card.locator(".turn-error-actions button");
+  await expect(actions.nth(0)).toHaveText("Turn off Computer Use on this gateway");
+  await expect(actions.nth(1)).toHaveText("Try again");
+  await actions.nth(0).press("Enter");
+  await expect(
+    card.getByText("The Computer Use startup check is off on this gateway.", { exact: true }),
+  ).toBeVisible();
+  await expect(actions.nth(0)).toHaveText("Try again");
+  await expect(actions.nth(0)).toBeFocused();
+  await card.getByRole("button", { name: "Put back" }).press("Enter");
+  await expect(card.getByText("The previous Computer Use setting is back.")).toBeVisible();
+  await expect(actions.nth(0)).toBeFocused();
 });

@@ -6,6 +6,7 @@
 // row (`status: "failed"`, `lastRunError`); 2026.11.10, failing it at dispatch, keeps neither.
 
 import { describe, expect, it, vi } from "vitest";
+import { ADMIN_SCOPES } from "../src/scopes.ts";
 import { mapHistory, mergeSessionRow } from "../src/mapping.ts";
 import {
   applyAgentEvent,
@@ -18,11 +19,36 @@ import {
   RawTable,
   runsFromHistory,
   type TaskActivity,
+  type OutgoingMessage,
 } from "../src/runs.ts";
-import { neverRan, neverStarted, notRunCause, MAX_NOT_RUN_WORDS } from "../src/not-run.ts";
+import {
+  neverRan,
+  neverStarted,
+  notRunCause,
+  repeatedNotRun,
+  NotRunFiles,
+  MAX_NOT_RUN_WORDS,
+  MAX_NOT_RUN_FILE_BYTES,
+  MAX_NOT_RUN_FILE_MESSAGES,
+} from "../src/not-run.ts";
 import { fromActivity, WaitingIndex } from "../src/waiting.ts";
-import { agentEvent, grantingGateway, KEY, openTask, questionRecord } from "./client-harness.ts";
-import { sleep, until, type FakeGateway } from "./fake-gateway.ts";
+import {
+  agentEvent,
+  grantingGateway,
+  KEY,
+  openTask,
+  questionRecord,
+  stampOn,
+  URL_A,
+} from "./client-harness.ts";
+import {
+  sleep,
+  until,
+  GatewayError,
+  memoryStorage,
+  tokenKey,
+  type FakeGateway,
+} from "./fake-gateway.ts";
 
 const OTHER = "agent:otto:weekly-report";
 const T0 = 1_795_000_000_000;
@@ -70,6 +96,14 @@ const userRow = (runId: string, text = "hello") => ({
   timestamp: T0,
   idempotencyKey: `${runId}:user`,
   __openclaw: { id: `u-${runId}`, seq: 1, idempotencyKey: `${runId}:user` },
+});
+
+const beforeReplyRow = (runId: string) => ({
+  role: "custom",
+  customType: "run-failed-before-reply",
+  content: "Backend unavailable.",
+  timestamp: T0 + 1,
+  __openclaw: { runId },
 });
 
 describe("why the gateway couldn't run a message, from its own words", () => {
@@ -1362,3 +1396,1128 @@ describe("only a run that started sends these, so each says it ran (#686)", () =
       expect(neverRan(quiet.runs[0]!)).toBe(true);
   });
 });
+
+describe("F-480 #988: recovering a message that never ran", () => {
+  it("recognizes the exact Computer Use catalog deadline, with or without the nested code", () => {
+    const reason = "Codex Computer Use readiness failed: plugin/list timed out";
+    const code = "CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED";
+    expect(notRunCause(reason)?.kind).toBe("computer-use-timeout");
+    expect(notRunCause(`Error: ${reason} | ${code}`)?.kind).toBe("computer-use-timeout");
+    for (const other of [
+      `thread/start timed out | ${code}`,
+      `Codex Computer Use readiness failed: plugin/list aborted | ${code}`,
+      `Codex Computer Use readiness failed: thread/start timed out | ${code}`,
+      `The gateway logged: ${reason} | ${code}`,
+    ])
+      expect(notRunCause(other)?.kind).toBe("other");
+  });
+
+  it("matches the previous reason, with a success or a different reason resetting the streak", () => {
+    const fail = (id: string, time: number, reason: string) => ({
+      ...newRun(id, { state: "failed", origin: "local", bound: true }, time),
+      error: { message: reason, kind: null },
+    });
+    const first = fail("a", 1, "The backend could not prepare.");
+    const second = fail("b", 2, "Error: The backend could not prepare.");
+    const success = newRun("c", { state: "completed", origin: "local", bound: true }, 3);
+    const after = fail("d", 4, "The backend could not prepare.");
+    const different = fail("e", 5, "The session is locked.");
+    const unsaid = fail("f", 6, "Your request couldn't be completed.");
+    expect(repeatedNotRun(first, [first, second])).toBe(false);
+    expect(repeatedNotRun(second, [second, first])).toBe(true);
+    expect(repeatedNotRun(after, [after, first, second, success])).toBe(false);
+    expect(repeatedNotRun(different, [second, different])).toBe(false);
+    expect(repeatedNotRun(unsaid, [unsaid, { ...unsaid, id: "g", startedAt: 5 }])).toBe(false);
+  });
+
+  it("uses keyed message order when an earlier failure was written after a successful run", () => {
+    const reason = "The backend could not prepare.";
+    const items = mapHistory(["a", "b", "c"].map((id) => userRow(id, id)));
+    const runs = ["c", "a", "b"].map((id, index) =>
+      newRun(
+        id,
+        {
+          state: id === "b" ? "completed" : "failed",
+          origin: "history",
+          anchorKeyed: true,
+          anchorItemId: items.find((item) => item.id.startsWith(`u-${id}:`))!.id,
+          error: id === "b" ? null : { message: reason, kind: null, beforeReply: true },
+        },
+        10 + index,
+      ),
+    );
+    expect(repeatedNotRun(runs[0]!, runs, items)).toBe(false);
+    expect(repeatedNotRun(runs[0]!, runs.slice(0, 2), items)).toBe(true);
+  });
+
+  it("gives up the oldest retry copy at the count and decoded size limits", () => {
+    const files = new NotRunFiles();
+    const entry = (runId: string, bytes: number) => ({
+      task: KEY,
+      gatewayId: "gateway",
+      bot: "otto",
+      runId,
+      bytes,
+      message: {} as OutgoingMessage,
+      files: [],
+    });
+    for (let i = 0; i < MAX_NOT_RUN_FILE_MESSAGES; i++)
+      expect(files.hold(entry(String(i), 1))).toEqual([]);
+    expect(files.hold(entry("next", 1)).map((each) => each.runId)).toEqual(["0"]);
+    expect(files.get(KEY, "0")).toBeUndefined();
+    // What it gives up is still known to have had files.
+    expect(files.knownToHaveFiles(KEY, "0")).toBe(true);
+    expect(files.get(KEY, "1")).toBeDefined();
+    expect(files.hold(entry("big", MAX_NOT_RUN_FILE_BYTES - 1)).map((each) => each.runId)).toEqual(
+      Array.from({ length: MAX_NOT_RUN_FILE_MESSAGES - 1 }, (_, i) => String(i + 1)),
+    );
+    expect(files.get(KEY, "next")).toBeDefined();
+    expect(files.get(KEY, "big")).toBeDefined();
+    files.drop(KEY, "big");
+    expect(files.hold(entry("later", 1))).toEqual([]);
+  });
+
+  it("resends every file, word and the reply reference after history removes the send", async () => {
+    const gateway = gatewayWith([{ key: KEY, agentId: "otto", updatedAt: T0 - 60_000 }]);
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway" });
+    const { client, transcript } = await openTask({ gateway });
+    try {
+      const files = [
+        { type: "file", fileName: "a.txt", mimeType: "text/plain", content: "Zmlyc3Q=" },
+        { type: "file", fileName: "b.txt", mimeType: "text/plain", content: "c2Vjb25k" },
+      ];
+      const text = "Read these files.";
+      const id = client.sendMessage(KEY, text, { attachments: files, replyToId: "parent" });
+      await until(() => transcript().runs[0]?.bound === true);
+      gateway.handlers["chat.history"] = () => ({
+        messages: [userRow(id, text)],
+        inFlightRun: { runId: id },
+        hasMore: false,
+      });
+      gateway.emit("session.message", { sessionKey: KEY, messageSeq: 1 });
+      await until(() => transcript().outbox.length === 0);
+      gateway.emit("chat", {
+        runId: id,
+        sessionKey: KEY,
+        seq: 1,
+        state: "error",
+        errorMessage: "Backend unavailable.",
+      });
+      await until(() => transcript().runs[0]?.state === "failed");
+      expect(transcript().runs[0]?.retryFiles).toBe("held");
+      const next = client.retryNotRun(KEY, id);
+      expect(next).not.toBe(id);
+      await until(() => transcript().runs.some((run) => run.id === next && run.bound));
+      const [first, second] = gateway.calls("chat.send") as Array<{
+        attachments: unknown[];
+        replyToId: string;
+      }>;
+      expect(first?.attachments).toHaveLength(2);
+      expect(second).toMatchObject({
+        message: "Read these files.",
+        attachments: first!.attachments,
+        replyToId: "parent",
+      });
+      expect(transcript().runs.find((run) => run.id === id)?.retryFiles).toBe("held");
+      gateway.emit("agent", agentEvent(next, 1, "lifecycle", { phase: "start" }));
+      await until(() => transcript().runs.find((run) => run.id === id)?.retryFiles === "gone");
+      expect(client.retryNotRun(KEY, id)).toBe(next);
+      expect(gateway.calls("chat.send")).toHaveLength(2);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("publishes a retry copy's eviction with the history read, so a message sent then is kept", async () => {
+    const gateway = gatewayWith([{ key: KEY, agentId: "otto", updatedAt: T0 - 60_000 }]);
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway" });
+    const { client, transcript } = await openTask({ gateway });
+    const file = { type: "file", fileName: "a.txt", mimeType: "text/plain", content: "Zmlyc3Q=" };
+    const rows: Row[] = [];
+    const ids: string[] = [];
+    let sentThen: string | null = null;
+    let unsubscribe = () => {};
+    try {
+      for (let i = 0; i <= MAX_NOT_RUN_FILE_MESSAGES; i++) {
+        const text = `Read file ${i}.`;
+        const id = client.sendMessage(KEY, text, { attachments: [file] });
+        ids.push(id);
+        await until(() => transcript().runs.find((run) => run.id === id)?.bound === true);
+        gateway.emit("chat", {
+          runId: id,
+          sessionKey: KEY,
+          seq: 1,
+          state: "error",
+          errorMessage: "Backend unavailable.",
+        });
+        await until(() => transcript().runs.find((run) => run.id === id)?.state === "failed");
+        rows.push(userRow(id, text), beforeReplyRow(id));
+        if (i === MAX_NOT_RUN_FILE_MESSAGES)
+          // A window that sends a message as soon as it sees the oldest copy go.
+          unsubscribe = client.store.subscribe((state) => {
+            const oldest = state.transcripts[KEY]?.runs.find((run) => run.id === ids[0]);
+            if (sentThen !== null || oldest?.retryFiles !== "gone") return;
+            sentThen = "";
+            sentThen = client.sendMessage(KEY, "A message sent meanwhile.");
+          });
+        const messages = [...rows];
+        gateway.handlers["chat.history"] = () => ({ messages, hasMore: false });
+        gateway.emit("session.message", { sessionKey: KEY, messageSeq: i + 1 });
+        await until(() => transcript().runs.find((run) => run.id === id)?.retryFiles === "held");
+      }
+      expect(transcript().runs.find((run) => run.id === ids[0])?.retryFiles).toBe("gone");
+      expect(sentThen).not.toBeNull();
+      expect(transcript().outbox.map((message) => message.text)).toContain(
+        "A message sent meanwhile.",
+      );
+      await until(() =>
+        gateway
+          .calls("chat.send")
+          .some((send) => (send as Row).message === "A message sent meanwhile."),
+      );
+    } finally {
+      unsubscribe();
+      client.stop();
+    }
+  });
+
+  it("still knows a message had files after its card let them go and the task reopens", async () => {
+    const gateway = gatewayWith([{ key: KEY, agentId: "otto", updatedAt: T0 - 60_000 }]);
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway" });
+    const { client, transcript } = await openTask({ gateway });
+    try {
+      const id = client.sendMessage(KEY, "Read this.", {
+        attachments: [
+          { type: "file", fileName: "a.txt", mimeType: "text/plain", content: "Zmlyc3Q=" },
+        ],
+      });
+      await until(() => transcript().runs[0]?.bound === true);
+      gateway.emit("chat", {
+        runId: id,
+        sessionKey: KEY,
+        seq: 1,
+        state: "error",
+        errorMessage: "Backend unavailable.",
+      });
+      await until(() => transcript().runs[0]?.state === "failed");
+      // History confirms the send without listing its files.
+      gateway.handlers["chat.history"] = () => ({
+        messages: [userRow(id, "Read this."), beforeReplyRow(id)],
+        hasMore: false,
+      });
+      gateway.emit("session.message", { sessionKey: KEY, messageSeq: 1 });
+      await until(() => transcript().runs[0]?.retryFiles === "held");
+      client.dismissNotRun(KEY, id);
+      client.closeSession(KEY);
+      expect(client.state.transcripts[KEY]).toBeUndefined();
+      client.openSession(KEY);
+      await until(() => transcript()?.runs.some((run) => run.id === id) === true);
+      expect(transcript().runs.find((run) => run.id === id)?.retryFiles).toBe("gone");
+      expect(() => client.retryNotRun(KEY, id)).toThrow("Its files are no longer held");
+      expect(gateway.calls("chat.send")).toHaveLength(1);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("releases the retry copy when its card is dismissed", async () => {
+    const gateway = gatewayWith([{ key: KEY, agentId: "otto", updatedAt: T0 - 60_000 }]);
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway" });
+    const { client, transcript } = await openTask({ gateway });
+    try {
+      const id = client.sendMessage(KEY, "Read this.", {
+        attachments: [
+          { type: "file", fileName: "a.txt", mimeType: "text/plain", content: "Zmlyc3Q=" },
+        ],
+      });
+      await until(() => transcript().runs[0]?.bound === true);
+      gateway.emit("chat", {
+        runId: id,
+        sessionKey: KEY,
+        seq: 1,
+        state: "error",
+        errorMessage: "Backend unavailable.",
+      });
+      await until(() => transcript().runs[0]?.state === "failed");
+      gateway.handlers["chat.history"] = () => ({ messages: [userRow(id)], hasMore: false });
+      gateway.emit("session.message", { sessionKey: KEY, messageSeq: 1 });
+      await until(() => transcript().outbox.length === 0);
+      expect(transcript().runs[0]?.retryFiles).toBe("held");
+      client.dismissNotRun(KEY, id);
+      expect(transcript().runs[0]?.retryFiles).toBe("gone");
+      expect(() => client.retryNotRun(KEY, id)).toThrow("Its files are no longer held");
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("drops kept files and blocks retry when the direct address answers as another gateway", async () => {
+    const gateway = gatewayWith([{ key: KEY, agentId: "otto", updatedAt: T0 }]);
+    let gatewayId = "first-gateway";
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: gatewayId });
+    const { client, transcript } = await openTask({ gateway });
+    try {
+      const id = client.sendMessage(KEY, "Read this.", {
+        attachments: [
+          { type: "file", fileName: "a.txt", mimeType: "text/plain", content: "Zmlyc3Q=" },
+        ],
+        replyToId: "parent",
+      });
+      await until(() => transcript().runs[0]?.bound === true);
+      gateway.emit("chat", {
+        runId: id,
+        sessionKey: KEY,
+        seq: 1,
+        state: "error",
+        errorMessage: "Backend unavailable.",
+      });
+      gateway.handlers["chat.history"] = () => ({
+        messages: [userRow(id, "Read this."), beforeReplyRow(id)],
+        hasMore: false,
+      });
+      gateway.emit("session.message", { sessionKey: KEY, messageSeq: 1 });
+      await until(() => transcript().runs[0]?.retryFiles === "held");
+      gatewayId = "second-gateway";
+      gateway.dropAll();
+      await until(() => client.state.connection.gatewayId === gatewayId);
+      expect(transcript().runs[0]).toMatchObject({
+        id,
+        retryFiles: "gone",
+        retryGatewayChanged: true,
+      });
+      expect(() => client.retryNotRun(KEY, id)).toThrow(/another gateway/i);
+      expect(gateway.calls("chat.send")).toHaveLength(1);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("one retry key survives quick presses, two clients and a lost reply", async () => {
+    const gateway = gatewayWith([{ key: KEY, agentId: "otto", updatedAt: T0 }]);
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway" });
+    const original = "failed-original";
+    gateway.handlers["chat.history"] = () => ({
+      messages: [userRow(original, "Read the notes."), beforeReplyRow(original)],
+      hasMore: false,
+    });
+    const first = await openTask({ gateway });
+    const second = await openTask({ gateway });
+    let accepted: string | null = null;
+    const dispatched = vi.fn();
+    gateway.handlers["chat.send"] = (params) => {
+      const { idempotencyKey, message } = params as { idempotencyKey: string; message: string };
+      if (accepted !== idempotencyKey) {
+        dispatched(message);
+        if (accepted === null) gateway.dropAll();
+        accepted = idempotencyKey;
+      }
+      return { runId: idempotencyKey, status: "started" };
+    };
+    try {
+      const id = first.client.retryNotRun(KEY, original);
+      expect(first.client.retryNotRun(KEY, original)).toBe(id);
+      await until(() => gateway.calls("chat.send").length === 1);
+      await until(
+        () => first.transcript().outbox.find((message) => message.id === id)?.status === "unknown",
+      );
+      await until(() => second.client.state.connection.gatewayId === "gateway");
+      expect(second.client.retryNotRun(KEY, original)).toBe(id);
+      expect(first.client.retryNotRun(KEY, original)).toBe(id);
+      await until(() => first.transcript().runs.some((run) => run.id === id && run.bound));
+      await until(() => second.transcript().runs.some((run) => run.id === id && run.bound));
+      expect(dispatched).toHaveBeenCalledExactlyOnceWith("Read the notes.");
+      expect(gateway.calls("chat.send")).toHaveLength(3);
+      expect(gateway.calls("chat.send").map((send) => (send as Row).idempotencyKey)).toEqual([
+        id,
+        id,
+        id,
+      ]);
+    } finally {
+      first.client.stop();
+      second.client.stop();
+    }
+  });
+
+  it("a retry cancelled before it left gives way to a new one under the same key", async () => {
+    const gateway = gatewayWith([{ key: KEY, agentId: "otto", updatedAt: T0 }]);
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway" });
+    const original = "failed-original";
+    gateway.handlers["chat.history"] = () => ({
+      messages: [userRow(original, "Read the notes."), beforeReplyRow(original)],
+      hasMore: false,
+    });
+    gateway.handlers["chat.abort"] = () => new Promise(() => {});
+    const { client, transcript } = await openTask({ gateway });
+    try {
+      gateway.emit("agent", agentEvent("run-busy", 1, "lifecycle", { phase: "start" }));
+      await until(() => transcript().runs.some((run) => run.id === "run-busy"));
+      void client.stopRun(KEY, "run-busy");
+      await until(() => transcript().runs.some((run) => run.state === "stopping"));
+      const id = client.retryNotRun(KEY, original);
+      expect(transcript().outbox.find((message) => message.id === id)?.status).toBe("queued");
+      client.cancelQueued(KEY, id);
+      expect(transcript().outbox.find((message) => message.id === id)?.status).toBe("cancelled");
+      expect(client.retryNotRun(KEY, original)).toBe(id);
+      expect(transcript().outbox.filter((message) => message.id === id)).toMatchObject([
+        { status: "queued", text: "Read the notes." },
+      ]);
+      expect(gateway.calls("chat.send")).toHaveLength(0);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("a retry asked again while its cancelled row is removed is queued once", async () => {
+    const gateway = gatewayWith([{ key: KEY, agentId: "otto", updatedAt: T0 }]);
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway" });
+    const original = "failed-original";
+    gateway.handlers["chat.history"] = () => ({
+      messages: [userRow(original, "Read the notes."), beforeReplyRow(original)],
+      hasMore: false,
+    });
+    gateway.handlers["chat.abort"] = () => new Promise(() => {});
+    const { client, transcript } = await openTask({ gateway });
+    let unsubscribe = () => {};
+    try {
+      gateway.emit("agent", agentEvent("run-busy", 1, "lifecycle", { phase: "start" }));
+      await until(() => transcript().runs.some((run) => run.id === "run-busy"));
+      void client.stopRun(KEY, "run-busy");
+      await until(() => transcript().runs.some((run) => run.state === "stopping"));
+      const id = client.retryNotRun(KEY, original);
+      client.cancelQueued(KEY, id);
+      // A window that presses Try again as soon as it sees the cancelled row go.
+      let pressed = false;
+      unsubscribe = client.store.subscribe((state) => {
+        const outbox = state.transcripts[KEY]?.outbox ?? [];
+        if (pressed || outbox.some((message) => message.id === id)) return;
+        pressed = true;
+        client.retryNotRun(KEY, original);
+      });
+      expect(client.retryNotRun(KEY, original)).toBe(id);
+      expect(pressed).toBe(true);
+      expect(transcript().outbox.filter((message) => message.id === id)).toHaveLength(1);
+    } finally {
+      unsubscribe();
+      client.stop();
+    }
+  });
+
+  it("a retry the gateway withdrew from a turn says why Try again can't send it", async () => {
+    const gateway = gatewayWith([{ key: KEY, agentId: "otto", updatedAt: T0 }]);
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway" });
+    const original = "failed-original";
+    gateway.handlers["chat.history"] = () => ({
+      messages: [userRow(original, "Read the notes."), beforeReplyRow(original)],
+      hasMore: false,
+    });
+    const { client, transcript } = await openTask({ gateway });
+    try {
+      // A turn is running: the retry goes into it, and its Stop withdraws the retry.
+      gateway.emit("agent", agentEvent("run-busy", 1, "lifecycle", { phase: "start" }));
+      await until(() => transcript().runs.some((run) => run.id === "run-busy"));
+      gateway.handlers["chat.send"] = () => new Promise(() => {});
+      gateway.handlers["chat.abort"] = (params) => ({
+        aborted: true,
+        runIds: [(params as { runId: string }).runId],
+      });
+      const id = client.retryNotRun(KEY, original);
+      await until(() => gateway.calls("chat.send").length === 1);
+      void client.stopRun(KEY, "run-busy");
+      await until(
+        () => transcript().outbox.find((message) => message.id === id)?.steer === "withdrawn",
+      );
+      expect(() => client.retryNotRun(KEY, original)).toThrow(
+        "The gateway withdrew this retry and won't take it again.",
+      );
+      expect(gateway.calls("chat.send")).toHaveLength(1);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("a queued message whose files went with a replaced gateway waits, says why, and never goes without them", async () => {
+    const gateway = gatewayWith([{ key: KEY, agentId: "otto", updatedAt: T0 }]);
+    let gatewayId = "first-gateway";
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: gatewayId });
+    gateway.handlers["chat.abort"] = () => new Promise(() => {});
+    const { client, transcript } = await openTask({ gateway });
+    try {
+      // A run that is stopping: what is sent now waits its turn.
+      gateway.emit("agent", agentEvent("run-busy", 1, "lifecycle", { phase: "start" }));
+      await until(() => transcript().runs.some((run) => run.id === "run-busy"));
+      void client.stopRun(KEY, "run-busy");
+      await until(() => transcript().runs.some((run) => run.state === "stopping"));
+      const id = client.sendMessage(KEY, "Read this after.", {
+        mode: "queue",
+        attachments: [
+          { type: "file", fileName: "a.txt", mimeType: "text/plain", content: "Zmlyc3Q=" },
+        ],
+      });
+      expect(transcript().outbox.find((message) => message.id === id)?.status).toBe("queued");
+      gatewayId = "second-gateway";
+      gateway.dropAll();
+      await until(() => client.state.connection.gatewayId === gatewayId);
+      expect(transcript().outbox.find((message) => message.id === id)).toMatchObject({
+        status: "not-sent",
+        error:
+          "It was written for another gateway and its files aren't kept. To send it here, attach them to a new message.",
+      });
+      // Sending it anyway never sends its words without its files.
+      client.retryMessage(KEY, id);
+      await until(
+        () => transcript().outbox.find((message) => message.id === id)?.status === "failed",
+      );
+      expect(transcript().outbox.find((message) => message.id === id)?.error).toBe(
+        "Its files are no longer held; attach them again.",
+      );
+      expect(
+        gateway.calls("chat.send").filter((send) => (send as Row).idempotencyKey === id),
+      ).toHaveLength(0);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("files sent before the gateway's identity is read belong to that connection's gateway", async () => {
+    const gateway = gatewayWith([{ key: KEY, agentId: "otto", updatedAt: T0 - 60_000 }]);
+    let identify: (() => void) | null = null;
+    const { client, transcript } = await openTask({ gateway });
+    try {
+      // The next connection's identity is read late.
+      gateway.handlers["gateway.identity.get"] = () =>
+        new Promise((resolve) => {
+          identify = () => resolve({ deviceId: "gateway" });
+        });
+      gateway.dropAll();
+      await until(() => client.state.connection.status === "connected" && identify !== null);
+      expect(client.state.connection.gatewayId).toBeNull();
+      const id = client.sendMessage(KEY, "Read this.", {
+        attachments: [
+          { type: "file", fileName: "a.txt", mimeType: "text/plain", content: "Zmlyc3Q=" },
+        ],
+      });
+      await until(() => transcript().runs.find((run) => run.id === id)?.bound === true);
+      gateway.emit("chat", {
+        runId: id,
+        sessionKey: KEY,
+        seq: 1,
+        state: "error",
+        errorMessage: "Backend unavailable.",
+      });
+      await until(() => transcript().runs.find((run) => run.id === id)?.state === "failed");
+      identify!();
+      await until(() => client.state.connection.gatewayId === "gateway");
+      const next = client.retryNotRun(KEY, id);
+      await until(() => gateway.calls("chat.send").length === 2);
+      const [first, second] = gateway.calls("chat.send") as Array<{ attachments: unknown[] }>;
+      expect(next).not.toBe(id);
+      expect(second?.attachments).toEqual(first?.attachments);
+      expect(second?.attachments).toHaveLength(1);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("scrubs the device credential from a live failure before keeping Details or its payload", async () => {
+    const gateway = gatewayWith([{ key: KEY, agentId: "otto", updatedAt: T0 }]);
+    const secret = 'make-believe-"device"-credential';
+    const storage = memoryStorage({
+      connection: JSON.stringify({ url: URL_A, token: null }),
+      [tokenKey(URL_A)]: JSON.stringify({
+        token: secret,
+        grantedScopes: ADMIN_SCOPES,
+        heldScopes: ADMIN_SCOPES,
+      }),
+    });
+    const { client, transcript } = await openTask({ gateway, storage });
+    try {
+      const id = client.sendMessage(KEY, "Read the notes.");
+      await until(() => transcript().runs[0]?.bound === true);
+      gateway.emit("chat", {
+        runId: id,
+        sessionKey: KEY,
+        seq: 1,
+        state: "error",
+        errorMessage: `Backend refused ${secret}.`,
+        extra: { nested: [secret] },
+      });
+      await until(() => transcript().runs[0]?.state === "failed");
+      const error = transcript().runs[0]!.error!;
+      expect(error.message).toBe("Backend refused [credential].");
+      expect(notRunCause(error.message)?.words).toBe("Backend refused [credential].");
+      expect(client.readRunRaw(KEY, id)).toMatchObject({
+        status: "available",
+        payload: {
+          errorMessage: "Backend refused [credential].",
+          extra: { nested: ["[credential]"] },
+        },
+      });
+    } finally {
+      client.stop();
+    }
+  });
+});
+
+describe("F-480 #988: Computer Use recovery", () => {
+  const reason =
+    "Codex Computer Use readiness failed: plugin/list timed out | CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED";
+
+  for (const lifecycleFirst of [true, false]) {
+    it(`keeps the known reason once when ${lifecycleFirst ? "lifecycle" : "chat"} reports it`, () => {
+      const ctx = { raw: new RawTable(), sessionKey: KEY, now: T0 };
+      const lifecycle = (activity: TaskActivity) =>
+        applyAgentEvent(
+          activity,
+          agentEvent("run-1", 1, "lifecycle", {
+            phase: "error",
+            executionSettled: true,
+            error: lifecycleFirst ? reason : "Request ended.",
+          }),
+          ctx,
+        ).activity;
+      const chat = (activity: TaskActivity) =>
+        applyChatEvent(
+          activity,
+          {
+            runId: "run-1",
+            sessionKey: KEY,
+            seq: 1,
+            state: "error",
+            errorMessage: lifecycleFirst ? "Request ended." : reason,
+          },
+          null,
+          ctx,
+        );
+      for (const applied of [chat(lifecycle(emptyActivity)), lifecycle(chat(emptyActivity))]) {
+        expect(applied.runs).toHaveLength(1);
+        expect(neverRan(applied.runs[0]!)).toBe(true);
+        expect(notRunCause(applied.runs[0]!.error?.message)?.kind).toBe("computer-use-timeout");
+        expect(repeatedNotRun(applied.runs[0]!, applied.runs)).toBe(false);
+      }
+    });
+  }
+
+  it("reads a settled lifecycle error sent as { message } after the chat error", () => {
+    const ctx = { raw: new RawTable(), sessionKey: KEY, now: T0 };
+    const lifecycle = (activity: TaskActivity, extra: Record<string, unknown> = {}) =>
+      applyAgentEvent(
+        activity,
+        agentEvent("run-1", 2, "lifecycle", {
+          phase: "error",
+          executionSettled: true,
+          error: { message: reason },
+          ...extra,
+        }),
+        ctx,
+      ).activity;
+    const chat = applyChatEvent(
+      emptyActivity,
+      { runId: "run-1", sessionKey: KEY, seq: 1, state: "error", errorMessage: "Request ended." },
+      null,
+      ctx,
+    );
+    const applied = lifecycle(chat);
+    expect(applied.runs[0]!.error?.message).toBe(reason);
+    expect(notRunCause(applied.runs[0]!.error?.message)?.kind).toBe("computer-use-timeout");
+    // Late start evidence still wins: a run that started is not a Computer Use not-run.
+    const started = lifecycle(chat, { providerStarted: true });
+    expect(neverRan(started.runs[0]!)).toBe(false);
+    expect(started.runs[0]!.error?.message).toBe("Request ended.");
+    // An exhausted fallback is as definitive as a settled run, whichever order they come in.
+    const exhausted = lifecycle(chat, {
+      executionSettled: undefined,
+      fallbackExhaustedFailure: true,
+    });
+    expect(exhausted.runs[0]!.error?.message).toBe(reason);
+    // A failed attempt the gateway may still go on from changes nothing.
+    const attempt = lifecycle(chat, { executionSettled: undefined });
+    expect(attempt.runs[0]!.error?.message).toBe("Request ended.");
+  });
+
+  const patch = (value: boolean | null, baseHash: string) => ({
+    baseHash,
+    raw: JSON.stringify({
+      plugins: {
+        entries: {
+          codex: {
+            config: {
+              computerUse: { enabled: value },
+            },
+          },
+        },
+      },
+    }),
+  });
+
+  async function recovery(admin = true) {
+    const gateway = gatewayWith([{ key: KEY, agentId: "otto", updatedAt: T0 }]);
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway" });
+    let enabled: boolean | null = true;
+    let revision = 1;
+    gateway.handlers["config.get"] = () => ({
+      hash: `hash-${revision}`,
+      configRevisionHash: `rev-${revision}`,
+      appliedConfigHash: `rev-${revision}`,
+      config: {
+        plugins: {
+          entries: {
+            codex: {
+              config: {
+                computerUse: enabled === null ? {} : { enabled },
+              },
+            },
+          },
+        },
+      },
+    });
+    const set = (value: boolean | null) => {
+      enabled = value;
+      revision += 1;
+    };
+    gateway.handlers["config.patch"] = (params) => {
+      const { raw } = params as { raw: string };
+      set(JSON.parse(raw).plugins.entries.codex.config.computerUse.enabled);
+      return { ok: true, hash: `hash-${revision}` };
+    };
+    const storage = admin
+      ? memoryStorage({
+          connection: JSON.stringify({ url: URL_A, token: null }),
+          [tokenKey(URL_A)]: JSON.stringify({
+            token: "device-token",
+            grantedScopes: ADMIN_SCOPES,
+            heldScopes: ADMIN_SCOPES,
+            adminHeld: true,
+          }),
+        })
+      : undefined;
+    const { client, transcript } = await openTask({ gateway, ...(storage ? { storage } : {}) });
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const id = client.sendMessage(KEY, "Check the log.");
+      await until(() => transcript().runs.some((run) => run.id === id && run.bound));
+      gateway.emit("chat", {
+        runId: id,
+        sessionKey: KEY,
+        seq: 1,
+        state: "error",
+        errorMessage: reason,
+      });
+      await until(() => transcript().runs.some((run) => run.id === id && run.state === "failed"));
+    }
+    const runId = transcript().runs.at(-1)!.id;
+    const change = (restore: boolean) =>
+      client.changeNotRunComputerUse(
+        KEY,
+        runId,
+        restore,
+        stampOn(client.state.connection.gatewayId ?? "gateway", client),
+      );
+    return { client, gateway, runId, change, set };
+  }
+
+  it("changes just Computer Use, reads it back, and puts it back against a fresh hash", async () => {
+    const { client, gateway, runId, change } = await recovery();
+    try {
+      const reads = gateway.calls("config.get").length;
+      expect(await change(false)).toBe("off");
+      expect(gateway.calls("config.patch")).toEqual([patch(false, "hash-1")]);
+      expect(gateway.calls("config.get").length).toBeGreaterThanOrEqual(reads + 2);
+      expect(client.state.computerUseUndo).toMatchObject({ runId, previous: true });
+      expect(await change(true)).toBe("restored");
+      expect(gateway.calls("config.patch")).toEqual([
+        patch(false, "hash-1"),
+        patch(true, "hash-2"),
+      ]);
+      expect(client.state.computerUseUndo).toBeUndefined();
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("waits for the running gateway to apply the new revision before offering Put back", async () => {
+    const { client, gateway, change } = await recovery();
+    const saved = gateway.handlers["config.get"]!;
+    let observedPending = false;
+    let applied = false;
+    gateway.handlers["config.get"] = (params) => {
+      const snapshot = saved(params) as Row;
+      if (applied || gateway.calls("config.patch").length === 0) return snapshot;
+      observedPending = true;
+      return { ...snapshot, appliedConfigHash: "rev-1" };
+    };
+    try {
+      const result = change(false);
+      await until(() => observedPending);
+      expect(client.state.computerUseUndo).toBeUndefined();
+      applied = true;
+      expect(await result).toBe("off");
+      expect(client.state.computerUseUndo).toBeDefined();
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("puts back an unset value and refuses to replace a different value read back", async () => {
+    const { client, gateway, change, set } = await recovery();
+    try {
+      set(null);
+      expect(await change(false)).toBe("off");
+      expect(await change(true)).toBe("restored");
+      expect(gateway.calls("config.patch")).toEqual([
+        patch(false, "hash-2"),
+        patch(null, "hash-3"),
+      ]);
+      expect(await change(false)).toBe("off");
+      set(true);
+      expect(await change(true)).toBe("changed");
+      expect(gateway.calls("config.patch")).toHaveLength(3);
+      expect(client.state.computerUseUndo).toBeUndefined();
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("drops Put back when the address answers as another gateway", async () => {
+    const { client, gateway, runId, change } = await recovery();
+    try {
+      expect(await change(false)).toBe("off");
+      gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "replacement" });
+      gateway.dropAll();
+      await until(() => client.state.connection.gatewayId === "replacement");
+      expect(client.state.computerUseUndo).toBeUndefined();
+      expect(client.state.transcripts[KEY]?.runs.find((run) => run.id === runId)).toMatchObject({
+        computerUseGatewayChanged: true,
+      });
+      expect(await change(true)).toBe("not-sent");
+      expect(gateway.calls("config.patch")).toHaveLength(1);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("Put back refuses a newer revision even when Computer Use is off again", async () => {
+    const { client, gateway, change, set } = await recovery();
+    try {
+      expect(await change(false)).toBe("off");
+      set(true);
+      set(false);
+      expect(await change(true)).toBe("changed");
+      expect(gateway.calls("config.patch")).toEqual([patch(false, "hash-1")]);
+      expect(client.state.computerUseUndo).toBeUndefined();
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("recovers Put back after the read of an acknowledged write loses its connection", async () => {
+    const { client, gateway, runId, change } = await recovery();
+    const read = gateway.handlers["config.get"]!;
+    let lost = false;
+    gateway.handlers["config.get"] = (params) => {
+      if (!lost && gateway.calls("config.patch").length > 0) {
+        lost = true;
+        gateway.dropAll();
+      }
+      return read(params);
+    };
+    try {
+      expect(await change(false)).toBe("unconfirmed");
+      await until(() => client.state.computerUseUndo?.runId === runId);
+      expect(await change(true)).toBe("restored");
+      expect(gateway.calls("config.patch")).toEqual([
+        patch(false, "hash-1"),
+        patch(true, "hash-2"),
+      ]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("a second press settles an acknowledged disable whose read failed on the same connection", async () => {
+    const { client, gateway, runId, change } = await recovery();
+    const read = gateway.handlers["config.get"]!;
+    let failed = false;
+    gateway.handlers["config.get"] = (params) => {
+      if (!failed && gateway.calls("config.patch").length > 0) {
+        failed = true;
+        throw new GatewayError({ code: "UNAVAILABLE", message: "Try the read again." });
+      }
+      return read(params);
+    };
+    try {
+      expect(await change(false)).toBe("unconfirmed");
+      expect(client.state.computerUseUndo).toBeUndefined();
+      expect(await change(false)).toBe("off");
+      expect(client.state.computerUseUndo?.runId).toBe(runId);
+      expect(await change(true)).toBe("restored");
+      expect(gateway.calls("config.patch")).toEqual([
+        patch(false, "hash-1"),
+        patch(true, "hash-2"),
+      ]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("Put back sends nothing when its week ends while it reads", async () => {
+    const { client, gateway, change } = await recovery();
+    try {
+      expect(await change(false)).toBe("off");
+      const read = gateway.handlers["config.get"]!;
+      const later = client.state.computerUseUndo!.expiresAt + 1;
+      gateway.handlers["config.get"] = (params) => {
+        vi.spyOn(Date, "now").mockReturnValue(later);
+        return read(params);
+      };
+      expect(await change(true)).toBe("not-sent");
+      expect(gateway.calls("config.patch")).toEqual([patch(false, "hash-1")]);
+    } finally {
+      vi.restoreAllMocks();
+      client.stop();
+    }
+  });
+
+  it("keeps the saved revision from a pending application reply", async () => {
+    const { client, gateway, runId, change } = await recovery();
+    const write = gateway.handlers["config.patch"]!;
+    gateway.handlers["config.patch"] = (params) => {
+      const result = write(params) as Row;
+      throw new GatewayError({
+        code: "UNAVAILABLE",
+        message: "Saved, waiting for the gateway to apply the change.",
+        details: { persistedConfig: { hash: result.hash } },
+      });
+    };
+    try {
+      expect(await change(false)).toBe("off");
+      expect(client.state.computerUseUndo?.runId).toBe(runId);
+      expect(gateway.calls("config.patch")).toEqual([patch(false, "hash-1")]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("reads a disable back after its reply is lost without claiming to have written it", async () => {
+    const { client, gateway, runId, change } = await recovery();
+    const write = gateway.handlers["config.patch"]!;
+    gateway.handlers["config.patch"] = (params) => {
+      const result = write(params);
+      gateway.dropAll();
+      return result;
+    };
+    try {
+      expect(await change(false)).toBe("unconfirmed");
+      await until(
+        () =>
+          client.state.transcripts[KEY]?.runs.some(
+            (run) => run.id === runId && run.computerUseReadback === "already-off",
+          ) ?? false,
+      );
+      expect(client.state.computerUseUndo).toBeUndefined();
+      expect(gateway.calls("config.patch")).toEqual([patch(false, "hash-1")]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("distinguishes a refused change from an answer that could not establish the outcome", async () => {
+    const { client, gateway, change } = await recovery();
+    try {
+      for (const [code, expected] of [
+        ["INVALID_REQUEST", "refused"],
+        ["UNAVAILABLE", "unconfirmed"],
+      ]) {
+        gateway.handlers["config.patch"] = () => {
+          throw new GatewayError({ code: code!, message: "No setting was confirmed." });
+        };
+        expect(await change(false)).toBe(expected);
+        expect(client.state.computerUseUndo).toBeUndefined();
+      }
+      expect(gateway.calls("config.patch")).toHaveLength(2);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("refuses before reading or writing config when this device lacks admin control", async () => {
+    const { client, gateway, change } = await recovery(false);
+    try {
+      const reads = gateway.calls("config.get").length;
+      await expect(change(false)).rejects.toThrow(/admin/i);
+      expect(gateway.calls("config.patch")).toHaveLength(0);
+      expect(gateway.calls("config.get").length).toBe(reads);
+      const turnOn = client.changeNotRunComputerUse(
+        KEY,
+        transcriptRunId(client),
+        false,
+        stampOn("gateway", client),
+        undefined,
+        true,
+      );
+      await expect(turnOn).rejects.toThrow(/admin/i);
+      expect(gateway.calls("config.patch")).toHaveLength(0);
+      expect(gateway.calls("config.get").length).toBe(reads);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("with no receipt, Turn it back on is a new write of true at a fresh read", async () => {
+    const { client, gateway, runId, change } = await recovery();
+    const write = gateway.handlers["config.patch"]!;
+    gateway.handlers["config.patch"] = (params) => {
+      const result = write(params);
+      if (gateway.calls("config.patch").length === 1) gateway.dropAll();
+      return result;
+    };
+    const turnOn = () =>
+      client.changeNotRunComputerUse(
+        KEY,
+        runId,
+        false,
+        stampOn(client.state.connection.gatewayId ?? "gateway", client),
+        undefined,
+        true,
+      );
+    try {
+      expect(await change(false)).toBe("unconfirmed");
+      const readback = () =>
+        client.state.transcripts[KEY]?.runs.find((run) => run.id === runId)?.computerUseReadback;
+      await until(() => readback() === "already-off");
+      const reads = gateway.calls("config.get").length;
+      expect(await turnOn()).toBe("on");
+      expect(gateway.calls("config.get").length).toBeGreaterThanOrEqual(reads + 2);
+      // A new change at the read's own base, not an undo of the lost write.
+      expect(gateway.calls("config.patch")).toEqual([
+        patch(false, "hash-1"),
+        patch(true, "hash-2"),
+      ]);
+      expect(client.state.computerUseUndo).toBeUndefined();
+      expect(readback()).toBeUndefined();
+      // On again: nothing more to write.
+      expect(await turnOn()).toBe("on");
+      expect(gateway.calls("config.patch")).toHaveLength(2);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("Turn it back on after another device turned the check on says it is on, and writes nothing", async () => {
+    const { client, gateway, runId, change, set } = await recovery();
+    const write = gateway.handlers["config.patch"]!;
+    gateway.handlers["config.patch"] = (params) => {
+      const result = write(params);
+      if (gateway.calls("config.patch").length === 1) gateway.dropAll();
+      return result;
+    };
+    const readback = () =>
+      client.state.transcripts[KEY]?.runs.find((run) => run.id === runId)?.computerUseReadback;
+    try {
+      expect(await change(false)).toBe("unconfirmed");
+      await until(() => readback() === "already-off");
+      // Another device turns it on again.
+      set(true);
+      const turnOn = await client.changeNotRunComputerUse(
+        KEY,
+        runId,
+        false,
+        stampOn(client.state.connection.gatewayId ?? "gateway", client),
+        undefined,
+        true,
+      );
+      expect(turnOn).toBe("on");
+      expect(readback()).toBeUndefined();
+      expect(gateway.calls("config.patch")).toEqual([patch(false, "hash-1")]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("a disable stops when clearing another card's Put back closes the opening that asked", async () => {
+    const { client, gateway, change, set } = await recovery();
+    const transcript = () => client.state.transcripts[KEY]!;
+    try {
+      expect(await change(false)).toBe("off");
+      set(true);
+      // A third timeout, so a newer card can turn it off again.
+      const id = client.sendMessage(KEY, "Check the log again.");
+      await until(() => transcript().runs.some((run) => run.id === id && run.bound));
+      gateway.emit("chat", {
+        runId: id,
+        sessionKey: KEY,
+        seq: 1,
+        state: "error",
+        errorMessage: reason,
+      });
+      await until(() => transcript().runs.some((run) => run.id === id && run.state === "failed"));
+      const owner = {};
+      const unsubscribe = client.store.subscribe((state) => {
+        if (!state.computerUseUndo) client.withdraw(owner);
+      });
+      try {
+        await expect(
+          client.changeNotRunComputerUse(KEY, id, false, stampOn("gateway", client), owner),
+        ).rejects.toThrow();
+      } finally {
+        unsubscribe();
+      }
+      expect(gateway.calls("config.patch")).toEqual([patch(false, "hash-1")]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("Turn it back on is not offered beside a Put back that still holds", async () => {
+    const { client, gateway, runId, change } = await recovery();
+    try {
+      expect(await change(false)).toBe("off");
+      const turnOn = await client.changeNotRunComputerUse(
+        KEY,
+        runId,
+        false,
+        stampOn("gateway", client),
+        undefined,
+        true,
+      );
+      expect(turnOn).toBe("not-sent");
+      expect(gateway.calls("config.patch")).toEqual([patch(false, "hash-1")]);
+      expect(client.state.computerUseUndo?.runId).toBe(runId);
+    } finally {
+      client.stop();
+    }
+  });
+
+  // Today's limit, pinned so a fix has something to change: both versions' `hash` is an HMAC of
+  // the config's content, so another admin's false → true → false repeats this write's receipt.
+  it("the gateway exposes a content hash: Put back can miss an edit that restores the same config bytes", async () => {
+    const { client, gateway, change, set } = await recovery();
+    const content = (reply: unknown) =>
+      `content-${JSON.stringify((reply as { config: unknown }).config)}`;
+    const read = gateway.handlers["config.get"]!;
+    gateway.handlers["config.get"] = (params) => {
+      const reply = read(params) as Row;
+      const hash = content(reply);
+      return { ...reply, hash, configRevisionHash: hash, appliedConfigHash: hash };
+    };
+    const write = gateway.handlers["config.patch"]!;
+    gateway.handlers["config.patch"] = (params) => {
+      write(params);
+      return { ok: true, hash: content(read({})) };
+    };
+    try {
+      expect(await change(false)).toBe("off");
+      set(true);
+      set(false);
+      // Another admin's later "off" looks like this card's own: Put back writes over it.
+      expect(await change(true)).toBe("restored");
+      expect(gateway.calls("config.patch")).toHaveLength(2);
+    } finally {
+      client.stop();
+    }
+  });
+});
+
+function transcriptRunId(client: {
+  state: { transcripts: Record<string, { runs: Array<{ id: string }> } | undefined> };
+}) {
+  return client.state.transcripts[KEY]!.runs.at(-1)!.id;
+}

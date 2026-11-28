@@ -12,6 +12,7 @@ import type { TaskActivity } from "./runs.ts";
 import type { SkillNote } from "./skill-notes.ts";
 import type { StartTasks } from "./start-tasks.ts";
 import type { SetupState } from "./setup.ts";
+import type { ComputerUseUndo } from "./not-run.ts";
 import type { CheckInsState } from "./check-ins.ts";
 import type { SidebarState } from "./sidebar.ts";
 import type { ComputerState } from "./computer.ts";
@@ -583,6 +584,7 @@ export type DiscoveryState = {
 
 export type ClawtrateState = {
   connection: ConnectionState;
+  computerUseUndo?: ComputerUseUndo;
   discovery: DiscoveryState;
   bots: Bot[];
   tasksByBot: Record<string, Task[]>;

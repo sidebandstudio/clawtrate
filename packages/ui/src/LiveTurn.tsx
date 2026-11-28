@@ -5,9 +5,13 @@
 // messages between bots are the cards' own (./cards).
 
 import {
-  attachmentsCut,
-  wordsCut,
+  gatewayStamp,
+  type ComputerUseChange,
+  notRunRetryKey,
+  notRunRetryRecorded,
+  retryPlan,
   isTerminal,
+  repeatedNotRun,
   type Bot,
   type OutgoingMessage,
   type Run,
@@ -204,78 +208,7 @@ export function stoppedWithLines(run: Run, nameOf: (sessionKey: string) => strin
   return lines;
 }
 
-/**
- * The person's message a run is known to have started from: its keyed anchor only (#686), and
- * only a message of theirs: another session's message that started it (#645) is not sent again
- * as theirs. A position decides where a run is drawn, never what Try again sends.
- */
-function keyedAnchor(run: Run, transcript: Transcript) {
-  return run.anchorKeyed
-    ? transcript.items.find((item) => item.id === run.anchorItemId && item.role === "user")
-    : undefined;
-}
-
-/**
- * What "Try again" sends for a failed run, if anything (#686). Nothing goes out without its files:
- * - `again`: this device still holds the message, and its words and files go again together;
- * - `text`: only history has it, and it was words alone;
- * - `files-gone`: only history has it, and it had files this device no longer holds: no Try
- *   again, and the line says to send it again with them;
- * - `files-unknown`: only history has it, and history's list of its files was cut to its bound, so
- *   whether it had any isn't known: no Try again, and the line says to send it again with any;
- * - `words-cut`: only history has it, and its words may be only their start (`wordsCut`): no Try
- *   again, and the line says to send it again in full. A files plan says so too (`wordsCut`);
- * - null: no message is known to have started the run.
- */
-export type RetryPlan =
-  | { kind: "again"; messageId: string }
-  | { kind: "text"; text: string; replyToId: string | null }
-  | { kind: "files-gone"; wordsCut?: true }
-  | { kind: "files-unknown"; wordsCut?: true }
-  | { kind: "words-cut" }
-  | null;
-
-export function retryPlan(run: Run, transcript: Transcript): RetryPlan {
-  if (run.messageId && transcript.outbox.some((message) => message.id === run.messageId))
-    return { kind: "again", messageId: run.messageId };
-  const anchor = keyedAnchor(run, transcript);
-  if (!anchor) return null;
-  // Nor do words that may be only their start, which a files plan says as well.
-  const cut = wordsCut(anchor) ? ({ wordsCut: true } as const) : {};
-  if ((anchor.attachments?.length ?? 0) > 0) return { kind: "files-gone", ...cut };
-  // Words alone go again only when the message is known to have had no files.
-  if (attachmentsCut(anchor)) return { kind: "files-unknown", ...cut };
-  if ("wordsCut" in cut) return { kind: "words-cut" };
-  const text = messageTextOf(run, transcript);
-  return text ? { kind: "text", text, replyToId: messageReplyOf(run, transcript) } : null;
-}
-
-/**
- * The message a run's own message replied to, from the outbox or from history's reference on the
- * run's message. Try again sends it only through `retryPlan`, which first requires that message
- * known by its key: a parent is never taken from a message the run is only drawn under (#686).
- */
-export function messageReplyOf(run: Run, transcript: Transcript): string | null {
-  const outgoing = transcript.outbox.find((message) => message.id === run.messageId);
-  if (outgoing) return outgoing.replyToId ?? null;
-  return transcript.items.find((item) => item.id === run.anchorItemId)?.replyTo?.id ?? null;
-}
-
-/**
- * The text of the message that started a run, for "Try again": null (no Try again) when no
- * message is known to have started it, as for a failure history keyed to none (#686).
- */
-export function messageTextOf(run: Run, transcript: Transcript): string | null {
-  const outgoing = transcript.outbox.find((message) => message.id === run.messageId);
-  if (outgoing) return outgoing.text;
-  const anchor = keyedAnchor(run, transcript);
-  if (!anchor) return null;
-  const text = anchor.blocks
-    .map((block) => (block.kind === "text" ? block.text : ""))
-    .join("\n")
-    .trim();
-  return text || null;
-}
+export { messageReplyOf, messageTextOf, retryPlan, type RetryPlan } from "@clawtrate/core";
 
 /**
  * How a run ended, where the transcript says more than its text: the stop
@@ -294,12 +227,41 @@ export function RunEnding({
 }) {
   const bridge = useBridge();
   const announce = useAnnounce();
-  const bots = useClawtrateState().bots;
+  const { bots, connection, computerUseUndo } = useClawtrateState();
   const [dismissed, setDismissed] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
+  const [retrying, setRetrying] = useState(false);
+  const [computerUseResult, setComputerUseResult] = useState<ComputerUseChange | null>(null);
+  const [changingComputerUse, setChangingComputerUse] = useState(false);
+  // The latest Computer Use press: a failed Put back or Turn it back on says so while still off.
+  const [pressed, setPressed] = useState<"off" | "put-back" | "on" | null>(null);
+  // What this card's own presses last established; a press that failed leaves it as it was.
+  const [known, setKnown] = useState<"off" | "on" | null>(null);
+  const [undoClock, setUndoClock] = useState(Date.now);
+  const undoExpiresAt =
+    computerUseUndo?.taskKey === taskKey && computerUseUndo.runId === run.id
+      ? computerUseUndo.expiresAt
+      : null;
+  useEffect(() => {
+    if (undoExpiresAt === null) return;
+    const timer = setTimeout(() => setUndoClock(Date.now()), undoExpiresAt - Date.now());
+    return () => clearTimeout(timer);
+  }, [undoExpiresAt]);
   const [rawOpen, setRawOpen] = useState(false);
   const [rawRead, setRawRead] = useState<RunRawRead | null>(null);
   const requestRef = useRef<HTMLPreElement>(null);
+  const retryRef = useRef<HTMLButtonElement>(null);
+  const recoveryRef = useRef<HTMLButtonElement>(null);
+  const undoRef = useRef<HTMLButtonElement>(null);
+  const turnOnRef = useRef<HTMLButtonElement>(null);
+  const repairHadFocus = useRef(false);
+  useEffect(() => {
+    if (!repairHadFocus.current || !computerUseResult || changingComputerUse) return;
+    repairHadFocus.current = false;
+    if (computerUseResult === "off" || computerUseResult === "already-off")
+      (retryRef.current ?? undoRef.current)?.focus();
+    else (recoveryRef.current ?? turnOnRef.current ?? undoRef.current ?? retryRef.current)?.focus();
+  }, [computerUseResult, changingComputerUse]);
   // Dismiss and the line swap places; focus follows to what replaced it.
   const moved = useRef(false);
   const lineRef = useRef<HTMLButtonElement>(null);
@@ -394,6 +356,65 @@ export function RunEnding({
     ending.kind === "not-run" || ending.kind === "not-started"
       ? notRunWords(ending, bot.name, earlier)
       : null;
+  const repeated =
+    ending.kind === "not-run" && repeatedNotRun(run, transcript.runs, transcript.items);
+  const cause = ending.kind === "not-run" ? ending.cause : null;
+  const details = cause?.words;
+  const computerUse = cause?.kind === "computer-use-timeout";
+  const canAdmin =
+    connection?.status === "connected" && connection.canAdmin && !bridge.info?.readOnly;
+  const canAsk =
+    connection?.status === "connected" && !connection.fullPairing && !bridge.info?.readOnly;
+  const undo = undoExpiresAt !== null && undoExpiresAt > undoClock;
+  const readback =
+    !computerUseResult || computerUseResult === "unconfirmed"
+      ? (run.computerUseReadback ?? computerUseResult)
+      : computerUseResult;
+  const computerUseOff =
+    !run.retryGatewayChanged &&
+    (undoExpiresAt !== null ||
+      (known ?? (run.computerUseReadback === "already-off" ? "off" : null)) === "off");
+  const repair = computerUse && repeated && !computerUseOff && !run.retryGatewayChanged;
+  // Off with no Put back left (its receipt was lost, another writer turned it off, or its week
+  // ended): a new change can turn it on again.
+  const turnBackOn = computerUse && computerUseOff && !undo;
+  const changeComputerUse = (press: "off" | "put-back" | "on") => {
+    repairHadFocus.current =
+      document.activeElement ===
+      (press === "put-back"
+        ? undoRef.current
+        : press === "on"
+          ? turnOnRef.current
+          : recoveryRef.current);
+    setChangingComputerUse(true);
+    setComputerUseResult(null);
+    setPressed(press);
+    const settle = (result: ComputerUseChange) => {
+      setComputerUseResult(result);
+      setKnown((was) =>
+        result === "off" || result === "already-off"
+          ? "off"
+          : result === "restored" || result === "on"
+            ? "on"
+            : result === "changed"
+              ? null
+              : was,
+      );
+    };
+    void bridge
+      .invoke({
+        type: "changeNotRunComputerUse",
+        key: taskKey,
+        runId: run.id,
+        restore: press === "put-back",
+        stamp: gatewayStamp(connection),
+        ...(press === "on" ? { turnOn: true } : {}),
+      })
+      .then(settle, () => settle("not-sent"))
+      .finally(() => setChangingComputerUse(false));
+  };
+  // What the last press came to; a turn-off's own read-back stands in for its unconfirmed answer.
+  const said = pressed === "off" || pressed === null ? readback : computerUseResult;
   // The app's own limit and the gateway's are worded apart: each says who ended the turn.
   const title = notRun
     ? notRun.title
@@ -402,8 +423,24 @@ export function RunEnding({
       : ending.kind === "gateway-timeout"
         ? `${bot.name}'s turn reached the gateway's time limit`
         : failedTurnTitle(bot.name, earlier);
+  const retry = retryPlan(run, transcript);
+  const retryId = notRun ? notRunRetryKey(taskKey, run.id) : null;
+  const retried = retryId ? transcript.outbox.find((message) => message.id === retryId) : undefined;
+  const retryRecorded = !retried && retryId !== null && notRunRetryRecorded(transcript, retryId);
+  // What Try again sends, when there is one.
+  const resend =
+    !retryRecorded &&
+    (retry?.kind === "again" || retry?.kind === "retained" || retry?.kind === "text")
+      ? retry
+      : null;
+  const retryInFlight =
+    retrying ||
+    (retried !== undefined &&
+      !["failed", "unknown", "not-sent", "cancelled"].includes(retried.status));
   const reason = notRun
-    ? notRun.reason
+    ? cause?.kind === "other" && (repeated || !resend) && !run.retryGatewayChanged
+      ? "Choose another model for this bot."
+      : notRun.reason
     : ending.kind === "turn-limit"
       ? "Clawtrate stopped it at the Turn time limit in Settings, and the gateway confirmed. Send a message to pick up where it left off."
       : ending.kind === "gateway-timeout"
@@ -427,9 +464,19 @@ export function RunEnding({
   // A stop at the turn limit stops the other bots' runs it started too, as Stop does (F-296).
   const also =
     ending.kind === "turn-limit" ? stoppedWithLines(run, (key) => botOfSession(bots, key)) : [];
-  const retry = retryPlan(run, transcript);
-  // What Try again sends, when there is one.
-  const resend = retry?.kind === "again" || retry?.kind === "text" ? retry : null;
+  const ways = run.retryGatewayChanged ? [] : (notRun?.ways ?? []);
+  const tryFirst = !repeated && (cause?.kind === "other" || cause?.kind === "computer-use-timeout");
+  const wayButton = (way: (typeof ways)[number]) => (
+    <button
+      key={way}
+      type="button"
+      className="button"
+      data-size="sm"
+      onClick={() => requestBotSettings(bot.id, way)}
+    >
+      {way === "model" ? "Change model" : "Change account"}
+    </button>
+  );
   const requestId = run.requestId ?? null;
   const raw = run.error?.raw;
   const showRaw = (open: boolean) => {
@@ -474,11 +521,49 @@ export function RunEnding({
         data-variant="quiet"
         aria-label="Dismiss this error"
         title="Dismiss this error"
-        onClick={() => toggle(true)}
+        onClick={() => {
+          toggle(true);
+          if (notRun && (retry?.kind === "retained" || retry?.kind === "again"))
+            void bridge.send({ type: "dismissNotRun", key: taskKey, runId: run.id });
+        }}
       >
         <CloseIcon />
       </button>
       <p className="turn-error-reason">{reason}</p>
+      {repeated && !computerUseOff && (
+        <p className="turn-error-reason">
+          This happened on the previous attempt too. Sending again is unlikely to help.
+        </p>
+      )}
+      {computerUse && !repeated && (
+        <p className="turn-error-reason">This sometimes clears by itself.</p>
+      )}
+      {repair && (
+        <p className="turn-error-reason">
+          {canAdmin
+            ? "This skips the Computer Use check at startup and automatic installation. Native tools set up separately can still work."
+            : "Turning off Computer Use needs full control of the gateway."}
+        </p>
+      )}
+      {computerUse && computerUseOff && (
+        <p className="turn-error-reason" role="status">
+          The Computer Use startup check is off on this gateway.
+        </p>
+      )}
+      {turnBackOn && !canAdmin && (
+        <p className="turn-error-reason">
+          A device with full control of the gateway can turn it back on.
+        </p>
+      )}
+      {computerUse &&
+        !run.retryGatewayChanged &&
+        (!computerUseOff || (pressed === "put-back" && undo) || pressed === "on") &&
+        said &&
+        COMPUTER_USE_RESULT[said] && (
+          <p className="turn-error-reason" role="status">
+            {COMPUTER_USE_RESULT[said]}
+          </p>
+        )}
       {ending.kind === "turn-limit" && (run.omittedTools ?? 0) > 0 && (
         <p className="turn-error-reason">
           Some actions are no longer shown. Other bots' work may continue.
@@ -496,10 +581,21 @@ export function RunEnding({
           Couldn't send it again: {retryError}
         </p>
       )}
+      {notRun && run.retryGatewayChanged && (
+        <p className="turn-error-reason">
+          {run.retryFiles === "gone"
+            ? "This message went to a different gateway. Its files are no longer available to retry."
+            : "This message went to a different gateway, so it can't be retried here."}
+        </p>
+      )}
+      {run.computerUseGatewayChanged && (
+        <p className="turn-error-reason">
+          The Computer Use setting belongs to the previous gateway.
+        </p>
+      )}
       {retry?.kind === "files-gone" && (
         <p className="turn-error-reason" data-testid="retry-files-gone">
-          This message had files, and this device no longer holds them. To try again, send it again
-          with its files.
+          This device can no longer resend the files. To try again, attach them to a new message.
         </p>
       )}
       {retry?.kind === "files-unknown" && (
@@ -514,50 +610,110 @@ export function RunEnding({
           The full text of this message isn't available here. To try again, send it again in full.
         </p>
       )}
-      {(resend || requestId || raw || (notRun?.ways.length ?? 0) > 0) && (
+      {(resend ||
+        requestId ||
+        raw ||
+        details ||
+        ways.length > 0 ||
+        repair ||
+        undo ||
+        (turnBackOn && canAdmin)) && (
         <div className="turn-error-actions">
-          {notRun?.ways.map((way) => (
+          {repair && canAdmin && (
             <button
-              key={way}
+              ref={recoveryRef}
+              type="button"
+              className="button turn-error-recovery"
+              data-size="sm"
+              disabled={changingComputerUse}
+              onClick={() => changeComputerUse("off")}
+            >
+              Turn off Computer Use on this gateway
+            </button>
+          )}
+          {repair && !canAdmin && canAsk && (
+            <button
               type="button"
               className="button"
               data-size="sm"
-              onClick={() => requestBotSettings(bot.id, way)}
+              onClick={() =>
+                void bridge.send({ type: "requestAccess", tier: "admin" }).catch(() => {})
+              }
             >
-              {way === "model" ? "Change model" : "Change account"}
+              Request admin access
             </button>
-          ))}
+          )}
+          {!tryFirst && (repeated ? ways.slice(0, 1) : ways).map(wayButton)}
           {resend && (
             <button
+              ref={retryRef}
               type="button"
               className="button"
               data-size="sm"
+              disabled={
+                changingComputerUse ||
+                retryInFlight ||
+                (Boolean(notRun) && (connection?.status !== "connected" || !connection.gatewayId))
+              }
               onClick={() => {
                 setRetryError(null);
-                // The engine still holds the message: its words and files go again together.
-                // Otherwise only history has it, and it was words alone (`retryPlan`). A reply
-                // goes again as a reply to the same message.
-                const again =
-                  resend.kind === "again"
+                setRetrying(true);
+                const again = notRun
+                  ? bridge.invoke({
+                      type: "retryNotRun",
+                      key: taskKey,
+                      runId: run.id,
+                      stamp: gatewayStamp(connection),
+                    })
+                  : resend.kind === "again"
                     ? bridge.invoke({
                         type: "sendAgain",
                         key: taskKey,
                         messageId: resend.messageId,
                       })
-                    : bridge.invoke({
-                        type: "sendMessage",
-                        key: taskKey,
-                        text: resend.text,
-                        mode: "auto",
-                        attachmentIds: [],
-                        ...(resend.replyToId ? { replyToId: resend.replyToId } : {}),
-                      });
-                void again.catch((error: unknown) =>
-                  setRetryError(error instanceof Error ? error.message : String(error)),
-                );
+                    : resend.kind === "retained"
+                      ? bridge.invoke({ type: "retryNotRun", key: taskKey, runId: resend.runId })
+                      : bridge.invoke({
+                          type: "sendMessage",
+                          key: taskKey,
+                          text: resend.text,
+                          mode: "auto",
+                          attachmentIds: [],
+                          ...(resend.replyToId ? { replyToId: resend.replyToId } : {}),
+                        });
+                void again
+                  .catch((error: unknown) =>
+                    setRetryError(error instanceof Error ? error.message : String(error)),
+                  )
+                  .finally(() => setRetrying(false));
               }}
             >
               Try again
+            </button>
+          )}
+          {(tryFirst ? ways : repeated ? ways.slice(1) : []).map(wayButton)}
+          {undo && canAdmin && (
+            <button
+              ref={undoRef}
+              type="button"
+              className="button"
+              data-size="sm"
+              disabled={changingComputerUse}
+              onClick={() => changeComputerUse("put-back")}
+            >
+              Put back
+            </button>
+          )}
+          {turnBackOn && canAdmin && (
+            <button
+              ref={turnOnRef}
+              type="button"
+              className="button"
+              data-size="sm"
+              disabled={changingComputerUse}
+              onClick={() => changeComputerUse("on")}
+            >
+              Turn it back on
             </button>
           )}
           {requestId && (
@@ -571,7 +727,7 @@ export function RunEnding({
               Copy request ID
             </button>
           )}
-          {(requestId || raw) && (
+          {(requestId || raw || details) && (
             <button
               type="button"
               className="button"
@@ -580,7 +736,7 @@ export function RunEnding({
               aria-expanded={rawOpen}
               onClick={() => showRaw(!rawOpen)}
             >
-              Raw
+              {details ? "Details" : "Raw"}
             </button>
           )}
         </div>
@@ -595,18 +751,30 @@ export function RunEnding({
               </pre>
             </>
           )}
-          <RunRawView read={raw ? rawRead : { status: "not-kept", holds: null }} />
+          {details && <p className="code-block">{details}</p>}
+          {(raw || !details) && (
+            <RunRawView read={raw ? rawRead : { status: "not-kept", holds: null }} />
+          )}
         </div>
       )}
     </div>
   );
 }
 
-/** What a failed run's Raw holds, in words: exactly that, and as received. */
+const COMPUTER_USE_RESULT: Partial<Record<ComputerUseChange, string>> = {
+  restored: "The previous Computer Use setting is back.",
+  on: "The Computer Use startup check is back on.",
+  changed: "The gateway settings changed since this card last read them.",
+  refused: "The gateway refused the Computer Use change.",
+  unconfirmed: "Clawtrate couldn't confirm whether the Computer Use setting changed.",
+  "not-sent": "Clawtrate couldn't send the Computer Use change.",
+};
+
+/** What a failed run's Raw holds, after credential scrubbing. */
 const RAW_HOLDS: Record<RunErrorRaw["holds"], string> = {
-  "chat-event": "The chat event that ended the turn, as received",
-  "lifecycle-data": "The data of the agent lifecycle event that ended the turn, as received",
-  "send-answer": "The gateway's answer to the send that started the turn, as received",
+  "chat-event": "The chat event that ended the turn",
+  "lifecycle-data": "The data of the agent lifecycle event that ended the turn",
+  "send-answer": "The gateway's answer to the send that started the turn",
 };
 
 /** A failed run's Raw, once read (F-301): what it holds, or why it is not here. */

@@ -8,6 +8,7 @@ import type { ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { solidPng } from "../packages/core/test/sent-attachments-rows.ts";
 import { ACCOUNT_CLIENTS } from "../tools/dev-gateway/src/account-checks.ts";
 import { openInstance, openOperator } from "../tools/dev-gateway/src/cli.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
@@ -227,4 +228,57 @@ test("F-480 #663 #664: a message the gateway couldn't run says why, after a relo
   await expect(botRow(other)).not.toHaveAccessibleName(/a run failed/, { timeout: 20_000 });
   // The first message keeps its line: it still wasn't run.
   await expect(line).toContainText("The gateway couldn't run this message");
+});
+
+test("F-480 #988: after the same pre-run failure, the card leads with recovery and resends the picture", async () => {
+  test.setTimeout(180_000);
+  await setModel("acme/dev-1@acme:missing");
+  const key = `agent:${BOT}:picture-retry`;
+  await admin.request("sessions.create", { key, agentId: BOT, label: "Picture retry" });
+  if ((await botRow().getAttribute("aria-expanded")) !== "true") await botRow().click();
+  await page.getByTestId("task").filter({ hasText: "Picture retry" }).click();
+  const composer = page.getByTestId("composer-input");
+  await expect(composer).toBeEditable({ timeout: 20_000 });
+  await composer.fill("Check this first.");
+  await composer.press("Enter");
+  const failures = page.getByTestId("turn-error");
+  await expect(failures).toHaveCount(1, { timeout: 60_000 });
+
+  const shot = Buffer.from(solidPng(48, 32, [220, 40, 40]));
+  await page
+    .locator('.composer input[type="file"]')
+    .setInputFiles([{ name: "recovery.png", mimeType: "image/png", buffer: shot }]);
+  await expect(page.locator(".attachments .chip:not([aria-busy=true])")).toHaveCount(1);
+  const prompt = "Check this picture.";
+  await composer.fill(prompt);
+  await composer.press("Enter");
+  await expect(failures).toHaveCount(2, { timeout: 60_000 });
+  const failure = failures.last();
+  await expect(failure).toContainText(
+    "This happened on the previous attempt too. Sending again is unlikely to help.",
+  );
+  await expect(failure.locator(".turn-error-actions button").nth(0)).toHaveText("Change account");
+  await expect(failure.locator(".turn-error-actions button").nth(1)).toHaveText("Try again");
+  await expect(page.getByTestId("outgoing")).toHaveCount(0, { timeout: 30_000 });
+
+  const pictures = async () => {
+    const history = await admin.request<{ messages: Array<Record<string, unknown>> }>(
+      "chat.history",
+      { sessionKey: key, limit: 30 },
+    );
+    return history.messages
+      .filter((row) => row.role === "user" && row.content === prompt)
+      .map((row) =>
+        (row.__openclaw as { media?: Array<{ fileName: string }> })?.media?.map(
+          (file) => file.fileName,
+        ),
+      );
+  };
+  await expect.poll(pictures).toEqual([["recovery.png"]]);
+  await setModel("acme/dev-1@acme:work");
+  await failure.getByRole("button", { name: "Try again" }).click();
+  await expect.poll(pictures, { timeout: 60_000 }).toEqual([["recovery.png"], ["recovery.png"]]);
+  await expect(page.getByTestId("message").filter({ hasText: "scripted" }).first()).toBeVisible({
+    timeout: 60_000,
+  });
 });

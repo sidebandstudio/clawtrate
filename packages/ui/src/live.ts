@@ -471,7 +471,7 @@ export function notRunWords(
     case "model-unknown":
       return {
         title,
-        reason: `The gateway doesn't know ${bot}'s model. Choose another model.${cause.words ? ` The gateway said: ${cause.words}` : ""}`,
+        reason: `The gateway doesn't know ${bot}'s model. Choose another model.`,
         ways: ["model"],
       };
     case "no-account":
@@ -480,8 +480,18 @@ export function notRunWords(
         reason: `The gateway found no account it can use for the provider of ${bot}'s model. Add an account, or choose another model.`,
         ways: ["account", "model"],
       };
+    case "computer-use-timeout":
+      return {
+        title,
+        reason: "Codex couldn't finish checking Computer Use, so your message didn't run.",
+        ways: [],
+      };
     case "other":
-      return { title, reason: `The gateway said: ${cause.words ?? ""}`, ways: [] };
+      return {
+        title,
+        reason: "Try again, or choose another model for this bot.",
+        ways: ["model"],
+      };
     default:
       return { title, reason: "The gateway didn't say why.", ways: [] };
   }
@@ -543,9 +553,11 @@ export function endingOf(run: Run, _transcript?: Transcript): RunEnding | null {
     };
   }
   if (run.state === "failed") {
-    if (run.ending?.timeoutPhase)
+    const beforeRun = neverRan(run);
+    const cause = beforeRun ? notRunCause(run.error?.message) : null;
+    if (run.ending?.timeoutPhase && cause?.kind !== "computer-use-timeout")
       return { kind: "gateway-timeout", reason: run.error?.message ?? null };
-    if (neverRan(run)) return { kind: "not-run", cause: notRunCause(run.error?.message) };
+    if (beforeRun) return { kind: "not-run", cause };
     return { kind: "failed", reason: run.error?.message || "The gateway gave no reason." };
   }
   return null;
