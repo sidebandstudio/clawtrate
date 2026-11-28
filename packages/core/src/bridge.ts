@@ -37,7 +37,7 @@ import { MAX_MESSAGE_LINE_CHARS } from "./state-bounds.ts";
 import type { ComputerUseChange } from "./not-run.ts";
 import type { ClawtrateState, GatewayStamp, TranscriptItem } from "./types.ts";
 import type { MissingStep } from "./accounts.ts";
-import type { SetupHost, SetupOffer } from "./setup.ts";
+import type { InstallAction, SetupHost, SetupOffer } from "./setup.ts";
 import {
   CHECKIN_EVERY,
   MAX_CHECKIN_EVERY_CHARS,
@@ -113,6 +113,8 @@ export type BridgeCommand =
   | { type: "setupConnect" }
   | { type: "setupStart" }
   | { type: "setupReset" }
+  /** Set OpenClaw up on the host's computer, after the host's own dialog (`setup.ts`). */
+  | { type: "setupInstall"; action?: InstallAction }
   /** Close the connection and keep the gateway and the pairing, until `retry` reconnects. */
   | { type: "suspend" }
   | { type: "retry" }
@@ -1603,6 +1605,11 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "setupStart":
     case "setupReset":
       return { type: command.type };
+    case "setupInstall":
+      if (command.action === undefined) return { type: "setupInstall" };
+      if (command.action === "continue" || command.action === "replace")
+        return { type: "setupInstall", action: command.action };
+      throw new Error("Invalid setup install action.");
     case "sendMessage": {
       const ids = command.attachmentIds ?? [];
       if (
@@ -2314,11 +2321,13 @@ class ViewerSession implements BridgeSession {
       case "setupCancel":
       case "setupConnect":
       case "setupStart":
-      case "setupReset": {
+      case "setupReset":
+      case "setupInstall": {
         const setup = policy.setup;
         if (!setup) throw new Error("This host doesn't set up OpenClaw on its computer.");
         if (command.type === "setupLook") return setup.look();
         if (command.type === "setupConnect") return setup.connect();
+        if (command.type === "setupInstall") return setup.install(command.action);
         if (command.type === "setupStart") return setup.start();
         if (command.type === "setupCancel") return setup.cancel();
         return setup.reset();

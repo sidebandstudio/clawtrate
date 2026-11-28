@@ -1,0 +1,11 @@
+- status
+- main:
+  - button "Back"
+  - heading "On this computer" [level=2]
+  - heading "Found your OpenClaw settings on this Mac" [level=3]
+  - paragraph: What is listening at the port they name matches them.
+  - paragraph:
+    - text: Full control lets Clawtrate change gateway settings, approve devices and, when the gateway allows it, open a terminal on the computer running OpenClaw.
+    - button "What this means"
+  - button "Connect"
+  - paragraph: On this computer

@@ -92,6 +92,8 @@ describe("the hooks", () => {
     expect(versionKnown("2026.10.6")).toBe(true);
     expect(versionKnown("2026.11.10")).toBe(true);
     expect(versionKnown("v2026.11.10-beta.1")).toBe(true);
+    expect(versionKnown("2026.11.11")).toBe(true);
+    expect(versionKnown("2026.11.12")).toBe(false);
     expect(versionKnown("2026.12.1")).toBe(false);
     expect(versionKnown(undefined)).toBe(false);
   });

@@ -359,8 +359,10 @@ describe("F-588: Refresh in the Model menu", () => {
     expect(limited(["openai"])).toBeNull();
     expect(limited(["anthropic"])).toBe(line);
     expect(limited([], "2026.11.10")).toBe(line);
+    expect(limited([], "2026.11.11")).toBe(line);
     // A version where it wasn't established, or none reported: nothing is said.
     expect(limited([], "2026.11.6")).toBeNull();
+    expect(limited([], "2026.11.12")).toBeNull();
     expect(limited([], "2027.1.1")).toBeNull();
     expect(limited([], null)).toBeNull();
     // Exactly that release, a leading `v` allowed.
@@ -390,6 +392,7 @@ describe("F-588: Refresh in the Model menu", () => {
     // A prefix entry (`openai/gpt-*`) is an exact name to 2026.10.6 and a wildcard to 2026.11.10.
     expect(limited(["anthropic"], "2026.10.6", false, true)).toBe(line);
     expect(limited(["anthropic"], "2026.11.10", false, true)).toBe(wild);
+    expect(limited(["anthropic"], "2026.11.11", false, true)).toBe(wild);
   });
 
   it("F-588: under a model list with a wildcard that limits the provider, nothing offers a typed model id", () => {

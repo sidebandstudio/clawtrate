@@ -1,0 +1,14 @@
+- status
+- main:
+  - button "Back"
+  - heading "Setting up OpenClaw" [level=2]
+  - paragraph
+  - list "Steps":
+    - listitem "Download and check OpenClaw 2026.11.10, waiting": Download and check OpenClaw 2026.11.10
+    - listitem "Install Node.js and OpenClaw, waiting": Install Node.js and OpenClaw
+    - listitem "Set up the gateway, waiting": Set up the gateway
+    - listitem "Start and check, waiting": Start and check
+  - alert:
+    - paragraph: This session can't run a systemd user service. Setting OpenClaw up here needs a running systemd user manager, as a desktop login has.
+  - button "Try again"
+  - paragraph: Setting up OpenClaw
