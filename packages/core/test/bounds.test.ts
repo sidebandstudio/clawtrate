@@ -9,6 +9,7 @@
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { createBridgeSession, MAX_VIEWER_OPEN_TASKS } from "../src/bridge.ts";
 import {
+  capId,
   enforce,
   jsonTextLength,
   object,
@@ -18,6 +19,7 @@ import {
   type Bound,
 } from "../src/bounds.ts";
 import {
+  MAX_ID_CHARS,
   MAX_PENDING_APPROVAL_COUNT,
   MAX_PENDING_QUESTIONS_PER_TASK,
   MAX_RUN_TEXT_CHARS,
@@ -35,7 +37,7 @@ import {
   STEP,
 } from "../src/state-bounds.ts";
 import type { ClawtrateState } from "../src/types.ts";
-import { agentEvent, KEY, openTask, questionRecord } from "./client-harness.ts";
+import { agentEvent, grantingGateway, KEY, openTask, questionRecord } from "./client-harness.ts";
 import { until } from "./fake-gateway.ts";
 
 describe("the totals", () => {
@@ -315,6 +317,36 @@ describe("the client keeps within the totals", () => {
       expect(transcript().approvals.filter((each) => each.status === "pending")).toHaveLength(
         MAX_PENDING_APPROVAL_COUNT,
       );
+      expectWithinTotals(client.state);
+    } finally {
+      client.stop();
+    }
+  }, 30_000);
+
+  it("with the session a history named, past the id cap, and a message written in it", async () => {
+    const gateway = grantingGateway();
+    const long = `s-${"x".repeat(MAX_ID_CHARS)}`;
+    const history = { sessionId: long, messages: [] as unknown[] };
+    gateway.handlers["chat.history"] = () => ({ ...history, hasMore: false });
+    gateway.handlers["chat.send"] = () => ({ runId: "run-1", status: "started" });
+    const { client, transcript } = await openTask({ gateway });
+    try {
+      // Kept as no id, never as its digest: nothing kept can stand in for the session as named.
+      expect(transcript().sessionId).toBe("");
+      const id = client.sendMessage(KEY, "Free some space.");
+      expect(transcript().outbox[0]).toMatchObject({ id, sessionId: "" });
+      history.messages = [
+        {
+          role: "user",
+          content: "Free some space.",
+          __openclaw: { id: "u1", seq: 1, idempotencyKey: `${id}:user` },
+        },
+      ];
+      gateway.emit("chat", { runId: "run-1", sessionKey: KEY, seq: 1, state: "final" });
+      // The same long id and the message's own key prove no exact session: its words stay.
+      await until(() => transcript().outbox[0]?.status === "unconfirmed");
+      expect(transcript().outbox[0]).toMatchObject({ id, text: "Free some space.", sessionId: "" });
+      expect(JSON.stringify(client.state)).not.toContain(capId(long, MAX_ID_CHARS));
       expectWithinTotals(client.state);
     } finally {
       client.stop();

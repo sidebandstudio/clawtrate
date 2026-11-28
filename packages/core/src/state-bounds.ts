@@ -512,6 +512,7 @@ export const OUTGOING: Bound = object<OutgoingMessage>()({
   error: text(MAX_ERROR_JSON_CHARS),
   attachments: list(MAX_FILES_PER_MESSAGE, attachmentInfo),
   replyToId: ID,
+  sessionId: ID,
   steer: ENUM,
   unmarked: FLAG,
 });
@@ -751,6 +752,7 @@ export const TRANSCRIPT: Bound = flagged<Transcript>()({
   caughtUp,
   questionsOmitted: NUMBER,
   runsOmitted: NUMBER,
+  sessionId: ID,
   sessionKey: ID,
   status: ENUM,
   items: list(MAX_HISTORY_ITEMS, item, {
