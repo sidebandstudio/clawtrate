@@ -174,6 +174,7 @@ export async function nameTask(
     if (hasName(ctx.row())) return null;
     // The bot moved meanwhile to a provider whose tasks no other provider names.
     if (model && !namesAcross(ctx.botModel())) continue;
+    const sentFor = ctx.botModel();
     let title: string | null = null;
     try {
       const answer = asRecord(
@@ -188,6 +189,12 @@ export async function nameTask(
       // Refused or failed: the next one.
     }
     if (!title) continue;
+    // The bot moved while the call was out: its provider (the one named, else the bot's own when
+    // sent) may write the title only if it still may name the bot's tasks. If not, as a refusal.
+    const writer = model ?? sentFor;
+    const now = ctx.botModel();
+    if (providerOf(now) !== providerOf(writer) && !(namesAcross(writer) && namesAcross(now)))
+      continue;
     const row = ctx.row();
     if (hasName(row)) return null;
     // The row now names another session: the task was reset or made again under this key.

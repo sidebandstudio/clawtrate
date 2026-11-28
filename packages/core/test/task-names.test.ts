@@ -182,6 +182,57 @@ describe("making a name", () => {
     }
   });
 
+  it("keeps no title from a provider the bot moved away from while the call was out", async () => {
+    // From Anthropic while OpenAI's call is out: OpenAI's title is dropped, and the bot's own call
+    // goes to its new provider. From OpenAI during its own call: dropped, Anthropic is not asked.
+    for (const [from, answers, kept, models] of [
+      [
+        "anthropic/claude-sonnet-5-5",
+        [{ title: "From OpenAI" }, { title: "From Ollama" }],
+        "From Ollama",
+        ["openai/gpt-6-sol", null],
+      ],
+      ["openai/gpt-6-sol", [{ title: "From OpenAI" }, { title: "z" }], null, [null]],
+    ] as const) {
+      const g = namingGateway([...answers]);
+      g.state.botModel = from;
+      let sent = 0;
+      const ctx = {
+        ...g.ctx,
+        request: async (method: string, params: unknown) => {
+          const answer = await g.ctx.request(method, params);
+          if (method === "sessions.title.prepare" && sent++ === 0)
+            g.state.botModel = "ollama/llama-4";
+          return answer;
+        },
+      };
+      expect(await nameTask(ctx, TASK)).toBe(kept);
+      expect(g.titleCalls().map((each) => each.model ?? null)).toEqual(models);
+      expect(g.patches().map((each) => each.autoLabel)).toEqual(kept ? [kept] : []);
+    }
+  });
+
+  it("keeps a title whose provider may still name the bot's tasks when it arrives", async () => {
+    // Unchanged, or moved between the providers that name each other's tasks.
+    for (const to of [
+      "anthropic/claude-sonnet-5-5",
+      "anthropic/claude-opus-5-5",
+      "openai/gpt-6-sol",
+    ]) {
+      const g = namingGateway([{ title: "Lisbon" }]);
+      const ctx = {
+        ...g.ctx,
+        request: async (method: string, params: unknown) => {
+          const answer = await g.ctx.request(method, params);
+          if (method === "sessions.title.prepare") g.state.botModel = to;
+          return answer;
+        },
+      };
+      expect(await nameTask(ctx, TASK)).toBe("Lisbon");
+      expect(g.patches().map((each) => each.autoLabel)).toEqual(["Lisbon"]);
+    }
+  });
+
   it("keeps no name for a task whose session changed while the name was made", async () => {
     // A reset, or a delete and a new task under the same key, during the title call: the key's
     // new session S2 is not the task the first message was sent to (S1).
