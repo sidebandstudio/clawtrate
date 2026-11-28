@@ -2744,7 +2744,6 @@ export class ClawtrateClient {
     this.selectionApplied = asked;
     this.abandonAccessRequest("Disconnected from the gateway.");
     this.close();
-    this.restarts.end();
     this.setupCode = null;
     this.setupCheck = null;
     this.setupIntent = null;
@@ -9205,9 +9204,7 @@ export class ClawtrateClient {
     }
     this.everConnected = hasData;
     // A reopen of the gateway that is restarting (Retry) still waits for it; any other ends it.
-    const restart = this.state.connection.restart;
-    const keepRestart = sameGateway && restart;
-    if (!keepRestart) this.restarts.end();
+    const keepRestart = sameGateway && this.state.connection.restart;
     this.store.update((state) => ({
       ...(sameGateway
         ? state
