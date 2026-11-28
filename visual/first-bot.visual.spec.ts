@@ -56,6 +56,46 @@ async function outsideAccounts(page: Page, connected: boolean, labels: string[])
   );
 }
 
+/** A later read on the same connection: the accounts it found, or that it failed. */
+async function readAgain(page: Page, labels: string[], failed = false) {
+  await page.evaluate(
+    ({ labels, failed }) => {
+      const { clawtrateFixture } = window as unknown as {
+        clawtrateFixture: { setState(change: (state: ClawtrateState) => ClawtrateState): void };
+      };
+      clawtrateFixture.setState((state) => ({
+        ...state,
+        accounts: {
+          ...state.accounts,
+          status: failed ? "error" : "ready",
+          error: failed ? "models.authStatus is unavailable right now." : null,
+          accounts: labels.map((label, index) => ({
+            id: `openai:outside-${index}`,
+            label,
+            provider: "openai",
+            type: "api_key",
+            status: "static",
+            expiresAt: null,
+            kind: "gateway",
+            made: null,
+            keptBy: null,
+            logoutSupported: false,
+          })),
+        },
+      }));
+    },
+    { labels, failed },
+  );
+}
+
+const refreshes = (page: Page) =>
+  page.evaluate(() => {
+    const { clawtrateFixture } = window as unknown as {
+      clawtrateFixture: { sent: BridgeCommand[] };
+    };
+    return clawtrateFixture.sent.filter((command) => command.type === "refreshAccounts").length;
+  });
+
 for (const size of SIZES.filter(({ name }) => name === "1440" || name === "phone")) {
   test.describe(`first bot at ${size.name}`, () => {
     test.use(contextFor(size));
@@ -122,6 +162,48 @@ for (const size of SIZES.filter(({ name }) => name === "1440" || name === "phone
       await expect(dialog.getByText("Uses OpenAI · Workshop.")).toBeVisible();
     });
 
+    test("F-504: after a reconnect, a later read that finds the account moves setup on", async ({
+      page,
+    }) => {
+      await page.clock.install({ time: NOW });
+      await openFixture(page, FIRST);
+      const dialog = await providers(page);
+      await outsideAccounts(page, false, []);
+      await expect(dialog.getByText(/Waiting for your gateway to reconnect/)).toBeVisible();
+      // The returned gateway's first read lists nothing yet, as one still starting may answer.
+      await outsideAccounts(page, true, []);
+      await providers(page);
+      // Setup asks again on its own, and the next read has the account.
+      const asked = await refreshes(page);
+      await page.clock.fastForward(5_000);
+      await expect.poll(() => refreshes(page)).toBeGreaterThan(asked);
+      await readAgain(page, ["Workshop"]);
+      await expect(dialog.getByRole("heading", { name: "Make your first bot" })).toBeVisible();
+      await expect(dialog.getByRole("button", { name: "Create bot" })).toBeEnabled();
+      await expect(dialog.getByText("Uses OpenAI · Workshop.")).toBeVisible();
+    });
+
+    test("F-504: a failed account read after a reconnect waits and reads again instead of showing the tiles", async ({
+      page,
+    }) => {
+      await page.clock.install({ time: NOW });
+      await openFixture(page, FIRST);
+      const dialog = await providers(page);
+      await outsideAccounts(page, false, []);
+      await outsideAccounts(page, true, []);
+      await readAgain(page, [], true);
+      await expect(dialog.getByText(/Waiting for your gateway to reconnect/)).toBeVisible();
+      await expect(dialog.getByRole("button", { name: "Show more" })).toHaveCount(0);
+      const asked = await refreshes(page);
+      await page.clock.fastForward(5_000);
+      await expect.poll(() => refreshes(page)).toBeGreaterThan(asked);
+      await readAgain(page, ["Workshop", "Studio"]);
+      const account = dialog.getByRole("combobox", { name: "Account" });
+      await expect(account).toHaveValue("");
+      await account.selectOption({ label: "OpenAI · Workshop" });
+      await expect(dialog.getByRole("button", { name: "Create bot" })).toBeEnabled();
+    });
+
     test("F-504: reconnect leaves provider tiles for no account and asks when several arrive", async ({
       page,
     }) => {
@@ -139,6 +221,39 @@ for (const size of SIZES.filter(({ name }) => name === "1440" || name === "phone
       await expect(create).toHaveCount(0);
       await account.selectOption({ label: "OpenAI · Studio" });
       await expect(create).toBeEnabled();
+      await expect(dialog.getByText("Uses OpenAI · Studio.")).toBeVisible();
+    });
+
+    test("F-504: an ended sign-in leaves the chooser to several accounts found on reconnect", async ({
+      page,
+    }) => {
+      await openFixture(page, FIRST);
+      const dialog = await signIn(page);
+      await expect(dialog.locator(".b-code code")).toBeVisible();
+      // The sheet's own sign-in ends with its connection; two accounts arrive by another route.
+      await page.evaluate(() => {
+        const { clawtrateFixture } = window as unknown as {
+          clawtrateFixture: { setState(change: (state: ClawtrateState) => ClawtrateState): void };
+        };
+        clawtrateFixture.setState((state) => ({
+          ...state,
+          accounts: {
+            ...state.accounts,
+            signIn: state.accounts.signIn && {
+              ...state.accounts.signIn,
+              stage: "ended",
+              step: null,
+            },
+          },
+        }));
+      });
+      await outsideAccounts(page, false, ["Workshop", "Studio"]);
+      await outsideAccounts(page, true, ["Workshop", "Studio"]);
+      const account = dialog.getByRole("combobox", { name: "Account" });
+      await expect(account).toHaveValue("");
+      await expect(dialog.getByText("The sign-in ended")).toHaveCount(0);
+      await account.selectOption({ label: "OpenAI · Studio" });
+      await expect(dialog.getByRole("button", { name: "Create bot" })).toBeEnabled();
       await expect(dialog.getByText("Uses OpenAI · Studio.")).toBeVisible();
     });
 
@@ -230,7 +345,7 @@ for (const size of SIZES.filter(({ name }) => name === "1440" || name === "phone
       await expect(page.getByTestId("composer-input")).toBeFocused();
     });
 
-    test("F-504: a subscription without a usable model offers the saved API key", async ({
+    test("F-504: after failed checks every saved account stays in reach, and Create uses the one chosen", async ({
       page,
     }) => {
       await openFixture(page, `${FIRST}&signin=connected&create=account-unusable`);
@@ -239,8 +354,8 @@ for (const size of SIZES.filter(({ name }) => name === "1440" || name === "phone
       await expect(create).toBeEnabled();
       const info = dialog.getByRole("button", { name: "About checking this account" });
       await info.click();
-      await expect(dialog.getByRole("note")).toContainText(
-        "uses a little of your account’s allowance",
+      await expect(dialog.getByRole("note")).toHaveText(
+        "When you press Create bot, Clawtrate asks your gateway to send one short test message through this account to check that it can run the model. It is a real request: your provider may bill it or count it against your account’s allowance, and a failed test can be noted on the account.",
       );
       await info.press("Escape");
       await expect(dialog.getByRole("note")).toHaveCount(0);
@@ -259,6 +374,7 @@ for (const size of SIZES.filter(({ name }) => name === "1440" || name === "phone
               ...state.accounts,
               accounts: [
                 selected,
+                { ...selected, id: "openai:unusable", label: "Work" },
                 { ...selected, id: "openai:key", type: "api_key", kind: "key", label: "API key" },
               ],
             },
@@ -277,9 +393,33 @@ for (const size of SIZES.filter(({ name }) => name === "1440" || name === "phone
       await expect(dialog.getByRole("button", { name: "Connect another account" })).toBeVisible();
       await settle(page);
       await expect(page).toHaveScreenshot(`first-bot-account-unusable-dark-${size.name}.png`);
-      await dialog.getByRole("button", { name: "Use OpenAI · API key" }).click();
+      // Every saved account is offered, not a toggle between two: a second failure still leaves
+      // the third in reach, and Create uses it.
+      const account = dialog.getByRole("combobox", { name: "Account" });
+      await expect(account.locator("option")).toHaveText([
+        "OpenAI openai:second",
+        "OpenAI · Work",
+        "OpenAI · API key",
+      ]);
+      await account.focus();
+      await account.selectOption({ label: "OpenAI · Work" });
+      // The list stays while the failed check stands: choosing keeps it, and focus with it.
+      await expect(account).toBeFocused();
+      await expect(account).toHaveValue("openai:unusable");
+      await create.click();
+      await expect(dialog.getByText("This account can’t run a model here.")).toBeVisible();
+      await account.selectOption({ label: "OpenAI · API key" });
       await create.click();
       await expect(page.getByTestId("composer-input")).toBeFocused();
+      const sent = await page.evaluate(() => {
+        const { clawtrateFixture } = window as unknown as {
+          clawtrateFixture: { sent: BridgeCommand[] };
+        };
+        return clawtrateFixture.sent.flatMap((command) =>
+          command.type === "createBot" ? [command.account] : [],
+        );
+      });
+      expect(sent).toEqual(["openai:second", "openai:unusable", "openai:key"]);
     });
 
     test("F-504: the typed name survives closing first bot setup", async ({ page }) => {

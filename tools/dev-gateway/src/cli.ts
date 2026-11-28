@@ -3372,6 +3372,35 @@ export async function lockOrder(
   return (await lockMode(inst)) === "stopped" ? withGatewayStopped(inst, change) : change();
 }
 
+/**
+ * Stop a named instance's running gateway and start it again on the same state and port: a real
+ * restart, which closes every connection. With `account`, that scripted account is saved by the
+ * gateway's own command line while the gateway is stopped, as an owner saves a named account
+ * outside Clawtrate (OpenClaw 2026.11.10 refuses `--profile-id` beside a running gateway).
+ * Clawtrate the application never does this; the tool does, so that checks can.
+ */
+export async function restartGateway(inst: DevInstance, account?: string): Promise<void> {
+  if (inst.name === null) throw new Error("restart acts only on a named development instance");
+  const saving = account === undefined ? null : SCRIPTED_ACCOUNTS.find((a) => a.id === account);
+  if (saving === undefined) throw new Error(`not a scripted account: ${JSON.stringify(account)}`);
+  const refusal = inst.runner.refusal();
+  if (refusal) throw new Error(refusal);
+  if (saving) {
+    const store = "bot" in saving.store ? saving.store.bot : "main";
+    const problems = accountStoreProblems(inst.stateDir, readConfigForLock(inst), store);
+    if (problems.length > 0) throw new Error(`refusing to save ${saving.id}: ${problems.join("; ")}`);
+  }
+  if (!(await gatewayHealthy(inst))) throw new Error(`${label(inst)} is not running`);
+  await withGatewayStopped(inst, async () => {
+    if (!saving) return;
+    const { args, stdin } = saveAccountCommand(saving);
+    const saved = inst.runner.runSync(args, { input: stdin });
+    if (saved.status !== 0) {
+      throw new Error(`could not save account ${saving.id}:\n${saved.stdout}${saved.stderr}`);
+    }
+  });
+}
+
 const USAGE =
   "usage: pnpm dev-gateway setup   (OpenClaw 2026.10.6 for this tool; start does it when needed)\n" +
   "       pnpm dev-gateway <start|up|seed|routines|approve [requestId]|status|stop|reset> [--instance <name>] [--no-seed] [--first-bot] [--run-id <id>] [--with-accounts] [--default-local-pairing] [--with-node] [--with-images] [--with-message-tool] [--with-http-api] [--with-skill-review] [--with-plugin <plugin>]... [--renew-timeout-ms <ms>]\n" +

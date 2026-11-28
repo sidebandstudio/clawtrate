@@ -38,6 +38,30 @@ describe("screenFor (C2)", () => {
     expect(screenFor(state("pairing", 4))).toBe("connect");
   });
 
+  it("F-003: a connection whose bots are still loading shows the setup steps, with or without an earlier read", () => {
+    const loading = (
+      tasksRead: ClawtrateState["discovery"]["tasksRead"],
+      connectedAt: number | null,
+    ) => ({
+      ...state("connected", 0),
+      connection: { ...state("connected", 0).connection, connectedAt },
+      discovery: { ...initialState.discovery, status: "loading" as const, tasksRead },
+    });
+    const stamp = (connectedAt: number | null) => ({ gatewayId: "gw", target: 0, connectedAt });
+    expect(screenFor(loading(null, 5))).toBe("connect");
+    // Read on this same connection, or with no connection stamp to compare: an ordinary load.
+    expect(screenFor(loading(stamp(5), 5))).toBe("connect");
+    expect(screenFor(loading(stamp(4), null))).toBe("connect");
+    // Read on an earlier connection to the same target: an empty roster's reconnect keeps the shell.
+    expect(screenFor(loading(stamp(4), 5))).toBe("shell");
+    expect(
+      screenFor({
+        ...loading(stamp(4), 4),
+        connection: { ...loading(stamp(4), 4).connection, status: "reconnecting" },
+      }),
+    ).toBe("shell");
+  });
+
   it("shows the shell for a connected gateway with no bots, so its error or empty state is visible", () => {
     expect(screenFor(state("connected", 0))).toBe("shell");
   });

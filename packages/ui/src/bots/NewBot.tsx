@@ -22,10 +22,12 @@ import {
   defaultRef,
   effortFor,
   FIRST_BOT_RECONNECT_WAIT_MS,
+  FIRST_BOT_REREAD_MS,
   firstEffort,
   firstBotModel,
   firstModel,
   providerName,
+  recoveredSignInAccount,
 } from "./words.ts";
 
 type Draft = {
@@ -222,21 +224,67 @@ export function NewBot({
       (signedIn === null || account.id === signedIn) &&
       bots.some((bot) => bot.id === account.keptBy),
   );
+  // The accounts with a model when the provider tiles opened: one found since moves setup on.
+  const [knownAtConnect, setKnownAtConnect] = useState<readonly string[]>([]);
+  // The connection whose first reads after a reconnect found nothing usable: read again on it.
+  const [rereadOn, setRereadOn] = useState<number | null>(null);
   if (first && firstConnect === null && ready && canSubmitHere && admin) {
     setConnectReadAt(connection.connectedAt);
+    setKnownAtConnect(candidates.map((account) => account.id));
     setFirstConnect(firstChoice === null && !keptAccount);
   }
   const returning = firstConnect === true && connectReadAt !== connection.connectedAt;
-  if (first && returning && ready && canSubmitHere && admin) {
-    setConnectReadAt(connection.connectedAt);
-    if (!accounts.signIn && (signedIn ? firstChoice !== null : candidates.length > 0)) {
+  const accountReadFailed = accounts.status === "error" || accounts.modelsStatus === "error";
+  // A sign-in of this sheet's still under way, or one whose own ending decides what comes next,
+  // is the sign-in's to finish. One that ended, failed, expired or was cancelled holds nothing.
+  const signInSettled =
+    !accounts.signIn ||
+    accounts.signIn.stage === "ended" ||
+    accounts.signIn.stage === "failed" ||
+    accounts.signIn.stage === "expired" ||
+    accounts.signIn.stage === "cancelled";
+  if (first && returning && canSubmitHere && admin && accountReadFailed) {
+    // The read failed on the returned connection: shown as the wait, and read again.
+    if (rereadOn !== connection.connectedAt) setRereadOn(connection.connectedAt);
+  }
+  // Every complete read on the current connection is looked at, not only the first after a
+  // reconnect: an account with a model that wasn't there when the tiles opened moves setup on by
+  // itself (one), or is offered with the others (several). The account confirmed in this sheet,
+  // if any, stays the one used.
+  if (first && firstConnect === true && ready && canSubmitHere && admin && signInSettled) {
+    if (returning) setConnectReadAt(connection.connectedAt);
+    const fresh = candidates.filter((account) => !knownAtConnect.includes(account.id));
+    const ended = accounts.signIn && accounts.signIn.stage === "ended" ? accounts.signIn : null;
+    const confirmed = ended ? recoveredSignInAccount(ended, ended.method) : null;
+    if (signedIn ? returning && firstChoice !== null : fresh.length > 0) {
       if (signedIn === null) {
-        if (candidates.length === 1) chooseFirstAccount(candidates[0]!.id);
+        if (confirmed && fresh.some((account) => account.id === confirmed))
+          chooseFirstAccount(confirmed);
+        else if (fresh.length === 1) chooseFirstAccount(fresh[0]!.id);
         setChooseAfterReconnect(true);
       }
       setFirstConnect(false);
+    } else if (returning && rereadOn !== connection.connectedAt) {
+      setRereadOn(connection.connectedAt);
     }
   }
+  const rereading =
+    first &&
+    firstConnect === true &&
+    rereadOn !== null &&
+    rereadOn === connection.connectedAt &&
+    canSubmitHere;
+  useEffect(() => {
+    if (!rereading) return;
+    const timer = setInterval(refresh, FIRST_BOT_REREAD_MS);
+    const end = setTimeout(() => clearInterval(timer), FIRST_BOT_RECONNECT_WAIT_MS);
+    return () => {
+      clearInterval(timer);
+      clearTimeout(end);
+    };
+    // One schedule per returned connection.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rereading, rereadOn]);
   const showFirstConnect =
     first &&
     firstConnect === true &&
@@ -244,12 +292,13 @@ export function NewBot({
     connection.target === target &&
     (connection.gatewayId === null || connection.gatewayId === openedOn) &&
     (admin || connection.status !== "connected");
-  const accountReadFailed = accounts.status === "error" || accounts.modelsStatus === "error";
   const waitingForGateway =
     first &&
     connection.target === target &&
     (showFirstConnect
-      ? !canSubmitHere || (returning && !ready && !accountReadFailed)
+      ? !canSubmitHere ||
+        (returning && !ready && !accountReadFailed) ||
+        (rereading && accountReadFailed)
       : connection.status === "reconnecting" ||
         connection.status === "connecting" ||
         connection.status === "error");
@@ -273,6 +322,8 @@ export function NewBot({
   };
   const openFirstConnect = () => {
     setConnectReadAt(connection.connectedAt);
+    setKnownAtConnect(candidates.map((account) => account.id));
+    setRereadOn(null);
     setFirstConnect(true);
   };
 
@@ -494,11 +545,20 @@ export function NewBot({
     const replacement =
       legacyCheck && firstChoice && firstChoice.account.id !== partial?.accountChecked;
     const canRecover = legacyCheck || problem === "unusable" || problem === "unchecked";
-    const alternative = canRecover
-      ? accounts.accounts.find(
-          (account) => account.id !== signedIn && !!firstBotModel(accounts, account.id),
-        )
-      : null;
+    // Every saved account with a model to choose from, not a toggle between two: a usable third
+    // account stays in reach after the first two fail.
+    // It stays while the failed check stands, so choosing another account keeps the list (and focus).
+    const checkFailed =
+      creation?.status === "failed" &&
+      (creation.accountCheck === "unusable" || creation.accountCheck === "unchecked");
+    const choices =
+      (legacyCheck || checkFailed) &&
+      candidates.some((account) => account.id !== signedIn) &&
+      ready &&
+      canSubmitHere &&
+      admin &&
+      !busy &&
+      !preparing;
     const retry = (
       <button type="button" className="button" onClick={refresh}>
         Try again
@@ -580,9 +640,10 @@ export function NewBot({
               . <InfoTip id="first-bot-account-check" about="checking this account" />
             </p>
             <InfoCard id="first-bot-account-check">
-              When you press Create bot, Clawtrate sends one short test message through this account
-              to check that it can run the model. The test uses a little of your account’s
-              allowance.
+              When you press Create bot, Clawtrate asks your gateway to send one short test message
+              through this account to check that it can run the model. It is a real request: your
+              provider may bill it or count it against your account’s allowance, and a failed test
+              can be noted on the account.
             </InfoCard>
           </>
         ) : (
@@ -605,6 +666,27 @@ export function NewBot({
                 : "Clawtrate couldn’t check this account."}
             </p>
           </Note>
+        )}
+        {choices && (
+          <label className="b-field">
+            Account
+            <select
+              className="input"
+              value={signedIn ?? ""}
+              onChange={(event) => chooseFirstAccount(event.target.value)}
+            >
+              {signedIn === null && (
+                <option value="" disabled>
+                  Choose an account
+                </option>
+              )}
+              {candidates.map((account) => (
+                <option key={account.id} value={account.id}>
+                  {accountName(account, accounts)}
+                </option>
+              ))}
+            </select>
+          </label>
         )}
         {creation?.status === "failed" && !creation.accountCheck && (
           <Note tone="danger" testId="create-failed">
@@ -676,15 +758,6 @@ export function NewBot({
                 : problem === "unchecked"
                   ? "Try again"
                   : "Create bot"}
-          </button>
-        )}
-        {ready && canSubmitHere && admin && !busy && !preparing && alternative && (
-          <button
-            type="button"
-            className="button"
-            onClick={() => chooseFirstAccount(alternative.id)}
-          >
-            Use {accountName(alternative, accounts)}
           </button>
         )}
         {ready &&

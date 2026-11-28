@@ -1516,7 +1516,7 @@ export function accountCommand(
         );
       const name = command.name.trim() || "New bot";
       const check =
-        command.account?.endsWith(":second") &&
+        (command.account?.endsWith(":second") || command.account?.endsWith(":unusable")) &&
         (params.create === "account-unusable" || params.create === "account-unchecked")
           ? params.create === "account-unusable"
             ? "unusable"
