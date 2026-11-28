@@ -1,5 +1,6 @@
-// Whether a bot can start tasks of its own: the gateway's `sessions_spawn` tool, as
-// `tools.effective` reports it for one of the bot's tasks (OpenClaw 2026.10.6). The bot's
+// Whether a bot can start tasks of its own: the gateway's `sessions_spawn` tool, or on OpenClaw
+// 2026.11.10 its `sessions_create`, as `tools.effective` reports them for one of the bot's tasks
+// (2026.10.6 and 2026.11.10). The bot's
 // settings say so when it can't, and change nothing (#532).
 
 // It imports nothing: `state-bounds.ts` imports its bound, so an import here could close a cycle.
@@ -40,8 +41,10 @@ export function startTasksFrom(answer: unknown): StartTasks | null {
     const tools = asRecord(group)?.tools;
     for (const entry of Array.isArray(tools) ? tools : []) {
       const tool = asRecord(entry);
-      if (tool?.id === START_TASK_TOOL && tool.deniedBySession !== true)
-        return { can: true, reason: null };
+      // Either tool starts a task the person sees: OpenClaw 2026.11.10 offers `sessions_create`
+      // beside `sessions_spawn`, and a gateway may allow one and not the other.
+      const starts = tool?.id === START_TASK_TOOL || tool?.id === CREATE_TASK_TOOL;
+      if (starts && tool.deniedBySession !== true) return { can: true, reason: null };
     }
   }
   const access = asRecord(value?.toolAccess)?.tools;
