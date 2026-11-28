@@ -95,6 +95,7 @@ const accountTiming = {
   reconnectNoticeAt: null as number | null,
   connectedAt: null as number | null,
   sheetAdvancedAt: null as number | null,
+  timingWindowMet: null as boolean | null,
 };
 
 mkdirSync(out, { recursive: true });
@@ -362,7 +363,7 @@ const firstBotAction = () =>
 const reconnecting = () =>
   hasText(/^(?:Waiting for your gateway to reconnect|Reconnecting\b|Restarting OpenClaw)/i);
 
-async function waitForGatewayReturn() {
+async function waitForGatewayReturn(onSample: () => void) {
   const deadline = performance.now() + 150_000;
   const directory = process.env.RUNNER_TEMP!;
   const name = "first-run-connection-sample.png";
@@ -371,6 +372,7 @@ async function waitForGatewayReturn() {
   while (performance.now() < deadline) {
     await readWindow();
     if (reconnecting()) accountTiming.reconnectNoticeAt ??= seconds(performance.now() - start);
+    onSample();
     if (accountTiming.reconnectNoticeAt !== null) {
       const sampledAt = performance.now();
       // The modal hides the rest of the window from Accessibility. Read the
@@ -397,30 +399,41 @@ async function configureAccount(profile: string, appData: string) {
   accountTiming.configAt = seconds(performance.now() - start);
   const restarted = fixture.restart();
   void restarted.catch(() => undefined);
-  const returned = await waitForGatewayReturn();
+  async function save() {
+    const writer = fixture.prepareAccountSave(true);
+    accountTiming.saveInputAt = seconds(performance.now() - start);
+    try {
+      await writer.save();
+      accountSavedAt = performance.now();
+      accountTiming.savedAt = seconds(accountSavedAt - start);
+    } finally {
+      writer.cancel();
+    }
+  }
+  let saving: Promise<void> | undefined;
+  const returned = await waitForGatewayReturn(() => {
+    const notice = accountTiming.reconnectNoticeAt;
+    if (
+      timing === "at-return" &&
+      !saving &&
+      notice !== null &&
+      seconds(performance.now() - start) >= notice + 11
+    ) {
+      saving = save();
+      void saving.catch(() => undefined);
+    }
+  });
   if (timing === "late") {
-    while (performance.now() - returned < 23_000) {
+    while (performance.now() - returned < 14_000) {
       await readWindow();
       await sleep(350);
     }
   }
-  const writer = fixture.prepareAccountSave(true);
-  try {
-    accountTiming.saveInputAt = seconds(performance.now() - start);
-    await writer.save();
-    accountSavedAt = performance.now();
-    accountTiming.savedAt = seconds(accountSavedAt - start);
-    await restarted;
-    const delta = accountTiming.savedAt! - accountTiming.connectedAt!;
-    if (
-      (timing === "at-return" && Math.abs(delta) > 5) ||
-      (timing === "late" && (delta < 20 || delta > 30))
-    ) {
-      throw new Error(`The ${timing} save landed ${delta.toFixed(1)}s relative to Connected.`);
-    }
-  } finally {
-    writer.cancel();
-  }
+  await (saving ?? save());
+  await restarted;
+  const delta = accountTiming.savedAt! - accountTiming.connectedAt!;
+  accountTiming.timingWindowMet =
+    timing === "at-return" ? Math.abs(delta) <= 5 : delta >= 20 && delta <= 30;
 }
 
 const shellVisible = () =>
@@ -645,7 +658,7 @@ try {
       : "missing",
   };
   const answer = {
-    verdict: verdict(stepResults),
+    verdict: accountTiming.timingWindowMet === false ? "failed" : verdict(stepResults),
     steps: stepResults,
     pressCounts,
     accountSheet,
