@@ -78,11 +78,13 @@ function Steps({
   steps,
   current,
   failed,
+  paused,
   details,
 }: {
   steps: string[];
   current: number;
   failed?: boolean;
+  paused?: boolean;
   /** A line under a step, such as what the installer reported. */
   details?: Array<string | null>;
 }) {
@@ -91,25 +93,31 @@ function Steps({
   const [timed, setTimed] = useState({ step: current, seconds: 0 });
   if (timed.step !== current) setTimed({ step: current, seconds: 0 });
   useEffect(() => {
-    if (failed) return;
+    if (failed || paused) return;
     const at = Date.now();
     const timer = setInterval(
       () => setTimed({ step: current, seconds: Math.floor((Date.now() - at) / 1000) }),
       1000,
     );
     return () => clearInterval(timer);
-  }, [current, failed]);
+  }, [current, failed, paused]);
   const elapsed = timed.step === current ? timed.seconds : 0;
   return (
     <>
       {/* The step under way, said when it changes; never its seconds. */}
       <p className="visually-hidden" aria-live="polite" data-testid="setup-step-live">
-        {failed ? "" : (steps[current] ?? "")}
+        {failed || paused ? "" : (steps[current] ?? "")}
       </p>
       <ol className="s-steps" aria-label="Steps" data-testid="setup-step-list">
         {steps.map((text, index) => {
           const state: StepState =
-            index < current ? "done" : index > current ? "waiting" : failed ? "failed" : "running";
+            index < current
+              ? "done"
+              : index > current || paused
+                ? "waiting"
+                : failed
+                  ? "failed"
+                  : "running";
           return (
             <li
               key={text}
@@ -620,11 +628,14 @@ function LookResult({
               {INSTALL_NODE_VERSION} from nodejs.org. It checks both against fingerprints built into
               this version. OpenClaw's installer then fetches dependencies from npm. Clawtrate
               doesn't verify those downloads. Their code runs with your account's permissions. The
-              program goes in Clawtrate's app data. The gateway uses the clawtrate profile and
-              starts when you log in. Clawtrate connects this Mac with full control. Other devices
-              won't find the gateway automatically unless you enable discovery. To remove OpenClaw,
-              use its uninstall for the clawtrate profile and remove the program from Clawtrate's
-              app data.
+              program goes in the openclaw folder in Clawtrate's app data. The gateway uses the
+              clawtrate profile in your home folder and starts when you log in. Clawtrate connects
+              this Mac with full control. The gateway listens only on this Mac, with network
+              discovery and Tailscale access off. Other devices won't find it automatically unless
+              you enable discovery. To remove OpenClaw, run{" "}
+              <code>bin/openclaw --profile clawtrate uninstall</code> from the openclaw folder in
+              Clawtrate's app data. Then remove that folder and the openclaw-install.json file
+              beside it.
             </InfoCard>
             <p className="s-links">
               <SmallLink onClick={onAdvanced}>Advanced</SmallLink>
@@ -931,7 +942,13 @@ function Installing({
             : "Clawtrate set up the gateway profile. Continue to finish setting up its service."}
         </Lede>
       )}
-      <Steps steps={INSTALL_STEPS} current={current} failed={!!failure} details={details} />
+      <Steps
+        steps={INSTALL_STEPS}
+        current={current}
+        failed={!!failure}
+        paused={!!install.recovery}
+        details={details}
+      />
       {failure && (
         <>
           <Note tone="danger" lead={lead}>
