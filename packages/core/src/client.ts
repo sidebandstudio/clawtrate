@@ -291,6 +291,8 @@ import {
   startQueuedRun,
   updateMessage,
   unfollowed,
+  awaitRows,
+  rowsRead,
   type CaughtUp,
   type EngineContext,
   type OutgoingMessage,
@@ -11344,6 +11346,12 @@ export class ClawtrateClient {
     // Quiet ends this read may settle: those that ended before it was asked (#680), and those an
     // earlier read failed for (#767).
     const quietBefore = quietToRead(this.state.transcripts[key]?.runs ?? []);
+    // Runs waiting for their rows when the read is asked: it is answered after their end (#912).
+    const waitedAtAsk = new Set(
+      (this.state.transcripts[key]?.runs ?? [])
+        .filter((run) => run.awaitsRows)
+        .map((run) => run.id),
+    );
     // The task's live events come only through its subscription: asked again like the reads.
     // A subscription that failed for good stays failed through later history reads, and each of
     // them tries it again; only one that succeeds clears it.
@@ -11424,9 +11432,17 @@ export class ClawtrateClient {
           .filter((message) => message.status === "sending" || message.status === "awaiting-access")
           .map((message) => message.id),
       );
+      // A run this read shows no longer in flight has its rows in it (#912).
       const runs = settleQuietEnds(
         settleUnboundStops(
-          settleVanishedRuns(merge.runs, activeBefore, historyIds, inFlightId, ctx, busy),
+          settleVanishedRuns(
+            rowsRead(merge.runs, inFlightId, waitedAtAsk),
+            activeBefore,
+            historyIds,
+            inFlightId,
+            ctx,
+            busy,
+          ),
           inFlightId,
           historyIds,
           awaitingAnswer,
@@ -11509,7 +11525,8 @@ export class ClawtrateClient {
       this.setTranscript(key, (current) => ({
         ...(current ?? this.emptyTranscript(key)),
         // History unread can't show a quiet end to be one: each stays the failure it was sent as.
-        runs: settleQuietEnds(current?.runs ?? [], quietBefore, "unread"),
+        // Nor does any run wait for its rows longer (#912).
+        runs: rowsRead(settleQuietEnds(current?.runs ?? [], quietBefore, "unread"), null),
         status: "error",
         error: live ? errorMessage(error) : LIVE_UPDATES_NOT_STARTED,
       }));
@@ -11571,7 +11588,10 @@ export class ClawtrateClient {
     // Only tasks this client follows keep a stream baseline: the text, never the message.
     const projected = this.streams.project(payload);
     const text = payload.state === "delta" ? projected : null;
-    this.updateActivity(key, (activity, ctx) => applyChatEvent(activity, payload, text, ctx));
+    // A run this ends keeps its reply drawn until history holds its rows (#912).
+    this.updateActivity(key, (activity, ctx) =>
+      awaitRows(activity, applyChatEvent(activity, payload, text, ctx)),
+    );
     // final, aborted or error: the durable transcript now owns the text.
     if (payload.state !== "delta" && payload.state !== "status") this.scheduleHistory(key);
   }
@@ -11611,7 +11631,10 @@ export class ClawtrateClient {
       this.updateForeign(key, (activity, ctx) => applyAgentEvent(activity, payload, ctx).activity);
       return;
     }
-    this.updateActivity(key, (activity, ctx) => applyAgentEvent(activity, payload, ctx).activity);
+    // A run this ends keeps its reply drawn until history holds its rows (#912).
+    this.updateActivity(key, (activity, ctx) =>
+      awaitRows(activity, applyAgentEvent(activity, payload, ctx).activity),
+    );
     const phase = asRecord(payload.data)?.phase;
     if (payload.stream === "lifecycle" && (phase === "end" || phase === "error")) {
       this.scheduleHistory(key);

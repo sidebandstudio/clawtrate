@@ -2910,6 +2910,11 @@ test("F-551: by default a real run shows no thinking and no failed action, which
       run.locator('.run-actions details.card.action[data-status="failed"]'),
     ).toBeVisible();
   };
+  // The run has started (its status line shows, or its run line already does) before the status
+  // line is waited out: right after Enter it isn't there yet either (#912).
+  await expect(
+    page.getByTestId("status-line").or(transcript.getByTestId("run-line")),
+  ).not.toHaveCount(0, { timeout: 30_000 });
   await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 30_000 });
   await quiet();
   // From the gateway's history, the same.
@@ -2927,6 +2932,61 @@ test("F-551: by default a real run shows no thinking and no failed action, which
   await expect(toggle).toHaveAttribute("aria-checked", "true");
   await page.keyboard.press("Escape");
   await expect(transcript.locator("details.thought").first()).toBeVisible();
+});
+
+test("#912: a run's reply stays on screen, once, from its last text until history's row of it is drawn", async ({
+  page,
+}) => {
+  await openShell(page);
+  await ownTaskOf(page, "pip", "Pip", "Look for notes, then answer");
+  const reply = "That file does not exist, so the step failed. I will carry on without it.";
+  // Every change to the transcript, as it happens: how many times the reply is on screen, and how
+  // many of those are the live turn's. Nothing is sampled, so no moment between changes is missed.
+  await page.evaluate((text) => {
+    const w = window as unknown as { replySeen: Array<{ n: number; live: number }> };
+    w.replySeen = [];
+    const look = () => {
+      const all = [...document.querySelectorAll('[data-testid="transcript"] p')].filter(
+        (p) => p.textContent === text,
+      );
+      const live = all.filter((p) => p.closest('[data-testid="live-turn"]')).length;
+      const last = w.replySeen.at(-1);
+      if (!last || last.n !== all.length || last.live !== live)
+        w.replySeen.push({ n: all.length, live });
+    };
+    new MutationObserver(look).observe(document.body, {
+      subtree: true,
+      childList: true,
+      characterData: true,
+    });
+  }, reply);
+  await composer(page).fill("Look for my old notes. #think #tool-fail");
+  await page.keyboard.press("Enter");
+  // The run has ended and history's row of the reply has replaced the live copy.
+  await expect(page.getByTestId("status-line").or(page.getByTestId("run-line"))).not.toHaveCount(
+    0,
+    {
+      timeout: 30_000,
+    },
+  );
+  await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 60_000 });
+  await expect
+    .poll(() =>
+      page.evaluate(() =>
+        (window as unknown as { replySeen: Array<{ n: number; live: number }> }).replySeen.at(-1),
+      ),
+    )
+    .toEqual({ n: 1, live: 0 });
+  const seen = await page.evaluate(
+    () => (window as unknown as { replySeen: Array<{ n: number; live: number }> }).replySeen,
+  );
+  const first = seen.findIndex((each) => each.n > 0);
+  expect(first, JSON.stringify(seen)).toBeGreaterThan(-1);
+  // From its first showing on, the reply is on screen in every state, and never twice.
+  expect(
+    seen.slice(first).map((each) => each.n),
+    JSON.stringify(seen),
+  ).toEqual(seen.slice(first).map(() => 1));
 });
 
 /** The action cards' and folds' lines in a transcript, in order. */
