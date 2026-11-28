@@ -416,9 +416,63 @@ export class PluginInstaller {
   update(pin: PluginPin) {
     return this.one(() => this.attempt(pin, "update"));
   }
-  /** At a connection: goes on with this device's record, if it has one. */
+  /**
+   * Goes on with this device's record, if it has one, toward on too: only from the person's own
+   * press on this device. At a connection the host calls `settle`, never this (section 14).
+   */
   resume(pin: PluginPin) {
     return this.one(() => this.attempt(pin, null));
+  }
+
+  /**
+   * At every connection: only work toward off. A "taking off" record is finished, and a plugin a
+   * record may have left running (an enable unconfirmed, "turning off", another pin's) is turned
+   * off. Never a grant or an enable, whatever record it finds: an installation continues toward on
+   * only from the person's press (`resume`, or the mode they chose). Null when there is nothing
+   * to turn off.
+   */
+  async settle(pin: PluginPin): Promise<PluginOutcome | null> {
+    let nothing = false;
+    const outcome = await this.one(async () => {
+      const settled = await this.settleNow(pin);
+      nothing = settled === null;
+      return settled ?? { kind: "nothing-installed" };
+    });
+    return nothing ? null : outcome;
+  }
+
+  private async settleNow(callerPin: PluginPin): Promise<PluginOutcome | null> {
+    const epoch = this.ctx.epoch();
+    let pin: PluginPin;
+    try {
+      pin = this.trustedPin(callerPin);
+    } catch (error) {
+      return this.stopped(error, false);
+    }
+    const record = await this.ctx.loadRecord(pin.pluginId);
+    if (!record) return null;
+    if (record.takingOff) return this.takeOffNow(pin);
+    if (!tracksRunning(record))
+      return record.integrity === pin.integrity ? null : this.dropRecord(pin);
+    try {
+      if (!this.ctx.admin()) throw new Stop("no-admin");
+      const route = this.ctx.route();
+      if (route !== "same-computer" && route !== "ssh") throw new Stop("route");
+      this.live = true;
+      await this.ctx.saveRecord(pin.pluginId, { ...record, turningOff: true });
+      if (!(await this.turnOffUntilApplied(epoch, pin))) throw new Stop("lost");
+      // Off: the record goes, and a press starts afresh from what a read shows.
+      this.live = false;
+      await this.ctx.saveRecord(pin.pluginId, null);
+      return { kind: "stopped", stop: "turned-off", mayBeRunning: false };
+    } catch (error) {
+      return this.stopped(error, true);
+    }
+  }
+
+  private async dropRecord(pin: PluginPin): Promise<null> {
+    await this.ctx.saveRecord(pin.pluginId, null);
+    return null;
   }
   /**
    * "Take it off" (section 12): turned off, its grants removed, left installed. The cancellation

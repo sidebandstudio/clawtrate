@@ -1384,6 +1384,32 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
       expect(await engine.turnOn(PIN)).toEqual({ kind: "enabled" });
     });
 
+    it.each([
+      ["fresh", { step: 2, pending: 3 }],
+      ["off", { step: 4, pending: 5 }],
+      ["off", { step: 5 }],
+      ["off", { step: 6, pending: 7 }],
+      ["on", { step: 6, pending: 7 }],
+      ["on", { step: 7, sourceDigest: PIN_DIGEST }],
+      ["on", { step: 7, turningOff: true }],
+      ["on", { step: 6, pending: 7, integrity: "sha512-an-earlier-pin" }],
+      ["off", { step: 4, takingOff: true }],
+      ["older-on", { mode: "update" as const, step: 1, pending: 2 }],
+    ] as const)(
+      "at a connection, settle never sends a grant or an enable (gateway %s, record %j)",
+      async (start, patch) => {
+        const g = at(version, start);
+        const ctx = withRecord(g, record({ configHash: g.configHash, ...patch }));
+        await new PluginInstaller(ctx).settle(PIN);
+        expect(enables(g)).toEqual([]);
+        for (const c of g.calls.filter((c) => c.method === "config.patch"))
+          expect(JSON.parse(String(c.params.raw)).plugins.entries[ID].hooks ?? null).toBeNull();
+        // Off where a record may have left it on; a Take it off finished.
+        if (start === "on") expect(g.loaded).toBe(false);
+        if ("takingOff" in patch) expect(g.shape()).toBe("OFF");
+      },
+    );
+
     // 3. The stage sends the archive it just checked.
     it("a tarball changed during the stage's idle wait is refused before the send", async () => {
       const g = at(version, "fresh");
