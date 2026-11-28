@@ -11,6 +11,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openInstance, openOperator } from "../tools/dev-gateway/src/cli.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
+import { findSection, withSection } from "../packages/core/src/guides.ts";
 import { devGateway, startHost, stopChild } from "./global-setup.ts";
 
 const INSTANCE = process.env.CLAWTRATE_DEV_INSTANCE!;
@@ -76,18 +77,52 @@ async function ownBot(name: string, folder: string): Promise<string> {
   return created.agentId;
 }
 
-/** Write a bot's AGENTS.md through the gateway, so its workspace folder holds a file of ours. */
-async function writeAgents(botId: string, content: string): Promise<void> {
-  const { file } = await admin.request<{ file: { hash?: string; missing?: boolean } }>(
-    "agents.files.get",
-    { agentId: botId, name: "AGENTS.md" },
-  );
+/**
+ * Write a bot's AGENTS.md through the gateway, so its workspace folder holds a file of ours, and
+ * answer what was written. The page's admin connection adds Clawtrate's section to a bot's file
+ * when its bot list first shows the bot (guides.ts), at a time of its own. So the page lists the
+ * bots on the folder (`names`) and the gateway serves the file with the current section before
+ * the write, and the file is written as Clawtrate keeps it, which the page never writes again.
+ */
+async function writeAgents(botId: string, names: string[], content: string): Promise<string> {
+  await expect
+    .poll(
+      async () => {
+        await rereadBots().catch(() => {});
+        for (const name of names) if ((await botRow(name).count()) === 0) return false;
+        return true;
+      },
+      { timeout: 90_000, intervals: [1_000, 2_000, 5_000] },
+    )
+    .toBe(true);
+  const read = () =>
+    admin.request<{ file: { content?: string; hash?: string; missing?: boolean } }>(
+      "agents.files.get",
+      { agentId: botId, name: "AGENTS.md" },
+    );
+  await expect
+    .poll(
+      async () => {
+        // A read that overlaps the page's write of the file is answered "unsafe workspace file".
+        const content = await read().then(
+          ({ file }) => file.content ?? "",
+          () => "",
+        );
+        const found = findSection(content);
+        return found.kind === "ours" && found.current;
+      },
+      { timeout: 60_000, message: "the page adds Clawtrate's section to the bot's AGENTS.md" },
+    )
+    .toBe(true);
+  const { file } = await read();
+  const written = withSection(content);
   await admin.request("agents.files.set", {
     agentId: botId,
     name: "AGENTS.md",
-    content,
-    ...(file.hash && !file.missing ? { expectedHash: file.hash } : { expectedMissing: true }),
+    content: written,
+    expectedHash: file.hash,
   });
+  return written;
 }
 
 const botRow = (name: string) =>
@@ -236,7 +271,7 @@ test("F-276: deleting with the folder kept removes the bot and leaves its worksp
   const name = `Heron ${STAMP}`;
   const folder = workspace("heron");
   const botId = await ownBot(name, folder);
-  await writeAgents(botId, "Heron's instructions.");
+  await writeAgents(botId, [name], "Heron's instructions.");
   expect(existsSync(join(folder, "AGENTS.md"))).toBe(true);
   const dialog = await openDelete(name);
   const box = dialog.getByRole("checkbox", { name: "Also remove this bot's workspace folder" });
@@ -265,7 +300,7 @@ test("F-276: deleting with the folder ticked moves the workspace folder away, as
   const name = `Wren ${STAMP}`;
   const folder = workspace("wren");
   const botId = await ownBot(name, folder);
-  await writeAgents(botId, "Wren's instructions.");
+  await writeAgents(botId, [name], "Wren's instructions.");
   expect(existsSync(folder)).toBe(true);
   const dialog = await openDelete(name);
   await dialog.getByRole("checkbox", { name: "Also remove this bot's workspace folder" }).check();
@@ -290,7 +325,7 @@ test("F-464: a workspace folder another bot uses can't be removed, and stays rea
   const folder = workspace("shared");
   const botId = await ownBot(name, folder);
   const partnerId = await ownBot(partner, folder);
-  await writeAgents(partnerId, "Shared instructions.");
+  const written = await writeAgents(partnerId, [name, partner], "Shared instructions.");
   const dialog = await openDelete(name);
   const box = dialog.getByRole("checkbox", { name: "Also remove this bot's workspace folder" });
   await expect(box).toBeDisabled();
@@ -303,13 +338,14 @@ test("F-464: a workspace folder another bot uses can't be removed, and stays rea
   });
   expect(await listsBot(botId)).toBe(false);
   made.delete(botId);
-  // The folder and its file are intact, and the other bot still reads them through the gateway.
+  // The folder and its file are intact, and the other bot still reads them through the gateway:
+  // the instructions written, below Clawtrate's section, unchanged.
   expect(existsSync(join(folder, "AGENTS.md"))).toBe(true);
   const { file } = await admin.request<{ file: { content?: string } }>("agents.files.get", {
     agentId: partnerId,
     name: "AGENTS.md",
   });
-  expect(file.content).toBe("Shared instructions.");
+  expect(file.content).toBe(written);
   await expect(botRow(partner)).toHaveCount(1);
   await dialog.getByRole("button", { name: "Close" }).last().click();
 });
