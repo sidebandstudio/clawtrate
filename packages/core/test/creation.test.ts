@@ -109,6 +109,7 @@ describe("a creation without an answer", () => {
   it("is not asked again once the gateway may have forgotten its key", async () => {
     const gateway = grantingGateway();
     idempotentCreate(gateway);
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway-test" });
     let clock = 1_000_000;
     const storage = memoryStorage({
       connection: JSON.stringify({ url: URL_A, token: null }),
@@ -229,6 +230,30 @@ describe("a creation without an answer", () => {
         key: "agent:otto:original",
       });
       expect(new Set(keysAsked(gateway)).size).toBe(1);
+    } finally {
+      client.stop();
+    }
+  });
+});
+
+describe("a creation recovered after its answer was lost (#749)", () => {
+  it("stamps its first message with the gateway it was asked of, when the reconnect can't name it", async () => {
+    const gateway = grantingGateway();
+    const create = idempotentCreate(gateway);
+    const { client } = await openTask({ gateway, client: { ...FASTER, creationCheckMs: 5_000 } });
+    try {
+      await until(() => client.state.connection.gatewayId === "gateway-test");
+      await expect(client.createTask("otto", "do this once")).rejects.toThrow();
+      create.accept();
+      // The same gateway start answers the check, but can't say which gateway it is just now.
+      gateway.handlers["gateway.identity.get"] = () => {
+        throw new GatewayError({ code: "UNAVAILABLE", message: "not now" });
+      };
+      gateway.dropAll();
+      await until(() => client.state.creations[0]?.status === "created", 2_000);
+      expect(client.state.transcripts["agent:otto:original"]!.outbox).toMatchObject([
+        { text: "do this once", gatewayId: "gateway-test" },
+      ]);
     } finally {
       client.stop();
     }

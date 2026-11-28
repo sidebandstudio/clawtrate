@@ -474,6 +474,9 @@ export const CONNECTION_CHANGED =
   "The connection changed since this screen was read, so nothing was sent. Look again, then try again.";
 /** Why a write stamped with one gateway's identity is not sent to another (`requireSameGateway`). */
 const ANOTHER_GATEWAY = "This change was made for another gateway, so nothing was sent.";
+/** Why a waiting message is not sent to the gateway that answered (`deliver`). */
+const WRITTEN_FOR_ANOTHER =
+  "This message was written for another gateway, or one that hasn't said which it is, so it wasn't sent.";
 const UNNAMED_GATEWAY = "The gateway hasn't said which gateway it is, so nothing was sent.";
 /** The identity read failed or named none: a retry may read it, unlike another gateway's. */
 const IDENTITY_UNREAD =
@@ -3933,8 +3936,26 @@ export class ClawtrateClient {
       if (resolved === "queue" && !held) return queueLocalRun(withMessage, message, this.now());
       return withMessage;
     });
+    this.stampGateway(key, message.id);
     if (message.status === "sending") this.enqueueDelivery(key, message.id);
     return message.id;
+  }
+
+  /**
+   * Record the gateway a message is written for (`OutgoingMessage.gatewayId`): the one named now,
+   * or, right after a hello, the name the connection it was written on gives when it answers.
+   */
+  private stampGateway(key: string, messageId: string, known: string | null = null): void {
+    const stamp = (gatewayId: string) =>
+      this.updateActivity(key, (activity) => updateMessage(activity, messageId, { gatewayId }));
+    if (known !== null) return stamp(known);
+    const { gatewayId, status } = this.state.connection;
+    if (gatewayId !== null) return stamp(gatewayId);
+    // Asked before any delivery of it can be, so it is stamped before `deliver` reads it.
+    if (status === "connected")
+      void this.readGatewayIdentity().then((id) => {
+        if (id !== null) stamp(id);
+      });
   }
 
   /**
@@ -4190,6 +4211,9 @@ export class ClawtrateClient {
       }));
       return this.retryMessage(key, id);
     }
+    // Written before any gateway named itself (its read of the name failed): the person retries
+    // it on this connection, so it is for the gateway this one names.
+    if (message.gatewayId === undefined) this.stampGateway(key, messageId);
     const transcript = this.state.transcripts[key]!;
     // The gateway is running a run under this message's own id: the message is out, and nothing
     // goes again (as when a held one is released).
@@ -4434,23 +4458,38 @@ export class ClawtrateClient {
             error: null,
             key: null,
             gatewayBootId: null,
+            gatewayId: null,
           };
     this.putCreation(creation);
     let sent = false;
     try {
-      // A viewer that goes away while access is approved takes its request with it (`withdraw`).
+      // The gateway the task is asked of: the one named now, or right after a hello the name this
+      // connection gives. Another answering at the same address while access settles is asked
+      // nothing, the task and its first message alike (#749).
+      const connection = this.state.connection;
+      const forGateway =
+        connection.gatewayId ??
+        (connection.status === "connected" ? await this.readGatewayIdentity() : null);
+      // A viewer gone during that read asks for no access; one that goes while access is approved
+      // takes its request with it (`withdraw`).
+      this.checkNotWithdrawn(options.owner);
       await this.ensureScope(WRITE_SCOPE, options.owner ?? null);
+      const epoch = this.epoch;
+      const here = await this.readGatewayIdentity();
       // The viewer went away while access settled: nothing is asked of the gateway.
       this.checkNotWithdrawn(options.owner);
       // Switching gateways while access settled dropped it: it is never asked of another gateway.
       if (this.creations.get(creation.id)?.status !== "creating")
         throw new Error("Switched to another gateway.");
+      if (epoch !== this.epoch || forGateway === null || here !== forGateway)
+        throw new Error(WRITTEN_FOR_ANOTHER);
       creation.gatewayBootId = this.gatewayBootId;
+      creation.gatewayId = forGateway;
       this.putCreation(creation);
       sent = true;
       const result = asRecord(await this.request("sessions.create", creationParams(creation)));
       release();
-      return this.completeCreation(creation, result, true);
+      return this.completeCreation(creation, result, true, forGateway);
     } catch (error) {
       if (!sent) {
         // Nothing was asked of the gateway: an earlier refused attempt goes back to how it was,
@@ -4494,6 +4533,7 @@ export class ClawtrateClient {
     creation: TaskCreation,
     result: RawRecord | null,
     byCaller: boolean,
+    gatewayId: string | null = null,
   ): string {
     const key = typeof result?.key === "string" ? result.key : null;
     if (!key) {
@@ -4554,6 +4594,7 @@ export class ClawtrateClient {
         ctx,
       );
     });
+    this.stampGateway(key, id, gatewayId);
     // As any message is sent: once, under its key, while it is still to be sent.
     if (!runError) this.enqueueDelivery(key, id);
     if (byCaller) {
@@ -4671,7 +4712,7 @@ export class ClawtrateClient {
     try {
       const result = asRecord(await this.request("sessions.create", creationParams(creation)));
       if (this.creations.get(id)?.status !== "checking") return;
-      this.completeCreation(creation, result, false);
+      this.completeCreation(creation, result, false, creation.gatewayId);
     } catch (error) {
       if (this.creations.get(id)?.status !== "checking") return;
       if (error instanceof GatewayProtocolRequestError) {
@@ -4740,6 +4781,15 @@ export class ClawtrateClient {
       await this.ensureScope(WRITE_SCOPE);
     } catch (error) {
       if (waiting()) this.failDelivery(key, messageId, error, true);
+      return;
+    }
+    // Waiting for access or a reconnect, it may meet another gateway at the same address: it goes
+    // only to the one it was written for, named on this connection. No name on either side is a
+    // refusal, as for a screen's write (`requireSameGateway`).
+    const epoch = this.epoch;
+    const here = await this.readGatewayIdentity();
+    if (here !== this.outgoing(key, messageId)?.gatewayId || this.epoch !== epoch) {
+      if (waiting()) this.failDelivery(key, messageId, new Error(WRITTEN_FOR_ANOTHER), true);
       return;
     }
     let message = this.outgoing(key, messageId);

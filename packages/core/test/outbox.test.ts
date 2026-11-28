@@ -12,7 +12,14 @@ import {
   type OutgoingMessage,
   type TaskActivity,
 } from "../src/runs.ts";
-import { agentEvent, KEY, openTask, questionRecord, sentTexts } from "./client-harness.ts";
+import {
+  agentEvent,
+  grantingGateway,
+  KEY,
+  openTask,
+  questionRecord,
+  sentTexts,
+} from "./client-harness.ts";
 import { deferred, GatewayError, sleep, until } from "./fake-gateway.ts";
 
 function start(gateway: Parameters<typeof sentTexts>[0], runId = "run-x") {
@@ -242,6 +249,57 @@ describe("a message written while the connection is down (F-287)", () => {
     expect(["sent", "unconfirmed"]).toContain(transcript().outbox[0]?.status);
     expect(sentTexts(gateway)).toEqual(["Written offline"]);
     expect(gateway.calls("chat.send")[0]).toMatchObject({ idempotencyKey: id });
+    client.stop();
+  });
+});
+
+describe("a waiting message goes only to the gateway it was written for (F-287, #749)", () => {
+  const ANOTHER =
+    "This message was written for another gateway, or one that hasn't said which it is, so it wasn't sent.";
+  /** A message written while the connection to "gateway-test" is down, and the gateway that answers next. */
+  const writtenOffline = async (answering: string) => {
+    const { client, gateway, transcript } = await openTask();
+    await until(() => client.state.connection.gatewayId === "gateway-test");
+    gateway.refuseConnections = true;
+    gateway.dropAll();
+    await until(() => client.state.connection.status !== "connected");
+    const id = client.sendMessage(KEY, "Written offline");
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: answering });
+    gateway.refuseConnections = false;
+    return { client, gateway, transcript, id };
+  };
+
+  it("F-287: another gateway answering at the same address is sent nothing, and the message stays, Not sent, with Try again", async () => {
+    const { client, gateway, transcript, id } = await writtenOffline("gateway-x");
+    await until(() => transcript().outbox[0]?.status === "failed", 4_000);
+    expect(transcript().outbox[0]).toMatchObject({ id, error: ANOTHER });
+    expect(gateway.calls("chat.send")).toEqual([]);
+    client.stop();
+  });
+
+  it("F-287: one written before its gateway could be named is sent there by Try again, once it is", async () => {
+    const gateway = grantingGateway();
+    gateway.handlers["gateway.identity.get"] = () => {
+      throw new Error("unavailable");
+    };
+    const { client, transcript } = await openTask({ gateway });
+    const id = client.sendMessage(KEY, "Before its name");
+    await until(() => transcript().outbox[0]?.status === "failed", 4_000);
+    expect(gateway.calls("chat.send")).toEqual([]);
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway-test" });
+    client.retryMessage(KEY, id);
+    await until(() => gateway.calls("chat.send").length === 1, 4_000);
+    expect(gateway.calls("chat.send")[0]).toMatchObject({ idempotencyKey: id });
+    client.stop();
+  });
+
+  it("F-287: the gateway it was written for, back at the same address, is sent it once", async () => {
+    const { client, gateway, transcript, id } = await writtenOffline("gateway-test");
+    await until(() => gateway.calls("chat.send").length === 1, 4_000);
+    await sleep(100);
+    expect(sentTexts(gateway)).toEqual(["Written offline"]);
+    expect(gateway.calls("chat.send")[0]).toMatchObject({ idempotencyKey: id });
+    expect(transcript().outbox[0]?.status).not.toBe("failed");
     client.stop();
   });
 });

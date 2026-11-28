@@ -7,8 +7,9 @@
 // a check-in or another bot sends is not a person's message and never carries the mark.
 import { describe, expect, it } from "vitest";
 import { createBridgeSession } from "../src/bridge.ts";
+import { WithdrawnError } from "../src/client.ts";
 import { fieldsOf, parseRoutine } from "../src/routines.ts";
-import { ADMIN_SCOPES, INTERACTIVE_SCOPES } from "../src/scopes.ts";
+import { ADMIN_SCOPES, INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
 import { grantingGateway, openTask, stampOn, URL_A } from "./client-harness.ts";
 import {
   deferred,
@@ -250,6 +251,90 @@ describe.each(["2026.10.6", "2026.11.10"])(
       // It left on the new connection, after the drop.
       const methods = gateway.requests.map((r) => r.method);
       expect(methods.lastIndexOf("sessions.create")).toBeLessThan(methods.indexOf("chat.send"));
+      client.stop();
+    });
+
+    it("the connection drops between the two and another gateway answers at the same address: the message isn't sent there, and stays Not sent", async () => {
+      const gateway = gatewayOf(version);
+      const created = gateway.handlers["sessions.create"]!;
+      gateway.handlers["sessions.create"] = (params) => {
+        gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway-x" });
+        void Promise.resolve().then(() => Promise.resolve().then(() => gateway.dropAll()));
+        return created(params);
+      };
+      const { client } = await openTask({ gateway });
+      await until(() => client.state.connection.gatewayId === "gateway-test");
+      const connects = gateway.connects.length;
+      await client.createTask("otto", "Hello");
+      await until(() => outboxOf(client)[0]?.status === "failed", 3_000);
+      expect(gateway.connects.length).toBeGreaterThan(connects);
+      expect(outboxOf(client)).toMatchObject([{ text: "Hello", gatewayId: "gateway-test" }]);
+      expect(gateway.calls("chat.send")).toEqual([]);
+      client.stop();
+    });
+
+    it.each([
+      ["another gateway", "gateway-x", false],
+      ["the same gateway", "gateway-test", true],
+    ])(
+      "the connection drops while write access is approved and %s answers: the task is asked of it only if it is the one it was written for",
+      async (_name, answering, created) => {
+        const gateway = gatewayOf(version);
+        const approved = deferred<void>();
+        let asks = 0;
+        gateway.handlers["device.scopes.requestUpgrade"] = () => ({
+          requestId: `up-${(asks += 1)}`,
+        });
+        gateway.handlers["device.scopes.waitUpgrade"] = () =>
+          approved.promise.then(() => ({
+            status: "approved",
+            requestId: `up-${asks}`,
+            deviceToken: "rotated",
+            scopes: [...INTERACTIVE_SCOPES],
+          }));
+        const { client } = await openTask({ gateway, held: READ_SCOPES });
+        await until(() => client.state.connection.gatewayId === "gateway-test");
+        const creation = client.createTask("otto", "Hello");
+        creation.catch(() => {});
+        await until(() => asks === 1);
+        gateway.handlers["gateway.identity.get"] = () => ({ deviceId: answering });
+        gateway.dropAll();
+        await until(() => client.state.connection.gatewayId === answering, 3_000);
+        approved.resolve();
+        if (created) {
+          await creation;
+          expect(gateway.calls("sessions.create")).toHaveLength(1);
+        } else {
+          await expect(creation).rejects.toThrow("written for another gateway");
+          expect(gateway.calls("sessions.create")).toEqual([]);
+          expect(client.state.creations).toEqual([]);
+        }
+        client.stop();
+      },
+    );
+
+    it("a viewer closed while the gateway is named: no access is asked for its task", async () => {
+      const gateway = gatewayOf(version);
+      gateway.handlers["device.scopes.requestUpgrade"] = () => ({ requestId: "up-1" });
+      const { client } = await openTask({ gateway, held: READ_SCOPES });
+      await until(() => client.state.connection.gatewayId === "gateway-test");
+      const named = deferred<unknown>();
+      gateway.handlers["gateway.identity.get"] = () => named.promise;
+      const reads = gateway.calls("gateway.identity.get").length;
+      gateway.dropAll();
+      await until(
+        () =>
+          client.state.connection.status === "connected" &&
+          gateway.calls("gateway.identity.get").length > reads,
+      );
+      const viewer = {};
+      const creation = client.createTask("otto", "Hello", { owner: viewer });
+      creation.catch(() => {});
+      client.withdraw(viewer);
+      named.resolve({ deviceId: "gateway-test" });
+      await expect(creation).rejects.toThrow(WithdrawnError);
+      expect(gateway.calls("device.scopes.requestUpgrade")).toEqual([]);
+      expect(client.pendingAccessWaiters).toBe(0);
       client.stop();
     });
 

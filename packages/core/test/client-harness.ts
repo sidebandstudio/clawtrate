@@ -62,6 +62,8 @@ export async function openTask(
   } = {},
 ) {
   const gateway = options.gateway ?? grantingGateway();
+  // A waiting message goes only to the gateway that names itself as the one it was written for.
+  gateway.handlers["gateway.identity.get"] ??= () => ({ deviceId: "gateway-test" });
   const held = options.held ?? INTERACTIVE_SCOPES;
   const storage =
     options.storage ??

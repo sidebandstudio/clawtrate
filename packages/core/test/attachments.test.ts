@@ -80,6 +80,8 @@ async function openTask() {
     payload: helloOk((params as { scopes: string[] }).scopes, "device-token"),
   });
   gateway.handlers["chat.send"] = () => ({ runId: "run-1", status: "started" });
+  // A waiting message goes only to the gateway that names itself as the one it was written for.
+  gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway-test" });
   gateway.handlers["question.list"] = () => ({ questions: [] });
   for (const method of ["exec.approval.list", "plugin.approval.list", "openclaw.approval.list"]) {
     gateway.handlers[method] = () => [];

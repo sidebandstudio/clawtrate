@@ -17,6 +17,8 @@ import {
 
 function started(turnLimit: string | null) {
   const gateway = grantingGateway();
+  // A waiting message goes only to the gateway that names itself as the one it was written for.
+  gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway-test" });
   const storage = memoryStorage({
     connection: JSON.stringify({ url: URL_A, token: null }),
     [tokenKey(URL_A)]: JSON.stringify({

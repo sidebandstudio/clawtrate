@@ -760,6 +760,11 @@ export type OutgoingMessage = {
    * went without it; sent again, it goes the same way, as the gateway took it.
    */
   unmarked?: true;
+  /**
+   * The identity of the gateway it was written for, once known; it goes to no other (`deliver`).
+   * Written before the gateway named itself, it takes the name its connection gives.
+   */
+  gatewayId?: string;
 };
 
 export type OutgoingAttachmentInfo = { fileName: string; mimeType: string; sizeBytes: number };

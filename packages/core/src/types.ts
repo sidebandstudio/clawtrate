@@ -741,6 +741,11 @@ export type TaskCreation = {
    * of that same start, which holds its idempotency record.
    */
   gatewayBootId: string | null;
+  /**
+   * The identity of the gateway the task was asked of, null until it is sent. Its first message is
+   * written for that gateway, also when the task is found created after its answer was lost.
+   */
+  gatewayId: string | null;
 };
 
 export const initialScopeUpgrade: ScopeUpgradeState = {
