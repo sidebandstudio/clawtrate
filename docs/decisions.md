@@ -589,8 +589,9 @@ Create bot asks OpenClaw to check the account once. The gateway sends a short te
 | --------------------------------- | --------------------------------------------------- | ------------ |
 | Gateway first-bot probe           | Time allowed to test the selected profile           | 20,000       |
 | Clawtrate first-bot account check | Total time to wait for the probe and catalogue read | 25,000       |
+| First-bot setup sheet             | Time before a reconnect offers Try again            | 45,000       |
 
-If the check fails or cannot finish, the sheet offers another account or sign-in. An unavailable check can also be tried again. A gateway that refuses the method as unknown uses the task’s account catalogue after creating the bot. If that check fails, the sheet offers a different account to finish that same bot. First setup keeps the chosen account with the draft for that gateway and uses it after a reconnect.
+If the check fails or cannot finish, the sheet offers another account or sign-in. An unavailable check can also be tried again. A gateway that refuses the method as unknown uses the task’s account catalogue after creating the bot. If that check fails, the sheet offers a different account to finish that same bot. First setup keeps the chosen account with the draft for that gateway. After a reconnect it refreshes the accounts. A single account saved elsewhere can move setup on. Several available accounts without a confirmed choice open an account picker.
 
 ## Development gateway
 

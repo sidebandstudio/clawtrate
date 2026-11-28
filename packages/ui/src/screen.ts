@@ -13,7 +13,10 @@ export function screenFor(state: ClawtrateState): "connect" | "shell" {
   if (state.bots.length > 0) return "shell";
   if (
     state.discovery.tasksRead?.target === target &&
-    (status === "reconnecting" || status === "connected")
+    (status === "reconnecting" ||
+      status === "connecting" ||
+      status === "connected" ||
+      status === "error")
   )
     return "shell";
   // The setup steps stay until the bots have loaded; then the app opens.

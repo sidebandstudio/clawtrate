@@ -1545,7 +1545,9 @@ export function accountCommand(
       const answer = (run: () => void) =>
         params.create === "release" || params.create === "release-failed"
           ? ((globalThis as unknown as { releaseCreate: () => void }).releaseCreate = run)
-          : later(500, run);
+          : check
+            ? deferred(run, 500)
+            : later(500, run);
       // As the host does (`forgetGatewayState`): what a gateway answers after another has
       // replaced it changes nothing kept; only the reply goes back.
       const asked = get().connection.gatewayId;

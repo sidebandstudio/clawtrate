@@ -291,6 +291,9 @@ export function firstModel(
   return models.find((m) => m.available)?.id ?? (availableOnly ? null : (models[0]?.id ?? null));
 }
 
+/** Time before an interrupted first setup offers a retry. */
+export const FIRST_BOT_RECONNECT_WAIT_MS = 45_000;
+
 /** A shared, signed-in account and a model the gateway offers for its provider. */
 export function firstBotModel(accounts: AccountsState, signedIn: string | null) {
   const named = signedIn ?? defaultAccount(accounts);

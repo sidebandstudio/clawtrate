@@ -21,6 +21,7 @@ import {
   defaultAccount,
   defaultRef,
   effortFor,
+  FIRST_BOT_RECONNECT_WAIT_MS,
   firstEffort,
   firstBotModel,
   firstModel,
@@ -100,6 +101,8 @@ export function NewBot({
   const [pictureFailed, setPictureFailed] = useState(false);
   const [pictureBusy, setPictureBusy] = useState(false);
   const [firstConnect, setFirstConnect] = useState<boolean | null>(null);
+  const [connectReadAt, setConnectReadAt] = useState(connection.connectedAt);
+  const [chooseAfterReconnect, setChooseAfterReconnect] = useState(false);
   const [signedIn, setSignedIn] = useState<string | null>(
     () => (first ? firstDraftFor(connection)?.account : null) ?? null,
   );
@@ -205,15 +208,35 @@ export function NewBot({
     accounts.readOn?.gatewayId === openedOn &&
     accounts.readOn?.target === target &&
     accounts.readOn?.connectedAt === connection.connectedAt;
-  const firstChoice = first && ready ? firstBotModel(accounts, signedIn) : null;
+  const firstChoice =
+    first && ready && (!chooseAfterReconnect || signedIn !== null)
+      ? firstBotModel(accounts, signedIn)
+      : null;
+  const candidates =
+    first && ready
+      ? accounts.accounts.filter((account) => firstBotModel(accounts, account.id))
+      : [];
   const keptAccount = accounts.accounts.find(
     (account) =>
       account.keptBy !== null &&
       (signedIn === null || account.id === signedIn) &&
       bots.some((bot) => bot.id === account.keptBy),
   );
-  if (first && firstConnect === null && ready && canSubmitHere && admin)
+  if (first && firstConnect === null && ready && canSubmitHere && admin) {
+    setConnectReadAt(connection.connectedAt);
     setFirstConnect(firstChoice === null && !keptAccount);
+  }
+  const returning = firstConnect === true && connectReadAt !== connection.connectedAt;
+  if (first && returning && ready && canSubmitHere && admin) {
+    setConnectReadAt(connection.connectedAt);
+    if (!accounts.signIn && (signedIn ? firstChoice !== null : candidates.length > 0)) {
+      if (signedIn === null) {
+        if (candidates.length === 1) chooseFirstAccount(candidates[0]!.id);
+        setChooseAfterReconnect(true);
+      }
+      setFirstConnect(false);
+    }
+  }
   const showFirstConnect =
     first &&
     firstConnect === true &&
@@ -221,6 +244,37 @@ export function NewBot({
     connection.target === target &&
     (connection.gatewayId === null || connection.gatewayId === openedOn) &&
     (admin || connection.status !== "connected");
+  const accountReadFailed = accounts.status === "error" || accounts.modelsStatus === "error";
+  const waitingForGateway =
+    first &&
+    connection.target === target &&
+    (showFirstConnect
+      ? !canSubmitHere || (returning && !ready && !accountReadFailed)
+      : connection.status === "reconnecting" ||
+        connection.status === "connecting" ||
+        connection.status === "error");
+  const [waitAttempt, setWaitAttempt] = useState(0);
+  const [waitExpired, setWaitExpired] = useState(false);
+  const [wasWaiting, setWasWaiting] = useState(waitingForGateway);
+  if (wasWaiting !== waitingForGateway) {
+    setWasWaiting(waitingForGateway);
+    setWaitExpired(false);
+  }
+  useEffect(() => {
+    if (!waitingForGateway) return;
+    const timer = setTimeout(() => setWaitExpired(true), FIRST_BOT_RECONNECT_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, [waitingForGateway, waitAttempt]);
+  const retryGateway = () => {
+    setWaitExpired(false);
+    setWaitAttempt((attempt) => attempt + 1);
+    if (canSubmitHere) refresh();
+    else void bridge.send({ type: "retry" }).catch(() => {});
+  };
+  const openFirstConnect = () => {
+    setConnectReadAt(connection.connectedAt);
+    setFirstConnect(true);
+  };
 
   // The gateway's default model names an account: it is chosen at first (section 4).
   const named = defaultAccount(accounts);
@@ -428,7 +482,7 @@ export function NewBot({
   );
 
   if (first && !showFirstConnect) {
-    const failed = accounts.status === "error" || accounts.modelsStatus === "error";
+    const failed = accountReadFailed;
     const signedInAccount = accounts.accounts.find((account) => account.id === signedIn);
     const legacyCheck =
       partial?.missing.includes("account-model") && !partial.missing.includes("task");
@@ -470,9 +524,11 @@ export function NewBot({
           </Note>
         ) : !canSubmitHere || !admin ? (
           <p role="status">
-            {connection.status !== "connected" && connection.target === target
-              ? "Waiting for your gateway to reconnect. Setup will continue when it returns."
-              : "Reconnect to this gateway with full control to finish setting up."}
+            {waitingForGateway && waitExpired
+              ? "Your gateway hasn’t reconnected. Try again to finish setup."
+              : connection.status !== "connected" && connection.target === target
+                ? "Waiting for your gateway to reconnect. Setup will continue when it returns."
+                : "Reconnect to this gateway with full control to finish setting up."}
           </p>
         ) : failed ? (
           <Note tone="warn">
@@ -481,6 +537,24 @@ export function NewBot({
           </Note>
         ) : !ready ? (
           <p role="status">Checking which models your gateway can use…</p>
+        ) : chooseAfterReconnect && signedIn === null && candidates.length > 0 ? (
+          <label className="b-field">
+            Account
+            <select
+              className="input"
+              value=""
+              onChange={(event) => chooseFirstAccount(event.target.value)}
+            >
+              <option value="" disabled>
+                Choose an account
+              </option>
+              {candidates.map((account) => (
+                <option key={account.id} value={account.id}>
+                  {accountName(account, accounts)}
+                </option>
+              ))}
+            </select>
+          </label>
         ) : firstChoice ? (
           <>
             <label className="b-field">
@@ -497,7 +571,8 @@ export function NewBot({
             </label>
             <p className="b-hint">
               Uses{" "}
-              {accounts.accounts.filter(
+              {chooseAfterReconnect ||
+              accounts.accounts.filter(
                 (account) => account.provider === firstChoice.account.provider,
               ).length > 1
                 ? accountName(firstChoice.account, accounts)
@@ -553,6 +628,11 @@ export function NewBot({
     );
     foot = (
       <>
+        {waitingForGateway && waitExpired && (
+          <button type="button" className="button" onClick={retryGateway}>
+            Try again
+          </button>
+        )}
         {partial && (!legacyCheck || (replacement && firstChoice)) && (
           <button
             type="button"
@@ -621,7 +701,7 @@ export function NewBot({
               data-variant={firstChoice ? "quiet" : "primary"}
               onClick={() => {
                 if (!partial) void bridge.send({ type: "dismissBotCreation" }).catch(() => {});
-                setFirstConnect(true);
+                openFirstConnect();
               }}
             >
               {signedIn || firstChoice ? "Connect another account" : "Connect an account"}
@@ -948,10 +1028,12 @@ export function NewBot({
           info={info}
           announce={announce}
           skipLabel={first}
-          waitingForGateway={first && !canSubmitHere}
+          waitingForGateway={waitingForGateway}
+          {...(first && waitExpired ? { onRetryGateway: retryGateway } : {})}
           onDone={(account) => {
             if (first) {
               if (account) chooseFirstAccount(account);
+              setChooseAfterReconnect(false);
               setFirstConnect(false);
               focusStep();
               return;

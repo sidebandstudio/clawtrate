@@ -39,6 +39,7 @@ import {
   FIRST_BOT_ACCOUNT_CHECK_MS,
   FIRST_BOT_PROBE_MS,
 } from "../../../packages/core/src/accounts.ts";
+import { FIRST_BOT_RECONNECT_WAIT_MS } from "../../../packages/ui/src/bots/words.ts";
 import {
   MAX_RESULT_CHARS,
   MAX_SNAPSHOTS_IN_FLIGHT,
@@ -63,9 +64,10 @@ const written = (value: number) => value.toLocaleString("en-US");
 /** The table row whose first cell is `name`, and its last cell. */
 const lastCell = (name: string) => rows.find((cells) => cells[0] === name)?.at(-1);
 
-it("F-504: the first bot's account check documents both deadlines", () => {
+it("F-504: the first bot's setup documents its waiting limits", () => {
   expect(lastCell("Gateway first-bot probe")).toBe(written(FIRST_BOT_PROBE_MS));
   expect(lastCell("Clawtrate first-bot account check")).toBe(written(FIRST_BOT_ACCOUNT_CHECK_MS));
+  expect(lastCell("First-bot setup sheet")).toBe(written(FIRST_BOT_RECONNECT_WAIT_MS));
 });
 
 /** The bound at `path` beneath `bound`: field names, `item` for a list's item, `value` for a map's. */
