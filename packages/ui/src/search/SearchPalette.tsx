@@ -953,10 +953,11 @@ export function SearchPalette({
         };
       const { reply, each } = messages;
       const incomplete = reply.truncated || reply.indexing || reply.archivedExcluded > 0;
-      // Offered whenever the reply is incomplete, with or without matches: with none, Messages is
-      // drawn as its heading and this action under the nothing-found line.
+      // Offered whenever the reply is incomplete and a bot is listed to ask, with or without
+      // matches: with none, Messages is drawn as its heading and this action under the
+      // nothing-found line.
       const eachAction =
-        incomplete && !each
+        incomplete && !each && listedBotsNow.length > 0
           ? [
               action("messages:each", "Search each bot for more", () =>
                 searchEach(
@@ -1260,11 +1261,27 @@ export function SearchPalette({
     messages.status === "done" && messages.each === null && messages.reply.hits.length === 0
       ? replyFlags(messages.reply)
       : [];
+  // A list that couldn't be read is still said where none of its rows matched, as a status line
+  // in its own words: what was searched is the list loaded before. Beside a match it is the
+  // group's own line.
+  const stale =
+    state.discovery.status === "error"
+      ? groups.flatMap((group) =>
+          group.count > 0
+            ? []
+            : group.id === "bots"
+              ? ["Couldn't load the gateway's bots. Searched the bots loaded before."]
+              : group.id === "tasks"
+                ? ["Couldn't load the task list. Searched the titles of the tasks loaded before."]
+                : [],
+        )
+      : [];
   const status = !query
     ? []
     : [
         pending ? "Searching…" : found === 0 ? `No results for “${query}”.` : "",
         ...(pending ? [] : unshown),
+        ...stale,
         connected
           ? ""
           : `Messages, files and routines weren't searched: ${gatewayName} isn't connected.`,
