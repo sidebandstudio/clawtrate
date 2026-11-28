@@ -1,9 +1,11 @@
 import {
+  mkdirSync,
   mkdtempSync,
   readdirSync,
   readlinkSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -371,6 +373,34 @@ describe("a gateway's PATH (#933)", () => {
     expect(readlinkSync(join(dir, "node"))).toBe(realpathSync(node));
     // The same Node again keeps its folder.
     expect(nodeLinkDir(node, root)).toBe(dir);
+  });
+
+  it("puts the Node link in place over one already there, and leaves nothing else beside it", () => {
+    const root = temp();
+    const bin = temp();
+    const node = join(bin, "node");
+    writeFileSync(node, "");
+    const dir = nodeLinkDir(node, root);
+    // Something already at `node` that its check didn't read as the link, as when another start
+    // makes the link in the same moment: replaced, never an error.
+    rmSync(join(dir, "node"));
+    writeFileSync(join(dir, "node"), "");
+    expect(nodeLinkDir(node, root)).toBe(dir);
+    expect(readlinkSync(join(dir, "node"))).toBe(realpathSync(node));
+    // A stale link to another Node is replaced too.
+    rmSync(join(dir, "node"));
+    symlinkSync(join(bin, "elsewhere"), join(dir, "node"));
+    expect(nodeLinkDir(node, root)).toBe(dir);
+    expect(readlinkSync(join(dir, "node"))).toBe(realpathSync(node));
+    expect(readdirSync(dir)).toEqual(["node"]);
+  });
+
+  it("refuses a folder whose name has a colon, which would split into two PATH entries", () => {
+    const parent = temp();
+    const split = join(parent, "probes:extra");
+    mkdirSync(split);
+    expect(() => gatewayPath({ [STAND_INS_ENV]: split })).toThrow(/has a colon/);
+    expect(() => gatewayPath({}, "/tool/.run/path:/opt/agent-tools/bin")).toThrow(/has a colon/);
   });
 });
 

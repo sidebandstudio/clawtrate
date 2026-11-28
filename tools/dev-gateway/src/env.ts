@@ -11,8 +11,8 @@ import {
   type StdioOptions,
 } from "node:child_process";
 import type { Writable } from "node:stream";
-import { createHash } from "node:crypto";
-import { mkdirSync, readlinkSync, realpathSync, rmSync, statSync, symlinkSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
+import { mkdirSync, readlinkSync, realpathSync, renameSync, statSync, symlinkSync } from "node:fs";
 import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -92,6 +92,13 @@ export const SYSTEM_PATH = ["/usr/bin", "/bin", "/usr/sbin", "/sbin"] as const;
  */
 export const STAND_INS_ENV = "DEV_GATEWAY_STAND_INS";
 
+/** A folder that goes on a gateway's `PATH`, refused if a colon would split it into two. */
+function pathEntry(dir: string, what: string): string {
+  if (dir.includes(":"))
+    throw new Error(`${what} can't go on a PATH: its name has a colon (${dir})`);
+  return dir;
+}
+
 /** The stand-ins folder a test asked for, checked; or null. */
 export function standInsDir(source: NodeJS.ProcessEnv): string | null {
   const asked = source[STAND_INS_ENV];
@@ -100,7 +107,7 @@ export function standInsDir(source: NodeJS.ProcessEnv): string | null {
   const temp = realpathSync(tmpdir());
   if (!dir.startsWith(temp + sep) || !statSync(dir).isDirectory())
     throw new Error(`${STAND_INS_ENV} must name a folder inside ${temp}`);
-  return dir;
+  return pathEntry(dir, `The ${STAND_INS_ENV} folder`);
 }
 
 /**
@@ -119,15 +126,19 @@ export function nodeLinkDir(node: string, root: string = RUN_DIR): string {
     // No link yet.
   }
   if (current !== target) {
-    if (current !== null) rmSync(link, { force: true });
-    symlinkSync(target, link);
+    // Made under a name of its own, then renamed over `node`: two starts at once both end with
+    // the link, since every link in this folder names the same Node.
+    const made = join(dir, `node.${process.pid}.${randomBytes(4).toString("hex")}`);
+    symlinkSync(target, made);
+    renameSync(made, link);
   }
   return dir;
 }
 
 /** A gateway's `PATH`: a test's stand-ins, the folder with its Node, the system's folders. */
 export function gatewayPath(source: NodeJS.ProcessEnv, nodeDir: string | null = null): string {
-  return [standInsDir(source), nodeDir, ...SYSTEM_PATH].filter(Boolean).join(":");
+  const node = nodeDir === null ? null : pathEntry(nodeDir, "The folder with the gateway's Node");
+  return [standInsDir(source), node, ...SYSTEM_PATH].filter(Boolean).join(":");
 }
 
 function passthrough(source: NodeJS.ProcessEnv, nodeDir: string | null): NodeJS.ProcessEnv {
