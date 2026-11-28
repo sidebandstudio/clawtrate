@@ -342,8 +342,18 @@ export const IMAGE_FAILED_REPLY = "The picture could not be made.";
 const DELIVERY_FAILED = /(?:^|[\n"])sessions_send (?:delivery to|target run for) \S+ failed/;
 export const DELIVERY_FAILED_SECONDS = 20;
 
+/**
+ * The gateway's notice to a bot's main task that a task it watches changed, one line for each such
+ * task (OpenClaw 2026.10.6 to 2026.11.11, `sessionStateNoticeText`). A task made with
+ * `sessions.create` has the bot's main task as its parent, so a person's message in it queues one,
+ * and the gateway runs it in the main task as a turn of its own about 20 s later (#576).
+ */
+const SESSION_STATE_NOTICE =
+  /^Session "[^"\n]+" changed \(other actor\)\. Reconcile before acting: session_status sessionKey "[^"\n]+" changesSince \d+\.$/;
+
 export const isGatewayTurn = (prompt: string) =>
-  GATEWAY_TURN_PROMPTS.some((start) => prompt.startsWith(start));
+  GATEWAY_TURN_PROMPTS.some((start) => prompt.startsWith(start)) ||
+  prompt.split("\n").every((line) => SESSION_STATE_NOTICE.test(line));
 
 /** Which of GATEWAY_TURN_PROMPTS a request's prompt is, or null for any other prompt. */
 export function gatewayTurnPrompt(messages: ChatMessage[]): string | null {
