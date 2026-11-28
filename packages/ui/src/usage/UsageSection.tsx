@@ -31,7 +31,6 @@ import {
   meterTone,
   PARTIAL_COUNT,
   refreshFailed,
-  reportWindow,
   sourceBars,
   sourcesNote,
   USAGE_WAITING,
@@ -405,10 +404,11 @@ function ByBot({ bots, shown }: { bots: readonly Bot[]; shown: boolean }) {
               </button>
             </p>
           )}
-          <p className="b-hint" style={{ marginTop: 0 }}>
-            From the gateway's usage records {reportWindow(r.period, r.range)}.
-            {stillCounted(r) ? " Some of the gateway's records are still being counted." : ""}
-          </p>
+          {stillCounted(r) && (
+            <p className="b-hint" style={{ marginTop: 0 }} data-testid="usage-counting">
+              Some of the gateway's records are still being counted.
+            </p>
+          )}
           <Bars
             testId="usage-bots"
             rows={botBars(r, (id) => bots.find((bot) => bot.id === id)?.name ?? id)}

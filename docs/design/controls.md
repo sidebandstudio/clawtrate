@@ -594,14 +594,14 @@ Settings, **Machines** (F-157, F-156):
 
 ## 16. Usage and context
 
-Usage is the gateway's own numbers with their source and age, every time a figure appears. A figure the gateway does not report reads "Unavailable"; a total that misses some runs says "Partial"; a figure still being counted says so. An account is named only when the gateway ties the figure to that account.
+Usage is the gateway's own numbers. A figure the gateway does not report reads "Unavailable"; a total that misses some runs says "Partial"; a figure still being counted says so. An account is named only when the gateway ties the figure to that account.
 
 **A bot's Usage page**, top to bottom:
 
 1. **The budget**, first, when there is one: its meter, its period ("today" for Daily, "this week" for Weekly), its mark, "Shown only", and its state (section 17). Without one, "Set a budget".
-2. **Period**: Today, This week, 30 days. A week starts Monday 00:00 in this person's time zone. The report names its selected days and device time zone. The budget names its own days and saved time zone.
-3. **Tokens**: Input, Output, Cache read, Cache write, Total, each in full; "From the gateway's usage records for Otto, as of 5:41 PM."
-4. **Cost**: "About $3.29", and under it "The gateway's estimate from its configured prices, in US dollars, as of 5:41 PM.". "Partial: 2 runs have no price configured." when some are missing. A balance a provider reports is shown as that provider's own figure with its time. Clawtrate never computes a cost.
+2. **Period**: Today, This week, 30 days. A week starts Monday 00:00 in this person's time zone.
+3. **Tokens**: Input, Output, Cache read, Cache write, Total, each in full.
+4. **Cost**: "About $3.29", and under it "Partial: 2 runs have no price configured." when some are missing. A balance a provider reports is shown as that provider's own figure with its time. Clawtrate never computes a cost.
 5. **By source** (F-131, F-237): "Your messages", "Routines" (runs whose task is a routine's), "Messages from other bots" (runs a send's result names), "Not attributed". A recipient task's whole total is never charged to one message.
 6. **By task**, and **Context** for the open task. "41,200 tokens in the latest prompt, of the model's 128,000." The gateway uses the reported prompt token count. Its fallbacks are input plus cache tokens, or total tokens less the reply's output. "Breakdown unavailable" (F-233).
 
@@ -613,7 +613,7 @@ Usage is the gateway's own numbers with their source and age, every time a figur
 
 A budget is a number of tokens a bot or a routine may use in a day or a week (F-234). **A budget is a warning, everywhere, and says so ("Shown only").** Nothing in this design stops a bot at its budget: that would need a trusted identity for each model attempt, the period it counts in, and a rule for charges that arrive late, twice or never and for runs that start at the same moment, and the gateway's per-attempt usage summary is best-effort and carries no attempt id (row 27). So no state says a budget stops anything, and "Stop at the limit" is not offered (section 24).
 
-**Setting one**, on the bot's Usage page: Daily or Weekly, a number ("Tokens", whole, 1,000 or more), counting the total the gateway reports for the bot (or the routine) in that period. "Save budget". A Daily budget is labelled and counted daily ("41k of 200k tokens today", "Resets at 00:00, your time"); a Weekly one weekly ("1.64M of 2.5M tokens this week", "Resets Monday at 00:00, your time").
+**Setting one**, on the bot's Usage page: Daily or Weekly, a number ("Tokens", whole, 1,000 or more), counting the total the gateway reports for the bot (or the routine) in that period. "Save budget". A Daily budget is labelled and counted daily ("41k of 200k tokens today"); a Weekly one weekly ("1.64M of 2.5M tokens this week").
 
 - At 80 percent (F-396): a grey line in the bot's open task, "Otto has used 82% of its weekly budget: 1.64M of 2M tokens.", and a system notification on the desktop.
 - At 100 percent (F-397): the composer says "Otto has reached its weekly warning budget. This is shown only: other apps, channels and Otto's routines aren't stopped." with "Raise budget". A local send hold is not implemented: it would hold only Clawtrate's own sends, and only once the period's count is complete. With admin, "Pause Weekly cleanup", which pauses the routine itself (`cron.update`), said as that and not as the budget.
