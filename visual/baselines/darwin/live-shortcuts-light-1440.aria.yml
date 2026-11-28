@@ -120,6 +120,8 @@
   - definition: Send from anywhere in the window
   - term: ⌘.
   - definition: Stop
+  - term: Esc
+  - definition: Stop, from the message field
   - term: ⌘J
   - definition: Go to what needs you
   - term: ⌘I

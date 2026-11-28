@@ -1181,7 +1181,7 @@ The pill from `visual-language.md`, with what a run adds. Send stays; Stop appea
 
 **The menu.** During a run it opens from the mode word. With no run it opens from Send: by right-click, by touch and hold, and from the keyboard with Shift+F10 or the Menu key while Send has focus. Items: "Steer this turn ↵" (or "Hold until you answer ↵"), "Queue after this turn ⌥↵", "Start as new task ⇧⌘↵"; with no run, "Send ↵" and "Start as new task ⇧⌘↵". It is a `menu`; the current mode is a checked `menuitemradio`. It opens with focus on the checked item, Up and Down move, Enter chooses, and Escape closes it and returns focus to what opened it. (F-061, F-096)
 
-**Keys.** Enter sends as the mode word says. Shift+Enter adds a line. ⌥Enter queues. ⇧⌘Enter starts a new task. ⌘. stops. ⌘J goes to what needs you. ⌘I focuses the composer. ⌘Enter sends from anywhere in the window except inside a pending card, where it answers the card (section 12). (F-072)
+**Keys.** Enter sends as the mode word says. Shift+Enter adds a line. ⌥Enter queues. ⇧⌘Enter starts a new task. ⌘. stops, and so does Escape in the composer while a run is active; an open "/" or "@" menu takes Escape first. ⌘J goes to what needs you. ⌘I focuses the composer. ⌘Enter sends from anywhere in the window except inside a pending card, where it answers the card (section 12). (F-072)
 
 **The shelf** is a stack of rows above the pill, each 40 px on `--bg-bubble`, newest at the bottom. A row rises 4 px over 200 ms.
 
@@ -1222,7 +1222,7 @@ While any refusal shows, Send is disabled and its tooltip and description give t
 
 ## 16. Stop
 
-1. Pressing Stop, or ⌘., asks the gateway to stop the run and moves it to stopping. The phrase reads "Stopping…", Stop leaves the composer, and a message sent now is queued. (F-097, F-421)
+1. Pressing Stop, ⌘., or Escape in the composer, asks the gateway to stop the run and moves it to stopping. The phrase reads "Stopping…", Stop leaves the composer, and a message sent now is queued. (F-097, F-421)
 2. When the gateway confirms, pending approvals and questions close as "Cancelled", including those raised by the run's helpers and by bots it messaged, the status line leaves and a note takes its place. Nothing Clawtrate still holds starts by itself after a stop: messages that were held or queued, or released and not yet sent, stay on the shelf, marked "Not sent", until the user sends or removes each one (section 15). A message already on its way to the gateway is not touched; it settles as the gateway answers it, and one the gateway already accepted settles as the gateway runs it, which can be after the stop.
 
 The note is 13 px `--text-muted`, led by the stopped mark:

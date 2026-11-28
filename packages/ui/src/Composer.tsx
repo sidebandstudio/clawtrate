@@ -569,6 +569,13 @@ export function Composer({
         }
       }
     }
+    // Escape in the field stops the task's run, as ⌘. does. An open menu takes it first (above).
+    if (event.key === "Escape" && !event.nativeEvent.isComposing && view.stoppable) {
+      event.preventDefault();
+      event.stopPropagation();
+      stop(view.stoppable);
+      return;
+    }
     if (
       event.key === "Backspace" &&
       tokens.length > 0 &&

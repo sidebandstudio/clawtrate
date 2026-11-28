@@ -8,6 +8,7 @@ export const SHORTCUTS: Array<[keys: string, does: string]> = [
   ["⇧⌘↵", "Start as new task"],
   ["⌘↵", "Send from anywhere in the window"],
   ["⌘.", "Stop"],
+  ["Esc", "Stop, from the message field"],
   ["⌘J", "Go to what needs you"],
   ["⌘I", "Focus the message field"],
   ["⌘L", "Add the selected text to the message"],
