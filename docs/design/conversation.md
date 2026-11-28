@@ -265,6 +265,7 @@ Phrases are in the user's language, have no bot name in front and no trailing el
 ## 6. Streaming text and message captions
 
 - Reply text streams into its bubble as the gateway emits it. A caret follows the last character: 2 px wide, the height of the text, `--accent-line`, breathing between 100% and 35% over 1.2 s (steady under reduced motion). The bubble has `aria-busy="true"` until the message is complete. Text is never revealed more slowly than it arrives. (F-095, F-433)
+- The gateway writes a message's row into history when the message ends, before the run ends. While the run is still drawn live, that row's text is the reply already on screen: it is drawn once, as the reply, where it was read. That row is known by where it stands, as the first text of the message after the call the reply came after, or after the person's message, never by its words. History gives up a row only then, so no words leave the screen. Where it can't be known so (after a reconnect, in a task opened while the run went on, with a steer in between, text after the call in the call's own message, a row the gateway cut), the reply is shown twice until the run ends, never left out (decisions.md, "Text beside a tool call").
 - Progress messages the bot writes mid-run are ordinary bubbles, and so is the text it writes beside a tool call (section 7.6). (F-088)
 
 A caption is a 12 px line under a bubble, on the bubble's side:
@@ -1128,7 +1129,7 @@ Pending or resolved, the card ends with "Raw": the question event, and the answe
 
 ## 14. While a bot waits on you
 
-Quiet until something needs you; then it says so in five places at once, in the same colour and the same words.
+Quiet until something needs you; then it says so in five places at once, in the same colour.
 
 | Place           | What shows                                                                                                                                                             |
 | --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -1136,7 +1137,7 @@ Quiet until something needs you; then it says so in five places at once, in the 
 | The status line | "Waiting for you" in `--warn`; the avatar leaning in, with its badge (F-292)                                                                                           |
 | The composer    | A shelf row on `--warn-soft`: "Otto needs your approval to run a command" or "Otto asked you a question", with "Review", which scrolls to the card and focuses it (⌘J) |
 | The task row    | The waiting mark                                                                                                                                                       |
-| The bot row     | The waiting avatar, and "Waiting for you: approve a command" or "Waiting for you: a question" in `--warn` (F-021)                                                      |
+| The bot row     | The waiting avatar, and "waiting for you" in its accessible name (F-021)                                                                                               |
 
 The Jump control reads "Needs you" when the card is out of view (section 18).
 
@@ -1308,7 +1309,6 @@ The status strip reports the connection from inside the conversation, in the ban
 | The status phrase                                                                                     | No shimmer. "Reconnecting. Last seen …"                                                                             |
 | A running action's card, or a fold with a running action                                              | Its state reads "Last seen running"; the working mark is still                                                      |
 | A Messaged or T3 Code card that was Call started or Working                                           | The state word keeps its last value with "last seen" before it: "Last seen working"                                 |
-| A bot's row in the rail                                                                               | Its last preview, led by "Last seen:"                                                                               |
 | The streaming caret                                                                                   | Still                                                                                                               |
 
 The strip's own dot, and the footer's, may pulse: that motion is the connection attempt, which the app does know about.
@@ -1326,27 +1326,25 @@ The rail's arrangement, the folded-bot rule and the task rows are defined in `vi
 
 **A bot row** speaks for all of the bot's tasks. One table decides every part of it, so the parts cannot disagree:
 
-| Part                | Rule                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         |
-| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| The avatar's state  | The most urgent state among the bot's tasks, in the order of section 4: waiting for you; failed or blocked; done with failures; working; thinking; done; stopped; idle. (F-426)                                                                                                                                                                                                                                                                                                                              |
-| The failure badge   | Shown with failed, and with done with failures (on the done face)                                                                                                                                                                                                                                                                                                                                                                                                                                            |
-| Line two            | If any task is waiting for you: "Waiting for you: approve a command", or "…: a question", in `--warn`, whatever happened since in other tasks. Otherwise, by the avatar's state: failed, "Couldn't finish: provider overloaded" in `--danger`; blocked, "Can't reach media-box" in `--warn`; done with failures, "Finished with 1 failed action" in `--danger`; working, the working task's current phrase; thinking, "Thinking". For done, stopped and idle: the latest message in any task. (F-021, F-295) |
-| The time            | "now" while a run is active; since it began waiting, for waiting; otherwise the time of the latest activity                                                                                                                                                                                                                                                                                                                                                                                                  |
-| The unread dot      | An 8 px accent dot at the end of line two when any task other than the one on screen is unread. Independent of everything above. (F-022)                                                                                                                                                                                                                                                                                                                                                                     |
-| The accessible name | "<Bot>, <N> tasks, <state>", with ", unread" when the dot shows                                                                                                                                                                                                                                                                                                                                                                                                                                              |
+| Part                | Rule                                                                                                                                                                            |
+| ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| The avatar's state  | The most urgent state among the bot's tasks, in the order of section 4: waiting for you; failed or blocked; done with failures; working; thinking; done; stopped; idle. (F-426) |
+| The failure badge   | Shown with failed, and with done with failures (on the done face)                                                                                                               |
+| The unread dot      | An 8 px accent dot after the name when any task other than the one on screen is unread. Independent of everything above. (F-022)                                                |
+| The accessible name | "<Bot>, <N> tasks, <state>", with ", unread" when the dot shows                                                                                                                 |
 
-With the state avatar, the run-state mark that the plain shell puts at the start of line two moves onto the avatar: the ring for working, the badge for waiting, blocked and failed.
+The row has no line of words and no time (#790): the picture carries the state, the ring for working and the badge for waiting, blocked and failed, and the accessible name says it in words.
 
 Fixtures for the order:
 
-| The bot's tasks                                                       | The row shows                                                                             |
-| --------------------------------------------------------------------- | ----------------------------------------------------------------------------------------- |
-| One waiting, one working                                              | Waiting, and "Waiting for you: …"                                                         |
-| One done with failures, one working                                   | Done with failures, its failed badge, "Finished with 1 failed action", and the unread dot |
-| The same, after the done-with-failures task is opened                 | Working, the working task's phrase                                                        |
-| One waiting since ten minutes ago, another that finished a minute ago | Waiting, "Waiting for you: …", and the unread dot for the finished task                   |
-| One working, one unread                                               | Working, the working task's phrase, and the unread dot                                    |
-| One stopped, one idle                                                 | Stopped, with its badge, and the latest message                                           |
+| The bot's tasks                                                       | The row shows                                                     |
+| --------------------------------------------------------------------- | ----------------------------------------------------------------- |
+| One waiting, one working                                              | Waiting, with its badge                                           |
+| One done with failures, one working                                   | Done with failures, its failed badge, and the unread dot          |
+| The same, after the done-with-failures task is opened                 | Working, the ring                                                 |
+| One waiting since ten minutes ago, another that finished a minute ago | Waiting, with its badge, and the unread dot for the finished task |
+| One working, one unread                                               | Working, the ring, and the unread dot                             |
+| One stopped, one idle                                                 | Stopped, with its badge                                           |
 
 A pinned tile shows the same avatar state, with the unread dot beside the name.
 

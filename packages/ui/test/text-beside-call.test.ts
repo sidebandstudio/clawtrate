@@ -10,6 +10,8 @@ import {
   mapHistory,
   RawTable,
   readingContextOf,
+  replyRow,
+  unfollowed,
   type ClawtrateBridge,
   type Run,
   type TaskActivity,
@@ -70,6 +72,13 @@ function transcriptOf(
 /** The conversation's drawing of the run's history rows and of the run itself. */
 function draw(transcript: Transcript): string {
   const run = transcript.runs[0]!;
+  // Whenever history gives up a block as the reply's row, the live reply shows those words: no
+  // words leave the screen (#872). Checked here by the words, which the app never compares.
+  const given = replyRow(run, transcript.items);
+  if (given) {
+    const block = transcript.items.find((item) => item.id === given.itemId)!.blocks[given.block]!;
+    expect(block.kind === "text" && run.text.includes(block.text.trim())).toBe(true);
+  }
   const bridge = {
     invoke: () => Promise.reject(new Error("not in this test")),
     send: () => Promise.reject(new Error("not in this test")),
@@ -189,10 +198,10 @@ describe("F-088: text beside a call is known by its item, never by its words", (
     expect(html).not.toContain('data-testid="live-turn"');
   });
 
-  it("history's row of the reply the engine still streams is drawn from history, and again as the reply until the run ends", () => {
-    // No history row names an item of the stream, so the row can't be known as the reply being
-    // drawn: it is shown, and the reply is doubled for as long as the run streams it. Pinned so
-    // that hiding it again is a deliberate change.
+  it("history's row of the reply the engine still streams is drawn once, as the reply, while the run goes on", () => {
+    // No history row names an item of the stream. The reply's item was the first to begin after
+    // a call this client saw start, so its row is the first text history holds after that call's
+    // block: drawn once, as the reply, where the run draws it (#872). Was drawn twice until #872.
     const rows = [
       {
         role: "assistant",
@@ -220,7 +229,7 @@ describe("F-088: text beside a call is known by its item, never by its words", (
       ),
     );
     expect(count(html, "Checking logs.")).toBe(1);
-    expect(count(html, "Both logs are clean.")).toBe(2);
+    expect(count(html, "Both logs are clean.")).toBe(1);
     expect(html).toContain('data-testid="live-turn"');
   });
 
@@ -383,5 +392,207 @@ describe("F-088: text beside a call is known by its item, never by its words", (
       expect(html).not.toMatch(/<div class="bubble"[^>]*>\s*<\/div>/);
       expect(count(html, 'class="bubble"')).toBe(count(html, "All clean."));
     }
+  });
+});
+
+// The reply's own row in history while the run still draws it (#872, #738): known by where it
+// stands after a call this client saw start, or after the run's own start, never by its words.
+describe("#872: a reply history already holds is drawn once while its run goes on", () => {
+  const user = {
+    role: "user",
+    content: "Look for my old notes.",
+    __openclaw: { id: "u1", seq: 1 },
+  };
+  const row = (
+    id: string,
+    seq: number,
+    content: unknown[],
+    extra: Record<string, unknown> = {},
+  ) => ({
+    role: "assistant",
+    content,
+    ...extra,
+    __openclaw: { id, seq, runId: RUN },
+  });
+  const text = (value: string) => ({ type: "text", text: value });
+  const toolCall = (id: string) => ({ type: "toolCall", id, name: "ls", arguments: { path: "." } });
+  /** The run keyed to the person's row, as this client's own message is once history holds it. */
+  const keyed = (transcript: Transcript): Transcript => ({
+    ...transcript,
+    runs: transcript.runs.map((run) => ({
+      ...run,
+      anchorItemId: transcript.items[0]!.id,
+      anchorKeyed: true as const,
+    })),
+  });
+  const model: Array<[string, Record<string, unknown>]> = [["lifecycle", { phase: "model" }]];
+
+  it("a plain answer whose row history holds is drawn once, as the reply", () => {
+    const answer = "Your notes are in the drawer.";
+    const html = draw(
+      keyed(transcriptOf([...start, ...said("m:0", answer)], [user, row("a1", 2, [text(answer)])])),
+    );
+    expect(count(html, answer)).toBe(1);
+    expect(html).toContain('data-testid="live-turn"');
+  });
+
+  it("a later item's reply leaves the earlier text history holds where it was read", () => {
+    // Two texts after one call: the second is not the first to begin after it, so the first's
+    // row is not taken for the reply's.
+    const html = draw(
+      transcriptOf(
+        [...start, ...call("c1"), ...said("m:1", "The listing is in."), ...said("m:2", "Done.")],
+        [user, row("a1", 2, [toolCall("c1")]), row("a2", 4, [text("The listing is in.")])],
+      ),
+    );
+    expect(count(html, "The listing is in.")).toBe(1);
+    expect(count(html, "Done.")).toBe(1);
+  });
+
+  it("a reply with the words of the text beside its call is drawn twice: once beside, once as the reply", () => {
+    const words = "Checking logs.";
+    const html = draw(
+      transcriptOf(
+        [...start, ...said("m:1", words), ...call("c1"), ...said("m:2", words)],
+        [user, row("a1", 2, [text(words), toolCall("c1")]), row("a2", 4, [text(words)])],
+      ),
+    );
+    expect(count(html, words)).toBe(2);
+  });
+
+  it("a row the gateway wrote itself after the call is not the reply's: both are drawn", () => {
+    // A delivery's mirror, never streamed, may stand after the call before the reply's row is.
+    const mirror = row("a2", 4, [text("Sent to the team channel.")], {
+      provider: "openclaw",
+      model: "delivery-mirror",
+    });
+    const html = draw(
+      transcriptOf(
+        [...start, ...call("c1"), ...said("m:1", "I told the team.")],
+        [user, row("a1", 2, [toolCall("c1")]), mirror],
+      ),
+    );
+    expect(count(html, "Sent to the team channel.")).toBe(1);
+    expect(count(html, "I told the team.")).toBe(1);
+  });
+
+  it("after a read that subscribes again, the reply history holds is drawn twice until the run ends", () => {
+    // A client that was away may have missed an item since the call: the row can't be tied.
+    // Pinned, so that changing it is deliberate.
+    const reply = "Both logs are clean.";
+    const before = transcriptOf(
+      [...start, ...call("c1"), ...said("m:1", reply)],
+      [user, row("a1", 2, [toolCall("c1")]), row("a2", 4, [text(reply)])],
+    );
+    const html = draw({ ...before, runs: before.runs.map(unfollowed) });
+    expect(count(html, reply)).toBe(2);
+    expect(html).toContain('data-testid="live-turn"');
+  });
+
+  it("a history row is given up only where the live reply shows the same words", () => {
+    const long = `First I read every log. ${"Line by line, before I answer. ".repeat(90)}The end.`;
+    const arrangements: Array<[Array<[string, Record<string, unknown>]>, unknown[]]> = [
+      // The reply after a call, in a message of its own: given up.
+      [
+        [...start, ...call("c1"), ...said("m:1", "Clean.")],
+        [user, row("a1", 2, [toolCall("c1")]), row("a2", 4, [text("Clean.")])],
+      ],
+      // Text after the call in the call's own row, the next message streaming: kept.
+      [
+        [...start, ...said("m:1", `${long}\n\nShort.`), ...call("c1"), ...said("m:2", "Next.")],
+        [user, row("a1", 2, [text(long), toolCall("c1"), text("Short.")])],
+      ],
+      // The reply's row not written yet, an earlier text after the call there: kept.
+      [
+        [...start, ...call("c1"), ...said("m:1", "Reading."), ...said("m:2", "Done.")],
+        [user, row("a1", 2, [toolCall("c1")]), row("a2", 4, [text("Reading.")])],
+      ],
+      // A plain answer whose row is written: given up.
+      [
+        [...start, ...said("m:0", "All clean.")],
+        [user, row("a1", 2, [text("All clean.")])],
+      ],
+    ];
+    const given = arrangements.map(([events, rows]) => {
+      const transcript = keyed(transcriptOf(events, rows));
+      const run = transcript.runs[0]!;
+      const tied = replyRow(run, transcript.items);
+      if (!tied) return null;
+      const block = transcript.items.find((item) => item.id === tied.itemId)!.blocks[tied.block]!;
+      return block.kind === "text" && run.text.includes(block.text.trim());
+    });
+    expect(given).toEqual([true, null, null, true]);
+  });
+
+  it("text after the call in the call's own row stays when the next message streams", () => {
+    // Long text, a call, then short text, in one message: the text beside the call is cut to its
+    // bound, so the short text is on screen only from history. The next message's item is the
+    // first since the call, and the short text is the first after the call's block, but in the
+    // call's own row: not the next message's.
+    const long = `First I read every log. ${"Line by line, before I answer. ".repeat(90)}The end.`;
+    const short = "One more look at the cache.";
+    const html = draw(
+      transcriptOf(
+        [...start, ...said("m:1", `${long}\n\n${short}`), ...call("c1"), ...said("m:2", "Next.")],
+        [user, row("a1", 2, [text(long), toolCall("c1"), text(short)])],
+      ),
+    );
+    expect(count(html, short)).toBe(1);
+    expect(count(html, "Next.")).toBe(1);
+  });
+
+  it("the gateway's placeholder for a message too large is never taken for the reply's row", () => {
+    const placeholder = {
+      role: "assistant",
+      content: [{ type: "text", text: "[chat.history omitted: message too large]" }],
+      __openclaw: { id: "a2", seq: 4, runId: RUN, truncated: true, reason: "oversized" },
+    };
+    const html = draw(
+      transcriptOf(
+        [...start, ...call("c1"), ...said("m:1", "A very long answer.")],
+        [user, row("a1", 2, [toolCall("c1")]), placeholder],
+      ),
+    );
+    expect(count(html, "[chat.history omitted: message too large]")).toBe(1);
+    expect(count(html, "A very long answer.")).toBe(1);
+  });
+
+  it("a history row that belongs to no run the transcript knows is drawn as it is", () => {
+    // A page that starts with a bot's row: no person's row before it, no call of a known run.
+    const html = draw(
+      transcriptOf(
+        [...start, ...call("c1"), ...said("m:1", "All clean.")],
+        [
+          {
+            role: "assistant",
+            content: [text("An older note.")],
+            __openclaw: { id: "a0", seq: 1 },
+          },
+          user,
+          row("a1", 2, [toolCall("c1")]),
+        ],
+      ),
+    );
+    expect(count(html, "An older note.")).toBe(1);
+    expect(count(html, "All clean.")).toBe(1);
+  });
+
+  it("#738: text in a message before a steer, its action in the next message with no text, is drawn once", () => {
+    const note = "The logs are clean.";
+    const steer = {
+      role: "user",
+      content: "Also list the cache.",
+      __openclaw: { id: "u2", seq: 3 },
+    };
+    const html = draw(
+      keyed(
+        transcriptOf(
+          [...start, ...said("m:0", note), ...model, ...call("c2")],
+          [user, row("a1", 2, [text(note)]), steer, row("a2", 4, [toolCall("c2")])],
+        ),
+      ),
+    );
+    expect(count(html, note)).toBe(1);
+    expect(html).toContain('data-testid="live-turn"');
   });
 });

@@ -508,18 +508,6 @@ type MenuState =
       shown: ShownStamp;
     };
 
-/** What a bot's line two says while one of its tasks waits for the person (F-021). */
-export function waitingWords(tasks: Task[]): string | null {
-  const waiting = tasks.filter((task) => task.status === "waiting");
-  if (waiting.length === 0) return null;
-  const first = waiting.reduce((a, b) => ((b.waitingSince ?? 0) < (a.waitingSince ?? 0) ? b : a));
-  return first.waitingFor === "question"
-    ? "Waiting for you: a question"
-    : first.waitingFor === "approval"
-      ? "Waiting for you: approve a command"
-      : "Waiting for you";
-}
-
 /** Drop the separators a menu would start or end with, or show twice in a row. */
 function tidy(entries: MenuEntry[]): MenuEntry[] {
   return entries.filter(
@@ -1887,18 +1875,6 @@ export function Rail({
 
   const gatewayName = `${gateway}, ${words.replace("…", "").toLowerCase()}. Open the gateway menu.`;
 
-  // Since it began waiting, while a task waits for the person (conversation.md,
-  // section 20); "now" while any of the bot's tasks runs; else the latest activity.
-  const time = (tasks: Task[], summary: BotSummary) => {
-    const waiting = tasks
-      .filter((task) => task.status === "waiting" && task.waitingSince !== undefined)
-      .map((task) => task.waitingSince!);
-    if (waiting.length > 0) return rowTime(Math.min(...waiting), now);
-    return tasks.some((task) => task.status === "running")
-      ? "now"
-      : rowTime(summary.latest?.updatedAt ?? null, now);
-  };
-
   const onContextMenu = (bot: Bot) => (event: MouseEvent<HTMLButtonElement>) => {
     event.preventDefault();
     openBotMenu(bot.id, event.currentTarget, event.clientX, event.clientY);
@@ -1939,13 +1915,11 @@ export function Rail({
       summarize(tasks, selection.seen, onScreenKey, selection.unreadSeen),
       running,
     );
-    const waiting = waitingWords(tasks);
     const open = place !== "search" && selection.isOpen(bot.id);
     const several = tasks.length > 1;
     const routineRuns = place !== "search" && (open || !several) ? runsUnder(bot) : [];
     const showTasks = open || (place !== "search" && interactive && archivedOpen.has(bot.id));
     const selected = bot.id === selection.bot?.id;
-    const latest = summary.latest;
     return (
       <li
         key={bot.id}
@@ -1979,6 +1953,7 @@ export function Rail({
           aria-label={botLabel(bot, tasks.length, summary, {
             primary: bot.isDefault,
             label: bot.theme,
+            loading: discovery.status === "loading",
           })}
           onClick={() =>
             clickBot(bot, place === "search" ? Math.min(tasks.length, 1) : tasks.length)
@@ -1986,25 +1961,12 @@ export function Rail({
           onContextMenu={onContextMenu(bot)}
         >
           <Presence bot={bot} state={summary.state} primary={bot.isDefault} />
-          <span className="bot-text">
-            <span className="bot-line">
-              <bdi className="bot-name">{bot.name}</bdi>
-              {bot.theme && <span className="bot-label">{bot.theme}</span>}
-              <time className="bot-time">{time(tasks, summary)}</time>
-            </span>
-            <span className="bot-line">
-              <span className="bot-preview" data-tone={waiting ? "warn" : undefined}>
-                {waiting ??
-                  (running
-                    ? `Running ${running.name}`
-                    : latest
-                      ? (latest.preview ?? latest.title)
-                      : discovery.status === "loading"
-                        ? "Loading tasks"
-                        : "No tasks yet")}
-              </span>
-              {summary.unread && <span className="unread-dot" />}
-            </span>
+          {/* The name and a larger picture: no preview and no time (#790). The picture carries
+              the state; the dot says something is unread. */}
+          <span className="bot-line">
+            <bdi className="bot-name">{bot.name}</bdi>
+            {bot.theme && <span className="bot-label">{bot.theme}</span>}
+            {summary.unread && <span className="unread-dot" />}
           </span>
         </button>
         {several && place !== "search" && (
