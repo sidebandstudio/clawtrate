@@ -175,6 +175,14 @@ export const SETUP_STATES: Record<string, SetupState> = {
   "installing-node": installing({ step: 1, nodeChecked: true }),
   "installing-gateway": installing({ step: 2, nodeChecked: true }),
   "installing-check": installing({ step: 3, nodeChecked: true }),
+  "install-recovery": {
+    ...installing({ step: 2, nodeChecked: true, recovery: "replace" }),
+    phase: "install-failed",
+  },
+  "install-recovery-inspect": {
+    ...installing({ step: 2, nodeChecked: true, recovery: "inspect" }),
+    phase: "install-failed",
+  },
   "install-download": installFailed("download", 0, { cleanup: "removed" }),
   "install-download-space": installFailed("download-space", 0, { cleanup: "removed" }),
   "install-fingerprint": installFailed("fingerprint", 0, { cleanup: "removed" }),
@@ -332,12 +340,14 @@ export function setupCommand(
     }
     case "setupInstall": {
       // As the host runs it after its dialog: the four steps, then the look finds the gateway.
-      setup(installing({}));
+      setup(installing(command.action === "continue" ? { step: 2, nodeChecked: true } : {}));
       const at = (ms: number, install: Partial<SetupInstall>) =>
         after(ms, () => current().phase === "installing" && setup(installing(install)));
-      at(300, { step: 1 });
-      at(500, { step: 1, nodeChecked: true });
-      at(700, { step: 2, nodeChecked: true });
+      if (command.action !== "continue") {
+        at(300, { step: 1 });
+        at(500, { step: 1, nodeChecked: true });
+        at(700, { step: 2, nodeChecked: true });
+      }
       at(900, { step: 3, nodeChecked: true });
       after(1100, () => {
         if (current().phase !== "installing") return;
