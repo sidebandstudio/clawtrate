@@ -355,14 +355,14 @@ export function startWebHost(options: WebHostOptions) {
   };
   const cookieValid = (req: IncomingMessage) => admittedUntil(req) !== null;
 
-  const authorized = (req: IncomingMessage, url: URL): "ok" | "redirect" | "denied" => {
-    if (cookieValid(req)) return "ok";
-    // A private host takes no token in the URL: its bare address is the bookmark.
-    if (typeof accessToken !== "string") return "denied";
+  // A private host takes no token in the URL: its bare address is the bookmark.
+  const tokenInUrl = (url: URL): boolean => {
+    if (typeof accessToken !== "string") return false;
     const fromQuery = url.searchParams.get("token");
-    if (fromQuery && safeEqual(fromQuery, accessToken)) return "redirect";
-    return "denied";
+    return fromQuery !== null && safeEqual(fromQuery, accessToken);
   };
+  const authorized = (req: IncomingMessage, url: URL): "ok" | "redirect" | "denied" =>
+    cookieValid(req) ? "ok" : tokenInUrl(url) ? "redirect" : "denied";
 
   const signIn = async (req: IncomingMessage, res: ServerResponse, secret: string) => {
     const answer = (status: number, problem: string, extra: Record<string, string> = {}) => {
@@ -621,23 +621,21 @@ export function startWebHost(options: WebHostOptions) {
     socket.on("error", () => socket.destroy());
     // Everything about an unauthenticated upgrade is untrusted input: any
     // parsing failure is answered and the socket closed, never thrown.
-    let allowed: boolean;
+    // The cookie is read once: a session that expires during the upgrade admits nothing, and
+    // only the startup token's link admits without a cookie, never expiring.
+    let until: number | null = null;
     try {
       const url = new URL(req.url ?? "/", "http://placeholder");
-      allowed =
-        url.pathname === "/bridge" &&
-        sameOrigin(req, publicOrigin) &&
-        authorized(req, url) !== "denied";
+      if (url.pathname === "/bridge" && sameOrigin(req, publicOrigin))
+        until = admittedUntil(req) ?? (tokenInUrl(url) ? Infinity : null);
     } catch {
       refuseUpgrade(socket, "400 Bad Request");
       return;
     }
-    if (!allowed) {
+    if (until === null) {
       refuseUpgrade(socket, "401 Unauthorized");
       return;
     }
-    // Only the startup token's link admits without a cookie, and it never expires.
-    const until = admittedUntil(req) ?? Infinity;
     sockets.handleUpgrade(req, socket, head, (ws) => sockets.emit("connection", ws, until));
   });
 

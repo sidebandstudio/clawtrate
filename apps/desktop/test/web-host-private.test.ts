@@ -12,7 +12,7 @@ import { chmodSync, readFileSync, statSync, symlinkSync, writeFileSync } from "n
 import { request } from "node:http";
 import type { AddressInfo } from "node:net";
 import { join } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import WebSocket from "ws";
 import { tempDir } from "../../../test/temp-dir.ts";
 import type { HostRuntime } from "../src/host/runtime.ts";
@@ -254,6 +254,29 @@ describe("private web host", () => {
     const code = await new Promise<number>((resolve) => socket.once("close", resolve));
     expect(code).toBe(ACCESS_REFUSED_CLOSE_CODE);
     expect(await openBridge(base, { cookie, origin: base })).toBe(401);
+  });
+
+  it("a session that expires while its bridge is admitted gets a closing socket, never an open-ended one", async () => {
+    const { base, secret } = await start(tempDir("clawtrate-private-"));
+    const real = Date.now();
+    // Two seconds left at the first look; every look after it, ten seconds later.
+    const cookie = `${ACCESS_COOKIE}=${signSession(secret, real - SESSION_MAX_AGE_S * 1000 + 2000)}`;
+    let looks = 0;
+    const clock = vi
+      .spyOn(Date, "now")
+      .mockImplementation(() => (looks++ === 0 ? real : real + 10_000));
+    try {
+      const socket = new WebSocket(`${base.replace("http", "ws")}/bridge`, {
+        headers: { cookie, origin: base },
+      });
+      const code = await new Promise<number>((resolve) => {
+        socket.once("close", resolve);
+        socket.once("unexpected-response", () => resolve(401));
+      });
+      expect([ACCESS_REFUSED_CLOSE_CODE, 401]).toContain(code);
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it("behind an HTTPS public origin, sets Secure cookies and takes uploads and the bridge from it", async () => {
