@@ -133,6 +133,17 @@ describe("the first screen on a Mac whose OpenClaw profile the host found and ma
     }
   });
 
+  it("F-501 F-602: the card that offers Set up OpenClaw here shows Advanced once, first or after a look", () => {
+    const info = local();
+    const installs: HostInfo = { ...info, setup: { ...info.setup!, install: true } };
+    for (const unasked of [true, false]) {
+      const html = render(installs, found({ outcome: "not-found", access: null }, unasked));
+      expect(html).toContain(escape("Clawtrate didn't find OpenClaw here"));
+      expect(html).toContain(">Set up OpenClaw here</button>");
+      expect(html.match(/>Advanced<\/button>/g)).toHaveLength(1);
+    }
+  });
+
   it("F-491 F-602: a named profile discovered at startup offers Advanced without an install card", () => {
     const html = render(
       local(),

@@ -235,6 +235,8 @@ export const SETUP_STATES: Record<string, SetupState> = {
   "local-refused-token": { ...looked({ ...localLook }), phase: "done", step: 2 },
   "local-refused-bots": { ...looked({ ...localLook }), phase: "done", step: 2 },
   "install-ready": looked(notFound),
+  // The host's own look at start found nothing: the same card is the first screen.
+  "install-first": { ...looked(notFound), unasked: true },
   installing: installing({}),
   "installing-node": installing({ step: 1, nodeChecked: true }),
   "installing-gateway": installing({ step: 2, nodeChecked: true }),
