@@ -177,7 +177,7 @@ describe("#take-name", () => {
   it("edits either form of the name line, from the directive or its phrase", () => {
     expect(take("#take-name Johnny", "# IDENTITY.md\n\n- **Name:** New bot\n")).toEqual({
       edits: [{ oldText: "- **Name:** New bot", newText: "- **Name:** Johnny" }],
-      said: "Johnny it is. It shows once you confirm it in Clawtrate.",
+      said: "Johnny it is.",
     });
     // The line as the gateway writes it after a rename.
     expect(take("#take-name Scout", "# IDENTITY.md\n\n- Name: Johnny\n").edits).toEqual([

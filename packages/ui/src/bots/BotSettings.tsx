@@ -42,6 +42,7 @@ import { ManageGroup } from "./DeleteBot.tsx";
 import { connectionKey, RunsOnPage, RunsOnRow, usePlacement } from "../machines/RunsOn.tsx";
 import { BotMemory, MemoryRow } from "../memory/BotMemory.tsx";
 import { StartTasksRow } from "./StartTasks.tsx";
+import { NameChanges } from "./NameLine.tsx";
 import { AdminBar, CommandBlock, GrantedBar, Note, useGranted, Wait } from "./parts.tsx";
 import {
   accountName,
@@ -195,6 +196,7 @@ export function BotSettings({
     : null;
   const word = binding ? accountWord(binding) : null;
   const name = bot.name;
+  const nameChangesKey = JSON.stringify([connection.gatewayId, connection.target, bot.id]);
   // Where the bot runs (controls.md section 14): read while the tab shows its first page or that page.
   const placement = usePlacement(
     bot.id,
@@ -460,6 +462,7 @@ export function BotSettings({
         <StartTasksRow name={name} botId={bot.id} transcripts={transcripts} />
         {extraGroups}
         {runsOnRow}
+        <NameChanges key={nameChangesKey} bot={bot} />
         <ManageGroup bot={bot} onDelete={onDeleteBot} />
       </div>
     );
@@ -631,6 +634,7 @@ export function BotSettings({
         <StartTasksRow name={name} botId={bot.id} transcripts={transcripts} />
         {extraGroups}
         {runsOnRow}
+        <NameChanges key={nameChangesKey} bot={bot} />
         <ManageGroup bot={bot} onDelete={onDeleteBot} />
         {foot}
       </div>

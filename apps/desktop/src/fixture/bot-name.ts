@@ -1,24 +1,36 @@
 // A bot made in New bot with no name takes one in the chat (F-552). The
 // history is written in the gateway's own shapes, as a development gateway
 // recorded `#take-name`: the bot reads its IDENTITY.md and edits the
-// `- Name:` line, and the gateway's config still names it "New bot". The card
-// is the state the engine publishes then (`botNames`). In `bot-name-read-only`
-// the connection lacks admin, so the card has no Rename.
+// `- Name:` line. The line is the state the engine publishes then
+// (`botNames`), with the record of changes it read (`botNameRecord`):
+// `bot-name` renamed as the person's own ask, `bot-name-own` renamed by the
+// bot after reading a file, `bot-name-file` a restored change from an earlier
+// build, `bot-name-no-write` a turn that leaves the name alone, `bot-name-undone` put back, and in
+// `bot-name-read-only` the connection lacks admin, so nothing was renamed.
 
 import {
   ADMIN_SCOPES,
   gatewayStamp,
-  sameStamp,
   mapHistory,
   RawTable,
+  runTag,
   runsFromHistory,
+  sameStamp,
   type BridgeCommand,
   type ClawtrateState,
   type EngineContext,
+  type NameLine,
 } from "@clawtrate/core";
 import { OPEN_TASK } from "./data.ts";
 
-export const BOT_NAME_SCENES = ["bot-name", "bot-name-read-only"] as const;
+export const BOT_NAME_SCENES = [
+  "bot-name",
+  "bot-name-own",
+  "bot-name-file",
+  "bot-name-no-write",
+  "bot-name-undone",
+  "bot-name-read-only",
+] as const;
 export type BotNameScene = (typeof BOT_NAME_SCENES)[number];
 
 export const isBotNameScene = (value: string): value is BotNameScene =>
@@ -28,9 +40,14 @@ export const NAMED_BOT = "new-bot";
 export const NAMED_TASK = "agent:new-bot:main";
 const SECOND = 1000;
 const FILE =
-  "# IDENTITY.md - Who Am I?\n\n- **Name:** New bot\n\nYour name was chosen in Clawtrate when you were made. Keep it unless the person asks for another.\n\nWhen the person gives you a new name, write it on the `- Name:` line above and tell them it shows once they confirm it in Clawtrate.\n";
+  "# IDENTITY.md - Who Am I?\n\n- **Name:** New bot\n\nYour name was chosen in Clawtrate when you were made. Keep it unless the person asks for another.\n\nWhen the person gives you a new name, write it on the `- Name:` line above. Clawtrate shows it as your name after your turn, when it can.\n";
 
-function rows(start: number) {
+/**
+ * The conversation, its run's steps as each scene's line needs them: the read of IDENTITY.md
+ * and the edit (the bot's own, as `#take-name` runs), the edit alone (the person's ask), or
+ * neither (a conversation that made no name change).
+ */
+function rows(start: number, steps: "read-edit" | "edit" | "none") {
   const run = "3c1f4b7e-9a2d-4e51-8f0b-6d2a7c9e1b40";
   const meta = (id: string, runId: string | null, seq: number) => ({
     id,
@@ -38,16 +55,7 @@ function rows(start: number) {
     ...(runId ? { runId } : {}),
   });
   const at = (n: number) => start + n * SECOND;
-  return [
-    { role: "user", content: "can i name u", timestamp: at(0), __openclaw: meta("n-1", null, 1) },
-    {
-      role: "assistant",
-      content: [{ type: "text", text: "Yes. What would you like to call me?" }],
-      timestamp: at(2),
-      model: "scripted/dev-1",
-      __openclaw: meta("n-2", "8e0d2f61-5b7a-4c3e-9d14-2f6b8a0c7e95", 2),
-    },
-    { role: "user", content: "Johnny", timestamp: at(30), __openclaw: meta("n-3", null, 3) },
+  const READ = [
     {
       role: "assistant",
       content: [
@@ -66,6 +74,8 @@ function rows(start: number) {
       timestamp: at(31),
       __openclaw: meta("n-5", run, 5),
     },
+  ];
+  const EDIT = [
     {
       role: "assistant",
       content: [
@@ -93,9 +103,22 @@ function rows(start: number) {
       timestamp: at(32),
       __openclaw: meta("n-7", run, 7),
     },
+  ];
+  return [
+    { role: "user", content: "can i name u", timestamp: at(0), __openclaw: meta("n-1", null, 1) },
     {
       role: "assistant",
-      content: [{ type: "text", text: "Johnny it is. It shows once you confirm it in Clawtrate." }],
+      content: [{ type: "text", text: "Yes. What would you like to call me?" }],
+      timestamp: at(2),
+      model: "scripted/dev-1",
+      __openclaw: meta("n-2", "8e0d2f61-5b7a-4c3e-9d14-2f6b8a0c7e95", 2),
+    },
+    { role: "user", content: "Johnny", timestamp: at(30), __openclaw: meta("n-3", null, 3) },
+    ...(steps === "read-edit" ? READ : []),
+    ...(steps === "none" ? [] : EDIT),
+    {
+      role: "assistant",
+      content: [{ type: "text", text: "Johnny it is." }],
       timestamp: at(33),
       model: "scripted/dev-1",
       __openclaw: meta("n-8", run, 8),
@@ -109,9 +132,32 @@ export function botNameScene(
   now: number,
 ): ClawtrateState {
   const start = now - 5 * 60 * SECOND;
-  const history = rows(start);
+  const restored = name === "bot-name-file";
+  const noWrite = name === "bot-name-no-write";
+  const history = rows(
+    start,
+    name === "bot-name" ? "edit" : restored || noWrite ? "none" : "read-edit",
+  );
   const ctx: EngineContext = { sessionKey: NAMED_TASK, now, raw: new RawTable() };
-  const admin = name === "bot-name";
+  const admin = name !== "bot-name-read-only";
+  const renamed = name === "bot-name" || name === "bot-name-own" || restored;
+  const stamp = gatewayStamp(base.connection);
+  // The legacy record predates this conversation and refers to a run outside its history.
+  const run = runTag(restored ? "earlier-file-rename" : "3c1f4b7e-9a2d-4e51-8f0b-6d2a7c9e1b40");
+  const line: NameLine = {
+    botId: NAMED_BOT,
+    from: "New bot",
+    to: "Johnny",
+    stamp,
+    run,
+    whose: name === "bot-name" ? "person" : name === "bot-name-file" ? "file" : "bot",
+    source: name === "bot-name-own" ? "file" : null,
+    status: admin ? (renamed ? "renamed" : "undone") : "not-done",
+    reason: admin ? null : "no-admin",
+    after: renamed || !admin ? null : "New bot",
+    error: null,
+  };
+  const at = restored ? start - 60 * SECOND : start + 33 * SECOND;
   return {
     ...base,
     connection: admin
@@ -128,7 +174,7 @@ export function botNameScene(
       ...base.bots,
       {
         id: NAMED_BOT,
-        name: "New bot",
+        name: renamed ? "Johnny" : "New bot",
         emoji: null,
         avatarUrl: null,
         theme: null,
@@ -144,7 +190,7 @@ export function botNameScene(
           botId: NAMED_BOT,
           sessionId: "5f2c8e1a-7b3d-4a96-b0e4-1d9c6a2f8e37",
           title: "Main",
-          preview: "Johnny it is. It shows once you confirm it in Clawtrate.",
+          preview: "Johnny it is.",
           updatedAt: start + 33 * SECOND,
           status: "done",
           unread: false,
@@ -163,59 +209,84 @@ export function botNameScene(
         questions: [],
       },
     },
-    botNames: [
-      {
-        botId: NAMED_BOT,
-        name: "Johnny",
-        from: "New bot",
-        stamp: gatewayStamp(base.connection),
-        status: "open",
-        error: null,
-      },
-    ],
+    botNames: noWrite ? [] : [line],
+    botNameRecord:
+      admin && !noWrite
+        ? {
+            stamp,
+            changes: [
+              {
+                bot: NAMED_BOT,
+                field: "name",
+                from: "New bot",
+                to: "Johnny",
+                at,
+                run,
+                whose: line.whose,
+                source: line.source,
+                file: runTag(FILE),
+                done: at,
+                ...(renamed ? {} : { undone: at + 60 * SECOND }),
+              },
+            ],
+          }
+        : null,
   };
 }
 
 /**
- * Rename names the bot as the gateway's bot list then would; Not now drops the card. Both answer
- * only the card open now, from this connection, as the engine does: Rename is refused otherwise,
- * and Not now says it declined only then.
+ * Undo puts the name before back, as the gateway's bot list then would, and marks the change
+ * undone, only for the change the record holds, from this connection, as the engine does; Close
+ * puts the line away.
  */
 export function botNameCommand(
   command: BridgeCommand,
   get: () => ClawtrateState,
   set: (state: ClawtrateState) => void,
 ): Promise<unknown> | undefined {
-  if (command.type !== "acceptBotName" && command.type !== "declineBotName") return undefined;
+  if (command.type !== "undoBotName" && command.type !== "dismissBotName") return undefined;
   const state = get();
-  const botNames = (state.botNames ?? []).filter((each) => each.botId !== command.botId);
-  const open = (state.botNames ?? []).find((each) => each.botId === command.botId);
-  const stamp = gatewayStamp(state.connection);
-  if (command.type === "declineBotName") {
-    // As the engine decides: the open card's name, not being renamed, and stamps that match and
-    // name a gateway (`sameStamp`), the card's and this connection's.
-    const declined =
-      open?.name === command.name &&
-      open.status !== "renaming" &&
-      sameStamp(open.stamp, command.stamp) &&
-      sameStamp(stamp, command.stamp);
-    if (declined) set({ ...state, botNames });
-    return Promise.resolve({ declined });
+  if (command.type === "dismissBotName") {
+    set({
+      ...state,
+      botNames: (state.botNames ?? []).filter(
+        (each) =>
+          each.botId !== command.botId ||
+          each.run !== command.run ||
+          each.stamp.gatewayId !== command.stamp.gatewayId ||
+          each.stamp.target !== command.stamp.target,
+      ),
+    });
+    return Promise.resolve();
   }
-  // Rename, in the engine's order and words: the open card with this name, not already being
-  // renamed, then the card's stamp and this connection's.
-  if (open?.name !== command.name || open.status === "renaming")
-    return Promise.reject(new Error("That name is no longer waiting for you."));
-  if (!sameStamp(open.stamp, command.stamp) || !sameStamp(stamp, command.stamp))
+  const record = state.botNameRecord;
+  const change = record?.changes.find((each) => each.run === command.run);
+  const bot = state.bots.find((each) => each.id === command.botId);
+  if (!record || !change || change.undone !== undefined || bot?.name !== change.to)
+    return Promise.reject(new Error("That change can no longer be undone."));
+  if (change.from !== command.from)
     return Promise.reject(
-      new Error("This name was found on another gateway, so nothing was sent."),
+      new Error(
+        `That change now puts back ${change.from}, not ${command.from}, so nothing was sent.`,
+      ),
     );
+  if (!sameStamp(gatewayStamp(state.connection), command.stamp))
+    return Promise.reject(
+      new Error("This change was read on another gateway, so nothing was sent."),
+    );
+  const undone = Date.now();
   set({
     ...state,
-    bots: state.bots.map((bot) =>
-      bot.id === command.botId ? { ...bot, name: command.name } : bot,
+    bots: state.bots.map((each) =>
+      each.id === command.botId ? { ...each, name: change.from } : each,
     ),
-    botNames,
+    botNames: (state.botNames ?? []).map((each) =>
+      each.run === command.run ? { ...each, status: "undone", after: change.from } : each,
+    ),
+    botNameRecord: {
+      ...record,
+      changes: record.changes.map((each) => (each === change ? { ...each, undone } : each)),
+    },
   });
   return Promise.resolve();
 }

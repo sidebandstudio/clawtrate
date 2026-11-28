@@ -1,0 +1,59 @@
+- banner: Clawtrate
+- status
+- navigation "Bots":
+  - button "Routines"
+  - 'button "Sort bots: Recent activity"'
+  - button "Search"
+  - button "New"
+  - list:
+    - listitem:
+      - button "Otto, working, 14 tasks, unread, home server operations": Otto home server operations
+    - listitem:
+      - button "New bot, 1 task": New bot
+    - listitem:
+      - button "Juniper, 3 tasks, unread, research": Juniper research
+    - listitem:
+      - button "Marlow, 1 task, editing": Marlow editing
+    - listitem:
+      - button "Pip, a run failed, 4 tasks, unread, planning": Pip planning
+    - listitem:
+      - button "Quartermaster of the Family Calendar and Errands, 2 tasks, household logistics": Quartermaster of the Family Calendar and Errands household logistics
+  - status
+  - button "127.0.0.1:18789, connected. Open the gateway menu."
+  - button "Settings"
+- region "Conversation":
+  - button "New bot, Main. Show details.": New bot ·Main
+  - button "Show work panel"
+  - region "Transcript":
+    - heading "Main" [level=1]
+    - text: Today 5:35 PM
+    - paragraph: can i name u
+    - toolbar "Message actions":
+      - button "Add a reaction"
+      - button "Reply in a thread"
+      - button "More"
+    - paragraph: Yes. What would you like to call me?
+    - toolbar "Message actions":
+      - button "Add a reaction"
+      - button "Reply in a thread"
+      - button "More"
+    - paragraph: Johnny
+    - toolbar "Message actions":
+      - button "Add a reaction"
+      - button "Reply in a thread"
+      - button "More"
+    - paragraph: Johnny it is.
+    - toolbar "Message actions":
+      - button "Add a reaction"
+      - button "Reply in a thread"
+      - button "More"
+    - group: Worked 2 actions
+    - status
+  - region "New bot's name":
+    - status: Back to New bot.
+    - button "Close"
+  - button "Attach files"
+  - textbox "Message New bot"
+  - button "Send" [disabled]
+  - status
+- status

@@ -440,9 +440,13 @@ export type BridgeCommand =
       kind: "unlock" | "clear";
       stamp: GatewayStamp;
     }
-  /** A name card's Rename and Not now (`ClawtrateState.botNames`): `name` is the one it shows. */
-  | { type: "acceptBotName"; botId: string; name: string; stamp: GatewayStamp }
-  | { type: "declineBotName"; botId: string; name: string; stamp: GatewayStamp }
+  /**
+   * Undo a name a bot took, for the change `run` names (`ClawtrateState.botNames`,
+   * `botNameRecord`), putting back `from`, the name its button showed; and put a name line away
+   * on this device.
+   */
+  | { type: "undoBotName"; botId: string; run: string; from: string; stamp: GatewayStamp }
+  | { type: "dismissBotName"; botId: string; run: string; stamp: GatewayStamp }
   /**
    * Update OpenClaw, after its confirmation (`ClawtrateState.openclawUpdating`): sent only to the
    * gateway the screen showed (`stamp`). Dismiss puts away a finished update's line.
@@ -618,11 +622,9 @@ type BridgeResultStart<C extends BridgeCommand> = C extends { type: "readBotDele
   ? BotDeleteRead
   : C extends { type: "deleteBot" }
     ? BotDeleteOutcome
-    : C extends { type: "declineBotName" }
-      ? { declined: boolean }
-      : C extends { type: "undoSkillChange" }
-        ? { undone: boolean }
-        : BridgeResultRest<C>;
+    : C extends { type: "undoSkillChange" }
+      ? { undone: boolean }
+      : BridgeResultRest<C>;
 
 type BridgeResultRest<C extends BridgeCommand> = C extends { type: "sendMessage" }
   ? { messageId: string }
@@ -1441,11 +1443,19 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         kind: oneOf(command.kind, ["unlock", "clear"] as const, "kind"),
         stamp: gatewayStampOf(command.stamp),
       };
-    case "acceptBotName":
+    case "undoBotName":
       return {
-        type: "acceptBotName",
+        type: "undoBotName",
         botId: botId(command.botId),
-        name: shortText(command.name, MAX_BOT_NAME_CHARS * 2, "name"),
+        run: shortText(command.run, 16, "change"),
+        from: shortText(command.from, MAX_BOT_NAME_CHARS * 2, "name"),
+        stamp: gatewayStampOf(command.stamp),
+      };
+    case "dismissBotName":
+      return {
+        type: "dismissBotName",
+        botId: botId(command.botId),
+        run: shortText(command.run, 16, "change"),
         stamp: gatewayStampOf(command.stamp),
       };
     case "startOpenClawUpdate":
@@ -1456,13 +1466,6 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       return { type: "checkOpenClawUpdate" };
     case "releaseOpenClawUpdateHold":
       return { type: "releaseOpenClawUpdateHold" };
-    case "declineBotName":
-      return {
-        type: "declineBotName",
-        botId: botId(command.botId),
-        name: shortText(command.name, MAX_BOT_NAME_CHARS * 2, "name"),
-        stamp: gatewayStampOf(command.stamp),
-      };
     case "finishBot":
       return {
         type: "finishBot",
@@ -2447,10 +2450,10 @@ class ViewerSession implements BridgeSession {
           command.kind,
           command.stamp,
         );
-      case "acceptBotName":
-        return client.acceptBotName(command.botId, command.name, command.stamp);
-      case "declineBotName":
-        return client.declineBotName(command.botId, command.name, command.stamp);
+      case "undoBotName":
+        return client.undoBotName(command.botId, command.run, command.from, command.stamp);
+      case "dismissBotName":
+        return client.dismissBotName(command.botId, command.run, command.stamp);
       case "startOpenClawUpdate":
         return client.startOpenClawUpdate(command.stamp);
       case "dismissOpenClawUpdate":

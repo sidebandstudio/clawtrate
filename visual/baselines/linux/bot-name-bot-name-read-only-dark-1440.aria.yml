@@ -35,15 +35,14 @@
     - paragraph: Johnny
     - toolbar "Message actions":
       - button "More"
-    - paragraph: Johnny it is. It shows once you confirm it in Clawtrate.
+    - paragraph: Johnny it is.
     - toolbar "Message actions":
       - button "More"
     - group: Worked 2 actions
     - status
-  - region "A new name for New bot":
-    - paragraph: New bot would like to be called “Johnny”
-    - paragraph: Renaming New bot needs admin access, which this connection doesn't have.
-    - button "Not now"
+  - region "New bot's name":
+    - status: New bot wrote a new name for itself, Johnny. Renaming needs admin access, which this connection doesn't have.
+    - button "Close"
   - region "Access":
     - text: Read-only. You can follow New bot's work here. Approvals and questions aren't shown on this connection.
     - button "Request access"

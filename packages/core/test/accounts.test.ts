@@ -1514,7 +1514,7 @@ describe("a bot made in New bot starts as itself, without OpenClaw's first-run q
 
   it("names the bot, and names a picture only when one was chosen, in lines the gateway reads", () => {
     expect(identityFile("  Maple \n Leaf ", false)).toBe(
-      "# IDENTITY.md - Who Am I?\n\n- **Name:** Maple Leaf\n\nYour name was chosen in Clawtrate when you were made. Keep it unless the person asks for another.\n\nWhen the person gives you a new name, write it on the `- Name:` line above and tell them it shows once they confirm it in Clawtrate.\n",
+      "# IDENTITY.md - Who Am I?\n\n- **Name:** Maple Leaf\n\nYour name was chosen in Clawtrate when you were made. Keep it unless the person asks for another.\n\nWhen the person gives you a new name, write it on the `- Name:` line above. Clawtrate shows it as your name after your turn, when it can.\n",
     );
     const withPicture = identityFile("Maple", true);
     expect(withPicture).toMatch(/^- \*\*Picture:\*\* chosen in Clawtrate/m);

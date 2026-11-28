@@ -21,6 +21,15 @@ const ALLOWED: Record<string, string> = {
   // Static: built once from constants, never grown.
   "packages/core/src/memory.ts:ROOT_MEMORY": "static, two workspace filenames",
   "packages/core/src/bot-names.ts:PLACEHOLDERS": "static, the template's two name placeholders",
+  "packages/core/src/bot-names.ts:QUIET_TOOLS":
+    "static, the tools whose result is no outside content",
+  "packages/core/src/bot-names.ts:FILE_TOOLS": "static, the file tools a source is named for",
+  "packages/core/src/bot-names.ts:CONVERSATION_TOOLS":
+    "static, the tools that return another conversation's history or results",
+  "packages/core/src/bot-names.ts:NAME_WRITES": "static, the tools that write the name line",
+  "packages/core/src/bot-names.ts:SOURCES": "static, the five sources a record entry may name",
+  "packages/core/src/bot-names.ts:WHOSE":
+    "static, the three classifications a record entry may hold",
   "packages/core/src/send-marker.ts:ABORT_WORDS": "static, the gateway's 43 stop words",
   "packages/core/src/send-marker.ts:MARKER_SENTENCES": "static, the marker's two sentences",
   "packages/core/src/task-names.ts:NAMING_MODELS":

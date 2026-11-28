@@ -1,7 +1,7 @@
 - status
 - region "Conversation":
   - button "Back to bots"
-  - button "New bot, Main. Show details.": New bot
+  - button "Johnny, Main. Show details.": Johnny
   - button "Show work panel"
   - region "Transcript":
     - heading "Main" [level=1]
@@ -21,20 +21,19 @@
       - button "Add a reaction"
       - button "Reply in a thread"
       - button "More"
-    - paragraph: Johnny it is. It shows once you confirm it in Clawtrate.
+    - paragraph: Johnny it is.
     - toolbar "Message actions":
       - button "Add a reaction"
       - button "Reply in a thread"
       - button "More"
-    - group: Worked 2 actions
+    - group: Worked 1 action
     - status
-  - region "A new name for New bot":
-    - paragraph: New bot would like to be called “Johnny”
-    - paragraph: It wrote this name for itself. Rename changes its name everywhere it shows.
-    - button "Rename"
-    - button "Not now"
+  - region "Johnny's name":
+    - status: Renamed to Johnny
+    - 'button "Undo: back to New bot"'
+    - button "Close"
   - button "Attach files"
-  - textbox "Message New bot"
+  - textbox "Message Johnny"
   - button "Send" [disabled]
   - status
 - status

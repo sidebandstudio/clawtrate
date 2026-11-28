@@ -4667,7 +4667,7 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
           title: "Edit in IDENTITY.md",
         },
       ]);
-      view.expectEnd("final", "Johnny it is. It shows once you confirm it in Clawtrate.");
+      view.expectEnd("final", "Johnny it is.");
       const file = await workspaceFile(h, "marlow", "IDENTITY.md");
       expect(/^- \*\*Name:\*\* Johnny$/m.test(file), `IDENTITY.md after the edit: ${file}`);
       // The edit leaves the listed name as it was, whatever it was: only Rename changes it.

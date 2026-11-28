@@ -48,8 +48,9 @@ import {
   AdminNeededError,
   type CreateBotInput,
   type CreatedBot,
+  isCertainRefusal,
 } from "./accounts-engine.ts";
-import { BotNames } from "./bot-names.ts";
+import { BotNames, CLAIM_DELAY_MS, NAME_RECORD_KEY } from "./bot-names.ts";
 import type { ModelList, ModelRefresh, OrderClear } from "./accounts.ts";
 import {
   dismissCheckInSave,
@@ -829,6 +830,8 @@ export type ClientOptions = {
   creationCheckMs?: number;
   /** First wait before a read answered as passing is asked again; `READ_AGAIN_MS` unless a test shortens it. */
   readAgainMs?: number;
+  /** How long a device that didn't send a run waits before applying a name its bot wrote (`CLAIM_DELAY_MS`). */
+  nameClaimDelayMs?: number;
   /**
    * Counts the host sets for its device. Each defaults to the bound the
    * retention arithmetic assumes and may only be lower: `trackedTasks`, the
@@ -1972,7 +1975,7 @@ export class ClawtrateClient {
     connected: () => this.state.connection.status === "connected",
     admin: () => this.holds(ADMIN_SCOPE) && this.state.connection.scopes.includes(ADMIN_SCOPE),
     serverVersion: () => this.state.connection.serverVersion,
-    refreshBots: () => this.refreshBots(),
+    refreshBots: async () => void (await this.refreshBots()),
     gateway: () => this.readGatewayIdentity(),
     gatewayNow: () => this.state.connection.gatewayId,
     readStamp: () => ({
@@ -2009,7 +2012,7 @@ export class ClawtrateClient {
     withdrawn: (owner) => this.withdrawnOwners.has(owner),
     target: () => this.target,
   });
-  /** Names bots wrote for themselves, waiting for the person (`bot-names.ts`); its state is `botNames`. */
+  /** Names bots wrote for themselves, applied with Undo (`bot-names.ts`); its state is `botNames`. */
   private readonly botNames = new BotNames({
     request: (method, params) => this.request(method, params),
     bots: () => this.state.bots,
@@ -2017,8 +2020,8 @@ export class ClawtrateClient {
       this.state.connection.status === "connected" &&
       this.state.connection.canAdmin &&
       !this.options.readOnly,
-    gateway: () => this.state.connection.gatewayId ?? this.state.connection.gatewayUrl,
     stamp: () => gatewayStamp(this.state.connection),
+    generation: () => `${this.generation}:${this.epoch}`,
     sameGateway: async (stamp) => {
       await this.requireSameGateway(stamp);
     },
@@ -2037,11 +2040,78 @@ export class ClawtrateClient {
       };
     },
     refreshBots: () => this.refreshBots(),
+    // Read only when a read that began after this call has published the task's history: a read
+    // in flight runs once more after it (`loadTranscript`), on the same connection and the same
+    // opening of the task. A failed last read leaves the task in error, keeping an earlier read's
+    // time, and so does one without live updates, which can't be told from it; Try again on a
+    // failed read sets it loading with that time too: none of these is read.
+    readHistory: async (key) => {
+      if (!this.tracked(key)) return false;
+      const generation = this.generation;
+      const epoch = this.epoch;
+      const incarnation = this.incarnations.get(key);
+      const since = this.now();
+      await this.loadTranscript(key, false, null).catch(() => {});
+      const read = this.state.transcripts[key];
+      return (
+        generation === this.generation &&
+        epoch === this.epoch &&
+        this.tracked(key) &&
+        this.incarnations.get(key) === incarnation &&
+        read !== undefined &&
+        read.status === "ready" &&
+        (read.loadedAt ?? Number.NEGATIVE_INFINITY) >= since
+      );
+    },
+    // A run some of whose steps aren't kept is a run whose steps aren't known. A person's message
+    // in the conversation after the run's own and before its end joined it as a steer.
+    runFacts: (sessionKey, runId) => {
+      const transcript = this.state.transcripts[sessionKey];
+      const run = transcript?.runs.find((each) => each.id === runId);
+      if (!transcript || !run) return { steps: null, steered: false, owner: false };
+      const anchor = run.anchorItemId
+        ? transcript.items.findIndex((item) => item.id === run.anchorItemId)
+        : -1;
+      // The run's own message (a keyed anchor, not merely where it is drawn), stored as the owner's.
+      const owner =
+        run.anchorKeyed === true && anchor !== -1 && transcript.items[anchor]!.owner === true;
+      const end = run.endedAt ?? Number.POSITIVE_INFINITY;
+      const steered =
+        anchor !== -1 &&
+        transcript.items
+          .slice(anchor + 1)
+          // History marks steers even without timestamps. An untimed input whose place
+          // relative to the end is unknown also rules out direct attribution.
+          .some(
+            (item) =>
+              item.role === "user" &&
+              (item.steered || item.timestamp === null || item.timestamp <= end),
+          );
+      return {
+        steps:
+          run.omittedSteps === 0
+            ? run.steps.map((step) => ({
+                toolName: step.toolName,
+                args: step.argsText?.text ?? null,
+                ok: step.status === "done",
+              }))
+            : null,
+        steered,
+        owner,
+      };
+    },
     missingScope: (error) => {
       this.noteMissingScope(error);
       return isMissingScope(error);
     },
-    publish: (botNames) => this.store.update((state) => ({ ...state, botNames })),
+    certainRefusal: (error) => isCertainRefusal(error),
+    now: () => this.now(),
+    waitToClaim: () =>
+      new Promise((resolve) =>
+        setTimeout(resolve, this.options.nameClaimDelayMs ?? CLAIM_DELAY_MS),
+      ),
+    publishLines: (botNames) => this.store.update((state) => ({ ...state, botNames })),
+    publishRecord: (botNameRecord) => this.store.update((state) => ({ ...state, botNameRecord })),
     log: (message) => this.log("warn", message),
   });
   /**
@@ -4817,6 +4887,11 @@ export class ClawtrateClient {
       // A send that starts its own run names that run's request: what a failed turn's
       // "Copy request ID" gives (F-301). A steer joins a run another frame started.
       const starts = message.mode !== "steer";
+      // A run it starts runs under the message's id: the name a bot takes in it is judged by it,
+      // and by the files it carried. A steer makes the run it joins more than one message's.
+      const files = this.attachmentContent.get(messageId)?.files ?? [];
+      if (starts) this.botNames.sent(key, message.id, message.text, files.length > 0);
+      else if (message.runId) this.botNames.steered(message.runId);
       const send = (frame: typeof params) =>
         this.request("chat.send", frame, {
           onSent: (requestId) => {
@@ -7479,12 +7554,13 @@ export class ClawtrateClient {
   }
 
   /**
-   * Rename on a name card: `name` and `gatewayId` must be the ones it shows (`bot-names.ts`).
-   * Nothing is sent unless that gateway is still the one connected.
+   * Undo a name a bot took (`bot-names.ts`): only for the change the record still holds, only to
+   * put back `from`, the name the line or the settings showed, on the gateway they read it from
+   * (`stamp`).
    */
-  acceptBotName(botId: string, name: string, stamp: GatewayStamp): Promise<void> {
+  undoBotName(botId: string, run: string, from: string, stamp: GatewayStamp): Promise<void> {
     if (this.options.readOnly) return Promise.reject(new Error("This host only reads."));
-    return this.botNames.accept(botId, name, stamp);
+    return this.botNames.undo(botId, run, from, stamp);
   }
 
   /**
@@ -7552,14 +7628,9 @@ export class ClawtrateClient {
     return this.deviceApprovals.refuse(requestId, why, listedOn);
   }
 
-  /** Not now on a name card: kept on this device for that bot and that name. */
-  /** Not now, with whether it answered the card shown now. */
-  async declineBotName(
-    botId: string,
-    name: string,
-    stamp: GatewayStamp,
-  ): Promise<{ declined: boolean }> {
-    return { declined: await this.botNames.decline(botId, name, stamp) };
+  /** Put a bot's name line away on this device, only while it is the change `run` names. Nothing is sent. */
+  async dismissBotName(botId: string, run: string, stamp: GatewayStamp): Promise<void> {
+    this.botNames.dismiss(botId, run, stamp);
   }
 
   /** A new picture for a bot: a creature with its choice inside, or the person's own (`avatar.ts`). */
@@ -7911,13 +7982,18 @@ export class ClawtrateClient {
     }
   }
 
-  /** Read the bot list again, after a bot was created or changed here. */
-  private async refreshBots(): Promise<void> {
+  /**
+   * Read the bot list again, after a bot was created or changed here. Answers with every bot the
+   * reply lists, past the display's cap too, held by no one (a name check reads it once), or null
+   * when the reply wasn't the newest on this connection and was set aside.
+   */
+  private async refreshBots(): Promise<ReturnType<typeof mapAgents> | null> {
     const generation = this.generation;
     const issued = ++this.botsIssued;
     const result = await this.request("agents.list", {});
-    if (generation !== this.generation || !this.newestBots(issued)) return;
+    if (generation !== this.generation || !this.newestBots(issued)) return null;
     this.applyBots(result);
+    return mapAgents(result);
   }
 
   /**
@@ -10504,8 +10580,12 @@ export class ClawtrateClient {
     if (this.bindRouteIdentity(id, current) === "changed") return;
     this.accounts.onGateway(id);
     // Clearing another gateway's creation can notify a host that stops the connection.
-    if (current() && this.state.connection.gatewayId !== id) this.setConnection({ gatewayId: id });
+    const named = this.state.connection.gatewayId !== id;
+    if (current() && named) this.setConnection({ gatewayId: id });
     if (current()) this.settleReadStamps(id);
+    // The record of name changes is this gateway's: read again once the gateway is named, as a
+    // retried identity read names it after the connection's own read found it unnamed.
+    if (current() && named) void this.botNames.loadRecord();
     // The guide change after this connection's connect found it unnamed: once, now it is named.
     const unnamed = this.guidesUnnamed;
     if (current() && unnamed?.generation === this.generation && unnamed.epoch === this.epoch) {
@@ -10768,6 +10848,7 @@ export class ClawtrateClient {
       if (this.tracked(key)) void this.loadTranscript(key, true, resync);
     }
     void this.loadSidebar(generation);
+    void this.botNames.loadRecord();
     void this.loadWaitingQuestions(generation);
     void this.loadWaitingApprovals(generation);
 
@@ -11656,11 +11737,17 @@ export class ClawtrateClient {
     }
     this.updateActivity(key, (activity, ctx) => applyAgentEvent(activity, payload, ctx).activity);
     const phase = asRecord(payload.data)?.phase;
+    // A run of an open task starting: its bot's IDENTITY.md as the run finds it (`runStarted`).
+    if (payload.stream === "lifecycle" && phase === "start" && this.openSessions.has(key)) {
+      const botId = botIdFromSessionKey(key);
+      if (botId) void this.botNames.runStarted(botId, payload.runId);
+    }
     if (payload.stream === "lifecycle" && (phase === "end" || phase === "error")) {
       this.scheduleHistory(key);
       // Only while a viewer has the task open: a task kept for its unsettled work reads nothing.
       const botId = botIdFromSessionKey(key);
-      if (botId && this.openSessions.has(key)) void this.botNames.afterRun(botId, payload.runId);
+      if (botId && this.openSessions.has(key))
+        void this.botNames.afterRun(botId, key, payload.runId);
     }
   }
 
@@ -11754,6 +11841,8 @@ export class ClawtrateClient {
         const keys = asRecord(event.payload)?.keys;
         if (Array.isArray(keys) && keys.includes(SIDEBAR_PREF_KEY))
           void this.loadSidebar(this.generation);
+        if (Array.isArray(keys) && keys.includes(NAME_RECORD_KEY))
+          void this.botNames.onPrefsChanged(keys);
         this.usage.onPrefsChanged(keys);
         return;
       }

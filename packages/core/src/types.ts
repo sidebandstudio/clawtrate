@@ -438,6 +438,11 @@ export type TranscriptItem = {
    */
   idempotencyKey?: string;
   /**
+   * The gateway stored this user row as the owner's (`__openclaw.senderIsOwner`, both versions:
+   * a connection with admin, or the owner in a chat app). Present and true only then.
+   */
+  owner?: true;
+  /**
    * An assistant item whose first row names no run (neither `__openclaw.runId` nor
    * `openclawAbort.runId`), such as a row the gateway appends after a turn: not a run's reply,
    * so never a stopped or failed run's last text. Present and true only then. It goes by the run
@@ -674,10 +679,15 @@ export type ClawtrateState = {
    */
   usage?: UsageState;
   /**
-   * Names bots wrote for themselves that wait for the person (`bot-names.ts`): one card each in
-   * that bot's conversation. Absent until the first.
+   * Names bots wrote for themselves (`bot-names.ts`): one line each in that bot's conversation,
+   * what happened and Undo. Absent until the first.
    */
-  botNames?: NameProposal[];
+  botNames?: NameLine[];
+  /**
+   * The record of changes as last read from the gateway, for Undo in a bot's settings; absent
+   * when this connection has none to read.
+   */
+  botNameRecord?: { stamp: GatewayStamp; changes: NameRecordChange[] } | null;
   /**
    * Updating OpenClaw from Clawtrate (`openclaw-update.ts`): the run followed, the press being
    * sent, and why the gateway can't update itself. Absent until the first.
@@ -693,20 +703,61 @@ export type ClawtrateState = {
 };
 
 /**
- * A bot's IDENTITY.md names it otherwise than the gateway's config does (#424): the card in
- * its conversation, whose Rename saves `name` with `agents.update`.
+ * What a run read before it wrote a bot's name, when its steps say: a web page, a file (the bot's
+ * own IDENTITY.md included), another conversation's history or results, a tool's output, or the
+ * files the person's message carried.
  */
-export type NameProposal = {
+export type NameSource = "web" | "file" | "conversation" | "tool" | "attachment" | null;
+
+/**
+ * Whose a rename was, as the device that applied it judged it (`judgeRename`), and as every device
+ * shows it: shown to be the person's own ask (`person`); written by the run, but not shown to be
+ * the person's (`bot`); or picked up from the file with no write by the run seen (`file`).
+ */
+export type NameWhose = "person" | "bot" | "file";
+
+/**
+ * A bot's IDENTITY.md named it otherwise than the gateway's config did (F-552): one line in that
+ * bot's conversation, saying what happened, with Undo (`bot-names.ts`).
+ */
+export type NameLine = {
   botId: string;
-  /** The file's name made plain, exactly as Rename saves it (`plainName`). */
-  name: string;
-  /** The bot's name when the file was read; Rename sends nothing once the bot is named otherwise. */
+  /** The name before and the name the bot wrote, made plain (`plainName`). */
   from: string;
-  /** Where the file was read (`gatewayStamp`): Rename sends only there. */
+  to: string;
+  /** Where the file was read (`gatewayStamp`): Undo sends only there. */
   stamp: GatewayStamp;
-  /** `renaming` while Rename is out; `failed` with `error` when it didn't land. */
-  status: "open" | "renaming" | "failed";
+  /** The record's tag for the run (`runTag`), naming its change in the record of changes. */
+  run: string;
+  whose: NameWhose;
+  source: NameSource;
+  status: "renaming" | "renamed" | "undoing" | "undone" | "not-done" | "failed";
+  /**
+   * Why a rename wasn't made: a name another bot has, a name before that another bot has too (so
+   * Undo couldn't put it back), the day's limit, no room, no admin, no record.
+   */
+  reason: "taken" | "claimed" | "shared" | "limit" | "full" | "no-admin" | "no-record" | null;
+  /** After Undo: the bot's name as the gateway's bot list gave it back, or null before. */
+  after: string | null;
   error: string | null;
+};
+
+/** One change in the record of changes on the gateway (`users.prefs`): a bot's name only. */
+export type NameRecordChange = {
+  bot: string;
+  field: "name";
+  from: string;
+  to: string;
+  at: number;
+  run: string;
+  whose: NameWhose;
+  source: NameSource;
+  /** The record's tag for IDENTITY.md as it was read (`runTag` of its text): what Undo declines. */
+  file: string;
+  /** When the bot list confirmed the rename; a claim without it never landed, as far as known. */
+  done?: number;
+  /** When Undo put the name back, from any device. */
+  undone?: number;
 };
 
 /**

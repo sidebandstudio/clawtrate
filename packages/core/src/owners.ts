@@ -46,7 +46,6 @@ import {
   MAX_FIRST_MESSAGE_TITLES,
   MAX_FOLLOW_UPS,
   MAX_OUTCOME_LOOKUPS,
-  MAX_FILE_READS,
   MAX_PICTURE_READS,
   MAX_READ_BACK_PICTURES,
   MAX_SENT_PICTURE_MESSAGES,
@@ -72,7 +71,16 @@ import {
   MAX_QUEUED_INPUTS,
 } from "./computer.ts";
 import { MAX_STORE_LISTENERS } from "./store.ts";
-import { MAX_CHECKED_RUN_CHARS, MAX_CHECKED_RUNS, MAX_NAME_ERROR_CHARS } from "./bot-names.ts";
+import {
+  MAX_CHECKED_RUN_CHARS,
+  MAX_CHECKED_RUNS,
+  MAX_LEGACY_DECLINES,
+  MAX_LEGACY_KEY_CHARS,
+  MAX_NAME_CARDS,
+  MAX_NAME_ERROR_CHARS,
+  MAX_SENT_RUNS,
+  MAX_SENT_TEXT_CHARS,
+} from "./bot-names.ts";
 import {
   MAX_WAITING_ID_CHARS,
   MAX_WAITING_MARKERS,
@@ -379,14 +387,57 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // What the person typed into the one sign-in under way, in the forms it may come back in, while
   // that sign-in lasts, to scrub the gateway's answers: never in the state, forgotten at its end.
   "accounts.secrets": { max: MAX_SIGNIN_SECRETS, each: MAX_SECRET_JSON_CHARS, row: "bookkeeping" },
-  // Names bots wrote for themselves (`bot-names.ts`): one card per listed bot, the reads under
-  // way (one per bot, within the file reads), and the bots whose file is too long to read.
-  "botNames.proposals": {
+  // Names bots wrote for themselves (`bot-names.ts`): one line per listed bot, the reads under
+  // way (one per bot, within the file reads), the bots whose file is too long to read, and the
+  // runs this device started with the first characters of what it sent, to judge whose ask a
+  // rename was.
+  "botNames.lines": {
     max: MAX_BOTS,
-    each: 2 * ID + 2 * MAX_NAME_CHARS + MAX_NAME_ERROR_CHARS + SHORT,
+    // The error as JSON writes it: up to six characters (`\uXXXX`) for each one kept.
+    each: 3 * ID + 3 * MAX_NAME_CHARS + 6 * MAX_NAME_ERROR_CHARS + 4 * SHORT + 2 * N,
     row: "bookkeeping",
   },
-  "botNames.reading": { max: MAX_FILE_READS, each: ID, row: "bookkeeping" },
+  // Undos whose decline couldn't be written to the gateway yet: a key, a stamp, a bot, a name,
+  // and the tags of a run, a file and a claim each, one per listed bot.
+  "botNames.unrecorded": {
+    max: MAX_BOTS,
+    each: 6 * ID + MAX_NAME_CHARS + N,
+    row: "bookkeeping",
+  },
+  // Renames this device applied, for its own Undo: a key, a gateway, a bot, the name before and
+  // after, and the tags of the run and the file, one per listed bot.
+  "botNames.applied": {
+    max: MAX_BOTS,
+    each: 6 * ID + 2 * MAX_NAME_CHARS,
+    row: "bookkeeping",
+  },
+  // Changes whose line was closed on this device: their run's tag, one per listed bot.
+  "botNames.dismissed": { max: MAX_BOTS, each: ID, row: "bookkeeping" },
+  "botNames.sentRuns": {
+    max: MAX_SENT_RUNS,
+    // The run id and the text as JSON writes them: up to six characters (`\uXXXX`) for each
+    // one kept, and their quotes.
+    each: 6 * MAX_CHECKED_RUN_CHARS + ID + 6 * MAX_SENT_TEXT_CHARS + 6 + 2 * SHORT,
+    row: "bookkeeping",
+  },
+  // The checks under way, one per bot, bounded on their own: an entry outlives its file read's
+  // slot and its bot leaving the roster.
+  "botNames.reading": { max: MAX_NAME_CARDS, each: ID, row: "bookkeeping" },
+  // The name each run found in IDENTITY.md as it started: its run id, its bot and the name.
+  "botNames.starts": {
+    max: MAX_CHECKED_RUNS,
+    each: 6 * MAX_CHECKED_RUN_CHARS + 2 + ID + MAX_NAME_CHARS,
+    row: "bookkeeping",
+  },
+  // An earlier build's "Not now" answers, as kept on this device: a gateway and bot key, a name.
+  "botNames.legacy": {
+    max: MAX_LEGACY_DECLINES,
+    each: MAX_LEGACY_KEY_CHARS + MAX_NAME_CHARS,
+    row: "bookkeeping",
+  },
+  // This device's Undo claims left standing when their outcome couldn't be read: a gateway and
+  // change key, and the claim's tag.
+  "botNames.heldUndos": { max: MAX_NAME_CARDS, each: 3 * ID, row: "bookkeeping" },
   "botNames.skipped": { max: MAX_BOTS, each: ID, row: "bookkeeping" },
   "botNames.checkedRuns": {
     max: MAX_CHECKED_RUNS,
@@ -448,8 +499,8 @@ export const CLIENT_NOT_WALKED: Record<string, string> = {
   "routines.ctx": "the client's own functions, handed to the routines engine",
   "usage.ctx": "the client's own functions, handed to the usage engine",
   "botNames.ctx": "the client's own functions, handed to the bot names engine",
-  "botNames.declines":
-    "Not now as read from the host's storage, at most `MAX_NAME_DECLINES` names, each bounded when read",
+  "botNames.published":
+    "the record of changes as last published, the same object the state holds (`botNameRecord`)",
   "machines.ctx": "the client's own functions, handed to the machines engine, which keeps nothing",
   "openclawUpdates.ctx": "the client's own functions, handed to the OpenClaw update engine",
   "deviceApprovals.ctx": "the client's own functions, handed to the device approval engine",
