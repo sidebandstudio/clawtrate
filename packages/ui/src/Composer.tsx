@@ -1,10 +1,13 @@
 import {
   fileRefusal,
+  isLibraryRow,
   isStopNow,
   sendRefusal,
   type SendShape,
   type AttachmentInfo,
   type Bot,
+  type GatewayStamp,
+  type LibrarySkill,
   type MenuRow,
   type OutgoingMessage,
   type Run,
@@ -35,6 +38,7 @@ import {
   type SendMode,
 } from "./live.ts";
 import { Menu, type MenuEntry } from "./Menu.tsx";
+import { screenStamp, shownStamp, type ShownStamp } from "./stamp.ts";
 
 /** The gateway's limits, checked as files are added (conversation.md, section 15). */
 const MIB = 1024 * 1024;
@@ -52,6 +56,8 @@ export const DEFAULT_LIMITS: SendLimits = {
 const TAG: Record<MenuRow["kind"], string> = {
   "your-skill": "Your skill",
   "team-skill": "Team skill",
+  "your-skill-to-add": "Add your skill",
+  "team-skill-to-add": "Add team skill",
   skill: "Bot skill",
   command: "Command",
   bot: "Bot",
@@ -62,8 +68,20 @@ const TAG: Record<MenuRow["kind"], string> = {
  * What a row and its chip show: a library skill by its slug, since the generated command name it
  * inserts (`/skill s_tide_tabl_…`) means nothing to a person; anything else by what it inserts.
  */
-const shown = (row: MenuRow) =>
-  row.kind === "your-skill" || row.kind === "team-skill" ? row.name : row.insert;
+const shown = (row: MenuRow) => (isLibraryRow(row) ? row.name : row.insert);
+
+/**
+ * The library skill this composer last added to the task (#889): its line, and its Undo while the
+ * task still has what was added. `already`: the task had it, so there is nothing to undo.
+ */
+type Added = {
+  skill: LibrarySkill;
+  status: "adding" | "added" | "already";
+  /** The gateway the add went to, for its Undo; the command that runs it, for its chip. */
+  stamp: GatewayStamp | null;
+  command: string | null;
+  undo: { status: "ready" | "busy" } | { status: "done" | "failed"; words: string };
+};
 
 /** How long a touch on Send is held before its menu opens. */
 const LONG_PRESS_MS = 500;
@@ -233,7 +251,10 @@ export function Composer({
     trigger: "/" | "@";
     rows: MenuRow[] | null;
     error: string | null;
+    /** The gateway the rows were read from: a skill added from them goes only to that one. */
+    shown: ShownStamp;
   } | null>(null);
+  const [added, setAdded] = useState<Added | null>(null);
   /** The latest menu read; an earlier one's answer is not shown. */
   const menuRead = useRef(0);
   const [active, setActive] = useState(0);
@@ -508,10 +529,11 @@ export function Composer({
     // the latest read's answer is shown.
     if (menuRows?.trigger !== trigger || (opening && menuRows.error !== null)) {
       const asked = ++menuRead.current;
-      setMenuRows({ trigger, rows: null, error: null });
+      const shown = shownStamp(bridge.getState().connection);
+      setMenuRows({ trigger, rows: null, error: null, shown });
       void bridge.invoke({ type: "readComposerMenu", key: taskKey, trigger }).then(
         (rows) => {
-          if (asked === menuRead.current) setMenuRows({ trigger, rows, error: null });
+          if (asked === menuRead.current) setMenuRows({ trigger, rows, error: null, shown });
         },
         (error: unknown) => {
           if (asked === menuRead.current)
@@ -519,14 +541,107 @@ export function Composer({
               trigger,
               rows: [],
               error: error instanceof Error ? error.message : String(error),
+              shown,
             });
         },
       );
     }
   };
+  /**
+   * A library skill the task doesn't have: added to the task, then its chip goes in, as one
+   * action and in that order (#889). The person chose it, so nothing asks first; the line says
+   * what was done and offers Undo.
+   */
+  /** The next "/" reads what the task has now, once an add or its Undo has settled. */
+  const forgetMenu = () => {
+    menuRead.current += 1;
+    setMenuRows(null);
+  };
+  const addToTask = (row: MenuRow, attach: NonNullable<MenuRow["attach"]>, from: ShownStamp) => {
+    const skill: LibrarySkill = { ...attach, slug: row.name };
+    const same = (current: Added | null) => current?.skill.skillId === skill.skillId;
+    setAdded({ skill, status: "adding", stamp: null, command: null, undo: { status: "ready" } });
+    onAnnounce(`Adding ${row.name} to this task`);
+    void screenStamp(bridge, from).then((stamp) =>
+      bridge.invoke({ type: "attachLibrarySkill", key: taskKey, skill, stamp }).then(
+        (outcome) => {
+          const chip: MenuRow = {
+            kind: row.kind === "your-skill-to-add" ? "your-skill" : "team-skill",
+            name: row.name,
+            description: row.description,
+            insert: `/skill ${outcome.command}`,
+          };
+          // One skill or command goes with a message: one chosen meanwhile keeps its place.
+          setTokens((current) => (current.length === 0 ? [chip] : current));
+          setAdded((current) =>
+            same(current)
+              ? {
+                  ...current!,
+                  skill: { ...skill, revision: outcome.revision },
+                  status: outcome.status,
+                  stamp,
+                  command: outcome.command,
+                }
+              : current,
+          );
+          forgetMenu();
+          onAnnounce(
+            outcome.status === "added"
+              ? `Added ${row.name} to this task`
+              : `${row.name} is already in this task`,
+          );
+        },
+        (error: unknown) => {
+          setAdded((current) => (same(current) ? null : current));
+          forgetMenu();
+          onNotice({ title: error instanceof Error ? error.message : String(error), reason: null });
+        },
+      ),
+    );
+  };
+  /** Undo the add this composer made, while the task still has it; the outcome is said as it is. */
+  const undoAdd = () => {
+    if (!added || added.status !== "added" || !added.stamp || !connected) return;
+    if (added.undo.status !== "ready" && added.undo.status !== "failed") return;
+    const { skill, stamp, command } = added;
+    const same = (current: Added | null) => current?.skill.skillId === skill.skillId;
+    setAdded({ ...added, undo: { status: "busy" } });
+    void bridge.invoke({ type: "detachLibrarySkill", key: taskKey, skill, stamp }).then(
+      ({ undone, words }) => {
+        setAdded((current) =>
+          same(current) ? { ...current!, undo: { status: "done", words } } : current,
+        );
+        // Its chip would ask for a skill the task no longer has.
+        if (undone)
+          setTokens((current) => current.filter((chip) => chip.insert !== `/skill ${command}`));
+        forgetMenu();
+      },
+      (error: unknown) => {
+        setAdded((current) =>
+          same(current)
+            ? {
+                ...current!,
+                undo: {
+                  status: "failed",
+                  words: error instanceof Error ? error.message : String(error),
+                },
+              }
+            : current,
+        );
+        forgetMenu();
+      },
+    );
+  };
   const choose = (row: MenuRow) => {
     if (!picker) return;
     const caret = focusRef.current?.selectionStart ?? text.length;
+    if (row.attach && menuRows) {
+      setText((text.slice(0, picker.start) + text.slice(caret)).replace(/^\s+/, ""));
+      setPicker(null);
+      addToTask(row, row.attach, menuRows.shown);
+      focusRef.current?.focus();
+      return;
+    }
     if (row.kind === "bot" || row.kind === "routine") {
       // A mention stays where it was typed, as text: the gateway's mentions are people only.
       const inserted = `${row.insert} `;
@@ -707,6 +822,57 @@ export function Composer({
         <button type="button" className="button" data-size="sm" onClick={onReview}>
           Review
         </button>
+      </div>,
+    );
+  }
+  if (added) {
+    const name = added.skill.slug;
+    rows.push(
+      <div
+        className="shelf-row"
+        key="library-skill"
+        data-testid="library-skill-line"
+        aria-busy={added.status === "adding" || added.undo.status === "busy" || undefined}
+      >
+        <span className="shelf-text">
+          {added.status === "adding"
+            ? `Adding ${name} to this task…`
+            : added.status === "added"
+              ? `Added ${name} to this task.`
+              : `${name} is already in this task.`}{" "}
+          <span role="status">
+            {added.undo.status === "done" || added.undo.status === "failed" ? added.undo.words : ""}
+          </span>
+        </span>
+        {added.status === "added" && (
+          <button
+            type="button"
+            className="button"
+            data-size="sm"
+            onClick={undoAdd}
+            aria-label={`Undo: Added ${name} to this task`}
+            aria-disabled={
+              !connected ||
+              added.undo.status === "busy" ||
+              added.undo.status === "done" ||
+              undefined
+            }
+          >
+            Undo
+          </button>
+        )}
+        {added.status !== "adding" && (
+          <button
+            type="button"
+            className="icon-button"
+            data-variant="quiet"
+            aria-label="Dismiss"
+            title="Dismiss"
+            onClick={() => act(() => setAdded(null))}
+          >
+            <CloseIcon />
+          </button>
+        )}
       </div>,
     );
   }

@@ -68,7 +68,8 @@ import {
   type MessageSearch,
   type RoutineSearch,
 } from "./search.ts";
-import type { MenuRow } from "./composer-menus.ts";
+import { LIBRARY_REVISION, LIBRARY_SKILL_ID, type MenuRow } from "./composer-menus.ts";
+import type { AttachOutcome, DetachOutcome, LibrarySkill } from "./library-attach.ts";
 import type { UsageBusy, UsageReport } from "./usage-engine.ts";
 import {
   MAX_ROUTINE_NAME_CHARS,
@@ -169,6 +170,12 @@ export type BridgeCommand =
   | { type: "setShowGatewayBot"; on: boolean }
   /** What the composer's "/" or "@" menu lists for a task: read now, kept nowhere (F-071, F-070). */
   | { type: "readComposerMenu"; key: string; trigger: "/" | "@" }
+  /**
+   * Add a library skill the "/" menu offered to an open task, on the gateway `stamp` names
+   * (`skills.library.activate`, #889), or Undo that add while the task still has it.
+   */
+  | { type: "attachLibrarySkill"; key: string; skill: LibrarySkill; stamp: GatewayStamp }
+  | { type: "detachLibrarySkill"; key: string; skill: LibrarySkill; stamp: GatewayStamp }
   | { type: "retryMessage"; key: string; messageId: string }
   | { type: "deleteMessage"; key: string; messageId: string }
   | { type: "cancelQueued"; key: string; messageId: string }
@@ -599,7 +606,11 @@ type BridgeResultStart<C extends BridgeCommand> = C extends { type: "readBotDele
       ? { declined: boolean }
       : C extends { type: "undoSkillChange" }
         ? { undone: boolean }
-        : BridgeResultRest<C>;
+        : C extends { type: "attachLibrarySkill" }
+          ? AttachOutcome
+          : C extends { type: "detachLibrarySkill" }
+            ? DetachOutcome
+            : BridgeResultRest<C>;
 
 type BridgeResultRest<C extends BridgeCommand> = C extends { type: "sendMessage" }
   ? { messageId: string }
@@ -886,6 +897,8 @@ const BOT_ID_PATTERN = /^[\w.-]{1,128}$/;
 const SKILL_REVIEW_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const QUESTION_ID_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
 const MAX_LABEL_CHARS = 512;
+/** The longest slug a library skill's add or Undo names (the menu cuts its names to 120). */
+const MAX_LIBRARY_SLUG_CHARS = 120;
 /** Why a held or queued message cannot be taken back to edit: its files would not fit. */
 export const TAKE_BACK_NO_ROOM =
   "Too many files are waiting to be sent for this message's files to come back with it. The message stays as it is; send or remove some waiting files, then edit it.";
@@ -1592,6 +1605,26 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "readComposerMenu":
       if (command.trigger !== "/" && command.trigger !== "@") throw new Error("invalid menu");
       return { type: "readComposerMenu", key: sessionKey(command.key), trigger: command.trigger };
+    case "attachLibrarySkill":
+    case "detachLibrarySkill": {
+      const skill = record(command.skill, "library skill");
+      if (
+        typeof skill.skillId !== "string" ||
+        !LIBRARY_SKILL_ID.test(skill.skillId) ||
+        typeof skill.revision !== "string" ||
+        !LIBRARY_REVISION.test(skill.revision) ||
+        typeof skill.slug !== "string" ||
+        !skill.slug.trim() ||
+        skill.slug.length > MAX_LIBRARY_SLUG_CHARS
+      )
+        throw new Error("invalid library skill");
+      return {
+        type: command.type,
+        key: sessionKey(command.key),
+        skill: { skillId: skill.skillId, revision: skill.revision, slug: skill.slug },
+        stamp: gatewayStampOf(command.stamp),
+      };
+    }
     case "setReaction": {
       const emoji = command.emoji;
       if (typeof emoji !== "string" || emoji.length === 0 || emoji.length > 64)
@@ -2477,6 +2510,20 @@ class ViewerSession implements BridgeSession {
         return client.setShowGatewayBot(command.on);
       case "readComposerMenu":
         return client.readComposerMenu(this.mine(command.key), command.trigger);
+      case "attachLibrarySkill":
+        return client.attachLibrarySkill(
+          this.mine(command.key),
+          command.skill,
+          command.stamp,
+          owner,
+        );
+      case "detachLibrarySkill":
+        return client.detachLibrarySkill(
+          this.mine(command.key),
+          command.skill,
+          command.stamp,
+          owner,
+        );
       case "setReaction":
         return client.setReaction(
           this.mine(command.key),
