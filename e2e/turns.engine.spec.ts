@@ -306,11 +306,24 @@ test("#872: while a run still draws its reply, history's row of that reply is kn
       .poll(() => runs(client, key).find((run) => run.id === id)?.text ?? "")
       .toContain("That file does not exist");
     const steer = client.sendMessage(key, "Then run the slow tool. #slow-tool 1");
+    // In the gateway's keeping for this task: its receipt waits, and it is not a turn queued behind
+    // the run (`queued`), which runs on its own once the run has ended.
     await expect
-      .poll(async () => (await gatewayWork(op, key)).pending.map(([runId]) => runId), {
-        timeout: 30_000,
-      })
-      .toContain(steer);
+      .poll(
+        async () => {
+          const history = await op.request<{
+            inputReceipts?: Array<{ runId?: string; state?: string; queued?: boolean }>;
+          }>("chat.history", { sessionKey: key, limit: 1, inputRunIds: [steer] });
+          const receipt = history.inputReceipts?.find((each) => each.runId === steer);
+          return receipt ? `${receipt.state}${receipt.queued ? " queued" : ""}` : "none";
+        },
+        { message: "the run took the steer in", timeout: 30_000 },
+      )
+      .toBe("pending");
+    // The receipt is written when the steer is sent; the gateway then hands it to the active run,
+    // which drains it at the answer's end. No read or event tells when that hand-over is done, so
+    // the answer stays held well past it (a few hundred ms at most, on a loaded machine).
+    await sleep(3_000);
     await hold.post(key, "next");
     // The answer's message ends and its row is written; the steer joins the run at that end, and
     // the model's next reply (reasoning and a call, no text) waits before its end. Until the check
