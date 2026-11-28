@@ -16,6 +16,12 @@ export const MAX_START_TASKS_REASON_CHARS = 256;
 export const START_TASK_TOOL = "sessions_spawn";
 
 /**
+ * The tool OpenClaw 2026.11.10 adds for a task a person asks a bot to start: a visible task, as
+ * `sessions_spawn {visible: true}` makes, under the gateway's same rules. 2026.10.6 has none.
+ */
+export const CREATE_TASK_TOOL = "sessions_create";
+
+/**
  * Whether the task's bot has the tool, and when it hasn't, the gateway's reason: the labels
  * `toolAccess` gives it (for example "Not included in tools.allow"), or null when it gives none.
  */

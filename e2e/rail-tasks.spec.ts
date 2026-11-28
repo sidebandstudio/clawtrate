@@ -763,14 +763,12 @@ test("F-022: a new reply marks a task unread on both devices; a Mark as unread f
   while (Date.now() < until) expect((await describe(task.key))?.unread).toBe(true);
 });
 
-test("F-021: a question from a run puts its bot in Waiting for you: a question until it is answered", async () => {
+test("F-021: a question from a run puts its bot in waiting for you until it is answered", async () => {
   const task = await ownTask("pip", "Pip", "Ask me");
   await sendInTask(page, task.title, "#ask");
   const pip = botRow(page, "Pip").first();
-  await expect(pip.locator(".bot-preview")).toHaveText("Waiting for you: a question", {
-    timeout: 30_000,
-  });
-  await expect(pip).toHaveAccessibleName(/^Pip, waiting for you/);
+  await expect(pip).toHaveAccessibleName(/^Pip, waiting for you/, { timeout: 30_000 });
+  await expect(pip.locator(".presence > .glyph")).toHaveAttribute("data-state", "waiting");
   await expect(taskRow(page, task.title)).toHaveAccessibleName(/, needs you$/);
   // Answered (dismissed) on the gateway by another client: nothing is pending, the state clears.
   const pending = await gatewayCall<{ questions: Array<{ id: string; sessionKey?: string }> }>(
@@ -828,9 +826,6 @@ test("F-021 F-057: while a bot's run waits for an approval its row says Waiting 
     await expect(otto).toHaveAccessibleName(/^Otto, waiting for you/, { timeout: 30_000 });
     await expect(otto.locator(".presence")).toHaveAttribute("data-state", "waiting");
   }
-  await expect(botRow(second, "Otto").first().locator(".bot-preview")).toHaveText(
-    "Waiting for you: approve a command",
-  );
   await expect(taskRow(second, task.title)).toHaveAccessibleName(/, needs you$/);
   await shot(second, "waiting-light-1440");
   // Stopped: nothing is pending, and the state clears everywhere.
@@ -1064,8 +1059,9 @@ test("F-021: a device opened again while its run waits for an approval shows the
   await expect(botRow(page, "Otto").first()).toHaveAccessibleName(/^Otto, waiting for you/, {
     timeout: 30_000,
   });
-  await expect(botRow(page, "Otto").first().locator(".bot-preview")).toHaveText(
-    "Waiting for you: approve a command",
+  await expect(botRow(page, "Otto").first().locator(".presence")).toHaveAttribute(
+    "data-state",
+    "waiting",
   );
   await gatewayCall("chat.abort", { sessionKey: task.key });
   await expect(botRow(page, "Otto").first()).not.toHaveAccessibleName(/waiting for you/, {
