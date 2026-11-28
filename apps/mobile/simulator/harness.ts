@@ -26,6 +26,7 @@ import { callGateway, openInstance, openOperator } from "../../../tools/dev-gate
 import { IOS_STREAM_HOLD_FILE, parseJsonOutput } from "../../../tools/dev-gateway/src/env.ts";
 import type { OperatorSession } from "../../../tools/dev-gateway/src/operator.ts";
 import { decodePng } from "../../../tools/brand/src/png.ts";
+import { clockTime } from "../../../packages/ui/src/format.ts";
 
 const run = promisify(execFile);
 const REPO = join(import.meta.dirname, "../../..");
@@ -130,6 +131,15 @@ export type Selector = { id?: string; text?: string; [key: string]: unknown };
 
 /** Regular expression for a literal text: Maestro matches text as a pattern. */
 export const lit = (text: string) => text.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+/**
+ * The stamp of a message stored at `at` within the last day, as a pattern: "Today" or
+ * "Yesterday", then its exact time, with any space where the clock has one. Either day word is
+ * accepted, because a check can straddle the device's midnight (#640). The message is stored
+ * before midnight and looked at after it, and the app redraws its stamps only every 30 s, so near
+ * midnight it can show either word. `stampTime`'s own tests pin which word is right.
+ */
+export const stampPattern = (at: number) =>
+  `(?:Today|Yesterday) ${lit(clockTime(at))}`.replace(/\s/g, ".");
 
 export const see = (selector: Selector | string): Step => ({ assertVisible: selector });
 export const notSee = (selector: Selector | string): Step => ({ assertNotVisible: selector });
@@ -670,6 +680,66 @@ export async function until<T>(
   }
 }
 
+/**
+ * One connection through the proxy: its request line, whether it opened a WebSocket, whether the
+ * gateway answered its `connect` with hello, whether it has closed, and when it opened and closed.
+ */
+export type ProxiedConnection = {
+  line: string;
+  upgrade: boolean;
+  hello: boolean;
+  closed: boolean;
+  openedAt: number;
+  closedAt: number | null;
+};
+
+// The gateway sends hello as one text frame, `{"type":"res",...,"payload":{"type":"hello-ok",...}}`,
+// with compression off (`perMessageDeflate: false`), and a server's frames are not masked.
+const HELLO = Buffer.from('"type":"hello-ok"', "latin1");
+
+/**
+ * Whether the gateway's side of a connection has sent hello yet, fed each chunk in order. A frame
+ * can split across chunks, so the end of each chunk is kept, no longer than the marker, and searched
+ * with the next.
+ */
+export function helloWatcher(): (chunk: Buffer) => boolean {
+  let tail = Buffer.alloc(0);
+  let seen = false;
+  return (chunk) => {
+    if (seen) return true;
+    const joined = Buffer.concat([tail, chunk]);
+    seen = joined.includes(HELLO);
+    tail = joined.subarray(Math.max(0, joined.length - (HELLO.length - 1)));
+    return seen;
+  };
+}
+
+/**
+ * Whether the WebSockets opened since Reconnect was tapped are one connection that stayed up (#611).
+ * One that got hello and is still open passes. So do two, when the first closed without hello and
+ * the second got it and is still open: on a slow hosted runner the app can give up on a first
+ * connect that hasn't answered and open another. One that got hello and then closed has dropped,
+ * and two that each got hello are a drop and a reconnect: both fail, as does anything else.
+ */
+export function reconnectedOnce(since: readonly ProxiedConnection[]): boolean {
+  const [first, second] = since;
+  if (since.length === 1) return first!.hello && !first!.closed;
+  if (since.length === 2) return !first!.hello && first!.closed && second!.hello && !second!.closed;
+  return false;
+}
+
+/** One line per connection, with times in ms from `from`. */
+export function describeConnections(since: readonly ProxiedConnection[], from: number): string {
+  if (since.length === 0) return "no WebSocket opened";
+  return since
+    .map((each, index) => {
+      const state = each.closed ? `closed at +${each.closedAt! - from} ms` : "open";
+      const hello = each.hello ? "hello" : "no hello";
+      return `${index + 1}. ${each.line}: ${hello}, opened at +${each.openedAt - from} ms, ${state}`;
+    })
+    .join("\n");
+}
+
 /** A loopback TCP proxy to the gateway, which a check cuts (every socket closed, nothing listening) and restores. */
 export class Proxy {
   private server: Server | null = null;
@@ -677,8 +747,8 @@ export class Proxy {
   port = 0;
   /** Every connection the app opened through the proxy, since it started. */
   connections = 0;
-  /** What each of those connections asked first: its request line, and whether it opened a WebSocket. */
-  readonly requests: Array<{ line: string; upgrade: boolean }> = [];
+  /** Each of those connections, once its request header is in. */
+  readonly requests: ProxiedConnection[] = [];
   private readonly target: number;
   constructor(target: number) {
     this.target = target;
@@ -692,6 +762,14 @@ export class Proxy {
   private listen(port: number) {
     const server = createServer((client) => {
       this.connections += 1;
+      const record: ProxiedConnection = {
+        line: "",
+        upgrade: false,
+        hello: false,
+        closed: false,
+        openedAt: Date.now(),
+        closedAt: null,
+      };
       // Classified once its whole header is in, which may take more than one chunk.
       let head = "";
       const classify = (chunk: Buffer) => {
@@ -700,13 +778,23 @@ export class Proxy {
         if (end < 0 && head.length < 16_384) return;
         client.off("data", classify);
         const header = end < 0 ? head : head.slice(0, end + 2);
-        this.requests.push({
-          line: header.split("\r\n", 1)[0]!,
-          upgrade: /\r\nupgrade:[ \t]*websocket\r\n/i.test(header),
-        });
+        record.line = header.split("\r\n", 1)[0]!;
+        record.upgrade = /\r\nupgrade:[ \t]*websocket\r\n/i.test(header);
+        this.requests.push(record);
       };
       client.on("data", classify);
+      client.on("close", () => {
+        record.closed = true;
+        record.closedAt = Date.now();
+      });
       const upstream = new Socket();
+      const watch = helloWatcher();
+      const hello = (chunk: Buffer) => {
+        if (!watch(chunk)) return;
+        record.hello = true;
+        upstream.off("data", hello);
+      };
+      upstream.on("data", hello);
       upstream.connect(this.target, "127.0.0.1");
       for (const socket of [client, upstream]) {
         this.sockets.add(socket);

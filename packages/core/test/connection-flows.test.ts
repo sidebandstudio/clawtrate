@@ -7,6 +7,7 @@ import { MAX_GATEWAY_URL_CHARS } from "../src/gateway-url.ts";
 import { pairingEnded, protocolMismatch } from "../src/connect-errors.ts";
 import {
   FakeGateway,
+  GatewayError,
   deferred,
   helloOk,
   memoryStorage,
@@ -307,6 +308,56 @@ describe("connecting", () => {
     await until(() => client.state.connection.status === "connected");
     const last = gateway.connects.at(-1) as { auth?: { token?: string; deviceToken?: string } };
     expect(last.auth?.token ?? last.auth?.deviceToken).toBe("device-token");
+    client.stop();
+  });
+
+  it("F-457: after Reconnect, a catch-up whose reads time out and fail keeps the one connection; nothing reconnects again", async () => {
+    const gateway = new FakeGateway();
+    gateway.connectReply = () => ({
+      ok: true,
+      payload: helloOk(["operator.read"], "device-token"),
+    });
+    const client = new ClawtrateClient(testHost(gateway, memoryStorage()), {
+      ...FAST,
+      requestTimeoutMs: 40,
+      readAgainMs: 10,
+    });
+    await client.start();
+    await client.connect({ url: URL, token: "bootstrap" });
+    await until(() => client.state.discovery.status === "ready");
+    client.openSession("agent:main:main");
+    await client.suspend();
+    // A slow gateway: after Reconnect, every read either outlasts its time or fails.
+    const quick = { ...gateway.handlers };
+    let slow = true;
+    let asked = 0;
+    for (const [method, handler] of Object.entries(quick)) {
+      gateway.handlers[method] = (params) => {
+        if (!slow) return handler(params);
+        asked += 1;
+        return asked % 2
+          ? new Promise(() => {})
+          : Promise.reject(new GatewayError({ code: "UNAVAILABLE", message: "busy" }));
+      };
+    }
+    const statuses: string[] = [client.state.connection.status];
+    const stop = client.store.subscribe(({ connection }) => {
+      if (statuses.at(-1) !== connection.status) statuses.push(connection.status);
+    });
+    const socketsBefore = gateway.sockets.length;
+    await client.retryNow();
+    await until(() => client.state.connection.status === "connected");
+    // Long enough for every read and each of its tries again to time out or fail.
+    await until(() => client.state.discovery.status === "error", 4000);
+    await sleep(300);
+    // The gateway catches up, and the strip's Retry reloads on the same connection.
+    slow = false;
+    await client.retryNow();
+    await until(() => client.state.discovery.status === "ready");
+    stop();
+    expect(asked, "the catch-up's reads were slow").toBeGreaterThan(4);
+    expect(statuses).toEqual(["disconnected", "reconnecting", "connected"]);
+    expect(gateway.sockets.length - socketsBefore, "one socket since Reconnect").toBe(1);
     client.stop();
   });
 

@@ -15,8 +15,17 @@ const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
 const DAY = 24 * HOUR;
 
+/**
+ * `&pictures=none` gives the bot that has a picture one of Clawtrate's own creatures, like
+ * the rest. The website's screenshots are taken that way.
+ */
+const NO_PICTURES =
+  typeof window !== "undefined" &&
+  new URLSearchParams(window.location.search).get("pictures") === "none";
+
 /** A small picture, drawn here, for the bot whose gateway identity carries an image. */
-function pictureAvatar(): string {
+function pictureAvatar(): string | null {
+  if (NO_PICTURES) return null;
   const canvas = document.createElement("canvas");
   canvas.width = 96;
   canvas.height = 96;
