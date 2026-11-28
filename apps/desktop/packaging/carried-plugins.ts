@@ -115,11 +115,11 @@ export const digestOf = (tar: Buffer) =>
   `sha256-${createHash("sha256").update(tar).digest("base64")}`;
 
 /**
- * The contract families both OpenClaw versions count in a plugin's declared
- * surface (`PLUGIN_MANIFEST_CONTRACT_KEYS`: `<2026.10.6>/dist/manifest-contract-keys-WtA6uWDt.mjs`,
- * `<2026.11.10>/dist/manifest-contract-keys-BTtgVkx2.mjs`). A family only one
- * of them counts would make the two report different surfaces, so a carried
- * plugin may declare no other.
+ * The contract families every OpenClaw version carried-plugins.json names counts in a plugin's
+ * declared surface (`PLUGIN_MANIFEST_CONTRACT_KEYS`: `<2026.10.6>/dist/manifest-contract-keys-WtA6uWDt.mjs`,
+ * `<2026.11.10>/dist/manifest-contract-keys-BTtgVkx2.mjs`, the same file in 2026.11.11). A family
+ * only some of them count would make them report different surfaces, so a carried plugin may
+ * declare no other.
  */
 const CONTRACT_FAMILIES = new Set([
   "codeModeExecutors",
@@ -159,10 +159,10 @@ const names = (value: unknown, where: string): string[] => {
 const sorted = (values: Iterable<string>) => [...new Set(values)].sort();
 
 /**
- * Every capability group a manifest declares, as both OpenClaw versions'
+ * Every capability group a manifest declares, as each OpenClaw version's
  * `buildPluginCapabilitySummary` counts it for `plugins.inspect`'s `declared`
  * (`<2026.10.6>/dist/capability-summary-CFDZfvsK.mjs`; the same groups in
- * `<2026.11.10>/dist/capability-summary-D1Y-zikG.mjs`).
+ * `<2026.11.10>/dist/capability-summary-D1Y-zikG.mjs`, the same file in 2026.11.11).
  */
 export function declaredSurface(manifest: Json): DeclaredSurface {
   const contracts = isObject(manifest.contracts) ? manifest.contracts : {};
