@@ -23,11 +23,11 @@ import type { DesktopUpdates } from "../packages/core/src/desktop-updates.ts";
 import { setTimeout as pause } from "node:timers/promises";
 import { join } from "node:path";
 import { sidebarGateway } from "../apps/desktop/test/update/sidebar-gateway.ts";
+import { stopElectron } from "../apps/desktop/test/update/stop-electron.ts";
 import { feedFor, feedServer, json, payload } from "../apps/desktop/test/update/harness.ts";
 import { fileKeyFor, FILE_EXTENSION } from "../apps/desktop/src/main/update/feed.ts";
 import { PRIVATE_DIRECTORIES_TIMEOUT_MS } from "../apps/desktop/src/main/private-update-directory.ts";
 import { appEnv, debuggingPort } from "../e2e-packaged/desktop-driver.ts";
-import { askToClose, forceEnd } from "../e2e-packaged/windows.ts";
 
 type TestApp = {
   page: Page;
@@ -49,30 +49,6 @@ type ProbeWindow = Window & {
   seenUpdates: string[];
 };
 
-async function stopElectron(app: ChildProcess) {
-  const { pid } = app;
-  if (!pid || app.exitCode !== null || app.signalCode !== null) return;
-  const deadline = AbortSignal.timeout(25_000);
-  const exited = once(app, "exit", { signal: deadline });
-  const windows = process.platform === "win32";
-  const force = () => {
-    if (windows) forceEnd(pid);
-    else app.kill("SIGKILL");
-  };
-  const timer = setTimeout(force, 15_000);
-  try {
-    if (windows) {
-      if (askToClose(pid)) force();
-    } else app.kill("SIGTERM");
-    await exited;
-  } catch (error) {
-    if (deadline.aborted)
-      throw new Error(`Electron PID ${pid} did not exit after forced shutdown`, { cause: error });
-    throw error;
-  } finally {
-    clearTimeout(timer);
-  }
-}
 const test = base.extend<{
   desktopApp: TestApp;
   installer: "unsigned" | "mac" | "mac-unconfirmed" | "manual";
