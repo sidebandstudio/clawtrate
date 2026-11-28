@@ -53,6 +53,7 @@
 //                             (sending until releaseClear(), then cleared)
 
 import { isUpdateRunScene, type UpdateRunScene } from "./openclaw-update.ts";
+import { GATEWAY_ID } from "./bridge-fixture.ts";
 import {
   ADMIN_SCOPES,
   INTERACTIVE_SCOPES,
@@ -593,7 +594,7 @@ export function fixtureAccounts(now: number, params: AccountParams): AccountsSta
     const binding = locked.bindings.find((b) => b.botId === botId);
     const ref = { provider: binding?.provider ?? "openai", model: binding?.model ?? "gpt-5.5" };
     return params.modellist === "refused"
-      ? { ...locked, modelsRefused: [{ botId, ...ref }] }
+      ? { ...locked, modelsRefused: [{ botId, ...ref, full: false }] }
       : { ...locked, allowed: allowedLine(botId, ref, now) };
   }
   // The picker arrives after the accounts, when the page calls releasePicker().
@@ -611,11 +612,15 @@ function allowedLine(
 ): AccountsState["allowed"] {
   const entry = `${ref.provider}/${ref.model}`;
   return {
+    id: `allowed-${at}`,
+    // The fixture's one gateway: the line is shown only there.
+    gatewayId: GATEWAY_ID,
     botId,
     ...ref,
     entry,
     scope: "gateway",
     list: "gateway",
+    digest: "0".repeat(64),
     status: "added",
     error: null,
     at,
@@ -1674,6 +1679,11 @@ export function accountCommand(
     }
     case "allowBotModel": {
       const refused = accounts().modelsRefused.find((each) => each.botId === command.botId);
+      // As the engine does: only for the model the button named.
+      if (refused && (refused.provider !== command.provider || refused.model !== command.model))
+        return Promise.reject(
+          new Error("The bot's model has changed since this was shown, so nothing was changed."),
+        );
       if (refused)
         put((a) => ({
           ...a,
@@ -1685,7 +1695,7 @@ export function accountCommand(
     case "undoModelAllowed": {
       const allowed = accounts().allowed;
       // As the engine does: only for the line the screen shows.
-      if (allowed?.botId !== command.botId || allowed.entry !== command.entry)
+      if (allowed?.botId !== command.botId || allowed.id !== command.id)
         return Promise.reject(
           new Error("That change is no longer the latest one here, so nothing was undone."),
         );
@@ -1701,7 +1711,7 @@ export function accountCommand(
           ...a,
           modelsRefused: [
             ...a.modelsRefused.filter((each) => each.botId !== allowed.botId),
-            { botId: allowed.botId, provider: allowed.provider, model: allowed.model },
+            { botId: allowed.botId, provider: allowed.provider, model: allowed.model, full: false },
           ],
           allowed: { ...allowed, status: "undone", at: Date.now() },
         }));

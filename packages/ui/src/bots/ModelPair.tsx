@@ -474,6 +474,8 @@ export function typedModel(text: string, provider: string): { id: string } | { e
       return { error: "A model id can't hold control characters." };
     case "space":
       return { error: "A model id has no spaces and no @." };
+    case "pattern":
+      return { error: "A model id can't hold *." };
     case null:
       return { id };
   }

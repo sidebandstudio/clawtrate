@@ -7286,21 +7286,25 @@ export class ClawtrateClient {
   }
 
   /**
-   * "Allow <model>" (#799): the bot's own model onto the model list that refuses it. With
-   * `stamp`, as for `changeBotAccount`.
+   * "Allow <model>" (#799): the model the button names (`shown`) onto the model list that refuses
+   * it, while the bot still runs on it. With `stamp`, as for `changeBotAccount`.
    */
-  async allowBotModel(botId: string, stamp?: GatewayStamp): Promise<void> {
-    if (stamp === undefined) return this.accounts.allowModel(botId);
+  async allowBotModel(
+    botId: string,
+    shown: { provider: string; model: string },
+    stamp?: GatewayStamp,
+  ): Promise<void> {
+    if (stamp === undefined) return this.accounts.allowModel(botId, shown);
     await this.requireSameGateway(stamp);
-    return this.accounts.allowModel(botId, this.sameConnection(stamp));
+    return this.accounts.allowModel(botId, shown, this.sameConnection(stamp));
   }
 
   /**
-   * Undo of "Added <model> to …" (#799): that one entry out again, for the line the screen shows
-   * (`shown`, its bot and entry). With `stamp`, as above.
+   * Undo of "Added <model> to …" (#799): that one entry out again, for the addition the screen
+   * shows (`shown`: its bot and its id). With `stamp`, as above.
    */
   async undoModelAllowed(
-    shown: { botId: string; entry: string },
+    shown: { botId: string; id: string },
     stamp?: GatewayStamp,
   ): Promise<void> {
     if (stamp === undefined) return this.accounts.undoAllowed(shown);

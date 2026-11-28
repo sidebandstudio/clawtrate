@@ -6,7 +6,9 @@ import {
   allowRemoval,
   botModelRef,
   listAllows,
-  ownModelRefused,
+  listVerdict,
+  ownModelRefusal,
+  withoutProfile,
 } from "../src/model-allow.ts";
 import { INTERACTIVE_SCOPES } from "../src/scopes.ts";
 import { AccountsEngine } from "../src/accounts-engine.ts";
@@ -25,8 +27,13 @@ const cfg = (config: Record<string, unknown>) => ({
   config: { ...MIGRATED, ...config },
 });
 const gpt = { provider: "openai", model: "gpt-5.5" };
-/** The line the screens show after Otto's model `acme/dev-2` was added: Undo is for it. */
-const SHOWN = { botId: "otto", entry: "acme/dev-2" };
+/** The addition a screen shows, which its Undo names: its bot and its id. */
+const shownOf = (accounts: AccountsState) => ({
+  botId: accounts.allowed!.botId,
+  id: accounts.allowed!.id,
+});
+/** Otto's own model in the accounts fake: what "Allow" names for Otto. */
+const DEV1 = { provider: "acme", model: "dev-1" };
 
 describe("F-042: which list a chosen model goes on (#799)", () => {
   it("the bot's own list, when it has one: only that entry appended, nothing else", () => {
@@ -46,6 +53,7 @@ describe("F-042: which list a chosen model goes on (#799)", () => {
       replacePaths: ["agents.entries.pip.modelPolicy.allow"],
       entry: "openai/gpt-5.5",
       place: "bot",
+      digest: expect.stringMatching(/^[0-9a-f]{64}$/),
     });
   });
 
@@ -74,6 +82,7 @@ describe("F-042: which list a chosen model goes on (#799)", () => {
       replacePaths: [],
       entry: "openai/gpt-5.5",
       place: "models",
+      digest: expect.stringMatching(/^[0-9a-f]{64}$/),
     });
   });
 
@@ -115,7 +124,8 @@ describe("F-042: which list a chosen model goes on (#799)", () => {
     // A prefix only from 2026.11.10; 2026.10.6 reads it as an exact id that names nothing.
     expect(allows(["openai/gpt-*"], V11)).toBe(true);
     expect(allows(["openai/gpt-*"], V10)).toBe(false);
-    expect(allows(["openai/gpt-*"], null)).toBe(false);
+    // On a version it doesn't know, it can't tell: nothing is written.
+    expect(allows(["openai/gpt-*"], null)).toBe(true);
     expect(
       listAllows(["openrouter/anthropic/*"], { provider: "openrouter", model: "anthropic/x" }, V10),
     ).toBe(true);
@@ -139,85 +149,115 @@ describe("F-042: which list a chosen model goes on (#799)", () => {
   });
 });
 
-describe("F-042: Undo takes out that one entry, only while it is there (#799)", () => {
-  it("the entry, and nothing else, from the list that governs the bot", () => {
-    const config = cfg({
-      agents: {
-        defaults: { modelPolicy: { allow: ["acme/dev-1", "openai/gpt-5.5", "acme/dev-2"] } },
-      },
-    });
-    expect(allowRemoval(config, "pip", "openai/gpt-5.5", "gateway")).toEqual({
+/** A JSON merge patch applied as the gateway applies one (arrays whole, null removes). */
+function merged(base: unknown, patch: unknown): unknown {
+  if (patch === null || typeof patch !== "object" || Array.isArray(patch)) return patch;
+  const out: Record<string, unknown> =
+    base && typeof base === "object" && !Array.isArray(base)
+      ? { ...(base as Record<string, unknown>) }
+      : {};
+  for (const [key, value] of Object.entries(patch as Record<string, unknown>)) {
+    if (value === null) delete out[key];
+    else out[key] = merged(out[key], value);
+  }
+  return out;
+}
+/** The config after an addition, and the addition: what its Undo is held to. */
+function addTo(config: { hash: string; config: Record<string, unknown> }, ref = gpt) {
+  const addition = allowAddition(config, "pip", ref, V11) as AllowAddition;
+  const after = {
+    hash: "h2",
+    config: merged(config.config, addition.patch) as Record<string, unknown>,
+  };
+  return { after, undo: { entry: addition.entry, place: addition.place, digest: addition.digest } };
+}
+
+describe("F-042: Undo takes out that one entry, only while its list is as it left it (#799)", () => {
+  it("the entry, and nothing else, from the list it went on", () => {
+    const { after, undo } = addTo(
+      cfg({ agents: { defaults: { modelPolicy: { allow: ["acme/dev-1", "acme/dev-2"] } } } }),
+    );
+    expect(allowRemoval(after, "pip", undo)).toEqual({
       patch: { agents: { defaults: { modelPolicy: { allow: ["acme/dev-1", "acme/dev-2"] } } } },
       replacePaths: ["agents.defaults.modelPolicy.allow"],
     });
   });
 
-  it("nothing when it is gone, and never the last entry, which would lift the limit", () => {
+  it("nothing when it is gone, changed, moved, or the last entry, and says which", () => {
+    const { after, undo } = addTo(
+      cfg({ agents: { defaults: { modelPolicy: { allow: ["acme/dev-1"] } } } }),
+    );
+    const list = (allow: unknown[], extra: Record<string, unknown> = {}) =>
+      cfg({ agents: { defaults: { modelPolicy: { allow } }, ...extra } });
+    // Someone took it out since.
+    expect(allowRemoval(list(["acme/dev-1"]), "pip", undo)).toBe("gone");
+    // Someone added another model since: the list isn't as it left it.
+    expect(allowRemoval(list(["acme/dev-1", "openai/gpt-5.5", "acme/dev-3"]), "pip", undo)).toBe(
+      "changed",
+    );
+    // Someone took it out and put it back since, elsewhere in the list: not this addition's.
+    expect(allowRemoval(list(["openai/gpt-5.5", "acme/dev-1"]), "pip", undo)).toBe("changed");
+    // The bot has a list of its own now, holding it too: never that list, nor the gateway's.
     expect(
       allowRemoval(
-        cfg({ agents: { defaults: { modelPolicy: { allow: ["acme/dev-1"] } } } }),
+        list(["acme/dev-1", "openai/gpt-5.5"], {
+          entries: { pip: { modelPolicy: { allow: ["openai/gpt-5.5", "acme/dev-3"] } } },
+        }),
         "pip",
-        "openai/gpt-5.5",
-        "gateway",
+        undo,
       ),
-    ).toBe("gone");
-    expect(allowRemoval(cfg({}), "pip", "openai/gpt-5.5", "gateway")).toBe("gone");
-    expect(
-      allowRemoval(
-        cfg({ agents: { defaults: { modelPolicy: { allow: ["openai/gpt-5.5"] } } } }),
-        "pip",
-        "openai/gpt-5.5",
-        "gateway",
-      ),
-    ).toBe("last");
-    // The old models map on a config never migrated: its key, and never its last one.
+    ).toBe("moved");
+    expect(allowRemoval(after, "pip", undo)).not.toBeTypeOf("string");
+    // An addition goes only on a list with an entry already, and Undo needs the list as it left
+    // it, so taking it out never empties a list; the guard stays for a list read otherwise.
+    const emptied = { ...undo, digest: "" };
+    expect(allowRemoval(list(["openai/gpt-5.5"]), "pip", emptied)).toBe("changed");
+  });
+
+  it("the old models map of a config never migrated: its key, and never its last one", () => {
     const old = (models: Record<string, unknown>) => ({
       hash: "h",
       config: { agents: { defaults: { models } } },
     });
-    expect(
-      allowRemoval(
-        old({ "acme/dev-1": {}, "openai/gpt-5.5": {} }),
-        "pip",
-        "openai/gpt-5.5",
-        "models",
-      ),
-    ).toEqual({
+    const { after, undo } = addTo(old({ "acme/dev-1": {} }));
+    expect(undo.place).toBe("models");
+    expect(allowRemoval(after, "pip", undo)).toEqual({
       patch: { agents: { defaults: { models: { "openai/gpt-5.5": null } } } },
       replacePaths: [],
     });
-    expect(allowRemoval(old({ "openai/gpt-5.5": {} }), "pip", "openai/gpt-5.5", "models")).toBe(
-      "last",
-    );
-    expect(allowRemoval(old({ "acme/dev-1": {} }), "pip", "openai/gpt-5.5", "models")).toBe("gone");
-    // Moved to the bot's own list since: not the list it was added to.
+    // The config migrated it to the default list since: another list, so nothing.
     expect(
       allowRemoval(
-        cfg({
-          agents: {
-            defaults: { modelPolicy: { allow: ["acme/dev-1", "openai/gpt-5.5"] } },
-            entries: { pip: { modelPolicy: { allow: ["acme/dev-2"] } } },
-          },
-        }),
+        cfg({ agents: { defaults: { modelPolicy: { allow: ["acme/dev-1", "openai/gpt-5.5"] } } } }),
         "pip",
-        "openai/gpt-5.5",
-        "gateway",
+        undo,
       ),
-    ).toBe("gone");
+    ).toBe("moved");
   });
 });
 
 describe("F-042: a bot whose own model its list refuses (#799)", () => {
-  it("its own model, else the default; its account dropped", () => {
+  it("its own model, else the default; its profile split off as the gateway splits it", () => {
     const config = cfg({
       agents: {
         defaults: { model: { primary: "acme/dev-1" }, modelPolicy: { allow: ["acme/dev-1"] } },
-        entries: { pip: { model: { primary: "openai/gpt-5.5@openai:work" } }, otto: {} },
+        entries: {
+          pip: { model: { primary: "openai/gpt-5.5@openai:work" } },
+          otto: {},
+          // A short profile, and a quantization that is the model's own.
+          fern: { model: { primary: "OpenAI/gpt-5.5@work" } },
+          wren: { model: { primary: "ollama/example@q4_k_m" } },
+        },
       },
     });
     expect(botModelRef(config, "pip")).toEqual(gpt);
-    expect(ownModelRefused(config, "pip", V11)).toEqual(gpt);
-    expect(ownModelRefused(config, "otto", V11)).toBeNull();
+    expect(botModelRef(config, "fern")).toEqual(gpt);
+    expect(botModelRef(config, "wren")).toEqual({ provider: "ollama", model: "example@q4_k_m" });
+    expect(ownModelRefusal(config, "pip", V11)).toEqual({ ...gpt, full: false });
+    expect(ownModelRefusal(config, "otto", V11)).toBeNull();
+    expect(withoutProfile("openai/gpt-5.5@work")).toBe("openai/gpt-5.5");
+    expect(withoutProfile("ollama/example@q4_k_m@home")).toBe("ollama/example@q4_k_m");
+    expect(withoutProfile("acme/dev-1@20250101")).toBe("acme/dev-1@20250101");
   });
 });
 
@@ -258,16 +298,35 @@ describe("F-042: setting a bot's model puts it on the list that limits the bot (
       scope: "gateway",
       status: "added",
     });
-    // Someone adds a model meanwhile; Undo keeps it and the model, and takes out its own entry.
-    limited(fake, ["acme/dev-1", "acme/dev-2", "acme/dev-3"]);
-    fake.revision += 1;
-    await client.undoModelAllowed(SHOWN);
-    expect(defaults(fake).modelPolicy).toEqual({ allow: ["acme/dev-1", "acme/dev-3"] });
+    // Undo takes out its own entry, keeps the model, and is held to the hash it read.
+    const hash = `h${fake.revision}`;
+    await client.undoModelAllowed(shownOf(accounts()));
+    expect(defaults(fake).modelPolicy).toEqual({ allow: ["acme/dev-1"] });
     expect((entries(fake).otto!.model as { primary: string }).primary).toBe("acme/dev-2@acme:work");
-    expect(patches(fake).at(-1)!.baseHash).toBe(`h${fake.revision - 1}`);
+    expect(patches(fake).at(-1)!.baseHash).toBe(hash);
     expect(accounts().allowed?.status).toBe("undone");
     // Refused again: the bot's own model is off the list.
-    expect(accounts().modelsRefused).toEqual([{ botId: "otto", provider: "acme", model: "dev-2" }]);
+    expect(accounts().modelsRefused).toEqual([
+      { botId: "otto", provider: "acme", model: "dev-2", full: false },
+    ]);
+    client.stop();
+  });
+
+  it("Undo after someone changed that list writes nothing: the entry there may be theirs", async () => {
+    const fake = new AccountsGateway();
+    limited(fake, ["acme/dev-1"]);
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    await client.setBotModel("otto", "dev-2", null);
+    // Someone adds a model meanwhile.
+    limited(fake, ["acme/dev-1", "acme/dev-2", "acme/dev-3"]);
+    fake.revision += 1;
+    const before = patches(fake).length;
+    await client.undoModelAllowed(shownOf(accounts()));
+    expect(patches(fake)).toHaveLength(before);
+    expect(accounts().allowed).toMatchObject({ status: "kept", error: "changed" });
+    expect(defaults(fake).modelPolicy).toEqual({
+      allow: ["acme/dev-1", "acme/dev-2", "acme/dev-3"],
+    });
     client.stop();
   });
 
@@ -316,7 +375,7 @@ describe("F-042: setting a bot's model puts it on the list that limits the bot (
     await client.setBotModel("otto", "dev-2", null);
     limited(fake, ["acme/dev-1"]);
     const before = patches(fake).length;
-    await client.undoModelAllowed(SHOWN);
+    await client.undoModelAllowed(shownOf(accounts()));
     expect(patches(fake)).toHaveLength(before);
     expect(accounts().allowed?.status).toBe("kept");
     client.stop();
@@ -334,7 +393,7 @@ describe("F-042: setting a bot's model puts it on the list that limits the bot (
       fake.gateway.handlers["config.get"] = get;
       return answer;
     };
-    await expect(client.undoModelAllowed(SHOWN)).rejects.toThrow("config changed");
+    await expect(client.undoModelAllowed(shownOf(accounts()))).rejects.toThrow("config changed");
     expect(defaults(fake).modelPolicy).toEqual({ allow: ["acme/dev-1", "acme/dev-2"] });
     expect(accounts().allowed?.status).toBe("failed");
     client.stop();
@@ -348,11 +407,11 @@ describe("F-042 F-587: Allow <model>, for a bot whose own model its list refuses
     const { client, accounts } = await accountsClient({ gateway: fake });
     expect(accounts().modelsRefused).toEqual([
       // The default bot runs on the gateway's default model, off the list too.
-      { botId: "main", provider: "acme", model: "dev-1" },
-      { botId: "otto", provider: "acme", model: "dev-1" },
-      { botId: "pip", provider: "acme", model: "dev-1" },
+      { botId: "main", provider: "acme", model: "dev-1", full: false },
+      { botId: "otto", provider: "acme", model: "dev-1", full: false },
+      { botId: "pip", provider: "acme", model: "dev-1", full: false },
     ]);
-    await client.allowBotModel("otto");
+    await client.allowBotModel("otto", DEV1);
     expect(JSON.parse(patches(fake).at(-1)!.raw)).toEqual({
       agents: { defaults: { modelPolicy: { allow: ["acme/dev-2", "acme/dev-1"] } } },
     });
@@ -365,7 +424,7 @@ describe("F-042 F-587: Allow <model>, for a bot whose own model its list refuses
     expect(accounts().modelsRefused).toEqual([]);
     // Pressed again, with nothing refused: nothing is written.
     const before = patches(fake).length;
-    await client.allowBotModel("otto");
+    await client.allowBotModel("otto", DEV1);
     expect(patches(fake)).toHaveLength(before);
     client.stop();
   });
@@ -374,8 +433,8 @@ describe("F-042 F-587: Allow <model>, for a bot whose own model its list refuses
     const fake = new AccountsGateway();
     limited(fake, ["acme/dev-2"]);
     const { client } = await accountsClient({ gateway: fake, scopes: INTERACTIVE_SCOPES });
-    await expect(client.allowBotModel("otto")).rejects.toThrow(/admin/i);
-    await expect(client.undoModelAllowed(SHOWN)).rejects.toThrow(/admin/i);
+    await expect(client.allowBotModel("otto", DEV1)).rejects.toThrow(/admin/i);
+    await expect(client.undoModelAllowed({ botId: "otto", id: "a" })).rejects.toThrow(/admin/i);
     expect(patches(fake)).toHaveLength(0);
     client.stop();
   });
@@ -383,28 +442,23 @@ describe("F-042 F-587: Allow <model>, for a bot whose own model its list refuses
 
 // Review of #910: each case where a line or its Undo could act on what it wasn't read from.
 describe("F-042: a line and its Undo act only on what they were read from (#799)", () => {
-  it("Undo takes the entry only out of the list it went on, and never out of another", () => {
-    // Went on the gateway's list; the bot has since been given a list of its own holding it too.
-    const moved = cfg({
-      agents: {
-        defaults: { modelPolicy: { allow: ["acme/dev-1", "openai/gpt-5.5"] } },
-        entries: { pip: { modelPolicy: { allow: ["openai/gpt-5.5", "acme/dev-3"] } } },
-      },
-    });
-    expect(allowRemoval(moved, "pip", "openai/gpt-5.5", "gateway")).toBe("gone");
-    // Went on the bot's own list, which still governs it: out of that list.
-    expect(allowRemoval(moved, "pip", "openai/gpt-5.5", "bot")).toEqual({
+  it("Undo takes the entry out of the bot's own list when that is the list it went on", () => {
+    const { after, undo } = addTo(
+      cfg({
+        agents: {
+          defaults: { modelPolicy: { allow: ["acme/dev-1"] } },
+          entries: { pip: { modelPolicy: { allow: ["acme/dev-3"] } } },
+        },
+      }),
+    );
+    expect(undo.place).toBe("bot");
+    expect(allowRemoval(after, "pip", undo)).toEqual({
       patch: { agents: { entries: { pip: { modelPolicy: { allow: ["acme/dev-3"] } } } } },
       replacePaths: ["agents.entries.pip.modelPolicy.allow"],
     });
-    // Went on the old models map; the config has since moved it to the default list: not the same.
-    const migrated = cfg({
-      agents: { defaults: { modelPolicy: { allow: ["acme/dev-1", "openai/gpt-5.5"] } } },
-    });
-    expect(allowRemoval(migrated, "pip", "openai/gpt-5.5", "models")).toBe("gone");
   });
 
-  it("Undo after the bot got a list of its own writes nothing and says the entry is gone from it", async () => {
+  it("Undo after the bot got a list of its own writes nothing, and says another list decides now", async () => {
     const fake = new AccountsGateway();
     limited(fake, ["acme/dev-1"]);
     const { client, accounts } = await accountsClient({ gateway: fake });
@@ -413,28 +467,34 @@ describe("F-042: a line and its Undo act only on what they were read from (#799)
     entries(fake).otto!.modelPolicy = { allow: ["acme/dev-2", "acme/dev-3"] };
     fake.revision += 1;
     const before = patches(fake).length;
-    await client.undoModelAllowed(SHOWN);
+    await client.undoModelAllowed(shownOf(accounts()));
     expect(patches(fake)).toHaveLength(before);
-    expect(accounts().allowed).toMatchObject({ status: "kept", error: "gone" });
+    expect(accounts().allowed).toMatchObject({ status: "kept", error: "moved" });
     expect(defaults(fake).modelPolicy).toEqual({ allow: ["acme/dev-1", "acme/dev-2"] });
     expect(entries(fake).otto!.modelPolicy).toEqual({ allow: ["acme/dev-2", "acme/dev-3"] });
     client.stop();
   });
 
-  it("Undo is for the line shown: another bot's or an older entry writes nothing", async () => {
+  it("Undo is for the addition shown: an old Undo after it was undone and allowed again writes nothing", async () => {
     const fake = new AccountsGateway();
     limited(fake, ["acme/dev-1"]);
     const { client, accounts } = await accountsClient({ gateway: fake });
     await client.setBotModel("otto", "dev-2", null);
+    const first = shownOf(accounts());
+    await client.undoModelAllowed(first);
+    expect(defaults(fake).modelPolicy).toEqual({ allow: ["acme/dev-1"] });
+    // Allowed again, by the press: a new addition of the same entry.
+    await client.allowBotModel("otto", { provider: "acme", model: "dev-2" });
+    expect(defaults(fake).modelPolicy).toEqual({ allow: ["acme/dev-1", "acme/dev-2"] });
+    expect(accounts().allowed!.id).not.toBe(first.id);
+    // A viewer's old Undo arrives now: it names the first addition, so nothing is undone.
     const before = patches(fake).length;
-    for (const shown of [
-      { botId: "pip", entry: "acme/dev-2" },
-      { botId: "otto", entry: "acme/dev-3" },
-    ])
+    for (const shown of [first, { botId: "pip", id: accounts().allowed!.id }])
       await expect(client.undoModelAllowed(shown)).rejects.toThrow(
         "That change is no longer the latest one here, so nothing was undone.",
       );
     expect(patches(fake)).toHaveLength(before);
+    expect(defaults(fake).modelPolicy).toEqual({ allow: ["acme/dev-1", "acme/dev-2"] });
     expect(accounts().allowed?.status).toBe("added");
     client.stop();
   });
@@ -460,7 +520,7 @@ describe("F-042: a line and its Undo act only on what they were read from (#799)
     expect(defaults(fake).modelPolicy).toEqual({ allow: ["acme/dev-1", "acme/dev-2"] });
     expect(accounts().allowed).toMatchObject({ entry: "acme/dev-2", status: "added" });
     fake.gateway.handlers["config.get"] = get;
-    await client.undoModelAllowed(SHOWN);
+    await client.undoModelAllowed(shownOf(accounts()));
     expect(defaults(fake).modelPolicy).toEqual({ allow: ["acme/dev-1"] });
     expect(accounts().allowed?.status).toBe("undone");
     client.stop();
@@ -472,7 +532,7 @@ describe("F-042: a line and its Undo act only on what they were read from (#799)
     limited(fake, full);
     const { client, accounts } = await accountsClient({ gateway: fake });
     expect(accounts().modelsRefused.map((each) => each.botId)).toContain("otto");
-    await expect(client.allowBotModel("otto")).rejects.toThrow(
+    await expect(client.allowBotModel("otto", DEV1)).rejects.toThrow(
       `This gateway's model list has ${MAX_ALLOWLIST_ENTRIES} entries or more, more than Clawtrate writes back, so it wasn't changed.`,
     );
     expect(patches(fake)).toHaveLength(0);
@@ -517,10 +577,20 @@ describe("F-042: a gateway's line and refusals stay with it (#799)", () => {
 
   it("a connection to another gateway clears the line and the refusals", async () => {
     const fake = new AccountsGateway();
-    limited(fake, ["acme/dev-2"]);
+    limited(fake, ["acme/dev-2", "acme/dev-3"]);
     const { engine, state } = engineOn(fake);
-    await engine.allowModel("otto");
+    // The accounts read first: Otto's own model is refused, so there is a refusal to clear.
+    await engine.load();
+    expect(state().modelsRefused).toEqual([{ botId: "otto", ...DEV1, full: false }]);
+    await engine.allowModel("otto", DEV1);
     expect(state().allowed).toMatchObject({ botId: "otto", status: "added" });
+    // Otto moved to a model the list refuses, read again: a line and a refusal both stand.
+    (entries(fake).otto!.model as { primary: string }).primary = "acme/dev-4@acme:work";
+    fake.revision += 1;
+    await engine.load();
+    expect(state().modelsRefused).toEqual([
+      { botId: "otto", provider: "acme", model: "dev-4", full: false },
+    ]);
     engine.reset();
     expect(state().allowed).toBeNull();
     expect(state().modelsRefused).toEqual([]);
@@ -535,7 +605,9 @@ describe("F-042: a gateway's line and refusals stay with it (#799)", () => {
       if (method === "config.patch") holder.engine!.reset();
     });
     holder.engine = engine;
-    await engine.allowModel("otto");
+    await engine.load();
+    expect(state().modelsRefused.length).toBeGreaterThan(0);
+    await engine.allowModel("otto", DEV1);
     expect(defaults(fake).modelPolicy).toEqual({ allow: ["acme/dev-2", "acme/dev-1"] });
     expect(state().allowed).toBeNull();
     expect(state().modelsRefused).toEqual([]);

@@ -285,13 +285,18 @@ export const MAX_MODEL_ID_CHARS = 512;
  * Why a model id can't be sent, or null when it can: one rule for the field that takes a typed
  * id and for the bridge that carries every model id to the gateway.
  */
-export function modelIdProblem(id: string): "empty" | "long" | "space" | "control" | null {
+export function modelIdProblem(
+  id: string,
+): "empty" | "long" | "space" | "control" | "pattern" | null {
   if (id.length === 0) return "empty";
   if (id.length > MAX_MODEL_ID_CHARS) return "long";
   if ([...id].some((char) => char.charCodeAt(0) < 0x20 || char.charCodeAt(0) === 0x7f))
     return "control";
   // A space would split it, and an `@` would name an account.
   if (/[\s@]/.test(id)) return "space";
+  // A `*` makes a model list's entry a pattern (both versions read a trailing one so, and
+  // 2026.11.10 a prefix): a model chosen by its id never carries one (#799).
+  if (id.includes("*")) return "pattern";
   return null;
 }
 
@@ -593,7 +598,13 @@ export type AccountsState = {
 };
 
 /** A bot whose own model its model list refuses for the tasks it starts (#799). */
-export type RefusedBotModel = { botId: string; provider: string; model: string };
+export type RefusedBotModel = {
+  botId: string;
+  provider: string;
+  model: string;
+  /** The list is past the entries Clawtrate writes back whole: it can't offer to change it. */
+  full: boolean;
+};
 
 /**
  * A model Clawtrate put on the model list that governs a bot (#799), in the same write as the
@@ -601,6 +612,10 @@ export type RefusedBotModel = { botId: string; provider: string; model: string }
  * entry out again while it is still there.
  */
 export type ModelAllowed = {
+  /** This addition's own id: an Undo sent for another addition, even of the same entry, does nothing. */
+  id: string;
+  /** The gateway it was written on, by its identity: Undo acts only there. Null when unnamed. */
+  gatewayId: string | null;
   botId: string;
   provider: string;
   model: string;
@@ -613,9 +628,12 @@ export type ModelAllowed = {
    * `agents.defaults.models` of a config never migrated. Undo takes it out of that list only.
    */
   list: "bot" | "gateway" | "models";
+  /** The list as this addition left it, as a digest: Undo needs to find it unchanged. */
+  digest: string;
   /**
    * `added`: written. `undoing`: Undo under way. `undone`: taken out. `kept`: Undo wrote nothing,
-   * `error` saying why: `gone` (that list no longer holds it, or no longer governs the bot) or
+   * `error` saying why: `moved` (another list now governs the bot), `gone` (its list no longer
+   * holds the entry), `changed` (its list changed since, so the entry may be someone else's) or
    * `last` (its only entry). `failed`: Undo's write failed, with `error`; Undo stays offered.
    */
   status: "added" | "undoing" | "undone" | "kept" | "failed";

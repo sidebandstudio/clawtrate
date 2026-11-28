@@ -26,10 +26,17 @@ export function allowedWords(allowed: NonNullable<AccountsState["allowed"]>, bot
     case "undone":
       return `Took ${model} out of ${list} again.`;
     case "kept":
-      // Undo wrote nothing, and says why.
-      return allowed.error === "last"
-        ? `Kept ${model} on ${list}: it's the only one left there, and taking it out would allow every model.`
-        : `${model} is no longer on ${list}, so nothing was changed.`;
+      // Undo wrote nothing, and says exactly why.
+      switch (allowed.error) {
+        case "last":
+          return `Kept ${model} on ${list}: it's the only one left there, and taking it out would allow every model.`;
+        case "moved":
+          return `Kept ${model} on ${list}: another list now decides ${botName}'s models, so nothing was changed.`;
+        case "changed":
+          return `Kept ${model} on ${list}: the list has changed since it was added, so nothing was changed.`;
+        default:
+          return `${model} is no longer on ${list}, so nothing was changed.`;
+      }
     case "failed":
       return `Couldn't take ${model} out of ${list}: ${allowed.error ?? "the gateway refused."}`;
     default:
@@ -44,9 +51,13 @@ const UNDOABLE = new Set(["added", "undoing", "failed"]);
 export const refusedWords = (refused: RefusedBotModel, botName: string) =>
   `${botName} can't start tasks on ${modelWords(refused)}: this gateway's model list doesn't include it.`;
 
+/** Why Clawtrate offers no Allow there: the list is past what it writes back whole. */
+export const FULL_LIST_WORDS = "The list is too long for Clawtrate to change.";
+
 /**
  * The line for one bot. `reason: false` leaves out the refused sentence where the place it stands
- * already says it (a refused start's card), and `only` shows it only for that model.
+ * already says it (a refused start's card), and `only` shows it only for that model. A refusal
+ * true now always shows, before any line about an earlier addition.
  */
 export function ModelAllowedLine({
   botId,
@@ -63,36 +74,78 @@ export function ModelAllowedLine({
   // A card drawn with no state from the host (the cards' own tests) has no line.
   const state = useClawtrateState() as ClawtrateState | null;
   const [busy, setBusy] = useState(false);
-  const [failed, setFailed] = useState<string | null>(null);
+  const [failed, setFailed] = useState<{ press: "allow" | "undo"; text: string } | null>(null);
   if (!state) return null;
   const { accounts, connection } = state;
   const admin = connection.canAdmin;
   const same = (ref: { provider: string; model: string }) =>
     !only || (ref.provider === only.provider && ref.model === only.model);
+  // An addition is shown only on the gateway it was made on.
   const allowed =
-    accounts.allowed?.botId === botId && same(accounts.allowed) ? accounts.allowed : null;
+    accounts.allowed?.botId === botId &&
+    same(accounts.allowed) &&
+    accounts.allowed.gatewayId !== null &&
+    accounts.allowed.gatewayId === connection.gatewayId
+      ? accounts.allowed
+      : null;
   const refused = accounts.modelsRefused.find((each) => each.botId === botId && same(each)) ?? null;
-  const press = async (command: "allowBotModel" | "undoModelAllowed") => {
+  const press = async (which: "allow" | "undo") => {
     setBusy(true);
     setFailed(null);
     try {
       const stamp = await screenStamp(bridge, shownStamp(connection));
-      // Undo is for the line shown: its bot and its entry, which the engine checks before writing.
+      // Allow names the model it shows; Undo, the addition it shows. The engine checks each.
       await bridge.invoke(
-        command === "allowBotModel"
-          ? { type: "allowBotModel", botId, stamp }
-          : { type: "undoModelAllowed", botId, entry: allowed!.entry, stamp },
+        which === "allow"
+          ? {
+              type: "allowBotModel",
+              botId,
+              provider: refused!.provider,
+              model: refused!.model,
+              stamp,
+            }
+          : { type: "undoModelAllowed", botId, id: allowed!.id, stamp },
       );
     } catch (error) {
-      setFailed(error instanceof Error ? error.message : String(error));
+      setFailed({ press: which, text: error instanceof Error ? error.message : String(error) });
     } finally {
       setBusy(false);
     }
   };
 
-  // After a write: what it did, and Undo while it can be undone.
-  if (allowed && allowed.status !== "undone") {
-    return (
+  // A bot whose own model its list refuses now: why, and with admin the one press.
+  const refusedLine =
+    refused && (reason || admin) ? (
+      <p className="b-hint" data-testid="model-refused">
+        {reason && refusedWords(refused, botName)}
+        {admin && refused.full && (
+          <>
+            {reason && " "}
+            {FULL_LIST_WORDS}
+          </>
+        )}
+        {admin && !refused.full && (
+          <>
+            {reason && " "}
+            <button
+              type="button"
+              className="link-button"
+              aria-label={`Allow ${modelWords(refused)} for ${botName}'s tasks`}
+              disabled={busy}
+              onClick={() => void press("allow")}
+            >
+              Allow {refused.model}
+            </button>
+          </>
+        )}
+        {failed?.press === "allow" && (
+          <span className="b-error"> Couldn't allow it: {failed.text}</span>
+        )}
+      </p>
+    ) : null;
+  // What an addition did, and Undo while it can be undone; once undone, only while nothing is refused.
+  const allowedLine =
+    allowed && (allowed.status !== "undone" || !refused) ? (
       <p className="b-hint" role="status" data-testid="model-allowed">
         {allowedWords(allowed, botName)}
         {/* Offered until the gateway shows the entry gone: after a failed Undo too. */}
@@ -104,46 +157,23 @@ export function ModelAllowedLine({
               className="link-button"
               aria-label={`Undo: take ${modelWords(allowed)} out of the list again`}
               disabled={busy || allowed.status === "undoing"}
-              onClick={() => void press("undoModelAllowed")}
+              onClick={() => void press("undo")}
             >
               Undo
             </button>
           </>
         )}
         {/* A press the host refused before any write; a failed write says so in the line itself. */}
-        {failed && allowed.status !== "failed" && (
-          <span className="b-error"> Couldn't undo it: {failed}</span>
+        {failed?.press === "undo" && allowed.status !== "failed" && (
+          <span className="b-error"> Couldn't undo it: {failed.text}</span>
         )}
       </p>
-    );
-  }
-  if (!refused) {
-    return allowed ? (
-      <p className="b-hint" role="status" data-testid="model-allowed">
-        {allowedWords(allowed, botName)}
-      </p>
     ) : null;
-  }
-  // A bot whose own model the list refuses: why, and with admin the one press.
-  if (!reason && !admin) return null;
+  if (!refusedLine && !allowedLine) return null;
   return (
-    <p className="b-hint" data-testid="model-refused">
-      {reason && refusedWords(refused, botName)}
-      {admin && (
-        <>
-          {reason && " "}
-          <button
-            type="button"
-            className="link-button"
-            aria-label={`Allow ${modelWords(refused)} for ${botName}'s tasks`}
-            disabled={busy}
-            onClick={() => void press("allowBotModel")}
-          >
-            Allow {refused.model}
-          </button>
-        </>
-      )}
-      {failed && <span className="b-error"> Couldn't allow it: {failed}</span>}
-    </p>
+    <>
+      {refusedLine}
+      {allowedLine}
+    </>
   );
 }

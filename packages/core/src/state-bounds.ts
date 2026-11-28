@@ -1341,14 +1341,22 @@ const orderClear = object<OrderClear>()({
   checkedSeq: NUMBER,
   checkedAt: NUMBER,
 });
-const refusedBotModel = object<RefusedBotModel>()({ botId: ID, provider: ID, model: ID });
+const refusedBotModel = object<RefusedBotModel>()({
+  botId: ID,
+  provider: ID,
+  model: ID,
+  full: FLAG,
+});
 const modelAllowed = object<ModelAllowed>()({
+  id: ID,
+  gatewayId: ID,
   botId: ID,
   provider: ID,
   model: ID,
   entry: ID,
   scope: ENUM,
   list: ENUM,
+  digest: ID,
   status: ENUM,
   error: text(MAX_MESSAGE_LINE_CHARS),
   at: NUMBER,
