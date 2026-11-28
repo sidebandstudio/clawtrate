@@ -4,15 +4,27 @@
 
 import { createHash } from "node:crypto";
 import type * as fs from "node:fs";
-import { mkdirSync, readFileSync, rmSync, truncateSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { chmodSync, mkdirSync, readFileSync, rmSync, truncateSync, writeFileSync } from "node:fs";
+import { join, relative, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin, {
+  otherToolHooks,
+  resolveUserPath,
+  codexAtPath,
+  codexInFolder,
+  globalPluginFolders,
   ALLOWED_DECISIONS,
   APPROVAL_TIMEOUT_MS,
+  CHANGED_ARGUMENTS_REASON,
   DESCRIPTION_MAX,
+  LOST_RULES_REASON,
+  LOST_TRACK_LINE,
+  MARK_EXPIRY_MS,
+  MEMORY_LIMIT,
+  PENDING_LIMIT,
   PLUGIN_VERSION,
   TITLE_MAX,
+  TURNED_OFF_REASON,
 } from "../index.js";
 import { RulesStore, serializeRules } from "../lib/store.js";
 import { load, running, tempState } from "./harness.ts";
@@ -56,9 +68,53 @@ function open(options: Parameters<typeof load>[0]) {
 const rulesFile = (stateDir: string) => join(stateDir, "clawtrate-tool-rules", "rules.json");
 
 describe("registration", () => {
-  it("registers one hook for every tool call, with no matcher and no conversation hook", () => {
+  it("decides every tool call by a trusted policy with no matcher, and needs no conversation hook", () => {
     const h = host();
-    expect(h.hooks.map((hook) => [hook.name, hook.opts])).toEqual([["before_tool_call", {}]]);
+    expect(h.policies.map((p) => [p.id, p.matcher])).toEqual([["rules", undefined]]);
+    // The manifest declares the policy, as the gateway asks of an installed plugin.
+    const manifest = JSON.parse(
+      readFileSync(join(import.meta.dirname, "..", "openclaw.plugin.json"), "utf8"),
+    );
+    expect(manifest.contracts).toEqual({ trustedToolPolicies: ["rules"] });
+    // None of these is a hook the gateway holds back without conversation access (both
+    // versions hold back agent_end, which is why the plugin does not use it).
+    expect(h.hooks.map((hook) => [hook.name, hook.opts])).toEqual([
+      ["before_tool_call", {}],
+      ["before_message_write", {}],
+      ["model_call_started", {}],
+      ["after_tool_call", {}],
+    ]);
+  });
+
+  it("decides in its hook where the gateway has no trusted policies, or refuses its own, and refuses an Ask there", async () => {
+    for (const trusted of [false, "refused"] as const) {
+      const h = host({ trusted });
+      expect(h.policies).toEqual([]);
+      await h.save("otto", [{ action: "never", tools: ["write"] }]);
+      expect(h.before("otto", "write", { path: "a" })?.block).toBe(true);
+      // An Ask: both versions resolve a hook's card after the hook has run, and nothing
+      // can veto the answer, so the hook refuses it without a card.
+      await h.save("otto", [{ action: "ask", tools: ["read"] }]);
+      const result = h.before("otto", "read", { path: "a" });
+      expect(result?.requireApproval).toBeUndefined();
+      expect(result?.blockReason).toMatch(
+        /^Refused by Clawtrate's rules plugin without asking anyone: otto's rule 'Ask first · read'.*asks first, and the gateway did not run the plugin's trusted policy, so an answer could not be checked again before the call runs\. The call did not run\.$/,
+      );
+      const [record] = (await h.call("decisions.list", { agentId: "otto" })).payload!
+        .records as Record<string, unknown>[];
+      expect([record?.decision, record?.answer]).toEqual(["ask", "cancelled"]);
+      expect((await h.call("status")).payload?.hook).toMatchObject({
+        registered: true,
+        decidedBy: "hook",
+      });
+    }
+  });
+
+  it("says the policy decided where the gateway ran it", async () => {
+    const h = host();
+    expect((await h.call("status")).payload?.hook).toMatchObject({ decidedBy: null });
+    h.before("otto", "read", { path: "a" });
+    expect((await h.call("status")).payload?.hook).toMatchObject({ decidedBy: "policy" });
   });
 
   it("asks the gateway to hold get, status and decisions.list to read, and set to admin", () => {
@@ -102,7 +158,7 @@ describe("status says only what the plugin itself knows", () => {
         rulesSchema: 1,
         rules: { state: "none" },
         enforcing: "nothing",
-        hook: { registered: true, lastCallAt: null },
+        hook: { registered: true, lastCallAt: null, decidedBy: null, otherToolHooks: [] },
         matches: { tools: [], fallback: [], exempt: ["ask_user"] },
         cardDetails: { mode: "full", because: "no-forwarding" },
         decisions: { state: "kept", setAside: [] },
@@ -113,7 +169,12 @@ describe("status says only what the plugin itself knows", () => {
     now = 2000;
     h.before("pip", "read", { path: "a" });
     const after = (await h.call("status")).payload!;
-    expect(after.hook).toEqual({ registered: true, lastCallAt: 2000 });
+    expect(after.hook).toEqual({
+      registered: true,
+      lastCallAt: 2000,
+      decidedBy: "policy",
+      otherToolHooks: [],
+    });
     expect(after.matches).toEqual({
       tools: ["coder__deploy_*", "edit", "write"],
       fallback: ["otto"],
@@ -122,10 +183,12 @@ describe("status says only what the plugin itself knows", () => {
   });
 
   it("does not claim a hook it could not register, or one whose service is not running", async () => {
-    const none = host({ on: false });
+    const none = host({ on: false, trusted: false });
     expect((await none.call("status")).payload?.hook).toEqual({
       registered: false,
       lastCallAt: null,
+      decidedBy: null,
+      otherToolHooks: [],
     });
     const stopped = host();
     stopped.stop();
@@ -179,7 +242,7 @@ describe("a lost policy is not an empty one", () => {
   });
 
   for (const [what, spoil, reason] of LOST) {
-    it(`${what}, with no copy read in this process: every call but ask_user asks, saying the rules could not be read`, async () => {
+    it(`${what}, with no copy read in this process: every call but ask_user is refused without a card, saying the rules could not be read`, async () => {
       const h0 = host();
       mkdirSync(join(h0.stateDir, "clawtrate-tool-rules"), { recursive: true });
       spoil(rulesFile(h0.stateDir));
@@ -190,12 +253,10 @@ describe("a lost policy is not an empty one", () => {
           ["web_search", { query: "x" }],
           ["exec", { command: "ls" }],
         ] as const) {
-          const approval = h.before("otto", tool, params)?.requireApproval;
-          expect(approval?.title, tool).toBe(`${tool}: Clawtrate's rules could not be read`);
-          expect(approval?.description).toMatch(
-            /could not read its rules, so it asks before every tool call/,
-          );
-          expect(approval?.allowedDecisions).toEqual(["allow-once", "deny"]);
+          expect(h.before("otto", tool, params), tool).toEqual({
+            block: true,
+            blockReason: LOST_RULES_REASON,
+          });
         }
         expect(h.before("otto", "ask_user", { questions: [] })).toBeUndefined();
         const [record] = (await h.call("decisions.list")).payload!.records as Record<
@@ -208,12 +269,12 @@ describe("a lost policy is not an empty one", () => {
           unknown
         >[];
         expect(records[1]).toMatchObject({
-          decision: "ask",
+          decision: "block",
           rules: "lost",
           source: { kind: "rules-lost" },
         });
         expect(h.warnings.join("\n")).toMatch(reason);
-        expect(h.warnings.join("\n")).toMatch(/every tool call but ask_user is asked about/);
+        expect(h.warnings.join("\n")).toMatch(/every tool call but ask_user is refused/);
         const got = await h.call("get");
         expect(got.error).toMatchObject({
           code: "UNAVAILABLE",
@@ -224,6 +285,32 @@ describe("a lost policy is not an empty one", () => {
       }
     });
   }
+
+  it("with no copy, a saved Never is never offered a card, and restoring the file ends the refusal at the next call", async () => {
+    const h0 = host();
+    await h0.save("otto", [
+      { action: "never", tools: ["write"] },
+      { action: "ask", tools: ["read"] },
+    ]);
+    const good = readFileSync(rulesFile(h0.stateDir));
+    writeFileSync(rulesFile(h0.stateDir), "{ broken");
+    // A fresh process: no copy was read.
+    const h = open({ stateDir: h0.stateDir });
+    for (const [tool, params] of [
+      ["write", { path: "a" }],
+      ["read", { path: "a" }],
+      ["web_search", { query: "x" }],
+    ] as const) {
+      const result = h.before("otto", tool, params);
+      expect(result?.requireApproval, tool).toBeUndefined();
+      expect(result?.blockReason).toBe(LOST_RULES_REASON);
+    }
+    // The file is read again at each call: the rules apply at once once it is whole.
+    writeFileSync(rulesFile(h0.stateDir), good);
+    expect(h.before("otto", "write", { path: "a" })?.blockReason).toMatch(/^Blocked by/);
+    expect(h.before("otto", "read", { path: "a" })?.requireApproval).toBeDefined();
+    expect(h.before("otto", "web_search", { query: "x" })).toBeUndefined();
+  });
 
   it("with a copy read earlier, goes on enforcing it, says so, and never overwrites the file", async () => {
     const h = host();
@@ -429,6 +516,8 @@ describe("the hook", () => {
     expect(APPROVAL_TIMEOUT_MS).toBe(600_000);
     expect(approval.allowedDecisions).toEqual(["allow-once", "deny"]);
     expect(ALLOWED_DECISIONS).not.toContain("allow-always");
+    // A trusted policy's card is not stamped by the gateway: it names its plugin itself.
+    expect(approval.pluginId).toBe("clawtrate-tool-rules");
     expect(asked.params).toBeUndefined();
     expect(asked.block).toBeUndefined();
   });
@@ -499,6 +588,1320 @@ describe("the hook", () => {
     expect(h.before("otto", "write", { path: "/srv/workspaces/otto/notes/k" })).toBeUndefined();
     // Outside it the path is not read, so the Never applies.
     expect(h.before("otto", "write", { path: "/srv/workspaces/pip/notes/k" })?.block).toBe(true);
+  });
+});
+
+describe("a run another bot's message started or reached (#606)", () => {
+  const PIP = "agent:pip:main";
+  const MARLOW = "agent:marlow:main";
+  /** A message from another task, naming the run it is to start, as the gateway writes it. */
+  const fromBot = (run: string, source = MARLOW, sourceTool = "sessions_send") => ({
+    role: "user",
+    content: "read your notes",
+    idempotencyKey: `${run}:user`,
+    provenance: { kind: "inter_session", sourceSessionKey: source, sourceTool },
+  });
+  const fromMarlow = (run: string) => fromBot(run);
+  const fromPerson = (run: string) => ({
+    role: "user",
+    content: "hello",
+    idempotencyKey: `${run}:user`,
+    provenance: { kind: "external_user" },
+  });
+  const read = (h: ReturnType<typeof load>, runId: string, sessionKey = PIP) =>
+    h.before("pip", "read", { path: "AGENTS.md" }, { runId, sessionKey, toolCallId: `${runId}-c` });
+  /** A person's message that starts its run at once. */
+  const personRun = (h: ReturnType<typeof load>, run: string, key = PIP) => {
+    h.write(key, fromPerson(run));
+    h.modelCall(run, key);
+  };
+  const asks = (h: ReturnType<typeof load>, run: string, key = PIP) =>
+    expect(read(h, run, key)?.requireApproval).toBeDefined();
+  const refusedFor = (h: ReturnType<typeof load>, run: string, bot = "marlow", key = PIP) => {
+    const result = read(h, run, key);
+    expect(result?.requireApproval).toBeUndefined();
+    expect(result?.blockReason).toContain(`started by a message from bot ${bot}.`);
+  };
+  /** A task's waiting marks: the bot and the run each names (and `next`), not when it was written. */
+  const pending = (h: ReturnType<typeof load>, key = PIP) =>
+    ((h.handle.shared.origins.pending.get(key) ?? []) as Record<string, unknown>[]).map(
+      ({ at: _at, ...mark }) => mark,
+    );
+
+  it("refuses an Ask without a card, naming the bot, and records the ask as cancelled", async () => {
+    const h = host();
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    h.write(PIP, fromMarlow("run-b"));
+    h.modelCall("run-b", PIP);
+    const result = read(h, "run-b");
+    expect(result?.requireApproval).toBeUndefined();
+    expect(result?.block).toBe(true);
+    expect(result?.blockReason).toMatch(
+      /^Refused by Clawtrate's rules plugin without asking anyone: pip's rule 'Ask first · read'.*started by a message from bot marlow\..*The call did not run\.$/,
+    );
+    expect(result!.blockReason!.length).toBeLessThanOrEqual(DESCRIPTION_MAX);
+    const [record] = (await h.call("decisions.list", { runId: "run-b" })).payload!
+      .records as Record<string, unknown>[];
+    expect([record?.decision, record?.answer]).toEqual(["ask", "cancelled"]);
+  });
+
+  it("refuses the fallback's ask the same way, the lost rules' call without a card, and still blocks a Never as a Never", async () => {
+    const h = host();
+    await h.save("pip", [{ action: "never", tools: ["write"] }], true);
+    h.write(PIP, fromMarlow("run-b"));
+    h.modelCall("run-b", PIP);
+    expect(read(h, "run-b")?.blockReason).toMatch(
+      /"Ask when nothing else decides" is on for pip, and this run was started by a message from bot marlow/,
+    );
+    const never = h.before("pip", "write", { path: "a" }, { runId: "run-b", sessionKey: PIP });
+    expect(never?.blockReason).toMatch(/^Blocked by Clawtrate's rules plugin: pip's rule/);
+    writeFileSync(rulesFile(h.stateDir), "{ broken");
+    const lost = open({ stateDir: h.stateDir });
+    lost.write(PIP, fromMarlow("run-l"));
+    lost.modelCall("run-l", PIP);
+    expect(read(lost, "run-l")?.blockReason).toBe(LOST_RULES_REASON);
+  });
+
+  it("asks in a person's run once the bot's message has started its own run", async () => {
+    const h = host();
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    h.write(PIP, fromMarlow("run-b"));
+    h.modelCall("run-b", PIP);
+    expect(pending(h)).toEqual([]);
+    personRun(h, "run-p");
+    asks(h, "run-p");
+    // The bot's run stays a bot's run.
+    refusedFor(h, "run-b");
+  });
+
+  it("a bot's message queued behind a person's: the run under way, every run starting before the bot's own, and the bot's own count as the bot's; a run after it asks", async () => {
+    // The order 2026.11.10 runs a queue in: the person's, the bot's, the person's.
+    const h = host();
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    personRun(h, "run-p1");
+    asks(h, "run-p1");
+    h.write(PIP, fromPerson("run-p2"));
+    h.write(PIP, fromMarlow("run-m"));
+    h.write(PIP, fromPerson("run-p3"));
+    // The busy run may have taken Marlow's message (the gateway can steer it in).
+    refusedFor(h, "run-p1");
+    h.modelCall("run-p2", PIP);
+    refusedFor(h, "run-p2");
+    // Held across that run: it still waits for its own.
+    expect(pending(h)).toEqual([{ bot: "marlow", run: "run-m" }]);
+    h.modelCall("run-m", PIP);
+    refusedFor(h, "run-m");
+    expect(pending(h)).toEqual([]);
+    h.modelCall("run-p3", PIP);
+    asks(h, "run-p3");
+  });
+
+  it("a bot's queued message whose run starts first lets the person's queued runs ask", async () => {
+    // The order 2026.10.6 runs the same queue in: the bot's first.
+    const h = host();
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    personRun(h, "run-p1");
+    h.write(PIP, fromPerson("run-p2"));
+    h.write(PIP, fromMarlow("run-m"));
+    h.write(PIP, fromPerson("run-p3"));
+    h.modelCall("run-m", PIP);
+    refusedFor(h, "run-m");
+    h.modelCall("run-p2", PIP);
+    asks(h, "run-p2");
+    h.modelCall("run-p3", PIP);
+    asks(h, "run-p3");
+  });
+
+  it("a bot's message steered into a person's run makes that run the bot's, and is let go when the send says so", async () => {
+    const h = host();
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    personRun(h, "run-q1");
+    // Marlow steers: the message names a run of its own that never starts.
+    h.write(PIP, fromMarlow("run-s"));
+    refusedFor(h, "run-q1");
+    // Its send's result says where the gateway put it: a queued one keeps its mark.
+    h.sent(MARLOW, {
+      status: "accepted",
+      runId: "run-s",
+      sessionKey: PIP,
+      targetDisposition: "queued",
+    });
+    expect(pending(h)).toHaveLength(1);
+    h.sent(MARLOW, {
+      status: "accepted",
+      runId: "run-s",
+      sessionKey: PIP,
+      targetDisposition: "steered",
+    });
+    expect(pending(h)).toEqual([]);
+    refusedFor(h, "run-q1");
+    personRun(h, "run-q2");
+    asks(h, "run-q2");
+  });
+
+  it("a steer whose send's result comes before its message is written: the run taking it in is the bot's, and nothing is left waiting", async () => {
+    // The order 2026.10.6 answers a steer in: the result first, the write when the run takes it.
+    const h = host();
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    personRun(h, "run-q1");
+    h.sent(MARLOW, {
+      status: "accepted",
+      runId: "run-s",
+      sessionKey: PIP,
+      targetDisposition: "steered",
+    });
+    // Only a steer is kept for later: a queued or answered one says nothing yet.
+    h.sent(MARLOW, { status: "accepted", runId: "run-x", sessionKey: PIP });
+    asks(h, "run-q1");
+    h.write(PIP, fromMarlow("run-s"));
+    refusedFor(h, "run-q1");
+    expect(pending(h)).toEqual([]);
+    personRun(h, "run-q2");
+    asks(h, "run-q2");
+    // A later message naming another run waits as any does.
+    h.write(PIP, fromMarlow("run-x"));
+    expect(pending(h)).toEqual([{ bot: "marlow", run: "run-x" }]);
+  });
+
+  it("a steer into a run not noted yet: the next run noted is the bot's, then the mark is gone", async () => {
+    const h = host();
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    personRun(h, "run-r1");
+    // A person's message is written; its run has not made a model call when Marlow steers.
+    h.write(PIP, fromPerson("run-r2"));
+    h.write(PIP, fromMarlow("run-s"));
+    h.sent(MARLOW, {
+      status: "accepted",
+      runId: "run-s",
+      sessionKey: PIP,
+      targetDisposition: "steered",
+    });
+    h.modelCall("run-r2", PIP);
+    refusedFor(h, "run-r2");
+    personRun(h, "run-r3");
+    asks(h, "run-r3");
+  });
+
+  it("a mark whose run never starts and whose send's result never comes keeps every run in the task the bot's", async () => {
+    const h = host();
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    personRun(h, "run-q1");
+    h.write(PIP, fromMarlow("run-s"));
+    for (const run of ["run-q2", "run-q3", "run-q4"]) {
+      personRun(h, run);
+      refusedFor(h, run);
+    }
+    // An answer from the bot's send lets it go: its run has ended.
+    h.sent(MARLOW, { status: "ok", runId: "run-s", sessionKey: PIP, reply: "done" });
+    personRun(h, "run-q5");
+    asks(h, "run-q5");
+  });
+
+  it("lets go only the mark a send's result names, in the task it names", async () => {
+    const h = host();
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    personRun(h, "run-q1");
+    h.write(PIP, fromMarlow("run-s"));
+    for (const details of [
+      { status: "accepted", runId: "run-other", sessionKey: PIP, targetDisposition: "steered" },
+      {
+        status: "accepted",
+        runId: "run-s",
+        sessionKey: "agent:pip:other",
+        targetDisposition: "steered",
+      },
+      { status: "accepted", runId: "run-s", sessionKey: PIP, targetDisposition: "queued" },
+      { status: "forbidden", runId: "run-s", sessionKey: PIP },
+      { status: "error", runId: "run-s", sessionKey: PIP, sentBeforeError: true },
+      { status: "timeout", runId: "run-s", sessionKey: PIP, sentBeforeError: true },
+    ]) {
+      h.sent(MARLOW, details);
+      expect(pending(h)).toEqual([{ bot: "marlow", run: "run-s" }]);
+    }
+    // Another tool's result is not read.
+    h.hooks
+      .find((x) => x.name === "after_tool_call")!
+      .fn(
+        {
+          toolName: "message",
+          params: {},
+          result: { details: { status: "ok", runId: "run-s", sessionKey: PIP } },
+        },
+        { sessionKey: MARLOW },
+      );
+    expect(pending(h)).toHaveLength(1);
+  });
+
+  it("two bots' messages waiting: each bot's own run is its own, and any other run counts as the first's", async () => {
+    const h = host();
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    personRun(h, "run-p1");
+    h.write(PIP, fromMarlow("run-m"));
+    h.write(PIP, fromPerson("run-p2"));
+    h.write(PIP, fromBot("run-o", "agent:otto:main"));
+    h.modelCall("run-o", PIP);
+    refusedFor(h, "run-o", "otto");
+    h.modelCall("run-p2", PIP);
+    refusedFor(h, "run-p2", "marlow");
+    h.modelCall("run-m", PIP);
+    refusedFor(h, "run-m", "marlow");
+    personRun(h, "run-p3");
+    asks(h, "run-p3");
+  });
+
+  it("takes a run of this bot's own task's message as that task's run stands, and an unknown one as a bot's", async () => {
+    const h = host();
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    const SUB = "agent:pip:subagent:s1";
+    const back = (source: string, run: string) => fromBot(run, source, "subagent_announce");
+    // A person's hand-off: its report back starts a person's run.
+    personRun(h, "run-s", SUB);
+    h.write(PIP, back(SUB, "run-back"));
+    h.modelCall("run-back", PIP);
+    asks(h, "run-back");
+    expect(pending(h)).toEqual([]);
+    // A hand-off Marlow's message started stays Marlow's.
+    const SUB2 = "agent:pip:subagent:s2";
+    h.write(SUB2, fromMarlow("run-s2"));
+    h.modelCall("run-s2", SUB2);
+    h.write(PIP, back(SUB2, "run-back2"));
+    h.modelCall("run-back2", PIP);
+    refusedFor(h, "run-back2");
+    // A task of its own the plugin knows nothing of counts as a bot's: this one.
+    h.write(PIP, back("agent:pip:subagent:unknown", "run-back3"));
+    h.modelCall("run-back3", PIP);
+    refusedFor(h, "run-back3", "pip");
+  });
+
+  it("with no model call seen, a waiting bot's message decides, and nothing once its run started", async () => {
+    const h = host();
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    h.write(PIP, fromMarlow("run-m"));
+    h.write(PIP, fromPerson("run-p"));
+    expect(read(h, "run-x")?.block).toBe(true);
+    expect(read(h, "run-m")?.block).toBe(true);
+    h.modelCall("run-m", PIP);
+    expect(read(h, "run-y")?.requireApproval).toBeDefined();
+  });
+
+  it("names only a bot id the task's key gives in a bot id's form", async () => {
+    const h = host();
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    for (const [key, words] of [
+      ["global", "another bot"],
+      ["agent:Marlow<b>:main", "another bot"],
+      [`agent:${"m".repeat(65)}:main`, "another bot"],
+      ["agent:otto-2:task", "bot otto-2"],
+    ] as const) {
+      const run = `run-${key.length}`;
+      h.write(PIP, fromBot(run, key));
+      h.modelCall(run, PIP);
+      expect(read(h, run)?.blockReason).toContain(`started by a message from ${words}.`);
+    }
+  });
+
+  it("past PENDING_LIMIT a mark let go still counts as a bot's, its run and its task", async () => {
+    const h = host();
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    personRun(h, "run-p1");
+    const runs = Array.from({ length: PENDING_LIMIT + 1 }, (_, i) => `run-m${i}`);
+    for (const run of runs) h.write(PIP, fromMarlow(run));
+    expect(pending(h)).toHaveLength(PENDING_LIMIT);
+    // The first mark was let go: its run and its task are kept among the forgotten.
+    expect(h.handle.shared.origins.forgotten.get("run-m0")).toEqual({ bot: "marlow" });
+    for (const run of runs) {
+      h.modelCall(run, PIP);
+      refusedFor(h, run);
+    }
+    // Every mark is used up; the forgotten task counts as a bot's for one more run.
+    personRun(h, "run-p2");
+    refusedFor(h, "run-p2");
+    personRun(h, "run-p3");
+    asks(h, "run-p3");
+  });
+
+  it("past MEMORY_LIMIT tasks waiting, the oldest task's marks are forgotten, not dropped", async () => {
+    const h = host();
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    h.write(PIP, fromMarlow("run-first"));
+    for (let i = 0; i < MEMORY_LIMIT; i += 1) h.write(`agent:pip:t${i}`, fromMarlow(`run-t${i}`));
+    const { origins } = h.handle.shared;
+    expect(origins.pending.size).toBe(MEMORY_LIMIT);
+    expect(origins.pending.has(PIP)).toBe(false);
+    h.modelCall("run-first", PIP);
+    refusedFor(h, "run-first");
+  });
+
+  it("past MEMORY_LIMIT lets a person's entries go first, and a bot's run it let go still counts as a bot's", async () => {
+    const h = host();
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    h.write(PIP, fromMarlow("run-b"));
+    h.modelCall("run-b", PIP);
+    for (let i = 0; i < MEMORY_LIMIT; i += 1) personRun(h, `run-${i}`, `agent:pip:t${i}`);
+    const origins = h.handle.shared.origins;
+    expect([origins.sessions.size, origins.runs.size, origins.current.size]).toEqual([
+      MEMORY_LIMIT,
+      MEMORY_LIMIT,
+      MEMORY_LIMIT,
+    ]);
+    // Marlow's run outlived a thousand people's, and a person's message since does not change it.
+    expect(origins.runs.get("run-b")).toEqual({ bot: "marlow" });
+    h.write(PIP, fromPerson("run-p"));
+    h.modelCall("run-b", PIP);
+    refusedFor(h, "run-b");
+    // With only bots' runs left, the oldest is let go and kept among the forgotten.
+    for (let i = 0; i < MEMORY_LIMIT; i += 1) {
+      h.write(`agent:pip:b${i}`, fromMarlow(`run-bot-${i}`));
+      h.modelCall(`run-bot-${i}`, `agent:pip:b${i}`);
+    }
+    expect(origins.runs.has("run-b")).toBe(false);
+    expect(origins.forgotten.size).toBeLessThanOrEqual(MEMORY_LIMIT);
+    h.modelCall("run-b", PIP);
+    refusedFor(h, "run-b");
+  });
+
+  it("past the forgotten marks' own bound, a run it cannot place counts as a bot's, and only a run a person's message names asks", async () => {
+    const h = host();
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    h.write(PIP, fromMarlow("run-b"));
+    h.modelCall("run-b", PIP);
+    const { origins } = h.handle.shared;
+    // Bots' runs fill the notes, then the forgotten: Marlow's run is let go from both.
+    for (let i = 0; i < 2 * MEMORY_LIMIT; i += 1) {
+      h.write(`agent:pip:b${i}`, fromMarlow(`run-bot-${i}`));
+      h.modelCall(`run-bot-${i}`, `agent:pip:b${i}`);
+    }
+    expect([origins.runs.has("run-b"), origins.forgotten.has("run-b")]).toEqual([false, false]);
+    expect(origins.lostTrack).toBe(true);
+    expect(h.warnings.filter((w) => w.includes(LOST_TRACK_LINE))).toHaveLength(1);
+    // Its next model call cannot make it a person's run, nor can a call with none seen.
+    h.modelCall("run-b", PIP);
+    for (const run of ["run-b", "run-unseen"]) {
+      const result = read(h, run);
+      expect(result?.requireApproval).toBeUndefined();
+      expect(result?.blockReason).toContain(
+        "the plugin can no longer tell who started this run: it let go of a bot's message past its memory limit",
+      );
+    }
+    // A run no message named (a scheduled one, say) is refused too.
+    h.modelCall("run-cron", PIP);
+    expect(read(h, "run-cron")?.requireApproval).toBeUndefined();
+    // A person's message still starts a person's run, at every model call.
+    personRun(h, "run-p");
+    asks(h, "run-p");
+    h.modelCall("run-p", PIP);
+    asks(h, "run-p");
+  });
+
+  it("once it lost track, a person's note from before is no proof: a routine's run noted earlier is refused, a person's message's run and a person's hand-off still ask", async () => {
+    const h = host();
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    // Noted before track is lost: a run no message named (a routine's), a person's, a hand-off.
+    h.modelCall("run-routine", PIP);
+    personRun(h, "run-person", "agent:pip:p");
+    const SUB = "agent:pip:subagent:s1";
+    personRun(h, "run-s", SUB);
+    h.write(PIP, fromBot("run-back", SUB, "subagent_announce"));
+    h.modelCall("run-back", PIP);
+    // A routine's hand-off: its report back comes from a run no person started.
+    const ROUTINE = "agent:pip:subagent:r1";
+    h.modelCall("run-r", ROUTINE);
+    h.write(PIP, fromBot("run-back-r", ROUTINE, "subagent_announce"));
+    h.modelCall("run-back-r", PIP);
+    asks(h, "run-routine");
+    // Bots' messages waiting in another task push marks out of the forgotten ones; no run
+    // starts, so the runs' notes from before are all still held.
+    for (let i = 0; i < MEMORY_LIMIT + PENDING_LIMIT + 1; i += 1) {
+      h.write("agent:pip:other", fromMarlow(`run-w${i}`));
+    }
+    const { origins } = h.handle.shared;
+    expect(origins.lostTrack).toBe(true);
+    expect(origins.runs.has("run-routine")).toBe(true);
+    expect(read(h, "run-routine")?.blockReason).toContain(
+      "the plugin can no longer tell who started this run",
+    );
+    asks(h, "run-person", "agent:pip:p");
+    asks(h, "run-back");
+    expect(read(h, "run-back-r")?.blockReason).toContain(
+      "the plugin can no longer tell who started this run",
+    );
+  });
+
+  it("a run that takes a bot's attribution is no longer a person's, on a steer or at its start, after its notes are let go", async () => {
+    const h = host();
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    const { origins } = h.handle.shared;
+    /** Its note and its forgotten mark let go past their bounds, and track lost. */
+    const evict = (run: string) => {
+      origins.runs.delete(run);
+      origins.forgotten.delete(run);
+      origins.lostTrack = true;
+    };
+    // On a steer: a person's run under way, then Marlow's message, whose own run starts.
+    personRun(h, "run-p");
+    h.write(PIP, fromMarlow("run-m"));
+    h.modelCall("run-m", PIP);
+    expect(origins.people.has("run-p")).toBe(false);
+    evict("run-p");
+    expect(read(h, "run-p")?.requireApproval).toBeUndefined();
+    // At its start: a person's message whose run starts while Marlow's message waits.
+    const T = "agent:pip:t2";
+    h.write(T, fromPerson("run-x"));
+    h.write(T, fromMarlow("run-m2"));
+    h.modelCall("run-x", T);
+    h.modelCall("run-m2", T);
+    expect(origins.people.has("run-x")).toBe(false);
+    evict("run-x");
+    expect(read(h, "run-x", T)?.requireApproval).toBeUndefined();
+  });
+
+  it("a waiting bot's message is read before a person's note: a busy run whose task the plugin no longer holds as under way still loses its cards", async () => {
+    const h = host();
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    personRun(h, "run-p1");
+    const { origins } = h.handle.shared;
+    // As past MEMORY_LIMIT tasks' latest runs, where the oldest task is let go.
+    origins.current.delete(PIP);
+    h.write(PIP, fromMarlow("run-m"));
+    // The write could not mark the busy run, which keeps its person's note.
+    expect(origins.runs.get("run-p1")).toBeNull();
+    refusedFor(h, "run-p1");
+    h.modelCall("run-m", PIP);
+    asks(h, "run-p1");
+  });
+
+  it("a bot's message lets the task go once its send says the run ended; the run is still the bot's", async () => {
+    for (const ended of [{ status: "no_reply" }, { status: "ok", reply: "done" }]) {
+      const h = host();
+      await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+      personRun(h, "run-q1");
+      h.write(PIP, fromMarlow("run-s"));
+      personRun(h, "run-q2");
+      refusedFor(h, "run-q2");
+      h.sent(MARLOW, { ...ended, runId: "run-s", sessionKey: PIP });
+      expect(pending(h)).toEqual([]);
+      personRun(h, "run-q3");
+      asks(h, "run-q3");
+      // Should its run start after all, it is Marlow's.
+      h.modelCall("run-s", PIP);
+      refusedFor(h, "run-s");
+    }
+  });
+
+  it("a bot's message dropped or cancelled before its first model call: an error or a timeout keeps the task held until MARK_EXPIRY_MS, then a person's Ask is asked", async () => {
+    for (const unsure of [
+      // A deadline while the gateway's admission is still pending: the message may yet run.
+      {
+        status: "error",
+        error: "Gateway admission is still pending; inspect this run before retrying.",
+        sentBeforeError: true,
+      },
+      { status: "error", error: "dropped from the queue", sentBeforeError: true },
+      { status: "timeout", error: "agent run timed out", sentBeforeError: true },
+    ]) {
+      let clock = 1_800_000_000_000;
+      const h = host({ now: () => clock });
+      await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+      personRun(h, "run-q1");
+      h.write(PIP, fromMarlow("run-s"));
+      h.sent(MARLOW, { ...unsure, runId: "run-s", sessionKey: PIP });
+      expect(pending(h)).toEqual([{ bot: "marlow", run: "run-s" }]);
+      personRun(h, "run-q2");
+      refusedFor(h, "run-q2");
+      clock += MARK_EXPIRY_MS + 1;
+      personRun(h, "run-q3");
+      asks(h, "run-q3");
+      h.modelCall("run-s", PIP);
+      refusedFor(h, "run-s");
+    }
+  });
+
+  it("a send's result that its run ended, before its message is written, leaves nothing waiting", async () => {
+    const h = host();
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    personRun(h, "run-q1");
+    h.sent(MARLOW, { status: "no_reply", runId: "run-s", sessionKey: PIP });
+    h.write(PIP, fromMarlow("run-s"));
+    expect(pending(h)).toEqual([]);
+    personRun(h, "run-q2");
+    asks(h, "run-q2");
+    h.modelCall("run-s", PIP);
+    refusedFor(h, "run-s");
+  });
+
+  it("a mark nothing lets go expires after MARK_EXPIRY_MS; its run, starting later, is still the bot's", async () => {
+    let clock = 1_800_000_000_000;
+    const h = host({ now: () => clock });
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    personRun(h, "run-q1");
+    // Sent without waiting: no result will ever say where it went.
+    h.write(PIP, fromMarlow("run-s"));
+    clock += MARK_EXPIRY_MS;
+    personRun(h, "run-q2");
+    refusedFor(h, "run-q2");
+    clock += 1;
+    personRun(h, "run-q3");
+    asks(h, "run-q3");
+    expect(pending(h)).toEqual([]);
+    h.modelCall("run-s", PIP);
+    refusedFor(h, "run-s");
+  });
+
+  it("a run whose mark expired is the bot's from its first call, with no model call seen", async () => {
+    let clock = 1_800_000_000_000;
+    const h = host({ now: () => clock });
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    h.write(PIP, fromMarlow("run-s"));
+    clock += MARK_EXPIRY_MS + 1;
+    // Its first call comes before any model call is noted: the expired mark still names it.
+    refusedFor(h, "run-s");
+    refusedFor(h, "run-s");
+  });
+
+  it("a steer the plugin cannot tie to the run under way makes every run already going the bot's until the task's next run starts", async () => {
+    let clock = 1_800_000_000_000;
+    const h = host({ now: () => clock });
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    personRun(h, "run-busy");
+    // As past MEMORY_LIMIT tasks' latest runs: the plugin no longer holds this task's run.
+    h.handle.shared.origins.current.delete(PIP);
+    // A person writes, then Marlow steers: the write could not mark the run under way.
+    h.write(PIP, fromPerson("run-next"));
+    h.write(PIP, fromMarlow("run-s"));
+    h.sent(MARLOW, {
+      status: "accepted",
+      runId: "run-s",
+      sessionKey: PIP,
+      targetDisposition: "steered",
+    });
+    // The mark kept for the next run expires before any run starts.
+    clock += MARK_EXPIRY_MS + 1;
+    refusedFor(h, "run-busy");
+    expect(pending(h)).toEqual([]);
+    // A run a person starts afterwards: the run that took the steer has ended.
+    h.modelCall("run-next", PIP);
+    asks(h, "run-next");
+  });
+
+  it("a steered run seen again after the plugin let go of its note stays the bot's; a run a person's later message names asks", async () => {
+    let clock = 1_800_000_000_000;
+    const h = host({ now: () => clock });
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    personRun(h, "run-busy");
+    // Past MEMORY_LIMIT other tasks' runs: the busy run's note, when it was noted, its
+    // person's message and the task's latest run are all let go.
+    for (let i = 0; i <= MEMORY_LIMIT; i += 1) personRun(h, `run-o${i}`, `agent:pip:o${i}`);
+    const { origins } = h.handle.shared;
+    expect(origins.notedLost).toBe(true);
+    expect([origins.runs.has("run-busy"), origins.current.has(PIP)]).toEqual([false, false]);
+    h.write(PIP, fromMarlow("run-s"));
+    h.sent(MARLOW, {
+      status: "accepted",
+      runId: "run-s",
+      sessionKey: PIP,
+      targetDisposition: "steered",
+    });
+    clock += MARK_EXPIRY_MS + 1;
+    // The busy run's next model call: to the plugin a run first seen, and it may be that one.
+    h.modelCall("run-busy", PIP);
+    refusedFor(h, "run-busy");
+    // That used the steer's mark up: the next run first seen, which no message names, is no
+    // longer taken for the run the steer went into.
+    h.modelCall("run-beat", PIP);
+    asks(h, "run-beat");
+    // A person writes after the steer, and the run it names starts: it asks.
+    personRun(h, "run-later");
+    asks(h, "run-later");
+  });
+
+  it("a run that matches its own mark also uses up a mark kept only for the next run", async () => {
+    const h = host();
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    personRun(h, "run-r1");
+    // A person writes; Marlow steers (into the run under way, or the one the person's
+    // message starts: the plugin cannot tell), then sends again.
+    h.write(PIP, fromPerson("run-r2"));
+    h.write(PIP, fromMarlow("run-s"));
+    h.sent(MARLOW, {
+      status: "accepted",
+      runId: "run-s",
+      sessionKey: PIP,
+      targetDisposition: "steered",
+    });
+    h.write(PIP, fromMarlow("run-m"));
+    expect(pending(h)).toEqual([
+      { bot: "marlow", run: null, next: true },
+      { bot: "marlow", run: "run-m" },
+    ]);
+    // Marlow's run starts first (2026.10.6's order): it is the next run noted.
+    h.modelCall("run-m", PIP);
+    refusedFor(h, "run-m");
+    expect(pending(h)).toEqual([]);
+    // One run at a time in a task: the steer went into the run under way, not the person's.
+    h.modelCall("run-r2", PIP);
+    asks(h, "run-r2");
+  });
+});
+
+describe("a card answered after its rule changed (#606)", () => {
+  const ASK = { action: "ask", tools: ["write"], target: { kind: "path", pattern: "notes/**" } };
+  const call = [
+    "main",
+    "write",
+    { path: "notes/a.md" },
+    { runId: "run-1", toolCallId: "call-1" },
+  ] as const;
+
+  it("runs the call when the rule the card showed still asks, at the same version", async () => {
+    const h = host();
+    const saved = await h.save("main", [ASK]);
+    const card = h.before(...call);
+    // Another rule changes; the card's rule stays as it was.
+    const rules = (saved.payload!.rules as Record<string, unknown>[]).map((r) => ({ ...r }));
+    await h.save("main", [...rules, { action: "never", tools: ["exec"] }]);
+    expect(h.answer(card, "allow-once", ...call)).toBeUndefined();
+  });
+
+  it("refuses it when the rule now says Never, naming the rule, and records the refusal", async () => {
+    const h = host();
+    await h.save("main", [ASK]);
+    const card = h.before(...call);
+    await h.save("main", [{ action: "never", tools: ["write"] }]);
+    const result = h.answer(card, "allow-once", ...call);
+    expect(result?.block).toBe(true);
+    expect(result?.blockReason).toMatch(
+      /^Refused by Clawtrate's rules plugin: the rules changed while the card waited, and main's rule 'Never · write', version 1 \(rule [0-9a-f]{12}\), now says Never\. The answer was for the rule the card showed\. The call did not run\.$/,
+    );
+    const records = (await h.call("decisions.list", { runId: "run-1" })).payload!.records as Record<
+      string,
+      unknown
+    >[];
+    expect(records.map((r) => [r.decision, r.answer])).toEqual([
+      ["block", null],
+      ["ask", "allow-once"],
+    ]);
+  });
+
+  it("refuses it when another Ask, or another version of the rule, now asks", async () => {
+    const h = host();
+    const saved = await h.save("main", [ASK]);
+    const id = (saved.payload!.rules as { id: string }[])[0]!.id;
+    const card = h.before(...call);
+    await h.save("main", [{ ...ASK, id, target: { kind: "path", pattern: "**" } }]);
+    expect(h.answer(card, "allow-once", ...call)?.blockReason).toMatch(
+      /version 2 .*asks first now/,
+    );
+    const fallback = host();
+    await fallback.save("main", [ASK]);
+    const second = fallback.before(...call);
+    await fallback.save("main", [], true);
+    expect(fallback.answer(second, "allow-once", ...call)?.blockReason).toMatch(
+      /"Ask when nothing else decides" is on for main now/,
+    );
+  });
+
+  it("runs it when the rules now let it run without asking", async () => {
+    // An Allow decides only where the fallback would ask; with nothing at all, nothing decides.
+    for (const [now, fallback, decision] of [
+      [[{ action: "allow", tools: ["write"] }], true, "allow"],
+      [[], false, "none"],
+    ] as const) {
+      const h = host();
+      await h.save("main", [ASK]);
+      const card = h.before(...call);
+      await h.save("main", [...now], fallback);
+      expect(h.answer(card, "allow-once", ...call)).toBeUndefined();
+      // What the rules now say, for a call like it.
+      h.before("main", "write", { path: "notes/a.md" }, { runId: "run-2", toolCallId: "c2" });
+      const [latest] = (await h.call("decisions.list", { runId: "run-2" })).payload!
+        .records as Record<string, unknown>[];
+      expect(latest?.decision).toBe(decision);
+    }
+  });
+
+  it("refuses Allow once for a call another policy rewrote after the card, under the same rule, and runs it unchanged", async () => {
+    for (const rule of [ASK, { action: "ask", tools: ["write"] }]) {
+      const h = host();
+      await h.save("main", [rule]);
+      const card = h.before(...call);
+      // The rule asks for the rewritten target too: only the arguments tell them apart.
+      const result = h.answer(card, "allow-once", "main", "write", { path: "notes/b.md" }, call[3]);
+      expect(result).toEqual({ block: true, blockReason: CHANGED_ARGUMENTS_REASON });
+      const records = (await h.call("decisions.list", { runId: "run-1" })).payload!
+        .records as Record<string, unknown>[];
+      expect(records.map((r) => [r.decision, r.source])).toEqual([
+        ["block", { kind: "arguments-changed" }],
+        ["ask", expect.objectContaining({ kind: "rule" })],
+      ]);
+    }
+    // The same arguments, in another key order: the answer stands.
+    const h = host();
+    await h.save("main", [ASK]);
+    const card = h.before("main", "write", { path: "notes/a.md", content: "x" }, call[3]);
+    expect(
+      h.answer(card, "allow-once", "main", "write", { content: "x", path: "notes/a.md" }, call[3]),
+    ).toBeUndefined();
+  });
+
+  it("uses Allow once up: the same call reaching the hook again is refused, never run on that answer", async () => {
+    const h = host();
+    await h.save("main", [ASK]);
+    const card = h.before(...call);
+    expect(h.answer(card, "allow-once", ...call)).toBeUndefined();
+    const hook = h.hooks.find((x) => x.name === "before_tool_call")!;
+    const again = hook.fn(
+      { toolName: "write", params: { path: "notes/a.md" }, runId: "run-1", toolCallId: "call-1" },
+      { agentId: "main", sessionKey: "agent:main:main", runId: "run-1", toolCallId: "call-1" },
+    ) as { block?: boolean; blockReason?: string; requireApproval?: unknown } | undefined;
+    expect(again?.requireApproval).toBeUndefined();
+    expect(again?.block).toBe(true);
+    expect(again?.blockReason).toMatch(/could not be checked again before the call runs/);
+    expect(h.handle.shared.approved.size).toBe(0);
+  });
+
+  it("looks again only at the call whose card was answered Allow once, once", async () => {
+    const h = host();
+    await h.save("main", [ASK]);
+    const card = h.before(...call);
+    await h.save("main", [{ action: "never", tools: ["write"] }]);
+    expect(h.answer(card, "deny", ...call)).toBeUndefined();
+    expect(h.handle.shared.approved.size).toBe(0);
+    // A call the policy decided, then let run: the hook leaves it alone.
+    await h.save("main", [{ action: "allow", tools: ["write"] }], true);
+    const event = { toolName: "write", params: { path: "x" }, runId: "run-2", toolCallId: "c2" };
+    const context = { agentId: "main" };
+    expect(h.policies[0]!.evaluate(event, context)).toBeUndefined();
+    const hook = h.hooks.find((x) => x.name === "before_tool_call")!;
+    expect(hook.fn(event, context)).toBeUndefined();
+    const { records } = (await h.call("decisions.list", { runId: "run-2" })).payload!;
+    expect(records).toEqual([expect.objectContaining({ decision: "allow" })]);
+    // A call the policy never saw, the hook decides itself.
+    await h.save("main", [{ action: "never", tools: ["write"] }]);
+    expect(
+      hook.fn(
+        { toolName: "write", params: {}, runId: "run-9", toolCallId: "c" },
+        { agentId: "main" },
+      ),
+    ).toMatchObject({ block: true });
+  });
+});
+
+describe("a gateway setting changed while a card waits (#606)", () => {
+  const call = [
+    "main",
+    "write",
+    { path: "notes/a.md" },
+    { runId: "run-1", toolCallId: "call-1" },
+  ] as const;
+  const DENIES: [string, Record<string, unknown>, boolean][] = [
+    [
+      "this bot's deny list names the tool",
+      { agents: { entries: { main: { tools: { deny: ["write"] } } } } },
+      true,
+    ],
+    ["the gateway's deny list holds it by a group", { tools: { deny: ["group:fs"] } }, true],
+    ["the gateway's deny list matches it by a pattern", { tools: { deny: ["wr*"] } }, true],
+    [
+      "another tool is denied to this bot",
+      { agents: { entries: { main: { tools: { deny: ["web_search"] } } } } },
+      false,
+    ],
+    [
+      "the tool is denied to another bot",
+      { agents: { entries: { pip: { tools: { deny: ["write"] } } } } },
+      false,
+    ],
+    ["an unrelated setting changed", { ui: { seamColor: "#000000" } }, false],
+  ];
+  for (const [what, change, refused] of DENIES) {
+    it(`${refused ? "refuses Allow once" : "lets Allow once stand"} when ${what}`, async () => {
+      const config: Record<string, unknown> = {};
+      const h = host({ config });
+      await h.save("main", [{ action: "ask", tools: ["write"] }]);
+      const card = h.before(...call);
+      Object.assign(config, change);
+      const result = h.answer(card, "allow-once", ...call);
+      if (!refused) return expect(result).toBeUndefined();
+      expect(result).toEqual({
+        block: true,
+        blockReason:
+          "Refused by Clawtrate's rules plugin: the gateway's settings now deny write to this bot, a change made while the card waited. The answer was for a call they allowed. The call did not run.",
+      });
+      const [record] = (await h.call("decisions.list", { runId: "run-1" })).payload!
+        .records as Record<string, unknown>[];
+      expect([record?.decision, record?.source]).toEqual(["block", { kind: "gateway-deny" }]);
+    });
+  }
+});
+
+describe("a pending read when the gateway comes to deny group:fs (#606)", () => {
+  // Both versions' catalogs put read and ls in group:fs; 2026.11.10 checks a deny captured
+  // before the card, so a deny saved while it waits is the plugin's to enforce.
+  for (const [what, change] of [
+    ["the gateway's deny list", { tools: { deny: ["group:fs"] } }],
+    ["this bot's deny list", { agents: { entries: { main: { tools: { deny: ["group:fs"] } } } } }],
+  ] as const) {
+    it(`refuses Allow once for read and ls when ${what} names group:fs`, async () => {
+      for (const tool of ["read", "ls"]) {
+        const config: Record<string, unknown> = {};
+        const h = host({ config });
+        await h.save("main", [{ action: "ask", tools: [tool] }]);
+        const card = h.before("main", tool, { path: "a" });
+        Object.assign(config, change);
+        expect(h.answer(card, "allow-once", "main", tool, { path: "a" })?.blockReason).toBe(
+          `Refused by Clawtrate's rules plugin: the gateway's settings now deny ${tool} to this bot, a change made while the card waited. The answer was for a call they allowed. The call did not run.`,
+        );
+      }
+    });
+  }
+});
+
+describe("a pending call when the gateway comes to deny a group that holds its tool (#606)", () => {
+  // Every group whole, as either version's catalog has it: a group read short would let the call run.
+  for (const [tool, deny] of [
+    ["web_fetch", "group:openclaw"],
+    ["web_fetch", "group:web"],
+    ["sessions_create", "group:sessions"],
+    ["heartbeat_respond", "group:automation"],
+    ["automations", "cron"],
+    ["coder__deploy", "group:plugins"],
+    ["coder__deploy", "bundle-mcp"],
+    // A catalogued tool a plugin registers (memory-core's memory_search): the gateway expands
+    // group:plugins by owner, and the hook is not told the owner.
+    ["memory_search", "group:plugins"],
+    ["code_execution", "group:plugins"],
+    // The names both versions read a deny entry as: a renamed tool, an alias, a family.
+    ["progress_card", "update_plan"],
+    ["dispatch_action", "tool_call"],
+    ["show_widget", "canvas"],
+  ] as const) {
+    it(`refuses Allow once for ${tool} when ${deny} is denied while its card waits`, async () => {
+      const config: Record<string, unknown> = {};
+      const h = host({ config });
+      await h.save("main", [{ action: "ask", tools: [tool] }]);
+      const card = h.before("main", tool, {});
+      config.tools = { deny: [deny] };
+      expect(h.answer(card, "allow-once", "main", tool, {})?.blockReason).toContain(
+        `the gateway's settings now deny ${tool} to this bot`,
+      );
+    });
+  }
+
+  it("lets Allow once stand when the group denied does not hold the tool", async () => {
+    const config: Record<string, unknown> = {};
+    const h = host({ config });
+    await h.save("main", [{ action: "ask", tools: ["web_fetch"] }]);
+    const card = h.before("main", "web_fetch", {});
+    config.tools = { deny: ["group:fs", "group:plugins"] };
+    expect(h.answer(card, "allow-once", "main", "web_fetch", {})).toBeUndefined();
+  });
+});
+
+describe("a call another plugin's policy changed after this one decided it (#606)", () => {
+  it("decides it again: into a Never it is blocked, into an Ask it is refused, unchanged it is left alone", async () => {
+    const h = host();
+    await h.save("main", [
+      { action: "never", tools: ["write"], target: { kind: "path", pattern: "secrets/**" } },
+      { action: "ask", tools: ["write"], target: { kind: "path", pattern: "notes/**" } },
+    ]);
+    const ids = (n: number) => ({ runId: "run-1", toolCallId: `call-${n}` });
+    expect(h.before("main", "write", { path: "tmp/a" }, ids(1))).toBeUndefined();
+    expect(
+      h.before("main", "write", { path: "tmp/a" }, ids(2), { path: "secrets/k" })?.blockReason,
+    ).toMatch(/^Blocked by Clawtrate's rules plugin: main's rule 'Never · secrets\/\*\*'/);
+    const asked = h.before("main", "write", { path: "tmp/a" }, ids(3), { path: "notes/a" });
+    expect(asked?.requireApproval).toBeUndefined();
+    expect(asked?.blockReason).toMatch(
+      /asks first, and another plugin's policy changed the call after this plugin looked at it, so an answer could not be checked again before the call runs\. The call did not run\.$/,
+    );
+    // Rewritten to another target the rules let run: it runs.
+    expect(h.before("main", "write", { path: "tmp/a" }, ids(4), { path: "tmp/b" })).toBeUndefined();
+    // Each changed call has a record of its own; the policy still decided the rest.
+    const records = (await h.call("decisions.list", { runId: "run-1" })).payload!.records as Record<
+      string,
+      unknown
+    >[];
+    expect(records.map((r) => r.decision)).toEqual([
+      "none",
+      "none",
+      "ask",
+      "none",
+      "block",
+      "none",
+      "none",
+    ]);
+    expect((await h.call("status")).payload?.hook).toMatchObject({ decidedBy: "policy" });
+  });
+
+  it("decides it again when the answer the policy asked for is no longer held", async () => {
+    const h = host();
+    await h.save("main", [{ action: "ask", tools: ["write"] }]);
+    const card = h.before("main", "write", { path: "a" });
+    card!.requireApproval!.onResolution!("allow-once");
+    h.handle.shared.approved.clear();
+    const hook = h.hooks.find((x) => x.name === "before_tool_call")!;
+    const result = hook.fn(
+      { toolName: "write", params: { path: "a" }, runId: "run-1", toolCallId: "call-1" },
+      { agentId: "main", sessionKey: "agent:main:main", runId: "run-1", toolCallId: "call-1" },
+    ) as { blockReason?: string };
+    expect(result?.blockReason).toMatch(/could not be checked again before the call runs/);
+  });
+});
+
+describe("another plugin's hook can change a call after the rules decided it (#606)", () => {
+  // Both versions give each before_tool_call handler the original call, and apply the merged
+  // arguments only after the last one, with nothing after that can refuse: the plugin never sees
+  // the final form. A call that would run without a card, where what it acts on decides that,
+  // is taken as an Ask and refused, asking no one, while another plugin holds such a hook.
+  const rules = [
+    { action: "never", tools: ["write"], target: { kind: "path", pattern: "secrets/**" } },
+    { action: "ask", tools: ["exec"] },
+  ];
+
+  it("refuses without a card a call whose target decides it, and only that call", async () => {
+    let others: string[] | null = ["notes-rewriter"];
+    const h = host({ toolHooks: () => others });
+    await h.save("main", rules);
+    const write = h.before("main", "write", { path: "tmp/a" });
+    expect(write?.requireApproval).toBeUndefined();
+    expect(write?.blockReason).toBe(
+      "Refused by Clawtrate's rules plugin without asking anyone: whether write may run depends on what it acts on, and another plugin (notes-rewriter) can change a call after this plugin decides it, so the call's final form cannot be checked. The call did not run.",
+    );
+    const [record] = (await h.call("decisions.list")).payload!.records as Record<string, unknown>[];
+    expect([record?.decision, record?.source, record?.answer]).toEqual([
+      "ask",
+      { kind: "rewritable" },
+      "cancelled",
+    ]);
+    // A Never still blocks; a tool-wide Ask still asks (a changed call is refused by the gateway
+    // after a card's answer); a tool no rule about a target names runs.
+    expect(h.before("main", "write", { path: "secrets/k" })?.blockReason).toMatch(/^Blocked by/);
+    expect(h.before("main", "exec", { command: "ls" })?.requireApproval).toBeDefined();
+    expect(h.before("main", "read", { path: "a" })).toBeUndefined();
+    expect((await h.call("status")).payload?.hook).toMatchObject({
+      otherToolHooks: ["notes-rewriter"],
+    });
+    // Where the plugin cannot read the gateway's registry, the same.
+    others = null;
+    expect(h.before("main", "write", { path: "tmp/a" })?.blockReason).toMatch(
+      /and another plugin can change a call/,
+    );
+    // No other such hook: the call runs.
+    others = [];
+    expect(h.before("main", "write", { path: "tmp/a" })).toBeUndefined();
+  });
+
+  it("refuses a call an Allow about its target lets run under the fallback, not one a tool-wide Allow does", async () => {
+    const h = host({ toolHooks: () => ["notes-rewriter"] });
+    await h.save(
+      "main",
+      [
+        { action: "allow", tools: ["write"], target: { kind: "path", pattern: "notes/**" } },
+        { action: "allow", tools: ["web_fetch"] },
+      ],
+      true,
+    );
+    expect(h.before("main", "write", { path: "notes/a" })?.blockReason).toMatch(
+      /depends on what it acts on/,
+    );
+    expect(h.before("main", "web_fetch", { url: "x" })).toBeUndefined();
+  });
+
+  it("lets a whole-tool Allow cover a call regardless of a target-specific Allow", async () => {
+    const h = host({ toolHooks: () => ["notes-rewriter"] });
+    await h.save(
+      "main",
+      [{ action: "allow", tools: ["write"], target: { kind: "path", pattern: "notes/**" } }],
+      true,
+    );
+    await h.save("*", [{ action: "allow", tools: ["write"] }]);
+    expect(h.before("main", "write", { path: "notes/a" })).toBeUndefined();
+    expect(h.before("main", "write", { path: "tmp/a" })).toBeUndefined();
+
+    await h.save("*", [
+      { action: "allow", tools: ["write"] },
+      { action: "never", tools: ["write"], target: { kind: "path", pattern: "archive/**" } },
+    ]);
+    expect(h.before("main", "write", { path: "notes/a" })?.blockReason).toMatch(
+      /depends on what it acts on/,
+    );
+  });
+
+  it("reads which plugins hold a before_tool_call hook from the registries both versions keep", () => {
+    const HOOKS = Symbol.for("openclaw.plugins.hook-runner-global-state");
+    const ACTIVE = Symbol.for("openclaw.pluginRegistryState");
+    const hook = (pluginId: string, hookName = "before_tool_call") => ({
+      pluginId,
+      hookName,
+      handler: () => undefined,
+      priority: undefined,
+    });
+    // The hook runner counts from the registry it dispatches from, resolved for each call.
+    const runner = (count: number) => ({
+      getHookCount: (name: string) => (name === "before_tool_call" ? count : 0),
+    });
+    // 2026.10.6 and 2026.11.10 both: the hook runner's registry and the active one.
+    expect(
+      otherToolHooks({
+        [HOOKS]: {
+          hookRunner: runner(3),
+          registry: { typedHooks: [hook("rewriter"), hook("clawtrate-tool-rules")] },
+        },
+        [ACTIVE]: { activeRegistry: { typedHooks: [hook("other"), hook("x", "after_tool_call")] } },
+      }),
+    ).toEqual(["other", "rewriter"]);
+    const ownOnly = { typedHooks: [hook("clawtrate-tool-rules")] };
+    expect(otherToolHooks({ [HOOKS]: { hookRunner: runner(1), registry: ownOnly } })).toEqual([]);
+    // The runner dispatches a hook no registry read names (a prepared generation's, or a
+    // request's): one the plugin cannot name.
+    expect(otherToolHooks({ [HOOKS]: { hookRunner: runner(2), registry: ownOnly } })).toBeNull();
+    expect(
+      otherToolHooks({ [HOOKS]: { hookRunner: runner(1), registry: { typedHooks: [] } } }),
+    ).toBeNull();
+    // Nothing there, no runner to count, or a shape the plugin cannot read: it cannot say none.
+    expect(otherToolHooks({})).toBeNull();
+    expect(otherToolHooks({ [HOOKS]: { hookRunner: null, registry: ownOnly } })).toBeNull();
+    expect(
+      otherToolHooks({
+        [HOOKS]: {
+          hookRunner: {
+            getHookCount: () => {
+              throw new Error("retired");
+            },
+          },
+          registry: ownOnly,
+        },
+      }),
+    ).toBeNull();
+    expect(otherToolHooks({ [HOOKS]: { hookRunner: runner(1), registry: {} } })).toBeNull();
+    expect(
+      otherToolHooks({
+        [HOOKS]: {
+          hookRunner: runner(1),
+          registry: { typedHooks: [{ hookName: "before_tool_call" }] },
+        },
+      }),
+    ).toBeNull();
+  });
+});
+
+describe("where the Codex harness may answer a card (#606)", () => {
+  const CODEX_REFUSAL =
+    /asks first, and the gateway may run the Codex harness, whose native tool approvals are answered where the plugin cannot check the answer again before the call runs\. The call did not run\.$/;
+  const refuses = (h: ReturnType<typeof load>) => {
+    const result = h.before("main", "write", { path: "a" });
+    expect(result?.requireApproval).toBeUndefined();
+    expect(result?.blockReason).toMatch(CODEX_REFUSAL);
+  };
+  const asksFor = (h: ReturnType<typeof load>) =>
+    expect(h.before("main", "write", { path: "a" })?.requireApproval).toBeDefined();
+  const rules = [
+    { action: "ask", tools: ["write"] },
+    { action: "never", tools: ["exec"] },
+  ];
+
+  it("asks on a default config, and where the config keeps it from loading; refuses wherever the config names it", async () => {
+    const config: Record<string, unknown> = {};
+    const h = host({ config });
+    await h.save("main", rules);
+    // Not bundled with either version: a default config does not load it.
+    asksFor(h);
+    // Each way of naming it, where both versions would load the installed plugin.
+    for (const plugins of [
+      { entries: { codex: { enabled: true } } },
+      { entries: { Codex: {} } },
+      { allow: ["codex", "clawtrate-tool-rules"] },
+      { allow: [" CODEX ", "clawtrate-tool-rules"], entries: { codex: { enabled: true } } },
+      { installs: { codex: { source: "npm" } } },
+      { load: { paths: ["/srv/plugins/openclaw-codex"] } },
+      // A slot that names it loads it past the allow list.
+      { allow: ["clawtrate-tool-rules"], slots: { contextEngine: "codex" } },
+    ]) {
+      config.plugins = plugins;
+      refuses(h);
+      expect(h.before("main", "exec", { command: "ls" })?.blockReason).toMatch(/^Blocked by/);
+    }
+    // Kept from loading: its entry turned off, denied, or left out of an allow list.
+    for (const plugins of [
+      {},
+      { entries: { codex: { enabled: false } } },
+      { deny: ["codex"], entries: { codex: { enabled: true } } },
+      { allow: ["clawtrate-tool-rules"] },
+      { allow: ["clawtrate-tool-rules"], entries: { codex: { enabled: true } } },
+      { allow: ["clawtrate-tool-rules"], installs: { codex: {} } },
+    ]) {
+      config.plugins = plugins;
+      asksFor(h);
+    }
+  });
+
+  it("refuses where an untracked Codex plugin sits in the global plugin folder, or the folder cannot be read", async () => {
+    const config: Record<string, unknown> = {};
+    const h = host({ config });
+    await h.save("main", rules);
+    const folder = join(h.stateDir, "extensions");
+    asksFor(h);
+    // Another plugin there changes nothing.
+    mkdirSync(join(folder, "notes"), { recursive: true });
+    writeFileSync(join(folder, "notes", "openclaw.plugin.json"), JSON.stringify({ id: "notes" }));
+    expect(codexInFolder(folder)).toBe(false);
+    // A folder named codex, or a manifest whose id is codex: both versions load it unnamed.
+    mkdirSync(join(folder, "codex"));
+    expect(codexInFolder(folder)).toBe(true);
+    rmSync(join(folder, "codex"), { recursive: true });
+    mkdirSync(join(folder, "openclaw-codex"));
+    writeFileSync(
+      join(folder, "openclaw-codex", "openclaw.plugin.json"),
+      JSON.stringify({ id: "codex" }),
+    );
+    expect(codexInFolder(folder)).toBe(true);
+    // The plugin looks again a minute later at most; a fresh host looks at once.
+    const fresh = open({ stateDir: h.stateDir, config });
+    refuses(fresh);
+    // An allow list that leaves it out still keeps it from loading.
+    config.plugins = { allow: ["clawtrate-tool-rules"] };
+    asksFor(fresh);
+    // A folder that cannot be read may hold it.
+    expect(codexInFolder(join(h.stateDir, "missing"))).toBe(false);
+    expect(codexInFolder(join(folder, "notes", "openclaw.plugin.json"))).toBe(false);
+    if (process.getuid?.() !== 0) {
+      const locked = join(h.stateDir, "locked");
+      mkdirSync(locked, { mode: 0o000 });
+      expect(codexInFolder(locked)).toBe(true);
+      chmodSync(locked, 0o700);
+    }
+  });
+
+  it("refuses an Ask when a child plugin manifest cannot be read", async () => {
+    const h = host();
+    await h.save("main", rules);
+    const child = join(h.stateDir, "extensions", "notes");
+    mkdirSync(child, { recursive: true });
+    io.failPath = join(child, "openclaw.plugin.json");
+    try {
+      refuses(h);
+    } finally {
+      io.failPath = "";
+    }
+  });
+
+  it("refuses where a configured load path holds the Codex plugin under any name, or cannot be read", async () => {
+    const config: Record<string, unknown> = {};
+    const h = host({ config });
+    await h.save("main", rules);
+    const relay = join(h.stateDir, "srv", "relay");
+    const shelf = join(h.stateDir, "srv", "shelf");
+    const other = join(h.stateDir, "srv", "notes");
+    for (const [dir, id] of [
+      [relay, "codex"],
+      [join(shelf, "harness"), "codex"],
+      [other, "notes"],
+    ] as const) {
+      mkdirSync(dir, { recursive: true });
+      writeFileSync(join(dir, "openclaw.plugin.json"), JSON.stringify({ id }));
+    }
+    const at = (path: string) => {
+      config.plugins = { load: { paths: [path] } };
+      return open({ stateDir: h.stateDir, config });
+    };
+    // A plugin folder whose manifest is Codex's, a folder of plugins holding it, its entry file.
+    for (const path of [relay, shelf, join(relay, "index.js")]) refuses(at(path));
+    // Another plugin, or a path that is not there, holds none.
+    for (const path of [other, join(h.stateDir, "srv", "gone")]) asksFor(at(path));
+    // A relative path resolves against the working folder, as the gateway's does; an
+    // unreadable path may hold it.
+    expect(resolveUserPath("srv/relay", {})).toBe(resolve("srv/relay"));
+    expect(codexAtPath(relative(process.cwd(), relay))).toBe(true);
+    if (process.getuid?.() !== 0) {
+      const locked = join(h.stateDir, "srv", "locked");
+      mkdirSync(locked, { mode: 0o000 });
+      expect(codexAtPath(locked)).toBe(true);
+      chmodSync(locked, 0o700);
+    }
+    // An allow list that leaves it out still keeps it from loading.
+    config.plugins = { load: { paths: [relay] }, allow: ["clawtrate-tool-rules"] };
+    asksFor(open({ stateDir: h.stateDir, config }));
+  });
+
+  it("reads a home-relative load path against the gateway's own home (OPENCLAW_HOME), as both versions do", async () => {
+    const config: Record<string, unknown> = {};
+    const h = host({ config });
+    await h.save("main", rules);
+    const gatewayHome = join(h.stateDir, "gateway-home");
+    const osHome = join(h.stateDir, "os-home");
+    mkdirSync(join(gatewayHome, "relay"), { recursive: true });
+    mkdirSync(join(osHome, "relay"), { recursive: true });
+    writeFileSync(
+      join(gatewayHome, "relay", "openclaw.plugin.json"),
+      JSON.stringify({ id: "codex" }),
+    );
+    writeFileSync(join(osHome, "relay", "openclaw.plugin.json"), JSON.stringify({ id: "notes" }));
+    // The harness sits only under the gateway's home.
+    expect(codexAtPath("~/relay", { OPENCLAW_HOME: gatewayHome, HOME: osHome })).toBe(true);
+    expect(codexAtPath("~/relay", { HOME: osHome })).toBe(false);
+    // OPENCLAW_HOME's own ~ is read against the OS home.
+    expect(resolveUserPath("~/relay", { OPENCLAW_HOME: "~/gateway-home", HOME: h.stateDir })).toBe(
+      join(gatewayHome, "relay"),
+    );
+    expect(gatewayHome).toBe(resolveUserPath("~", { OPENCLAW_HOME: gatewayHome, HOME: osHome }));
+    // The gateway's process environment decides, as the plugin runs in that process.
+    vi.stubEnv("OPENCLAW_HOME", gatewayHome);
+    vi.stubEnv("HOME", osHome);
+    try {
+      config.plugins = { load: { paths: ["~/relay"] } };
+      refuses(open({ stateDir: h.stateDir, config }));
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
+  it("looks for a global plugin folder where both versions resolve it", () => {
+    expect(globalPluginFolders("/s", { OPENCLAW_STATE_DIR: "/state" })).toEqual([
+      "/s/extensions",
+      "/state/extensions",
+    ]);
+    expect(globalPluginFolders("/s", { OPENCLAW_CONFIG_PATH: "/cfg/openclaw.json" })).toEqual([
+      "/s/extensions",
+      "/cfg/extensions",
+    ]);
+    expect(globalPluginFolders("/state", { OPENCLAW_STATE_DIR: "/state" })).toEqual([
+      "/state/extensions",
+    ]);
+  });
+});
+
+describe("the plugin turned off while a run is under way (#606)", () => {
+  const OFF: [string, Record<string, unknown>][] = [
+    ["its entry", { entries: { "clawtrate-tool-rules": { enabled: false } } }],
+    ["plugins.enabled", { enabled: false }],
+    ["plugins.deny", { deny: ["clawtrate-tool-rules"] }],
+    ["an allow list without it", { allow: ["memory-core"] }],
+  ];
+  for (const [what, plugins] of OFF) {
+    it(`refuses every call of that run, by ${what}, but never ask_user`, async () => {
+      const config: Record<string, unknown> = {};
+      const h = host({ config });
+      await h.save("main", [{ action: "allow", tools: ["read"] }]);
+      config.plugins = plugins;
+      for (const tool of ["read", "write"]) {
+        expect(h.before("main", tool, { path: "a" })).toEqual({
+          block: true,
+          blockReason: TURNED_OFF_REASON,
+        });
+      }
+      expect(h.before("main", "ask_user")).toBeUndefined();
+    });
+  }
+
+  it("refuses a call whose card is answered after it was turned off", async () => {
+    const config: Record<string, unknown> = {};
+    const h = host({ config });
+    await h.save("main", [{ action: "ask", tools: ["write"] }]);
+    const card = h.before("main", "write", { path: "a" });
+    config.plugins = { entries: { "clawtrate-tool-rules": { enabled: false } } };
+    expect(h.answer(card, "allow-once", "main", "write", { path: "a" })?.blockReason).toBe(
+      TURNED_OFF_REASON,
+    );
   });
 });
 
@@ -669,15 +2072,15 @@ describe("status says whether rules are being enforced", () => {
     const h = open({ stateDir: h0.stateDir });
     expect((await h.call("status")).payload).toMatchObject({
       rules: { state: "lost", reason: "the rules file is not JSON", keptCopyReadAt: null },
-      enforcing: "ask-every-call",
+      enforcing: "refuse-every-call",
       matches: null,
     });
-    const without = host({ on: false });
+    const without = host({ on: false, trusted: false });
     await without.save("otto", [{ action: "never", tools: ["write"] }]);
     expect((await without.call("status")).payload).toMatchObject({
       rules: { state: "read" },
       enforcing: "not-enforced",
-      hook: { registered: false, lastCallAt: null },
+      hook: { registered: false, lastCallAt: null, decidedBy: null },
     });
   });
 });
@@ -723,7 +2126,7 @@ describe("who can see a card's text", () => {
     });
   }
 
-  it("leaves the target out of the fallback's card and the lost-rules card too", async () => {
+  it("leaves the target out of the fallback's card, and shows none while the rules are lost", async () => {
     const h = host({ config: FORWARDING });
     await h.save("*", [], true);
     const fallback = h.before("otto", "read", { path: "notes/x.md" })!.requireApproval!;
@@ -732,8 +2135,9 @@ describe("who can see a card's text", () => {
     );
     writeFileSync(rulesFile(h.stateDir), "{ broken");
     const h2 = open({ stateDir: h.stateDir, config: FORWARDING });
-    const lost = h2.before("otto", "read", { path: "notes/x.md" })!.requireApproval!;
-    expect(lost.description).not.toContain("notes/x.md");
+    const lost = h2.before("otto", "read", { path: "notes/x.md" });
+    expect(lost?.requireApproval).toBeUndefined();
+    expect(lost?.blockReason).toBe(LOST_RULES_REASON);
   });
 
   it("follows a setting that forces either", async () => {

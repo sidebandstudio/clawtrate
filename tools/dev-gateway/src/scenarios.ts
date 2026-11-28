@@ -303,7 +303,12 @@ export const SAME_CALL_REPLY_SECONDS = 180;
 export const SAME_CALL_RUN_MS = SAME_CALL_REPLY_SECONDS * 1000 + 120_000;
 
 /** A bot-to-bot message whose text tells the recipient which scenario to play. */
-function message(recipientDirective: string, request: string, timeoutSeconds: number): Step[] {
+function message(
+  recipientDirective: string,
+  request: string,
+  timeoutSeconds: number,
+  extra: Record<string, unknown> = {},
+): Step[] {
   return [
     (ctx) => [
       think(
@@ -318,6 +323,7 @@ function message(recipientDirective: string, request: string, timeoutSeconds: nu
           agentId: partnerOf(ctx),
           message: `${recipientDirective} ${request}`,
           timeoutSeconds,
+          ...extra,
         }),
     },
     (ctx) => {
@@ -326,6 +332,10 @@ function message(recipientDirective: string, request: string, timeoutSeconds: nu
       const who = SEED_BOTS.find((bot) => bot.id === id)?.name ?? id;
       const status = typeof result?.status === "string" ? result.status : "unknown";
       if (status === "ok") return [say(`${who} replied:\n\n> ${String(result?.reply ?? "")}`)];
+      // A steer joins the run under way: no reply of its own comes back to this task.
+      if (status === "accepted" && result?.targetDisposition === "steered") {
+        return [say(`The message was added to the run ${who} has under way.`)];
+      }
       if (status === "accepted") {
         return [say(`${who} is still working on it. Their reply will arrive in this task.`)];
       }
@@ -355,6 +365,11 @@ export const HAND_OFF_HIDDEN_HERE = { label: "Where is this, hidden", task: "#he
 export const HAND_OFF_HIDDEN = {
   label: "Check the forecast",
   task: "Check the forecast for Saturday on the ridge. Reply in plain text.",
+} as const;
+/** What `#hand-off-read` starts: a task whose brief is a read of the bot's own instructions. */
+export const HAND_OFF_READ = {
+  label: "Read the instructions",
+  task: "#read Check your instructions file. Reply in plain text.",
 } as const;
 export const HAND_OFF_PARTNER = {
   label: "Review the route",
@@ -1053,6 +1068,14 @@ export const SCENARIOS: Scenario[] = [
     steps: () => message("#read", "Could you check your instructions?", 30),
   },
   {
+    name: "message-steer-read",
+    phrase: "steer your busy partner to read",
+    bots: "Marlow or Pip",
+    summary:
+      'A message to the other bot steered into the run it has under way (`mode: "steer"`), asking it to read its own instructions file; the call returns once the gateway has taken the steer in, without waiting for the reply, and fails when no run is under way.',
+    steps: () => message("#read", "Could you check your instructions?", 0, { mode: "steer" }),
+  },
+  {
     name: "message-here",
     phrase: "ask your partner where they are",
     bots: "Marlow or Pip, with clawtrate-bots",
@@ -1106,6 +1129,15 @@ export const SCENARIOS: Scenario[] = [
       think("This is worth a task of its own. I will start one with a brief."),
       spawn(HAND_OFF, { visible: true }),
       afterSpawn(() => `I started a task for it: ${HAND_OFF.label}.`),
+    ],
+  },
+  {
+    name: "hand-off-read",
+    phrase: "put a read in a task",
+    summary: `Starts a task of the bot's own with \`sessions_spawn\` (\`visible: true\`), labelled "${HAND_OFF_READ.label}", whose brief has it read its own instructions file: a tool call in a run the bot's own task started.`,
+    steps: () => [
+      spawn(HAND_OFF_READ, { visible: true }),
+      afterSpawn(() => `I started a task for it: ${HAND_OFF_READ.label}.`),
     ],
   },
   {

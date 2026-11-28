@@ -11,13 +11,15 @@
 //
 // Where the gateway does something the design did not know, the check
 // asserts what it does and says so in its name (the plugin turned off in the
-// middle of a run, a run another bot's message started).
+// middle of a run, a run another bot's message started). Where OpenClaw
+// versions differ, the check says beside its expectation which does what.
 
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, statSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import type { GatewayEvent, OperatorSession } from "./operator.ts";
 import { drainSessions } from "./scenario-check.ts";
+import { shape } from "./versions.ts";
 
 type JsonRecord = Record<string, unknown>;
 const rec = (value: unknown): JsonRecord =>
@@ -70,6 +72,23 @@ const VERSION = "1.0.0";
 /** What the gateway answers for a call whose approval it could not take (OpenClaw 2026.10.6). */
 const GATEWAY_UNAVAILABLE = "Plugin approval required (gateway unavailable)";
 const DENIED = "Denied by user. The tool call did not run.";
+/** The plugin's refusal of every call while its rules are lost and no copy was read. */
+const LOST_RULES_REFUSAL = "its rules could not be read and no copy was read before";
+/** The plugin's refusal of an Ask in a run another bot's message started. */
+const BOT_RUN_REFUSAL = "Refused by Clawtrate's rules plugin without asking anyone:";
+/** The plugin's refusal of a call whose tool the gateway's settings came to deny while its card waited. */
+const deniedWhileWaiting = (tool: string) => `the gateway's settings now deny ${tool} to this bot`;
+/** The plugin's refusal of a call whose card was answered after its rule changed. */
+const CHANGED_WHILE_WAITING = "the rules changed while the card waited";
+/**
+ * A call in a run under way when the plugin was turned off: the plugin's refusal where the
+ * gateway still runs its policy (2026.10.6), the gateway's where the plugin is gone
+ * (2026.11.10: its trusted policy fails, "blocked by rules: policy evaluation failed").
+ */
+const TURNED_OFF_REFUSALS = [
+  "it was turned off while this run was under way",
+  "blocked by rules: policy evaluation failed",
+];
 /** The gateway's own bot, its built-in `main`. */
 const BOT = "main";
 
@@ -171,8 +190,13 @@ const marks = (ctx: RulesContext) =>
     number
   >;
 
-async function start(ctx: RulesContext, key: string, message: string): Promise<string> {
-  const sent = await ctx.clients.interactive.send(key, message);
+async function start(
+  ctx: RulesContext,
+  key: string,
+  message: string,
+  extra: JsonRecord = {},
+): Promise<string> {
+  const sent = await ctx.clients.interactive.send(key, message, extra);
   return String(sent.runId);
 }
 
@@ -474,13 +498,194 @@ async function logged(ctx: RulesContext, text: string, from: number): Promise<vo
   }
 }
 
+/** Pip's main task, where the other bot's messages arrive, subscribed to by every client. */
+const PIP_MAIN = "agent:pip:main";
+/** How long a run in the bot-to-bot checks may take on a loaded machine. */
+const LONG_RUN_MS = 300_000;
+
+async function pipMain(ctx: RulesContext, world: World): Promise<void> {
+  world.keys.add(PIP_MAIN);
+  for (const op of Object.values(ctx.clients)) {
+    await op.request("sessions.messages.subscribe", { key: PIP_MAIN }).catch(() => {});
+  }
+}
+
+/** How long a card that keeps failing to be denied is tried again. */
+const DENY_RETRY_MS = 30_000;
+
+/**
+ * Until the returned stop, every card that reaches admin is denied as it comes. A denial
+ * that fails is tried again while the card still waits, for `retryMs`; the stop waits for
+ * those retries and fails naming any card it could not deny.
+ */
+export function denyAsTheyCome(
+  ctx: RulesContext,
+  since: Record<RulesClient, number>,
+  retryMs = DENY_RETRY_MS,
+): () => Promise<void> {
+  let stopped = false;
+  const done = new Set<string>();
+  const firstTried = new Map<string, number>();
+  const failed: string[] = [];
+  /** One pass over the cards seen so far: deny each not done, or count it failed past the deadline. */
+  const pass = async () => {
+    for (const e of ctx.clients.admin.events) {
+      if (e.seq <= since.admin || e.event !== REQUESTED) continue;
+      const id = String(rec(e.payload).id);
+      if (done.has(id)) continue;
+      const denied = await call(ctx.clients.admin, "plugin.approval.resolve", {
+        id,
+        decision: "deny",
+      }).catch(() => undefined);
+      // Denied, or no longer waiting (answered or expired meanwhile): nothing more to do.
+      const waiting = denied?.ok ? [] : await waitingCards(ctx.clients.admin).catch(() => [id]);
+      if (!waiting.includes(id)) {
+        done.add(id);
+        continue;
+      }
+      const first = firstTried.get(id) ?? Date.now();
+      firstTried.set(id, first);
+      if (Date.now() - first >= retryMs) {
+        done.add(id);
+        failed.push(id);
+      }
+    }
+  };
+  const loop = (async () => {
+    while (!stopped) {
+      await pass();
+      await sleep(250);
+    }
+  })();
+  return async () => {
+    stopped = true;
+    await loop;
+    // The loop can stop during its sleep, after a new card was received.
+    await pass();
+    // A card whose denial failed is tried again until it is denied, no longer waits, or its
+    // deadline passes, so stopping early never leaves it unreported.
+    while ([...firstTried.keys()].some((id) => !done.has(id))) {
+      await sleep(250);
+      await pass();
+    }
+    expect(failed.length === 0, `cards the check could not deny: ${show(failed)}`);
+  };
+}
+
+/** Wait until a run of the interactive device's starts a tool call (`name`, or any). */
+async function toolStarted(
+  ctx: RulesContext,
+  runId: string,
+  since: Record<RulesClient, number>,
+  name?: string,
+): Promise<void> {
+  await ctx.clients.interactive.waitFor(
+    `run ${runId}'s ${name ?? "tool"} call`,
+    (e) =>
+      e.event === "agent" &&
+      rec(e.payload).runId === runId &&
+      rec(e.payload).stream === "tool" &&
+      rec(rec(e.payload).data).phase === "start" &&
+      (name === undefined || rec(rec(e.payload).data).name === name),
+    LONG_RUN_MS,
+    since.interactive,
+  );
+}
+
+/** The run in Pip's task that Marlow's send started, as the send's own result names it. */
+async function sentRun(ctx: RulesContext, marlowRun: string): Promise<string> {
+  const send = (await finish(ctx, marlowRun, LONG_RUN_MS)).calls[0];
+  const runId = send?.details.runId;
+  expect(
+    ranOk(send) && typeof runId === "string" && runId.length > 0,
+    `Marlow's send named no run: ${show(send)}`,
+  );
+  return runId;
+}
+
+/** A run's read in a task of Pip's: its decision record and its result, once both are there. */
+async function readIn(
+  ctx: RulesContext,
+  runId: string,
+  sessionKey = PIP_MAIN,
+): Promise<{ record: Decision; text: string }> {
+  const record = await eventually(
+    `the read of run ${runId}`,
+    async () =>
+      (await decisionsOf(ctx, { agentId: "pip", runId, limit: 5 })).find((r) => r.tool === "read"),
+    LONG_RUN_MS,
+  );
+  const text = await eventually(
+    `the read result of run ${runId}`,
+    async () => {
+      const history = answered(
+        await call(ctx.clients.admin, "chat.history", { sessionKey, limit: 80 }),
+        "Pip's task",
+      );
+      const mine = ((history.messages ?? []) as JsonRecord[]).find(
+        (m) => m.role === "toolResult" && isResultOfCall(m, record.callId),
+      );
+      return mine ? JSON.stringify(mine.content ?? "") : undefined;
+    },
+    LONG_RUN_MS,
+  );
+  return { record, text };
+}
+
+/** A run's read was refused before any card, naming Marlow, and no client received a card for it. */
+async function refusedForMarlow(
+  ctx: RulesContext,
+  since: Record<RulesClient, number>,
+  runId: string,
+  what: string,
+): Promise<{ record: Decision; text: string }> {
+  const read = await readIn(ctx, runId);
+  same(cardsSeen(ctx, since, runId), [], `who received a card for ${what}`);
+  same([read.record.decision, read.record.answer], ["ask", "cancelled"], `${what}'s read`);
+  expect(
+    read.text.includes(BOT_RUN_REFUSAL) &&
+      read.text.includes("started by a message from bot marlow."),
+    `${what}'s read result: ${read.text.slice(0, 300)}`,
+  );
+  return read;
+}
+
+/** A run's read raised the plugin's card on the person's device (the check denied it). */
+async function askedThePerson(
+  ctx: RulesContext,
+  since: Record<RulesClient, number>,
+  runId: string,
+  what: string,
+): Promise<void> {
+  const { record: asked, text } = await readIn(ctx, runId);
+  // The record is found as soon as the card is raised; its answer comes with the denial.
+  const record = await eventually(
+    `the answer to ${what}'s card`,
+    async () =>
+      (await decisionsOf(ctx, { agentId: "pip", runId, limit: 5 })).find(
+        (r) => r.id === asked.id && r.answer != null,
+      ),
+    LONG_RUN_MS,
+  );
+  same(
+    [record.decision, record.answer],
+    ["ask", "deny"],
+    `${what}'s read (its result: ${text.slice(0, 300)})`,
+  );
+  const seen = cardsSeen(ctx, since, runId);
+  expect(
+    seen.includes("interactive"),
+    `${what}'s card reached ${show(seen)}, not the person's device`,
+  );
+}
+
 /** Turn approval forwarding on with no destination, so nothing is delivered anywhere. */
 const FORWARD_NOWHERE = { approvals: { plugin: { enabled: true, mode: "targets", targets: [] } } };
 
 export const RULES_CHECKS: RulesCheck[] = [
   {
     // First, while this gateway process has never read a rules file.
-    name: "rules lost with no copy read: every call but ask_user asks, saying the rules could not be read, and status says so",
+    name: "rules lost with no copy read: every call but ask_user is refused with no card, saying the rules could not be read, and status says so",
     covers: ["#read", "#ask"],
     async run(ctx, world) {
       const before = await statusOf(ctx);
@@ -498,7 +703,7 @@ export const RULES_CHECKS: RulesCheck[] = [
           [status.rules, status.enforcing, status.matches],
           [
             { state: "lost", reason: "the rules file is not JSON", keptCopyReadAt: null },
-            "ask-every-call",
+            "refuse-every-call",
             null,
           ],
           "status with the rules lost",
@@ -511,15 +716,17 @@ export const RULES_CHECKS: RulesCheck[] = [
         const key = await task(ctx, world, BOT, "lost");
         const since = marks(ctx);
         const runId = await start(ctx, key, "#read");
-        const card = await cardFor(ctx, runId, since.interactive);
-        same(card.request.title, "read: Clawtrate's rules could not be read", "the card's title");
-        same(card.request.allowedDecisions, ["allow-once", "deny"], "the card's decisions");
-        await resolve(ctx, card.id, "deny");
-        await finish(ctx, runId);
+        // A saved Never may cover the call, and no card could say so: refused, asking no one.
+        const read = (await finish(ctx, runId)).calls[0];
+        expect(
+          read?.isError && read.text.includes(LOST_RULES_REFUSAL),
+          `the read with the rules lost: ${show(read)}`,
+        );
+        same(cardsSeen(ctx, since, runId), [], "who received a card with the rules lost");
         const [record] = await decisionsOf(ctx, { runId });
         same(
           [record?.rules, record?.decision, record?.source],
-          ["lost", "ask", { kind: "rules-lost" }],
+          ["lost", "block", { kind: "rules-lost" }],
           "the lost-rules decision record",
         );
         const question = marks(ctx);
@@ -554,9 +761,12 @@ export const RULES_CHECKS: RulesCheck[] = [
           rec(status.rules).state,
           status.enforcing,
           rec(status.hook).registered,
+          // No other plugin here holds a before_tool_call hook, and the gateway's registries and
+          // hook runner are read as this version keeps them.
+          rec(status.hook).otherToolHooks,
         ],
         // The check before it leaves a valid empty store.
-        [PLUGIN, VERSION, 1, "read", "rules", true],
+        [PLUGIN, VERSION, 1, "read", "rules", true, []],
         "the plugin's status",
       );
       answered(await rules(reader, "get"), "get at the read tier");
@@ -1055,36 +1265,81 @@ export const RULES_CHECKS: RulesCheck[] = [
     },
   },
   {
-    name: "a setting changed while a card waits: after a rules change Allow once runs the call; after a config change the call fails",
+    name: "a rule changed while a card waits: to Allow, Allow once runs the call; to Never or to another Ask, Allow once does not run it",
     covers: ["#write"],
     async run(ctx, world) {
-      const original = await botEntry(ctx, BOT);
-      for (const change of ["rules", "config"] as const) {
-        await save(ctx, BOT, [askWrite()]);
-        const key = await task(ctx, world, BOT, `waiting-${change}`);
+      // An answer is for the rule the card showed. The gateway runs the call on either version
+      // once it is answered; the plugin looks at the rules again before it runs.
+      for (const change of ["allow", "never", "other-ask"] as const) {
+        const saved = await save(ctx, BOT, [askWrite()]);
+        const key = await task(ctx, world, BOT, `rule-${change}`);
         const since = marks(ctx);
         const runId = await start(ctx, key, "#write");
         const card = await cardFor(ctx, runId, since.interactive);
-        const answer = async () => {
-          expect(
-            (await waitingCards(ctx.clients.interactive)).includes(card.id),
-            `the card was no longer listed after the ${change} change`,
-          );
-          await resolve(ctx, card.id, "allow-once");
-          return finish(ctx, runId);
-        };
-        if (change === "rules") {
-          await save(ctx, BOT, [{ action: "allow", tools: ["write"] }]);
-          const run = await answer();
-          expect(ranOk(run.calls[0]), `after a rules change: ${show(run.calls)}`);
+        const id = saved.rules[0]!.id;
+        await save(
+          ctx,
+          BOT,
+          change === "allow"
+            ? [{ action: "allow", tools: ["write"] }]
+            : change === "never"
+              ? [{ action: "never", tools: ["write"] }]
+              : [{ ...askWrite("**"), id }],
+          // An Allow decides only where "Ask when nothing else decides" would ask: with it on,
+          // the look after the answer meets a real Allow, not a rule that decides nothing.
+          change === "allow",
+        );
+        expect(
+          (await waitingCards(ctx.clients.interactive)).includes(card.id),
+          `the card was no longer listed after the change to ${change}`,
+        );
+        await resolve(ctx, card.id, "allow-once");
+        const write = (await finish(ctx, runId)).calls[0];
+        if (change === "allow") {
+          expect(ranOk(write), `after a change to Allow: ${show(write)}`);
           continue;
         }
+        expect(
+          write?.isError &&
+            write.text.includes(CHANGED_WHILE_WAITING) &&
+            write.text.includes(change === "never" ? "now says Never" : "version 2"),
+          `after a change to ${change}: ${show(write)}`,
+        );
+        // Exactly the card's ask and the refusal: each call is decided once.
+        const records = await decisionsOf(ctx, { runId });
+        same(
+          records.map((r) => [r.decision, rec(r.source).action, r.answer]),
+          [
+            ["block", change === "never" ? "never" : "ask", null],
+            ["ask", "ask", "allow-once"],
+          ],
+          `the decision records after a change to ${change}`,
+        );
+        same(
+          (await joined(ctx, records[0]!)).status,
+          "blocked",
+          "the joined audit record's status",
+        );
+      }
+    },
+  },
+  {
+    name: "a gateway setting changed while a card waits: a new deny of the tool for this bot refuses Allow once; another change lets it stand where the gateway does",
+    covers: ["#write"],
+    async run(ctx, world) {
+      const original = await botEntry(ctx, BOT);
+      for (const denied of ["web_search", "write"] as const) {
+        await save(ctx, BOT, [askWrite()]);
+        const key = await task(ctx, world, BOT, `waiting-config-${denied}`);
+        const since = marks(ctx);
+        const runId = await start(ctx, key, "#write");
+        const card = await cardFor(ctx, runId, since.interactive);
         // The deny is undone however the check ends.
         const run = await withConfig(
           ctx,
           () =>
             patchConfig(ctx, {
-              agents: { entries: { [BOT]: { tools: { deny: ["web_search"] } } } },
+              agents: { entries: { [BOT]: { tools: { deny: [denied] } } } },
             }),
           async () => {
             if (
@@ -1096,20 +1351,111 @@ export const RULES_CHECKS: RulesCheck[] = [
               `agents.entries.${BOT}.tools.deny`,
             ]);
           },
-          answer,
+          async () => {
+            expect(
+              (await waitingCards(ctx.clients.interactive)).includes(card.id),
+              `the card was no longer listed after denying ${denied}`,
+            );
+            await resolve(ctx, card.id, "allow-once");
+            return finish(ctx, runId);
+          },
         );
         const write = run.calls[0];
-        expect(
-          write?.isError && write.text.includes(GATEWAY_UNAVAILABLE),
-          `after a config change: ${show(run.calls)}`,
-        );
+        if (shape().version === "2026.10.6") {
+          // 2026.10.6 binds a waiting approval to the gateway's config as it was and fails the
+          // call after any config change (`Approval requester authority changed`): stricter than
+          // the rule asks, and the gateway's own, which the plugin cannot loosen.
+          expect(
+            write?.isError && write.text.includes(GATEWAY_UNAVAILABLE),
+            `after denying ${denied}: ${show(run.calls)}`,
+          );
+        } else if (denied === "write") {
+          // Newer versions keep the approval through a config change; the plugin refuses a
+          // call whose tool the bot's deny list came to name while the card waited.
+          expect(
+            write?.isError && write.text.includes(deniedWhileWaiting("write")),
+            `after denying write: ${show(run.calls)}`,
+          );
+        } else {
+          // Another tool's deny changes nothing the card was about: the answer stands.
+          expect(ranOk(write), `after denying web_search: ${show(run.calls)}`);
+        }
       }
       same(await botEntry(ctx, BOT), original, "the bot's settings once the deny is removed again");
       await pluginRunning(ctx);
     },
   },
   {
-    name: "the plugin turned off mid-run: that run's next call is still asked; a run started after runs the call with no card",
+    name: "a read waiting for its card when group:fs comes to be denied, to every bot or to this one: Allow once does not run it",
+    covers: ["#read"],
+    async run(ctx, world) {
+      // Both versions' catalogs put read in group:fs. 2026.11.10 runs the call against the
+      // deny it read before the card, so the plugin refuses it; 2026.10.6 fails the call
+      // itself after any config change.
+      const config = async () =>
+        rec(rec(await ctx.clients.admin.request("config.get", {})).config) as JsonRecord;
+      const originalDeny = rec((await config()).tools).deny as string[];
+      const original = await botEntry(ctx, BOT);
+      for (const where of ["every bot", "this bot"] as const) {
+        await save(ctx, BOT, [{ action: "ask", tools: ["read"] }]);
+        const key = await task(
+          ctx,
+          world,
+          BOT,
+          `waiting-fs-${where === "every bot" ? "all" : "bot"}`,
+        );
+        const since = marks(ctx);
+        const runId = await start(ctx, key, "#read");
+        const card = await cardFor(ctx, runId, since.interactive);
+        const run = await withConfig(
+          ctx,
+          () =>
+            where === "every bot"
+              ? patchConfig(ctx, { tools: { deny: [...originalDeny, "group:fs"] } })
+              : patchConfig(ctx, {
+                  agents: { entries: { [BOT]: { tools: { deny: ["group:fs"] } } } },
+                }),
+          async () => {
+            if (where === "every bot") {
+              // Restored only once the gateway runs with it, not when it is merely saved.
+              const restored = JSON.stringify(originalDeny);
+              if (await configHolds(ctx, (c) => JSON.stringify(rec(c.tools).deny) === restored)) {
+                return;
+              }
+              await patchConfig(ctx, { tools: { deny: originalDeny } }, ["tools.deny"]);
+              return;
+            }
+            if (await configHolds(ctx, (c) => rec(entryOf(c, BOT).tools).deny === undefined))
+              return;
+            await patchConfig(ctx, { agents: { entries: { [BOT]: { tools: { deny: null } } } } }, [
+              `agents.entries.${BOT}.tools.deny`,
+            ]);
+          },
+          async () => {
+            expect(
+              (await waitingCards(ctx.clients.interactive)).includes(card.id),
+              `the card was no longer listed after denying group:fs to ${where}`,
+            );
+            await resolve(ctx, card.id, "allow-once");
+            return finish(ctx, runId);
+          },
+        );
+        const read = run.calls[0];
+        expect(
+          read?.isError &&
+            read.text.includes(
+              shape().version === "2026.10.6" ? GATEWAY_UNAVAILABLE : deniedWhileWaiting("read"),
+            ),
+          `after denying group:fs to ${where}: ${show(run.calls)}`,
+        );
+      }
+      same(rec((await config()).tools).deny, originalDeny, "the gateway's deny list once restored");
+      same(await botEntry(ctx, BOT), original, "the bot's settings once the deny is removed again");
+      await pluginRunning(ctx);
+    },
+  },
+  {
+    name: "the plugin turned off mid-run: that run's next call is refused with no card; a run started after runs the call with no card",
     covers: ["#slow-tool", "#write"],
     async run(ctx, world) {
       await save(ctx, BOT, [askWrite()]);
@@ -1135,18 +1481,24 @@ export const RULES_CHECKS: RulesCheck[] = [
       await withConfig(ctx, plugin(false), pluginBackOn, async () => {
         const off = await rules(ctx.clients.reader, "status");
         expect(!off.ok, `status still answered with the plugin off: ${show(off)}`);
-        // The run that started with the plugin keeps its hook: its write is asked.
-        const card = await cardFor(ctx, runId, since.interactive);
-        await resolve(ctx, card.id, "allow-once");
+        // The run that started with the plugin makes no more calls: 2026.10.6 keeps the
+        // plugin's policy for it, and the plugin refuses; 2026.11.10 refuses the call itself,
+        // as the plugin is gone. Either way no one is asked.
         const during = await finish(ctx, runId);
         same(
           during.calls.map((c) => [c.name, ranOk(c)]),
           [
             ["coder__slow_task", true],
-            ["write", true],
+            ["write", false],
           ],
           "the run the plugin was turned off in",
         );
+        const refused = during.calls[1]!;
+        expect(
+          refused.result && TURNED_OFF_REFUSALS.some((reason) => refused.text.includes(reason)),
+          `the write in the run the plugin was turned off in: ${show(refused)}`,
+        );
+        same(cardsSeen(ctx, since, runId), [], "who received a card in that run");
         // A run that starts with the plugin off: nothing asks.
         const fresh = await task(ctx, world, BOT, "stopped-fresh");
         const after = marks(ctx);
@@ -1218,7 +1570,238 @@ export const RULES_CHECKS: RulesCheck[] = [
         );
         return mine ? JSON.stringify(mine.content ?? "") : undefined;
       });
-      expect(text.includes(GATEWAY_UNAVAILABLE), `Pip's read result: ${text.slice(0, 300)}`);
+      // The plugin refuses before asking, on every version, and names the bot whose message
+      // started the run (2026.10.6 also failed the card itself; newer versions would raise it).
+      expect(
+        text.includes(BOT_RUN_REFUSAL) && text.includes("started by a message from bot marlow."),
+        `Pip's read result: ${text.slice(0, 300)}`,
+      );
+    },
+  },
+  {
+    name: "a bot's message waiting behind a person's run, then a person's message steered into that run: neither run asks anyone",
+    covers: ["#slow-tool", "#message-read", "#read"],
+    async run(ctx, world) {
+      // The first review's sequence. The person's message steers into the busy run, which
+      // Marlow's message reached first: that run counts as Marlow's from then on.
+      await save(ctx, "pip", [{ action: "ask", tools: ["read"] }]);
+      await pipMain(ctx, world);
+      const since = marks(ctx);
+      const stopDenying = denyAsTheyCome(ctx, since);
+      try {
+        const busy = await start(ctx, PIP_MAIN, "#slow-tool 20");
+        await toolStarted(ctx, busy, since);
+        const marlowRun = await start(
+          ctx,
+          await task(ctx, world, "marlow", "queued"),
+          "#message-read",
+        );
+        await toolStarted(ctx, marlowRun, since, "sessions_send");
+        await sleep(3000);
+        await start(ctx, PIP_MAIN, "#read");
+        const recipient = await sentRun(ctx, marlowRun);
+        await finish(ctx, busy, LONG_RUN_MS);
+        await refusedForMarlow(ctx, since, recipient, "Marlow's run in Pip's task");
+        await refusedForMarlow(
+          ctx,
+          since,
+          busy,
+          "the person's busy run, which Marlow's message reached",
+        );
+        same(cardsSeen(ctx, since), [], "who received a card");
+      } finally {
+        await stopDenying();
+      }
+    },
+  },
+  {
+    name: "a person's messages queued around a bot's: the busy run, the bot's run and every run starting before it ask no one; the person's run after it asks",
+    covers: ["#slow-tool", "#message-read", "#read"],
+    async run(ctx, world) {
+      // The confirming review's sequence: the person queues behind their own busy run,
+      // Marlow's message arrives, the person queues again ("Queue after this turn").
+      await save(ctx, "pip", [{ action: "ask", tools: ["read"] }]);
+      const startedAt = Date.now();
+      await pipMain(ctx, world);
+      const since = marks(ctx);
+      const stopDenying = denyAsTheyCome(ctx, since);
+      try {
+        const busy = await start(ctx, PIP_MAIN, "#slow-tool 15 #read");
+        await toolStarted(ctx, busy, since);
+        await start(ctx, PIP_MAIN, "#read", { queueMode: "followup" });
+        await sleep(1000);
+        const marlowRun = await start(
+          ctx,
+          await task(ctx, world, "marlow", "queued"),
+          "#message-read",
+        );
+        await toolStarted(ctx, marlowRun, since, "sessions_send");
+        await sleep(1500);
+        await start(ctx, PIP_MAIN, "#read", { queueMode: "followup" });
+        const recipient = await sentRun(ctx, marlowRun);
+        await finish(ctx, busy, LONG_RUN_MS);
+        // The busy run's read comes after Marlow's message reached it.
+        await refusedForMarlow(
+          ctx,
+          since,
+          busy,
+          "the person's busy run, which Marlow's message reached",
+        );
+        const marlows = await refusedForMarlow(ctx, since, recipient, "Marlow's run in Pip's task");
+        // The person's two queued messages: the gateway gives a queued run an id of its own
+        // on 2026.10.6, so they are told apart by when their reads came. 2026.11.10 runs the
+        // person's first one before Marlow's, while Marlow's message waits: it asks no one.
+        // 2026.10.6 runs Marlow's first: both of the person's then ask.
+        // On 2026.10.6 both of the person's queued runs start after Marlow's: wait for them.
+        const queuedReads = async () =>
+          (await decisionsOf(ctx, { agentId: "pip", sessionKey: PIP_MAIN, limit: 20 }))
+            .filter(
+              (r) =>
+                r.tool === "read" &&
+                Number(r.at) >= startedAt &&
+                r.runId !== busy &&
+                r.runId !== recipient,
+            )
+            .sort((x, y) => Number(x.at) - Number(y.at));
+        const reads = await eventually(
+          "the reads of the person's queued messages",
+          async () => {
+            const found = await queuedReads();
+            return found.length >= 2 ? found : undefined;
+          },
+          LONG_RUN_MS,
+        );
+        same(reads.length, 2, "the reads of the person's queued messages");
+        const [first, last] = reads as [Decision, Decision];
+        if (Number(first.at) < Number(marlows.record.at)) {
+          await refusedForMarlow(
+            ctx,
+            since,
+            String(first.runId),
+            "the person's run before Marlow's",
+          );
+        } else {
+          await askedThePerson(ctx, since, String(first.runId), "the person's first queued run");
+        }
+        // At most the first can come before Marlow's: the last is after it on either version.
+        expect(
+          Number(last.at) > Number(marlows.record.at),
+          `the person's last queued read came before Marlow's: ${show([last, marlows.record])}`,
+        );
+        await askedThePerson(ctx, since, String(last.runId), "the person's run after Marlow's");
+      } finally {
+        await stopDenying();
+      }
+    },
+  },
+  {
+    name: "a bot's message steered into a person's run: that run asks no one, and the person's next run asks",
+    covers: ["#slow-tool", "#message-steer-read", "#read"],
+    async run(ctx, world) {
+      await save(ctx, "pip", [{ action: "ask", tools: ["read"] }]);
+      await pipMain(ctx, world);
+      const since = marks(ctx);
+      const stopDenying = denyAsTheyCome(ctx, since);
+      try {
+        const busy = await start(ctx, PIP_MAIN, "#slow-tool 30");
+        await toolStarted(ctx, busy, since);
+        const marlowRun = await start(
+          ctx,
+          await task(ctx, world, "marlow", "steer"),
+          "#message-steer-read",
+        );
+        const send = (await finish(ctx, marlowRun, LONG_RUN_MS)).calls[0];
+        same(
+          [send?.details.status, send?.details.targetDisposition],
+          ["accepted", "steered"],
+          `the gateway's answer to Marlow's steer: ${show(send?.details)}`,
+        );
+        await finish(ctx, busy, LONG_RUN_MS);
+        // The busy run makes the read Marlow's message asked for.
+        await refusedForMarlow(ctx, since, busy, "the person's run Marlow's message steered into");
+        // The send's result let Marlow's mark go: the person's next run is the person's.
+        const next = await start(ctx, PIP_MAIN, "#read");
+        await finish(ctx, next, LONG_RUN_MS);
+        await askedThePerson(ctx, since, next, "the person's next run");
+      } finally {
+        await stopDenying();
+      }
+    },
+  },
+  {
+    name: "two bot messages waiting behind a person's run: the busy run and each message's run ask no one; the person's run after asks",
+    covers: ["#slow-tool", "#message-read", "#read"],
+    async run(ctx, world) {
+      await save(ctx, "pip", [{ action: "ask", tools: ["read"] }]);
+      await pipMain(ctx, world);
+      const since = marks(ctx);
+      const stopDenying = denyAsTheyCome(ctx, since);
+      try {
+        const busy = await start(ctx, PIP_MAIN, "#slow-tool 15 #read");
+        await toolStarted(ctx, busy, since);
+        const senders: string[] = [];
+        for (const tag of ["first", "second"]) {
+          const run = await start(ctx, await task(ctx, world, "marlow", tag), "#message-read");
+          await toolStarted(ctx, run, since, "sessions_send");
+          senders.push(run);
+        }
+        const recipients = [];
+        for (const run of senders) recipients.push(await sentRun(ctx, run));
+        // Each message started a run of its own.
+        same(new Set(recipients).size, recipients.length, `the runs Marlow's sends named`);
+        await finish(ctx, busy, LONG_RUN_MS);
+        await refusedForMarlow(ctx, since, busy, "the person's busy run");
+        for (const [i, run] of recipients.entries()) {
+          await refusedForMarlow(ctx, since, run, `the run of Marlow's message ${i + 1}`);
+        }
+        const next = await start(ctx, PIP_MAIN, "#read");
+        await finish(ctx, next, LONG_RUN_MS);
+        await askedThePerson(ctx, since, next, "the person's run after both");
+      } finally {
+        await stopDenying();
+      }
+    },
+  },
+  {
+    name: "a task a person's run handed off: its message is this bot's own, not another bot's, so its run's read is asked about",
+    covers: ["#hand-off-read"],
+    async run(ctx, world) {
+      await save(ctx, "pip", [{ action: "ask", tools: ["read"] }]);
+      const since = marks(ctx);
+      const stopDenying = denyAsTheyCome(ctx, since);
+      try {
+        const parent = await start(
+          ctx,
+          await task(ctx, world, "pip", "hand-off"),
+          "#hand-off-read",
+        );
+        const spawned = (await finish(ctx, parent, LONG_RUN_MS)).calls[0];
+        const child = String(spawned?.details.childSessionKey ?? "");
+        expect(ranOk(spawned) && child.startsWith("agent:pip:"), `the hand-off: ${show(spawned)}`);
+        world.keys.add(child);
+        const record = await eventually(
+          "the read of the handed-off task",
+          async () =>
+            (await decisionsOf(ctx, { agentId: "pip", sessionKey: child, limit: 5 })).find(
+              (r) => r.tool === "read",
+            ),
+          LONG_RUN_MS,
+        );
+        const { text } = await readIn(ctx, String(record.runId), child);
+        // The plugin asks: 2026.11.10 raises the card (to admin, as the run has no device),
+        // which the check denies; 2026.10.6 cannot raise a card for a run no device started.
+        same(record.decision, "ask", "the handed-off task's read");
+        expect(
+          !text.includes(BOT_RUN_REFUSAL),
+          `the handed-off read was refused as a bot's: ${text.slice(0, 300)}`,
+        );
+        expect(
+          text.includes(shape().version === "2026.10.6" ? GATEWAY_UNAVAILABLE : DENIED),
+          `the handed-off read's result: ${text.slice(0, 300)}`,
+        );
+      } finally {
+        await stopDenying();
+      }
     },
   },
   {
