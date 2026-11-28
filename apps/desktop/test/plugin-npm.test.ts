@@ -49,8 +49,13 @@ const PACKED_FILES = [
   "lib/apply.js",
   "lib/bots.js",
   "lib/canonical.js",
+  "lib/here.js",
+  "lib/hooks.js",
   "lib/ledger.js",
+  "lib/origins.js",
+  "lib/params.js",
   "lib/records.js",
+  "lib/runs.js",
   "openclaw.plugin.json",
   "package.json",
 ].map((path) => `package/${path}`);
@@ -471,10 +476,10 @@ describe("the lock a release reads", { timeout: 60_000 }, () => {
     });
   });
 
-  it("lists no tools or hooks for a manifest that declares none", () => {
+  it("lists the tools the manifest declares, and no hooks when it declares none", () => {
     const packed = packPlugin(PLUGIN, temp(), LICENSE);
     expect(lockEntry(packed.file, packed.integrity, COMMIT)).toMatchObject({
-      tools: [],
+      tools: ["clawtrate_bots", "clawtrate_here", "clawtrate_tasks"],
       hooks: [],
     });
   });

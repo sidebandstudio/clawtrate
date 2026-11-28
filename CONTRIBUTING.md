@@ -4,7 +4,7 @@ Clawtrate is young and moves fast. A small team builds most of it, a lot of it w
 
 ## Where things stand
 
-- There is no release yet. The desktop app runs against a development gateway, and the iOS app is not on `main` yet.
+- Clawtrate is in beta on macOS. Windows builds are not published yet, and the iPhone app is in development in `apps/mobile` on `main` with no release yet.
 - The plan is [docs/roadmap.md](docs/roadmap.md). It splits the work into milestones, and each piece is an issue.
 - The definition of done is [docs/parity.md](docs/parity.md). Each row is one behavior with a stable id such as `F-012`, and a row is done when an automated check whose title starts with that id passes.
 - The maintainers merge their own work once its checks pass. Review time for outside pull requests is limited for now, so talk on the issue before you start anything large.

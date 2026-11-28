@@ -123,6 +123,7 @@ jobs:
             e2e/global-setup.ts
             e2e/ports.ts
             e2e/run-record.ts
+            plugins/clawtrate-bots/**
             plugins/clawtrate-computer/**
             plugins/clawtrate-dev-signin/**
             plugins/clawtrate-tool-rules/**
@@ -444,6 +445,14 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Check the settings reader and the local proof on Windows
         run: pnpm exec vitest run apps/desktop/test/settings-reader.test.ts apps/desktop/test/local-connect.test.ts -t "reads nothing on Windows|in a production run|on Windows the proof refuses"
+      # Electron's install script is declined (pnpm-workspace.yaml); requiring the package fetches its binary.
+      - run: node -e "require('electron')"
+        working-directory: apps/desktop
+      # The variable makes a missing binary fail the check instead of skipping it.
+      - name: Check Electron's secure storage across a restart on Windows
+        run: pnpm exec vitest run apps/desktop/test/windows-secure-storage.test.ts
+        env:
+          CLAWTRATE_WINDOWS_SAFE_STORAGE_TESTS: "1"
       # Unsigned: no signing variables are set.
       - run: pnpm test:desktop-updates
       - run: pnpm package:win

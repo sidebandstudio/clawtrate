@@ -43,7 +43,9 @@ import { ENSEMBLE } from "../src/presentation/ensemble.ts";
 import { noTasksBody, TASK_WORDS } from "../src/presentation/summary.ts";
 import { CONVERSATION_WORDS } from "../src/presentation/conversation-words.ts";
 import { SENT_PICTURE_LINES, sentPictureAlt } from "../src/presentation/sent-files.ts";
-import { rowTime, stampTime } from "../../../packages/ui/src/format.ts";
+import { BOT_FILE_WORDS } from "../src/presentation/bot-files.ts";
+import { ATTACH_TEXT, reviewsDraftPdf } from "../../../tools/dev-gateway/src/scripted-files.ts";
+import { rowTime } from "../../../packages/ui/src/format.ts";
 import { addressWords, SETTINGS_WORDS } from "../src/presentation/gateway-state.ts";
 import { WebSocket, WebSocketServer } from "ws";
 import { decodePng, encodePng } from "../../../tools/brand/src/png.ts";
@@ -58,6 +60,7 @@ import {
   closeWithin,
   containerHits,
   deadPort,
+  describeConnections,
   devGateway,
   devices,
   displays,
@@ -83,15 +86,18 @@ import {
   protocolFiveGateway,
   Proxy,
   quit,
+  reconnectedOnce,
   reduceMotion,
   reinstall,
   running,
   rgb,
   screen,
   screenText,
+  sharedFolders,
   scrollTo,
   see,
   shoot,
+  stampPattern,
   steps,
   switcherSnapshot,
   tap,
@@ -188,8 +194,6 @@ async function creaturesAtFoot(screenId: string): Promise<boolean> {
 }
 
 const hostOf = (url: string) => url.replace(/^ws:\/\//, "");
-/** A stamp's words as a pattern: the clock's space may be any space. */
-const stampPattern = (at: number) => lit(stampTime(at)).replace(/\s/g, ".");
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function expectSwitcherCover({
@@ -812,6 +816,10 @@ describe("the iOS app", () => {
   });
 
   it("F-063 F-065: on iPhone, a task's chat opens on its title under the header band, puts a stamp before the first message and after a pause, shows your messages and the bot's as bubbles with the bot's markdown and tables that scroll sideways, and each action as one line in the engine's words", async () => {
+    const DISK_ASK = "The media box says the disk is 94% full. What is eating the space?";
+    // The seed wrote this before the check ran, maybe before the device's midnight (#640). So
+    // the stamp shows this message's own time, under "Today" or "Yesterday".
+    const diskAskAt = await storedAt("agent:otto:disk-space", DISK_ASK);
     await steps("read-disk", [
       tap({ id: "bot-otto" }),
       waitFor({ id: "bot-tasks-otto" }, 20_000),
@@ -819,8 +827,8 @@ describe("the iOS app", () => {
       waitFor({ id: "turn-bot" }, 60_000),
       // Opened at its start: the title is in view without scrolling.
       see({ id: "task-line", text: "Disk almost full on the media box" }),
-      see({ id: "stamp", text: "Today \\d{1,2}:\\d{2}.(AM|PM)", below: { id: "task-line" } }),
-      see(`${lit("The media box says the disk is 94% full. What is eating the space?")}`),
+      see({ id: "stamp", text: stampPattern(diskAskAt), below: { id: "task-line" } }),
+      see(lit(DISK_ASK)),
       // The markdown is drawn, not shown as marks.
       notSee(".*\\*\\*.*"),
       // One read-only explanation, where the composer will be.
@@ -1465,11 +1473,31 @@ describe("the iOS app", () => {
     ]);
     // Disconnected keeps the pairing: the gateway still has the device, and Reconnect connects it.
     expect((await devices()).paired.some((d) => d.deviceId === deviceId)).toBe(true);
+    // A hosted runner can take more than a minute to connect again (#611), so the wait is three.
+    const upgrades = () => proxy.requests.filter((request) => request.upgrade);
+    const sockets = upgrades().length;
+    const tapped = Date.now();
     await steps("reconnect", [
       tap({ id: "status-strip-action", text: "Reconnect" }),
-      waitFor({ id: "connection-dot-connected" }, 60_000),
-      waitGone({ id: "status-strip" }, 60_000),
+      waitFor({ id: "connection-dot-connected" }, 180_000),
     ]);
+    // Then it settles: the strip goes and the dot stays connected. The strip goes only once the
+    // app has caught up and shown Synced for four seconds without a drop, but those states can
+    // pass between two of Maestro's looks, so they aren't asserted on their own. Reconnect opened
+    // one socket that got the gateway's hello, and no other since, so nothing dropped and
+    // reconnected. On a slow hosted runner the app can give up on a first connect the gateway
+    // hasn't answered and open another (#611), so one such abandoned connect before it is allowed;
+    // two that each got hello are a drop and a reconnect, and fail. The list is logged either way.
+    await steps("reconnect-settles", [
+      waitGone({ id: "status-strip" }, 120_000),
+      see({ id: "connection-dot-connected" }),
+    ]);
+    const since = upgrades().slice(sockets);
+    const opened = describeConnections(since, tapped);
+    console.log(`WebSockets since Reconnect was tapped:\n${opened}`);
+    expect(reconnectedOnce(since), `Reconnect did not settle on one connection:\n${opened}`).toBe(
+      true,
+    );
 
     // Deleted and installed again, the app does not walk back into the gateway:
     // it offers it, and the same device reconnects when asked.
@@ -2147,6 +2175,141 @@ describe("the iOS app", () => {
       ]);
     } finally {
       await loopback?.stop();
+      await front?.close();
+      await gatewayCall("sessions.delete", { key: own.key, deleteTranscript: true }).catch(
+        () => {},
+      );
+    }
+  });
+
+  it("F-115: on iPhone, a file a bot attaches shows under its message with a document icon, its name and size, and Save opens the share sheet for it at once, from a file of the app's own that is gone once the sheet closes", async () => {
+    // The scripted bot writes a two-page PDF and a text note and hands both over (`#attach`).
+    const own = await gatewayTask("pip", "File check");
+    let front: Awaited<ReturnType<typeof protectedFront>> | null = null;
+    // A line the PDF holds, and nothing else the app keeps: where the shared file is.
+    const inPdf = "Lake loop review";
+    try {
+      // Sent as a person's message from another client, as the desktop's end-to-end check does:
+      // the gateway stages the files of a chat run's answer.
+      await gatewayCall("chat.send", {
+        sessionKey: own.key,
+        message: "#attach",
+        idempotencyKey: `ios-attach-${Date.now().toString(36)}`,
+      });
+      // The gateway writes the files into the row just after the run ends.
+      await until(
+        "the reply's files in history",
+        async () => {
+          const history = await gatewayCall<{ messages?: unknown[] }>("chat.history", {
+            sessionKey: own.key,
+            limit: 20,
+          });
+          const text = JSON.stringify(history.messages ?? []);
+          return text.includes('"type":"attachment"') && text.includes("reviews.txt");
+        },
+        180_000,
+      );
+      // Files load only from a protected address, as a person's pictures do (F-557).
+      front = await protectedFront(Number(new URL(env.gateway).port));
+      launch({ fresh: true, devGateway: front.url });
+      await steps("file-connect", [
+        waitFor({ id: "welcome" }),
+        tap({ id: "connect-a-gateway" }),
+        ...typeAddress(front.url, env.token),
+        waitFor({ id: "pairing" }, 90_000),
+      ]);
+      devGateway("approve");
+      const pdf = { id: "bot-file-info", text: lit("reviews-draft.pdf, 1 KB") };
+      const save = { id: "bot-file-save", text: lit("Save reviews-draft.pdf") };
+      await steps("file-row", [
+        waitFor({ id: "bot-pip" }, 120_000),
+        tap({ id: "bot-pip" }),
+        waitFor({ id: `task-${lit(own.key)}` }, 60_000),
+        tap({ id: `task-${lit(own.key)}` }),
+        waitFor(lit(ATTACH_TEXT), 60_000),
+        scrollTo({ id: "bot-file-info", text: lit("reviews.txt, 1 KB") }, "DOWN"),
+        see(pdf),
+        see({ id: "bot-file-info", text: lit("reviews.txt, 1 KB") }),
+        see(save),
+        see({ id: "bot-file-save", text: lit("Save reviews.txt") }),
+        notSee("MEDIA:"),
+        // Nothing is read before Save.
+        notSee({ id: "bot-file-note" }),
+      ]);
+      await shoot("bot-files-ready");
+      expect(containerHits([inPdf])).toEqual([0]);
+      expect(front.requests.filter((request) => request.url.startsWith("/api/chat/media"))).toEqual(
+        [],
+      );
+
+      // Save: the sheet opens with no question first, for the file the app wrote of its own.
+      // Its header names the file and its exact size, as iOS reads it from the file the app wrote.
+      await steps("file-sheet", [
+        tap(save),
+        waitFor("Save to Files", 60_000),
+        see("reviews-draft"),
+        // While the sheet is open the row says nothing: no failure, no outcome yet.
+        notSee({ id: "bot-file-note" }),
+        // iOS reads the size from the file once it has the sheet up: given a moment, never
+        // assumed at once.
+        waitFor(lit(`PDF Document · ${reviewsDraftPdf().length} bytes`), 20_000),
+        notSee({ id: "bot-file-note" }),
+      ]);
+      await shoot("bot-files-share-sheet");
+      expect(containerHits([inPdf])[0]).toBeGreaterThan(0);
+      // One folder of the share step's own, holding the file the sheet offers.
+      const [folder, ...others] = sharedFolders();
+      expect(others).toEqual([]);
+      expect(folder).toBeDefined();
+      const asked = front.requests.filter((request) => request.url.startsWith("/api/chat/media"));
+      expect(asked).toHaveLength(1);
+      expect(asked[0]!.method).toBe("GET");
+      expect(asked[0]!.cookie).toBeUndefined();
+
+      // A person closes the sheet with a tap outside it. The tap is at a point with no control
+      // under it, near the top beside the title: the centre of the sheet's full-screen dismiss
+      // region lands on the row's own Save button, and that tap didn't close it.
+      const tapOutside: Step = { tapOn: { point: "75%,11%" } };
+      // Closed without choosing: the row is ready again and the file is gone.
+      await steps("file-sheet-closed", [
+        tapOutside,
+        waitGone("Save to Files", 30_000),
+        see(save),
+        notSee({ id: "bot-file-note", text: lit(BOT_FILE_WORDS.saved) }),
+      ]);
+      await until("the shared file deleted", async () => containerHits([inPdf])[0] === 0);
+      expect(sharedFolders()).not.toContain(folder);
+
+      // Ready again: Save opens the sheet a second time, for a folder of its own. Save to Files
+      // picked there and ended without saving, the sheet is done with, the row is ready, and that
+      // folder is gone too: nothing waits for an answer that doesn't come.
+      await steps("file-sheet-again", [
+        tap(save),
+        waitFor("Save to Files", 60_000),
+        waitFor(lit(`PDF Document · ${reviewsDraftPdf().length} bytes`), 20_000),
+        notSee({ id: "bot-file-note" }),
+      ]);
+      const [again, ...more] = sharedFolders();
+      expect(more).toEqual([]);
+      expect(again).toBeDefined();
+      expect(again).not.toBe(folder);
+      await steps("file-save-to-files-cancelled", [
+        tap("Save to Files"),
+        // On the Simulator iOS can end Save to Files without a picker; where one shows, it is
+        // cancelled, and a sheet left up to choose again is closed with a tap outside it.
+        { extendedWaitUntil: { visible: "Cancel", timeout: 15_000, optional: true } },
+        { runFlow: { when: { visible: "Cancel" }, commands: [tap("Cancel")] } },
+        { runFlow: { when: { visible: "Save to Files" }, commands: [tapOutside] } },
+      ]);
+      await steps("file-save-to-files-closed", [
+        waitGone("Save to Files", 30_000),
+        see(save),
+        // Cancelled is not saved: the row says nothing, so a wrong "Saved to Files." fails here.
+        notSee({ id: "bot-file-note" }),
+      ]);
+      await until("the second shared file deleted", async () => !sharedFolders().includes(again!));
+      expect(containerHits([inPdf])).toEqual([0]);
+    } finally {
       await front?.close();
       await gatewayCall("sessions.delete", { key: own.key, deleteTranscript: true }).catch(
         () => {},

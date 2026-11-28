@@ -78,20 +78,24 @@ export const FIRST_CHECK_ROWS = 40;
 
 /**
  * Whether a task's history, read from the gateway just before its name is made, holds no person's
- * row but this client's own sends there (`own`: the ids of its messages with no text and of the
- * one with text; each row is stored as `<id>:user`). The history this client holds can be behind
- * the task's row, so another device's first message is looked for here too. A page cut short
- * (`hasMore`) or not read can't tell, and says no.
+ * row but this client's own sends there (`own`: the ids of its messages with no text, then the one
+ * with text the name is made from; each row is stored as `<id>:user`) up to that last one. Rows
+ * after it came later, another device's too, and don't make it any less the first. The history this
+ * client holds can be behind the task's row, so another device's first message is looked for here
+ * too. A page cut short (`hasMore`) or not read can't tell, and says no.
  */
 export function onlyOwnRows(history: unknown, own: readonly string[]): boolean {
   const page = asRecord(history);
   if (!page || page.hasMore === true || !Array.isArray(page.messages)) return false;
-  return page.messages.every((entry) => {
+  for (const entry of page.messages) {
     const row = asRecord(entry);
-    if (row?.role !== "user") return true;
+    if (row?.role !== "user") continue;
     const stored = asRecord(row.__openclaw)?.idempotencyKey ?? row.idempotencyKey;
-    return typeof stored === "string" && own.some((id) => stored === id || stored === `${id}:user`);
-  });
+    const id = own.find((each) => stored === each || stored === `${each}:user`);
+    if (id === undefined) return false;
+    if (id === own[own.length - 1]) return true;
+  }
+  return true;
 }
 
 /** Whether a task has a name already: one the person or the bot gave, or one made before. */
@@ -117,6 +121,8 @@ export type NamingContext = {
   request: (method: string, params: unknown) => Promise<unknown>;
   /** The task's row as the client has it now, or null. */
   row: () => RawRecord | null;
+  /** The bot's model as the client has it now: it can change while the name is made. */
+  botModel: () => string | null;
 };
 
 /**
@@ -128,23 +134,21 @@ export async function nameTask(
   ctx: NamingContext,
   task: {
     key: string;
-    /** The session the task was created as, from the creation's answer, else its row's. */
+    /** The session the task was created as, from the creation's answer. */
     sessionId: string | null;
     botId: string;
-    botModel: string | null;
     text: string;
-    /** For an empty task named from a later send: this client's sends there (`onlyOwnRows`). */
+    /** This client's sends in the task, checked against its history first (`onlyOwnRows`). */
     ownSends?: readonly string[];
   },
 ): Promise<string | null> {
   const message = namingSource(task.text);
-  const before = ctx.row();
-  if (!message || hasName(before)) return null;
-  // Bound to the task's own session, known before anything is awaited: a reset or a delete and
-  // recreate meanwhile gives the key another session, which this name is not for. The gateway
-  // refuses the patch for a task deleted meanwhile, which a patch by key alone would make again.
-  const sessionId =
-    task.sessionId ?? (typeof before?.sessionId === "string" ? before.sessionId : null);
+  if (!message || hasName(ctx.row())) return null;
+  // Bound to the session the task was created as: a reset or a delete and recreate since gives
+  // the key another session, which this name is not for, and the row read now could already be
+  // that one. The gateway refuses the patch for a task deleted meanwhile, which a patch by key
+  // alone would make again.
+  const sessionId = task.sessionId;
   if (!sessionId) return null;
   if (task.ownSends) {
     try {
@@ -161,13 +165,15 @@ export async function nameTask(
   let catalogue: CatalogModel[] = [];
   try {
     // Only a bot whose provider may be named across needs the person's other providers.
-    if (namesAcross(task.botModel))
+    if (namesAcross(ctx.botModel()))
       catalogue = readCatalog(await ctx.request("models.list", { agentId: task.botId }));
   } catch {
     // Without the list, the bot's own provider still names it.
   }
-  for (const model of namingCalls(task.botModel, catalogue)) {
+  for (const model of namingCalls(ctx.botModel(), catalogue)) {
     if (hasName(ctx.row())) return null;
+    // The bot moved meanwhile to a provider whose tasks no other provider names.
+    if (model && !namesAcross(ctx.botModel())) continue;
     let title: string | null = null;
     try {
       const answer = asRecord(

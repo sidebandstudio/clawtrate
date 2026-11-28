@@ -40,7 +40,9 @@ import {
   MAX_SIGNIN_METHODS,
   type AccountsState,
   type AccountWrite,
+  type ModelAllowed,
   type OrderClear,
+  type RefusedBotModel,
   type BotBinding,
   type BotCreationState,
   type CatalogModel,
@@ -445,6 +447,8 @@ export const RUN: Bound = flagged<Run>()({
   textSource: ENUM,
   textItemId: ID,
   textEarlier: FLAG,
+  followed: object<NonNullable<Run["followed"]>>()({ call: ID, items: NUMBER }),
+  textAfter: object<NonNullable<Run["textAfter"]>>()({ call: ID }),
   textComplete: FLAG,
   steps: list(MAX_STEPS_PER_TASK, STEP, { pool: "steps" }),
   pendingCards: list(MAX_PENDING_CARDS, pendingCard),
@@ -636,6 +640,8 @@ const block = union<TranscriptBlock, "kind">("kind")({
     text: text(MAX_BLOCK_CHARS),
     messageId: ID,
     replyToId: ID,
+    gatewayRow: FLAG,
+    afterCall: FLAG,
   }),
   reasoning: object<Extract<TranscriptBlock, { kind: "reasoning" }>>()({
     kind: ENUM,
@@ -1339,6 +1345,25 @@ const orderClear = object<OrderClear>()({
   checkedSeq: NUMBER,
   checkedAt: NUMBER,
 });
+const refusedBotModel = object<RefusedBotModel>()({
+  botId: ID,
+  provider: ID,
+  model: ID,
+  why: ENUM,
+});
+const modelAllowed = object<ModelAllowed>()({
+  id: ID,
+  gatewayId: ID,
+  botId: ID,
+  provider: ID,
+  model: ID,
+  entry: ID,
+  scope: ENUM,
+  revision: ID,
+  status: ENUM,
+  error: text(MAX_MESSAGE_LINE_CHARS),
+  at: NUMBER,
+});
 export const ACCOUNTS: Bound = object<AccountsState>()({
   status: ENUM,
   error: text(MAX_MESSAGE_LINE_CHARS),
@@ -1358,6 +1383,8 @@ export const ACCOUNTS: Bound = object<AccountsState>()({
   creation: botCreation,
   write: accountWrite,
   clear: orderClear,
+  modelsRefused: list(MAX_BOTS, refusedBotModel),
+  allowed: modelAllowed,
 });
 
 /** Setting up on the host's computer (`setup.ts`): fixed facts and a few short names. */

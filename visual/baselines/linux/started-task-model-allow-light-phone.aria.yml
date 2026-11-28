@@ -1,0 +1,32 @@
+- status
+- region "Conversation":
+  - button "Back to bots"
+  - button "Otto, Disk almost full on the media box. Show details.": Otto
+  - button "Show work panel"
+  - region "Transcript":
+    - heading "Disk almost full on the media box" [level=1]
+    - paragraph: "Context: 18,432 of 128,000 tokens"
+    - text: Today 5:30 PM
+    - paragraph: Put the log rotation in a task of its own.
+    - toolbar "Message actions":
+      - button "Add a reaction"
+      - button "Reply in a thread"
+      - button "More"
+    - 'group "Couldn''t start a task: Rotate the media logs"':
+      - text: Couldn't start a task Otto Rotate the media logs Couldn't start
+      - paragraph: Rotate the transcode logs and keep the last month. Ask before deleting anything older.
+      - paragraph: This gateway doesn't allow tasks on OpenAI's gpt-5.5.
+      - paragraph:
+        - button "Allow OpenAI's gpt-5.5 for Otto's tasks": Allow gpt-5.5
+    - paragraph: The gateway wouldn't start that task.
+    - toolbar "Message actions":
+      - button "Add a reaction"
+      - button "Reply in a thread"
+      - button "More"
+    - group: Worked 1 action 1 failed
+    - status
+  - button "Attach files"
+  - textbox "Message Otto"
+  - button "Send" [disabled]
+  - status
+- status

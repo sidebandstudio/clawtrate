@@ -11,7 +11,8 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { ClawtrateClient } from "../packages/core/src/client.ts";
-import { runningRunId } from "../packages/core/src/runs.ts";
+import { replyRow, runningRunId, textPlaced } from "../packages/core/src/runs.ts";
+import type { WebSocketFactory, WebSocketLike } from "../packages/core/src/host.ts";
 import { createNodeHost } from "../packages/core/src/node/index.ts";
 import {
   instanceForm,
@@ -26,15 +27,50 @@ const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 type Engine = { client: ClawtrateClient; close: () => Promise<void> };
 
+/**
+ * Sockets that tell `seen` of every event frame the client takes in, right after the client has
+ * it, in their order: a check can act at a moment of the gateway's own sending.
+ */
+function watching(create: WebSocketFactory, seen: (frame: unknown) => void): WebSocketFactory {
+  return (url) => {
+    const socket = create(url);
+    const wrapper: WebSocketLike = {
+      get readyState() {
+        return socket.readyState;
+      },
+      send: (data) => socket.send(data),
+      close: (code, reason) => socket.close(code, reason),
+      onopen: null,
+      onmessage: null,
+      onclose: null,
+      onerror: null,
+    };
+    socket.onopen = (event) => wrapper.onopen?.(event);
+    socket.onclose = (event) => wrapper.onclose?.(event);
+    socket.onerror = (event) => wrapper.onerror?.(event);
+    socket.onmessage = (event) => {
+      wrapper.onmessage?.(event);
+      if (typeof event.data === "string") seen(JSON.parse(event.data));
+    };
+    return wrapper;
+  };
+}
+
 /** A client paired with this run's instance, with write access. */
-async function engine(name: string): Promise<Engine> {
+async function engine(
+  name: string,
+  options: { seen?: (frame: unknown) => void } = {},
+): Promise<Engine> {
   const inst = openInstance(INSTANCE);
   const connection = readDevConnection(inst.connectionFile)!;
   const dataDir = mkdtempSync(join(tmpdir(), "clawtrate-e2e-engine-"));
-  const host = createNodeHost({
+  const node = createNodeHost({
     dataDir,
     client: { displayName: `Clawtrate ${name}`, version: "0.0.0", platform: process.platform },
   });
+  const host = options.seen
+    ? { ...node, createWebSocket: watching(node.createWebSocket, options.seen) }
+    : node;
   const client = new ClawtrateClient(host, {});
   await client.start();
   await client.connect({ url: connection.url, token: connection.token });
@@ -218,6 +254,125 @@ test("F-088: text the bot writes beside an action is beside that action from the
     expect(seen.filter((texts) => texts.join() !== beside)).toEqual([]);
     const run = runs(client, key)[0]!;
     expect(run.text.trim()).toBe("This answers no message: none was named.");
+  } finally {
+    stop();
+    await close();
+  }
+});
+
+/**
+ * Each state in which a run still draws its reply and history already holds that reply's row:
+ * the row is found here by its words, which the app never compares, and each such state records
+ * whether the engine ties the reply to it (`replyRow`): null when it does, the rows otherwise.
+ */
+function heldReplies(client: ClawtrateClient, key: () => string) {
+  const held: Array<string | null> = [];
+  const stop = client.store.subscribe((state) => {
+    const transcript = state.transcripts[key()];
+    for (const run of transcript?.runs ?? []) {
+      const reply = run.text.trim();
+      if (run.state !== "running" || !reply || textPlaced(run)) continue;
+      const rows = transcript!.items.flatMap((item) =>
+        item.blocks.flatMap((block, i) =>
+          block.kind === "text" && block.text.trim() === reply ? [`${item.id}#${i}`] : [],
+        ),
+      );
+      if (rows.length === 0) continue;
+      const tied = replyRow(run, transcript!.items);
+      held.push(tied && rows.includes(`${tied.itemId}#${tied.block}`) ? null : rows.join());
+    }
+  });
+  return { held, stop };
+}
+
+test("#872: while a run still draws its reply, history's row of that reply is known as the reply's", async () => {
+  test.setTimeout(240_000);
+  // The gateway writes the answer's row 30 to 60 ms before the run's end, and the app reads
+  // history 150 ms after it hears of a row: the read lands in between only on a loaded machine,
+  // where F-551 met it. Here history is read again the moment the answer's row is announced, on a
+  // new task each time, until a read has landed in between (a history read that comes after the
+  // end ends the run itself, so nothing on this side can hold that moment open).
+  let key = "";
+  let client: ClawtrateClient | null = null;
+  const { client: engineClient, close } = await engine("reply drawn once check", {
+    seen: (frame) => {
+      // The answer's own row: the bot's, with text and no call (the call's row comes first).
+      const f = frame as {
+        event?: string;
+        payload?: { sessionKey?: string; message?: { role?: string; content?: unknown } };
+      };
+      const message = f.payload?.message;
+      const parts = Array.isArray(message?.content)
+        ? (message.content as Array<{ type?: string }>)
+        : [];
+      if (
+        f.event === "session.message" &&
+        f.payload?.sessionKey === key &&
+        message?.role === "assistant" &&
+        parts.some((part) => part.type === "text") &&
+        !parts.some((part) => part.type === "toolCall")
+      )
+        client?.reloadSession(key);
+    },
+  });
+  client = engineClient;
+  const { held, stop } = heldReplies(engineClient, () => key);
+  const TRIES = 12;
+  let tries = 0;
+  try {
+    while (tries < TRIES && held.length === 0) {
+      tries += 1;
+      key = await openNewTask(engineClient, `reply-once-${tries}`);
+      // The scripted model thinks, its call fails, and it answers in a message of its own: F-551's run.
+      engineClient.sendMessage(key, "Look for my old notes. #think #tool-fail");
+      await expect
+        .poll(() => runs(engineClient, key)[0]?.state, { timeout: 60_000 })
+        .toBe("completed");
+      await expect.poll(() => gatewayIdle(op, key), { timeout: 15_000 }).toBe(true);
+      // Within the client's bound of open tasks.
+      if (held.length === 0) engineClient.closeSession(key);
+    }
+    console.log(`#872: the read landed between the answer's row and the run's end on try ${tries}`);
+    // The moment happened, and in every state of it the row was the reply's. Both versions write
+    // the answer's row at its message's end, when the provider's stream is done, and end the run
+    // right after unless a steer waits (OpenClaw's agent loop): no fixture holds that moment open.
+    expect(
+      held.length,
+      `no history read landed in the 30 to 60 ms between the answer's row and the run's end in ${TRIES} tries`,
+    ).toBeGreaterThan(0);
+    expect(held.filter((row) => row !== null)).toEqual([]);
+  } finally {
+    stop();
+    await close();
+  }
+});
+
+test("#872 #738: an answer a steer kept going is known by its row while the steered message's tool runs", async () => {
+  const { client, close } = await engine("answer before a steer check");
+  let key = "";
+  const { held, stop } = heldReplies(client, () => key);
+  try {
+    key = await openNewTask(client, "steered-answer");
+    // A text-only answer streamed slowly; a steer joins after it, and the model's next message is
+    // reasoning and a slow call with no text. All the while the answer is the run's reply, and
+    // history holds its row.
+    const id = client.sendMessage(key, "Answer slowly. #slow 3");
+    await expect
+      .poll(() => runs(client, key)[0]?.text ?? "", { timeout: 60_000 })
+      .toContain("part 1");
+    client.sendMessage(key, "Then run the slow tool. #slow-tool 8");
+    await expect
+      .poll(() => runs(client, key).find((run) => run.id === id)?.state, { timeout: 90_000 })
+      .toBe("completed");
+    await expect.poll(() => gatewayIdle(op, key), { timeout: 15_000 }).toBe(true);
+    // Where the steer joined the run (the answer's run holds a call: `#slow` makes none), the
+    // moment happened, and in every state of it the row was the reply's. Where the steer ran as a
+    // turn of its own, the answer's run ended first and nothing was drawn twice.
+    const joined = runs(client, key)
+      .find((run) => run.id === id)!
+      .steps.some((step) => step.kind === "tool");
+    if (joined) expect(held.length).toBeGreaterThan(0);
+    expect(held.filter((row) => row !== null)).toEqual([]);
   } finally {
     stop();
     await close();

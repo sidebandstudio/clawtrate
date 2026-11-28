@@ -478,7 +478,7 @@ Clawtrate never reads `config.get`'s `raw`. It can come back as redacted text, n
 
 ### 8.7 OpenClaw's own routes
 
-- **What stays open today, said plainly.** Without the bots plugin, a bot whose runs are Full Access changes OpenClaw's settings with its own `openclaw` tool, with no prompt, no journal and no Undo (section 1.5). A bot that runs commands freely can also edit the config file. This design doesn't close the command route; that is `doing-not-asking.md` §3 and #675.
+- **What stays open today, said plainly.** Without the bots plugin, a bot whose runs are Full Access changes OpenClaw's settings with its own `openclaw` tool, with no prompt, no journal and no Undo (section 1.5). A bot that runs commands freely can also edit the config file. Clawtrate leaves the command policy to the person (`doing-not-asking.md` §3.5).
 - **With the plugin, each native mutating route is named and refused by default** in its `before_tool_call`, for every bot it serves:
 
   | Route                                                                                | 2026.10.6 | 2026.11.10 |

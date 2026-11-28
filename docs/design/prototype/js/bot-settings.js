@@ -200,7 +200,6 @@
     const tools = listed.map(([label, tool]) => row(`<span title="${tool}">${label}</span>`, (b.deny || []).includes(tool) ? "Denied" : "Allowed")).join("");
     const lastTask = bot.tasks.find((t) => !t.fresh);
     return (
-      (CT.botsSettingsLead ? CT.botsSettingsLead(id) : "") +
       `<h3 class="b-tabgroup">About</h3><dl class="facts">` +
       row("Description", `<span class="b-faint">None</span>`) +
       row("Instructions", "From AGENTS.md, 42 lines") +
@@ -221,7 +220,7 @@
       (b.failed ? note(`<p>${b.failed}</p>`, "danger") : "") +
       `<h3 class="b-tabgroup">Tools</h3><dl class="facts">` +
       // controls.html fills the Tools group's first rows (docs/design/controls.md, section 4).
-      (CT.botsToolsRows ? CT.botsToolsRows(id) : row("Permissions", "Ask before running commands")) +
+      (CT.botsToolsRows ? CT.botsToolsRows(id) : row("Permissions", "Commands follow the gateway's policy")) +
       `</dl>` +
       (tools
         ? `<h4 class="b-group">From xAI</h4><dl class="facts">${tools}</dl>` +
