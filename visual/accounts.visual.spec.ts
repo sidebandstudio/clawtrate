@@ -326,6 +326,14 @@ const SCENES: Scene[] = [
     ),
   },
   {
+    name: "signin-unsure-label",
+    query: `${ADMIN}&signin=unsure`,
+    ready: signIn("xAI", null, async (page) => {
+      await page.getByTestId("reread").getByRole("button", { name: "Name it" }).click();
+      await expect(page.getByRole("heading", { name: "xAI account found" })).toBeVisible();
+    }),
+  },
+  {
     name: "signin-label-clash",
     query: `${ADMIN}&signin=connected`,
     ready: signIn("OpenAI", "Use a device code", async (page) => {

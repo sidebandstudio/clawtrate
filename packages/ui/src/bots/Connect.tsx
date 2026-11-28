@@ -38,7 +38,8 @@ import { accountName, flowWords, providerName } from "./words.ts";
 
 /** A label step left before Done, kept until the app quits so it comes back (section 6). */
 const LABEL_KEPT = "connect-label";
-type KeptLabel = { account: string; byKey: boolean };
+/** `found`: the account a read showed after a sign-in that wasn't confirmed. */
+type KeptLabel = { account: string; byKey: boolean; found?: boolean };
 
 /** The label step left open, when its account is still on the gateway. */
 export function keptLabel(accounts: AccountsState): KeptLabel | null {
@@ -65,7 +66,7 @@ type Where =
   | { view: "provider"; tile: string }
   /** `tile`: the provider whose methods it was chosen from, where Back goes. */
   | { view: "flow"; method: string; tile?: string }
-  | { view: "label"; account: string; byKey: boolean }
+  | { view: "label"; account: string; byKey: boolean; found?: boolean }
   | { view: "same"; provider: string }
   /** A key the gateway took whose account the read after it didn't show. */
   | { view: "key-check"; provider: string; known: string[] };
@@ -124,7 +125,9 @@ export function useConnect({
   const setWhere = (next: Where) => {
     remember(
       LABEL_KEPT,
-      next.view === "label" ? { account: next.account, byKey: next.byKey } : null,
+      next.view === "label"
+        ? { account: next.account, byKey: next.byKey, ...(next.found ? { found: true } : {}) }
+        : null,
     );
     setWhereState(next);
   };
@@ -739,14 +742,21 @@ export function useConnect({
       backLabel: "Back to sign-in methods",
       body: (
         <>
-          <Result
-            tone="ok"
-            mark="check"
-            title={where.byKey ? "Key saved" : `Connected to ${who}`}
-            focus={false}
-          >
-            {where.byKey ? "Your gateway keeps the key." : "Your gateway keeps the sign-in."}
-          </Result>
+          {where.found ? (
+            // Found by a read after a sign-in whose end wasn't confirmed: never said to be connected.
+            <Result tone="warn" mark="warning" title={`${who} account found`} focus={false}>
+              The gateway lists it, but Clawtrate couldn't confirm the sign-in.
+            </Result>
+          ) : (
+            <Result
+              tone="ok"
+              mark="check"
+              title={where.byKey ? "Key saved" : `Connected to ${who}`}
+              focus={false}
+            >
+              {where.byKey ? "Your gateway keeps the key." : "Your gateway keeps the sign-in."}
+            </Result>
+          )}
           <p className="b-hint" role="status" style={{ textAlign: "center" }} data-testid="landed">
             {landedText}
           </p>
@@ -982,7 +992,9 @@ export function useConnect({
               type="button"
               className="button"
               data-size="sm"
-              onClick={() => setWhere({ view: "label", account: added, byKey: sign.byKey })}
+              onClick={() =>
+                setWhere({ view: "label", account: added, byKey: sign.byKey, found: true })
+              }
             >
               Name it
             </button>

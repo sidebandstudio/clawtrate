@@ -1291,6 +1291,14 @@ export function accountCommand(
               sensitive: false,
             },
           });
+        // signin=unsure: a step Clawtrate can't read, and the read after it finds an account.
+        if (stage === "unsure")
+          return signIn({
+            stage: "failed",
+            unsure: true,
+            error: "The gateway sent a step Clawtrate can't read.",
+            result: result([`${method.provider}:second`]),
+          });
         if (["failed", "expired", "cancelled", "ended", "unconfirmed"].includes(stage)) {
           return signIn({
             stage: stage as SignInState["stage"],

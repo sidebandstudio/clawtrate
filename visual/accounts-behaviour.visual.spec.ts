@@ -1055,6 +1055,27 @@ test("#450: disconnecting the account a failed sign-in left sends the stamp Conn
   );
 });
 
+test("#932: Name it after an unsure ending says the account was found, not that it connected", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&signin=unsure`, "light");
+  await connectFromNewBot(page);
+  await newBot(page)
+    .getByRole("button", { name: /^xAI\b/ })
+    .click();
+  await expect(
+    newBot(page).getByRole("heading", { name: "Couldn't confirm the connection" }),
+  ).toBeVisible();
+  await page.getByTestId("reread").getByRole("button", { name: "Name it" }).click();
+  await expect(newBot(page).getByRole("heading", { name: "xAI account found" })).toBeVisible();
+  await expect(newBot(page)).toContainText(
+    "The gateway lists it, but Clawtrate couldn't confirm the sign-in.",
+  );
+  await expect(newBot(page).getByRole("heading", { name: /^Connected to/ })).toHaveCount(0);
+  await expect(newBot(page).getByText("Your gateway keeps the sign-in.")).toHaveCount(0);
+  await expect(newBot(page).getByRole("textbox", { name: "Label" })).toBeVisible();
+});
+
 test("#450: a Disconnect confirmation is refused when another gateway names itself on the same target", async ({
   page,
 }) => {
