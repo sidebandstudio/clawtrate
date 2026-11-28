@@ -676,7 +676,9 @@ export function ConnectScreen({
   };
   const setupOwns =
     setup !== undefined &&
-    (setup.phase === "confirming" ||
+    (setup.phase === "installing" ||
+      setup.phase === "install-failed" ||
+      setup.phase === "confirming" ||
       setup.phase === "connecting" ||
       setup.phase === "failed" ||
       // A setup that finished stops speaking for the connection once it ends in an error: a

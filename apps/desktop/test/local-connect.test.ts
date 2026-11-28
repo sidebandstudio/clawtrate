@@ -514,6 +514,7 @@ it("only a person's packaged Mac app turns local connect on", () => {
       "apps/desktop/src/setup/controller.ts read this.options.localConnect",
       "apps/desktop/src/setup/controller.ts read this.options.localConnect",
       "apps/desktop/src/setup/controller.ts read this.options.localConnect",
+      "apps/desktop/src/setup/controller.ts read this.options.localConnect",
       "packages/core/src/client.ts PropertySignature localConnect?: (url: string, route: string) => ProvedRoute | null;",
       "packages/core/src/client.ts read this.options.localConnect",
     ]

@@ -257,3 +257,9 @@
     min-height: 48px;
   }
 }
+
+.s-step-detail {
+  display: block;
+  font-size: var(--text-sm);
+  color: var(--text-faint);
+}

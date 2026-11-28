@@ -161,7 +161,9 @@ import type {
 import {
   MAX_LOOK_OTHER_CHARS,
   MAX_LOOK_OTHERS,
+  type InstallFailure,
   type SetupFailure,
+  type SetupInstall,
   type SetupLook,
   type SetupState,
 } from "./setup.ts";
@@ -1377,6 +1379,7 @@ const setupLook = object<SetupLook>()({
   authMode: ENUM,
   access: ENUM,
   others: list(MAX_LOOK_OTHERS, text(MAX_LOOK_OTHER_CHARS)),
+  leftover: FLAG,
 });
 const setup = object<SetupState>()({
   phase: ENUM,
@@ -1385,6 +1388,18 @@ const setup = object<SetupState>()({
   unasked: FLAG,
   look: setupLook,
   failure: object<SetupFailure>()({ kind: ENUM, exitCode: NUMBER, port: NUMBER, reason: ENUM }),
+  install: object<SetupInstall>()({
+    step: NUMBER,
+    nodeChecked: FLAG,
+    failure: object<InstallFailure>()({
+      kind: ENUM,
+      step: NUMBER,
+      exitCode: NUMBER,
+      classification: ENUM,
+      retry: FLAG,
+      cleanup: ENUM,
+    }),
+  }),
 });
 
 // Check-ins (check-ins.ts): one job and one setting per bot, the default and the one save under way.

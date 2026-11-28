@@ -49,6 +49,10 @@ import {
   type HostRuntime,
 } from "../host/runtime.ts";
 import { SetupController } from "../setup/controller.ts";
+import { computerPlace, Installer, installSupported } from "../setup/install.ts";
+import { installTarget, PINS } from "../setup/install-pins.ts";
+import { InstallRunner } from "../setup/install-runner.ts";
+import { quitGate } from "../setup/quit.ts";
 import { localConnectFor, provedRouteFor } from "../setup/local-connect.ts";
 import { ProgramRunner } from "../setup/programs.ts";
 import { resolveSetupLaunch, sandboxOpener, type Opened } from "../setup/sandbox.ts";
@@ -102,6 +106,14 @@ let window: BrowserWindow | null = null;
 /** The programs setup started, ended by PID when the app quits. */
 const programs = new ProgramRunner();
 let closeSetup: () => Promise<void> = async () => {};
+/** The programs an install started, each in its own process group, ended and waited for when the app quits. */
+const installPrograms = new InstallRunner();
+/** Aborted when the app quits: an install downloads nothing more and starts no further step. */
+const installStop = new AbortController();
+/** How long the quit waits for setting OpenClaw up, its downloads and its programs to end. */
+const INSTALL_QUIT_WAIT_MS = 5_000;
+/** The setup controller's own close, once it exists: nothing new starts and its operation is waited for. */
+let closeController: () => Promise<void> = async () => {};
 
 /** Whether a command-line switch was given, to Chromium or to the app. */
 function hasSwitch(name: string): boolean {
@@ -226,6 +238,34 @@ function setupOpener(): {
     }),
     close,
   };
+}
+
+/**
+ * A new installer for each attempt (docs/design/setup.md §10), offered only where local
+ * connect is on: a person's packaged Mac app that nothing automates. Every development build
+ * and automated run gets none: it never downloads or runs OpenClaw's installer.
+ */
+function setupInstaller(): (() => Installer) | null {
+  if (SETUP.kind !== "production" || !LOCAL_CONNECT || process.platform !== "darwin") return null;
+  const target = installTarget(process.platform, process.arch, false);
+  const home = LOCAL_CONNECT.home;
+  if (!target || !installSupported(home, app.getPath("userData"))) return null;
+  return () =>
+    new Installer({
+      place: computerPlace({
+        home,
+        appData: app.getPath("userData"),
+        platform: "darwin",
+        target,
+        env: process.env,
+      }),
+      pins: PINS,
+      run: (request, check) => installPrograms.run(request, check),
+      signal: installStop.signal,
+      personsApp: true,
+      accountHome: home,
+      log: (line) => console.log(line),
+    });
 }
 
 /** The host's own confirmation (docs/design/setup.md §2): a native dialog, never the page. */
@@ -507,8 +547,10 @@ async function main(): Promise<void> {
   // Setup on this computer. A development build and every automated run look only in a sandbox.
   const opener = setupOpener();
   closeSetup = opener.close;
+  const installer = setupInstaller();
   const setup = new SetupController({
     client,
+    installer,
     open: opener.open,
     stopPrograms: () => programs.stopAll(),
     confirm: confirmNatively,
@@ -524,7 +566,14 @@ async function main(): Promise<void> {
       : {}),
   });
   policy.setup = setup;
-  info.setup = { look: true, pair: true, platform: process.platform, local: !!LOCAL_CONNECT };
+  closeController = () => setup.close();
+  info.setup = {
+    look: true,
+    pair: true,
+    platform: process.platform,
+    local: !!LOCAL_CONNECT,
+    install: installer !== null,
+  };
   // With local connect, the look only reads files and proves a socket, so it runs before the
   // person is asked anything: a gateway found here is offered on the first screen.
   if (LOCAL_CONNECT && client.state.connection.gatewayUrl === null) void setup.lookAtStart();
@@ -612,9 +661,29 @@ app.on("window-all-closed", () => {
   if (process.platform !== "darwin" || process.env.CLAWTRATE_SCREENSHOT) app.quit();
 });
 
+/**
+ * Setting OpenClaw up is closed first, so that no dialog's answer or queued step starts
+ * anything; then its downloads are aborted and every program it started, descendants too, is
+ * ended. The quit waits, within one bound, for the operation and the install's groups, and
+ * every quit asked while it waits is held too.
+ */
+const mayQuit = quitGate(
+  () => {
+    const operation = closeController();
+    installStop.abort();
+    const deadline = new Promise<void>((done) => setTimeout(done, INSTALL_QUIT_WAIT_MS));
+    return Promise.race([
+      Promise.all([operation, installPrograms.close(INSTALL_QUIT_WAIT_MS)]).then(() => {}),
+      deadline,
+    ]);
+  },
+  () => app.quit(),
+);
+
 /** Set once setup's programs and their workers are gone: quitting then goes ahead. */
 let programsEnded = false;
 app.on("before-quit", (event) => {
+  if (!mayQuit(event)) return;
   // The programs setup started, and the workers in their groups, end before the app does:
   // quitting waits for them (killed after their grace), then quits again.
   if (!programsEnded && programs.running().length + programs.groupsLeft() > 0) {

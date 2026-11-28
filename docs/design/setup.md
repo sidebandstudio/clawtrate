@@ -326,46 +326,17 @@ A device paired with less before full control isn't sent up one tier at a time: 
 
 "Approve from here", which would run the approve command for the person, is not in this version: OpenClaw's approve command can follow a compatible replacement of the request, so the exact request, device, role and scopes can't yet be enforced at the moment of approval (research §2). It waits for that check (F-500, `todo`).
 
-## 10. Setting OpenClaw up (macOS and Linux, on this computer)
+## 10. Setting OpenClaw up on this Mac
 
-"Set up OpenClaw here" (F-501 to F-505). Offered on this computer only, on macOS (Apple silicon and Intel) and on Linux with glibc (x64 and arm64). Elsewhere, including Windows, Alpine and other musl Linux, FreeBSD and another computer over SSH, the not-found card says what is offered instead (section 6, F-517). Setting up over SSH, cancelling a setup and removing OpenClaw are `todo`: they wait until the archive and script boundary over SSH and each attempt's ownership are proved (section 11).
+A person's packaged Mac app offers **Set up OpenClaw here** when the look finds no installation. The information button names the versions, the app-data folder, the separate `clawtrate` profile, the service that starts at login and the download checks. The main button goes straight to the native confirmation. Its answer expires after two minutes. The host checks the local files again before starting.
 
-**What Clawtrate owns.** An install is Clawtrate's when all four of these are true, and removal and rollback rely on nothing else (section 11):
+The host checks the OpenClaw 2026.11.10 npm tarball against its published SHA-512 integrity and the appropriate Node.js 24.22.1 archive against its published SHA-256. Both URLs are pinned. A redirect, incomplete download or mismatch ends the attempt before either archive is extracted. The host replaces two functions in the verified installer only when each appears once and matches its pinned hash. They make the installer use the checked Node.js and a private temporary folder. npm installs OpenClaw from the checked tarball and fetches dependencies from the public registry. Clawtrate does not pin those dependencies.
 
-- **A program folder of its own**, `<app data>/openclaw`. It is created empty by the install, and holds a record, `.clawtrate-install.json`, with the install's id, the version and the profile.
-- **An OpenClaw profile of its own**, `clawtrate`: its state is `~/.openclaw-clawtrate`, which holds an owner file, `.clawtrate-owner.json`, with the same id, written after onboarding. Its service is the profile's own: `ai.openclaw.clawtrate` (LaunchAgent), `openclaw-gateway-clawtrate.service` (systemd user unit). Its port is one the host picked free.
-- **Clawtrate's own record** of that install: the computer, the id, the folders, the service and the port.
-- **Nothing there before.** The install refuses to start if either folder or the service already exists: "Something named clawtrate is already set up on this computer. Clawtrate won't change it."
+The steps are “Download and check OpenClaw 2026.11.10”, “Install Node.js and OpenClaw”, “Set up the gateway” and “Start and check”. OpenClaw sets up token sign-in on a free loopback port without asking for a provider account or key. It installs the profile's user service. Clawtrate checks what the service runs and waits for an answer. The file check immediately before service installation narrows the window in which a service can appear. The read-back refuses a service definition that does not match the checked program and port.
 
-A default OpenClaw (`~/.openclaw`, `ai.openclaw.gateway`) is never touched: proven on both systems with a decoy default folder that came through install and removal unchanged (research §6.8).
+Once the local look proves the new profile and port, Clawtrate pairs with full control using the same checks as [local connect](setup-effortless.md#3-connect-to-openclaw-on-this-mac). The native confirmation covers that connection. Clawtrate starts no connection to a different profile or port on that consent.
 
-**What is verified, fail-closed** (research §6.8). Before anything runs, the host downloads two files and checks each against a hash built into this Clawtrate: OpenClaw 2026.10.6's npm tarball (its published `sha512` integrity) and Node.js 24.22.1 for the computer's system (its published SHA-256). A mismatch aborts explicitly, before anything is extracted. The host extracts `install-cli.sh` and `install-policy.sh` directly from that checked tarball, where they run. It puts the checked Node.js where the installer looks first, and has the installer install the checked tarball itself, not a version fetched again. Install is enabled only when the installer's Node.js download fallback is unreachable: before invoking the installer, the host runs the installer's own Node.js check against the checked runtime (the script can be sourced without running, `OPENCLAW_INSTALL_CLI_SH_NO_RUN=1`) and doesn't start it unless that check passes. An installer whose Node.js step then doesn't report `skip` is a failure. npm then downloads the packages OpenClaw depends on from the npm registry; Clawtrate can't check them. npm's own configuration is replaced by empty files for this install, so a registry or a setting of the person's isn't used.
-
-**Before anything is downloaded** (F-501): the title "Set up OpenClaw on this computer", and a fact block:
-
-|         |                                                                                                                                                                                                                                            |
-| ------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| What    | "OpenClaw 2026.10.6, the version this Clawtrate is tested with, with its own copy of Node.js 24.22.1"                                                                                                                                      |
-| Where   | "Clawtrate puts OpenClaw's program and gateway data in its own folders and adds a user service. npm can also write its cache and OpenClaw can write service logs."                                                                         |
-| Checked | "Clawtrate checks the OpenClaw and Node.js downloads against fingerprints built into this version. Setup also installs code from npm that Clawtrate hasn't pinned or verified. That code can run with your account's permissions."         |
-| Then    | "A gateway that listens on this computer only, as a LaunchAgent that starts when you log in, with no AI provider yet. You sign in to one when you make your first bot." (Linux: "as a systemd user service that starts with your session") |
-
-Under the facts (13, faint): "Nothing is asked for: no account and no model key." and "OpenClaw keeps running if you remove Clawtrate. Removing this gateway in Settings can also stop it; removing OpenClaw isn't offered in this version." Then "Set up OpenClaw…" (primary), which opens the host's dialog repeating the dependency sentence, and "Cancel".
-
-**The steps** (F-502), title "Setting up OpenClaw":
-
-| Step                                    | What the host runs (section 19)                                                                                                                                                                    | Its failure, in fixed copy                                                                                                |
-| --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------- |
-| "Download and check OpenClaw 2026.10.6" | Fetches the tarball and Node.js and checks both hashes                                                                                                                                             | "The download didn't finish." · "A download didn't match the fingerprint built into Clawtrate, so nothing was installed." |
-| "Install Node.js and OpenClaw"          | `install-cli.sh --json --runtime-only --npm --version <the checked tarball> --prefix <program folder>`; its NDJSON step names drive the step's line ("Node.js 24.22.1, checked")                   | "The installer stopped (exit 1)."; or "The installer didn't use the checked Node.js."                                     |
-| "Set up the gateway"                    | `openclaw --profile clawtrate onboard --non-interactive --accept-risk --auth-choice skip --gateway-bind loopback --gateway-auth token --gateway-port <port> --install-daemon --skip-skills --json` | The result's `classification` in words, as in section 6                                                                   |
-| "Start and check"                       | `openclaw --profile clawtrate gateway status --json` until `rpc.ok` with version 2026.10.6, at most 60 s                                                                                           | "The gateway didn't answer after it was set up."                                                                          |
-
-The step list shows elapsed time after 10 s on the running step. An install takes about a minute (research §6.2, §6.8; the times in the prototype are samples). When every step is done, the look's running card for the `clawtrate` profile appears, and Connect pairs as in section 7.
-
-**A failed step** is drawn failed, the steps after it stay waiting, and a `--danger` note under the list says "**<the step's words> failed.**" and the fixed cause. "Show details" opens the step's typed record: step, error category, and numeric exit code. Back returns to the not-found card. Trying again is `todo` with Cancel (F-502): a new install refuses while anything this attempt made is there ("Nothing there before", above), and removing it waits until each attempt's ownership is proved (F-514).
-
-**Cancel** (`todo`, not in this version): the host's dialog "Stop setting up OpenClaw?", with the detail "Clawtrate will stop this setup and remove what it can verify this attempt created. It will list anything left." It reports only cleanup it verified.
+Failures use fixed copy and offer a retry. Before onboarding, a fresh attempt can remove files it proves the earlier attempt made. After onboarding starts, a retry checks what's there and keeps gateway files. Cancelling a running install and removing an installed gateway from Settings are separate work. The Linux installer is covered by stand-ins. Install is offered on macOS.
 
 ## 11. Removing OpenClaw, or leaving it (not in this version)
 
@@ -484,7 +455,7 @@ The rows this design governs are in `docs/parity.md`. Statuses do not change. In
 
 - **F-500, F-506 and F-507** stay `todo`: no code is handed to a phone and nothing is approved for the person. F-500 now carries `setup-effortless.md` §6, whose offer for a remote pairing is built; this Mac's upgrade waits for §3's send gate.
 - **F-510 to F-512** stay `todo`: the Tailscale row is read-only, with OpenClaw's own instructions.
-- **F-501 to F-505** are macOS and Linux only, on this computer; remote setup, cancelling (F-502) and removal (F-514) wait for their proofs. **F-517** is for installing on Windows, `todo`.
+- **F-501 to F-505** are on this Mac; remote setup, cancelling (F-502) and removal (F-514) wait for their proofs. **F-517** is for installing on Windows, `todo`.
 - **F-513** keeps ordered failover and failback, with one token per route.
 - **F-003 and F-009** keep their `desktop done` scope for what the existing check drives.
 
