@@ -1525,6 +1525,10 @@ export class AccountsEngine {
       }
       out.step = step as SignInState["step"];
     }
+    // A model read back that carries what was typed is no model reference: it is left out.
+    const model = out.result?.model;
+    if (out.result && typeof model === "string" && this.scrub(model) !== model)
+      out.result = { ...out.result, model: null };
     return out;
   }
 
@@ -1597,6 +1601,8 @@ export class AccountsEngine {
       }
       const step = readStep(next?.step);
       if (!step) {
+        // Its session may still be open: ended on this gateway, as the safety stop does. Whether
+        // the account connected stays unsure either way.
         this.setSignIn(id, {
           stage: "failed",
           step: null,
@@ -1673,8 +1679,9 @@ export class AccountsEngine {
       throw new Error("That can't be sent.");
     const stepId = signIn.step.id;
     this.holdSecret(value);
-    this.setSignIn(signIn.id, { stage: "checking" });
+    // The accounts as they are now are this answer's baseline, for its read and for Check again.
     const before = this.accountsOf(signIn.provider);
+    this.setSignIn(signIn.id, { stage: "checking" });
     await this.paused((pause) => this.follow(signIn.id, { stepId, value }, null, before, pause));
   }
 
@@ -1878,7 +1885,7 @@ export class AccountsEngine {
           return readModelConfig(asRecord(asRecord(entries)?.[signIn.forBot])?.model).primary;
         })
         .catch(() => null);
-    if (ctx.get().signIn?.id !== id) return;
+    if (ctx.get().signIn?.id !== id ) return;
     const ended = ctx.get().signIn!;
     // "Connected" only when the read after it shows the account; otherwise what is known.
     const stage =

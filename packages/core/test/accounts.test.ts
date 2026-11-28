@@ -1683,6 +1683,29 @@ describe("sign-ins, through the gateway's own methods", () => {
     }
   });
 
+  it("an unsure ending leaves out a model read back that carries what was typed", async () => {
+    const fake = new AccountsGateway();
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    const code = "made-up-echoed-code";
+    try {
+      await client.startSignIn(CHOICES.browser, null);
+      const forBot = accounts().signIn!.forBot;
+      const entries = (fake.config.agents as { entries: Record<string, Record<string, unknown>> })
+        .entries;
+      // The gateway echoes the submitted value into the bot's primary model.
+      fake.gateway.handlers["wizard.next"] = () => {
+        entries[forBot] = { ...entries[forBot], model: { primary: `acme/${code}` } };
+        return { done: false, step: { type: "text" } };
+      };
+      await client.answerSignIn(code);
+      await until(() => accounts().signIn?.result != null);
+      expect(accounts().signIn).toMatchObject({ unsure: true, result: { model: null } });
+      expect(JSON.stringify(accounts().signIn)).not.toContain(code);
+    } finally {
+      client.stop();
+    }
+  });
+
   it("a sign-in the gateway refused is not unsure, and its read after it has no model", async () => {
     const fake = new AccountsGateway();
     fake.nextEnding = { outcome: "refuse" };
