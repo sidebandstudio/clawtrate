@@ -317,9 +317,12 @@ test("#872: while a run still draws its reply, history's row of that reply is kn
   });
   client = engineClient;
   const { held, stop } = heldReplies(engineClient, () => key);
+  const TRIES = 12;
+  let tries = 0;
   try {
-    for (let attempt = 0; attempt < 12 && held.length === 0; attempt++) {
-      key = await openNewTask(engineClient, `reply-once-${attempt}`);
+    while (tries < TRIES && held.length === 0) {
+      tries += 1;
+      key = await openNewTask(engineClient, `reply-once-${tries}`);
       // The scripted model thinks, its call fails, and it answers in a message of its own: F-551's run.
       engineClient.sendMessage(key, "Look for my old notes. #think #tool-fail");
       await expect
@@ -329,8 +332,14 @@ test("#872: while a run still draws its reply, history's row of that reply is kn
       // Within the client's bound of open tasks.
       if (held.length === 0) engineClient.closeSession(key);
     }
-    // The moment happened, and in every state of it the row was the reply's.
-    expect(held.length).toBeGreaterThan(0);
+    console.log(`#872: the read landed between the answer's row and the run's end on try ${tries}`);
+    // The moment happened, and in every state of it the row was the reply's. Both versions write
+    // the answer's row at its message's end, when the provider's stream is done, and end the run
+    // right after unless a steer waits (OpenClaw's agent loop): no fixture holds that moment open.
+    expect(
+      held.length,
+      `no history read landed in the 30 to 60 ms between the answer's row and the run's end in ${TRIES} tries`,
+    ).toBeGreaterThan(0);
     expect(held.filter((row) => row !== null)).toEqual([]);
   } finally {
     stop();
