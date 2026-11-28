@@ -416,7 +416,7 @@ await p.close();
 p = await open("view=routine&routine=digest");
 await p.click('[data-testid="runs"] li:first-child [data-testid="run-row"]');
 check("F-193 a run opens its conversation: the scheduled message as the gateway recorded it, then the reply", (await text(p, "#view-title")) === "Morning digest" && (await text(p, '[data-testid="run-when"]')) === "Marlow · Today 8:00 AM" && (await text(p, '[data-testid="scheduled-message"] .r-sched-head')) === "Scheduled message, as the gateway recorded it" && (await text(p, '[data-testid="scheduled-message"] p')).startsWith("Summarise the notes I added yesterday, and list anything I need to answer today.\n\nThis is an unattended scheduled run.") && (await has(p, ".r-convo .bubble")));
-check("F-190 the run's foot: no reply possible, its usage", (await text(p, '[data-testid="run-foot"]')).startsWith("This run has finished. A run can't be answered; to change what it does, edit the routine.") && (await text(p, ".r-run-facts")) === "scripted/dev-1 · 2.6 s · 120 in, 80 out tokens" && !(await has(p, ".composer-input")));
+check("F-190 the run's foot: no reply possible, its usage", (await text(p, '[data-testid="run-foot"]')).startsWith("This run has finished. A run can't be answered; to change what it does, edit the routine.") && (await text(p, '[data-testid="run-outcome"]')) === "Succeeded · 2.6 s · 200 tokens" && !(await has(p, '[data-testid="run-outcome"][data-tone]')) && (await text(p, ".r-run-facts")) === "scripted/dev-1 · 120 in, 80 out tokens" && !(await has(p, ".composer-input")));
 await p.click('[data-r="back-to-routine"]');
 check("Back returns to the routine, focus on the run", (await text(p, "#view-title")) === "Morning digest" && (await p.evaluate(() => document.activeElement === document.querySelector('[data-testid="run-row"]'))));
 await p.close();
@@ -425,6 +425,13 @@ check("a run from before the instruction was edited shows the message it was sen
 await p.close();
 p = await open("view=run&routine=digest&run=3");
 check("no recorded conversation: said plainly; a run with no summary says it returned nothing; nothing rebuilt from the current instruction", (await text(p, ".b-note")).startsWith("Clawtrate can't show this run's conversation. The gateway returned none for it.") && (await text(p, '[data-testid="returned"]')) === "The gateway recorded nothing this run returned." && !(await has(p, '[data-testid="scheduled-message"]')) && !(await p.evaluate(() => /as it reads now/.test(document.body.textContent))));
+await p.close();
+// Every finished run's foot says how it ended, and only a failure in the danger tone (#897).
+p = await open("view=run&routine=watch&run=0");
+check("a skipped run's foot says Skipped, not in the danger tone", (await text(p, '[data-testid="run-outcome"]')) === "Skipped" && !(await has(p, '[data-testid="run-outcome"][data-tone]')));
+await p.close();
+p = await open("view=run&routine=digest&run=3");
+check("a failed run's foot says why, in the danger tone", (await text(p, '[data-testid="run-outcome"]')) === "Failed: The model didn't answer within 120 seconds." && (await has(p, '[data-testid="run-outcome"][data-tone="danger"]')));
 await p.close();
 p = await open("view=run&routine=reminder&run=0&state=ran-once");
 check("a reminder's run is in the main conversation: no transcript of its own, its summary and a way there", (await text(p, ".b-note")).startsWith("This run happened in Marlow's main conversation.") && (await text(p, '[data-testid="returned"]')) === "Posted the reminder in Marlow's main conversation." && (await has(p, '.b-note [data-r="open-bot"]')) && !(await has(p, '[data-testid="scheduled-message"]')));
@@ -437,8 +444,8 @@ for (const sessionTarget of ["session:planning", "current"]) {
 await p.click('[data-testid="run-row"]');
 check("F-190 a recorded isolated run still shows its transcript after the routine switches to current", (await text(p, '[data-testid="scheduled-message"] p')).startsWith("Summarise the notes I added yesterday,"));
 await p.click('[data-r="back-to-routine"]');
-await p.locator('[data-testid="run-row"]').nth(3).click();
-check("a shared run with an unknown destination has no conversation link", (await text(p, ".b-note")).startsWith("This run happened in a shared conversation.") && !(await has(p, '.b-note [data-session]')));
+await p.locator('[data-testid="run-row"]').nth(1).click();
+check("a run that recorded no session in a shared routine says it can't be placed, and what the gateway recorded, with no conversation link (#897)", (await text(p, ".b-note")).startsWith("Clawtrate can't confirm which conversation this run used. The gateway recorded no session for it") && (await text(p, ".r-returned-head")) === "What the gateway recorded:" && (await text(p, '[data-testid="returned"]')) === "Two notes from yesterday, both about the venue." && !(await has(p, '.b-note [data-session]')));
 await p.click('[data-r="back-to-routine"]');
 const sharedKey = "agent:marlow:planning";
 await event(p, { action: "finished", job: { id: "digest", sessionTarget: "current", sessionKey: sharedKey }, runId: "shared-run", runAtMs: Date.UTC(2026, 10, 18, 15, 12), sessionKey: "agent:marlow:cron:digest:run:shared-run", status: "ok", summary: "Planning notes." });

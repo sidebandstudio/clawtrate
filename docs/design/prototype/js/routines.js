@@ -845,13 +845,17 @@
     const where = r.payload.kind === "command" ? "command" : shared ? "main" : "";
     const rs = S.runstate || (x.running ? "running" : where || (x.history ? "" : "none"));
     // A run with no summary returned nothing the gateway kept; its outcome is not offered as its result.
-    const returned = () => (x.summary ? `<p class="r-returned-head">What the run returned:</p><p data-testid="returned">${esc(x.summary)}</p>` : `<p data-testid="returned">The gateway recorded nothing this run returned.</p>`);
+    const returned = (label = "What the run returned:") => (x.summary ? `<p class="r-returned-head">${label}</p><p data-testid="returned">${esc(x.summary)}</p>` : `<p data-testid="returned">The gateway recorded nothing this run returned.</p>`);
     let body = "";
     if (rs === "loading") body = `<div class="r-convo" aria-busy="true"><span class="skeleton" style="display:block;width:70%;height:16px;margin:24px 0"></span><span class="skeleton" style="display:block;width:50%;height:16px"></span></div>`;
     else if (rs === "error") body = `<div class="work-empty" data-testid="run-error"><span class="empty-mark">${icon("warning")}</span><h4>Couldn't load this run.</h4><p>The gateway didn't answer in time.</p>${button("Try again", 'data-r="run-retry"')}</div>`;
     else {
       if (rs === "none")
         body += note(`<p><b>Clawtrate can't show this run's conversation.</b> The gateway returned none for it. It keeps a run's conversation for 24 hours unless it is set to keep them longer, so an older one may have been removed.</p>${returned()}`);
+      // A run that recorded no session can't be placed in any conversation; a reminder's run on
+      // OpenClaw 2026.10.6 records the reminder's own text, not the bot's answer.
+      else if (rs === "main" && !x.sessionKey && !x.sharedSessionKey)
+        body += note(`<p><b>Clawtrate can't confirm which conversation this run used.</b> The gateway recorded no session for it, and the routine may have been edited since it ran.</p>${returned("What the gateway recorded:")}`);
       else if (rs === "main") {
         const main = `agent:${r.bot}:main`;
         const title = session === main ? `${botName(r.bot)}'s main conversation` : session ? `the shared conversation (${session})` : "a shared conversation";
@@ -869,7 +873,9 @@
       body += `<div class="r-run-foot" data-testid="run-foot">` +
         (rs === "running" ? `${glyph("working")} Running…` : `This run has finished. A run can't be answered; to change what it does, edit the routine.` +
           (isAdmin() && !S.deleted ? `<div class="b-actions">${button("Edit routine", `data-size="sm" data-r="edit" data-id="${r.id}"`)}</div>` : "") +
-          `<span class="r-run-facts">${o.mark === "failed" ? esc(o.text) + " · " : ""}scripted/dev-1 · ${x.dur} s · ${x.inT} in, ${x.outT} out tokens</span>`) + `</div>`;
+          // Every finished run says how it ended; only a failed one in the danger tone.
+          `<span data-testid="run-outcome"${o.mark === "failed" ? ' data-tone="danger"' : ""}>${esc(o.text)}</span>` +
+          `<span class="r-run-facts">scripted/dev-1 · ${x.inT} in, ${x.outT} out tokens</span>`) + `</div>`;
     }
     return { head, body: `<div class="r-convo">${body}</div>`, r: "run" };
   }
