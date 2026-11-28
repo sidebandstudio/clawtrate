@@ -35,6 +35,7 @@ import { AccountChoices, GATEWAY_CHOICE, gatewayLine } from "./AccountChoices.ts
 import { ClearOrderConfirm, ClearOutcome, type ClearAsk } from "./ClearOrder.tsx";
 import { settleBotSettingsRequest, settlement, useBotSettingsRequest } from "./settings-request.ts";
 import { Connect } from "./Connect.tsx";
+import { ModelAllowedLine } from "./ModelAllowedLine.tsx";
 import { ModelPair, rowFor, useModelList } from "./ModelPair.tsx";
 import { UpdateOpenClawNote } from "./UpdateOpenClaw.tsx";
 import { ManageGroup } from "./DeleteBot.tsx";
@@ -531,6 +532,25 @@ export function BotSettings({
         );
       }
     };
+    // The effort alone, for the model this menu was drawn for: the host writes nothing if the
+    // bot's model has moved since (#799).
+    const saveEffort = async (drawn: { provider: string; model: string }, nextEffort: string) => {
+      setError(null);
+      try {
+        await bridge.invoke({
+          type: "setBotEffort",
+          botId: bot.id,
+          ...drawn,
+          effort: nextEffort,
+          stamp: await screenStamp(bridge, shownOn),
+        });
+        announce("Effort saved");
+      } catch (failure) {
+        setError(
+          `Couldn't save the effort: ${failure instanceof Error ? failure.message : String(failure)}`,
+        );
+      }
+    };
     return (
       <div ref={rootRef} className="b-tab" data-testid="bot-settings">
         <h3 className="b-tabgroup">Model</h3>
@@ -589,7 +609,7 @@ export function BotSettings({
                   }
                   void saveModel(next, effort);
                 }}
-                onEffort={(effort) => void saveModel(model, effort)}
+                onEffort={(effort) => void saveEffort({ provider, model }, effort)}
               />
             </div>
             <p className="b-hint" id="b-model-line">
@@ -608,6 +628,8 @@ export function BotSettings({
             <UpdateOpenClawNote />
           </>
         )}
+        {/* The model and the list that limits it (#799): what was added, or why tasks can't start. */}
+        <ModelAllowedLine botId={bot.id} botName={name} />
         <MemoryRow onOpen={() => go("memory")} />
         <StartTasksRow name={name} botId={bot.id} transcripts={transcripts} />
         {extraGroups}

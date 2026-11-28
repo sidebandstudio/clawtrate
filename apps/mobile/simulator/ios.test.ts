@@ -45,7 +45,7 @@ import { CONVERSATION_WORDS } from "../src/presentation/conversation-words.ts";
 import { SENT_PICTURE_LINES, sentPictureAlt } from "../src/presentation/sent-files.ts";
 import { BOT_FILE_WORDS } from "../src/presentation/bot-files.ts";
 import { ATTACH_TEXT, reviewsDraftPdf } from "../../../tools/dev-gateway/src/scripted-files.ts";
-import { rowTime, stampTime } from "../../../packages/ui/src/format.ts";
+import { rowTime } from "../../../packages/ui/src/format.ts";
 import { addressWords, SETTINGS_WORDS } from "../src/presentation/gateway-state.ts";
 import { WebSocket, WebSocketServer } from "ws";
 import { decodePng, encodePng } from "../../../tools/brand/src/png.ts";
@@ -60,6 +60,7 @@ import {
   closeWithin,
   containerHits,
   deadPort,
+  describeConnections,
   devGateway,
   devices,
   displays,
@@ -85,6 +86,7 @@ import {
   protocolFiveGateway,
   Proxy,
   quit,
+  reconnectedOnce,
   reduceMotion,
   reinstall,
   running,
@@ -95,6 +97,7 @@ import {
   scrollTo,
   see,
   shoot,
+  stampPattern,
   steps,
   switcherSnapshot,
   tap,
@@ -191,8 +194,6 @@ async function creaturesAtFoot(screenId: string): Promise<boolean> {
 }
 
 const hostOf = (url: string) => url.replace(/^ws:\/\//, "");
-/** A stamp's words as a pattern: the clock's space may be any space. */
-const stampPattern = (at: number) => lit(stampTime(at)).replace(/\s/g, ".");
 const pause = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 function expectSwitcherCover({
@@ -815,6 +816,10 @@ describe("the iOS app", () => {
   });
 
   it("F-063 F-065: on iPhone, a task's chat opens on its title under the header band, puts a stamp before the first message and after a pause, shows your messages and the bot's as bubbles with the bot's markdown and tables that scroll sideways, and each action as one line in the engine's words", async () => {
+    const DISK_ASK = "The media box says the disk is 94% full. What is eating the space?";
+    // The seed wrote this before the check ran, maybe before the device's midnight (#640). So
+    // the stamp shows this message's own time, under "Today" or "Yesterday".
+    const diskAskAt = await storedAt("agent:otto:disk-space", DISK_ASK);
     await steps("read-disk", [
       tap({ id: "bot-otto" }),
       waitFor({ id: "bot-tasks-otto" }, 20_000),
@@ -822,8 +827,8 @@ describe("the iOS app", () => {
       waitFor({ id: "turn-bot" }, 60_000),
       // Opened at its start: the title is in view without scrolling.
       see({ id: "task-line", text: "Disk almost full on the media box" }),
-      see({ id: "stamp", text: "Today \\d{1,2}:\\d{2}.(AM|PM)", below: { id: "task-line" } }),
-      see(`${lit("The media box says the disk is 94% full. What is eating the space?")}`),
+      see({ id: "stamp", text: stampPattern(diskAskAt), below: { id: "task-line" } }),
+      see(lit(DISK_ASK)),
       // The markdown is drawn, not shown as marks.
       notSee(".*\\*\\*.*"),
       // One read-only explanation, where the composer will be.
@@ -1468,11 +1473,31 @@ describe("the iOS app", () => {
     ]);
     // Disconnected keeps the pairing: the gateway still has the device, and Reconnect connects it.
     expect((await devices()).paired.some((d) => d.deviceId === deviceId)).toBe(true);
+    // A hosted runner can take more than a minute to connect again (#611), so the wait is three.
+    const upgrades = () => proxy.requests.filter((request) => request.upgrade);
+    const sockets = upgrades().length;
+    const tapped = Date.now();
     await steps("reconnect", [
       tap({ id: "status-strip-action", text: "Reconnect" }),
-      waitFor({ id: "connection-dot-connected" }, 60_000),
-      waitGone({ id: "status-strip" }, 60_000),
+      waitFor({ id: "connection-dot-connected" }, 180_000),
     ]);
+    // Then it settles: the strip goes and the dot stays connected. The strip goes only once the
+    // app has caught up and shown Synced for four seconds without a drop, but those states can
+    // pass between two of Maestro's looks, so they aren't asserted on their own. Reconnect opened
+    // one socket that got the gateway's hello, and no other since, so nothing dropped and
+    // reconnected. On a slow hosted runner the app can give up on a first connect the gateway
+    // hasn't answered and open another (#611), so one such abandoned connect before it is allowed;
+    // two that each got hello are a drop and a reconnect, and fail. The list is logged either way.
+    await steps("reconnect-settles", [
+      waitGone({ id: "status-strip" }, 120_000),
+      see({ id: "connection-dot-connected" }),
+    ]);
+    const since = upgrades().slice(sockets);
+    const opened = describeConnections(since, tapped);
+    console.log(`WebSockets since Reconnect was tapped:\n${opened}`);
+    expect(reconnectedOnce(since), `Reconnect did not settle on one connection:\n${opened}`).toBe(
+      true,
+    );
 
     // Deleted and installed again, the app does not walk back into the gateway:
     // it offers it, and the same device reconnects when asked.
