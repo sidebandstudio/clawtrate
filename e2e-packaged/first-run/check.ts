@@ -1,6 +1,7 @@
 import { execFile, execFileSync, spawn, spawnSync, type ChildProcess } from "node:child_process";
 import {
   closeSync,
+  copyFileSync,
   existsSync,
   lstatSync,
   mkdirSync,
@@ -84,6 +85,19 @@ let accountPickerBeforeSave = false;
 let accountSheet: AccountSheetResult | null = null;
 let accountProbe: { checkingScreenObserved: boolean; scriptedResponses: number } | null = null;
 let notFoundAdvancedCount: number | null = null;
+const timing = process.env.FIRST_RUN_ACCOUNT_TIMING;
+if (timing !== "before" && timing !== "at-return" && timing !== "late") {
+  throw new Error("Select a hosted account timing case.");
+}
+const accountTiming = {
+  case: timing,
+  configAt: null as number | null,
+  saveInputAt: null as number | null,
+  savedAt: null as number | null,
+  reconnectNoticeAt: null as number | null,
+  connectedAt: null as number | null,
+  sheetAdvancedAt: null as number | null,
+};
 
 mkdirSync(out, { recursive: true });
 const system = observeMac(out);
@@ -160,6 +174,9 @@ async function readWindow() {
     record({ kind: "screen", text });
     screenKey = text;
   }
+  if (accountTiming.configAt !== null && (firstBotAction() || composer())) {
+    accountTiming.sheetAdvancedAt ??= seconds(performance.now() - start);
+  }
   refuseForbidden([...systemWindows, ...latest]);
   if (child?.exitCode != null || child?.signalCode != null)
     throw new Error("Clawtrate quit before the check finished.");
@@ -211,8 +228,8 @@ async function press(
   }
 }
 
-async function screenshot(file: string, wholeDisplay = false) {
-  const path = join(out!, file);
+async function screenshot(file: string, wholeDisplay = false, directory = out!) {
+  const path = join(directory, file);
   // Capture the window's screen rectangle so the native sheet is also in the picture.
   // Before the app has a window, show the desktop.
   const bounds = wholeDisplay ? "" : await ax("bounds").catch(() => "");
@@ -346,6 +363,70 @@ const firstBotAction = () =>
   );
 const reconnecting = () =>
   hasText(/^(?:Waiting for your gateway to reconnect|Reconnecting\b|Restarting OpenClaw)/i);
+
+async function waitForGatewayReturn() {
+  const deadline = performance.now() + 150_000;
+  const directory = process.env.RUNNER_TEMP!;
+  const name = "first-run-connection-sample.png";
+  const frame = join(directory, name);
+  const reader = join(directory, "first-run-connection-label");
+  while (performance.now() < deadline) {
+    await readWindow();
+    if (reconnecting()) accountTiming.reconnectNoticeAt ??= seconds(performance.now() - start);
+    if (accountTiming.reconnectNoticeAt !== null) {
+      const sampledAt = performance.now();
+      // The modal hides the rest of the window from Accessibility. Read the
+      // rendered connection label without dismissing or clicking the sheet.
+      await screenshot(name, false, directory);
+      const { stdout } = await run(reader, [frame], { timeout: 8000 });
+      if (hasText(/^Connected$/) || stdout.trim() === "Connected") {
+        accountTiming.connectedAt = seconds(sampledAt - start);
+        copyFileSync(frame, join(out!, "05-gateway-connected.png"));
+        return sampledAt;
+      }
+    }
+    await sleep(350);
+  }
+  throw new Error("The check did not observe Connected after the gateway restart.");
+}
+
+async function configureAccount(profile: string, appData: string) {
+  const fixture = await scriptedProvider(profile, appData, (text) =>
+    record({ kind: "fixture", text }),
+  );
+  provider = fixture.server;
+  // Start the CLI early and keep its stdin closed to data until the chosen time.
+  const writer = fixture.prepareAccountSave();
+  async function save() {
+    accountTiming.saveInputAt = seconds(performance.now() - start);
+    await writer.save();
+    accountSavedAt = performance.now();
+    accountTiming.savedAt = seconds(accountSavedAt - start);
+  }
+  try {
+    if (timing === "before") await save();
+    fixture.applyConfig();
+    accountTiming.configAt = seconds(performance.now() - start);
+    const returned = await waitForGatewayReturn();
+    if (timing === "late") {
+      while (performance.now() - returned < 24_000) {
+        await readWindow();
+        await sleep(350);
+      }
+    }
+    if (timing !== "before") await save();
+    const delta = accountTiming.savedAt! - accountTiming.connectedAt!;
+    if (
+      (timing === "before" && delta >= 0) ||
+      (timing === "at-return" && Math.abs(delta) > 5) ||
+      (timing === "late" && (delta < 20 || delta > 30))
+    ) {
+      throw new Error(`The ${timing} save landed ${delta.toFixed(1)}s relative to Connected.`);
+    }
+  } finally {
+    writer.cancel();
+  }
+}
 
 const shellVisible = () =>
   latest.some(({ role, text }) => role === "AXLandmarkNavigation" && text === "Bots") ||
@@ -483,10 +564,7 @@ try {
     if (accountPickerBeforeSave) {
       await screenshot("05-account-picker.png");
     }
-    provider = await scriptedProvider(profile, appData, (text) =>
-      record({ kind: "fixture", text }),
-    );
-    accountSavedAt = performance.now();
+    await configureAccount(profile, appData);
     await readWindow();
     await screenshot("05-after-scripted-account.png");
     return heading() ?? "The scripted model is configured on loopback.";
@@ -598,6 +676,7 @@ try {
     pressCounts,
     accountSheet,
     accountProbe,
+    accountTiming,
     trace,
     diagnostics,
   };

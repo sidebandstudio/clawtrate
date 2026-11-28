@@ -1,4 +1,4 @@
-import { spawnSync } from "node:child_process";
+import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { lstatSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import type { Server } from "node:http";
@@ -52,44 +52,69 @@ export async function scriptedProvider(
     const health = await fetch(`${base}/health`, { signal: AbortSignal.timeout(3000) });
     if (!health.ok) throw new Error("The scripted provider did not answer its health check.");
     note(`Started the scripted development provider on ${base}.`);
-    const next = {
-      ...config,
-      proxy: { proxyUrl: base },
-      models: {
-        mode: "replace",
-        providers: { [account.provider]: accountProviders(port)[account.provider] },
-      },
-      agents: {
-        ...config.agents,
-        defaults: {
-          ...config.agents?.defaults,
-          model: { primary: `${account.provider}/${MODEL_ID}` },
+    function applyConfig() {
+      const current = JSON.parse(readFileSync(configFile, "utf8"));
+      if (current.gateway?.mode !== "local" || current.gateway?.bind !== "loopback") {
+        throw new Error("The installed gateway is no longer configured for loopback.");
+      }
+      const next = {
+        ...current,
+        proxy: { proxyUrl: base },
+        models: {
+          mode: "replace",
+          providers: { [account.provider]: accountProviders(port)[account.provider] },
         },
-      },
-    };
-    // Atomic replacement lets OpenClaw's config watcher see a complete file.
-    const staged = join(profile, ".first-run-config.json");
-    writeFileSync(staged, JSON.stringify(next, null, 2) + "\n", { flag: "wx", mode: 0o600 });
-    renameSync(staged, configFile);
-    note(
-      `Set the clawtrate profile's only model provider to ${account.provider}, with ${account.provider}/${MODEL_ID} as the default and the scripted server as its proxy.`,
-    );
+        agents: {
+          ...current.agents,
+          defaults: {
+            ...current.agents?.defaults,
+            model: { primary: `${account.provider}/${MODEL_ID}` },
+          },
+        },
+      };
+      // Atomic replacement lets OpenClaw's config watcher see a complete file.
+      const staged = join(profile, ".first-run-config.json");
+      writeFileSync(staged, JSON.stringify(next, null, 2) + "\n", { flag: "wx", mode: 0o600 });
+      renameSync(staged, configFile);
+      note(
+        `Set the clawtrate profile's only model provider to ${account.provider}, with ${account.provider}/${MODEL_ID} as the default and the scripted server as its proxy.`,
+      );
+    }
 
     // Use the same fake account as the development gateway. Its key takes
     // the gateway's normal save path, so a new bot sees the shared account.
-    const { args, stdin } = saveAccountCommand(account);
-    const installed = join(appData, "openclaw", "bin", "openclaw");
-    const saved = spawnSync(installed, ["--profile", "clawtrate", ...args], {
-      env: { HOME: dirname(profile), PATH: "/usr/bin:/bin:/usr/sbin:/sbin" },
-      input: stdin,
-      stdio: ["pipe", "ignore", "ignore"],
-      timeout: 60_000,
-    });
-    if (saved.status !== 0) throw new Error("OpenClaw did not save the scripted account.");
-    note(
-      `Saved the synthetic ${account.id} account to the shared main store with the gateway's own account command.`,
-    );
-    return server;
+    function prepareAccountSave() {
+      const { args, stdin } = saveAccountCommand(account);
+      const installed = join(appData, "openclaw", "bin", "openclaw");
+      const writer = spawn(installed, ["--profile", "clawtrate", ...args], {
+        env: { HOME: dirname(profile), PATH: "/usr/bin:/bin:/usr/sbin:/sbin" },
+        stdio: ["pipe", "ignore", "ignore"],
+        timeout: 180_000,
+      });
+      const saved = new Promise<void>((resolve, reject) => {
+        writer.once("error", reject);
+        writer.stdin.once("error", reject);
+        writer.once("close", (status) =>
+          status === 0
+            ? resolve()
+            : reject(new Error("OpenClaw did not save the scripted account.")),
+        );
+      });
+      void saved.catch(() => undefined);
+      return {
+        async save() {
+          writer.stdin.end(stdin);
+          await saved;
+          note(
+            `Saved the synthetic ${account.id} account to the shared main store with the gateway's own account command.`,
+          );
+        },
+        cancel() {
+          if (writer.exitCode === null && writer.signalCode === null) writer.kill();
+        },
+      };
+    }
+    return { server, applyConfig, prepareAccountSave };
   } catch (error) {
     server.close();
     throw error;

@@ -31,6 +31,10 @@ jobs:
   first-run:
     runs-on: macos-15
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        timing: [before, at-return, late]
     steps:
       - uses: actions/checkout@v7
         with:
@@ -76,15 +80,19 @@ jobs:
           # shellcheck disable=SC2046
           security list-keychains -d user -s "$path" $(security list-keychains -d user | tr -d '"')
           security default-keychain -d user -s "$path"
+      - name: Build the connection label reader
+        run: swiftc e2e-packaged/first-run/connection-label.swift -o "$RUNNER_TEMP/first-run-connection-label"
       - name: Move Apple developer tools aside
         run: bash e2e-packaged/first-run/without-developer-tools.sh
       - name: Drive the packaged app
+        env:
+          FIRST_RUN_ACCOUNT_TIMING: ${{ matrix.timing }}
         run: node e2e-packaged/first-run/check.ts "$APP" "$RUNNER_TEMP/first-run"
       - name: Upload the result and screenshots
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: packaged-first-run
+          name: packaged-first-run-${{ matrix.timing }}
           if-no-files-found: error
           path: ${{ runner.temp }}/first-run/
           retention-days: 7
