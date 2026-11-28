@@ -46,6 +46,10 @@ export const LIVE_SCENES = [
   "run-failed",
   "not-run-api-key",
   "not-run-other",
+  "not-run-computer-use",
+  "not-run-computer-use-repeat",
+  "not-run-computer-use-off",
+  "not-run-computer-use-access",
   "not-started",
   "run-turn-limit",
   "stop-failed",
@@ -794,6 +798,62 @@ export function liveScene(
         }),
         steps: [],
       };
+    case "not-run-computer-use":
+    case "not-run-computer-use-repeat":
+    case "not-run-computer-use-off":
+    case "not-run-computer-use-access": {
+      const error = {
+        message: "Codex Computer Use readiness failed: plugin/list timed out",
+        kind: null,
+      };
+      const earlier = scene !== "not-run-computer-use";
+      const canAdmin = scene !== "not-run-computer-use-access";
+      const state = withRun(
+        base,
+        now,
+        {
+          state: "failed",
+          reportedStartAt: null,
+          endedAt: now - 2 * SECOND,
+          error,
+        },
+        earlier
+          ? {
+              runs: [
+                newRun(
+                  "run-prior",
+                  {
+                    state: "failed",
+                    origin: "local",
+                    error,
+                    messageId: "msg-prior",
+                    endedAt: now - 64 * SECOND,
+                  },
+                  now - 70 * SECOND,
+                ),
+              ],
+              outbox: [message("msg-prior", "Can you check the disk?", now - 70 * SECOND)],
+            }
+          : {},
+      );
+      return {
+        initial: {
+          ...state,
+          connection: { ...state.connection, canAdmin },
+          ...(scene === "not-run-computer-use-off"
+            ? {
+                computerUseUndo: {
+                  taskKey: OPEN_TASK,
+                  runId: "run-live",
+                  previous: true,
+                  expiresAt: now + 86_400 * SECOND,
+                },
+              }
+            : {}),
+        },
+        steps: [],
+      };
+    }
     case "not-started":
       return {
         initial: withRun(base, now, {
@@ -1085,6 +1145,26 @@ export function liveCommand(
         return info;
       });
       return Promise.resolve({ text: taken.text, attachments });
+    }
+    case "dismissNotRun":
+    case "retryNotRun":
+      return Promise.resolve();
+    case "changeNotRunComputerUse": {
+      const { computerUseUndo: _undo, ...state } = get();
+      set(
+        command.restore
+          ? state
+          : {
+              ...state,
+              computerUseUndo: {
+                taskKey: command.key,
+                runId: command.runId,
+                previous: true,
+                expiresAt: now + 86_400 * SECOND,
+              },
+            },
+      );
+      return Promise.resolve(command.restore ? "restored" : "off");
     }
     case "sendAgain": {
       const original = get().transcripts[OPEN_TASK]?.outbox.find(

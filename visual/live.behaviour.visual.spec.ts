@@ -2282,3 +2282,31 @@ test.describe("the phone", () => {
     expect(sizes.filter((each) => each.width < 44 || each.height < 44)).toEqual([]);
   });
 });
+
+test("F-480 #988: an unknown reason is behind Details", async ({ page }) => {
+  await open(page, "not-run-other");
+  const card = page.getByTestId("turn-error");
+  const raw = "The session is being moved to another machine. Try again in a minute.";
+  await expect(card.getByText(raw, { exact: true })).toHaveCount(0);
+  await expect(card.locator(".turn-error-actions button").nth(0)).toHaveText("Try again");
+  await card.getByRole("button", { name: "Details" }).click();
+  await expect(card.getByText(raw, { exact: true })).toBeVisible();
+});
+
+test("F-480 #988: after a repeated Computer Use timeout the card can turn it off and put it back", async ({
+  page,
+}) => {
+  await open(page, "not-run-computer-use-repeat");
+  const card = page.locator('[data-testid="turn-error"][data-run="run-live"]');
+  await expect(card).toContainText(
+    "This happened on the previous attempt too. Sending again is unlikely to help.",
+  );
+  const actions = card.locator(".turn-error-actions button");
+  await expect(actions.nth(0)).toHaveText("Turn off Computer Use on this gateway");
+  await expect(actions.nth(1)).toHaveText("Try again");
+  await actions.nth(0).click();
+  await expect(card.getByText("Computer Use is off on this gateway.")).toBeVisible();
+  await expect(actions.nth(0)).toHaveText("Try again");
+  await card.getByRole("button", { name: "Put back" }).click();
+  await expect(card.getByText("The previous Computer Use setting is back.")).toBeVisible();
+});

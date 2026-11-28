@@ -9,6 +9,7 @@
 
 import { MAX_FILE_BYTES, MAX_PENDING_ATTACHMENT_BYTES } from "./attachments.ts";
 import { MAX_RETAINED_ATTACHMENT_BYTES } from "./client.ts";
+import { MAX_NOT_RUN_FILE_BYTES } from "./not-run.ts";
 import { ownerRows } from "./owners.ts";
 import { MAX_RAW_BYTES, MAX_RAW_ENTRY_CHARS } from "./runs.ts";
 import { WORST_STATE_CHARS, worstViewerChars } from "./state-bounds.ts";
@@ -40,6 +41,7 @@ export function hostWorstCase(limits: ViewerLimits): Record<string, number> {
     state: WORST_STATE_CHARS,
     rawPayloads: MAX_RAW_BYTES + MAX_RAW_ENTRY_CHARS,
     outboxFiles: base64Length(MAX_RETAINED_ATTACHMENT_BYTES),
+    notRunFiles: base64Length(MAX_NOT_RUN_FILE_BYTES),
     uploads: base64Length(MAX_PENDING_ATTACHMENT_BYTES) + base64Length(MAX_FILE_BYTES),
   };
   for (const [part, chars] of Object.entries(owners)) parts[part] = (parts[part] ?? 0) + chars;

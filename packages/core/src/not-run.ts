@@ -2,11 +2,13 @@
 // started, so no reply and no action came. Why, from the gateway's own words only: its `chat`
 // error, its lifecycle error, or the "run-failed-before-reply" row it keeps in history. Each kind
 // below is a text the gateway writes for it (OpenClaw 2026.10.6 and 2026.11.10 alike); any other
-// text is shown as the gateway's words, one plain line, cut to `MAX_NOT_RUN_WORDS`. Nothing is
+// text is kept for Details, one plain line, cut to `MAX_NOT_RUN_WORDS`. Nothing is
 // read from the gateway's log, and nothing is guessed from silence.
 
 import { cleanLine } from "./gateway-names.ts";
-import type { Run } from "./runs.ts";
+import { asRecord } from "./mapping.ts";
+import type { OutgoingAttachment } from "./client.ts";
+import type { OutgoingMessage, Run } from "./runs.ts";
 
 /** The longest the gateway's own words are shown, in characters. */
 export const MAX_NOT_RUN_WORDS = 300;
@@ -24,6 +26,8 @@ export type NotRunKind =
   | "model-unknown"
   /** The gateway found no account it can use for the model's provider. */
   | "no-account"
+  /** The Codex harness timed out listing its Computer Use plugins before the turn. */
+  | "computer-use-timeout"
   /** Anything else: the gateway's own words. */
   | "other"
   /** The gateway said the message failed and kept no reason. */
@@ -62,11 +66,19 @@ export function notRunCause(said: string | null | undefined): NotRunCause | null
   if (!words) return { kind: "unsaid", words: null };
   const kind = kindOf(text);
   // An unknown model keeps the gateway's words too: they name the model, and what it suggests.
-  const shown = kind === "other" || kind === "model-unknown";
-  return { kind, words: shown ? words : null };
+  const detail = kind === "other" || kind === "model-unknown" || kind === "computer-use-timeout";
+  return { kind, words: detail ? words : null };
 }
 
 function kindOf(text: string): NotRunKind {
+  // The Codex harness's named preflight and the exact RPC deadline on both versions.
+  // The cancellation code alone also covers other methods and deliberate aborts.
+  if (
+    /^Codex Computer Use readiness failed: plugin\/list timed out(?: \| CODEX_APP_SERVER_LOCAL_REQUEST_CANCELLED)?$/.test(
+      text,
+    )
+  )
+    return "computer-use-timeout";
   // `Auth profile "<id>" uses <mode> auth, but <provider>/<api> <reason>.` Only the two
   // requirements read whole are ours to say; any other reason (a consent to give, an operation a
   // sign-in can't do) is the gateway's own, with its own remedy, so its words are shown.
@@ -193,4 +205,129 @@ export function neverStarted(run: Run): boolean {
     run.ranInHistory !== true &&
     !startSeen(run)
   );
+}
+
+/** The previous outcome with the same reported reason, in message order. */
+export function repeatedNotRun(run: Run, runs: readonly Run[]): boolean {
+  if (!neverRan(run)) return false;
+  const reason = notRunCause(run.error?.message);
+  if (!reason || reason.kind === "unsaid") return false;
+  const at = run.startedAt ?? run.endedAt;
+  if (at === null) return false;
+  let previous: Run | undefined;
+  let previousAt = -Infinity;
+  const current = runs.findIndex((each) => each.id === run.id);
+  for (const [index, each] of runs.entries()) {
+    if (each.id === run.id || each.state === "queued") continue;
+    const eachAt = each.startedAt ?? each.endedAt;
+    if (eachAt === null || eachAt > at || (eachAt === at && index >= current)) continue;
+    if (eachAt >= previousAt) {
+      previous = each;
+      previousAt = eachAt;
+    }
+  }
+  if (!previous || !neverRan(previous)) return false;
+  const prior = notRunCause(previous.error?.message);
+  if (prior?.kind !== reason.kind) return false;
+  // A model or account change can give a different failure of the same kind.
+  return (
+    reason.kind === "computer-use-timeout" ||
+    reasonOf(previous.error!.message) === reasonOf(run.error!.message)
+  );
+}
+
+export const MAX_NOT_RUN_FILE_MESSAGES = 8;
+/** Decoded bytes, across tasks on the same gateway. */
+export const MAX_NOT_RUN_FILE_BYTES = 32 * 1024 * 1024;
+
+type RetryFiles = {
+  task: string;
+  bot: string | null;
+  runId: string;
+  message: OutgoingMessage;
+  files: OutgoingAttachment[];
+  bytes: number;
+  retriedAs?: string;
+};
+
+/** Files and original text for a send preparing to run or known to have failed before running. */
+export class NotRunFiles {
+  private readonly entries = new Map<string, RetryFiles>();
+  private bytes = 0;
+
+  private key(task: string, runId: string): string {
+    return JSON.stringify([task, runId]);
+  }
+
+  get(task: string, runId: string): RetryFiles | undefined {
+    return this.entries.get(this.key(task, runId));
+  }
+
+  hold(entry: RetryFiles): RetryFiles[] {
+    this.drop(entry.task, entry.runId);
+    this.entries.set(this.key(entry.task, entry.runId), entry);
+    this.bytes += entry.bytes;
+    const evicted: RetryFiles[] = [];
+    for (const oldest of this.entries.values()) {
+      if (this.entries.size <= MAX_NOT_RUN_FILE_MESSAGES && this.bytes <= MAX_NOT_RUN_FILE_BYTES)
+        break;
+      this.drop(oldest.task, oldest.runId);
+      evicted.push(oldest);
+    }
+    return evicted;
+  }
+
+  drop(task: string, runId: string): void {
+    const key = this.key(task, runId);
+    const entry = this.entries.get(key);
+    if (!entry) return;
+    this.entries.delete(key);
+    this.bytes -= entry.bytes;
+  }
+
+  dropWhere(matches: (entry: RetryFiles) => boolean): void {
+    for (const entry of this.entries.values())
+      if (matches(entry)) this.drop(entry.task, entry.runId);
+  }
+
+  clear(): void {
+    this.entries.clear();
+    this.bytes = 0;
+  }
+}
+
+export type ComputerUseChange =
+  "off" | "already-off" | "restored" | "changed" | "refused" | "unconfirmed" | "not-sent";
+
+export type ComputerUseUndo = {
+  taskKey: string;
+  runId: string;
+  previous: true | null;
+  expiresAt: number;
+};
+
+export const COMPUTER_USE_UNDO_MS = 7 * 24 * 60 * 60 * 1000;
+
+/** Read only the setting this card can write. Null means its config key was absent. */
+export function readComputerUse(response: unknown) {
+  const answer = asRecord(response);
+  const config = asRecord(answer?.config);
+  const codex = asRecord(asRecord(asRecord(config?.plugins)?.entries)?.codex);
+  const options = asRecord(asRecord(codex?.config)?.computerUse);
+  const value = options?.enabled;
+  if (
+    !answer ||
+    !config ||
+    answer.valid === false ||
+    typeof answer.hash !== "string" ||
+    !answer.hash ||
+    (value !== undefined && typeof value !== "boolean")
+  )
+    return null;
+  const saved = answer.configRevisionHash;
+  return {
+    hash: answer.hash,
+    value: value ?? null,
+    applied: typeof saved === "string" && answer.appliedConfigHash === saved,
+  };
 }

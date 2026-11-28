@@ -99,10 +99,9 @@ describe("#663: a message the gateway couldn't run says so, and why", () => {
       "account",
       "model",
     ]);
-    // The gateway's own words follow: they name the model, and what it suggests.
+    // The gateway's own words belong in Details.
     expect(of("Unknown model: nope/dev-1. Run `openclaw models list`.")).toMatchObject({
-      reason:
-        "The gateway doesn't know Otto's model. Choose another model. The gateway said: Unknown model: nope/dev-1. Run `openclaw models list`.",
+      reason: "The gateway doesn't know Otto's model. Choose another model.",
       ways: ["model"],
     });
     expect(
@@ -112,7 +111,7 @@ describe("#663: a message the gateway couldn't run says so, and why", () => {
     );
   });
 
-  it("an account-kind reason other than the two read whole keeps the gateway's own remedy", () => {
+  it("an unclassified account reason gives the same recovery choices as another unknown reason", () => {
     expect(
       words(
         failed(
@@ -120,13 +119,13 @@ describe("#663: a message the gateway couldn't run says so, and why", () => {
         ),
       ),
     ).toBe(
-      'The gateway couldn\'t run this message | The gateway said: Auth profile "acme:me" uses oauth auth, but acme/acme-responses requires token-sharing consent. Sign in again and enable sharing, or explicitly choose another inference credential.',
+      "The gateway couldn't run this message | Try again, or choose another model for this bot. | Change model",
     );
   });
 
-  it("anything else is the gateway's own words, with Try again; a reason it didn't keep is not made up", () => {
+  it("an unknown reason gives a recovery action, and a reason the gateway did not keep stays absent", () => {
     expect(words(failed("Error: The session is locked by another device."))).toBe(
-      "The gateway couldn't run this message | The gateway said: The session is locked by another device.",
+      "The gateway couldn't run this message | Try again, or choose another model for this bot. | Change model",
     );
     // 2026.11.10's history, after a reload, for a message it failed at dispatch.
     expect(

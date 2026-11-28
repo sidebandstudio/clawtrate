@@ -158,7 +158,39 @@ export const LIVE_VIEWS: Array<{
   {
     scene: "not-run-other",
     rows: "F-480",
-    ready: (page) => expect(page.getByTestId("turn-error")).toContainText("The gateway said"),
+    ready: (page) =>
+      expect(page.getByTestId("turn-error")).toContainText(
+        "Try again, or choose another model for this bot.",
+      ),
+  },
+  {
+    scene: "not-run-computer-use",
+    rows: "F-480",
+    ready: (page) =>
+      expect(page.getByTestId("turn-error")).toContainText("This sometimes clears by itself."),
+  },
+  {
+    scene: "not-run-computer-use-repeat",
+    rows: "F-480",
+    ready: (page) =>
+      expect(
+        page.getByRole("button", { name: "Turn off Computer Use on this gateway" }),
+      ).toBeVisible(),
+  },
+  {
+    scene: "not-run-computer-use-off",
+    rows: "F-480",
+    ready: (page) => expect(page.getByRole("button", { name: "Put back" })).toBeVisible(),
+  },
+  {
+    scene: "not-run-computer-use-access",
+    rows: "F-480",
+    ready: (page) =>
+      expect(
+        page
+          .getByTestId("turn-error")
+          .filter({ hasText: "Turning off Computer Use needs full control of the gateway." }),
+      ).toBeVisible(),
   },
   {
     scene: "not-started",

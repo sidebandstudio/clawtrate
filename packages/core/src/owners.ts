@@ -64,6 +64,7 @@ import {
   MAX_TRANSFER_BYTES,
 } from "./files.ts";
 import { MAX_ROUTINE_READS, MAX_ROUTINE_UPDATES } from "./routines.ts";
+import { MAX_NOT_RUN_FILE_MESSAGES } from "./not-run.ts";
 import { emptyActivity, MAX_QUEUE_ALIASES } from "./runs.ts";
 import {
   MAX_COMPUTER_PANES,
@@ -101,6 +102,7 @@ import {
   MAX_TRACKED_TASKS,
   MAX_UNROUTED,
   RUN,
+  OUTGOING,
   WORST_ROW_CHARS,
 } from "./state-bounds.ts";
 
@@ -298,6 +300,16 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
     row: null,
     opaque: "file content, counted in `outboxFiles`",
   },
+  "notRunFiles.entries": {
+    max: MAX_NOT_RUN_FILE_MESSAGES,
+    each:
+      5 * ID +
+      2 * N +
+      worstCase(OUTGOING) +
+      MAX_ATTACHMENTS_PER_MESSAGE * (3 * MAX_FILE_NAME_CHARS + 4),
+    row: "notRunFiles",
+    opaque: "the original message and files; file content shares MAX_NOT_RUN_FILE_BYTES",
+  },
   // Pictures of messages history holds, kept to show: their content is in `outboxFiles`'s budget.
   sentPictures: {
     max: MAX_SENT_PICTURE_MESSAGES,
@@ -476,6 +488,7 @@ export const CLIENT_PARTS: Record<string, string> = {
   machines: "MachinesEngine",
   waiting: "WaitingIndex",
   quietChecks: "QuietChecks",
+  notRunFiles: "NotRunFiles",
   computer: "ComputerViews",
 };
 

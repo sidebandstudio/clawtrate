@@ -33,6 +33,7 @@ import {
 } from "./sidebar.ts";
 import { MAX_TASK_LABEL_CHARS, type ArchivedList, type ArchiveResult } from "./task-actions.ts";
 import { MAX_MESSAGE_LINE_CHARS } from "./state-bounds.ts";
+import type { ComputerUseChange } from "./not-run.ts";
 import type { ClawtrateState, GatewayStamp, TranscriptItem } from "./types.ts";
 import type { MissingStep } from "./accounts.ts";
 import type { SetupHost, SetupOffer } from "./setup.ts";
@@ -177,6 +178,14 @@ export type BridgeCommand =
   | { type: "takeBackMessage"; key: string; messageId: string }
   /** Send a held message's words and files again as a new message (Try again on a failed turn). */
   | { type: "sendAgain"; key: string; messageId: string }
+  | { type: "retryNotRun" | "dismissNotRun"; key: string; runId: string }
+  | {
+      type: "changeNotRunComputerUse";
+      key: string;
+      runId: string;
+      restore: boolean;
+      stamp: GatewayStamp;
+    }
   /** A new task under a bot with its first message. The viewer then has it open. */
   | { type: "createTask"; botId: string; text: string; label: string | null }
   | { type: "stopRun"; key: string; runId: string }
@@ -591,15 +600,17 @@ export type BridgeResultFor<C extends BridgeCommand> = C extends {
       ? DeviceListRead
       : BridgeResultStart<C>;
 
-type BridgeResultStart<C extends BridgeCommand> = C extends { type: "readBotDelete" }
-  ? BotDeleteRead
-  : C extends { type: "deleteBot" }
-    ? BotDeleteOutcome
-    : C extends { type: "declineBotName" }
-      ? { declined: boolean }
-      : C extends { type: "undoSkillChange" }
-        ? { undone: boolean }
-        : BridgeResultRest<C>;
+type BridgeResultStart<C extends BridgeCommand> = C extends { type: "changeNotRunComputerUse" }
+  ? ComputerUseChange
+  : C extends { type: "readBotDelete" }
+    ? BotDeleteRead
+    : C extends { type: "deleteBot" }
+      ? BotDeleteOutcome
+      : C extends { type: "declineBotName" }
+        ? { declined: boolean }
+        : C extends { type: "undoSkillChange" }
+          ? { undone: boolean }
+          : BridgeResultRest<C>;
 
 type BridgeResultRest<C extends BridgeCommand> = C extends { type: "sendMessage" }
   ? { messageId: string }
@@ -1604,6 +1615,21 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         remove: command.remove === undefined ? false : flag(command.remove),
       };
     }
+    case "changeNotRunComputerUse":
+      return {
+        type: command.type,
+        key: sessionKey(command.key),
+        runId: id(command.runId, "run id"),
+        restore: flag(command.restore),
+        stamp: gatewayStampOf(command.stamp),
+      };
+    case "retryNotRun":
+    case "dismissNotRun":
+      return {
+        type: command.type,
+        key: sessionKey(command.key),
+        runId: id(command.runId, "run id"),
+      };
     case "retryMessage":
     case "deleteMessage":
     case "cancelQueued":
@@ -2437,6 +2463,19 @@ class ViewerSession implements BridgeSession {
         return client.sendQueuedNow(this.mine(command.key), command.messageId);
       case "sendAgain":
         return { messageId: client.sendAgain(this.mine(command.key), command.messageId) };
+      case "changeNotRunComputerUse":
+        return client.changeNotRunComputerUse(
+          this.mine(command.key),
+          command.runId,
+          command.restore,
+          command.stamp,
+          this.open.get(command.key),
+        );
+      case "retryNotRun":
+        client.retryNotRun(this.mine(command.key), command.runId);
+        return;
+      case "dismissNotRun":
+        return client.dismissNotRun(this.mine(command.key), command.runId);
       case "takeBackMessage": {
         const key = this.mine(command.key);
         if (!policy.attachments) {

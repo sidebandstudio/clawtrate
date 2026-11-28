@@ -16,7 +16,7 @@ import {
 import { projectArgs, projectDetails } from "./actions.ts";
 import { asRecord, liveTextFromChatMessage, type RawRecord } from "./mapping.ts";
 import { filePathsOf } from "./file-paths.ts";
-import { startSeen } from "./not-run.ts";
+import { neverRan, notRunCause, startSeen } from "./not-run.ts";
 import type { TranscriptItem } from "./types.ts";
 import { capId, digestOf, extendDigest, jsonLength, sameDigest, type Digest } from "./bounds.ts";
 import {
@@ -465,6 +465,8 @@ export type Run = {
   origin: "local" | "gateway" | "history";
   /** The outgoing message that started it, while it is in the outbox. */
   messageId: string | null;
+  /** Whether this device still holds the files for a retry after the message left the outbox. */
+  retryFiles?: "held" | "gone";
   /** The transcript item (the user's message) the run belongs under, once known. */
   anchorItemId: string | null;
   /**
@@ -2331,6 +2333,31 @@ export function removeMessage(activity: TaskActivity, id: string): TaskActivity 
 
 export type ApplyResult = { activity: TaskActivity };
 
+/** Keep a settled preflight reason when the other terminal event gave a generic error. */
+function withComputerUseReason(
+  activity: TaskActivity,
+  run: Run,
+  reason: unknown,
+  ctx: EngineContext,
+  holds: RunErrorRaw["holds"],
+  payload: RawRecord,
+): TaskActivity {
+  if (
+    !neverRan(run) ||
+    notRunCause(run.error?.message)?.kind === "computer-use-timeout" ||
+    typeof reason !== "string" ||
+    notRunCause(reason)?.kind !== "computer-use-timeout"
+  )
+    return activity;
+  const error = {
+    ...run.error,
+    message: reason,
+    kind: run.error?.kind ?? null,
+    raw: rawEvent(ctx, run.id, holds, payload),
+  };
+  return replaceRun(activity, { ...run, error: capRunError(error) });
+}
+
 /**
  * A `chat` event for this task. `projectedText` is the visible text of the
  * message snapshot after the client package's stream projection merged deltas.
@@ -2362,6 +2389,15 @@ export function applyChatEvent(
         state === "delta" || state === "final"
           ? (projectedText ?? contentText(asRecord(payload.message)?.content))
           : "";
+      if (state === "error")
+        return withComputerUseReason(
+          activity,
+          existing,
+          payload.errorMessage,
+          ctx,
+          "chat-event",
+          payload,
+        );
       return noteLateStart(activity, existing, (run) => ({ ...run, text: text || run.text }));
     }
     activity = replaceRun(activity, reopenInferred(existing));
@@ -2463,12 +2499,24 @@ export function applyAgentEvent(
   if (existing && isTerminal(existing.state) && !replacement) {
     // An end this client only inferred gives way to the end the gateway sends.
     const ends = stream === "lifecycle" && (data.phase === "end" || data.phase === "error");
-    if (existing.outcomeKnown || !ends)
+    if (existing.outcomeKnown || !ends) {
+      const observed = noteLateStart(activity, existing, (run) =>
+        apply(run, { ...ctx, raw: new RawTable() }),
+      );
       return {
-        activity: noteLateStart(activity, existing, (run) =>
-          apply(run, { ...ctx, raw: new RawTable() }),
-        ),
+        activity:
+          stream === "lifecycle" && data.phase === "error" && data.executionSettled === true
+            ? withComputerUseReason(
+                observed,
+                findRun(observed, existing.id) ?? existing,
+                data.error,
+                ctx,
+                "lifecycle-data",
+                data,
+              )
+            : observed,
       };
+    }
     activity = replaceRun(activity, reopenInferred(existing));
   }
 

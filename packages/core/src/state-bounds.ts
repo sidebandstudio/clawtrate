@@ -174,6 +174,7 @@ import {
   type CheckInSetting,
   type CheckInsState,
 } from "./check-ins.ts";
+import type { ComputerUseUndo } from "./not-run.ts";
 import { MAX_ACTION_FACTS_CHARS } from "./actions.ts";
 import type {
   Bot,
@@ -473,6 +474,7 @@ export const RUN: Bound = flagged<Run>()({
   quietError: runError,
   unansweredInHistory: FLAG,
   anchorKeyed: FLAG,
+  retryFiles: ENUM,
   preambles: list(MAX_PREAMBLES_PER_RUN, preamble),
   reasoningAnchor: ID,
   nextReasoning: NUMBER,
@@ -1495,6 +1497,12 @@ export const STATE: Bound = flagged<ClawtrateState>()({
   computer: COMPUTER,
   setup,
   checkIns: CHECK_INS,
+  computerUseUndo: object<ComputerUseUndo>()({
+    taskKey: ID,
+    runId: ID,
+    previous: FLAG,
+    expiresAt: NUMBER,
+  }),
   turnLimitMinutes: NUMBER,
   showChannelChats: FLAG,
   voiceChanges: NUMBER,
