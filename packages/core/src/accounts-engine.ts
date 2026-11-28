@@ -307,6 +307,8 @@ export class AccountsEngine {
   private signInCancel: { attempt: string; request: string } | null = null;
   /** The cancel ID the last attempt was started with: a later attempt that reuses it isn't named by it. */
   private lastCancelRequest: string | null = null;
+  /** Each read after a sign-in takes the next number; only the newest one publishes. */
+  private signInReads = 0;
   /**
    * The bot's own model when the setup sign-in under way started, by that sign-in's id, and the
    * gateway it was started on: only that gateway's session is ended and its saved token removed.
@@ -1826,6 +1828,7 @@ export class AccountsEngine {
     const { ctx } = this;
     const signIn = ctx.get().signIn;
     if (signIn?.id !== id) return;
+    const turn = ++this.signInReads;
     const result: SignInResult = {
       added: [],
       landed: null,
@@ -1887,7 +1890,8 @@ export class AccountsEngine {
           return readModelConfig(asRecord(asRecord(entries)?.[signIn.forBot])?.model).primary;
         })
         .catch(() => null);
-    if (ctx.get().signIn?.id !== id ) return;
+    // A read begun since (a second Check again) is newer: this one's answer is dropped.
+    if (ctx.get().signIn?.id !== id || turn !== this.signInReads) return;
     const ended = ctx.get().signIn!;
     // "Connected" only when the read after it shows the account; otherwise what is known.
     const stage =

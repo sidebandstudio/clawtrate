@@ -1722,6 +1722,48 @@ describe("sign-ins, through the gateway's own methods", () => {
     }
   });
 
+  it("two overlapping Check again presses publish only the newer read", async () => {
+    const fake = new AccountsGateway();
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    try {
+      await client.startSignIn(CHOICES.browser, null);
+      const forBot = accounts().signIn!.forBot;
+      const entries = (fake.config.agents as { entries: Record<string, Record<string, unknown>> })
+        .entries;
+      entries[forBot] = { ...entries[forBot], model: { primary: "acme/dev-2" } };
+      fake.gateway.handlers["wizard.next"] = () => {
+        fake.shared.push({ id: "acme:made-up", provider: "acme", type: "oauth" });
+        return { done: false, step: { type: "text" } };
+      };
+      await client.answerSignIn("made-up-code");
+      await until(() => accounts().signIn?.result != null);
+
+      // The first press's model read is held until the second press has published.
+      const get = fake.gateway.handlers["config.get"]!;
+      const { promise: held, resolve: release } = Promise.withResolvers<void>();
+      let holding = true;
+      let waiting = false;
+      fake.gateway.handlers["config.get"] = (params) => {
+        if (!holding) return get(params);
+        holding = false;
+        waiting = true;
+        return held.then(() => get(params));
+      };
+      const older = client.recheckSignIn();
+      await until(() => waiting);
+      fake.shared = fake.shared.filter((profile) => profile.id !== "acme:made-up");
+      entries[forBot] = { ...entries[forBot], model: { primary: "acme/dev-3" } };
+      await client.recheckSignIn();
+      const newer = { added: [], model: "acme/dev-3" };
+      expect(accounts().signIn).toMatchObject({ unsure: true, result: newer });
+      release();
+      await older;
+      expect(accounts().signIn).toMatchObject({ stage: "failed", unsure: true, result: newer });
+    } finally {
+      client.stop();
+    }
+  });
+
   it("a sign-in the gateway refused is not unsure, and its read after it has no model", async () => {
     const fake = new AccountsGateway();
     fake.nextEnding = { outcome: "refuse" };
