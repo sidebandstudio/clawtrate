@@ -176,6 +176,17 @@ for (const colorScheme of ['light', 'no-preference']) {
   }
   check(`every prototype opens dark with no theme chosen (system: ${colorScheme})`, light.length === 0, light.join(', '));
 }
+// Match the system is kept as the choice: after a reload it follows the system's colour now (#819).
+p = await b.newPage({ colorScheme: 'light' }); await p.goto(pageUrl('app.html') + '?chrome=0');
+await p.click('.gateway-pill'); await p.click('[data-theme-choice="system"]');
+check('Match the system on a light system opens light', (await p.locator('html').getAttribute('data-theme')) === 'light');
+await p.emulateMedia({ colorScheme: 'dark' }); await p.reload();
+check('Match the system follows a system turned dark after a reload', (await p.locator('html').getAttribute('data-theme')) === 'dark');
+await p.click('.gateway-pill');
+check('Match the system is still chosen after the reload', (await p.getAttribute('[data-theme-choice="system"]', 'aria-checked')) === 'true');
+await p.keyboard.press('Escape'); await p.click('.gateway-pill'); await p.click('[data-theme-choice="light"]'); await p.reload();
+check('Light chosen after Match the system opens light on a dark system', (await p.locator('html').getAttribute('data-theme')) === 'light');
+await p.close();
 p = await b.newPage({ colorScheme: 'dark' }); await p.goto(pageUrl('app.html') + '?theme=light');
 check('theme=light opens light on a dark system', (await p.locator('html').getAttribute('data-theme')) === 'light');
 await p.close();
