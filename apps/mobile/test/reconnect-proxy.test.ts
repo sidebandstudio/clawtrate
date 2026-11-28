@@ -125,7 +125,9 @@ describe("Proxy", () => {
 
     const app = new Socket();
     const received: Buffer[] = [];
-    app.on("data", (chunk) => received.push(chunk));
+    app.on("data", (chunk) =>
+      received.push(typeof chunk === "string" ? Buffer.from(chunk) : chunk),
+    );
     await new Promise<void>((resolve) => app.connect(Number(url.port), "127.0.0.1", resolve));
     app.write("GET / HTTP/1.1\r\nHost: x\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n");
     await expect.poll(() => proxy!.requests[0]?.hello, { timeout: 5_000 }).toBe(true);
