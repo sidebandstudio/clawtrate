@@ -115,7 +115,10 @@ async function waitFor(label: string, ready: () => boolean, seconds = 30) {
     if (retry) throw new Error(`${heading() ?? label} offers Try again.`);
     await sleep(600);
   } while (performance.now() < until);
-  throw new Error(`${label} did not appear. Last heading: ${heading() ?? "(none)"}.`);
+  const roles = [...new Set(latest.map(({ role }) => role))].join(", ");
+  throw new Error(
+    `${label} did not appear. Last heading: ${heading() ?? "(none)"}. Window roles: ${roles || "(none)"}.`,
+  );
 }
 
 async function press(name: string) {
@@ -185,10 +188,11 @@ function launch() {
   // production window via the OS, with no debugging port and no setup stand-ins.
   delete env.CI;
   delete env.VITEST;
-  child = spawn(join(app!, "Contents/MacOS/Clawtrate"), [`--user-data-dir=${data}`], {
-    env,
-    stdio: "ignore",
-  });
+  child = spawn(
+    join(app!, "Contents/MacOS/Clawtrate"),
+    [`--user-data-dir=${data}`, "--force-renderer-accessibility"],
+    { env, stdio: "ignore" },
+  );
   child.once("error", (error) => (launchError = error));
 }
 

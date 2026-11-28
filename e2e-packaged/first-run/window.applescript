@@ -22,6 +22,10 @@ on labelOf(itemRef, roleName)
         if words is not "" and words is not "missing value" then return words
       end try
     end repeat
+    try
+      set words to name of itemRef as text
+      if words is not "missing value" then return words
+    end try
     return ""
   end tell
 end labelOf
@@ -56,12 +60,16 @@ on run argv
       return (leftEdge as text) & "," & topEdge & "," & windowWidth & "," & windowHeight
     end if
     set itemsInWindow to {appWindow} & (entire contents of appWindow)
-    repeat with uiItem in itemsInWindow
+    repeat with itemInList in itemsInWindow
+      set uiItem to contents of itemInList
       try
-        set roleName to role of uiItem
+        set roleName to value of attribute "AXRole" of uiItem
       on error
         set roleName to ""
       end try
+      if mode is "read" and roleName is "AXWebArea" then
+        set output to output & roleName & tab & linefeed
+      end if
       if roleName is in {"AXWindow", "AXSheet", "AXDialog", "AXHeading", "AXStaticText", "AXButton", "AXTextField", "AXTextArea", "AXSecureTextField", "AXComboBox", "AXLink", "AXMenuItem", "AXCheckBox", "AXList", "AXLandmarkNavigation"} then
         set labelText to my labelOf(uiItem, roleName)
         if mode is "read" then
