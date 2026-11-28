@@ -198,7 +198,7 @@ Every form follows four rules. **Validated before the write:** the value against
 
 What a person sees ([picture](gateway-settings/models-done-desktop.png), [phone](gateway-settings/models-phone.png)):
 
-- **For every bot:** **Default model**, a picker of the models the gateway offers on signed-in accounts, each with its account ("Swift 2 · Work"), and under it "Acme · runs on your Work account"; **If it can't answer**, the ordered backup models ("Then Globex One, on Team"), up to three, with Change; **Thinking**, Low, Medium or High.
+- **For every bot:** **Default model**, a picker of the models the gateway offers on signed-in accounts every bot sees (not an account one bot keeps as its own), each with its account ("Swift 2 · Work"), and under it "Acme · runs on your Work account"; **If it can't answer**, the ordered backup models ("Then Globex One, on Team"), up to three, with Change; **Thinking**, Low, Medium or High.
 - **Each bot:** its model and account, "The default: Swift 2 on Work" or its own; **Change** opens that bot's settings, where its model already lives (`bots.md`).
 - The "i" beside each: one plain sentence, and the key under it (`agents.defaults.model.primary`).
 

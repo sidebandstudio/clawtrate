@@ -50,7 +50,8 @@
 //                             2026.11.10, which changes a bot's account order only while stopped
 //   models=<state>            Settings › Models (gateway-settings.md section 4.1): held (a change
 //                             that waits for Save and restart, with the gateway's reload off) or
-//                             since (the read-back found another device's value)
+//                             since (the read-back found another device's value), or refused
+//                             (a change is refused before it is sent, as for another gateway)
 //   clear=<status>            how Unlock or Clear order ends (default cleared): refused, unanswered,
 //                             kept, unread, moved (the order is Home's alone), unsent, or hold
 //                             (sending until releaseClear(), then cleared)
@@ -123,7 +124,7 @@ export type AccountParams = {
   /** How Unlock or Clear order ends, when the address names it. */
   clear: string | null;
   /** Settings › Models' last change, when the address names one: held or since. */
-  models: "held" | "since" | null;
+  models: "held" | "since" | "refused" | null;
 };
 
 export function accountParams(params: URLSearchParams): AccountParams {
@@ -175,10 +176,9 @@ export function accountParams(params: URLSearchParams): AccountParams {
       ? params.get("version")
       : null,
     clear: params.get("clear"),
-    models:
-      params.get("models") === "held" || params.get("models") === "since"
-        ? (params.get("models") as "held" | "since")
-        : null,
+    models: ["held", "since", "refused"].includes(params.get("models") ?? "")
+      ? (params.get("models") as "held" | "since" | "refused")
+      : null,
   };
 }
 
@@ -365,7 +365,7 @@ export function fixtureAccounts(now: number, params: AccountParams): AccountsSta
       reloadOff: params.models === "held",
     },
     defaultsChange:
-      params.models === null
+      params.models === null || params.models === "refused"
         ? null
         : {
             status: params.models === "held" ? "held" : "changedSince",
@@ -1749,6 +1749,11 @@ export function accountCommand(
       return Promise.resolve();
     }
     case "setModelDefaults": {
+      // As the host does when another gateway is here (`requireSameGateway`): nothing is sent.
+      if (params.models === "refused")
+        return Promise.reject(
+          new Error("This change was made for another gateway, so nothing was sent."),
+        );
       // Applied and read back as written: the fixture's gateway is the only writer.
       const before: DefaultsValues = {};
       for (const key of Object.keys(command.values) as Array<keyof DefaultsValues>)

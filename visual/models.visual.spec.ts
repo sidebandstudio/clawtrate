@@ -83,4 +83,27 @@ test.describe("Settings › Models in the fixture", () => {
       stamp: { gatewayId: expect.any(String) },
     });
   });
+
+  test("a change refused before it is sent says why, in its line", async ({ page }) => {
+    await openFixture(page, `${ADMIN}&models=refused`);
+    await models(page);
+    await page
+      .getByRole("combobox", { name: /Default model/ })
+      .selectOption("openai/gpt-5.5@openai:work");
+    await expect(page.getByRole("status").filter({ hasText: "nothing was sent" })).toHaveText(
+      "This change was made for another gateway, so nothing was sent.",
+    );
+    await expect(page.getByRole("button", { name: /^Put back / })).toHaveCount(0);
+  });
+
+  test("the pickers offer only accounts every bot sees, not one a single bot keeps", async ({
+    page,
+  }) => {
+    await openFixture(page, ADMIN);
+    await models(page);
+    for (const name of [/Default model/, "Add a backup model"])
+      await expect(
+        page.getByRole("combobox", { name }).locator("option", { hasText: "Pip's key" }),
+      ).toHaveCount(0);
+  });
 });

@@ -2769,7 +2769,7 @@ export class AccountsEngine {
   ): Promise<void> {
     this.requireAdmin("Changing the default model");
     this.checkDefaults(values);
-    await this.writeDefaults(values, restart, false, beforeSend);
+    await this.writeDefaults(values, restart, null, beforeSend);
   }
 
   /**
@@ -2781,17 +2781,7 @@ export class AccountsEngine {
     this.requireAdmin("Changing the default model");
     const last = this.ctx.get().defaultsChange;
     if (!last || last.status !== "saved") throw new Error("There is nothing to put back.");
-    const { ctx } = this.checked(beforeSend);
-    const read = asRecord(await ctx.request("config.get", {}));
-    const now = defaultsValues(
-      readModelDefaults(read?.config),
-      Object.keys(last.after) as Array<keyof DefaultsValues>,
-    );
-    if (!sameDefaults(last.after, now)) {
-      this.setDefaultsChange({ ...last, status: "changedSince", current: now, at: this.ctx.now() });
-      return;
-    }
-    await this.writeDefaults(last.before, true, true, beforeSend);
+    await this.writeDefaults(last.before, true, last, beforeSend);
   }
 
   /** The values a person can set here: models the gateway lists, a level the model offers. */
@@ -2804,7 +2794,14 @@ export class AccountsEngine {
         return false;
       return parsed.account === null || state.accounts.some((a) => a.id === parsed.account);
     };
+    // Every bot reads the defaults: an account one bot's own store keeps isn't one they all see.
+    const keptByOne = (ref: string) => {
+      const account = parseModelRef(ref)?.account;
+      return state.accounts.some((a) => a.id === account && a.keptBy);
+    };
     if (Object.keys(values).length === 0) throw new Error("Nothing to change.");
+    if ([values.primary ?? null, ...(values.fallbacks ?? [])].some((ref) => ref && keptByOne(ref)))
+      throw new Error("That account is one bot's own, so the other bots can't use it.");
     if (values.primary !== undefined && (values.primary === null || !listed(values.primary)))
       throw new Error("Choose a model the gateway lists.");
     if (values.fallbacks !== undefined && values.fallbacks !== null) {
@@ -2825,18 +2822,33 @@ export class AccountsEngine {
     }
   }
 
+  /**
+   * `undoing` is the change Put back reverses: it writes only if the read whose hash the patch
+   * carries still holds what that change wrote, so a write between the two can't be overwritten.
+   */
   private async writeDefaults(
     after: DefaultsValues,
     restartPressed: boolean,
-    putBack: boolean,
+    undoing: DefaultsChange | null,
     beforeSend?: (sent: boolean) => void,
   ): Promise<void> {
     const fields = Object.keys(after) as Array<keyof DefaultsValues>;
     const gatewayId = this.ctx.gatewayNow();
+    // The change belongs to the gateway it was asked of: once another is here, it publishes nothing.
+    const resets = this.resets;
+    const live = () =>
+      this.resets === resets && (gatewayId === null || this.ctx.gatewayNow() === gatewayId);
+    const publish = (change: DefaultsChange) => {
+      if (live()) this.setDefaultsChange(change);
+    };
     const { ctx, check } = this.checked(beforeSend);
     const read = asRecord(await ctx.request("config.get", {}));
     const found = readModelDefaults(read?.config);
     const before = defaultsValues(found, fields);
+    if (undoing && !sameDefaults(undoing.after, before)) {
+      publish({ ...undoing, status: "changedSince", current: before, at: this.ctx.now() });
+      return;
+    }
     const baseHash = typeof read?.hash === "string" ? read.hash : undefined;
     const restart = found.reloadOff || (await this.restartBound(ctx, fields));
     const change: DefaultsChange = {
@@ -2845,16 +2857,16 @@ export class AccountsEngine {
       after,
       current: null,
       restart,
-      putBack,
+      putBack: undoing !== null,
       error: null,
       at: this.ctx.now(),
       gatewayId,
     };
     if (restart && !restartPressed) {
-      this.setDefaultsChange({ ...change, status: "held" });
+      publish({ ...change, status: "held" });
       return;
     }
-    this.setDefaultsChange(change);
+    publish(change);
     try {
       await ctx.request("config.patch", {
         raw: JSON.stringify(defaultsPatch(after)),
@@ -2866,7 +2878,7 @@ export class AccountsEngine {
       check();
     } catch (error) {
       const said = errorText(error);
-      this.setDefaultsChange({
+      publish({
         ...change,
         status: "failed",
         error: /changed since last load|config changed/i.test(said)
@@ -2876,8 +2888,8 @@ export class AccountsEngine {
       });
       throw error;
     }
-    if (restart) this.setDefaultsChange({ ...change, status: "restarting", at: this.ctx.now() });
-    await this.readBackDefaults(change, restart, read?.configRevisionHash);
+    if (restart) publish({ ...change, status: "restarting", at: this.ctx.now() });
+    await this.readBackDefaults(change, restart, read?.configRevisionHash, live);
   }
 
   /** Whether any setting changed restarts OpenClaw, by `config.schema.lookup`'s `reloadKind`. */
@@ -2911,6 +2923,7 @@ export class AccountsEngine {
     change: DefaultsChange,
     restart: boolean,
     revisionBefore: unknown,
+    live: () => boolean,
   ): Promise<void> {
     const ctx = this.ctx;
     const started = ctx.now();
@@ -2930,8 +2943,9 @@ export class AccountsEngine {
         continue;
       }
       // The change is the connected gateway's only while it is the one written to.
-      if (change.gatewayId !== null && ctx.gatewayNow() !== change.gatewayId) break;
+      if (!live()) return;
       const read = await ctx.request("config.get", {}).then(asRecord, () => null);
+      if (!live()) return;
       if (read) {
         // Saved with this device's values, not yet applied: with reload off, 2026.11.10 keeps it
         // so until OpenClaw next restarts, and doesn't restart by itself (2026.10.6 does).
@@ -2966,6 +2980,7 @@ export class AccountsEngine {
       }
       await pause(restart ? 500 : 200);
     }
+    if (!live()) return;
     this.setDefaultsChange({
       ...change,
       // The gateway never went away and holds the values saved: they wait for its next restart.

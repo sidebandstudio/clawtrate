@@ -158,6 +158,17 @@ describe("Settings › Models", () => {
     expect(render({ ...accounts, defaultsChange: since })).not.toContain("Put back");
   });
 
+  it("offers only accounts every bot sees: not one a single bot keeps", () => {
+    const html = render({
+      ...accounts,
+      accounts: accounts.accounts.map((a) =>
+        a.id === "globex:team" ? { ...a, keptBy: "otto" } : a,
+      ),
+    });
+    expect(html).not.toContain('<option value="globex/one@globex:team">');
+    expect(html).toContain('<option value="acme/swift-2@acme:work">');
+  });
+
   it("leaves the gateway's own bot out of Each bot, as every bot list does", () => {
     const html = render(accounts);
     expect(html).not.toContain(">Gateway bot<");

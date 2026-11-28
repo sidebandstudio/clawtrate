@@ -143,16 +143,24 @@ export function useModelsSection({
   const [busy, setBusy] = useState(false);
   /** The held change the person set aside with Cancel, by when it was held. */
   const [setAside, setSetAside] = useState<number | null>(null);
+  /**
+   * A command refused before the engine recorded it (another gateway here, or a value it
+   * refuses), with the change shown when it was pressed: shown until the engine records another.
+   */
+  const [refused, setRefused] = useState<{ text: string; over: number | null } | null>(null);
   const defaults = accounts.defaults;
   const change = accounts.defaultsChange;
   const version = connection.serverVersion;
 
   const run = async (command: Parameters<typeof bridge.invoke>[0]) => {
+    const over = change?.at ?? null;
     setBusy(true);
+    setRefused(null);
     try {
       await bridge.invoke(command);
-    } catch {
-      // The engine keeps what happened in `defaultsChange`; the line says it.
+    } catch (error) {
+      // What the engine recorded in `defaultsChange` is said by its line; this is for the rest.
+      setRefused({ text: error instanceof Error ? error.message : String(error), over });
     } finally {
       setBusy(false);
     }
@@ -169,15 +177,18 @@ export function useModelsSection({
   const putBack = async () =>
     run({ type: "putBackModelDefaults", stamp: await screenStamp(bridge, shownOn) });
 
-  // Each signed-in account's models, named for the person: "Swift 2 · Acme · Work".
-  const choices = accounts.accounts.flatMap((account) =>
-    accounts.models
-      .filter((m) => m.provider === account.provider && m.available)
-      .map((m) => ({
-        ref: `${m.provider}/${m.id}@${account.id}`,
-        words: `${m.name ?? m.id} · ${accountName(account, accounts)}`,
-      })),
-  );
+  // Each signed-in account's models, named for the person: "Swift 2 · Acme · Work". Only the
+  // shared store's: every bot reads the defaults, and an account one bot keeps is only its own.
+  const choices = accounts.accounts
+    .filter((account) => !account.keptBy)
+    .flatMap((account) =>
+      accounts.models
+        .filter((m) => m.provider === account.provider && m.available)
+        .map((m) => ({
+          ref: `${m.provider}/${m.id}@${account.id}`,
+          words: `${m.name ?? m.id} · ${accountName(account, accounts)}`,
+        })),
+    );
   const options = (current: string | null) => {
     const listed = choices.some((c) => c.ref === current);
     return (
@@ -201,7 +212,11 @@ export function useModelsSection({
   const disabled = !admin || busy || defaults === null;
 
   const line =
-    change && !(change.status === "held" && setAside === change.at) ? (
+    refused && refused.over === (change?.at ?? null) ? (
+      <div className="b-models-line" role="status" data-status="failed">
+        <span>{refused.text}</span>
+      </div>
+    ) : change && !(change.status === "held" && setAside === change.at) ? (
       <div className="b-models-line" role="status" data-status={change.status}>
         <span>{changeLine(change, accounts, version)}</span>
         {change.status === "held" && (

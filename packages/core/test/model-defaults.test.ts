@@ -246,6 +246,79 @@ describe("Settings › Models: the defaults every bot uses", () => {
     });
   });
 
+  it("Put back checks the read whose hash it sends, so a write just after that read isn't overwritten", async () => {
+    const { client, fake, stamp, accounts } = await models();
+    await client.setModelDefaults({ primary: "acme/dev-2" }, false, stamp);
+    const get = fake.gateway.handlers["config.get"]!;
+    let reads = 0;
+    fake.gateway.handlers["config.get"] = (params) => {
+      const answer = get(params);
+      // Another device writes just after Put back's read is answered.
+      if ((reads += 1) === 1) {
+        (fake.config.agents as { defaults: Record<string, unknown> }).defaults.model = {
+          primary: "acme/dev-1@acme:home",
+        };
+        fake.revision += 1;
+      }
+      return answer;
+    };
+    await expect(client.putBackModelDefaults(stamp)).rejects.toThrow();
+    expect(primaryOf(fake)).toBe("acme/dev-1@acme:home");
+    expect(accounts().defaultsChange).toMatchObject({
+      status: "failed",
+      error: "Changed on another device just now. Your change is still here to save.",
+    });
+  });
+
+  it("a read-back still running when another gateway is here publishes nothing to it", async () => {
+    const { client, fake, stamp, accounts } = await models();
+    const engine = (
+      client as unknown as {
+        accounts: { reset(): void; ctx: { update(f: (a: object) => object): void } };
+      }
+    ).accounts;
+    const patch = fake.gateway.handlers["config.patch"]!;
+    fake.gateway.handlers["config.patch"] = (params) => {
+      const answer = patch(params);
+      // The written gateway is retired before the change is read back: what the next one shows
+      // is its own.
+      engine.reset();
+      engine.ctx.update((a) => ({ ...a, defaultsChange: null }));
+      return answer;
+    };
+    await client.setModelDefaults({ primary: "acme/dev-2" }, false, stamp);
+    expect(accounts().defaultsChange).toBeNull();
+    expect(accounts().defaults?.primary).toBe("acme/dev-1");
+  });
+
+  it("refuses an account one bot keeps as every bot's model or backup, before anything is sent", async () => {
+    const { client, fake, stamp } = await models();
+    const engine = (
+      client as unknown as {
+        accounts: {
+          ctx: {
+            update(f: (a: { accounts: Array<{ id: string }> }) => object): void;
+          };
+        };
+      }
+    ).accounts;
+    engine.ctx.update((a) => ({
+      ...a,
+      accounts: a.accounts.map((each) =>
+        each.id === "acme:home" ? { ...each, keptBy: "juniper" } : each,
+      ),
+    }));
+    const before = fake.gateway.calls("config.patch").length;
+    for (const values of [
+      { primary: "acme/dev-2@acme:home" },
+      { fallbacks: ["acme/dev-2@acme:home"] },
+    ])
+      await expect(client.setModelDefaults(values, false, stamp)).rejects.toThrow(
+        "That account is one bot's own, so the other bots can't use it.",
+      );
+    expect(fake.gateway.calls("config.patch").length).toBe(before);
+  });
+
   it("a change from a connection without admin is refused before anything is read or sent", async () => {
     const fake = withLookup(new AccountsGateway());
     const run = await accountsClient({
