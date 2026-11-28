@@ -2511,6 +2511,10 @@ export class AccountsEngine {
     // An Unlock's line is about the gateway it was pressed for, even one at the same address.
     const clear = this.ctx.get().clear;
     if (clear && clear.gatewayId !== gatewayId) this.ctx.update((a) => ({ ...a, clear: null }));
+    // So is a Models change's line, kept unconfirmed when its gateway was slow to come back.
+    const change = this.ctx.get().defaultsChange;
+    if (change && change.gatewayId !== null && change.gatewayId !== gatewayId)
+      this.ctx.update((a) => ({ ...a, defaultsChange: null }));
     if (this.creationGateway === null || this.creationGateway === gatewayId) return;
     this.creationGateway = null;
     this.creationTarget = null;

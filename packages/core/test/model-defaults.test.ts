@@ -215,6 +215,49 @@ describe("Settings › Models: the defaults every bot uses", () => {
     expect(run.client.state.connection.gatewayId).toBe("gateway-a");
   }, 15_000);
 
+  it("a change left unconfirmed while the gateway was unnamed is gone before another gateway shows", async () => {
+    const fake = withLookup(new AccountsGateway());
+    fake.config.gateway = { reload: { mode: "off" } };
+    const run = await accountsClient({ gateway: fake });
+    // A short wait instead of the 60 seconds a restart is given.
+    (
+      run.client as unknown as { accounts: { ctx: { restartWaitMs?: number } } }
+    ).accounts.ctx.restartWaitMs = 1_200;
+    const stamp = gatewayStamp(run.client.state.connection);
+    const patch = fake.gateway.handlers["config.patch"]!;
+    const get = fake.gateway.handlers["config.get"]!;
+    let name: (answer: unknown) => void = () => {};
+    fake.gateway.handlers["config.patch"] = (params) => {
+      const answer = patch(params);
+      const applied = fake.revision - 1;
+      // Not applied before the restart, so the read-back can't end before the connection drops.
+      fake.gateway.handlers["config.get"] = (p) => ({
+        ...(get(p) as object),
+        appliedConfigHash: `r${applied}`,
+      });
+      // The address answers again, but names itself only after the wait has run out.
+      fake.identityReply = new Promise((done) => (name = done));
+      setTimeout(() => fake.gateway.dropAll(), 5);
+      return answer;
+    };
+    const shownOnB: unknown[] = [];
+    const unsubscribe = run.client.store.subscribe((state) => {
+      if (state.connection.gatewayId === "gateway-b") shownOnB.push(state.accounts.defaultsChange);
+    });
+    await run.client.setModelDefaults({ primary: "acme/dev-2" }, true, stamp);
+    expect(run.accounts().defaultsChange).toMatchObject({
+      status: "unconfirmed",
+      gatewayId: "gateway-a",
+    });
+    fake.identity = "gateway-b";
+    fake.identityReply = null;
+    name({ deviceId: "gateway-b" });
+    await expect.poll(() => run.client.state.connection.gatewayId).toBe("gateway-b");
+    unsubscribe();
+    expect(shownOnB.length).toBeGreaterThan(0);
+    expect(shownOnB.every((each) => each === null)).toBe(true);
+  });
+
   it("with reload off, a gateway that saves without restarting leaves it saved, not applied", async () => {
     const fake = withLookup(new AccountsGateway());
     fake.config.gateway = { reload: { mode: "off" } };
