@@ -165,6 +165,8 @@ export function createRemoteBridge(options: RemoteBridgeOptions): Promise<Clawtr
               status: "reconnecting",
               retryAt: now() + retryMs,
               error: { code: "HOST_UNREACHABLE", message: "Lost the preview host", hint: null },
+              // The host is what's lost: a restart of the gateway it last reported isn't said.
+              restart: null,
             },
           });
         }

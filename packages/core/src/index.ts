@@ -9,6 +9,7 @@ export * from "./skill-notes.ts";
 export * from "./avatar.ts";
 export * from "./gateway-update.ts";
 export * from "./openclaw-update.ts";
+export { RESTART_WAIT_MS, type ConnectionRestart } from "./restart.ts";
 export * from "./runs.ts";
 export * from "./not-run.ts";
 export { failedByRow } from "./quiet-end.ts";

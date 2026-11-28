@@ -94,6 +94,7 @@ import {
   type Bound,
 } from "./bounds.ts";
 import type { InterSessionMessage, LinkedRun, McpToolIdentity } from "./cards.ts";
+import type { ConnectionRestart } from "./restart.ts";
 import { MAX_START_TASKS_REASON_CHARS, type StartTasks } from "./start-tasks.ts";
 import {
   MAX_BUDGET_ID_CHARS,
@@ -826,6 +827,7 @@ const connection = object<ConnectionState>()({
     payloadBytes: NUMBER,
     files: NUMBER,
   }),
+  restart: object<ConnectionRestart>()({ cause: ENUM, since: NUMBER, until: NUMBER }),
 });
 const discovery = object<DiscoveryState>()({
   status: ENUM,
