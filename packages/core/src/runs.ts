@@ -3117,6 +3117,36 @@ export function replyRow(
   return null;
 }
 
+/**
+ * A completed run whose reply history doesn't hold yet: the place `replyRow` knows its row by is
+ * still empty. The gateway writes that row when the message ends, before the run's end, and the
+ * app reads history after it, so the read that lands next fills that place. Until it does, the
+ * reply is drawn from the run, and it never leaves the screen (#912). Anything history holds at
+ * that place, the reply's row or another, ends the wait, so a row `replyRow` refuses never keeps
+ * the run drawn. False where the reply isn't tied to a place (`Run.textAfter`).
+ */
+export function replyAwaited(run: Run, items: readonly TranscriptItem[]): boolean {
+  const after = run.textAfter;
+  if (run.state !== "completed" || !after || !run.text.trim() || textPlaced(run)) return false;
+  const last = items.length - 1;
+  if (after.call !== null) {
+    for (let i = 0; i <= last; i++) {
+      const blocks = items[i]!.blocks;
+      const at = blocks.findIndex((b) => b.kind === "tool-call" && b.callId === after.call);
+      if (at === -1) continue;
+      return (
+        i === last &&
+        !blocks
+          .slice(at + 1)
+          .some((b) => b.kind === "tool-call" || (b.kind === "text" && b.text.trim()))
+      );
+    }
+  } else if (run.anchorKeyed !== true) return false;
+  // Nothing of the reply's message is read yet: nothing may stand after the person's message.
+  const anchor = items.findIndex((each) => each.id === run.anchorItemId);
+  return anchor !== -1 && anchor === last;
+}
+
 /** Text beside a tool call: its updates replace its text in place; `end` ends it. */
 function applyPreamble(run: Run, data: RawRecord): Run {
   const id = str(data.itemId);
