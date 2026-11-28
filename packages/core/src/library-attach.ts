@@ -60,7 +60,9 @@ async function readTask(
   try {
     answer = await request("skills.library.list", { sessionKey });
   } catch (error) {
-    throw new Error(notSent(error) ? `The connection changed, so nothing was sent.` : failed);
+    throw new Error(notSent(error) ? "The connection changed, so nothing was sent." : failed, {
+      cause: error,
+    });
   }
   const session = asRecord(asRecord(answer)?.session);
   const selected = skillsOf(session?.selections);
@@ -124,11 +126,15 @@ export async function attachLibrarySkill(
       revision,
     });
   } catch (error) {
-    if (notSent(error)) throw new Error(`The connection changed, so ${slug} wasn't added.`);
+    if (notSent(error))
+      throw new Error(`The connection changed, so ${slug} wasn't added.`, { cause: error });
     if (error instanceof GatewayProtocolRequestError)
-      throw new Error(`Couldn't add ${slug} to this task: ${refusalReason(error, slug)}`);
+      throw new Error(`Couldn't add ${slug} to this task: ${refusalReason(error, slug)}`, {
+        cause: error,
+      });
     throw new Error(
       `It isn't known whether ${slug} was added to this task: the gateway's answer didn't arrive. Type / to see.`,
+      { cause: error },
     );
   }
   const added = skillsOf(asRecord(answer)?.selections)?.find(
@@ -168,11 +174,13 @@ export async function detachLibrarySkill(
   try {
     answer = await request("skills.library.activate", { sessionKey, action: "detach", skillId });
   } catch (error) {
-    if (notSent(error)) throw new Error("The connection changed, so nothing was sent.");
+    if (notSent(error))
+      throw new Error("The connection changed, so nothing was sent.", { cause: error });
     if (error instanceof GatewayProtocolRequestError)
-      throw new Error(`Couldn't undo: ${refusalReason(error, slug)}`);
+      throw new Error(`Couldn't undo: ${refusalReason(error, slug)}`, { cause: error });
     throw new Error(
       `It isn't known whether ${slug} was taken out: the gateway's answer didn't arrive. Type / to see.`,
+      { cause: error },
     );
   }
   const left = skillsOf(asRecord(answer)?.selections);
