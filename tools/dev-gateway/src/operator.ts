@@ -114,12 +114,20 @@ export class OperatorSession {
   private client: GatewayClient | null = null;
   /** Between a close and the client's own reconnect, requests wait for the next hello. */
   private ready = false;
+  /** A hello is in effect and no close has come since. */
+  get isUp(): boolean {
+    return this.ready;
+  }
+  /** Moves on with each hello: what was read on one connection is never written on the next. */
+  generation = 0;
   private readonly helloWaiters = new Set<() => void>();
   private lastClose = "";
   /** This connection's device, as the gateway lists it. */
   deviceId = "";
   /** The OpenClaw version the gateway reported in its hello. */
   serverVersion: OpenclawVersion | null = null;
+  /** The scopes the gateway granted in its latest hello (`auth.scopes`): what this connection holds. */
+  grantedScopes: string[] = [];
   /** Each request's limit when it names none. */
   private requestTimeoutMs = 60_000;
 
@@ -235,7 +243,12 @@ export class OperatorSession {
               settle({ ok: false, error: error as Error });
               return;
             }
+            const scopes = asRecord(asRecord(hello).auth).scopes;
+            session.grantedScopes = Array.isArray(scopes)
+              ? scopes.filter((scope): scope is string => typeof scope === "string")
+              : [];
             session.client = client;
+            session.generation += 1;
             session.ready = true;
             for (const wake of session.helloWaiters) wake();
             session.helloWaiters.clear();
@@ -326,6 +339,17 @@ export class OperatorSession {
       await this.connected(timeoutMs, left(), true);
       return send();
     }
+  }
+
+  /**
+   * One request on the connection that is up now, or none: no wait for a hello and no resend on
+   * the next connection. For a write decided from reads on this connection (the plugin install
+   * engine's), which must never go out on another one.
+   */
+  requestOnce<T = JsonRecord>(method: string, params: unknown, timeoutMs = 60_000): Promise<T> {
+    const client = this.client;
+    if (!client || !this.ready) return Promise.reject(new Error("not connected"));
+    return client.request<T>(method, params, { timeoutMs });
   }
 
   private notReconnected(timeoutMs: number): Error {

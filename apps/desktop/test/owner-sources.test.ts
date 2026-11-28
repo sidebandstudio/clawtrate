@@ -52,6 +52,10 @@ const ALLOWED: Record<string, string> = {
   "packages/core/src/file-paths.ts:filePathsOf>paths":
     "one call's paths, at most `MAX_STEP_PATHS`, returned to the caller",
   "packages/core/src/files.ts:TASK_PICTURE_TYPES": "static, five media types",
+  "packages/core/src/plugin-install.ts:DECLARED_GROUPS": "static, the ten declared groups",
+  "packages/core/src/plugin-install.ts:CARRIED_PLUGIN_IDS": "static, the plugins Clawtrate carries",
+  "packages/core/src/plugin-install.ts:BUSY_WAITS": "static, three waits",
+  "packages/core/src/plugin-install.ts:OFF_WAITS": "static, six waits",
   "packages/core/src/mapping.ts:NOT_FILES": "static, six block types that are never a file",
   "packages/core/src/mapping.ts:KNOWN_FILES": "static, three block types that hand a file over",
   "packages/core/src/mapping.ts:RUN_STATE_FIELDS":

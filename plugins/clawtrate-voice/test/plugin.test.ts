@@ -232,29 +232,16 @@ describe("clawtrate-voice", () => {
     expect(readme).toMatch(/resumed (CLI )?session/);
   });
 
-  it("puts a path check of its own, and a line to stop and check, right before every write", () => {
+  it("asks nobody to write the gateway's config: Clawtrate writes the grant when it installs it", () => {
     const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
-    // The README as it reads: each code block with the text since the one before it.
-    const parts = [...readme.matchAll(/```bash\n([\s\S]*?)```/g)].map((match, at, all) => ({
-      block: match[1]!,
-      before: readme.slice(
-        at === 0 ? 0 : all[at - 1]!.index! + all[at - 1]![0].length,
-        match.index,
-      ),
-    }));
-    const writes = parts
-      .map((part, at) => ({ ...part, at }))
-      .filter(({ block }) => /config set|plugins install/.test(block));
-    expect(writes.map(({ block }) => /allowConversationAccess/.test(block))).toContain(true);
-    for (const { block, before, at } of writes) {
-      // Pasting a write's block never checks and writes at once.
-      expect(block).not.toMatch(/config file/);
-      // The block just before it is the path check, and the text between says to stop and check.
-      expect(parts[at - 1]?.block, block).toMatch(/config file/);
-      expect(before, block).toMatch(/Stop and check/);
-      // Every variable is quoted.
-      expect(block).not.toMatch(/[^"]\$(profile|checkout)\b/);
-    }
+    // No block a person pastes to install it or write its grant (docs/decisions.md, "The voice
+    // plugin": Clawtrate writes a plugin's grants when it installs that plugin).
+    const blocks = [...readme.matchAll(/```bash\n([\s\S]*?)```/g)].map((match) => match[1]!);
+    expect(blocks.filter((block) => /config set|plugins install/.test(block))).toEqual([]);
+    expect(readme).toContain("plugins.entries.clawtrate-voice.hooks.allowConversationAccess: true");
+    expect(readme).toContain(
+      "Clawtrate writes it when it installs the plugin, and removes it when the plugin is taken off.",
+    );
   });
 });
 

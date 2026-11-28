@@ -77,6 +77,22 @@ node tools/dev-gateway/src/bots-checks.ts --instance bots
 
 `pnpm scenarios` runs those bots checks on an instance of their own: Tool Search's catalog and Code Mode reaching the plugin's `before_tool_call`; a run Clawtrate sent, another bot's message, the command line, a task's brief and a routine's run as the plugin sees each; a run marked after a web search or a task's history; and `clawtrate_bots` with and without `find`. Turning Tool Search or Code Mode on, as two checks do, takes the config outside the contract until it is back.
 
+A named instance can also install a plugin the desktop app carries the way the app will, through its install engine, instead of loading it through the config:
+
+```bash
+pnpm dev-gateway start --instance install --no-seed --install-plugin clawtrate-voice
+```
+
+After the gateway starts, `start` packs the plugin from the checkout with the app's own packer (`apps/desktop/packaging/carried-plugins.ts`) into the instance's run folder, pairs a client of its own with full control, runs the install engine (`packages/core/src/plugin-install.ts`), prints what happened, and unpairs the client. Only the plugins the app carries are accepted, and not one also loaded with `--with-plugin`; both are refused before anything else runs, the OpenClaw version probe included. The start records the names, so the config contract, which `seed` and every later check apply, accepts each one's entry as the engine leaves it (`enabled` true or false, with the grants its record pins or without) and nothing else in it. A packing whose source digest isn't recorded for the running OpenClaw installs as far as the enable, where the engine finds another digest and turns it off; `start` then prints the digest the gateway reported and the command that records it. `e2e/plugin-install.spec.ts` runs the engine on an instance of its own the same way.
+
+The tool hands the engine what the app's host will: its packing as the carried list, and the tarball checked before each stage (no symbolic link on its path, inside the packing folder, its SHA-512 measured from the bytes). It writes only when the gateway's hello granted `operator.admin`. The engine's record of the attempt is kept in the instance's state folder (`clawtrate-plugin-installs.json`), so an attempt that lost a reply is resumed, never started over, by the same command on the running instance:
+
+```bash
+pnpm dev-gateway install-plugin --instance install clawtrate-voice
+```
+
+`install-plugin` also installs on a named instance started without `--install-plugin`, after recording the name with its start options as `start` does. A reset removes the record with the state folder.
+
 The default instance and `pnpm e2e` load no plugins. [The opening](../decisions.md#development-gateway) is described in `docs/decisions.md`.
 
 ## Scripted provider accounts
