@@ -274,7 +274,8 @@ function PairingPanel({
 /** The errors whose way on is This computer: a route's own pairing, a refused proof. */
 const LOCAL_CODES: ReadonlySet<string> = new Set([LOCAL_ROUTE_ONLY, "LOCAL_UNVERIFIED"]);
 
-type ConnectDraft = { address: string; token: string | null };
+/** The form's address and token. `sent` while they are what this form last submitted. */
+type ConnectDraft = { address: string; token: string | null; sent?: true };
 
 function ConnectForm({
   connection,
@@ -319,7 +320,7 @@ function ConnectForm({
     }
     setSubmitError(null);
     const address = url.trim();
-    setDraft({ address, token });
+    setDraft({ address, token, sent: true });
     send({ type: "connect", url: address, token }).catch((error: unknown) =>
       setSubmitError({
         title: "Could not connect",
@@ -346,9 +347,12 @@ function ConnectForm({
           code: gatewayError.code,
         }
       : null;
-  // Try again repeats what failed: the saved gateway's connection, or this form.
+  // Try again repeats what failed: the saved gateway's connection, or this form. A form edited
+  // since then is submitted as it is now, so a new token is the one sent.
+  const edited = draft !== null && !draft.sent;
   const tryAgain = () => {
-    if (!submitError && gatewayError && connection.gatewayUrl) void send({ type: "retry" });
+    if (!submitError && gatewayError && connection.gatewayUrl && !edited)
+      void send({ type: "retry" });
     else formRef.current?.requestSubmit();
   };
 

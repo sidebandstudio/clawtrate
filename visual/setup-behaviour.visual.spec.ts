@@ -642,6 +642,65 @@ test("F-602: Advanced keeps a failed submission's address, error, and only that 
   await expect(token).toHaveValue("");
 });
 
+test("F-602: Try again sends a token typed after a failure, and retries an unchanged form", async ({
+  page,
+}) => {
+  await openFixture(page, "setup=local-refused-token", "dark");
+  const address = page.getByPlaceholder("Gateway address");
+  const token = page.getByPlaceholder("Gateway token, for pairing");
+  const remote = "wss://remote.example.test";
+  await expect(address).toHaveValue(remote);
+  await page.evaluate(() => {
+    const fixture = (window as unknown as { clawtrateFixture: SetupFixture }).clawtrateFixture;
+    fixture.sent.length = 0;
+    fixture.send = async (command) => {
+      fixture.sent.push(command);
+      if (command.type !== "connect") return;
+      fixture.setState((state) => ({
+        ...state,
+        connection: { ...state.connection, status: "connecting", error: null },
+      }));
+    };
+  });
+  const fail = () =>
+    page.evaluate(() => {
+      const fixture = (window as unknown as { clawtrateFixture: SetupFixture }).clawtrateFixture;
+      fixture.setState((state) => ({
+        ...state,
+        connection: {
+          ...state.connection,
+          status: "error",
+          error: { code: "REFUSED", message: "The gateway refused this token.", hint: null },
+        },
+      }));
+    });
+  const commands = () =>
+    page.evaluate(
+      () => (window as unknown as { clawtrateFixture: SetupFixture }).clawtrateFixture.sent,
+    );
+  await token.fill("first-fixture-token");
+  await page.getByRole("button", { name: "Connect a gateway" }).click();
+  await expect(address).toHaveCount(0);
+  await fail();
+  await expect(page.getByRole("alert")).toContainText("The gateway refused this token.");
+  await expect(token).toHaveValue("first-fixture-token");
+
+  // Unchanged since it failed: the same connection again.
+  await page.getByRole("button", { name: "Try again" }).click();
+  expect(await commands()).toEqual([
+    { type: "connect", url: remote, token: "first-fixture-token" },
+    { type: "retry" },
+  ]);
+
+  // A replacement token: Try again submits the form as it is now.
+  await token.fill("second-fixture-token");
+  await page.getByRole("button", { name: "Try again" }).click();
+  await expect(address).toHaveCount(0);
+  expect((await commands()).slice(2)).toEqual([
+    { type: "connect", url: remote, token: "second-fixture-token" },
+  ]);
+});
+
 test("F-602: a named profile goes straight to its card and Advanced", async ({ page }) => {
   await openFixture(page, "setup=local-named-profile", "dark");
   await expect(
