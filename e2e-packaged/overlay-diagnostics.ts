@@ -52,10 +52,11 @@ export function exitOf(child: ChildProcess): AppExit {
 /**
  * The exit the runner wrote to `file` (`reportExit`): "not reported" while it
  * has written none, and "unavailable", with nothing of the file kept, if no
- * file is named or it holds no exit status.
+ * file is named, it can't be read or it holds no exit status. The file is
+ * read, not checked for first: on Windows a check says "not there" also for a
+ * file it may not read.
  */
 export function reportedExit(file: string): AppExit {
-  if (file && !existsSync(file)) return "not reported";
   try {
     const { code, signal } = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;
     const validCode = code === null || Number.isInteger(code);
@@ -63,7 +64,8 @@ export function reportedExit(file: string): AppExit {
       signal === null || (typeof signal === "string" && /^SIG[A-Z0-9]+$/.test(signal));
     if (validCode && validSignal && (code !== null || signal !== null))
       return { code: code as number | null, signal: signal as string | null };
-  } catch {
+  } catch (problem) {
+    if (file && (problem as { code?: unknown } | null)?.code === "ENOENT") return "not reported";
     // unreadable, torn or not JSON
   }
   return "unavailable";
@@ -87,12 +89,14 @@ function described(read: OverlayRead, expected: string) {
 /**
  * What the check saw, phase by phase, the one it ended in last: how long
  * each ran, whether its badge call returned, how often each outcome came and
- * its last ten reads; then who kept the report and the app's exit by then.
+ * its last ten reads; then who kept the report and the app's exit when it
+ * was kept. An afterEach hook keeps it after the test's timeout, so that exit
+ * may be one that came after the failure.
  */
 export function overlayReport(
   steps: OverlayStep[],
   keptBy: "catch" | "afterEach",
-  appExitAtFailure: AppExit,
+  appExitWhenKept: AppExit,
   now = Date.now(),
 ) {
   const phases = steps.map((step, index) => {
@@ -108,38 +112,47 @@ export function overlayReport(
       lastReads: reads.slice(-10),
     };
   });
-  return { endedIn: steps.at(-1)?.phase ?? null, phases, keptBy, appExitAtFailure };
+  return { endedIn: steps.at(-1)?.phase ?? null, phases, keptBy, appExitWhenKept };
 }
 
-/** Writes the report into the test's output folder, and attaches it from there. */
-export async function keepOverlayReport(
+/** Writes the report into the test's output folder, and returns where. */
+export function writeOverlayReport(
   info: TestInfo,
   steps: OverlayStep[],
   keptBy: "catch" | "afterEach",
   exitFile: string,
-): Promise<void> {
+): string {
   const file = info.outputPath(OVERLAY_REPORT);
   const report = overlayReport(steps, keptBy, reportedExit(exitFile));
   writeFileSync(file, `${JSON.stringify(report, null, 2)}\n`);
-  await info.attach("taskbar-overlay", { path: file, contentType: "application/json" });
+  return file;
 }
 
 /**
- * The check's steps, kept as a report once: by the check's catch at its
- * failure, or by an afterEach hook if the test timed out before reaching it,
- * as when a badge call never returns. Nothing is kept for a test that passed.
- * Keeping it never throws, so the test fails with its own error.
+ * The check's steps, written as a report once and attached from there: by the
+ * check's catch at its failure, or by an afterEach hook if the test timed out
+ * before reaching it, as when a badge call never returns, or if the catch
+ * could not write it. Nothing is kept for a test that passed. Keeping it
+ * never throws, so the test fails with its own error.
  */
 export function overlayEvidence(exitFile: string) {
   let pending: OverlayStep[] | null = null;
   const keep = async (info: TestInfo, keptBy: "catch" | "afterEach") => {
-    const steps = pending;
-    pending = null;
-    if (!steps) return;
+    if (!pending) return;
+    let file: string;
     try {
-      await keepOverlayReport(info, steps, keptBy, exitFile);
+      file = writeOverlayReport(info, pending, keptBy, exitFile);
     } catch (problem) {
+      // Still pending, so afterEach tries again.
       console.error(`the taskbar overlay report could not be kept${codeOf(problem)}`);
+      return;
+    }
+    // On disk now: nothing writes or attaches it again, whatever the attachment does.
+    pending = null;
+    try {
+      await info.attach("taskbar-overlay", { path: file, contentType: "application/json" });
+    } catch (problem) {
+      console.error(`the taskbar overlay report was kept but not attached${codeOf(problem)}`);
     }
   };
   return {
@@ -157,16 +170,21 @@ export function overlayEvidence(exitFile: string) {
 
 /**
  * Writes `exit` beside every overlay report under the run's output folders,
- * apart from the exit the report saw at the failure: the runner may see the
- * app end only after the test's worker is gone. `lastReported` is asked only
- * when there is a report to write it beside. Never throws; a write that fails
- * is printed, so it neither fails a clean run nor hides another failure.
+ * apart from the exit the report read when it was kept: the runner may see the
+ * app end only after the test's worker is gone. `lastReported` is asked once,
+ * and only when there is a report to write it beside. Never throws; a write
+ * that fails is printed, so it neither fails a clean run nor hides another
+ * failure, and the next report still gets its record.
  */
 export async function recordTeardownExit(
   outputDirs: string[],
   exit: Omit<TeardownExit, "lastReported">,
   lastReported: () => Promise<AppExit>,
 ): Promise<void> {
+  const warn = (problem: unknown) =>
+    console.error(
+      `how the app quit could not be recorded beside the overlay report${codeOf(problem)}`,
+    );
   try {
     const folders = outputDirs
       .filter((dir) => existsSync(dir))
@@ -175,12 +193,15 @@ export async function recordTeardownExit(
       .map((entry) => entry.parentPath);
     if (folders.length === 0) return;
     const record: TeardownExit = { ...exit, lastReported: await lastReported() };
-    for (const folder of folders)
-      writeFileSync(join(folder, TEARDOWN_EXIT), `${JSON.stringify(record, null, 2)}\n`);
+    for (const folder of folders) {
+      try {
+        writeFileSync(join(folder, TEARDOWN_EXIT), `${JSON.stringify(record, null, 2)}\n`);
+      } catch (problem) {
+        warn(problem);
+      }
+    }
   } catch (problem) {
-    console.error(
-      `how the app quit could not be recorded beside the overlay report${codeOf(problem)}`,
-    );
+    warn(problem);
   }
 }
 
