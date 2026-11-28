@@ -552,7 +552,11 @@
 
   function rawFor(bot, l) {
     const s = P[bot][l.id];
-    if (l.id === "exec") return JSON.stringify({ [`agents.entries.${bot}.tools.exec`]: { mode: s.mode }, "tools.exec": { mode: "deny" } }, null, 2);
+    if (l.id === "exec") {
+      const policy = { "tools.exec": { mode: gatewayExec.mode } };
+      if (s.by !== "default") policy[`agents.entries.${bot}.tools.exec`] = { mode: s.mode };
+      return JSON.stringify(policy, null, 2);
+    }
     if (s.by === "gateway") return JSON.stringify({ "tools.deny": l.tools }, null, 2);
     if (s.by === "rule") return JSON.stringify({ agentId: bot, tools: l.tools, action: "ask", version: 3 }, null, 2);
     if (s.value === "never") return JSON.stringify({ [`agents.entries.${bot}.tools.deny`]: l.tools }, null, 2);
@@ -717,7 +721,7 @@
       fact("Messaging", PAIRS ? "Only Marlow and Pip, with each other" : "Bots may message each other") +
       `</dl><p class="b-hint">No bot's own settings can grant these back. ${mark("set")}</p>` +
       `<p class="c-subgroup">Defaults</p><dl class="facts">` +
-      fact("Commands", "Never, for bots that set none") +
+      fact("Commands", `${execWord(gatewayExec.mode)}, for bots that set none`) +
       `</dl><p class="b-hint">A bot's own setting replaces a default for that bot, wider or narrower. ${mark("set")}</p>` +
       `<dl class="facts">${fact("media-box's approvals file", isAdmin() ? (C.override ? "Always ask" : "Ask for commands not on its allowlist") : `<span class="b-faint">Seeing a machine's approvals needs admin access.</span>`)}</dl>` +
       `<p class="b-hint">Set on the gateway. Clawtrate can't change it.</p>`;

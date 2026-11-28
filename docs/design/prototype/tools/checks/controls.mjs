@@ -163,6 +163,11 @@ p = await open("bot=pip&panel=open&tab=settings&bview=rule&line=exec");
 check("F-051 S10 the bot shows the gateway policy with no override", has(await panelText(p), "Commands: Never", "No override. Uses the gateway's command policy.") && await p.evaluate(() => window.controls.P.pip.exec.by === "default" && window.controls.P.pip.exec.mode === "deny"));
 await p.close();
 
+p = await open("bot=pip&panel=open&tab=settings&bview=rule&line=exec&cmd=create");
+const inheritedPolicy = JSON.parse(await text(p, "#panel-settings .code-block code"));
+check("F-051 an inherited policy shows the gateway mode and no bot override in Raw", has(await panelText(p), "Commands: Allow all", "No override. Uses the gateway's command policy.") && inheritedPolicy["tools.exec"].mode === "full" && !("agents.entries.pip.tools.exec" in inheritedPolicy));
+await p.close();
+
 // One line, opened (section 5) -------------------------------------------------------------------
 p = await open(tab + "&bview=rule&line=exec");
 t = await panelText(p);
@@ -389,6 +394,9 @@ check("S3 ceilings and defaults are told apart, the gateway's pairs among the ce
 check("F-333 set on the gateway, Clawtrate can't change it", t.includes("Set on the gateway. Clawtrate can't change it."));
 check("F-177 rules for every bot, with versions", t.includes("Never · Change files under **/.ssh/**") && t.includes("version 1"));
 check("F-051 S10 a new bot inherits the gateway's command policy", has(t, "What a new bot starts with", "Uses the gateway's command policy", "New bot writes no command mode or tool deny list.", "The gateway's command policy applies from creation.", "Proposed deny list: gateway, plugins and openclaw"));
+await p.close();
+p = await open("open=settings&section=permissions&cmd=create");
+check("F-051 Settings shows the same gateway command mode as the bot", (await dialogText(p)).includes("Allow all, for bots that set none"));
 await p.close();
 p = await open("open=settings&section=permissions&rules=noplugin");
 check("F-051 a new bot inherits the gateway's policy without the rules plugin", (await dialogText(p)).includes("Uses the gateway's command policy"));

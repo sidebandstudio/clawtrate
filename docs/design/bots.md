@@ -629,7 +629,7 @@ With the integration on, a bot's Settings has a block "T3 Code" with one switch 
 - **Turning it on** removes the bot's deny of the server's tools, in one `config.patch`, and gives the bot Clawtrate's T3 Code skill (below). Then Clawtrate reads the bot's latest tool listing. A tool policy above the bot can still withhold the tools (a restrictive profile, a sandbox, a session's overrides); when the listing shows that, the line reads "On, but the gateway doesn't offer Otto the T3 Code tools:" and the gateway's notice as given.
 - **Turning it off** adds the deny back and removes the skill where Clawtrate added it.
 - A write that is refused leaves the switch as it was, with "Couldn't change T3 Code for Otto: <reason>." and the switch focused.
-- Turned on, a row follows: "Limits", with a summary ("All projects, asks first"), opening the **T3 Code** page.
+- When T3 Code is on, the "Limits" row opens the **T3 Code** page. Its default summary is "All projects, doesn't ask". The summary says "asks first" only when the person has enabled approval for starting a thread.
 
 **The skill, as a contract.** The skill explains how to choose a project, start a thread with a provider and model, follow up and read the result.
 

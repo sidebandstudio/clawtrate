@@ -287,6 +287,7 @@ const pane = (p) => text(p, "#panel-settings");
 p = await open("bot=marlow&panel=open&tab=settings");
 check("P2 the Work pane has a Settings tab, reached with the arrows", await p.evaluate(() => document.querySelector("#tab-settings").getAttribute("aria-selected") === "true" && !document.querySelector("#panel-settings").hidden));
 check("P2 the account row says the account and that it is bound", (await text(p, '#panel-settings [data-bs="account"]')).includes("OpenAI · Work") && (await text(p, '#panel-settings [data-bs="account"]')).includes("Bound"));
+check("F-051 default permissions say commands follow the gateway's policy", (await text(p, "#panel-settings")).includes("Commands follow the gateway's policy"));
 check("P2 model and effort sit side by side", await p.evaluate(() => { const [m, e] = document.querySelectorAll("#panel-settings .b-select"); return m && e && Math.abs(m.getBoundingClientRect().top - e.getBoundingClientRect().top) < 2; }));
 await p.click('#panel-settings [data-b-select="model"]');
 const pm = await p.evaluate(() => [...document.querySelectorAll(".b-menu .menu-item")].map((i) => i.dataset.value));

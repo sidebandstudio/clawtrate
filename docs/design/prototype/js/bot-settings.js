@@ -220,7 +220,7 @@
       (b.failed ? note(`<p>${b.failed}</p>`, "danger") : "") +
       `<h3 class="b-tabgroup">Tools</h3><dl class="facts">` +
       // controls.html fills the Tools group's first rows (docs/design/controls.md, section 4).
-      (CT.botsToolsRows ? CT.botsToolsRows(id) : row("Permissions", "Ask before running commands")) +
+      (CT.botsToolsRows ? CT.botsToolsRows(id) : row("Permissions", "Commands follow the gateway's policy")) +
       `</dl>` +
       (tools
         ? `<h4 class="b-group">From xAI</h4><dl class="facts">${tools}</dl>` +
