@@ -3,6 +3,7 @@
 // a message and its replies (parity F-066, F-067, F-283). The gateway's half
 // is proven in e2e/preview.spec.ts.
 import { test, type Locator, type Page } from "@playwright/test";
+import type { ClawtrateState, MessageReaction } from "../packages/core/src/index.ts";
 import {
   contextFor,
   expect,
@@ -60,6 +61,59 @@ const names = (locator: Locator) =>
 
 const shown = (locator: Locator) =>
   locator.evaluate((el) => Number(getComputedStyle(el).opacity) === 1);
+
+/**
+ * The points of a control's 44 px touch area, across it from its centre out to its edges, where a
+ * touch does not reach the control, each with what it reaches instead: a neighbour whose own area
+ * lies over part of it fails.
+ */
+const unreached = (control: Locator) =>
+  control.evaluate((el) => {
+    const box = el.getBoundingClientRect();
+    const across = [-21.5, -11, 0, 11, 21.5];
+    return across.flatMap((dy) =>
+      across.flatMap((dx) => {
+        const hit = document.elementFromPoint(
+          box.left + box.width / 2 + dx,
+          box.top + box.height / 2 + dy,
+        );
+        if (el.contains(hit)) return [];
+        const other = hit?.closest("button, [aria-label]");
+        const name = other?.getAttribute("aria-label") ?? other?.textContent ?? hit?.tagName;
+        return [`${dx},${dy}: ${name ?? "nothing"}`];
+      }),
+    );
+  });
+
+/** Set the reactions on messages of the open task, by row, as the gateway's next event would. */
+async function react(page: Page, reactions: Record<string, MessageReaction[]>): Promise<void> {
+  await page.evaluate((reactions) => {
+    const fixture = (
+      window as unknown as {
+        clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+      }
+    ).clawtrateFixture;
+    fixture.setState((state) => {
+      const task = "agent:otto:disk-space";
+      const transcript = state.transcripts[task]!;
+      const all = { ...transcript.reactions, ...reactions };
+      return {
+        ...state,
+        transcripts: { ...state.transcripts, [task]: { ...transcript, reactions: all } },
+      };
+    });
+  }, reactions);
+}
+
+/** A message's reaction pills, in view, each reaching every point of its 44 px touch area. */
+async function pillsReach(page: Page, row: string, count: number): Promise<void> {
+  const message = page.locator(`[data-message="${row}"]`);
+  const pills = message.getByTestId("reaction");
+  await expect(pills).toHaveCount(count);
+  await message.getByTestId("reactions").evaluate((el) => el.scrollIntoView({ block: "center" }));
+  await settle(page);
+  for (const pill of await pills.all()) expect(await unreached(pill)).toEqual([]);
+}
 
 /**
  * Fingers on the screen, through the browser's own touch input, so that they drift, scroll and
@@ -693,43 +747,6 @@ test.describe("message actions on a phone", () => {
     await expect(actions).not.toHaveAttribute("data-open", "true");
   });
 
-  test("F-066: touch and hold on a message shows its actions, each with a 44 px hit area", async ({
-    page,
-  }) => {
-    await open(page);
-    const turn = answer(page);
-    await turn.scrollIntoViewIfNeeded();
-    const bubble = turn.locator(".msg > .bubble").last();
-    const box = (await bubble.boundingBox())!;
-    const actions = turn.getByTestId("message-actions");
-    const x = box.x + 30;
-    const y = box.y + 20;
-    await page.touchscreen.tap(x, y);
-    expect(await shown(actions)).toBe(false);
-    // Held: a pointer down that lasts past the long press.
-    await bubble.dispatchEvent("pointerdown", {
-      pointerType: "touch",
-      isPrimary: true,
-      clientX: x,
-      clientY: y,
-    });
-    await expect(actions).toHaveAttribute("data-open", "true", { timeout: 3000 });
-    await bubble.dispatchEvent("pointerup", { pointerType: "touch", clientX: x, clientY: y });
-    await expect.poll(() => shown(actions)).toBe(true);
-    for (const button of await actions.getByRole("button").all()) {
-      const size = await button.evaluate((el) => {
-        const after = getComputedStyle(el, "::after");
-        return [parseFloat(after.width), parseFloat(after.height)];
-      });
-      expect(size[0]).toBeGreaterThanOrEqual(44);
-      expect(size[1]).toBeGreaterThanOrEqual(44);
-    }
-    // Within the screen.
-    const bar = (await actions.boundingBox())!;
-    expect(bar.x).toBeGreaterThanOrEqual(0);
-    expect(bar.x + bar.width).toBeLessThanOrEqual(PHONE.width);
-  });
-
   test("F-066: touch and hold shows a message's actions though the finger drifts a few px", async ({
     page,
   }) => {
@@ -953,6 +970,84 @@ test.describe("message actions on a phone", () => {
     await expect(turn.getByTestId("message-actions")).toHaveCSS("pointer-events", "none");
   });
 });
+
+for (const width of [320, 390]) {
+  test.describe(`touch areas on a ${width}px phone`, () => {
+    test.use(contextFor({ ...PHONE, width }, "light"));
+
+    test("F-066: touch and hold on a message shows its actions, each with a 44 px hit area of its own", async ({
+      page,
+    }) => {
+      await open(page);
+      const turn = answer(page);
+      await turn.scrollIntoViewIfNeeded();
+      const bubble = turn.locator(".msg > .bubble").last();
+      const box = (await bubble.boundingBox())!;
+      const actions = turn.getByTestId("message-actions");
+      const x = box.x + 30;
+      const y = box.y + 20;
+      await page.touchscreen.tap(x, y);
+      expect(await shown(actions)).toBe(false);
+      // Held: a pointer down that lasts past the long press.
+      await bubble.dispatchEvent("pointerdown", {
+        pointerType: "touch",
+        isPrimary: true,
+        clientX: x,
+        clientY: y,
+      });
+      await expect(actions).toHaveAttribute("data-open", "true", { timeout: 3000 });
+      await bubble.dispatchEvent("pointerup", { pointerType: "touch", clientX: x, clientY: y });
+      await expect.poll(() => shown(actions)).toBe(true);
+      const buttons = actions.getByRole("button");
+      await expect(buttons).toHaveCount(3);
+      for (const button of await buttons.all()) expect(await unreached(button)).toEqual([]);
+      // Within the screen.
+      const bar = (await actions.boundingBox())!;
+      expect(bar.x).toBeGreaterThanOrEqual(0);
+      expect(bar.x + bar.width).toBeLessThanOrEqual(width);
+    });
+
+    test("F-283: reaction pills that wrap onto a second row each keep a 44 px hit area of their own", async ({
+      page,
+    }) => {
+      await open(page);
+      // Otto's report takes six reactions with three-digit counts: more than one row holds.
+      await react(page, {
+        "row-9": ["👍", "❤️", "😂", "🎉", "👀", "🙏"].map((emoji, i) => ({
+          emoji,
+          count: 120 + i,
+          mine: i === 0,
+        })),
+      });
+      await pillsReach(page, "row-9", 6);
+      const rows = await page
+        .locator('[data-message="row-9"]')
+        .getByTestId("reaction")
+        .evaluateAll((all) => new Set(all.map((each) => each.getBoundingClientRect().top)).size);
+      expect(rows).toBe(2);
+    });
+
+    test("F-283: a reaction pill keeps its 44 px hit area over the replies link under it", async ({
+      page,
+    }) => {
+      await open(page);
+      // Otto's first answer has a reply, so its replies link is under the reaction it takes here.
+      await react(page, { "row-2": [{ emoji: "👀", count: 1, mine: false }] });
+      await pillsReach(page, "row-2", 1);
+    });
+
+    test("F-283: narrow reaction pills side by side each keep a 44 px hit area of their own", async ({
+      page,
+    }) => {
+      await open(page);
+      // Glyphs narrower than an emoji, with one reaction each: drawn, their pills are under 44 px.
+      await react(page, {
+        "row-9": ["☹", "☺"].map((emoji) => ({ emoji, count: 1, mine: false })),
+      });
+      await pillsReach(page, "row-9", 2);
+    });
+  });
+}
 
 for (const size of SIZES) {
   for (const theme of THEMES) {
