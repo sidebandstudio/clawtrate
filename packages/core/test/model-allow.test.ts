@@ -528,6 +528,40 @@ describe("F-042: a line and its Undo act only on what they were read from (#799)
     client.stop();
   });
 
+  it("saving the same model again after a failed read keeps the line and its Undo", async () => {
+    const fake = new AccountsGateway();
+    limited(fake, ["acme/dev-1"]);
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    const get = fake.gateway.handlers["config.get"]!;
+    const patch = fake.gateway.handlers["config.patch"]!;
+    let failNext = false;
+    fake.gateway.handlers["config.patch"] = (params) => {
+      const answer = patch(params);
+      failNext = true;
+      return answer;
+    };
+    fake.gateway.handlers["config.get"] = (params) => {
+      if (failNext) {
+        failNext = false;
+        throw new Error("gateway request timeout for config.get");
+      }
+      return get(params);
+    };
+    await expect(client.setBotModel("otto", "dev-2", null)).rejects.toThrow(/config\.get/);
+    const first = shownOf(accounts());
+    // The person saves again: the entry is there already, so nothing is added; the line stays.
+    fake.gateway.handlers["config.patch"] = patch;
+    await client.setBotModel("otto", "dev-2", "low");
+    expect(defaults(fake).modelPolicy).toEqual({ allow: ["acme/dev-1", "acme/dev-2"] });
+    expect(shownOf(accounts())).toEqual(first);
+    await client.undoModelAllowed(first);
+    expect(defaults(fake).modelPolicy).toEqual({ allow: ["acme/dev-1"] });
+    // Another model saved afterwards, which adds nothing, ends the line.
+    await client.setBotModel("otto", "dev-1", null);
+    expect(accounts().allowed).toBeNull();
+    client.stop();
+  });
+
   it("a list past what Clawtrate writes back still refuses the model, and Allow says why", async () => {
     const fake = new AccountsGateway();
     const full = Array.from({ length: MAX_ALLOWLIST_ENTRIES }, (_, i) => `acme/old-${i}`);

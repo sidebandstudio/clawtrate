@@ -2800,7 +2800,13 @@ export class AccountsEngine {
     const gatewayId = this.ctx.gatewayNow();
     const id = this.ctx.randomId();
     this.ctx.update((a) => {
-      if (!added) return a.allowed?.botId === botId ? { ...a, allowed: null } : a;
+      // A write that added nothing ends the line for that bot, unless it saved the very model the
+      // line names again (a retry after a failed read): that entry is still the line's, and so
+      // is its Undo.
+      if (!added) {
+        const same = a.allowed?.provider === ref.provider && a.allowed.model === ref.model;
+        return a.allowed?.botId === botId && !same ? { ...a, allowed: null } : a;
+      }
       const allowed: ModelAllowed = {
         id,
         gatewayId,
