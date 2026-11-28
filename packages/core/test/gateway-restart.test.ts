@@ -44,8 +44,8 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-describe("F-603: a restart the gateway announces", () => {
-  it("F-603: from the notice until the next hello it reads as restarting, and every attempt waits the first delay instead of doubling", async () => {
+describe("F-614: a restart the gateway announces", () => {
+  it("F-614: from the notice until the next hello it reads as restarting, and every attempt waits the first delay instead of doubling", async () => {
     const { client, gateway } = await connected();
     const waits = delays(client);
     goAway(gateway, RESTARTING);
@@ -60,7 +60,7 @@ describe("F-603: a restart the gateway announces", () => {
     client.stop();
   });
 
-  it("F-603: two minutes after the notice without a hello it reads as late, and the attempts back off again", async () => {
+  it("F-614: two minutes after the notice without a hello it reads as late, and the attempts back off again", async () => {
     const { client, gateway } = await connected({ reconnect: { initialMs: 1_000, maxMs: 30_000 } });
     expect(RESTART_WAIT_MS).toBe(2 * 60_000);
     vi.useFakeTimers();
@@ -81,7 +81,7 @@ describe("F-603: a restart the gateway announces", () => {
     client.stop();
   });
 
-  it("F-603: a send the closed connection may have delivered is not sent again on the new one", async () => {
+  it("F-614: a send the closed connection may have delivered is not sent again on the new one", async () => {
     const { client, gateway, transcript } = await openTask();
     // The gateway took the message and went away before it answered.
     gateway.handlers["chat.send"] = () => new Promise(() => {});
@@ -99,8 +99,8 @@ describe("F-603: a restart the gateway announces", () => {
   });
 });
 
-describe("F-603: a stop, or a drop the gateway didn't announce", () => {
-  it("F-603: a stop's notice, and no notice at all, read as any lost connection: no restart, and the backoff doubles", async () => {
+describe("F-614: a stop, or a drop the gateway didn't announce", () => {
+  it("F-614: a stop's notice, and no notice at all, read as any lost connection: no restart, and the backoff doubles", async () => {
     for (const notice of [STOPPING, null]) {
       const { client, gateway } = await connected();
       const waits = delays(client);

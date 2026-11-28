@@ -505,7 +505,7 @@ describe("F-591: while OpenClaw updates, the strip and the footer say so", () =>
   });
 });
 
-describe("F-603: while the gateway restarts, the strip and the footer say so", () => {
+describe("F-614: while the gateway restarts, the strip and the footer say so", () => {
   const down = { ...connection, status: "reconnecting" as const, retryAt: Date.now() + 1_000 };
   const state = (
     restart: ConnectionState["restart"],
@@ -520,7 +520,7 @@ describe("F-603: while the gateway restarts, the strip and the footer say so", (
   const strip = (s: ClawtrateState) => stripFor(s, "dropped", null);
   const footer = (s: ClawtrateState) => presenceWords(s.connection, false, updatingHere(s));
 
-  it("F-603: announced by the gateway: restarting and saved messages, no countdown and no Retry; past the wait, that it hasn't come back, what to check, and Retry", () => {
+  it("F-614: announced by the gateway: restarting and saved messages, no countdown and no Retry; past the wait, that it hasn't come back, what to check, and Retry", () => {
     const restarting = state("restarting");
     expect(strip(restarting)).toEqual({
       tone: "warn",
@@ -543,7 +543,7 @@ describe("F-603: while the gateway restarts, the strip and the footer say so", (
     expect(footer(late)).toBe("Not back from its restart");
   });
 
-  it("F-603: while OpenClaw updates, the update's words are said; connected again, or with nothing announced, as before", () => {
+  it("F-614: while OpenClaw updates, the update's words are said; connected again, or with nothing announced, as before", () => {
     const both = state("restarting", { run: run({ phase: "restarting" }) });
     expect(strip(both)?.text).toBe("Updating OpenClaw to 2026.11.6");
     expect(footer(both)).toBe("Updating OpenClaw…");

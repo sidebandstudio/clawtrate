@@ -1529,7 +1529,7 @@ describe("F-589: the client follows an update across the gateway's restart", () 
     client.stop();
   });
 
-  it("F-603: an update this app started, whose restart the gateway announces: the run is still followed, and every attempt waits the first delay until the gateway is back", async () => {
+  it("F-614: an update this app started, whose restart the gateway announces: the run is still followed, and every attempt waits the first delay until the gateway is back", async () => {
     const { client, gateway, finish } = await pressedUpdate({
       reconnect: { initialMs: 20, maxMs: 2_000 },
     });

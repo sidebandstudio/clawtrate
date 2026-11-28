@@ -7,7 +7,7 @@ import { contextFor, expect, openFixture, OTTO_DISK, settle, SIZES } from "./fix
 const WIDE = SIZES.find((size) => size.name === "1440")!;
 const PHONE = SIZES.find((size) => size.phone)!;
 
-test("F-603: while OpenClaw restarts, the strip, the footer and the announcement say so, with no countdown and no Retry; past the wait, that it hasn't come back, with Retry", async ({
+test("F-614: while OpenClaw restarts, the strip, the footer and the announcement say so, with no countdown and no Retry; past the wait, that it hasn't come back, with Retry", async ({
   page,
 }) => {
   // Connected, then the gateway says it is restarting and the connection drops.
@@ -56,7 +56,7 @@ for (const [size, theme] of [
   test.describe(`gateway restart strip ${size.name} ${theme}`, () => {
     test.use(contextFor(size, theme));
 
-    test("F-603: the strip and the footer while OpenClaw restarts match their baselines", async ({
+    test("F-614: the strip and the footer while OpenClaw restarts match their baselines", async ({
       page,
     }) => {
       await openFixture(page, `scene=restarting&${OTTO_DISK}`, theme);
