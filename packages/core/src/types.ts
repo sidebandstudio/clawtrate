@@ -15,6 +15,7 @@ import type { SetupState } from "./setup.ts";
 import type { CheckInsState } from "./check-ins.ts";
 import type { SidebarState } from "./sidebar.ts";
 import type { ComputerState } from "./computer.ts";
+import type { ConnectionRestart } from "./restart.ts";
 import { initialUsage, type UsageState } from "./usage.ts";
 
 export type ConnectionStatus =
@@ -146,6 +147,12 @@ export type ConnectionState = {
    * before the first hello.
    */
   sendLimits: SendLimits | null;
+  /**
+   * While the gateway restarts, as it announced or as a write of this app's said it would, for
+   * at most `RESTART_WAIT_MS` (`restart.ts`). Beside `status`, never instead of it: absent or
+   * null otherwise, and a reader that ignores it sees the connection as before.
+   */
+  restart?: ConnectionRestart | null;
 };
 
 /**

@@ -71,6 +71,7 @@ import { itemText, MessageProvider, MessageUnit, ReplyQuote, ThreadView } from "
 import { SentFiles } from "./SentFiles.tsx";
 import { TEXT_BLOCKS } from "./reading-line.ts";
 import { useShowCommands, useShowThinking } from "./preferences.ts";
+import { connectionHeard, restartingNow } from "./restarting.ts";
 import { BriefTurn, StartedLine, starterOf, type Starter } from "./StartedBy.tsx";
 
 /**
@@ -665,6 +666,8 @@ type LiveOptions = {
   connected: boolean;
   /** What the task shows is this connection's (`statusLineFor`): otherwise live work is last seen. */
   current: boolean;
+  /** The gateway is restarting (`restarting.ts`). */
+  restarting?: boolean;
   interactive: boolean;
   /** What this connection may act on: "Needs you" points only at a card it can answer. */
   may: { canApprove: boolean; canAnswer: boolean };
@@ -1053,11 +1056,7 @@ export function Conversation({
   const lastRun = transcript?.runs.filter((run) => run.state !== "queued").at(-1);
   const heard = [
     bot ? lifecycleWords(bot, active, lastRun) : null,
-    connection.status === "reconnecting"
-      ? (updatingWords ?? "Reconnecting")
-      : connection.status === "connected"
-        ? "Connected"
-        : null,
+    connectionHeard(connection, updatingWords),
     granted
       ? "You can now send, stop and answer"
       : connection.upgrade.status === "pending"
@@ -1250,6 +1249,7 @@ export function Conversation({
           // never does (#592).
           connected: online,
           current,
+          restarting: restartingNow(connection),
           interactive,
           may: { canApprove, canAnswer },
           onRequestAccess:
@@ -1353,6 +1353,7 @@ export function Conversation({
           taskKey={task.key}
           transcript={transcript}
           connected={online}
+          restarting={restartingNow(connection)}
           limits={connection.sendLimits}
           notices={[
             ...stopNotices.map((notice) => ({

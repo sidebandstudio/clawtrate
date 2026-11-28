@@ -458,6 +458,7 @@ export const CLIENT_NOT_WALKED: Record<string, string> = {
     "one lost press's gateway identity and time, at most one, read on the next hello",
   "openclawUpdates.refused":
     "the gateway's one refusal of a press with no run: a reason code and its bounded sentence",
+  "restarts.ctx": "the client's own functions, handed to the restart watch, which keeps nothing",
 };
 
 /** The class of each client property whose own collections are named under it. */
@@ -472,6 +473,7 @@ export const CLIENT_PARTS: Record<string, string> = {
   usage: "UsageEngine",
   botNames: "BotNames",
   openclawUpdates: "OpenClawUpdates",
+  restarts: "RestartWatch",
   deviceApprovals: "DeviceApprovals",
   machines: "MachinesEngine",
   waiting: "WaitingIndex",

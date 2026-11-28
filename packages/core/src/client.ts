@@ -3,6 +3,7 @@
 
 import { readOpenClawUpdate, type OpenClawUpdate } from "./gateway-update.ts";
 import { OpenClawUpdates } from "./openclaw-update.ts";
+import { announcesRestart, answerRestarts, RESTART_WAIT_MS, RestartWatch } from "./restart.ts";
 import {
   DeviceApprovals,
   pairCode,
@@ -675,6 +676,10 @@ export const MAX_PENDING_APPROVALS_PER_TASK = MAX_PENDING_APPROVAL_COUNT;
  */
 export const REQUEST_TIMEOUT_MS = 60_000;
 
+/** The statuses a restart may be said beside: the connection is up, or coming back by itself. */
+const comingBack = (status: ConnectionState["status"]) =>
+  status === "connected" || status === "connecting" || status === "reconnecting";
+
 /** How long Stop waits for the gateway to answer the withdrawal of the run's steers. */
 export const STEER_WITHDRAWAL_WAIT_MS = 2_000;
 /** Longest message text the client sends. */
@@ -819,6 +824,8 @@ export type ClientOptions = {
   allowGatewayUrl?: (url: string) => boolean;
   /** Reconnect backoff. Tests shorten it. */
   reconnect?: { initialMs: number; maxMs: number };
+  /** How long a restart is said (`ConnectionState.restart`): `RESTART_WAIT_MS` unless a test shortens it. */
+  restartWaitMs?: number;
   /** Turn limit for runs this client starts. */
   turnLimitMs?: number;
   /** `REQUEST_TIMEOUT_MS` unless a test shortens it. */
@@ -2044,6 +2051,14 @@ export class ClawtrateClient {
     publish: (botNames) => this.store.update((state) => ({ ...state, botNames })),
     log: (message) => this.log("warn", message),
   });
+  /** A restart of the gateway while it plausibly lasts (`restart.ts`): `connection.restart`. */
+  private readonly restarts = new RestartWatch({
+    now: () => this.now(),
+    current: () => this.state.connection.restart ?? null,
+    publish: (restart) => this.setConnection({ restart }),
+    waitMs: () => this.options.restartWaitMs ?? RESTART_WAIT_MS,
+  });
+
   /**
    * Updating OpenClaw (`openclaw-update.ts`): a person's press, and the gateway's run followed
    * across its restart; its state is `openclawUpdating`.
@@ -9250,6 +9265,8 @@ export class ClawtrateClient {
       this.forgetGatewayState();
     }
     this.everConnected = hasData;
+    // A reopen of the gateway that is restarting (Retry) still waits for it; any other ends it.
+    const keepRestart = sameGateway && this.state.connection.restart;
     this.store.update((state) => ({
       ...(sameGateway
         ? state
@@ -9277,6 +9294,7 @@ export class ClawtrateClient {
         openclawUpdate:
           sameGateway && !this.isSetup(settings.url) ? state.connection.openclawUpdate : null,
         gatewayId: sameGateway ? state.connection.gatewayId : null,
+        ...(keepRestart ? { restart: keepRestart } : {}),
       },
       transcripts: sameGateway
         ? state.transcripts
@@ -10030,6 +10048,8 @@ export class ClawtrateClient {
                   },
                 }
               : {};
+          // Publish an asked restart before any observer sees the dropped connection.
+          this.restarts.dropped();
           this.setConnection({
             status: this.everConnected ? "reconnecting" : "connecting",
             ...unanswered,
@@ -10356,6 +10376,8 @@ export class ClawtrateClient {
   }
 
   private handleHello(hello: HelloOk, generation: number): void {
+    // Back: a restart waited for is over, and one asked of the gateway before it isn't this one's.
+    this.restarts.end();
     this.holdSetupUpdate(
       generation,
       this.isSetup(this.settings?.url) ? asRecord(hello.snapshot)?.updateAvailable : null,
@@ -10403,6 +10425,7 @@ export class ClawtrateClient {
     };
     this.setConnection({
       status: "connected",
+      ...(this.state.connection.restart ? { restart: null } : {}),
       serverVersion: this.isSetup(this.settings?.url)
         ? setupVersion(hello.server.version)
         : hello.server.version,
@@ -11671,6 +11694,10 @@ export class ClawtrateClient {
       void this.bootstrap(generation, null, 0);
     }
     switch (event.event) {
+      case "shutdown":
+        // The gateway closes next: a restart when it says one is expected (`restart.ts`).
+        if (announcesRestart(event.payload)) this.restarts.announced();
+        return;
       case "update.available":
         // While a setup connection is open, the report is held, never published.
         if (this.isSetup(this.settings?.url)) {
@@ -12595,18 +12622,32 @@ export class ClawtrateClient {
     // The log policy of the connection this goes out on: a late failure is logged with it,
     // never with that of a connection that replaced it.
     const quiet = this.quiet();
-    return this.protocol.request(method, params, options).catch((error: unknown) => {
-      if (typeof error === "object" && error !== null) this.dispatchedQuiet.set(error, quiet);
-      throw error;
-    });
+    return this.protocol.request(method, params, options).then(
+      (answer) => {
+        // A write the gateway restarts to apply.
+        if (answerRestarts(method, answer)) this.restarts.asked();
+        return answer;
+      },
+      (error: unknown) => {
+        if (typeof error === "object" && error !== null) this.dispatchedQuiet.set(error, quiet);
+        throw error;
+      },
+    );
   }
 
   private setConnection(patch: Partial<ConnectionState>): void {
     // The host pointed anew (Suspend, Disconnect, a fresh pairing): no name card or skipped file
     // read before counts, even on a reconnect to the same address.
-    if (patch.target !== undefined && patch.target !== this.state.connection.target) {
+    const changedTarget =
+      patch.target !== undefined && patch.target !== this.state.connection.target;
+    if (changedTarget) {
       this.botNames.reset();
       this.openclawUpdates.reset();
+    }
+    // A connection that stops or waits for its owner no longer expects a restart.
+    if (changedTarget || (patch.status !== undefined && !comingBack(patch.status))) {
+      this.restarts.end();
+      if (this.state.connection.restart) patch = { ...patch, restart: null };
     }
     const scrubbed = this.scrubConnection(patch);
     this.store.update((state) => ({ ...state, connection: { ...state.connection, ...scrubbed } }));

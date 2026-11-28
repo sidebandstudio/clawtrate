@@ -27,6 +27,7 @@ import {
   type Run,
   type Transcript,
 } from "@clawtrate/core";
+import { RESTARTING_LEAD } from "./restarting.ts";
 
 /** The state avatar's states (section 4). */
 export type AvatarState =
@@ -142,6 +143,8 @@ export function statusLineFor(
      * has reloaded (or failed to). Defaults to true.
      */
     current?: boolean;
+    /** The gateway is restarting (`restarting.ts`): a lost connection says so. */
+    restarting?: boolean;
     interactive: boolean;
     reading?: ReadingContext | undefined;
     /** "Show commands" is off: the phrase says the kind of work (7.11). */
@@ -230,7 +233,7 @@ export function statusLineFor(
       // Connected: still loading again, or its reload or live updates failed (the strip or the
       // conversation says which); never a word about the connection then.
       phrase: !options.connected
-        ? `Reconnecting. ${seen}`
+        ? `${options.restarting ? RESTARTING_LEAD : "Reconnecting"}. ${seen}`
         : transcript.status === "error"
           ? seen
           : `Catching up. ${seen}`,
@@ -293,16 +296,25 @@ export type ComposerView = {
  */
 export function composerFor(
   transcript: Transcript | undefined,
-  options: { bot: string; connected: boolean; chosen: "steer" | "queue" | null },
+  options: {
+    bot: string;
+    connected: boolean;
+    chosen: "steer" | "queue" | null;
+    /** The gateway is restarting (`restarting.ts`): offline, the composer says so. */
+    restarting?: boolean;
+  },
 ): ComposerView {
   const run = currentRun(transcript);
   const offline = !options.connected;
+  const offlineWords = options.restarting
+    ? `${RESTARTING_LEAD}. Messages send when it's back.`
+    : "Offline. Messages send when you reconnect.";
   // A pending question holds every message, also when no run is shown as active.
   const held = !!transcript && questionPending(transcript, run);
   if (!run || !transcript) {
     return {
       placeholder: offline
-        ? "Offline. Messages send when you reconnect."
+        ? offlineWords
         : held
           ? `Answer above, or message ${options.bot}`
           : `Message ${options.bot}`,
@@ -316,9 +328,7 @@ export function composerFor(
   }
   if (run.state === "stopping") {
     return {
-      placeholder: offline
-        ? "Offline. Messages send when you reconnect."
-        : `Queue a message for ${options.bot}`,
+      placeholder: offline ? offlineWords : `Queue a message for ${options.bot}`,
       mode: "queue",
       stoppable: null,
       stopping: true,
@@ -331,7 +341,7 @@ export function composerFor(
   const mode: SendMode = held ? "hold" : options.chosen === "queue" ? "queue" : "steer";
   return {
     placeholder: offline
-      ? "Offline. Messages send when you reconnect."
+      ? offlineWords
       : waiting
         ? `Answer above, or message ${options.bot}`
         : `Message ${options.bot}`,

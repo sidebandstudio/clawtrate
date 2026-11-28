@@ -52,6 +52,7 @@ import { CommandLine, failureTitle } from "./ConnectScreen.tsx";
 import { gatewayTitle } from "./format.ts";
 import { useShowCommands, useShowThinking } from "./preferences.ts";
 import { useForget } from "./forget.ts";
+import { RESTARTING_WORDS, restartingNow } from "./restarting.ts";
 import { thisComputer, ThisComputerStage } from "./this-computer.ts";
 import { DeviceRequestsList } from "./DeviceApproval.tsx";
 import { BackIcon, ChevronIcon, CloseIcon, ExternalIcon } from "./icons.tsx";
@@ -73,6 +74,7 @@ function useNarrow(): boolean {
 
 /** The connection's state, as the Gateway pane names it. */
 export function gatewayState(connection: ConnectionState): string {
+  if (restartingNow(connection)) return RESTARTING_WORDS;
   switch (connection.status) {
     case "connected":
       // Re-pairing: the gateway holds this device's new authorization until its owner decides.
@@ -92,6 +94,17 @@ export function gatewayState(connection: ConnectionState): string {
       // An attempt under way is connecting; waiting for the next one is offline.
       return connection.retryAt === null ? "Connecting" : "Offline";
   }
+}
+
+/** The dot beside the gateway's state in words (`gatewayState`). */
+export function gatewayDot(state: string): string {
+  return state === "Connected"
+    ? "connected"
+    : state === "Connecting" || state === "Pairing pending" || state === RESTARTING_WORDS
+      ? "connecting"
+      : state === "Offline"
+        ? "error"
+        : "disconnected";
 }
 
 /**
@@ -979,14 +992,7 @@ export function Settings({
     )?.focus();
   });
 
-  const dot =
-    state === "Connected"
-      ? "connected"
-      : state === "Connecting" || state === "Pairing pending"
-        ? "connecting"
-        : state === "Offline"
-          ? "error"
-          : "disconnected";
+  const dot = gatewayDot(state);
 
   const toNav = (
     <button
