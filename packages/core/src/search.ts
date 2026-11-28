@@ -115,13 +115,15 @@ const exactId = (value: unknown): string | null => {
 /**
  * `sessions.search` across bots, or one bot's, with the task list's own filters (search.md §5).
  * `hidden` leaves out a hit whose session the list hides, decided from the session's row as the
- * gateway sends it with the matches, or null when it sent none.
+ * gateway sends it with the matches, or null when it sent none. `firstMessageTitle` is the title
+ * the client made from a task's first message, as the task list has it, for the row's session.
  */
 export async function searchMessages(
   request: Request,
   query: string,
   botId: string | null,
   hidden?: (sessionKey: string, row: RawRecord | null) => boolean,
+  firstMessageTitle?: (key: string, row: RawRecord) => string | null,
 ): Promise<MessageSearch> {
   const reply = asRecord(
     await request("sessions.search", {
@@ -134,7 +136,7 @@ export async function searchMessages(
       limit: MESSAGE_SEARCH_LIMIT,
     }),
   );
-  const found = readMessageSearch(reply, query);
+  const found = readMessageSearch(reply, query, firstMessageTitle);
   if (!hidden) return found;
   // The gateway sends the row of each session its matches came from (`sessions`, at most 25).
   const rows = new Map<string, RawRecord>();
@@ -234,7 +236,11 @@ function shownSnippet(snippet: string): string {
   return shown === snippet ? snippet : `${cutText(snippet, MAX_SNIPPET_CHARS - 1).trimEnd()}…`;
 }
 
-export function readMessageSearch(reply: RawRecord | null, query = ""): MessageSearch {
+export function readMessageSearch(
+  reply: RawRecord | null,
+  query = "",
+  firstMessageTitle?: (key: string, row: RawRecord) => string | null,
+): MessageSearch {
   const hits: MessageHit[] = [];
   for (const raw of Array.isArray(reply?.results) ? reply.results : []) {
     const row = asRecord(raw);
@@ -262,12 +268,23 @@ export function readMessageSearch(reply: RawRecord | null, query = ""): MessageS
     const row = asRecord(raw);
     const key = exactId(row?.key);
     // A title the gateway made from the first message loses the marker, as the task list's does.
-    // The gateway's placeholder name is no title: the task's own fallback stands for it (#741).
+    // The gateway's placeholder name is no title: the task list's stands for it, the title its
+    // first message makes, else the key's own (#741).
     const named = str(row?.displayName);
     // A small model's name for the task (#750) is placed as the task list places it.
     const title =
       row && key && (isPlaceholderName(row, key) || generatedName(row, key))
-        ? (mapSessionRow({ ...row, archived: false })?.title ?? null)
+        ? (mapSessionRow(
+            { ...row, archived: false },
+            {
+              // A row that leaves out its session is in its hit's.
+              firstMessage:
+                firstMessageTitle?.(key, {
+                  ...row,
+                  sessionId: row.sessionId ?? hits.find((hit) => hit.sessionKey === key)?.sessionId,
+                }) ?? null,
+            },
+          )?.title ?? null)
         : (str(row?.label) ?? (named === null ? null : str(titleWithoutMarker(named))));
     if (key && title && hits.some((hit) => hit.sessionKey === key))
       titles[key] = cutText(title, MAX_TASK_LABEL_CHARS);

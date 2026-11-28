@@ -26,7 +26,13 @@ import {
   VIEWER_OWNERS,
   type Owner,
 } from "../src/owners.ts";
-import { APPROVAL, MAX_ID_CHARS, MAX_RUN_TEXT_CHARS, MAX_UNROUTED } from "../src/state-bounds.ts";
+import {
+  APPROVAL,
+  MAX_ID_CHARS,
+  MAX_RUN_TEXT_CHARS,
+  MAX_TITLE_CHARS,
+  MAX_UNROUTED,
+} from "../src/state-bounds.ts";
 import { createStore, MAX_STORE_LISTENERS } from "../src/store.ts";
 import { agentEvent, FAST, grantingGateway, KEY, openTask, URL_A } from "./client-harness.ts";
 import { deferred, memoryStorage, sleep, testHost, tokenKey, until } from "./fake-gateway.ts";
@@ -246,6 +252,20 @@ describe("the registry of what the host keeps", () => {
       viewer.dispose();
       client.stop();
     }
+  });
+
+  it("bounds a first-message title's entry by its worst case: its key, title, message, session and connection", () => {
+    const entry = {
+      // Each quotation mark is two characters as JSON.
+      title: '"'.repeat(MAX_TITLE_CHARS),
+      from: "m".repeat(MAX_ID_CHARS),
+      session: "s".repeat(MAX_ID_CHARS),
+      epoch: Number.MAX_SAFE_INTEGER,
+    };
+    // As a map's entry: its key, then a colon, and a comma after it.
+    expect(size("k".repeat(MAX_ID_CHARS)) + size(entry) + 2).toBeLessThanOrEqual(
+      CLIENT_OWNERS.firstMessageTitles!.each,
+    );
   });
 
   it("names the waiting files' collections", () => {
