@@ -187,6 +187,63 @@ describe("the hooks", () => {
     expect(await h.tool("clawtrate_tasks", toolCtx, "c2")).not.toMatch(/Main/);
   });
 
+  it("the read tools look at the config before reading a run's origin too", async () => {
+    const seen: Json[] = [];
+    let current = structuredClone(CONFIG) as Json;
+    const hooks = new Map<string, Handler>();
+    const tools = new Map<
+      string,
+      (ctx: Json) => { execute: (id: string, p: Json) => Promise<unknown> }
+    >();
+    createRuns(
+      {
+        on: (name: string, handler: Handler) => hooks.set(name, handler),
+        registerTool: (factory: never, opts: { name: string }) => tools.set(opts.name, factory),
+        runtime: { version: "2026.10.6" },
+      } as never,
+      {
+        slots: {},
+        config: () => current,
+        sessions: () => [],
+        describeHolds: (origin: Json) => {
+          seen.push(origin);
+          return [];
+        },
+      } as never,
+    );
+    hooks.get("before_prompt_build")!({}, typed);
+    current = structuredClone(CONFIG) as Json; // a config write, access still on
+    await tools.get("clawtrate_here")!({ ...toolCtx, runId: "r1" }).execute("c9", {});
+    expect(seen.at(-1)).toMatchObject({ origin: "C", read: "lost" });
+  });
+
+  it("a run that may be a spawn's unnamed child is C with something lost, and runs.get says pending", async () => {
+    const h = host();
+    h.fire("before_prompt_build", {}, typed);
+    h.fire("before_tool_call", call("sessions_spawn", { task: "t", visible: true }, "s1"), toolCtx);
+    const other = { ...typed, runId: "r2", sessionKey: "agent:pip:dashboard:7" };
+    h.fire("before_prompt_build", {}, other);
+    const sawCall = (h.plugin as unknown as { sawCall: (e: Json, c: Json) => { origin: Json } })
+      .sawCall;
+    expect(
+      sawCall(
+        { ...call("write", { path: "x" }, "w1"), runId: "r2" },
+        { ...toolCtx, sessionKey: other.sessionKey },
+      ).origin,
+    ).toMatchObject({ origin: "C", read: "lost" });
+    expect(await h.runGet("r2")).toMatchObject({ pending: true });
+    // The result names another session: this one is the person's own again.
+    h.fire(
+      "after_tool_call",
+      {
+        ...call("sessions_spawn", { task: "t", visible: true }, "s1"),
+        result: { details: { status: "accepted", childSessionKey: "agent:pip:dashboard:child" } },
+      },
+      toolCtx,
+    );
+    expect(await h.runGet("r2")).toMatchObject({ pending: false, kind: "typed" });
+  });
+
   it("a routine's run is found by its session, since no client knows its run id", async () => {
     const h = host();
     const routine = {

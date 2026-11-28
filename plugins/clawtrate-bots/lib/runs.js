@@ -252,8 +252,13 @@ export function createRuns(api, options = {}) {
    * A run's origin, after looking at the config first: a write or an access
    * change since the last look invalidates the record before it is read.
    */
-  const vouched = (find, requester) =>
-    observe() ? originOf(find(), requester, { versionKnown: known }) : { ...UNVOUCHED };
+  const vouched = (find, requester) => {
+    if (!observe()) return { ...UNVOUCHED };
+    const run = find();
+    // A run that may be a spawn's child its result hasn't named yet: C, lost.
+    if (origins.pending(run)) return { origin: "C", read: "lost", kind: "task", why: "pending" };
+    return originOf(run, requester, { versionKnown: known });
+  };
 
   /**
    * The call's run and origin, recorded before any hold decides it; the run
@@ -423,6 +428,8 @@ export function createRuns(api, options = {}) {
               attachments: run.attachments,
               steers: run.steers,
               ended: run.ended,
+              // Possibly a spawn's child its result hasn't named yet: C, lost, meanwhile.
+              pending: origins.pending(run),
             }
           : {}),
       });
