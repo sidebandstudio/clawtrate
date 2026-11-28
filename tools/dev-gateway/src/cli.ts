@@ -2092,18 +2092,21 @@ export type Settled = { approved: true } | { approved: false; why: string };
  * (that first look always runs, too), and approves again, after a pause, only while the same
  * request is still pending; a look that gives up is made again after a pause. Calls after the first
  * two start only when they fit before `deadline` (see `ApproveLimits`). The id came from a list, so
- * a call saying the request isn't pending is looked at too: an earlier call may have approved it.
+ * a call saying the request isn't pending is looked at too: an earlier call, or another caller, may
+ * have approved it. An approval counts from `since`, the start of the list that showed the request
+ * pending, or from this attempt's start when no list is named.
  */
 export async function approveById(
   inst: DevInstance,
   kind: "devices" | "nodes",
   requestId: string,
   id: string | undefined,
-  options: { limits?: ApproveLimits; deadline?: number; clock?: Clock } = {},
+  options: { limits?: ApproveLimits; deadline?: number; clock?: Clock; since?: number } = {},
 ): Promise<Settled> {
   const limits = options.limits ?? NODE_APPROVAL;
   const clock = options.clock ?? realClock;
   const started = clock.now();
+  const since = options.since ?? started;
   const deadline = options.deadline ?? started + limits.limitMs;
   const left = () => deadline - clock.now();
   const lookTakes = limits.lookMs + limits.startMs;
@@ -2111,9 +2114,15 @@ export async function approveById(
   const what = `${kind} request ${requestId}`;
   let calls = 0;
   let output = "";
+  /** What the last look printed, while the looks after the last approve call have all given up. */
+  let lookOutput = "";
   const unsettled = (more = ""): Settled => ({
     approved: false,
-    why: `${unsettledApproval(what, clock.now() - started, calls, output)}${more}`,
+    why:
+      [
+        unsettledApproval(what, clock.now() - started, calls, output),
+        ...(lookOutput ? [`The last look printed:\n${lookOutput.trim()}`] : []),
+      ].join("\n") + more,
   });
   let result = await approveCall(inst, kind, requestId, limits.firstApproveMs, false, true);
   for (;;) {
@@ -2121,15 +2130,18 @@ export async function approveById(
     calls += 1;
     output = result.output;
     let state: "pending" | "approved" | "gone" | null = null;
+    lookOutput = "";
     for (let looks = 0; state === null; looks += 1) {
       if (looks > 0) {
         if (left() < GIVE_UP_PAUSE_MS + lookTakes) return unsettled();
         await clock.sleep(GIVE_UP_PAUSE_MS);
       }
       try {
-        state = await pairingState(inst, kind, requestId, id, limits.lookMs, started);
+        state = await pairingState(inst, kind, requestId, id, limits.lookMs, since);
+        lookOutput = "";
       } catch (error) {
         if (!cliGaveUp(String(error))) throw error;
+        lookOutput = error instanceof Error ? error.message : String(error);
       }
     }
     if (state === "approved") return { approved: true };
@@ -2884,8 +2896,11 @@ export async function approve(
   const clock = options.clock ?? realClock;
   let deadline: number | null = null;
   let listed: { pending?: PendingDevice[] } | null = null;
+  /** When the list that showed the requests pending started: an approval from then on counts. */
+  let listedFrom = 0;
   const lookTakes = limits.lookMs + limits.startMs;
   for (let lists = 0; listed === null; lists += 1) {
+    listedFrom = clock.now();
     try {
       // The first list has the CLI's own limit; one made again has a look's.
       const args = ["devices", "list", "--json"];
@@ -2922,6 +2937,7 @@ export async function approve(
         limits,
         deadline,
         clock,
+        since: listedFrom,
       });
       if (settled.approved) {
         log(`Approved ${name}`);
