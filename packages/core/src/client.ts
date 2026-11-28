@@ -4395,11 +4395,20 @@ export class ClawtrateClient {
       throw new Error("Reconnect to the message's gateway to try again.");
 
     const id = notRunRetryKey(key, run.id);
-    if (this.outgoing(key, id)) {
+    const earlier = this.outgoing(key, id);
+    // A cancelled retry never left this device: a new one takes its place under the same key.
+    if (earlier?.status === "cancelled")
+      this.updateActivity(key, (activity) => ({
+        ...removeMessage(activity, id),
+        runs: activity.runs.filter(
+          (each) => !(each.id === id && each.origin === "local" && !each.bound),
+        ),
+      }));
+    else if (earlier) {
       this.retryMessage(key, id);
       return id;
     }
-    if (notRunRetryRecorded(transcript, id)) return id;
+    if (notRunRetryRecorded(this.state.transcripts[key] ?? transcript, id)) return id;
 
     const plan = retryPlan(run, transcript);
     const kept = this.notRunFiles.get(key, runId);

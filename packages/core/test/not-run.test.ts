@@ -1644,6 +1644,35 @@ describe("F-480 #988: recovering a message that never ran", () => {
     }
   });
 
+  it("a retry cancelled before it left gives way to a new one under the same key", async () => {
+    const gateway = gatewayWith([{ key: KEY, agentId: "otto", updatedAt: T0 }]);
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway" });
+    const original = "failed-original";
+    gateway.handlers["chat.history"] = () => ({
+      messages: [userRow(original, "Read the notes."), beforeReplyRow(original)],
+      hasMore: false,
+    });
+    gateway.handlers["chat.abort"] = () => new Promise(() => {});
+    const { client, transcript } = await openTask({ gateway });
+    try {
+      gateway.emit("agent", agentEvent("run-busy", 1, "lifecycle", { phase: "start" }));
+      await until(() => transcript().runs.some((run) => run.id === "run-busy"));
+      void client.stopRun(KEY, "run-busy");
+      await until(() => transcript().runs.some((run) => run.state === "stopping"));
+      const id = client.retryNotRun(KEY, original);
+      expect(transcript().outbox.find((message) => message.id === id)?.status).toBe("queued");
+      client.cancelQueued(KEY, id);
+      expect(transcript().outbox.find((message) => message.id === id)?.status).toBe("cancelled");
+      expect(client.retryNotRun(KEY, original)).toBe(id);
+      expect(transcript().outbox.filter((message) => message.id === id)).toMatchObject([
+        { status: "queued", text: "Read the notes." },
+      ]);
+      expect(gateway.calls("chat.send")).toHaveLength(0);
+    } finally {
+      client.stop();
+    }
+  });
+
   it("scrubs the device credential from a live failure before keeping Details or its payload", async () => {
     const gateway = gatewayWith([{ key: KEY, agentId: "otto", updatedAt: T0 }]);
     const secret = 'make-believe-"device"-credential';

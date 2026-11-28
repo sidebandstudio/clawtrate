@@ -404,7 +404,8 @@ export function RunEnding({
       : null;
   const retryInFlight =
     retrying ||
-    (retried !== undefined && !["failed", "unknown", "not-sent"].includes(retried.status));
+    (retried !== undefined &&
+      !["failed", "unknown", "not-sent", "cancelled"].includes(retried.status));
   const reason = notRun
     ? cause?.kind === "other" && (repeated || !resend) && !run.retryGatewayChanged
       ? "Choose another model for this bot."

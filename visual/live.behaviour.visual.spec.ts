@@ -2301,6 +2301,42 @@ test("F-480 #988: Try again is disabled while the retry is in flight", async ({ 
   await expect(again).toBeDisabled();
 });
 
+test("F-480 #988: Try again comes back once its queued retry is cancelled", async ({ page }) => {
+  await open(page, "not-run-other");
+  const card = page.getByTestId("turn-error");
+  const again = card.getByRole("button", { name: "Try again" });
+  await again.click();
+  await expect(again).toBeDisabled();
+  // The retry is cancelled before it left this device: nothing is on its way.
+  await page.evaluate(() =>
+    (
+      window as unknown as {
+        clawtrateFixture: { setState: (update: (state: ClawtrateState) => ClawtrateState) => void };
+      }
+    ).clawtrateFixture.setState((state) => {
+      const key = "agent:otto:disk-space";
+      const transcript = state.transcripts[key]!;
+      const sent = transcript.outbox.filter((each) => each.status === "sending").map((m) => m.id);
+      return {
+        ...state,
+        transcripts: {
+          ...state.transcripts,
+          [key]: {
+            ...transcript,
+            outbox: transcript.outbox.map((each) =>
+              sent.includes(each.id) ? { ...each, status: "cancelled" as const } : each,
+            ),
+            runs: transcript.runs.map((run) =>
+              sent.includes(run.id) ? { ...run, state: "cancelled" as const } : run,
+            ),
+          },
+        },
+      };
+    }),
+  );
+  await expect(again).toBeEnabled();
+});
+
 test("F-480 #988: the card says its retry and setting belong to the previous gateway", async ({
   page,
 }) => {
