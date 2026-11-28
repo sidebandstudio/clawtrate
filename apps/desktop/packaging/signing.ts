@@ -1,7 +1,12 @@
 // Which signing a build plans, decided from the names of the variables in its
-// environment, before electron-builder runs. Nothing here prints a value;
-// electron-builder's own output, which the build passes through, can.
-// docs/development/packaging.md lists the variables.
+// environment, before electron-builder runs, and what the files' signatures are
+// after it. Nothing here prints a value; electron-builder's own output, which
+// the build passes through, can. docs/development/packaging.md lists the variables.
+
+import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { join } from "node:path";
 
 export type Env = Record<string, string | undefined>;
 
@@ -164,6 +169,14 @@ export function signingSummary(plan: SigningPlan, target: "mac" | "win"): string
     : "Signing plan: the macOS app will be signed with a Developer ID and not notarized.";
 }
 
+/**
+ * What a Windows build that signs from a .pfx prints before electron-builder starts. The
+ * count and the folder are only those of the setup CI tested; docs/development/packaging.md
+ * says more.
+ */
+export const WINDOWS_KEY_COPIES =
+  "Signing note: signtool can leave copies of the .pfx's private key in this user's key store, and the build does not delete them. On Windows Server 2025, winCodeSign 2.6.0's signtool left one per file signed in %APPDATA%\\Microsoft\\Crypto\\Keys, for a key from the Microsoft Software Key Storage Provider.";
+
 /** What `codesign --display --verbose=2` (its error output) says of an app's signature. */
 export function macSignatureKind(codesignOutput: string): "ad hoc" | "certificate" | "none" {
   if (/^Signature=adhoc$/m.test(codesignOutput)) return "ad hoc";
@@ -177,4 +190,194 @@ export function checkMacSignature(
 ) {
   const kind = result.status === 0 ? macSignatureKind(result.stderr ?? "") : "none";
   return { kind, matches: kind === (plan === "developer-id" ? "certificate" : "ad hoc") };
+}
+
+/**
+ * Windows PowerShell's arguments for a script beside this file: authenticode.ps1,
+ * which reads a file's embedded signatures with WinVerifyTrust, or certificate.ps1,
+ * which reads a .pfx. The script goes in encoded, so no quoting rule and no script
+ * execution policy applies to it.
+ */
+export function powerShellArgs(script: "authenticode.ps1" | "certificate.ps1"): string[] {
+  const text = readFileSync(join(import.meta.dirname, script), "utf8");
+  return [
+    "-NoProfile",
+    "-NonInteractive",
+    "-EncodedCommand",
+    Buffer.from(text, "utf16le").toString("base64"),
+  ];
+}
+
+/**
+ * The environment the scripts run in. Windows PowerShell started from
+ * PowerShell 7, as CI's steps are, inherits a module path that finds PowerShell
+ * 7's own modules first, and cannot load them. Without the variable it uses its own.
+ */
+export function powerShellEnv(env: Env): Env {
+  return Object.fromEntries(
+    Object.entries(env).filter(([name]) => name.toUpperCase() !== "PSMODULEPATH"),
+  );
+}
+
+/** authenticode.ps1's output for `file`, for `checkWindowsSignature`. Windows only. */
+export function readWindowsSignature(file: string, env: Env) {
+  return spawnSync("powershell.exe", powerShellArgs("authenticode.ps1"), {
+    encoding: "utf8",
+    env: { ...powerShellEnv(env), SIGNED_FILE: file },
+  });
+}
+
+/** builder-util's readers of a certificate variable's value. */
+interface CscLinkReaders {
+  decodeCscLinkBase64(link: string): Buffer | null;
+  resolveCscLinkPath(link: string, dir: string): string;
+}
+
+/**
+ * The .pfx and password a Windows build signs with, read as electron-builder
+ * 26.18.1 reads them. Its `importCertificate` (app-builder-lib's codeSign/codesign.js),
+ * which it does not export, downloads an https address and otherwise reads base64
+ * data or a file with builder-util's `decodeCscLinkBase64` and `resolveCscLinkPath`.
+ * Those two are called here through electron-builder's own dependency, so both read
+ * the value alike. A relative path starts at the app's folder, electron-builder's
+ * project folder. An https address is refused, since this reads no network.
+ */
+export function windowsCertificate(
+  env: Env,
+  appDir: string,
+): { pfx: Buffer; password: string } | { problem: string } {
+  const link = certificate(env, "win");
+  if (link === null) return { problem: "no Windows certificate is named" };
+  const value = (env[link] ?? "").trim();
+  if (value.startsWith("https://"))
+    return {
+      problem: `${link} is an https address, which the build does not download (give a .pfx file's path or its base64 data)`,
+    };
+  const builder = createRequire(import.meta.url).resolve("electron-builder");
+  const { decodeCscLinkBase64, resolveCscLinkPath } = createRequire(builder)(
+    "builder-util",
+  ) as CscLinkReaders;
+  let pfx = decodeCscLinkBase64(value);
+  if (pfx === null) {
+    try {
+      pfx = readFileSync(resolveCscLinkPath(value, appDir));
+    } catch {
+      return { problem: `${link} names a file that cannot be read` };
+    }
+  }
+  const password = chosen(env, CERTIFICATE_VARIABLES.win.password);
+  return { pfx, password: password === null ? "" : (env[password] ?? "").trim() };
+}
+
+/**
+ * What certificate.ps1 printed: the thumbprint of the one certificate in the .pfx
+ * that comes with its private key, which is the one signtool signs with.
+ */
+export function certificateThumbprint(result: {
+  status: number | null;
+  stdout: string | null;
+}): { thumbprint: string } | { problem: string } {
+  const lines = result.stdout?.match(/^.+$/gm) ?? [];
+  if (result.status !== 0 || lines.some((line) => !/^[0-9A-F]{40}$/.test(line)))
+    return {
+      problem: "the certificate WIN_CSC_LINK or CSC_LINK names cannot be opened with its password",
+    };
+  const [thumbprint] = lines;
+  if (lines.length !== 1 || thumbprint === undefined)
+    return {
+      problem: `the certificate WIN_CSC_LINK or CSC_LINK names holds ${lines.length} certificates with a private key, not one`,
+    };
+  return { thumbprint };
+}
+
+/**
+ * The thumbprint of the certificate a Windows build signs with, read from the .pfx
+ * in memory by certificate.ps1. Windows only. A problem names variables, never values.
+ */
+export function windowsSigner(
+  env: Env,
+  appDir: string,
+): { thumbprint: string } | { problem: string } {
+  const given = windowsCertificate(env, appDir);
+  if ("problem" in given) return given;
+  const input = [given.pfx, Buffer.from(given.password)].map((bytes) => bytes.toString("base64"));
+  return certificateThumbprint(
+    spawnSync("powershell.exe", powerShellArgs("certificate.ps1"), {
+      encoding: "utf8",
+      env: powerShellEnv(env),
+      input: `${input.join("\n")}\n`,
+    }),
+  );
+}
+
+/** WinVerifyTrust's results (winerror.h) that `windowsSignature` accepts, as authenticode.ps1 prints them. */
+const VERIFIED = "00000000";
+/** CERT_E_UNTRUSTEDROOT: the chain ends in a root this machine does not trust, as a test certificate's does. */
+const UNTRUSTED_ROOT = "800b0109";
+/** TRUST_E_NOSIGNATURE: the file has no embedded signature. */
+const NO_SIGNATURE = "800b0100";
+const SHA256 = "2.16.840.1.101.3.4.2.1";
+
+export interface WindowsSignature {
+  readonly kind: "certificate" | "none" | "invalid";
+  /** The signing certificate's thumbprint, when the kind is certificate. */
+  readonly signer: string | null;
+}
+
+const INVALID: WindowsSignature = { kind: "invalid", signer: null };
+
+/**
+ * What authenticode.ps1 says of a file. A file without an embedded signature is
+ * `none`. A signed file is `certificate` when each embedded signature verifies, or
+ * fails only on a root this machine does not trust, names its digest algorithm,
+ * all name one signer, and one is SHA-256. A file signed twice, as electron-builder
+ * does by default (SHA-1, then SHA-256 nested in it), passes only when both
+ * signatures do. Any other result, such as an expired or distrusted certificate
+ * or a file changed after signing, is invalid, and so is output that is not
+ * exactly one complete reading.
+ */
+export function windowsSignature(output: string): WindowsSignature {
+  const [head = "", ...lines] = output.trim().split(/\r?\n/);
+  const count = /^checked ([1-9]\d*)$/.exec(head)?.[1];
+  if (count === undefined || lines.length !== Number(count)) return INVALID;
+  const signatures = [];
+  for (const [index, line] of lines.entries()) {
+    const [, at, result, digest, signer] =
+      /^(\d+) ([0-9a-f]{8}) ([\d.]+|-) ([0-9A-F]{40}|-)$/.exec(line) ?? [];
+    if (Number(at) !== index) return INVALID;
+    signatures.push({ result, digest, signer });
+  }
+  const [first] = signatures;
+  if (!first) return INVALID;
+  if (signatures.length === 1 && first.result === NO_SIGNATURE)
+    return first.digest === "-" && first.signer === "-" ? { kind: "none", signer: null } : INVALID;
+  const signer = first.signer;
+  if (signer === undefined || signer === "-") return INVALID;
+  const passes =
+    signatures.every(
+      (each) =>
+        (each.result === VERIFIED || each.result === UNTRUSTED_ROOT) &&
+        each.digest !== "-" &&
+        each.signer === signer,
+    ) && signatures.some(({ digest }) => digest === SHA256);
+  return passes ? { kind: "certificate", signer } : INVALID;
+}
+
+/**
+ * What authenticode.ps1 read of a file, and whether it matches the plan: a
+ * signature from the certificate whose thumbprint is `signer`, or no signature
+ * when `signer` is null.
+ */
+export function checkWindowsSignature(
+  signer: string | null,
+  result: { status: number | null; stdout: string | null },
+) {
+  const reading = result.status === 0 ? windowsSignature(result.stdout ?? "") : INVALID;
+  return {
+    ...reading,
+    matches:
+      signer === null
+        ? reading.kind === "none"
+        : reading.kind === "certificate" && reading.signer === signer,
+  };
 }

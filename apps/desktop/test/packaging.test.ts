@@ -123,6 +123,24 @@ describe("packaging configuration", () => {
     expect(config.win?.target).toEqual([{ target: "nsis", arch: ["x64"] }]);
   });
 
+  it("signs Windows files with SHA-256 alone, whether or not a certificate is given", () => {
+    // electron-builder's own choice of signing passes for a file, from the win options.
+    const from = (base: string, name: string) => createRequire(base).resolve(name);
+    const builder = from(join(APP, "package.json"), "electron-builder");
+    const lib = from(builder, "app-builder-lib");
+    const { resolveSigningHashAlgorithms } = createRequire(lib)(
+      join(lib, "../codeSign/windowsSignToolManager.js"),
+    ) as { resolveSigningHashAlgorithms: (file: string, configured: unknown) => string[] };
+    expect(resolveSigningHashAlgorithms("Clawtrate.exe", undefined)).toEqual(["sha1", "sha256"]);
+    for (const env of [{}, { WIN_CSC_LINK: "cert.pfx", WIN_CSC_KEY_PASSWORD: "" }]) {
+      const options = builderConfig(env, "45.3.2").win?.signtoolOptions;
+      expect(options).toEqual({ signingHashAlgorithms: ["sha256"] });
+      expect(resolveSigningHashAlgorithms("Clawtrate.exe", options?.signingHashAlgorithms)).toEqual(
+        ["sha256"],
+      );
+    }
+  });
+
   it("without signing variables, never looks for an identity and never notarizes", () => {
     expect(macSigningRequested({})).toBe(false);
     expect(macSigningRequested({ CSC_LINK: " " })).toBe(false);

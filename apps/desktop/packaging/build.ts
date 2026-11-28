@@ -17,13 +17,22 @@ import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { isAbsolute, join } from "node:path";
+import { isAbsolute, join, resolve } from "node:path";
 import { build, Platform } from "electron-builder";
 import { LOGO_PATH, MANIFEST_PATH, sha256 } from "../../../tools/brand/src/make-icons.ts";
 import { BUILD_OUT, packCarried } from "./carried-plugins.ts";
 import { APP_ID, builderConfig, PRODUCT_NAME } from "./config.ts";
 import { OUTPUT_VARIABLE, packageOutput } from "./output.ts";
-import { checkMacSignature, signingPlan, signingProblems, signingSummary } from "./signing.ts";
+import {
+  checkMacSignature,
+  checkWindowsSignature,
+  readWindowsSignature,
+  signingPlan,
+  signingProblems,
+  signingSummary,
+  windowsSigner,
+  WINDOWS_KEY_COPIES,
+} from "./signing.ts";
 import { requireUnsignedEnvironment } from "./unsigned-environment.ts";
 
 const APP_DIR = join(import.meta.dirname, "..");
@@ -74,6 +83,17 @@ if (problems.length > 0) {
 }
 const plan = signingPlan(process.env);
 console.log(signingSummary(plan, target));
+// The certificate a signed Windows build must carry, read before anything is built.
+let signer: string | null = null;
+if (target === "win" && plan.windows === "certificate") {
+  const expected = windowsSigner(process.env, APP_DIR);
+  if ("problem" in expected) {
+    console.error(`Signing variables: ${expected.problem}.`);
+    process.exit(1);
+  }
+  signer = expected.thumbprint;
+  console.log(WINDOWS_KEY_COPIES);
+}
 
 // The exact Electron the app is developed and tested with.
 const require = createRequire(join(APP_DIR, "package.json"));
@@ -102,6 +122,20 @@ const artifacts = await build({
 });
 for (const artifact of artifacts) console.log(artifact);
 
+// electron-builder's temporary-file cleanup (async-exit-hook) ends the process with
+// status 0 once nothing is left to run, whatever process.exitCode says, so a failed
+// check sets the status again as the process exits. Another failing status stands.
+let failed = false;
+function failCheck(message: string) {
+  console.error(message);
+  if (failed) return;
+  failed = true;
+  process.on("exit", (code) => {
+    if (code === 0) process.exitCode = 1;
+  });
+}
+const SIGNATURE_DIFFERS = "The signature is not the one the signing variables asked for.";
+
 // What the macOS apps' signatures are, read back from the bundles. electron-builder
 // skips signing in a pull request's CI run even with an identity set.
 if (target === "mac") {
@@ -113,9 +147,24 @@ if (target === "mac") {
     const shown = spawnSync("codesign", ["--display", "--verbose=2", app], { encoding: "utf8" });
     const { kind, matches } = checkMacSignature(plan.mac, shown);
     console.log(`Signature of ${output.label}/${folder}/${PRODUCT_NAME}.app: ${kind}.`);
-    if (!matches) {
-      console.error("The signature is not the one the signing variables asked for.");
-      process.exitCode = 1;
-    }
+    if (!matches) failCheck(SIGNATURE_DIFFERS);
+  }
+}
+
+// What the Windows executable's and x64 installer's signatures are, read back from
+// the files. A signed build's must come from the certificate read above, not just
+// any. electron-builder deletes its copy of the uninstaller once the installer
+// holds it, so the uninstaller can be read only from an install.
+if (target === "win") {
+  const output = packageOutput(env, APP_DIR);
+  const { version } = require("./package.json") as { version: string };
+  const installer = `${PRODUCT_NAME}-${version}-win-x64.exe`;
+  if (!artifacts.some((file) => resolve(file) === join(output.path, installer)))
+    failCheck(`The build made no ${output.label}/${installer}.`);
+  for (const file of [`win-unpacked/${PRODUCT_NAME}.exe`, installer]) {
+    const shown = readWindowsSignature(join(output.path, file), process.env);
+    const { kind, matches } = checkWindowsSignature(signer, shown);
+    console.log(`Signature of ${output.label}/${file}: ${kind}.`);
+    if (!matches) failCheck(SIGNATURE_DIFFERS);
   }
 }
