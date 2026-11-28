@@ -151,25 +151,52 @@ export const waitFor = (selector: Selector | string, ms = 60_000): Step => ({
 export const waitGone = (selector: Selector | string, ms = 60_000): Step => ({
   extendedWaitUntil: { notVisible: selector, timeout: ms },
 });
+/** The label of each tap a `tapUntilGone` makes, in order, as Maestro's output names it. */
+const tapLabels = new WeakMap<Step[], string[]>();
+
 /**
  * Tap `target` until `gone` has gone, as a person taps again when a tap doesn't take: the tap,
  * then a wait of up to `ms` for it to go, at most `tries` times, and only while it is still
- * there. The last wait is the check's: still there then, the steps fail.
+ * there. The last wait is the check's: still there then, the steps fail. Each tap is labelled
+ * "<label> (<n> of <tries>)", so `tapsTaken` can tell from Maestro's output which tap took.
  */
 export function tapUntilGone(
-  target: Selector | string,
+  target: Selector,
   gone: Selector | string,
+  label: string,
   { tries = 3, ms = 10_000 }: { tries?: number; ms?: number } = {},
 ): Step[] {
+  const labels = Array.from({ length: tries }, (_, at) => `${label} (${at + 1} of ${tries})`);
+  const tapAt = (each: number): Step => ({ tapOn: { ...target, label: labels[each - 1] } });
   const wait = (last: boolean): Step => ({
     extendedWaitUntil: { notVisible: gone, timeout: ms, ...(last ? {} : { optional: true }) },
   });
-  const commands: Step[] = [tap(target), wait(tries === 1)];
+  const commands: Step[] = [tapAt(1), wait(tries === 1)];
   for (let each = 2; each <= tries; each += 1)
     commands.push({
-      runFlow: { when: { visible: gone }, commands: [tap(target), wait(each === tries)] },
+      runFlow: { when: { visible: gone }, commands: [tapAt(each), wait(each === tries)] },
     });
+  tapLabels.set(commands, labels);
   return commands;
+}
+
+/** A line for the run's report, which CI shows as a notice or a warning even when it passes. */
+export type ReportLine = { message: string; type: "notice" | "warning" };
+
+/**
+ * Which of a `tapUntilGone`'s taps closed `what`, for the run's report, read from Maestro's
+ * output of steps that passed with them. Maestro names each tap that ran as "<label>...
+ * COMPLETED", and steps that passed ended on the last tap that ran. When the output doesn't tell,
+ * because it names no tap, or names one without the tap before it, a warning says so.
+ */
+export function tapsTaken(close: Step[], output: string, what: string): ReportLine {
+  const labels = tapLabels.get(close) ?? [];
+  const ran = labels.map((label) => output.includes(`${label}... COMPLETED`));
+  const taps = ran.includes(false) ? ran.indexOf(false) : ran.length;
+  if (taps === 0 || ran.slice(taps).includes(true))
+    return { message: `Maestro's output didn't say which tap closed ${what}`, type: "warning" };
+  const of = taps === 1 ? "" : ` of ${labels.length}`;
+  return { message: `${what} closed on tap ${taps}${of}`, type: "notice" };
 }
 /**
  * Swipe until the element is wholly on screen. Maestro looks before each swipe

@@ -101,6 +101,7 @@ import {
   steps,
   switcherSnapshot,
   tap,
+  tapsTaken,
   tapUntilGone,
   textSize,
   transcriptLinkTap,
@@ -110,6 +111,7 @@ import {
   waitGone,
   workspaceFor,
   type FrontRequest,
+  type ReportLine,
   type Step,
 } from "./harness.ts";
 import { PAIRING, startsOnItsOwn } from "./jobs.ts";
@@ -2276,13 +2278,22 @@ describe("the iOS app", () => {
       // sheet, so it isn't the centre of the sheet's full-screen dismiss region, which is the
       // row's own Save button. On a loaded runner a tap now and then didn't close it, and the
       // sheet stayed up and at rest (#1025), so the check taps again, as a person would.
-      const closeSheet = tapUntilGone({ point: "75%,11%" }, "Save to Files");
+      const closeSheet = tapUntilGone(
+        { point: "75%,11%" },
+        "Save to Files",
+        "Tap outside the share sheet",
+      );
       // Closed without choosing: the row is ready again and the file is gone.
-      await steps("file-sheet-closed", [
+      const closing = await steps("file-sheet-closed", [
         ...closeSheet,
         see(save),
         notSee({ id: "bot-file-note", text: lit(BOT_FILE_WORDS.saved) }),
       ]);
+      // Which tap closed it, said in the run's report (a notice on CI), read from the flow that
+      // tapped. A person's first tap has to close it: a later tap on run after run is the app
+      // dropping that tap, not the runner (#1025).
+      const closed = tapsTaken(closeSheet, closing, "the share sheet");
+      await annotate(closed.message, closed.type);
       await until("the shared file deleted", async () => containerHits([inPdf])[0] === 0);
       expect(sharedFolders()).not.toContain(folder);
 
@@ -2303,6 +2314,7 @@ describe("the iOS app", () => {
       // cancelled, and a sheet left up to choose again is closed with a tap outside it.
       const choose = "Choose Save to Files";
       const cancelPicker = "Cancel the Save to Files picker";
+      const closeLeft = "Close the share sheet left up";
       const saving = await steps("file-save-to-files-cancelled", [
         { tapOn: { text: "Save to Files", label: choose } },
         { extendedWaitUntil: { visible: "Cancel", timeout: 15_000, optional: true } },
@@ -2312,7 +2324,7 @@ describe("the iOS app", () => {
             commands: [{ tapOn: { text: "Cancel", label: cancelPicker } }],
           },
         },
-        { runFlow: { when: { visible: "Save to Files" }, commands: closeSheet } },
+        { runFlow: { when: { visible: "Save to Files" }, commands: closeSheet, label: closeLeft } },
       ]);
       // Which of the two this run tested, said in the run's report (a notice on CI). It is read
       // from the flow that taps, whose output names each command that ran, so a picker that
@@ -2326,6 +2338,14 @@ describe("the iOS app", () => {
             : "Save to Files ended without a picker",
         ran(choose) ? "notice" : "warning",
       );
+      // And which tap closed a sheet left up, as above, or that none was needed.
+      const left: ReportLine = saving.includes(`${closeLeft}... SKIPPED`)
+        ? {
+            message: "the share sheet had gone after Save to Files, so no tap was needed",
+            type: "notice",
+          }
+        : tapsTaken(closeSheet, saving, "the share sheet left up after Save to Files");
+      await annotate(left.message, left.type);
       await steps("file-save-to-files-closed", [
         waitGone("Save to Files", 30_000),
         see(save),
