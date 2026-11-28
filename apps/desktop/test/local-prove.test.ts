@@ -523,6 +523,27 @@ describe.skipIf(platform !== "darwin")(
       }
     });
 
+    it("passes 2026.11.11 with fs-safe 0.27.1's module, as 2026.11.10, and refuses any other", async () => {
+      const at = path();
+      const lock = named(at);
+      const v1111 = { name: "openclaw", version: "2026.11.11" };
+      for (const arch of ["arm64", "x64"]) {
+        const sha256 = FS_SAFE_1110_SHA256[`darwin-${arch}`]!;
+        expect(await prove(at, answer({ lock, pkg: v1111, arch, sha256 })), arch).toEqual({
+          proved: true,
+        });
+        // 2026.10.6's module, a module that is no one's, and the other architecture's.
+        for (const wrong of [
+          FS_SAFE_NATIVE_SHA256[`darwin-${arch}`]!,
+          "0".repeat(64),
+          FS_SAFE_1110_SHA256[`darwin-${arch === "arm64" ? "x64" : "arm64"}`]!,
+        ])
+          expect(await prove(at, answer({ lock, pkg: v1111, arch, sha256: wrong })), arch).toEqual(
+            refused("pin"),
+          );
+      }
+    });
+
     it("refuses a pinned version's module that isn't its own", async () => {
       const at = path();
       const lock = named(at);
@@ -538,7 +559,7 @@ describe.skipIf(platform !== "darwin")(
       // A newer version, an install laid out otherwise (the module's package isn't OpenClaw's),
       // and a holder that maps no module at all (another runtime).
       const unpinned = [
-        { pkg: { name: "openclaw", version: "2026.11.11" }, sha256: "0".repeat(64) },
+        { pkg: { name: "openclaw", version: "2026.11.12" }, sha256: "0".repeat(64) },
         { pkg: { name: "openclaw", version: "2026.12.1" }, sha256: "-" },
         { pkg: { name: "not-openclaw", version: PINNED_OPENCLAW_VERSION }, sha256: "0".repeat(64) },
         { pkg: {}, sha256: "0".repeat(64) },
@@ -592,7 +613,7 @@ describe.skipIf(platform !== "darwin")(
         );
       expect(await prove(at, answer({ lock: "not json" }))).toEqual(refused("named"));
       expect(await prove(at, answer({ lock: "[]" }))).toEqual(refused("named"));
-      // Both pinned versions write the settings file the gateway loaded: a lock without one isn't theirs.
+      // Every pinned version writes the settings file the gateway loaded: a lock without one isn't theirs.
       const { configPath: _, ...noConfig } = named(at);
       expect(await prove(at, answer({ lock: noConfig }))).toEqual(refused("named"));
     });

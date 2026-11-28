@@ -25,12 +25,15 @@ vi.mock(import("node:child_process"), async (original) => {
 });
 // The download folder's watch is a stand-in. On macOS a real one is an FSEvents stream, and
 // closing it blocks until the system's fseventsd answers, which on a busy Mac took seconds
-// per close and most of the file's time (#677). No test here waits for a watch event: each
-// finds a changed file by reading it again. A test can still emit "error" on the stand-in.
+// per close and most of the file's time (#677). No real watch event reaches a test. The
+// stand-in keeps the listener it is given, and `watchEvent` calls it as a real watch would;
+// a test can also emit "error" on the stand-in.
 vi.mock(import("node:fs"), async (original) => {
   const fs = { ...(await original()) };
   const { EventEmitter } = await import("node:events");
-  vi.spyOn(fs, "watch").mockImplementation(() => {
+  vi.spyOn(fs, "watch").mockImplementation((...args: unknown[]) => {
+    const listener = args.find((arg) => typeof arg === "function") as
+      ((event: string, filename: string | null) => void) | undefined;
     let closed = false;
     const watcher = Object.assign(new EventEmitter(), {
       close() {
@@ -40,11 +43,22 @@ vi.mock(import("node:fs"), async (original) => {
       },
       ref: () => watcher,
       unref: () => watcher,
+      /** What a real watch does on a change in its folder: nothing once closed. */
+      fire(event: string, filename: string | null) {
+        if (!closed) listener?.(event, filename);
+      },
     });
     return watcher as unknown as ReturnType<typeof fs.watch>;
   });
   return fs;
 });
+/** Sends a change in the download folder to the newest watch, as `fs.watch` would. */
+function watchEvent(event: "change" | "rename", filename: string) {
+  const watcher = vi.mocked(watch).mock.results.at(-1)!.value as {
+    fire(event: string, filename: string | null): void;
+  };
+  watcher.fire(event, filename);
+}
 
 import type * as FileSystem from "node:fs/promises";
 import { open, rename } from "node:fs/promises";
@@ -1401,6 +1415,46 @@ it("withdraws Restart when the already inspected download is replaced", async ()
   writeFileSync(path, fixture.body);
   expect(service.get().install).toMatchObject({ reason: "artifact-changed" });
   expect((await service.restart(id)).outcome).toBe("stale");
+});
+it("withdraws Restart on the watch's event for the changed file, with no read asked for", async () => {
+  const installer = { ...installStandIn(), retire: vi.fn() };
+  const service = await start({ installer });
+  const id = await offer(service);
+  await service.download(id);
+  expect(service.get().install).toEqual({ kind: "restart-available", offerId: id });
+  installer.retire.mockClear();
+  const folder = join(updates, id),
+    name = readdirSync(folder)[0]!;
+  writeFileSync(join(folder, name), Buffer.alloc(fixture.body.length, 7));
+  snapshots.length = 0;
+  // Nothing reads the service between the change and this event: no get, check or Restart.
+  watchEvent("change", name);
+  expect(snapshots).toEqual([
+    expect.objectContaining({
+      state: { kind: "failed", stage: "download", reason: "artifact-changed", retry: "check" },
+      install: { kind: "unavailable-in-this-build", reason: "artifact-changed" },
+    }),
+  ]);
+  expect(installer.retire).toHaveBeenCalledTimes(1);
+  expect((await service.restart(id)).outcome).toBe("stale");
+  expect(installer.launch).not.toHaveBeenCalled();
+});
+it("keeps Restart on the watch's event for another file in the download folder", async () => {
+  const installer = { ...installStandIn(), retire: vi.fn() };
+  const service = await start({ installer });
+  const id = await offer(service);
+  await service.download(id);
+  const offered = service.get();
+  expect(offered.install).toEqual({ kind: "restart-available", offerId: id });
+  installer.retire.mockClear();
+  const folder = join(updates, id);
+  writeFileSync(join(folder, "other.partial"), "other");
+  snapshots.length = 0;
+  watchEvent("rename", "other.partial");
+  watchEvent("change", "other.partial");
+  expect(snapshots).toEqual([]);
+  expect(installer.retire).not.toHaveBeenCalled();
+  expect(service.get()).toBe(offered);
 });
 
 it("refuses an old same-track revision or a malformed revision without replacing the result", async () => {
