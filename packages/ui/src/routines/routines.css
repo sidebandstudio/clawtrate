@@ -263,6 +263,10 @@
   color: var(--text-faint);
 }
 
+.r-older {
+  margin: var(--space-3) 4px 0;
+}
+
 .r-foot-note {
   margin: var(--space-3) 4px 0;
   font-size: var(--text-sm);

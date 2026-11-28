@@ -176,7 +176,7 @@ Opened from a row, a calendar chip, a "Created routine" card's name (F-108), or 
 | Results   | "Kept with the run" (`delivery.mode: "none"`); "Sent to <channel>" when delivery names one; "Announced to the gateway's channels" otherwise                                        |
 | Triggers  | "Its schedule only." and, as one sentence after it, "This gateway's webhooks start a bot directly, not a routine." (section 12)                                                    |
 
-**Runs.** Group word "Runs", then up to 20 run rows, newest first (F-355), from `cron.runs {id, limit: 20}`:
+**Runs.** Group word "Runs", then up to 20 run rows, newest first (F-355), from `cron.runs {id, limit: 20, offset: 0}`:
 
 | The run                                         | Mark    | Line one                 | Line two                                                       |
 | ----------------------------------------------- | ------- | ------------------------ | -------------------------------------------------------------- |
@@ -189,6 +189,8 @@ Opened from a row, a calendar chip, a "Created routine" card's name (F-108), or 
 | Started with Run now                            |         | adds "· started by hand" |                                                                |
 
 "Started by hand" rests on the run id the gateway gave a forced run (`manual:<job>:<ms>:<n>`, row 4); a run with any other id is not labelled, because the form of a scheduled run's id was not observed (the development gateway's scheduler is off). Usage is `usage.total_tokens`; the model is on the run's page.
+
+When the gateway reports another page (`hasMore`), "Load older runs" sits under the list. It reads the page at `nextOffset` and puts its runs under the ones shown, leaving out any already there (a run that finished between the reads moves the gateway's list down), with focus on the first run it added; it reads "Loading older runs…" while out and is gone after the last page. A failed page keeps the runs shown and says "Couldn't load older runs." with "Try again", which reads the same page again. At 1,000 runs no older page is offered, and the list says "Clawtrate shows at most 1,000 of a routine's runs." A new first page, read when a run starts or finishes, starts the list over from it. The runs stay while a run is open, so Back returns to the same list. An older run opens like any other: its record shows even when the gateway no longer keeps its conversation (section 7).
 
 Under the list, in 13 faint: "Clawtrate shows the 20 most recent runs. The gateway keeps 7 days of runs, and each run's conversation for 24 hours unless it is set to keep them longer." Empty: "No runs yet. The first is due tomorrow at 8:00 AM." (a new routine waits for its slot, F-354); paused and empty: "No runs yet."; failed to load: "Couldn't load runs." with "Try again", which reads `cron.runs` again: three skeleton rows (busy), then the runs, focus on the "Runs" heading.
 

@@ -409,7 +409,7 @@ test("F-190: shared routine runs open the recorded conversation", async () => {
   }
 });
 
-test("F-355: a routine's page lists the 20 runs that finished most recently, in the gateway's order, when it has more", async () => {
+test("F-355: a routine's page lists the 20 runs that finished most recently, in the gateway's order, and loads the older ones on request", async () => {
   test.setTimeout(240_000);
   const name = `Many runs ${STAMP}`;
   // The list needs recorded runs, so use a reminder: on OpenClaw 2026.10.6 its run doesn't wait
@@ -426,13 +426,17 @@ test("F-355: a routine's page lists the 20 runs that finished most recently, in 
   const all = await call<{ entries: RunEntry[] }>("cron.runs", { id: job.id, limit: 200 });
   expect(all.entries.length).toBe(22);
   // The gateway's order (newest finished first) is the contract; the page does not reorder it.
-  const newest = all.entries.slice(0, 20).map((entry) => String(entry.runAtMs));
+  const order = all.entries.map((entry) => String(entry.runAtMs));
   await row(name).click();
   const rows = view().locator('[data-testid="run-row"][data-run-at]');
+  const shown = () => rows.evaluateAll((each) => each.map((el) => el.getAttribute("data-run-at")));
   await expect(rows).toHaveCount(20);
-  expect(
-    await rows.evaluateAll((each) => each.map((el) => el.getAttribute("data-run-at"))),
-  ).toEqual(newest);
+  expect(await shown()).toEqual(order.slice(0, 20));
+  const older = view().getByRole("button", { name: "Load older runs" });
+  await older.click();
+  await expect(rows).toHaveCount(22);
+  expect(await shown()).toEqual(order);
+  await expect(older).toHaveCount(0);
 });
 
 test("F-197: the week calendar shows today's recorded run and the coming scheduled times, and moves by its arrows and keys", async () => {
