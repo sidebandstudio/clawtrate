@@ -308,6 +308,16 @@ export function RunEnding({
   const [rawOpen, setRawOpen] = useState(false);
   const [rawRead, setRawRead] = useState<RunRawRead | null>(null);
   const requestRef = useRef<HTMLPreElement>(null);
+  const retryRef = useRef<HTMLButtonElement>(null);
+  const recoveryRef = useRef<HTMLButtonElement>(null);
+  const undoRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!computerUseResult || changingComputerUse || document.activeElement !== document.body)
+      return;
+    if (computerUseResult === "off" || computerUseResult === "already-off")
+      (retryRef.current ?? undoRef.current)?.focus();
+    else (recoveryRef.current ?? undoRef.current ?? retryRef.current)?.focus();
+  }, [computerUseResult, changingComputerUse]);
   // Dismiss and the line swap places; focus follows to what replaced it.
   const moved = useRef(false);
   const lineRef = useRef<HTMLButtonElement>(null);
@@ -596,8 +606,9 @@ export function RunEnding({
         <div className="turn-error-actions">
           {repair && canAdmin && (
             <button
+              ref={recoveryRef}
               type="button"
-              className="button"
+              className="button turn-error-recovery"
               data-size="sm"
               disabled={changingComputerUse}
               onClick={() => changeComputerUse(false)}
@@ -620,6 +631,7 @@ export function RunEnding({
           {!tryFirst && (repeated ? ways.slice(0, 1) : ways).map(wayButton)}
           {resend && (
             <button
+              ref={retryRef}
               type="button"
               className="button"
               data-size="sm"
@@ -657,6 +669,7 @@ export function RunEnding({
           {(tryFirst ? ways : repeated ? ways.slice(1) : []).map(wayButton)}
           {undo && canAdmin && (
             <button
+              ref={undoRef}
               type="button"
               className="button"
               data-size="sm"

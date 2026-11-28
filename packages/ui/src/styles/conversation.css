@@ -437,6 +437,15 @@ div.status-line:hover {
   background: var(--bg-selected);
 }
 
+/* The gateway-wide action can wrap on narrow conversations. */
+.turn-error .turn-error-recovery {
+  height: auto;
+  min-height: 30px;
+  max-width: 100%;
+  padding-block: 5px;
+  white-space: normal;
+}
+
 .turn-error .icon-button {
   width: 26px;
   height: 26px;
