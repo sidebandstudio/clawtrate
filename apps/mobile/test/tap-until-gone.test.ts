@@ -8,6 +8,8 @@ import { tapUntilGone, type Step } from "../simulator/harness.ts";
 
 const OUTSIDE = { point: "75%,11%" };
 const SHEET = "Save to Files";
+/** The steps failed: a wait that isn't optional ended with the sheet still up. */
+class StillUp extends Error {}
 
 /**
  * Run `steps` as Maestro does against a sheet that closes on its `closesOn`th tap (never, for
@@ -29,7 +31,7 @@ function run(steps: Step[], closesOn: number) {
         expect(args.notVisible).toBe(SHEET);
         expect(args.timeout).toBeLessThanOrEqual(10_000);
         waits += 1;
-        if (up() && !args.optional) throw new Error(`"${SHEET}" is still visible`);
+        if (up() && !args.optional) throw new StillUp(`"${SHEET}" is still visible`);
       } else if (name === "runFlow") {
         const flow = args as { when: { visible: string }; commands: Step[] };
         expect(flow.when).toEqual({ visible: SHEET });
@@ -40,7 +42,8 @@ function run(steps: Step[], closesOn: number) {
   try {
     each(steps);
     return { passed: true, taps, waits };
-  } catch {
+  } catch (error) {
+    if (!(error instanceof StillUp)) throw error;
     return { passed: false, taps, waits };
   }
 }
