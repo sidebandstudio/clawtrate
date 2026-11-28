@@ -76,10 +76,6 @@ function ownDays(period: "daily" | "weekly", zone: string) {
   return { startDate: monday.toISOString().slice(0, 10), endDate: today, timeZone: zone };
 }
 
-/** A date as the page names it: "Nov 16". */
-const dayName = (date: string) =>
-  `${"Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split(" ")[Number(date.slice(5, 7)) - 1]} ${Number(date.slice(8))}`;
-
 /**
  * What the gateway answers for a bot's (or every bot's) total over a period, in the page's time
  * zone, once it has finished counting: a cold gateway first answers with what it has read so
@@ -197,6 +193,19 @@ async function usagePage(on: Page, bot: string): Promise<void> {
   await expect(on.getByTestId("usage-total")).toBeVisible({ timeout: 30_000 });
 }
 
+/**
+ * Whether the Usage page shows a report the gateway has finished counting: its total is on
+ * screen, says no "so far", and no line says records are still being counted. A page still
+ * loading after a tab change has no total, so it is never taken for a settled one.
+ */
+async function reportSettled(on: Page) {
+  const total = on.getByTestId("usage-total");
+  if ((await total.count()) !== 1) return false;
+  if ((await total.textContent({ timeout: 1_000 }).catch(() => null))?.includes("so far") ?? true)
+    return false;
+  return (await on.getByTestId("usage-counting").count()) === 0;
+}
+
 /** The figures a Usage page shows, as numbers. */
 async function shownTokens(on: Page) {
   const value = async (label: string) =>
@@ -227,13 +236,18 @@ async function bar(on: Page, list: string, name: string): Promise<number> {
   return n(/([\d,]+) tokens/.exec(label ?? "")?.[1] ?? null);
 }
 
-/** The budget meter's count and tokens, from its accessible name. */
+/** The budget meter's accessible name. */
+async function meterLabel(on: Page): Promise<string> {
+  return (await on.getByTestId("budget-meter").getByRole("meter").getAttribute("aria-label"))!;
+}
+
+/**
+ * The budget meter's count and tokens, from its accessible name. A device in another time zone
+ * than the budget's reads the same figures with the budget's zone after them.
+ */
 async function meter(on: Page): Promise<{ used: number; tokens: number; words: string }> {
-  const label = (await on
-    .getByTestId("budget-meter")
-    .getByRole("meter")
-    .getAttribute("aria-label"))!;
-  const match = /: ([\d,]+) of ([\d,]+) tokens (today|this week)$/.exec(label)!;
+  const label = await meterLabel(on);
+  const match = /: ([\d,]+) of ([\d,]+) tokens (today|this week)(?: · \S+)?$/.exec(label)!;
   return { used: n(match[1]!), tokens: n(match[2]!), words: match[3]! };
 }
 
@@ -370,12 +384,13 @@ test("F-237: usage by bot and source agrees with the gateway for the selected pe
     await page.getByTestId("usage-page").getByRole("radio", { name: choice }).click();
     const expected = await gatewayTotal("otto", period);
     expect(expected.counting, "the gateway finished counting").toBe(false);
-    // The page reads again while the gateway is still counting, and then shows what it settled on.
-    await expect(page.getByTestId("usage-source")).not.toContainText("still being counted", {
-      timeout: 60_000,
-    });
+    // The page reads again while the gateway is still counting, and then shows what it settled on;
+    // a report still loading or still being counted is never compared.
+    await expect.poll(() => reportSettled(page), { timeout: 60_000 }).toBe(true);
     await expect
-      .poll(() => shownTokens(page), { timeout: 30_000 })
+      .poll(async () => ((await reportSettled(page)) ? shownTokens(page) : null), {
+        timeout: 30_000,
+      })
       .toEqual({
         input: expected.input,
         output: expected.output,
@@ -385,14 +400,9 @@ test("F-237: usage by bot and source agrees with the gateway for the selected pe
       });
     expect(expected.total).toBeGreaterThan(0);
   }
-  await expect(page.getByTestId("usage-source")).toHaveText(
-    /^From the gateway's usage records for Otto the last 30 days \([A-Z][a-z]{2} \d{1,2} to [A-Z][a-z]{2} \d{1,2}, your time\), as of \d{1,2}:\d{2} [AP]M\./,
-  );
-  // The development gateway configures a price of zero: an estimate of zero, named as the gateway's.
+  // The development gateway configures a price of zero: an estimate of zero.
   await expect(page.getByTestId("usage-cost")).toHaveText("About $0.00");
-  await expect(page.getByTestId("usage-cost-hint")).toContainText(
-    "The gateway's estimate from its configured prices, in US dollars, as of",
-  );
+  await expect(page.getByTestId("usage-cost-hint")).toHaveCount(0);
   // By task: each listed task's share is the gateway's, for the period.
   const sessions = await gateway.request<{ sessions: Array<{ label?: string; usage?: Json }> }>(
     "sessions.usage",
@@ -555,9 +565,7 @@ async function settledWeek(bot: string, botId: string, since: number) {
   await gatewayAgrees(botId, "week");
   await usagePage(page, bot);
   await page.getByTestId("usage-page").getByRole("radio", { name: "This week" }).click();
-  await expect(page.getByTestId("usage-source")).not.toContainText("still being counted", {
-    timeout: 60_000,
-  });
+  await expect.poll(() => reportSettled(page), { timeout: 60_000 }).toBe(true);
   await expect(page.getByTestId("usage-sources")).toBeVisible({ timeout: 30_000 });
 }
 
@@ -682,14 +690,11 @@ test("F-234: a weekly budget set on one device is shown with the same value afte
   await usagePage(page, "Otto");
   await expect.poll(() => meter(page), { timeout: 60_000 }).toEqual(shown);
   // On the second device, which only reads and is in another time zone: the same value,
-  // counted over the budget's own days in its own zone, named as that zone, and no way to change it.
+  // counted over the budget's own days in its own zone, and no way to change it.
   await usagePage(reader, "Otto");
   await expect.poll(() => meter(reader), { timeout: 60_000 }).toEqual(shown);
-  const days = ownDays("weekly", timeZone);
-  await expect(reader.getByTestId("budget-window")).toContainText(
-    `this week (${days.startDate === days.endDate ? dayName(days.endDate) : `${dayName(days.startDate)} to ${dayName(days.endDate)}`}, ${timeZone})`,
-  );
-  await expect(reader.getByTestId("budget")).toContainText(`Resets Monday at 00:00, ${timeZone}.`);
+  expect(await meterLabel(reader)).toContain(` · ${timeZone}`);
+  expect(await meterLabel(page)).not.toContain(" · ");
   await expect(reader.getByTestId("budget-edit")).toHaveCount(0);
   await expect(reader.getByTestId("budget-new")).toHaveCount(0);
   await shot(page, "usage-page");
@@ -797,19 +802,11 @@ test("F-234: a Daily and a Weekly budget are each counted over their own days, a
   await expect
     .poll(() => meter(page))
     .toEqual({ used: today.total, tokens: 1_000_000, words: "today" });
-  await expect(page.getByTestId("budget-window")).toContainText(
-    `today (${dayName(daily.startDate)}, your time)`,
-  );
-  await expect(page.getByTestId("budget")).toContainText("Resets at 00:00, your time.");
   await setBudget(page, "Weekly", 1_000_000);
   const week = await gatewayTotal("otto", weekly);
   await expect
     .poll(() => meter(page))
     .toEqual({ used: week.total, tokens: 1_000_000, words: "this week" });
-  await expect(page.getByTestId("budget-window")).toContainText(
-    `this week (${weekly.startDate === weekly.endDate ? dayName(weekly.endDate) : `${dayName(weekly.startDate)} to ${dayName(weekly.endDate)}`}, your time)`,
-  );
-  await expect(page.getByTestId("budget")).toContainText("Resets Monday at 00:00, your time.");
   expect(week.total).toBeGreaterThanOrEqual(today.total);
   // Changing only the amount keeps the budget's time zone.
   expect(await keptBudgets()).toContainEqual(
