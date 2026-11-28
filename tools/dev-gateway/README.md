@@ -97,6 +97,19 @@ curl -s $P/scripted/accounts/failures
 
 Mind the gateway's cooldowns: after a failure it rests an account (30 seconds for the first auth or rate-limit failure, 10 minutes for the first billing failure, longer on repeats), during which it skips it for every bot that shares it. A rate-limited account is retried ten times with growing pauses before the run gives up, about two and a half minutes. The account checks sign in accounts of their own for each failure for that reason.
 
+## Holding a task's replies
+
+A check can hold the replies in one task, to act while the gateway waits on the model:
+
+```bash
+curl -s -X POST $P/scripted/hold -d '{"session":"agent:otto:<task>","action":"hold"}'
+curl -s "$P/scripted/hold?session=agent:otto:<task>"   # {session, held, reached, waiting}
+curl -s -X POST $P/scripted/hold -d '{"session":"agent:otto:<task>","action":"next"}'
+curl -s -X POST $P/scripted/hold -d '{"session":"agent:otto:<task>","action":"release"}'
+```
+
+While the task is held, each reply streamed in it sends all its steps and then waits before its end. The gateway has the message's text and calls by then, but writes the message's row and runs its calls only at the end. `reached` counts the replies that got there since `hold`, and `waiting` those still waiting. `next` lets the oldest waiting reply end (409 when none waits), and `release` lets every one end and stops holding. A reply that waits five minutes fails, so a check that died frees the task. `e2e/turns.engine.spec.ts` uses it for #872: a steer sent while the answer waits joins at its end, and the model's next reply then waits with the answer's row written while the run still draws it.
+
 ## Scripted sign-ins
 
 `plugins/clawtrate-dev-signin` gives the gateway three sign-in methods for `acme`. A client lists them in `models.authStatus` `providerCapabilities[].loginOptions[]`, starts one with `models.authLogin {sessionId, authChoice, agentId}` (admin), follows it with `wizard.next` and cancels it with `wizard.cancel`, exactly as it would a real provider's:
