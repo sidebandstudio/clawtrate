@@ -32,11 +32,15 @@ export function observeMac(out: string) {
   let auditReady = false;
   let auditReadyBeforeLaunch = false;
   let auditError = "";
+  let auditExecEvents = 0;
   let samplesTaken = 0;
   let installerDialogFromAccessibility = false;
-  const audit = spawn("/usr/bin/sudo", ["-n", "/usr/bin/eslogger", "exec"], {
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  // A terminal keeps eslogger's JSON lines flowing while setup is in progress.
+  const audit = spawn(
+    "/usr/bin/script",
+    ["-q", "/dev/null", "/usr/bin/sudo", "-n", "/usr/bin/eslogger", "exec"],
+    { stdio: ["pipe", "pipe", "pipe"] },
+  );
   audit.on("error", (error) => (auditError = error.message));
   audit.stderr.on("data", (chunk: Buffer) => {
     auditError = (auditError + chunk.toString()).slice(0, 1000);
@@ -46,6 +50,7 @@ export function observeMac(out: string) {
     try {
       const { target, args } = JSON.parse(line).event?.exec ?? {};
       const path = target?.executable?.path;
+      if (typeof path === "string") auditExecEvents += 1;
       if (path === "/usr/bin/true") auditReady = true;
       const stub =
         path === "/usr/bin/git" || (path === "/usr/bin/xcrun" && args?.includes("/usr/bin/git"));
@@ -58,7 +63,7 @@ export function observeMac(out: string) {
   });
 
   async function confirmAudit() {
-    for (let i = 0; i < 8 && !auditReady && audit.exitCode === null; i += 1) {
+    for (let i = 0; i < 20 && !auditReady && audit.exitCode === null; i += 1) {
       execFileSync("/usr/bin/true");
       await sleep(250);
     }
@@ -128,6 +133,7 @@ export function observeMac(out: string) {
     const auditComplete =
       auditReadyBeforeLaunch && audit.exitCode === null && audit.signalCode === null;
     audit.kill("SIGTERM");
+    audit.stdin.destroy();
     input.close();
     audit.stdout.destroy();
     audit.stderr.destroy();
@@ -170,6 +176,8 @@ export function observeMac(out: string) {
           alerts: [...alerts.values()],
           execs,
           auditError,
+          auditExecEvents,
+          auditReadyBeforeLaunch,
         },
         null,
         2,

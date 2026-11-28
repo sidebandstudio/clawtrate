@@ -65,6 +65,7 @@ let launchError: Error | undefined;
 let developerTools:
   { activeDirectory: string | null; git: string; otherGitPaths: string[] } | undefined;
 let systemPromptVisible = false;
+let connectedAt: number | undefined;
 let provider: Server | undefined;
 
 mkdirSync(out, { recursive: true });
@@ -359,6 +360,7 @@ try {
   });
   await step(3, async () => {
     await waitFor("the automatically connected app", shellVisible, 90);
+    connectedAt = performance.now();
     await press("Settings");
     await waitFor("Gateway settings", () => hasButton("Gateway") || hasText(/^Granted scopes$/));
     if (!hasText(/^Granted scopes$/)) await press("Gateway");
@@ -429,10 +431,28 @@ try {
 } catch {
   // The first failing step retains the error and all later steps stay not reached.
 } finally {
+  let afterConnectionSeconds: number | null = null;
+  if (connectedAt !== undefined && !systemPromptVisible) {
+    const until = connectedAt + 60_000;
+    try {
+      while (performance.now() < until) {
+        refuseForbidden(await system.sample(active.step, child?.pid));
+        await sleep(1000);
+      }
+      refuseForbidden(await system.sample(active.step, child?.pid, true));
+      afterConnectionSeconds = Math.floor((performance.now() - connectedAt) / 1000);
+      await screenshot("after-connect-observation-screen.png", true);
+    } catch (error) {
+      active.status = "failed";
+      active.text = show(error);
+      await screenshot("after-connect-observation-screen.png", true).catch(() => undefined);
+    }
+  }
   const homeInfo = lstatSync(home, { throwIfNoEntry: false });
   const observed = await system.finish();
   const diagnostics = {
     developerTools: { ...developerTools, ...observed },
+    afterConnectionSeconds,
     accountHomeMode: homeInfo && (homeInfo.mode & 0o777).toString(8),
     accountHomeOwnedByAppUser: homeInfo?.uid === process.geteuid?.(),
     accountHomeIsDirectory: homeInfo?.isDirectory() === true,
