@@ -1,0 +1,15 @@
+- status
+- main:
+  - button "Back"
+  - heading "Setting up OpenClaw" [level=2]
+  - paragraph
+  - list "Steps":
+    - listitem "Download and check OpenClaw 2026.11.10, done": Download and check OpenClaw 2026.11.10
+    - listitem "Install Node.js and OpenClaw, failed": Install Node.js and OpenClaw
+    - listitem "Set up the gateway, waiting": Set up the gateway
+    - listitem "Start and check, waiting": Start and check
+  - alert:
+    - paragraph: Install Node.js and OpenClaw failed. Clawtrate couldn't find the installed OpenClaw program, or it isn't the checked one. Clawtrate removed this attempt's program files and install record.
+  - group: Show details
+  - button "Try again"
+  - paragraph: Setting up OpenClaw
