@@ -37,8 +37,8 @@ describe("reconnectedOnce", () => {
     expect(reconnectedOnce([at(true, true), at(true, false)])).toBe(false);
   });
 
-  it("fails three connections", () => {
-    expect(reconnectedOnce([at(false, true), at(false, true), at(true, false)])).toBe(false);
+  it("passes two connects closed without hello, then one with hello still open (#1032)", () => {
+    expect(reconnectedOnce([at(false, true), at(false, true), at(true, false)])).toBe(true);
   });
 
   it("fails when the first connect without hello is still open", () => {
