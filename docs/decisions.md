@@ -1351,7 +1351,7 @@ Every task Clawtrate makes ends up with a name a model wrote: a few words that s
 
 A setting shows its name and its control; what it does is one press away, behind a small "i" beside its name (#798, `packages/ui/src/InfoTip.tsx`).
 
-- **Opens on hover, keyboard focus and tap.** Escape, a second press, a tap elsewhere, and the pointer or focus leaving put it away. While a card is open, Escape closes only the card, wherever focus is (the field it explains included), never the dialog or form around it, and the card stays away until focus leaves its "i" or the pointer comes back to it.
+- **Opens on hover, keyboard focus and tap.** A card opened by hover stays while the pointer is on its "i" or on the card, so it can be read with the pointer on it. Escape, a second press, a tap elsewhere, and the pointer or focus leaving put it away. While a card is open, Escape closes only the card, wherever focus is (the field it explains included), never the dialog or form around it, and the card stays away until focus leaves its "i" or the pointer comes back to it.
 - **One at a time.** Opening one card puts away any other.
 - **In the flow, right after the setting's row** (`InfoCard`), as wide as the row: an open card pushes what follows down, so it covers nothing, not the control it explains, not another, and not a line that stays in view; it fits a phone's screen with no sideways scroll.
 - **Nothing lost for someone who can't see it.** The text is always in the page, hidden while closed; the control's `aria-describedby` names it, so a screen reader reads it as the control's description, and the "i" is a button named "About <setting>" with the same description. A field whose unit sits beside it as text has that unit in its name ("Turn time limit minutes").
