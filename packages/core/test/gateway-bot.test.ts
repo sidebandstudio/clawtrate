@@ -376,6 +376,12 @@ describe("F-562: the gateway's own bot is left out only while untouched (main-bo
         ["AGENTS.md", true],
         ["SOUL.md", true],
       ]),
+      // One starting file named three times is not the three.
+      files("atlas", [
+        ["AGENTS.md", true],
+        ["AGENTS.md", true],
+        ["AGENTS.md", true],
+      ]),
     ])
       expect(filesSayUntouched(answer, "atlas")).toBe(false);
   });
@@ -534,10 +540,34 @@ describe("F-562: reading whether the gateway's own bot is untouched", () => {
     client.stop();
   });
 
+  it("F-562: an identity read that fails before and after a reconnect is no match: the verdict isn't inherited", async () => {
+    let answer: () => unknown = () => used("atlas");
+    const { client, gateway } = await connected({}, (gateway) => {
+      gateway.connectReply = () => hello();
+      gateway.handlers["gateway.identity.get"] = () => {
+        throw new Error("identity unavailable");
+      };
+      gateway.handlers["agents.files.list"] = () => answer();
+    });
+    await until(() => ids(listedBots(client.state)).includes("atlas"));
+    expect(client.state.connection.gatewayId ?? null).toBeNull();
+    const held = deferred<unknown>();
+    answer = () => held.promise;
+    const asked = gateway.calls("agents.files.list").length;
+    gateway.dropAll();
+    await until(() => gateway.calls("agents.files.list").length > asked);
+    // Which gateway answered isn't known, so the earlier "used" isn't carried over.
+    expect(ids(listedBots(client.state))).toEqual(["main", "pip"]);
+    held.resolve(used("atlas"));
+    await until(() => ids(listedBots(client.state)).includes("atlas"));
+    client.stop();
+  });
+
   it("F-562: a reconnect keeps the verdict held until the new read answers", async () => {
     let answer: () => unknown = () => used("atlas");
     const { client, gateway } = await connected({}, (gateway) => {
       gateway.connectReply = () => hello();
+      gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway-a" });
       gateway.handlers["agents.files.list"] = () => answer();
     });
     await until(() => ids(listedBots(client.state)).includes("atlas"));

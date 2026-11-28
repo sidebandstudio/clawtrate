@@ -21,14 +21,6 @@ export const FILES_LIST = "agents.files.list";
 /** The longest a files read is waited for; past it, the answer counts as lost and the bot shows. */
 export const FILES_READ_TIMEOUT_MS = 5_000;
 /**
- * The starting files both versions list for a bot before its first turn, all missing
- * (`agents.files.list`, a development gateway of 2026.10.6 and of 2026.11.10): an all-missing
- * answer counts as untouched only when it names these.
- */
-const STARTING_FILE = /^(?:AGENTS|SOUL|USER)\.md$/;
-const STARTING_FILE_COUNT = 3;
-
-/**
  * Whether an `agents.files.list` answer for `botId` says the bot is untouched: true only for an
  * answer of the known shape naming that bot, whose `BOOTSTRAP.md` is there (or whose every file is
  * missing) and whose `MEMORY.md` is not. Anything else is false, so the bot is shown.
@@ -40,12 +32,19 @@ export function filesSayUntouched(answer: unknown, botId: string): boolean {
   let bootstrap = false;
   let memory = false;
   let anyPresent = false;
-  let starting = 0;
+  // The starting files both versions list for a bot before its first turn, all missing
+  // (`agents.files.list`, a development gateway of 2026.10.6 and of 2026.11.10): an all-missing
+  // answer counts as untouched only when it names each of them, however often one appears.
+  let agents = false;
+  let soul = false;
+  let user = false;
   for (const entry of record.files) {
     const file = asRecord(entry);
     if (!file || typeof file.name !== "string") return false;
     if (file.missing !== undefined && typeof file.missing !== "boolean") return false;
-    if (STARTING_FILE.test(file.name)) starting += 1;
+    if (file.name === "AGENTS.md") agents = true;
+    if (file.name === "SOUL.md") soul = true;
+    if (file.name === "USER.md") user = true;
     if (file.missing === true) continue;
     anyPresent = true;
     if (file.name === "BOOTSTRAP.md") bootstrap = true;
@@ -54,7 +53,7 @@ export function filesSayUntouched(answer: unknown, botId: string): boolean {
   if (record.files.length === 0 || memory) return false;
   // Every file missing is a bot before its first turn only when the answer names its starting
   // files; a partial or changed answer is a doubt.
-  return bootstrap || (!anyPresent && starting === STARTING_FILE_COUNT);
+  return bootstrap || (!anyPresent && agents && soul && user);
 }
 
 type Deps = {
@@ -127,8 +126,12 @@ export class GatewayBotFiles {
       return;
     }
     // No answer about this bot yet: it stays out of view, as before this rule, while it is read.
-    if (this.answeredFor !== this.wanted || this.answeredOn !== this.deps.gatewayId())
-      this.deps.publish(this.wanted);
+    // Kept only for the same bot on a gateway confirmed to be the same one: an identity unknown
+    // now or when it was read is no match.
+    const gatewayId = this.deps.gatewayId();
+    const same =
+      this.answeredFor === this.wanted && this.answeredOn !== null && this.answeredOn === gatewayId;
+    if (!same) this.deps.publish(this.wanted);
     const generation = this.deps.generation();
     // A read under way on this connection reads the newest list's bot when it answers.
     if (this.reading === generation) return;
