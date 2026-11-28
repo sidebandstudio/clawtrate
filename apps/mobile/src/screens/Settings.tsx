@@ -19,7 +19,7 @@ import {
   SETTINGS_WORDS as W,
   type DeviceSwitch,
 } from "../presentation/gateway-state.ts";
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
 import { Modal, Pressable, ScrollView, Switch, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { BackIcon, CloseIcon } from "../components/icons.tsx";
@@ -68,27 +68,17 @@ function Fact({
 }
 
 function DeviceSwitchRow({ setting, shown }: { setting: DeviceSwitch; shown: boolean }) {
-  const { send, redact } = useRuntime();
+  const { saves } = useRuntime();
   const { c } = useTheme();
   // The system's switch flips as it is tapped: it keeps the choice asked for until core
-  // reports it, and goes back when the choice could not be kept.
-  const [asked, setAsked] = useState<boolean | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  // One save at a time: a second tap before the first is kept could show the first's answer.
-  const [saving, setSaving] = useState(false);
-  if (asked !== null && asked === shown) setAsked(null);
+  // reports it, and goes back when the choice could not be kept. The save is the app's, so a
+  // row opened again while it is on its way, or after it failed, shows it (`switch-saves.ts`).
+  const { asked, saving, error } = useSyncExternalStore(saves.subscribe, () =>
+    saves.get(setting.id),
+  );
+  useEffect(() => saves.settle(setting.id, shown), [saves, setting.id, shown, asked]);
   const value = asked ?? shown;
-  const toggle = (on: boolean) => {
-    setAsked(on);
-    setSaving(true);
-    setError(null);
-    void send({ type: setting.command, on })
-      .catch((failure: unknown) => {
-        setAsked(null);
-        setError(redact(failure instanceof Error ? failure.message : String(failure)));
-      })
-      .finally(() => setSaving(false));
-  };
+  const toggle = (on: boolean) => saves.toggle(setting, on);
   return (
     <>
       <Txt

@@ -19,6 +19,7 @@ import { historyStamps } from "./bot-files.ts";
 import { createIosHost } from "./host/index.ts";
 import type { DevGatewayHint } from "./host/dev-gateway.ts";
 import type { ShareFile } from "./host/share.ts";
+import { createSwitchSaves, type SwitchSaves } from "./switch-saves.ts";
 
 export type Runtime = {
   client: ClawtrateClient;
@@ -31,6 +32,8 @@ export type Runtime = {
   readOn: (items: readonly TranscriptItem[]) => ShownStamp;
   /** Offer a file in the system's share sheet (`host/share.ts`). */
   shareFile: ShareFile;
+  /** The device switches' saves, kept while the app runs (`switch-saves.ts`). */
+  saves: SwitchSaves;
 };
 
 let runtime: Runtime | null = null;
@@ -49,18 +52,20 @@ export function startRuntime(): Runtime {
   const session = createBridgeSession(client);
   // From before the first connect, so every read of a task's history is stamped.
   const reads = historyStamps({ getState: client.store.get, subscribe: client.store.subscribe });
+  const send: Runtime["send"] = async (command) => {
+    const result = await session.apply(command);
+    if (command.type === "connect" || command.type === "retry") markInstalled();
+    return result;
+  };
   runtime = {
     client,
     session,
     devGateway,
-    send: async (command) => {
-      const result = await session.apply(command);
-      if (command.type === "connect" || command.type === "retry") markInstalled();
-      return result;
-    },
+    send,
     redact: secrets.redact,
     readOn: reads.of,
     shareFile,
+    saves: createSwitchSaves(send, secrets.redact),
   };
   void client.start({ resume: installedBefore ? true : "disconnected" }).catch((error: unknown) => {
     console.error(
