@@ -36,6 +36,7 @@ export const JOBS: readonly (readonly string[])[] = [
     "on iPhone, a long bot name", // 23
     "F-017:",
     "F-557:", // not run there yet: about 15, from 3 on an M1 Max, four to five times as fast
+    "F-115:", // not run there yet: about 15, as F-557, whose protected address it sets up too
   ],
 ];
 
@@ -55,6 +56,7 @@ export const OWN_START: readonly string[] = [
   "on iPhone, a long bot name",
   "F-017:",
   "F-557:", // pairs at a loopback address and at a protected one of its own
+  "F-115:", // pairs at a protected address of its own
 ];
 
 /** A check that starts where another leaves the app, so both run in one job, in this order. */
