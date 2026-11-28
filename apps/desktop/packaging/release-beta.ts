@@ -1314,7 +1314,7 @@ export function releaseNotes(
     "Install it from https://clawtrate.dev, or choose Check for Updates in a beta already installed.",
     "Apple silicon takes the arm64 zip and Intel Macs the x64 zip. Both are signed with a Developer ID and notarized by Apple.",
     "",
-    "If OpenClaw is already on your Mac, Clawtrate asks for your gateway's address and token under Advanced. It doesn't connect to it by itself yet: that would mean running OpenClaw's own program before you agree, and that program can change its installation when it starts.",
+    'If OpenClaw is not on your Mac, choose "Set up OpenClaw here" and confirm once when asked. Clawtrate downloads and installs OpenClaw for your account, starts it, and connects in two to four minutes with nothing to type. If OpenClaw is already running on your Mac, Clawtrate finds it and connects with one click. For OpenClaw on another computer, enter that gateway\'s address and token under "Advanced".',
     "",
     "SHA-256:",
     "",
