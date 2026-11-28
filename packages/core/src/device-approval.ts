@@ -153,6 +153,8 @@ export type DeviceRequest = {
   choices: string[];
   /** A pick or "None of these match" on this host already approved nothing for it. */
   spent: boolean;
+  /** A decision on it is under way on this host: it takes no other until that one ends. */
+  deciding: boolean;
 };
 
 export type DeviceRequestsState = {
@@ -199,6 +201,8 @@ export type DeviceDecision =
   | { kind: "denied" }
   /** Decided elsewhere, expired or superseded: the gateway no longer lists it. */
   | { kind: "gone" }
+  /** Not among the requests shown, while more wait than are shown: it may be one of those. */
+  | { kind: "not-shown" }
   /** The request read again has another key, roles or scopes than shown: nothing approved. */
   | { kind: "changed"; what: string[] }
   /** Approved, then the paired device had other access than shown: its pairing was removed. */
@@ -307,6 +311,7 @@ export function readDeviceRequest(
     blocked,
     choices: blocked || !withChoices ? [] : (codeChoices(publicKey, requestId, secret) ?? []),
     spent,
+    deciding: false,
   };
 }
 
@@ -362,7 +367,8 @@ export class DeviceApprovals {
    * Requests a decision is under way for, each with that decision's own token, taken before its
    * first await: no other decision on the same request starts until it ends, and only the
    * decision holding the token frees it. Kept when the gateway may have acted on it (an approval
-   * sent whose answer was lost, or approved, or a denial), until the request leaves the list.
+   * sent whose answer was lost, or approved, or a denial), until the request leaves the list,
+   * with token 0: no decision is under way on it, and none frees it.
    */
   private readonly deciding = new Map<string, number>();
   /** The last decision token handed out. */
@@ -697,6 +703,7 @@ export class DeviceApprovals {
         return {
           ...request,
           spent: this.spent.has(request.requestId),
+          deciding: (this.deciding.get(request.requestId) ?? 0) > 0,
           blocked: request.blocked ?? (shared ? ("same-code" as const) : null),
         };
       })
@@ -751,11 +758,20 @@ export class DeviceApprovals {
 
   private spend(requestId: string): void {
     this.spent.add(requestId);
+    this.mark(requestId, { spent: true });
+  }
+
+  private mark(requestId: string, change: Partial<DeviceRequest>): void {
     this.patch({
       requests: this.state.requests.map((request) =>
-        request.requestId === requestId ? { ...request, spent: true } : request,
+        request.requestId === requestId ? { ...request, ...change } : request,
       ),
     });
+  }
+
+  /** Not in the list shown: gone, unless more wait than are shown and it may be one of those. */
+  private unlisted(): DeviceDecision {
+    return this.state.omitted > 0 ? { kind: "not-shown" } : { kind: "gone" };
   }
 
   /**
@@ -772,7 +788,7 @@ export class DeviceApprovals {
     if (!this.ctx.admin()) return { kind: "not-allowed" };
     // A sheet an earlier connection showed decides nothing here; this one read its own list.
     if (listedOn !== this.epoch) return { kind: "not-allowed" };
-    if (!shown) return { kind: "gone" };
+    if (!shown) return this.unlisted();
     const token = this.reserve(requestId);
     if (token === null) return { kind: "not-allowed" };
     const decision = await this.approveReserved(shown, code, scopes);
@@ -788,6 +804,7 @@ export class DeviceApprovals {
     if (this.deciding.has(requestId) || this.deciding.size >= MAX_DEVICE_REQUESTS) return null;
     const token = (this.decisions += 1);
     this.deciding.set(requestId, token);
+    this.mark(requestId, { deciding: true });
     return token;
   }
 
@@ -806,7 +823,10 @@ export class DeviceApprovals {
       "unknown",
       "denied",
     ].includes(decision.kind);
-    if (!acted && this.deciding.get(requestId) === token) this.deciding.delete(requestId);
+    if (this.deciding.get(requestId) !== token) return;
+    if (acted) this.deciding.set(requestId, 0);
+    else this.deciding.delete(requestId);
+    this.mark(requestId, { deciding: false });
   }
 
   private async approveReserved(
@@ -960,7 +980,7 @@ export class DeviceApprovals {
     const shown = this.shown(requestId);
     if (!this.ctx.admin()) return { kind: "not-allowed" };
     if (listedOn !== this.epoch) return { kind: "not-allowed" };
-    if (!shown) return { kind: "gone" };
+    if (!shown) return this.unlisted();
     // A decision under way on this request (an approval being sent) takes no refusal.
     if (this.deciding.has(requestId)) return { kind: "not-allowed" };
     if (why === "none-match") {

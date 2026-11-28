@@ -906,6 +906,7 @@ export const DEVICE_REQUESTS: Bound = object<DeviceRequestsState>()({
       blocked: ENUM,
       choices: list(PAIR_CODE_CHOICES, ENUM),
       spent: FLAG,
+      deciding: FLAG,
     }),
   ),
   omitted: NUMBER,

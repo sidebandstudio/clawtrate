@@ -237,6 +237,32 @@ test("F-550: while a decision is under way nothing else on the request can be pr
   await expect(sheet.getByTestId("device-deciding")).toHaveCount(0);
 });
 
+test("F-550: a sheet closed during a decision and opened again from Settings, Gateway shows it being decided", async ({
+  page,
+}) => {
+  await openFixture(page, "scene=device-request", "dark");
+  const sheet = sheetOf(page);
+  await hold(page);
+  await sheet.getByRole("button", { name: "Code K 7 Q F, 2 M X A", exact: true }).click();
+  await sheet.getByRole("button", { name: "Not now" }).click();
+  await expect(sheet).toHaveCount(0);
+  const settings = await openGatewaySettings(page, false);
+  await settings.getByRole("button", { name: /^Clawtrate Desktop \(reported\)/ }).click();
+  await expect(sheet.getByTestId("device-deciding")).toHaveText(
+    "Deciding this request. Nothing else can be picked for it until it ends.",
+  );
+  for (const name of ["I didn't start this", "None of these match", "Code 9 H 3 K, T Q 8 B"])
+    await expect(sheet.getByRole("button", { name, exact: true })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+  await release(page);
+  await expect(sheet.getByTestId("device-outcome")).toHaveText(
+    "This request is no longer pending.",
+  );
+  expect(await sent(page)).toEqual([{ type: "approveDevice", code: CODE }]);
+});
+
 test("F-550: a sheet from an earlier connection decides nothing; the list is read again and shown as it is now", async ({
   page,
 }) => {
@@ -292,6 +318,18 @@ test("F-550: a request that comes to share a code while open takes no pick, says
   await sheet.getByRole("button", { name: "I didn't start this" }).click();
   await expect(sheet.getByTestId("device-outcome")).toHaveText("Denied. The device can ask again.");
   expect(await decisions(page)).toEqual([{ type: "refuseDevice", why: "not-mine", listedOn: 1 }]);
+});
+
+test("F-550: a block a new connection lists takes the codes away at once", async ({ page }) => {
+  await openFixture(page, "scene=device-request", "dark");
+  const sheet = sheetOf(page);
+  await expect(sheet.locator(".device-code")).toHaveCount(4);
+  await setRequests(page, { listedOn: 2, blocked: "same-code" });
+  await expect(sheet.getByTestId("device-blocked")).toHaveText(
+    "Another waiting device shows the same code, so neither is approved here. Deny both, then ask again from the new device.",
+  );
+  await expect(sheet.locator(".device-code")).toHaveCount(0);
+  await expect(sheet.getByRole("button", { name: "None of these match" })).toHaveCount(0);
 });
 
 for (const [answer, words] of [
@@ -576,6 +614,7 @@ const offerRequest = (page: Page) =>
             blocked: null,
             choices: ["4C7R-MZ2D", "9H3K-TQ8B", "K7QF-2MXA", "WX5N-0PJ6"],
             spent: false,
+            deciding: false,
           },
         ],
         omitted: 0,

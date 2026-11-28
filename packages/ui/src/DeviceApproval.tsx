@@ -6,6 +6,7 @@
 import {
   gatewayStamp,
   HostReplyLost,
+  MAX_DEVICE_REQUESTS,
   spokenCode,
   type DeviceDecision,
   type DeviceRequest,
@@ -89,6 +90,8 @@ export function decisionWords(decision: SheetOutcome, act: DecisionAct = "approv
       return "Denied. The device can ask again.";
     case "gone":
       return "This request is no longer pending.";
+    case "not-shown":
+      return `This request isn't among the newest ${MAX_DEVICE_REQUESTS} Clawtrate shows, so it can't be decided here.`;
     case "changed":
       return `The request changed after it was shown (its ${listWords(decision.what)}). Nothing was approved.`;
     case "undone":
@@ -194,12 +197,21 @@ export function DeviceRequestView({
   }, [outcome]);
   const current: Seen | null = seen ?? (live ? { request: live, listedOn } : null);
   // The list it came from still lists it: what it can take now (a block, a spent pick) is the
-  // list's. A list from another connection says nothing about it.
+  // list's. A list from another connection only takes picks away, by a block. Whether a decision
+  // is under way is this host's, whichever list it is on.
   const fresh = current !== null && current.listedOn === listedOn;
-  const request: DeviceRequest | null =
-    current && fresh && live
-      ? { ...current.request, blocked: live.blocked, spent: live.spent, choices: live.choices }
-      : (current?.request ?? null);
+  const now: Partial<DeviceRequest> = !live
+    ? {}
+    : fresh
+      ? { blocked: live.blocked, spent: live.spent, choices: live.choices }
+      : live.blocked
+        ? { blocked: live.blocked, choices: [] }
+        : {};
+  const request: DeviceRequest | null = current && {
+    ...current.request,
+    ...now,
+    deciding: live?.deciding ?? false,
+  };
   /** Read the list again and say how that went; after not-allowed, then follow the list. */
   const readAgain = (after: Check["after"]) => {
     setCheck({ after, read: "reading" });
@@ -270,7 +282,12 @@ export function DeviceRequestView({
   const ended =
     !outcome && !pending && !rereading && (current === null || (fresh && admin && !live));
   const result: SheetOutcome | null =
-    outcome?.shown ?? (ended ? (admin ? { kind: "gone" } : { kind: "not-allowed" }) : null);
+    outcome?.shown ??
+    (ended
+      ? admin
+        ? { kind: deviceRequests.omitted > 0 ? "not-shown" : "gone" }
+        : { kind: "not-allowed" }
+      : null);
   const note =
     check === null
       ? null
@@ -334,7 +351,9 @@ export function DeviceRequestBody({
   titleRef?: RefObject<HTMLHeadingElement | null>;
   closeRef?: RefObject<HTMLButtonElement | null>;
 }) {
-  const busy = pending !== null || held;
+  // A decision under way here, or one this host holds from a sheet closed before it ended.
+  const deciding = pending !== null || (!result && request?.deciding === true);
+  const busy = deciding || held;
   const press = (pick: Pick) => () => {
     if (!busy) onDecide(pick);
   };
@@ -394,7 +413,7 @@ export function DeviceRequestBody({
           {note}
         </p>
       )}
-      {pending && (
+      {deciding && (
         <p className="device-outcome" role="status" data-testid="device-deciding">
           {DECIDING_WORDS}
         </p>
