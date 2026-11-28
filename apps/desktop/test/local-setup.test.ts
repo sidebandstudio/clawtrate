@@ -32,6 +32,7 @@ import {
   ClawtrateClient,
   createBridgeSession,
   FULL_SCOPES,
+  GATEWAY_PROTOCOL,
   parseBridgeCommand,
   PROOF_REFUSAL_LINES,
   type SetupLook,
@@ -716,6 +717,12 @@ describe.skipIf(!mac)(
       },
       { code: "PROTOCOL_MISMATCH", expectedProtocol: 1, kind: "protocol", reason: "gateway-older" },
       { code: "PROTOCOL_MISMATCH", expectedProtocol: 99, kind: "protocol", reason: "client-older" },
+      {
+        code: "PROTOCOL_MISMATCH",
+        expectedProtocol: GATEWAY_PROTOCOL,
+        kind: "protocol",
+        reason: null,
+      },
     ])(
       "F-602: a proved gateway's $code refusal becomes $kind ($reason)",
       async ({ code, expectedProtocol, kind, reason }) => {
@@ -746,6 +753,9 @@ describe.skipIf(!mac)(
           await until(() => app.setup.current.phase === "failed", 30_000);
           expect(app.setup.current.failure).toMatchObject({ kind, reason });
           expect(JSON.stringify(app.setup.current)).not.toContain("a-gateway-token");
+          await until(() => app.client.state.connection.gatewayUrl === null, 30_000);
+          await app.setup.look();
+          expect(app.setup.current).toMatchObject({ phase: "found", look: { outcome: "running" } });
         } finally {
           app.client.stop();
           await server.close();

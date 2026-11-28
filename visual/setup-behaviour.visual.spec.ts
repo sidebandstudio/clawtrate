@@ -515,10 +515,13 @@ test("F-602: a startup look without settings opens the local setup card", async 
 test("F-602: Start OpenClaw runs on one press, then the proved gateway offers Connect", async ({
   page,
 }) => {
-  await openFixture(page, "setup=local-stopped", "dark");
+  await page.clock.install({ time: NOW });
+  await page.clock.pauseAt(new Date(NOW.getTime() + 1_000));
+  await page.goto("/?setup=local-stopped&theme=dark");
   await page.getByRole("button", { name: "Start OpenClaw", exact: true }).focus();
   await page.keyboard.press("Enter");
   await expect(page.getByRole("heading", { name: "Starting OpenClaw" })).toBeFocused();
+  await page.clock.runFor(900);
   await expect(
     page.getByRole("heading", { name: "Found your OpenClaw settings on this Mac" }),
   ).toBeVisible();

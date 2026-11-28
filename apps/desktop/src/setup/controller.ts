@@ -965,10 +965,11 @@ export class SetupController implements SetupHost {
         // One appeared before the code went: back to the card, for consent to reuse it.
         if (code === SETUP_PAIRING_APPEARED) return this.pairingAppeared();
         if (local && code === "PROTOCOL_MISMATCH") {
+          void this.closeOwned();
           const protocol = connection.error?.protocol;
           const gateway = protocol?.gateway;
           const reason =
-            gateway == null || !protocol
+            gateway == null || !protocol || gateway === protocol.client
               ? null
               : gateway < protocol.client
                 ? "gateway-older"
