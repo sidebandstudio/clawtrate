@@ -211,6 +211,8 @@ describe("F-042: Undo takes out that one entry, from the list it went on (#799)"
     ).toBeNull();
     // Its only entry: taking it out would allow every model.
     expect(allowRemoval(list(["openai/gpt-5.5"]), "pip", undo)).toBeNull();
+    // No list governs the bot at all.
+    expect(allowRemoval(cfg({}), "pip", undo)).toBeNull();
   });
 });
 
@@ -1126,6 +1128,29 @@ describe("F-042: Effort, Undo's revision and the old layout (#799)", () => {
     expect(accounts().allowed?.status).toBe("changed");
     expect(defaults(fake).modelPolicy).toEqual({ allow: ["acme/dev-1", "acme/dev-2"] });
     client.stop();
+  });
+
+  it("an Undo whose read is out while another hand takes the entry out and puts it back writes nothing", async () => {
+    const fake = new AccountsGateway();
+    limited(fake, ["acme/dev-2"]);
+    let undoing = false;
+    const { engine, state } = engineOn(fake, (method) => {
+      if (!undoing || method !== "config.get") return;
+      undoing = false;
+      // While the Undo's read is out: removed and put back, the list reading as it did.
+      limited(fake, ["acme/dev-2"]);
+      fake.revision += 1;
+      limited(fake, ["acme/dev-2", "acme/dev-1"]);
+      fake.revision += 1;
+    });
+    await engine.load();
+    await engine.allowModel("otto", DEV1);
+    const before = patches(fake).length;
+    undoing = true;
+    await engine.undoAllowed({ botId: "otto", id: state().allowed!.id });
+    expect(patches(fake)).toHaveLength(before);
+    expect(state().allowed?.status).toBe("changed");
+    expect(defaults(fake).modelPolicy).toEqual({ allow: ["acme/dev-2", "acme/dev-1"] });
   });
 
   it("a read after the config changed ends Undo before it is pressed; the move case too", async () => {

@@ -3091,8 +3091,10 @@ export class AccountsEngine {
       const { ctx, check } = this.checked(beforeSend);
       const { config, applied } = await this.patchFrom(
         (read) => {
+          // Checked again once read: the addition shown is still the record, and the config is
+          // still the revision it left, so nothing changed while the read was out either.
           const removal =
-            read?.hash === revision
+            read?.hash === revision && this.ctx.get().allowed?.id === allowed.id
               ? allowRemoval(read, allowed.botId, { entry: allowed.entry, place: allowed.scope })
               : null;
           outcome.changed = removal === null;
