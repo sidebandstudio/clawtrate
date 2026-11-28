@@ -1,12 +1,12 @@
 // The OpenClaw versions the development gateway runs (#609): the pin, which `pnpm dev-gateway
-// setup` installs and every pull request tests, and npm's newest, which the OpenClaw latest
-// workflow runs through OPENCLAW_BIN. Where the two differ only in form, the generated config,
+// setup` installs and every pull request tests, and newer releases the OpenClaw latest workflow
+// runs through OPENCLAW_BIN. Where versions differ only in form, the generated config,
 // the seed, the scripted model and the checks ask `shape()` for the running version's form.
 // The running version is the one the gateway itself reports in its hello (`server.version`), or,
 // before a gateway runs, the version of the program that will start it. Never a guess.
 
 /** The pin first. A version that is not listed is refused, not run. */
-export const OPENCLAW_VERSIONS = ["2026.10.6", "2026.11.10"] as const;
+export const OPENCLAW_VERSIONS = ["2026.10.6", "2026.11.10", "2026.11.11"] as const;
 export type OpenclawVersion = (typeof OPENCLAW_VERSIONS)[number];
 export const PINNED_OPENCLAW: OpenclawVersion = OPENCLAW_VERSIONS[0];
 
@@ -102,6 +102,55 @@ export type Shape = {
   routineOwnerProfile: boolean;
 };
 
+const SHAPE_2026_11_10: Omit<Shape, "version"> = {
+  heartbeat: false,
+  migrations: [
+    "modelPolicyAllowlist",
+    "utilityModelSeparation",
+    "skillWorkshopPlugin",
+    "skillLibraryToolSplit",
+  ],
+  // Offered unless denied, or reaching the network, as DENIED_TOOLS' own are.
+  extraDeniedTools: ["skill_library", "deep_research", "github_read", "github_search"],
+  extraAllowedTools: ["sessions_create"],
+  skillReviewTools: ["skill_workshop", "skill_library"],
+  reviewsCliTurns: false,
+  compactToolJson: true,
+  titlesWithArguments: false,
+  thinkingPersisted: true,
+  extraErrorDetail: ["providerErrorCode"],
+  pairedAutomations: true,
+  emptyReplyError: "No answer was returned. Ask again if you still need one.",
+  execOutputInDetails: false,
+  execTimeoutMessage: true,
+  execTimeoutAdvice:
+    "Do not automatically rerun commands unless repeating them is safe. Use a higher timeout only when the command is known to be safe to retry.",
+  execDeclinedNote: "\nCommand did not run: an operator declined this execution approval.",
+  pictureTurn: false,
+  messageSendEndsTurn: true,
+  mediaTicket: String.raw`[0-9a-f-]{36}%2F[A-Za-z0-9_-]+`,
+  addedGatewayTools: [
+    "deep_research",
+    "github_read",
+    "github_search",
+    "sessions_create",
+    "skill_library",
+  ],
+  removedGatewayTools: ["heartbeat_respond"],
+  sessionsOffsetCountsRead: true,
+  shortSessionKeys: false,
+  spawnedTaskCreator: "owner",
+  preambleItems: false,
+  queuedFinalMessage: false,
+  queuedTurnOwnId: false,
+  contextWhileRunning: true,
+  reportsPersonsRun: true,
+  reportsFollowUpRun: false,
+  briefFromTask: true,
+  hiddenSpawnLabel: true,
+  routineOwnerProfile: true,
+};
+
 const SHAPES: Record<OpenclawVersion, Shape> = {
   "2026.10.6": {
     version: "2026.10.6",
@@ -140,55 +189,8 @@ const SHAPES: Record<OpenclawVersion, Shape> = {
     hiddenSpawnLabel: false,
     routineOwnerProfile: false,
   },
-  "2026.11.10": {
-    version: "2026.11.10",
-    heartbeat: false,
-    migrations: [
-      "modelPolicyAllowlist",
-      "utilityModelSeparation",
-      "skillWorkshopPlugin",
-      "skillLibraryToolSplit",
-    ],
-    // Offered unless denied, or reaching the network, as DENIED_TOOLS' own are.
-    extraDeniedTools: ["skill_library", "deep_research", "github_read", "github_search"],
-    extraAllowedTools: ["sessions_create"],
-    skillReviewTools: ["skill_workshop", "skill_library"],
-    reviewsCliTurns: false,
-    compactToolJson: true,
-    titlesWithArguments: false,
-    thinkingPersisted: true,
-    extraErrorDetail: ["providerErrorCode"],
-    pairedAutomations: true,
-    emptyReplyError: "No answer was returned. Ask again if you still need one.",
-    execOutputInDetails: false,
-    execTimeoutMessage: true,
-    execTimeoutAdvice:
-      "Do not automatically rerun commands unless repeating them is safe. Use a higher timeout only when the command is known to be safe to retry.",
-    execDeclinedNote: "\nCommand did not run: an operator declined this execution approval.",
-    pictureTurn: false,
-    messageSendEndsTurn: true,
-    mediaTicket: String.raw`[0-9a-f-]{36}%2F[A-Za-z0-9_-]+`,
-    addedGatewayTools: [
-      "deep_research",
-      "github_read",
-      "github_search",
-      "sessions_create",
-      "skill_library",
-    ],
-    removedGatewayTools: ["heartbeat_respond"],
-    sessionsOffsetCountsRead: true,
-    shortSessionKeys: false,
-    spawnedTaskCreator: "owner",
-    preambleItems: false,
-    queuedFinalMessage: false,
-    queuedTurnOwnId: false,
-    contextWhileRunning: true,
-    reportsPersonsRun: true,
-    reportsFollowUpRun: false,
-    briefFromTask: true,
-    hiddenSpawnLabel: true,
-    routineOwnerProfile: true,
-  },
+  "2026.11.10": { ...SHAPE_2026_11_10, version: "2026.11.10" },
+  "2026.11.11": { ...SHAPE_2026_11_10, version: "2026.11.11" },
 };
 
 /** The form of a listed version; throws for any other. */

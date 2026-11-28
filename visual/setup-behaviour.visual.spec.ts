@@ -3,7 +3,13 @@
 // keyboard and the screen reader. The same walk runs against a real
 // development gateway in e2e/setup.spec.ts.
 import { expect, test, type Page } from "@playwright/test";
+import type { BridgeCommand, ClawtrateBridge, ClawtrateState } from "../packages/core/src/index.ts";
 import { contextFor, NOW, openFixture, SIZES } from "./fixture.ts";
+
+type SetupFixture = Pick<ClawtrateBridge, "getState" | "send"> & {
+  sent: BridgeCommand[];
+  setState(change: (state: ClawtrateState) => ClawtrateState): void;
+};
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
 test.use(contextFor(WIDE, "light"));
@@ -149,7 +155,7 @@ test("F-492: each failure of Connect is its own titled note, with its own next s
   }
 });
 
-test("F-515: another version is named, offers Advanced and how to update, and no Connect", async ({
+test("F-515: another version is named with a route to Advanced and no Terminal command", async ({
   page,
 }) => {
   await openFixture(page, "setup=untested", "light");
@@ -157,8 +163,8 @@ test("F-515: another version is named, offers Advanced and how to update, and no
     "OpenClaw 2026.9.37 isn't the version this Clawtrate is tested with (2026.10.6). Use Advanced to try connecting.",
   );
   await expect(page.getByRole("button", { name: "Connect" })).toHaveCount(0);
-  await page.getByText("How to update").click();
-  await expect(page.locator(".command code")).toHaveText("openclaw update");
+  await expect(page.getByText("How to update")).toHaveCount(0);
+  await expect(page.locator(".command code")).toHaveCount(0);
   await page.getByRole("button", { name: "Use Advanced" }).click();
   await expect(page.getByPlaceholder("Gateway address")).toBeVisible();
   expect(await sent(page)).toEqual(["setupReset"]);
@@ -321,10 +327,12 @@ test("F-515: the too-old card speaks of the version it read, and of no protocol"
   await openFixture(page, "setup=too-old", "light");
   await expect(
     page.getByText(
-      /OpenClaw 2026\.6\.2 is below the version this Clawtrate offers for automatic setup \(2026\.7\.0\)\. Update it, then look again\./,
+      "Automatic setup requires OpenClaw 2026.7.0 or later. Clawtrate found 2026.6.2.",
+      { exact: true },
     ),
   ).toBeVisible();
   await expect(page.getByText(/protocol/)).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Use Advanced" })).toBeVisible();
 });
 
 test("a refused sandbox says why it was refused", async ({ page }) => {
@@ -369,7 +377,7 @@ test("F-516: each card says only what the look established", async ({ page }) =>
   await openFixture(page, "setup=cant-tell-not-set-up", "light");
   await expect(lead("OpenClaw didn't report a config file for this profile.")).toBeVisible();
   await openFixture(page, "setup=cant-tell-no-answer", "light");
-  await expect(lead("Clawtrate couldn't read a gateway answer.")).toBeVisible();
+  await expect(lead("The gateway didn't answer in time.")).toBeVisible();
   await expect(page.getByText(/runs on its port|as its service/)).toHaveCount(0);
   await openFixture(page, "setup=stopped-by-hand", "light");
   const facts = page.getByTestId("setup-found").locator("dl > div");
@@ -498,6 +506,211 @@ test("F-602: on a Mac whose OpenClaw profile the host matched, the first screen 
   await expect(page.getByTestId("bot-list")).toBeVisible();
 });
 
+test("F-602: a startup look without settings opens the local setup card", async ({ page }) => {
+  await openFixture(page, "setup=local-empty-wait", "dark");
+  const card = page.getByTestId("setup-found");
+  await expect(card.getByRole("heading")).toHaveText("Clawtrate didn't find OpenClaw here");
+  await expect(page.getByRole("heading", { name: "Where does OpenClaw run?" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "On this computer" })).toBeFocused();
+  expect(await sent(page)).toEqual([]);
+  await page.getByRole("button", { name: "It runs on another computer" }).click();
+  await expect(page.getByRole("heading", { name: "Another computer" })).toBeFocused();
+  await page.getByRole("button", { name: "Back" }).click();
+  await page.getByRole("button", { name: "Advanced", exact: true }).click();
+  await expect(page.getByPlaceholder("Gateway address")).toBeFocused();
+});
+
+test("F-602: simulated Start offers Connect for the same selected profile and port", async ({
+  page,
+}) => {
+  await page.clock.install({ time: NOW });
+  await page.clock.pauseAt(new Date(NOW.getTime() + 1_000));
+  await page.goto("/?setup=local-stopped-two-profiles&theme=dark");
+  const port = 19321;
+  await expect(page.getByTestId("setup-found").getByText("clawtrate")).toBeVisible();
+  await page.evaluate((port) => {
+    const fixture = (window as unknown as { clawtrateFixture: SetupFixture }).clawtrateFixture;
+    fixture.setState((state) => ({
+      ...state,
+      setup: { ...state.setup!, look: { ...state.setup!.look!, port } },
+    }));
+  }, port);
+  await page.getByRole("button", { name: "Start OpenClaw", exact: true }).focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("heading", { name: "Starting OpenClaw" })).toBeFocused();
+  const selected = () =>
+    page.evaluate(() => {
+      const fixture = (window as unknown as { clawtrateFixture: SetupFixture }).clawtrateFixture;
+      return fixture.getState().setup?.look;
+    });
+  const facts = { profile: "clawtrate", port, others: ["profile default"] };
+  expect(await selected()).toMatchObject({ ...facts, outcome: "stopped" });
+  await page.clock.runFor(900);
+  await expect(
+    page.getByRole("heading", { name: "Found your OpenClaw settings on this Mac" }),
+  ).toBeVisible();
+  await expect(page.getByTestId("full-control-consent")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Connect", exact: true })).toBeVisible();
+  await expect(page.getByText("Using the clawtrate profile.")).toBeVisible();
+  expect(await selected()).toMatchObject({ ...facts, outcome: "running" });
+  expect(await sent(page)).toEqual(["setupStart"]);
+});
+
+test("F-602: Advanced opens after a local token refusal or an unfinished handshake", async ({
+  page,
+}) => {
+  for (const state of ["local-token-refused", "local-unanswered"]) {
+    await openFixture(page, `setup=${state}`, "dark");
+    await page.getByRole("button", { name: "Use Advanced" }).click();
+    await expect(page.getByPlaceholder("Gateway address")).toBeFocused();
+    expect(await sent(page)).toEqual(["setupReset"]);
+  }
+});
+
+test("F-602: Advanced keeps a failed submission's address, error, and only that address's token", async ({
+  page,
+}) => {
+  await openFixture(page, "setup=local-refused-token", "dark");
+  const address = page.getByPlaceholder("Gateway address");
+  const token = page.getByPlaceholder("Gateway token, for pairing");
+  const remote = "wss://remote.example.test";
+  const local = "ws://127.0.0.1:18789";
+  await expect(address).toHaveValue(remote);
+  await page.getByRole("button", { name: "Use This computer" }).click();
+  const connect = page.getByRole("button", { name: "Connect", exact: true });
+  await connect.waitFor();
+  await page.waitForTimeout(600);
+  await connect.click();
+  await expect(page.getByText("OpenClaw refused the token from its settings.")).toBeVisible();
+  await page.getByRole("button", { name: "Use Advanced" }).click();
+  await expect(address).toHaveValue(local);
+
+  const submitted = "wss://another.example.test/";
+  await page.evaluate(() => {
+    const fixture = (window as unknown as { clawtrateFixture: SetupFixture }).clawtrateFixture;
+    const send = fixture.send;
+    fixture.send = async (command) => {
+      if (command.type !== "connect") return send(command);
+      fixture.sent.push(command);
+      fixture.setState((state) => ({
+        ...state,
+        connection: {
+          ...state.connection,
+          status: "connecting",
+          gatewayUrl: command.url.replace(/\/$/, ""),
+          error: null,
+        },
+      }));
+    };
+  });
+  await token.fill("a-local-fixture-token");
+  await address.fill(submitted);
+  await expect(token).toHaveValue("");
+  await token.fill("another-fixture-token");
+  await page.getByRole("button", { name: "Connect a gateway" }).click();
+  await expect(page.getByTestId("setup-steps")).toBeVisible();
+  await expect(address).toHaveCount(0);
+  const connection = await page.evaluate(() => {
+    const fixture = (window as unknown as { clawtrateFixture: SetupFixture }).clawtrateFixture;
+    return fixture.sent.find((command) => command.type === "connect");
+  });
+  expect(connection).toEqual({ type: "connect", url: submitted, token: "another-fixture-token" });
+  await page.evaluate(() => {
+    const fixture = (window as unknown as { clawtrateFixture: SetupFixture }).clawtrateFixture;
+    fixture.setState((state) => ({
+      ...state,
+      connection: {
+        ...state.connection,
+        status: "error",
+        error: {
+          code: "REFUSED",
+          message: "The submitted gateway refused the connection.",
+          hint: null,
+        },
+      },
+    }));
+  });
+  await expect(address).toHaveValue(submitted);
+  await expect(page.getByRole("alert")).toContainText(
+    "The submitted gateway refused the connection.",
+  );
+  await expect(token).toHaveValue("another-fixture-token");
+  await address.fill(local);
+  await expect(token).toHaveValue("");
+  await expect(page.getByRole("alert")).toHaveCount(0);
+  await address.fill(submitted);
+  await expect(token).toHaveValue("");
+});
+
+test("F-602: Try again sends a token typed after a failure, and retries an unchanged form", async ({
+  page,
+}) => {
+  await openFixture(page, "setup=local-refused-token", "dark");
+  const address = page.getByPlaceholder("Gateway address");
+  const token = page.getByPlaceholder("Gateway token, for pairing");
+  const remote = "wss://remote.example.test";
+  await expect(address).toHaveValue(remote);
+  await page.evaluate(() => {
+    const fixture = (window as unknown as { clawtrateFixture: SetupFixture }).clawtrateFixture;
+    fixture.sent.length = 0;
+    fixture.send = async (command) => {
+      fixture.sent.push(command);
+      if (command.type !== "connect") return;
+      fixture.setState((state) => ({
+        ...state,
+        connection: { ...state.connection, status: "connecting", error: null },
+      }));
+    };
+  });
+  const fail = () =>
+    page.evaluate(() => {
+      const fixture = (window as unknown as { clawtrateFixture: SetupFixture }).clawtrateFixture;
+      fixture.setState((state) => ({
+        ...state,
+        connection: {
+          ...state.connection,
+          status: "error",
+          error: { code: "REFUSED", message: "The gateway refused this token.", hint: null },
+        },
+      }));
+    });
+  const commands = () =>
+    page.evaluate(
+      () => (window as unknown as { clawtrateFixture: SetupFixture }).clawtrateFixture.sent,
+    );
+  await token.fill("first-fixture-token");
+  await page.getByRole("button", { name: "Connect a gateway" }).click();
+  await expect(address).toHaveCount(0);
+  await fail();
+  await expect(page.getByRole("alert")).toContainText("The gateway refused this token.");
+  await expect(token).toHaveValue("first-fixture-token");
+
+  // Unchanged since it failed: the same connection again.
+  await page.getByRole("button", { name: "Try again" }).click();
+  expect(await commands()).toEqual([
+    { type: "connect", url: remote, token: "first-fixture-token" },
+    { type: "retry" },
+  ]);
+
+  // A replacement token: Try again submits the form as it is now.
+  await token.fill("second-fixture-token");
+  await page.getByRole("button", { name: "Try again" }).click();
+  await expect(address).toHaveCount(0);
+  expect((await commands()).slice(2)).toEqual([
+    { type: "connect", url: remote, token: "second-fixture-token" },
+  ]);
+});
+
+test("F-602: a named profile goes straight to its card and Advanced", async ({ page }) => {
+  await openFixture(page, "setup=local-named-profile", "dark");
+  await expect(
+    page.getByRole("heading", { name: "OpenClaw settings found for work" }),
+  ).toBeVisible();
+  await expect(page.getByRole("button", { name: "Set up OpenClaw here" })).toHaveCount(0);
+  await page.getByRole("button", { name: "Use Advanced" }).click();
+  await expect(page.getByPlaceholder("Gateway address")).toHaveValue("");
+});
+
 test("F-602: a gateway local connect couldn't prove isn't offered: it says so, with Advanced and Look again", async ({
   page,
 }) => {
@@ -505,7 +718,7 @@ test("F-602: a gateway local connect couldn't prove isn't offered: it says so, w
   await expect(page.getByRole("heading", { name: "OpenClaw settings found" })).toBeVisible();
   await expect(
     page.getByText(
-      "Clawtrate couldn't match what is listening at port 18789 to this account's OpenClaw profile. Clawtrate doesn't connect to it by itself. Use Advanced, or look again.",
+      "Clawtrate couldn't match what is listening at port 18789 to this account's OpenClaw profile.",
     ),
   ).toBeVisible();
   await expect(page.getByRole("button", { name: "Connect", exact: true })).toHaveCount(0);
