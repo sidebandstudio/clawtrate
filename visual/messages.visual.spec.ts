@@ -85,6 +85,23 @@ const unreached = (control: Locator) =>
     );
   });
 
+const ownedLinkPoints = (link: Locator) =>
+  link.evaluate((el) =>
+    [...el.getClientRects()].flatMap((box) =>
+      [box.top + 1, (box.top + box.bottom) / 2, box.bottom - 1].flatMap((y) =>
+        [box.left + 1, (box.left + box.right) / 2, box.right - 1]
+          .filter((x) => el.contains(document.elementFromPoint(x, y)))
+          .map((x) => ({ x, y })),
+      ),
+    ),
+  );
+
+const lostLinkPoints = (link: Locator, points: Array<{ x: number; y: number }>) =>
+  link.evaluate(
+    (el, points) => points.filter(({ x, y }) => !el.contains(document.elementFromPoint(x, y))),
+    points,
+  );
+
 /** Set the reactions on messages of the open task, by row, as the gateway's next event would. */
 async function react(page: Page, reactions: Record<string, MessageReaction[]>): Promise<void> {
   await page.evaluate((reactions) => {
@@ -114,6 +131,79 @@ async function pillsReach(page: Page, row: string, count: number): Promise<void>
   await settle(page);
   for (const pill of await pills.all()) expect(await unreached(pill)).toEqual([]);
 }
+
+/** Otto's progress bubble, a row of its own: on a phone its bar has no room beside it. */
+const progress = (page: Page) =>
+  page.getByTestId("message").filter({ hasText: "I'll write that down so I don't forget." });
+
+/** Touch and hold a message's last bubble until its actions open, then lift. */
+async function holdOn(
+  message: Locator,
+  target = message.locator(".msg > .bubble").last(),
+  offset = { x: 30, y: 20 },
+): Promise<void> {
+  const box = (await target.boundingBox())!;
+  const at = {
+    pointerType: "touch",
+    isPrimary: true,
+    clientX: box.x + offset.x,
+    clientY: box.y + offset.y,
+  };
+  await target.dispatchEvent("pointerdown", at);
+  await expect(message.getByTestId("message-actions")).toHaveAttribute("data-open", "true", {
+    timeout: 3000,
+  });
+  await target.dispatchEvent("pointerup", at);
+}
+
+/** Messages at the end of the open task, each with the gateway's id of its row. */
+async function addMessages(
+  page: Page,
+  add: Array<{ id: string; role: "user" | "assistant"; text: string }>,
+): Promise<void> {
+  await page.evaluate((add) => {
+    const fixture = (
+      window as unknown as {
+        clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+      }
+    ).clawtrateFixture;
+    fixture.setState((state) => {
+      const task = "agent:otto:disk-space";
+      const transcript = state.transcripts[task]!;
+      const at = transcript.items.at(-1)!.timestamp ?? 0;
+      const items = add.map(({ id, role, text }, index) => ({
+        id: `${id}:1`,
+        role,
+        timestamp: at + 60_000 * (index + 1),
+        blocks: [
+          { kind: "text" as const, text, ...(role === "assistant" ? { messageId: id } : {}) },
+        ],
+        model: null,
+        messageId: id,
+      }));
+      return {
+        ...state,
+        transcripts: {
+          ...state.transcripts,
+          [task]: { ...transcript, items: [...transcript.items, ...items] },
+        },
+      };
+    });
+  }, add);
+}
+
+/** Scroll the transcript until a bubble's top is at a height on the screen. */
+const topAt = (bubble: Locator, y: number) =>
+  bubble.evaluate((el, y) => {
+    el.closest(".transcript")!.scrollTop += el.getBoundingClientRect().top - y;
+  }, y);
+
+/** Four reactions, each a pill of its own. */
+const FOUR: MessageReaction[] = ["👍", "❤️", "🎉", "👀"].map((emoji) => ({
+  emoji,
+  count: 1,
+  mine: false,
+}));
 
 /**
  * Fingers on the screen, through the browser's own touch input, so that they drift, scroll and
@@ -974,6 +1064,7 @@ test.describe("message actions on a phone", () => {
 for (const width of [320, 390]) {
   test.describe(`touch areas on a ${width}px phone`, () => {
     test.use(contextFor({ ...PHONE, width }, "light"));
+    const longText = Array.from({ length: 24 }, (_, i) => `Line ${i + 1}.`).join("\n\n");
 
     test("F-066: touch and hold on a message shows its actions, each with a 44 px hit area of its own", async ({
       page,
@@ -1046,6 +1137,262 @@ for (const width of [320, 390]) {
       });
       await pillsReach(page, "row-9", 2);
     });
+
+    test("F-066: a held message just under the header, with no room beside it or above it, shows its actions where each button keeps its 44 px hit area", async ({
+      page,
+    }) => {
+      await open(page);
+      const message = progress(page);
+      const bubble = message.locator(".msg > .bubble");
+      // Its top 10 px under the header: above it, the bar would lie under the header.
+      const header = (await page.locator(".conversation-header").boundingBox())!;
+      await bubble.evaluate(
+        (el, top) => {
+          el.closest(".transcript")!.scrollTop += el.getBoundingClientRect().top - top;
+        },
+        header.y + header.height + 10,
+      );
+      await settle(page);
+      await holdOn(message);
+      const actions = message.getByTestId("message-actions");
+      await expect.poll(() => shown(actions)).toBe(true);
+      const buttons = actions.getByRole("button");
+      await expect(buttons).toHaveCount(3);
+      for (const button of await buttons.all()) expect(await unreached(button)).toEqual([]);
+    });
+
+    test("F-066: when write access comes back while a held message's actions show, the wider bar moves so each button keeps its 44 px hit area", async ({
+      page,
+    }) => {
+      await open(page, "message-actions-read");
+      const message = progress(page);
+      await message.evaluate((el) => el.scrollIntoView({ block: "center" }));
+      await settle(page);
+      await holdOn(message);
+      const actions = message.getByTestId("message-actions");
+      await expect(actions.getByRole("button")).toHaveCount(1);
+      await page.evaluate(() => {
+        const fixture = (
+          window as unknown as {
+            clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+          }
+        ).clawtrateFixture;
+        fixture.setState((state) => ({
+          ...state,
+          connection: { ...state.connection, canWrite: true },
+        }));
+      });
+      const buttons = actions.getByRole("button");
+      await expect(buttons).toHaveCount(3);
+      for (const button of await buttons.all())
+        await expect.poll(() => unreached(button)).toEqual([]);
+    });
+
+    for (const role of ["user", "assistant"] as const) {
+      const whose = role === "user" ? "of yours" : "of Otto's";
+      /** A short message, with room beside it, and a long one after it to scroll by. */
+      const shortThenLong = (page: Page) =>
+        addMessages(page, [
+          { id: "row-short", role, text: "Done." },
+          {
+            id: "row-long",
+            role: role === "user" ? "assistant" : "user",
+            text: longText,
+          },
+        ]);
+
+      test(`F-066: a short held message ${whose} at the transcript's foot keeps its actions beside it and on screen, each button with its 44 px hit area`, async ({
+        page,
+      }) => {
+        await open(page);
+        await shortThenLong(page);
+        const message = page.locator('[data-message="row-short"]');
+        const bubble = message.locator(".msg > .bubble");
+        // Its top 30 px above the transcript's foot: beside its top, the bar would reach past it.
+        const view = (await page.getByTestId("transcript").boundingBox())!;
+        await topAt(bubble, view.y + view.height - 30);
+        await settle(page);
+        await expect(page.getByTestId("jump-latest")).toHaveCount(0);
+        await holdOn(message);
+        const actions = message.getByTestId("message-actions");
+        const buttons = actions.getByRole("button");
+        await expect(buttons).toHaveCount(3);
+        for (const button of await buttons.all()) expect(await unreached(button)).toEqual([]);
+        // Beside the bubble, where there is room for it: moved up, not across.
+        const bar = (await actions.boundingBox())!;
+        const box = (await bubble.boundingBox())!;
+        if (role === "user") expect(bar.x + bar.width).toBeLessThanOrEqual(box.x);
+        else expect(bar.x).toBeGreaterThanOrEqual(box.x + box.width);
+      });
+
+      test(`F-066 F-283: a held message ${whose} just under the header keeps its actions off its four reaction pills, each button and pill with its 44 px hit area`, async ({
+        page,
+      }) => {
+        await open(page);
+        // Your message before Otto's progress bubble, or that bubble: on a phone, neither has room
+        // beside it.
+        const row = role === "user" ? "row-3" : "row-4-1";
+        await react(page, { [row]: FOUR });
+        const message = page.locator(`[data-message="${row}"]`);
+        const pills = message.getByTestId("reaction");
+        await expect(pills).toHaveCount(4);
+        const header = (await page.locator(".conversation-header").boundingBox())!;
+        await topAt(message.locator(".msg > .bubble"), header.y + header.height + 10);
+        await settle(page);
+        for (const pill of await pills.all()) expect(await unreached(pill)).toEqual([]);
+        await holdOn(message);
+        const buttons = message.getByTestId("message-actions").getByRole("button");
+        await expect(buttons).toHaveCount(3);
+        for (const button of await buttons.all()) expect(await unreached(button)).toEqual([]);
+        for (const pill of await pills.all()) expect(await unreached(pill)).toEqual([]);
+      });
+
+      test(`F-066 F-283: a held message ${whose} between links keeps both links, four reactions and its actions tappable`, async ({
+        page,
+      }) => {
+        await open(page);
+        await addMessages(page, [
+          {
+            id: "row-held",
+            role,
+            text: "[The whole first line is this link](https://example.com/one)\n\nPlain words held below it.",
+          },
+          {
+            id: "row-next",
+            role,
+            text: "[A link right after the pills](https://example.com/two) and more.",
+          },
+          {
+            id: "row-long",
+            role: role === "user" ? "assistant" : "user",
+            text: longText,
+          },
+        ]);
+        await react(page, { "row-held": FOUR });
+        const message = page.locator('[data-message="row-held"]');
+        const header = (await page.locator(".conversation-header").boundingBox())!;
+        await topAt(message.locator(".msg > .bubble"), header.y + header.height + 10);
+        await settle(page);
+
+        const links = [
+          message.getByRole("link"),
+          page.locator('[data-message="row-next"]').getByRole("link"),
+        ];
+        const points = await Promise.all(links.map(ownedLinkPoints));
+        for (const owned of points) expect(owned.length).toBeGreaterThan(0);
+        const pills = message.getByTestId("reaction");
+        await expect(pills).toHaveCount(4);
+        for (const pill of await pills.all()) expect(await unreached(pill)).toEqual([]);
+
+        await holdOn(message, message.getByText("Plain words held below it."), { x: 30, y: 4 });
+        for (const [index, link] of links.entries())
+          expect(await lostLinkPoints(link, points[index]!)).toEqual([]);
+        for (const pill of await pills.all()) expect(await unreached(pill)).toEqual([]);
+        const buttons = message.getByTestId("message-actions").getByRole("button");
+        await expect(buttons).toHaveCount(3);
+        for (const button of await buttons.all()) expect(await unreached(button)).toEqual([]);
+      });
+
+      test(`F-066: a short held message ${whose} just under the status strip keeps its actions where the transcript shows, off Retry, each button and Retry with its 44 px hit area`, async ({
+        page,
+      }) => {
+        await open(page);
+        await shortThenLong(page);
+        // The gateway can't be reached: the strip shows, with Retry, and write access stays.
+        await page.evaluate(() => {
+          const fixture = (
+            window as unknown as {
+              clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+            }
+          ).clawtrateFixture;
+          fixture.setState((state) => ({
+            ...state,
+            connection: { ...state.connection, status: "error" },
+          }));
+        });
+        const strip = page.getByTestId("status-strip");
+        const retry = strip.getByRole("button", { name: "Retry now" });
+        await expect(retry).toBeVisible();
+        const message = page.locator('[data-message="row-short"]');
+        // Its top 6 px under the strip: clear of what the strip draws, not of what Retry takes.
+        const drawn = (await strip.boundingBox())!;
+        await topAt(message.locator(".msg > .bubble"), drawn.y + drawn.height + 6);
+        await settle(page);
+        await expect(page.getByTestId("jump-latest")).toHaveCount(0);
+        expect(await unreached(retry)).toEqual([]);
+        await holdOn(message);
+        const buttons = message.getByTestId("message-actions").getByRole("button");
+        await expect(buttons).toHaveCount(3);
+        for (const button of await buttons.all()) expect(await unreached(button)).toEqual([]);
+        expect(await unreached(retry)).toEqual([]);
+        // And where they show: past the fade the transcript's mask draws under the strip.
+        const shown = await page.getByTestId("transcript").evaluate((el) => {
+          const stops = [...getComputedStyle(el).maskImage.matchAll(/([\d.]+)px/g)];
+          return el.getBoundingClientRect().top + Number(stops.at(-1)![1]);
+        });
+        for (const button of await buttons.all()) {
+          const box = (await button.boundingBox())!;
+          expect(box.y + box.height / 2 - 22).toBeGreaterThanOrEqual(shown);
+        }
+      });
+    }
+
+    if (width === 320) {
+      test("F-066: a held one-letter message at the foot keeps its actions on screen and off a 4 px link", async ({
+        page,
+      }) => {
+        await open(page);
+        await addMessages(page, [
+          {
+            id: "row-before",
+            role: "assistant",
+            text: "A short note with [i](https://example.com/i) and a few words.",
+          },
+          { id: "row-held", role: "user", text: "k" },
+          {
+            id: "row-long",
+            role: "assistant",
+            text: longText,
+          },
+        ]);
+        const message = page.locator('[data-message="row-held"]');
+        const bubble = message.locator(".msg > .bubble");
+        const view = (await page.getByTestId("transcript").boundingBox())!;
+        await topAt(bubble, view.y + view.height - 8);
+        await settle(page);
+
+        const link = page
+          .locator('[data-message="row-before"]')
+          .getByRole("link", { name: "i", exact: true });
+        await link.evaluate(
+          (el: HTMLElement, y) => {
+            Object.assign(el.style, {
+              display: "inline-block",
+              width: "4px",
+              position: "relative",
+            });
+            const box = el.getBoundingClientRect();
+            el.style.left = `${139.4 - box.left}px`;
+            el.style.top = `${y - box.top}px`;
+          },
+          view.y + view.height - 47,
+        );
+        const points = await ownedLinkPoints(link);
+        expect(points).toHaveLength(9);
+
+        expect(
+          await bubble.evaluate((el) => {
+            const box = el.getBoundingClientRect();
+            return el.contains(document.elementFromPoint(box.left + 18, box.top + 4));
+          }),
+        ).toBe(true);
+        await holdOn(message, bubble, { x: 18, y: 4 });
+        expect(await lostLinkPoints(link, points)).toEqual([]);
+        const buttons = message.getByTestId("message-actions").getByRole("button");
+        await expect(buttons).toHaveCount(3);
+        for (const button of await buttons.all()) expect(await unreached(button)).toEqual([]);
+      });
+    }
   });
 }
 
