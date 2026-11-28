@@ -17,7 +17,6 @@
       - option "grok-build-0.1 · xAI xai:personal"
       - option "gpt-5.5 · GitHub Copilot github-copilot:github"
       - option "claude-sonnet-5.5 · Anthropic anthropic:manual"
-      - option "claude-sonnet-5.5 · Anthropic anthropic:pip"
     - text: If it can't answer
     - list "If it can't answer":
       - listitem: gpt-5.5-mini, on OpenAI openai:home
@@ -30,7 +29,6 @@
       - option "grok-build-0.1 · xAI xai:personal"
       - option "gpt-5.5 · GitHub Copilot github-copilot:github"
       - option "claude-sonnet-5.5 · Anthropic anthropic:manual"
-      - option "claude-sonnet-5.5 · Anthropic anthropic:pip"
     - text: Thinking
     - combobox "Thinking" [disabled]:
       - option "The model's own" [selected]

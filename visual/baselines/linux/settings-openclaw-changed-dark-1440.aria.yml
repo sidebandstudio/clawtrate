@@ -27,7 +27,6 @@
       - option "grok-build-0.1 · xAI · Personal"
       - option "gpt-5.5 · GitHub Copilot github-copilot:github"
       - option "claude-sonnet-5.5 · Anthropic · Lab key"
-      - option "claude-sonnet-5.5 · Anthropic · Pip's key"
     - text: If it can't answer
     - list "If it can't answer":
       - listitem:
@@ -41,7 +40,6 @@
       - option "grok-build-0.1 · xAI · Personal"
       - option "gpt-5.5 · GitHub Copilot github-copilot:github"
       - option "claude-sonnet-5.5 · Anthropic · Lab key"
-      - option "claude-sonnet-5.5 · Anthropic · Pip's key"
     - text: Thinking
     - combobox "Thinking":
       - option "The model's own" [selected]
