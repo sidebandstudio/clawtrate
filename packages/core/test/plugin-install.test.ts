@@ -6,17 +6,25 @@
 // write until the enable.
 
 import { afterEach, describe, expect, it } from "vitest";
-import { PluginInstaller, type PluginRecord } from "../src/plugin-install.ts";
+import {
+  artifactProblem,
+  PluginInstaller,
+  type PluginOutcome,
+  type PluginRecord,
+} from "../src/plugin-install.ts";
 import {
   ARCHIVE,
+  committedError,
   CONFIRM,
   contextFor,
   FakeGateway,
   ID,
   OTHER_ARCHIVE,
+  OLDER_DIGEST,
   OTHER_DIGEST,
   PIN,
   PIN_DIGEST,
+  RESOURCES,
   TARBALLS,
   VERSIONS,
   type Version,
@@ -72,7 +80,7 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
     it("row 1: installs, staged off, granted off, then enabled and confirmed", async () => {
       const g = at(version, "fresh");
       const ctx = contextFor(g);
-      expect(await new PluginInstaller(ctx).install(PIN, ARCHIVE, CONFIRM)).toEqual({
+      expect(await new PluginInstaller(ctx).install(PIN, CONFIRM)).toEqual({
         kind: "enabled",
       });
       expect(writeLog(g)).toEqual([
@@ -93,7 +101,7 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
 
     it("row 2: Add again after an uninstall elsewhere left the entry OFF", async () => {
       const g = at(version, "uninstalled");
-      const outcome = await new PluginInstaller(contextFor(g)).addAgain(PIN, ARCHIVE, CONFIRM);
+      const outcome = await new PluginInstaller(contextFor(g)).addAgain(PIN, CONFIRM);
       expect(outcome).toEqual({ kind: "enabled" });
       expect(writeLog(g)[0]).toMatch(/^plugins\.install /);
       expect(g.shape()).toBe("ON+G");
@@ -103,7 +111,7 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
       "row 3: Turn on a listed plugin whose entry is %s",
       async (start) => {
         const g = at(version, start);
-        expect(await new PluginInstaller(contextFor(g)).turnOn(PIN, ARCHIVE, CONFIRM)).toEqual({
+        expect(await new PluginInstaller(contextFor(g)).turnOn(PIN, CONFIRM)).toEqual({
           kind: "enabled",
         });
         expect(g.writes().some((c) => c.method === "plugins.install")).toBe(false);
@@ -114,7 +122,7 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
 
     it("row 4: an update the person asks for turns it off first, then stages the newer copy", async () => {
       const g = at(version, "older-on");
-      expect(await new PluginInstaller(contextFor(g)).update(PIN, ARCHIVE, CONFIRM)).toEqual({
+      expect(await new PluginInstaller(contextFor(g)).update(PIN, CONFIRM)).toEqual({
         kind: "enabled",
       });
       expect(writeLog(g)).toEqual([
@@ -129,7 +137,7 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
 
     it("row 4: nothing updates by itself: an install finding an older copy leaves it", async () => {
       const g = at(version, "older-on");
-      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, ARCHIVE, CONFIRM);
+      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, CONFIRM);
       expect(outcome).toMatchObject({ kind: "stopped", stop: "other-copy" });
       expect(g.writes()).toEqual([]);
     });
@@ -139,9 +147,9 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
       const g = at(version, "on");
       g.staged = { version: "0.2.0", integrity: "sha512-newer", digest: "2".repeat(64) };
       const engine = new PluginInstaller(contextFor(g));
-      expect(await engine.install(PIN, ARCHIVE, CONFIRM)).toMatchObject({ stop: "other-copy" });
-      expect(await engine.update(PIN, ARCHIVE, CONFIRM)).toMatchObject({ stop: "other-copy" });
-      expect(await engine.turnOn(PIN, ARCHIVE, CONFIRM)).toMatchObject({ stop: "other-copy" });
+      expect(await engine.install(PIN, CONFIRM)).toMatchObject({ stop: "other-copy" });
+      expect(await engine.update(PIN, CONFIRM)).toMatchObject({ stop: "other-copy" });
+      expect(await engine.turnOn(PIN, CONFIRM)).toMatchObject({ stop: "other-copy" });
       expect(g.writes()).toEqual([]);
       expect(g.staged.version).toBe("0.2.0");
     });
@@ -149,7 +157,7 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
     it("row 4: an older copy this app never shipped is left as it is", async () => {
       const g = at(version, "older-on");
       const ctx = { ...contextFor(g), shipped: [] };
-      const outcome = await new PluginInstaller(ctx).update(PIN, ARCHIVE, CONFIRM);
+      const outcome = await new PluginInstaller(ctx).update(PIN, CONFIRM);
       expect(outcome).toMatchObject({ kind: "stopped", stop: "other-copy" });
       expect(g.writes()).toEqual([]);
     });
@@ -158,11 +166,11 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
       const g = at(version, "fresh");
       g.hooks.push({ method: "plugins.install", nth: 1, lose: "before" });
       const ctx = contextFor(g);
-      const first = await new PluginInstaller(ctx).install(PIN, ARCHIVE, CONFIRM);
+      const first = await new PluginInstaller(ctx).install(PIN, CONFIRM);
       expect(first).toMatchObject({ kind: "stopped", stop: "lost", mayBeRunning: false });
       expect(g.shape()).toBe("OFF");
       expect(ctx.records.get(ID)).toMatchObject({ step: 2, pending: 3 });
-      expect(await new PluginInstaller(ctx).resume(PIN, ARCHIVE, CONFIRM)).toEqual({
+      expect(await new PluginInstaller(ctx).resume(PIN, CONFIRM)).toEqual({
         kind: "enabled",
       });
     });
@@ -171,11 +179,11 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
       const g = at(version, "fresh");
       g.hooks.push({ method: "plugins.install", nth: 1, lose: "after" });
       const ctx = contextFor(g);
-      expect(await new PluginInstaller(ctx).install(PIN, ARCHIVE, CONFIRM)).toMatchObject({
+      expect(await new PluginInstaller(ctx).install(PIN, CONFIRM)).toMatchObject({
         stop: "lost",
       });
       expect(g.loaded).toBe(false);
-      expect(await new PluginInstaller(ctx).resume(PIN, ARCHIVE, CONFIRM)).toEqual({
+      expect(await new PluginInstaller(ctx).resume(PIN, CONFIRM)).toEqual({
         kind: "enabled",
       });
       // Staged once: the resume didn't stage again.
@@ -186,14 +194,14 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
       const g = at(version, "fresh");
       g.hooks.push({ method: "plugins.inspect", nth: 1, before: (gw) => (gw.busy = true) });
       const ctx = contextFor(g);
-      expect(await new PluginInstaller(ctx).install(PIN, ARCHIVE, CONFIRM)).toMatchObject({
+      expect(await new PluginInstaller(ctx).install(PIN, CONFIRM)).toMatchObject({
         stop: "bots-busy",
         mayBeRunning: false,
       });
       expect(ctx.slept.reduce((a, b) => a + b, 0)).toBeGreaterThanOrEqual(5 * 60_000);
       expect(g.shape()).toBe("OFF");
       g.busy = false;
-      expect(await new PluginInstaller(ctx).resume(PIN, ARCHIVE, CONFIRM)).toEqual({
+      expect(await new PluginInstaller(ctx).resume(PIN, CONFIRM)).toEqual({
         kind: "enabled",
       });
     });
@@ -208,7 +216,7 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
           gw.staged = { ...TARBALLS[OTHER_ARCHIVE]! };
         },
       });
-      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, ARCHIVE, CONFIRM);
+      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, CONFIRM);
       expect(outcome).toMatchObject({ kind: "stopped", stop: "mismatch", mayBeRunning: false });
       expect(g.shape()).toBe("OFF");
       expect(g.loaded).toBe(false);
@@ -219,13 +227,13 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
       const g = at(version, "fresh");
       g.hooks.push({ method: "config.patch", nth: 2, lose: "after" });
       const ctx = contextFor(g);
-      expect(await new PluginInstaller(ctx).install(PIN, ARCHIVE, CONFIRM)).toMatchObject({
+      expect(await new PluginInstaller(ctx).install(PIN, CONFIRM)).toMatchObject({
         stop: "lost",
         mayBeRunning: false,
       });
       expect(g.shape()).toBe("OFF+G");
       expect(g.loaded).toBe(false);
-      expect(await new PluginInstaller(ctx).resume(PIN, ARCHIVE, CONFIRM)).toEqual({
+      expect(await new PluginInstaller(ctx).resume(PIN, CONFIRM)).toEqual({
         kind: "enabled",
       });
       expect(g.calls.filter((c) => c.method === "config.patch")).toHaveLength(2);
@@ -239,7 +247,7 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
         nth: 2,
         before: (gw) => (gw.entry = { ...gw.entry, config: { mine: true } }),
       });
-      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, ARCHIVE, CONFIRM);
+      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, CONFIRM);
       expect(outcome).toMatchObject({ kind: "stopped", stop: "owner-settings" });
       expect(g.loaded).toBe(false);
     });
@@ -248,11 +256,11 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
       const g = at(version, "fresh");
       g.hooks.push({ method: "plugins.setEnabled", nth: 1, lose: "after" });
       const ctx = contextFor(g);
-      const first = await new PluginInstaller(ctx).install(PIN, ARCHIVE, CONFIRM);
+      const first = await new PluginInstaller(ctx).install(PIN, CONFIRM);
       // After step 7 the line says only that contact was lost, never that it is off.
       expect(first).toMatchObject({ kind: "stopped", stop: "lost", mayBeRunning: true });
       expect(g.loaded).toBe(true);
-      expect(await new PluginInstaller(ctx).resume(PIN, ARCHIVE, CONFIRM)).toEqual({
+      expect(await new PluginInstaller(ctx).resume(PIN, CONFIRM)).toEqual({
         kind: "enabled",
       });
       const sets = g.calls
@@ -266,8 +274,8 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
       g.hooks.push({ method: "plugins.setEnabled", nth: 1, lose: "after" });
       g.hooks.push({ method: "plugins.setEnabled", nth: 3, lose: "after" });
       const ctx = contextFor(g);
-      await new PluginInstaller(ctx).install(PIN, ARCHIVE, CONFIRM);
-      expect(await new PluginInstaller(ctx).resume(PIN, ARCHIVE, CONFIRM)).toMatchObject({
+      await new PluginInstaller(ctx).install(PIN, CONFIRM);
+      expect(await new PluginInstaller(ctx).resume(PIN, CONFIRM)).toMatchObject({
         stop: "lost",
         mayBeRunning: false,
       });
@@ -280,7 +288,7 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
       const g = at(version, "fresh");
       g.hooks.push({ method: "clawtrate-voice.get", answer: (a) => ({ ...a, version: "9.9.9" }) });
       const ctx = contextFor(g);
-      const outcome = await new PluginInstaller(ctx).install(PIN, ARCHIVE, CONFIRM);
+      const outcome = await new PluginInstaller(ctx).install(PIN, CONFIRM);
       expect(outcome).toMatchObject({ kind: "stopped", stop: "turned-off", mayBeRunning: false });
       expect(g.shape()).toBe("OFF+G");
       expect(g.loaded).toBe(false);
@@ -293,7 +301,7 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
       for (const nth of [2, 3, 4])
         g.hooks.push({ method: "plugins.setEnabled", nth, lose: "before" });
       const ctx = contextFor(g);
-      expect(await new PluginInstaller(ctx).install(PIN, ARCHIVE, CONFIRM)).toMatchObject({
+      expect(await new PluginInstaller(ctx).install(PIN, CONFIRM)).toMatchObject({
         stop: "turned-off",
       });
       expect(ctx.slept.slice(0, 3)).toEqual([1_000, 2_000, 4_000]);
@@ -312,10 +320,10 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
         method: "plugins.install",
         nth: 1,
         before: () => {
-          bOutcome = new PluginInstaller(b).install(PIN, ARCHIVE, CONFIRM);
+          bOutcome = new PluginInstaller(b).install(PIN, CONFIRM);
         },
       });
-      const first = new PluginInstaller(a).install(PIN, ARCHIVE, CONFIRM);
+      const first = new PluginInstaller(a).install(PIN, CONFIRM);
       aDone = first;
       expect(await first).toEqual({ kind: "enabled" });
       // B said nothing until A finished, then what it read: on.
@@ -323,7 +331,7 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
       expect(b.records.get(ID) ?? null).toBeNull();
       expect(g.calls.filter((c) => c.method === "plugins.install")).toHaveLength(1);
       // Read now, B shows it on.
-      expect(await new PluginInstaller(b).install(PIN, ARCHIVE, CONFIRM)).toMatchObject({
+      expect(await new PluginInstaller(b).install(PIN, CONFIRM)).toMatchObject({
         stop: "already-on",
       });
     });
@@ -337,7 +345,7 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
         before: (gw) => ((gw.entry = { enabled: false }), (gw.hash += 1)),
       });
       const ctx = contextFor(g);
-      const outcome = await new PluginInstaller(ctx).install(PIN, ARCHIVE, CONFIRM);
+      const outcome = await new PluginInstaller(ctx).install(PIN, CONFIRM);
       expect(outcome).toMatchObject({ kind: "stopped", stop: "not-listed-off" });
       expect(g.writes()).toHaveLength(1);
       expect(ctx.records.get(ID)).toBeNull();
@@ -346,7 +354,7 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
     it("row 7a: the owner denies it after step 1: a stop at the next read, nothing staged loads", async () => {
       const g = at(version, "fresh");
       g.hooks.push({ method: "plugins.inspect", nth: 1, before: (gw) => gw.deny.push(ID) });
-      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, ARCHIVE, CONFIRM);
+      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, CONFIRM);
       expect(outcome).toMatchObject({ stop: "owner-settings" });
       expect(g.loaded).toBe(false);
       expect(g.deny).toEqual([ID]);
@@ -357,7 +365,7 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
     it("row 7b: the owner denies it between the last check and the enable: blocked, off", async () => {
       const g = at(version, "fresh");
       g.hooks.push({ method: "plugins.setEnabled", nth: 1, before: (gw) => gw.deny.push(ID) });
-      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, ARCHIVE, CONFIRM);
+      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, CONFIRM);
       expect(outcome).toMatchObject({ stop: "owner-settings" });
       expect(outcome).toHaveProperty("gateway", g.f.errors.blockedDeny.message);
       expect(g.loaded).toBe(false);
@@ -370,7 +378,7 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
         nth: 1,
         before: (gw) => gw.allow.push("memory-core"),
       });
-      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, ARCHIVE, CONFIRM);
+      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, CONFIRM);
       expect(outcome).toMatchObject({
         stop: "owner-settings",
         gateway: g.f.errors.blockedAllow.message,
@@ -386,7 +394,7 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
         nth: 2,
         before: (gw) => (gw.entry = { enabled: true }),
       });
-      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, ARCHIVE, CONFIRM);
+      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, CONFIRM);
       expect(outcome).toMatchObject({ stop: "owner-turned-on" });
       expect(g.calls.some((c) => c.method === "plugins.install")).toBe(false);
     });
@@ -401,7 +409,7 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
           gw.loaded = true;
         },
       });
-      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, ARCHIVE, CONFIRM);
+      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, CONFIRM);
       expect(outcome).toMatchObject({ stop: "owner-turned-on" });
       expect(g.calls.filter((c) => c.method === "plugins.inspect")).toHaveLength(0);
       expect(g.writes().filter((c) => c.method === "plugins.setEnabled")).toEqual([]);
@@ -414,7 +422,7 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
         nth: 1,
         before: (gw) => (gw.entry = { enabled: false }),
       });
-      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, ARCHIVE, CONFIRM);
+      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, CONFIRM);
       expect(outcome).toMatchObject({ stop: "owner-settings", mayBeRunning: false });
       expect(g.loaded).toBe(false);
       expect(g.shape()).toBe("OFF");
@@ -428,7 +436,7 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
         before: (gw) => (gw.entry = { enabled: false }),
         refuse: "busy",
       });
-      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, ARCHIVE, CONFIRM);
+      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, CONFIRM);
       expect(outcome).toMatchObject({ stop: "listed-off", mayBeRunning: false });
       expect(g.calls.filter((c) => c.method === "plugins.setEnabled")).toHaveLength(1);
       expect(g.ran).toEqual([]);
@@ -443,7 +451,7 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
       });
       // The owner's write changes nothing a client can see: the engine enables over it, the
       // design's one owner change it can't preserve without a gateway-side precondition.
-      expect(await new PluginInstaller(contextFor(g)).install(PIN, ARCHIVE, CONFIRM)).toEqual({
+      expect(await new PluginInstaller(contextFor(g)).install(PIN, CONFIRM)).toEqual({
         kind: "enabled",
       });
     });
@@ -458,7 +466,7 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
           gw.entry = { enabled: false };
         },
       });
-      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, ARCHIVE, CONFIRM);
+      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, CONFIRM);
       expect(outcome).toMatchObject({
         stop: "not-listed-off",
         gateway: g.f.errors.notInstalled.message,
@@ -472,7 +480,7 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
         nth: 1,
         before: (gw) => (gw.staged = { ...TARBALLS[OTHER_ARCHIVE]! }),
       });
-      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, ARCHIVE, CONFIRM);
+      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, CONFIRM);
       expect(outcome).toMatchObject({ stop: "turned-off", mayBeRunning: false });
       // The replaced code ran once: this detects, it doesn't prevent (3.2).
       expect(g.ran).toEqual([OTHER_DIGEST]);
@@ -491,7 +499,7 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
           grants: { hooks: { ...a.grants.hooks, allowConversationAccess: { effective: false } } },
         }),
       });
-      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, ARCHIVE, CONFIRM);
+      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, CONFIRM);
       expect(outcome).toMatchObject({ stop: "mismatch", mayBeRunning: false });
       expect(g.calls.some((c) => c.method === "plugins.setEnabled")).toBe(false);
       expect(g.loaded).toBe(false);
@@ -507,7 +515,7 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
           grants: { hooks: { ...a.grants.hooks, allowPromptInjection: { effective: false } } },
         }),
       });
-      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, ARCHIVE, CONFIRM);
+      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, CONFIRM);
       expect(outcome).toMatchObject({ stop: "turned-off", mayBeRunning: false });
       expect(g.loaded).toBe(false);
     });
@@ -516,7 +524,6 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
       const g = at(version, "fresh");
       const outcome = await new PluginInstaller(contextFor(g, { route: "other" })).install(
         PIN,
-        ARCHIVE,
         CONFIRM,
       );
       expect(outcome).toMatchObject({ stop: "route" });
@@ -529,9 +536,9 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
       const g = at(version, "fresh");
       g.hooks.push({ method: "plugins.setEnabled", nth: 1, lose: "before" });
       const ctx = contextFor(g);
-      await new PluginInstaller(ctx).install(PIN, ARCHIVE, CONFIRM);
+      await new PluginInstaller(ctx).install(PIN, CONFIRM);
       const before = g.writes().length;
-      const outcome = await new PluginInstaller(ctx).resume(PIN, ARCHIVE, CONFIRM);
+      const outcome = await new PluginInstaller(ctx).resume(PIN, CONFIRM);
       expect(outcome).toMatchObject({ kind: "stopped", stop: "listed-off", mayBeRunning: false });
       expect(g.writes()).toHaveLength(before);
       expect(g.loaded).toBe(false);
@@ -542,11 +549,11 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
       const g = at(version, "fresh");
       g.hooks.push({ method: "plugins.inspect", nth: 3, lose: "before" });
       const ctx = contextFor(g);
-      expect(await new PluginInstaller(ctx).install(PIN, ARCHIVE, CONFIRM)).toMatchObject({
+      expect(await new PluginInstaller(ctx).install(PIN, CONFIRM)).toMatchObject({
         stop: "lost",
       });
       expect(ctx.records.get(ID)).toMatchObject({ step: 7, sourceDigest: PIN_DIGEST });
-      expect(await new PluginInstaller(ctx).resume(PIN, ARCHIVE, CONFIRM)).toEqual({
+      expect(await new PluginInstaller(ctx).resume(PIN, CONFIRM)).toEqual({
         kind: "enabled",
       });
       expect(g.calls.filter((c) => c.method === "plugins.setEnabled")).toHaveLength(1);
@@ -556,9 +563,9 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
       const g = at(version, "fresh");
       g.hooks.push({ method: "config.patch", nth: 2, lose: "after" });
       const ctx = contextFor(g);
-      await new PluginInstaller(ctx).install(PIN, ARCHIVE, CONFIRM);
+      await new PluginInstaller(ctx).install(PIN, CONFIRM);
       g.token = "f".repeat(64);
-      expect(await new PluginInstaller(ctx).resume(PIN, ARCHIVE, CONFIRM)).toEqual({
+      expect(await new PluginInstaller(ctx).resume(PIN, CONFIRM)).toEqual({
         kind: "enabled",
       });
       const enable = g.calls.find(
@@ -570,7 +577,7 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
     it("4: a lost reply at Update's step 2 says the plugin may still be running", async () => {
       const g = at(version, "older-on");
       g.hooks.push({ method: "plugins.setEnabled", nth: 1, lose: "before" });
-      const outcome = await new PluginInstaller(contextFor(g)).update(PIN, ARCHIVE, CONFIRM);
+      const outcome = await new PluginInstaller(contextFor(g)).update(PIN, CONFIRM);
       expect(outcome).toMatchObject({ kind: "stopped", stop: "lost", mayBeRunning: true });
       expect(g.loaded).toBe(true);
     });
@@ -599,7 +606,7 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
         before: (gw) => (gw.busy = true),
         refuse: "busy",
       });
-      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, ARCHIVE, CONFIRM);
+      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, CONFIRM);
       expect(outcome).toMatchObject({ stop: "bots-busy" });
       expect(g.calls.filter((c) => c.method === "plugins.setEnabled")).toHaveLength(1);
       expect(g.loaded).toBe(false);
@@ -615,14 +622,14 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
         refuse: "busy",
       });
       const ctx = contextFor(g);
-      expect(await new PluginInstaller(ctx).turnOn(PIN, ARCHIVE, CONFIRM)).toMatchObject({
+      expect(await new PluginInstaller(ctx).turnOn(PIN, CONFIRM)).toMatchObject({
         stop: "owner-settings",
         mayBeRunning: false,
       });
       expect(ctx.records.get(ID)).toMatchObject({ pending: null });
       // With the deny gone, Turn on goes on and enables: the refused enable isn't a lost one.
       g.deny = [];
-      expect(await new PluginInstaller(ctx).turnOn(PIN, ARCHIVE, CONFIRM)).toEqual({
+      expect(await new PluginInstaller(ctx).turnOn(PIN, CONFIRM)).toEqual({
         kind: "enabled",
       });
     });
@@ -630,7 +637,7 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
     it("reads every page of sessions.list before it calls the gateway idle", async () => {
       const g = at(version, "fresh");
       g.sessionPages = [[{ key: "agent:main:a" }], [{ key: "agent:pip:b", hasActiveRun: true }]];
-      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, ARCHIVE, CONFIRM);
+      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, CONFIRM);
       expect(outcome).toMatchObject({ stop: "bots-busy" });
       expect(g.writes()).toEqual([]);
       const offsets = g.calls
@@ -643,7 +650,7 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
       const g = at(version, "older-on");
       g.hooks.push({ method: "config.get", nth: 1, lose: "before" });
       const ctx = withRecord(g, record({ mode: "update", step: 1, pending: 2 }));
-      const outcome = await new PluginInstaller(ctx).resume(PIN, ARCHIVE, CONFIRM);
+      const outcome = await new PluginInstaller(ctx).resume(PIN, CONFIRM);
       expect(outcome).toMatchObject({ stop: "lost", mayBeRunning: true });
     });
 
@@ -653,7 +660,7 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
       // The connection goes while the disable is on its way: no read shows the plugin off.
       g.hooks.push({ method: "plugins.setEnabled", nth: 1, before: () => (epoch = 2) });
       const ctx = withRecord(g, record({ step: 7, turningOff: true }), { epoch: () => epoch });
-      expect(await new PluginInstaller(ctx).resume(PIN, ARCHIVE, CONFIRM)).toMatchObject({
+      expect(await new PluginInstaller(ctx).resume(PIN, CONFIRM)).toMatchObject({
         stop: "lost",
         mayBeRunning: true,
       });
@@ -667,7 +674,7 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
       const ctx = withRecord(g, record({ step: 7, turningOff: true }), {
         admin: () => (checks += 1) === 1,
       });
-      expect(await new PluginInstaller(ctx).resume(PIN, ARCHIVE, CONFIRM)).toMatchObject({
+      expect(await new PluginInstaller(ctx).resume(PIN, CONFIRM)).toMatchObject({
         stop: "lost",
         mayBeRunning: true,
       });
@@ -678,7 +685,7 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
     it("never enables a third time after the second enable's reply was lost", async () => {
       const g = at(version, "on");
       const ctx = withRecord(g, record({ step: 6, pending: 7, again: true }));
-      const outcome = await new PluginInstaller(ctx).resume(PIN, ARCHIVE, CONFIRM);
+      const outcome = await new PluginInstaller(ctx).resume(PIN, CONFIRM);
       expect(outcome).toMatchObject({ stop: "turned-off", mayBeRunning: false });
       expect(g.writes().map((c) => c.params.enabled)).toEqual([false]);
       expect(g.loaded).toBe(false);
@@ -689,7 +696,7 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
       // The owner replaced the shipped copy with another at the same version before the resume.
       g.staged = { ...g.staged!, integrity: "sha512-another" };
       const ctx = withRecord(g, record({ mode: "update", step: 1, pending: 2 }));
-      const outcome = await new PluginInstaller(ctx).resume(PIN, ARCHIVE, CONFIRM);
+      const outcome = await new PluginInstaller(ctx).resume(PIN, CONFIRM);
       expect(outcome).toMatchObject({ stop: "other-copy" });
       expect(g.writes()).toEqual([]);
     });
@@ -700,7 +707,7 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
         method: "clawtrate-voice.get",
         before: (gw) => (gw.entry = { ...gw.entry, config: { mine: true } }),
       });
-      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, ARCHIVE, CONFIRM);
+      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, CONFIRM);
       expect(outcome).toMatchObject({ kind: "stopped", stop: "owner-settings" });
     });
 
@@ -717,7 +724,7 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
       expect(await new PluginInstaller(ctx).takeOff(PIN)).toEqual({ kind: "taken-off" });
       expect(ctx.records.get(ID)).toBeNull();
       // A later connection resumes nothing: the grant stays off.
-      expect(await new PluginInstaller(ctx).resume(PIN, ARCHIVE, CONFIRM)).toMatchObject({
+      expect(await new PluginInstaller(ctx).resume(PIN, CONFIRM)).toMatchObject({
         stop: "lost",
       });
       expect(g.loaded).toBe(false);
@@ -728,7 +735,7 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
       const g = at(version, "off");
       g.token = "d".repeat(64);
       const ctx = withRecord(g, record({ step: 6, pending: null }));
-      expect(await new PluginInstaller(ctx).resume(PIN, ARCHIVE, CONFIRM)).toEqual({
+      expect(await new PluginInstaller(ctx).resume(PIN, CONFIRM)).toEqual({
         kind: "enabled",
       });
       const enable = g.calls.find((c) => c.method === "plugins.setEnabled" && c.params.enabled)!;
@@ -743,7 +750,6 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
       const g = at(version, "fresh");
       const outcome = await new PluginInstaller(contextFor(g, { admin: () => false })).install(
         PIN,
-        ARCHIVE,
         CONFIRM,
       );
       expect(outcome).toMatchObject({ stop: "no-admin" });
@@ -756,7 +762,6 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
       g.hooks.push({ method: "plugins.inspect", nth: 1, before: () => (admin = false) });
       const outcome = await new PluginInstaller(contextFor(g, { admin: () => admin })).install(
         PIN,
-        ARCHIVE,
         CONFIRM,
       );
       expect(outcome).toMatchObject({ stop: "no-admin" });
@@ -766,7 +771,7 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
     it("installs nothing on an OpenClaw version the pin has no source digest for", async () => {
       const g = at(version, "fresh");
       const ctx = contextFor(g, { serverVersion: "2026.12.1" });
-      expect(await new PluginInstaller(ctx).install(PIN, ARCHIVE, CONFIRM)).toMatchObject({
+      expect(await new PluginInstaller(ctx).install(PIN, CONFIRM)).toMatchObject({
         stop: "openclaw-version",
       });
       expect(g.calls).toEqual([]);
@@ -775,7 +780,7 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
     it("runs over SSH as on this computer", async () => {
       const g = at(version, "fresh");
       expect(
-        await new PluginInstaller(contextFor(g, { route: "ssh" })).install(PIN, ARCHIVE, CONFIRM),
+        await new PluginInstaller(contextFor(g, { route: "ssh" })).install(PIN, CONFIRM),
       ).toEqual({
         kind: "enabled",
       });
@@ -784,7 +789,7 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
     it("an entry already enabled: true for a plugin not yet staged is the owner's: nothing staged (3.1)", async () => {
       const g = at(version, "fresh");
       g.entry = { enabled: true };
-      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, ARCHIVE, CONFIRM);
+      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, CONFIRM);
       expect(outcome).toMatchObject({ stop: "owner-turned-on" });
       expect(g.writes()).toEqual([]);
     });
@@ -796,7 +801,7 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
         // The grant written beside the stage with `enabled` unset, which loads it on both versions.
         before: (gw) => (gw.entry = { hooks: { allowConversationAccess: true } }),
       });
-      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, ARCHIVE, CONFIRM);
+      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, CONFIRM);
       expect(outcome).toMatchObject({ kind: "stopped", stop: "turned-off" });
       expect(g.ran).toEqual([PIN_DIGEST]);
       expect(g.loaded).toBe(false);
@@ -806,7 +811,7 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
       const g = at(version, "fresh");
       g.hooks.push({ method: "plugins.setEnabled", nth: 1, refuse: "busy" });
       const ctx = contextFor(g);
-      expect(await new PluginInstaller(ctx).install(PIN, ARCHIVE, CONFIRM)).toEqual({
+      expect(await new PluginInstaller(ctx).install(PIN, CONFIRM)).toEqual({
         kind: "enabled",
       });
       expect(ctx.slept).toContain(g.f.errors.busy.retryAfterMs);
@@ -815,7 +820,7 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
     it("stops after three answers of 'already running'", async () => {
       const g = at(version, "fresh");
       g.hooks.push({ method: "plugins.install", refuse: "busy" });
-      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, ARCHIVE, CONFIRM);
+      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, CONFIRM);
       expect(outcome).toMatchObject({ stop: "gateway-busy", mayBeRunning: false });
       expect(g.calls.filter((c) => c.method === "plugins.install")).toHaveLength(3);
     });
@@ -826,7 +831,7 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
     ])("a stage the gateway refuses (%s) stops, off", async (refusal, stop) => {
       const g = at(version, "fresh");
       g.hooks.push({ method: "plugins.install", refuse: refusal });
-      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, ARCHIVE, CONFIRM);
+      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, CONFIRM);
       expect(outcome).toMatchObject({
         stop,
         gateway: g.f.errors[refusal].message,
@@ -844,11 +849,9 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
           code: "INVALID_REQUEST",
         },
       });
-      expect(await new PluginInstaller(contextFor(g)).install(PIN, ARCHIVE, CONFIRM)).toMatchObject(
-        {
-          stop: "policy-warning",
-        },
-      );
+      expect(await new PluginInstaller(contextFor(g)).install(PIN, CONFIRM)).toMatchObject({
+        stop: "policy-warning",
+      });
       expect(g.calls.filter((c) => c.method === "plugins.install")).toHaveLength(1);
     });
 
@@ -861,19 +864,17 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
           code: "INVALID_REQUEST",
         },
       });
-      expect(await new PluginInstaller(contextFor(g)).install(PIN, ARCHIVE, CONFIRM)).toMatchObject(
-        {
-          stop: "route",
-        },
-      );
+      expect(await new PluginInstaller(contextFor(g)).install(PIN, CONFIRM)).toMatchObject({
+        stop: "route",
+      });
     });
 
     it("one attempt at a time on a device", async () => {
       const g = at(version, "fresh");
       const engine = new PluginInstaller(contextFor(g));
       const [a, b] = await Promise.all([
-        engine.install(PIN, ARCHIVE, CONFIRM),
-        engine.install(PIN, ARCHIVE, CONFIRM),
+        engine.install(PIN, CONFIRM),
+        engine.install(PIN, CONFIRM),
       ]);
       expect(a).toEqual({ kind: "enabled" });
       expect(b).toMatchObject({ stop: "in-progress" });
@@ -885,12 +886,342 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
       g.hooks.push({ method: "plugins.inspect", nth: 1, before: () => (epoch = 2) });
       const outcome = await new PluginInstaller(contextFor(g, { epoch: () => epoch })).install(
         PIN,
-        ARCHIVE,
         CONFIRM,
       );
       expect(outcome).toMatchObject({ stop: "connection-changed" });
       expect(g.writes().map((c) => c.method)).toEqual(["config.patch", "plugins.install"]);
     });
+  });
+
+  describe("what the independent review found", () => {
+    const record = (patch: Partial<PluginRecord>): PluginRecord => ({
+      mode: "install",
+      integrity: PIN.integrity,
+      step: 1,
+      pending: null,
+      turningOff: false,
+      sourceDigest: null,
+      configHash: null,
+      ...patch,
+    });
+    const withRecord = (g: FakeGateway, r: PluginRecord, options = {}) =>
+      contextFor(g, { records: new Map([[ID, r]]), ...options });
+    const DISABLE =
+      'plugins.setEnabled {"pluginId":"clawtrate-voice","enabled":false,"allowlistPolicy":"preserve"}';
+
+    // 1. An answered error is no proof a change didn't apply.
+    it("an error answered after the enable committed: the read that shows it on turns it off", async () => {
+      const g = at(version, "fresh");
+      g.hooks.push({
+        method: "plugins.setEnabled",
+        nth: 1,
+        refuseAfter: committedError(PIN_DIGEST),
+      });
+      const ctx = contextFor(g);
+      const outcome = await new PluginInstaller(ctx).install(PIN, CONFIRM);
+      expect(outcome).toMatchObject({ kind: "stopped", stop: "refused", mayBeRunning: false });
+      expect(g.loaded).toBe(false);
+      expect(g.shape()).toBe("OFF+G");
+      expect(writeLog(g).at(-1)).toBe(DISABLE);
+      expect(ctx.records.get(ID)).toBeNull();
+    });
+
+    it("an error answered after the enable, then no read: the mark and the warning stay", async () => {
+      const g = at(version, "fresh");
+      g.hooks.push({
+        method: "plugins.setEnabled",
+        nth: 1,
+        refuseAfter: committedError(PIN_DIGEST),
+        before: (gw) => gw.hooks.unshift({ method: "config.get", lose: "before" }),
+      });
+      const ctx = contextFor(g);
+      const outcome = await new PluginInstaller(ctx).install(PIN, CONFIRM);
+      expect(outcome).toMatchObject({ kind: "stopped", stop: "lost", mayBeRunning: true });
+      expect(ctx.records.get(ID)).toMatchObject({ pending: 7 });
+    });
+
+    it("an error answered after Update's disable committed: the read shows it off, and it goes on", async () => {
+      const g = at(version, "older-on");
+      g.hooks.push({
+        method: "plugins.setEnabled",
+        nth: 1,
+        refuseAfter: committedError(OLDER_DIGEST),
+      });
+      expect(await new PluginInstaller(contextFor(g)).update(PIN, CONFIRM)).toEqual({
+        kind: "enabled",
+      });
+      expect(g.staged?.version).toBe("0.1.0");
+    });
+
+    it.each([
+      ["a pending enable", { step: 6, pending: 7 }],
+      ["a stage under way", { step: 3 }],
+    ])(
+      "a resume of %s that reads it active in a shape it didn't confirm keeps the record and the warning",
+      async (_, patch) => {
+        const g = at(version, "on");
+        g.entry = {
+          enabled: true,
+          hooks: { allowConversationAccess: true },
+          config: { tone: "dry" },
+        };
+        const ctx = withRecord(g, record(patch));
+        const outcome = await new PluginInstaller(ctx).resume(PIN, CONFIRM);
+        expect(outcome).toMatchObject({ stop: "owner-turned-on", mayBeRunning: true });
+        expect(ctx.records.get(ID)).toMatchObject(patch);
+        expect(g.writes()).toEqual([]);
+      },
+    );
+
+    it("another pin's record that may have left it running is finished first: turned off, then dropped", async () => {
+      const g = at(version, "on");
+      const ctx = withRecord(
+        g,
+        record({ integrity: "sha512-an-earlier-pin", step: 6, pending: 7 }),
+      );
+      const outcome = await new PluginInstaller(ctx).install(PIN, CONFIRM);
+      expect(writeLog(g)[0]).toBe(DISABLE);
+      expect(g.loaded).toBe(false);
+      expect(outcome).toMatchObject({ kind: "stopped", mayBeRunning: false });
+      expect(ctx.records.get(ID) ?? null).toBeNull();
+    });
+
+    it("another pin's record whose plugin won't turn off is kept, and says it may be running", async () => {
+      const g = at(version, "on");
+      g.hooks.push({ method: "plugins.setEnabled", lose: "before" });
+      const ctx = withRecord(g, record({ integrity: "sha512-an-earlier-pin", step: 7 }));
+      const outcome = await new PluginInstaller(ctx).install(PIN, CONFIRM);
+      expect(outcome).toMatchObject({ stop: "lost", mayBeRunning: true });
+      expect(ctx.records.get(ID)).toMatchObject({
+        integrity: "sha512-an-earlier-pin",
+        turningOff: true,
+      });
+    });
+
+    // 2. Take it off cancels the installation, durably.
+    it("Take it off during an attempt: the attempt stops at its next check, then the take-off runs", async () => {
+      const g = at(version, "fresh");
+      const ctx = contextFor(g);
+      const engine = new PluginInstaller(ctx);
+      let takeOff: Promise<PluginOutcome> | undefined;
+      g.hooks.push({
+        method: "plugins.install",
+        nth: 1,
+        before: () => (takeOff = engine.takeOff(PIN)),
+      });
+      expect(await engine.install(PIN, CONFIRM)).toMatchObject({ stop: "cancelled" });
+      expect(await takeOff).toEqual({ kind: "taken-off" });
+      expect(g.shape()).toBe("OFF");
+      expect(g.loaded).toBe(false);
+      expect(ctx.records.get(ID)).toBeNull();
+      // Nothing resumes the install.
+      expect(await engine.resume(PIN, CONFIRM)).toMatchObject({ stop: "lost" });
+      expect(g.writes().some((c) => c.params.enabled === true)).toBe(false);
+    });
+
+    it("Take it off after an interrupted install whose grant removal is lost: a resume finishes the take-off, never the install", async () => {
+      const g = at(version, "off");
+      const ctx = withRecord(g, record({ step: 5 }));
+      g.hooks.push({ method: "config.patch", nth: 1, lose: "before" });
+      const engine = new PluginInstaller(ctx);
+      expect(await engine.takeOff(PIN)).toMatchObject({ stop: "lost", mayBeRunning: false });
+      expect(ctx.records.get(ID)).toMatchObject({ takingOff: true });
+      expect(await engine.resume(PIN, CONFIRM)).toEqual({ kind: "taken-off" });
+      expect(g.writes().some((c) => c.params.enabled === true)).toBe(false);
+      expect(g.shape()).toBe("OFF");
+      expect(ctx.records.get(ID)).toBeNull();
+    });
+
+    it("Take it off never deletes hook settings it didn't read under the hash it sends", async () => {
+      const g = at(version, "off");
+      // The owner sets the plugin's hooks after Clawtrate's check of the entry.
+      g.hooks.push({
+        method: "config.get",
+        nth: 3,
+        before: (gw) => {
+          gw.entry = {
+            enabled: false,
+            hooks: { allowConversationAccess: true, allowPromptInjection: false },
+          };
+          gw.hash += 1;
+        },
+      });
+      const outcome = await new PluginInstaller(contextFor(g)).takeOff(PIN);
+      expect(g.entry?.hooks).toEqual({
+        allowConversationAccess: true,
+        allowPromptInjection: false,
+      });
+      expect(outcome).toMatchObject({ stop: "owner-settings" });
+    });
+
+    it("Take it off waits while a run goes, and stops with its record kept", async () => {
+      const g = at(version, "on");
+      g.busy = true;
+      const ctx = contextFor(g);
+      expect(await new PluginInstaller(ctx).takeOff(PIN)).toMatchObject({
+        stop: "bots-busy",
+        mayBeRunning: true,
+      });
+      expect(g.writes()).toEqual([]);
+      expect(ctx.records.get(ID)).toMatchObject({ takingOff: true });
+    });
+
+    it("a call during an attempt says what the attempt knows: may be running after its enable", async () => {
+      const g = at(version, "fresh");
+      const engine = new PluginInstaller(contextFor(g));
+      let during: Promise<PluginOutcome> | undefined;
+      g.hooks.push({
+        method: "clawtrate-voice.get",
+        nth: 1,
+        before: () => (during = engine.install(PIN, CONFIRM)),
+      });
+      expect(await engine.install(PIN, CONFIRM)).toEqual({ kind: "enabled" });
+      expect(await during).toMatchObject({ stop: "in-progress", mayBeRunning: true });
+    });
+
+    // 3. Only a carried pin, and a tarball the host checked.
+    it("refuses another plugin's pin, even one the host's list names, before any gateway call", async () => {
+      const g = at(version, "fresh");
+      const pin = { ...PIN, pluginId: "clawtrate-tool-rules" };
+      const engine = new PluginInstaller(contextFor(g, { carried: [PIN, pin] }));
+      for (const outcome of [
+        await engine.install(pin, CONFIRM),
+        await engine.update(pin, CONFIRM),
+        await engine.resume(pin, CONFIRM),
+        await engine.takeOff(pin),
+      ])
+        expect(outcome).toMatchObject({ stop: "not-carried" });
+      expect(g.calls).toEqual([]);
+    });
+
+    it.each([
+      ["another version", { version: "0.2.0" }],
+      ["another integrity", { integrity: "sha512-other" }],
+      ["another grant", { grants: { hooks: { allowConversationAccess: true, extra: true } } }],
+    ])(
+      "refuses a pin that isn't the carried list's (%s) before any gateway call",
+      async (_, patch) => {
+        const g = at(version, "fresh");
+        const pin = { ...PIN, ...patch };
+        const engine = new PluginInstaller(contextFor(g));
+        expect(await engine.install(pin, CONFIRM)).toMatchObject({ stop: "not-carried" });
+        expect(await engine.takeOff(pin)).toMatchObject({ stop: "not-carried" });
+        expect(g.calls).toEqual([]);
+      },
+    );
+
+    it.each([
+      ["a relative path", { path: "plugins/clawtrate-clawtrate-voice-0.1.0.tgz" }],
+      ["a parent step", { path: `${RESOURCES}/../other/clawtrate-clawtrate-voice-0.1.0.tgz` }],
+      ["a path outside the resources", { path: "/tmp/clawtrate-clawtrate-voice-0.1.0.tgz" }],
+      ["the resources folder itself", { path: RESOURCES }],
+      ["other bytes", { integrity: TARBALLS[OTHER_ARCHIVE]!.integrity }],
+    ])("refuses the host's tarball with %s before anything is written", async (_, patch) => {
+      const g = at(version, "fresh");
+      const ctx = contextFor(g, {
+        artifact: async () => ({
+          path: ARCHIVE,
+          root: RESOURCES,
+          integrity: PIN.integrity,
+          ...patch,
+        }),
+      });
+      expect(await new PluginInstaller(ctx).install(PIN, CONFIRM)).toMatchObject({
+        stop: "artifact",
+        mayBeRunning: false,
+      });
+      expect(g.writes()).toEqual([]);
+    });
+
+    it("refuses a tarball the host can't read", async () => {
+      const g = at(version, "fresh");
+      const ctx = contextFor(g, {
+        artifact: async () => {
+          throw new Error("EACCES: permission denied");
+        },
+      });
+      expect(await new PluginInstaller(ctx).install(PIN, CONFIRM)).toMatchObject({
+        stop: "artifact",
+        gateway: "EACCES: permission denied",
+      });
+      expect(g.writes()).toEqual([]);
+    });
+
+    it("checks the host's tarball again at the stage: changed since step 0, nothing is staged", async () => {
+      const g = at(version, "fresh");
+      let checks = 0;
+      const ctx = contextFor(g, {
+        artifact: async () => ({
+          path: ARCHIVE,
+          root: RESOURCES,
+          integrity: (checks += 1) === 1 ? PIN.integrity : "sha512-changed-since",
+        }),
+      });
+      expect(await new PluginInstaller(ctx).install(PIN, CONFIRM)).toMatchObject({
+        stop: "artifact",
+      });
+      expect(writeLog(g)).toEqual([
+        'config.patch {"plugins":{"entries":{"clawtrate-voice":{"enabled":false}}}}',
+      ]);
+      expect(g.shape()).toBe("OFF");
+    });
+
+    it("a stage of another package than the host checked is a mismatch, never turned on or off", async () => {
+      const g = at(version, "fresh");
+      g.hooks.push({
+        method: "plugins.install",
+        nth: 1,
+        answer: (a) => ({
+          ...a,
+          plugin: { ...a.plugin, id: "other-plugin", packageName: "other" },
+        }),
+      });
+      const outcome = await new PluginInstaller(contextFor(g)).install(PIN, CONFIRM);
+      expect(outcome).toMatchObject({ stop: "mismatch", mayBeRunning: false });
+      expect(g.writes().filter((c) => c.method === "plugins.setEnabled")).toEqual([]);
+    });
+
+    // 4. Every run a read can show.
+    it("a routine's run, which no sessions page lists, holds every write", async () => {
+      const g = at(version, "fresh");
+      g.routineRunning = true;
+      expect(await new PluginInstaller(contextFor(g)).install(PIN, CONFIRM)).toMatchObject({
+        stop: "bots-busy",
+      });
+      expect(g.writes()).toEqual([]);
+      expect(g.calls.find((c) => c.method === "cron.list")!.params).toMatchObject({
+        includeDisabled: true,
+        compact: true,
+      });
+      expect(g.calls.find((c) => c.method === "sessions.list")!.params).toMatchObject({
+        includeGlobal: true,
+        includeUnknown: true,
+      });
+    });
+
+    it("reads every page of the routines before it calls the gateway idle", async () => {
+      const g = at(version, "fresh");
+      g.routinePages = [
+        [{ id: "a", name: "A", enabled: true }],
+        [{ id: "b", name: "B", enabled: false, runningAtMs: 1_795_800_000_000 }],
+      ];
+      expect(await new PluginInstaller(contextFor(g)).install(PIN, CONFIRM)).toMatchObject({
+        stop: "bots-busy",
+      });
+      expect(g.writes()).toEqual([]);
+    });
+
+    it.each(["sessions.list", "cron.list"])(
+      "a %s page that says there are more without saying where is busy",
+      async (method) => {
+        const g = at(version, "fresh");
+        g.hooks.push({ method, answer: (a) => ({ ...a, hasMore: true, nextOffset: null }) });
+        expect(await new PluginInstaller(contextFor(g)).install(PIN, CONFIRM)).toMatchObject({
+          stop: "bots-busy",
+        });
+        expect(g.writes()).toEqual([]);
+      },
+    );
   });
 
   describe("Take it off", () => {
@@ -905,9 +1236,35 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
       expect(g.shape()).toBe("OFF");
       expect(g.staged).not.toBeNull();
       // Every device reads the marker: nothing installs it again by itself.
-      expect(await engine.install(PIN, ARCHIVE, CONFIRM)).toMatchObject({ stop: "listed-off" });
-      expect(await engine.turnOn(PIN, ARCHIVE, CONFIRM)).toEqual({ kind: "enabled" });
+      expect(await engine.install(PIN, CONFIRM)).toMatchObject({ stop: "listed-off" });
+      expect(await engine.turnOn(PIN, CONFIRM)).toEqual({ kind: "enabled" });
     });
+  });
+});
+
+describe("the host's tarball", () => {
+  const verified = (path: string, root: string) => ({ path, root, integrity: PIN.integrity });
+  it("takes a resolved path inside the resources, on either system", () => {
+    expect(artifactProblem(verified(ARCHIVE, RESOURCES), PIN)).toBeNull();
+    expect(
+      artifactProblem(
+        verified(
+          "C:\\Program Files\\Clawtrate\\resources\\plugins\\clawtrate-clawtrate-voice-0.1.0.tgz",
+          "C:\\Program Files\\Clawtrate\\resources\\plugins",
+        ),
+        PIN,
+      ),
+    ).toBeNull();
+  });
+  it("refuses another drive, a doubled separator, a dot step and a sibling with the same prefix", () => {
+    for (const [path, root] of [
+      ["D:\\Clawtrate\\plugins\\a.tgz", "C:\\Clawtrate\\plugins"],
+      ["/app/plugins//a.tgz", "/app/plugins"],
+      ["/app/plugins/./a.tgz", "/app/plugins"],
+      ["/app/plugins-other/a.tgz", "/app/plugins"],
+      ["/app/plugins/a.tgz", "app/plugins"],
+    ])
+      expect(artifactProblem(verified(path!, root!), PIN), path).not.toBeNull();
   });
 });
 
@@ -929,7 +1286,7 @@ describe("the device's record", () => {
       ],
     ]);
     const ctx = contextFor(g, { records });
-    expect(await new PluginInstaller(ctx).resume(PIN, ARCHIVE, CONFIRM)).toMatchObject({
+    expect(await new PluginInstaller(ctx).resume(PIN, CONFIRM)).toMatchObject({
       stop: "lost",
     });
     expect(records.get(ID)).toBeNull();

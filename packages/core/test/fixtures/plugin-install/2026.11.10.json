@@ -584,5 +584,14 @@
       },
       "retryable": false
     }
+  },
+  "cron": {
+    "jobs": [],
+    "snapshotRevision": "provisional",
+    "total": 0,
+    "offset": 0,
+    "limit": 200,
+    "hasMore": false,
+    "nextOffset": null
   }
 }

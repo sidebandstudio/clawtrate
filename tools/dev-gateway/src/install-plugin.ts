@@ -12,14 +12,23 @@
 // this says the digest it saw and the command that records it.
 
 import { spawnSync } from "node:child_process";
-import { mkdirSync, readFileSync } from "node:fs";
-import { join } from "node:path";
+import { createHash } from "node:crypto";
+import {
+  existsSync,
+  mkdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  writeFileSync,
+} from "node:fs";
+import { dirname, join, resolve } from "node:path";
 import {
   PluginInstaller,
   type PluginInstallContext,
   type PluginOutcome,
   type PluginPin,
   type PluginRecord,
+  type VerifiedArtifact,
 } from "../../../packages/core/src/plugin-install.ts";
 import type { OperatorSession } from "./operator.ts";
 
@@ -41,7 +50,8 @@ const CONFIRM: Record<string, { method: string; params: unknown }> = {
   "clawtrate-voice": { method: "clawtrate-voice.get", params: {} },
 };
 
-export type Packed = { pin: PluginPin; archive: string; unrecorded: boolean };
+/** A packing: its pin, its tarball, and the folder it was packed into, the tool's "resources". */
+export type Packed = { pin: PluginPin; archive: string; dir: string; unrecorded: boolean };
 
 /**
  * Packs the carried plugins from `checkout` into `dir` with the app's packer, and returns the
@@ -69,21 +79,74 @@ export function packCarried(checkout: string, dir: string, name: string): Packed
   return {
     pin,
     archive: join(dir, file),
+    dir,
     unrecorded: Object.values(pin.sourceDigests).some((d) => !d),
   };
 }
 
-/** The engine's context on a dev operator session: this computer, admin, time passing for real. */
+/**
+ * The packed tarball checked now, as the app's host checks its own before each stage
+ * (docs/design/plugins-install.md, 3.6): no symbolic link on its path or its folder's, inside
+ * the folder it was packed into, and its SHA-512 measured from the bytes read for this call.
+ */
+export function verifyPacked(packed: Pick<Packed, "archive" | "dir">): VerifiedArtifact {
+  const root = realpathSync(packed.dir);
+  const path = realpathSync(packed.archive);
+  if (root !== resolve(packed.dir) || path !== resolve(packed.archive))
+    throw new Error(`${packed.archive} is reached through a symbolic link`);
+  const integrity = `sha512-${createHash("sha512").update(readFileSync(path)).digest("base64")}`;
+  return { path, root, integrity };
+}
+
+/** Where the engine keeps its records: a file in the instance's state folder, or a map. */
+export type RecordStore = Pick<PluginInstallContext, "loadRecord" | "saveRecord">;
+
+/** The engine's records in `path`, so the next run on the same instance resumes them. */
+export function recordFile(path: string): RecordStore {
+  const read = (): Record<string, PluginRecord> =>
+    existsSync(path)
+      ? (JSON.parse(readFileSync(path, "utf8")) as Record<string, PluginRecord>)
+      : {};
+  return {
+    loadRecord: async (id) => read()[id] ?? null,
+    saveRecord: async (id, record) => {
+      const all = read();
+      if (record) all[id] = record;
+      else delete all[id];
+      mkdirSync(dirname(path), { recursive: true });
+      const next = `${path}.${process.pid}.next`;
+      writeFileSync(next, `${JSON.stringify(all, null, 2)}\n`, { mode: 0o600 });
+      renameSync(next, path);
+    },
+  };
+}
+
+/** The engine's records in a map, for a caller that keeps them itself. */
+export function recordMap(records: Map<string, PluginRecord | null>): RecordStore {
+  return {
+    loadRecord: async (id) => records.get(id) ?? null,
+    saveRecord: async (id, record) => {
+      records.set(id, record);
+    },
+  };
+}
+
+/**
+ * The engine's context on a dev operator session: this computer, admin as the gateway's hello
+ * granted it, the packing as the carried list and its tarball checked at each stage, time
+ * passing for real.
+ */
 export function operatorContext(
   session: OperatorSession,
-  records: Map<string, PluginRecord | null>,
+  records: RecordStore,
+  packed: Pick<Packed, "pin" | "archive" | "dir">,
   shipped: PluginInstallContext["shipped"] = [],
 ): PluginInstallContext {
   return {
     // Bound to one connection: sent on the connection that is up, never waited for or sent
     // again on the next (the engine's epoch is the session's hello count).
     request: (method, params) => session.requestOnce(method, params, 120_000),
-    admin: () => true,
+    admin: () => session.isUp && session.grantedScopes.includes("operator.admin"),
     serverVersion: () => session.serverVersion,
     route: () => "same-computer",
     answered: (error) =>
@@ -104,11 +167,10 @@ export function operatorContext(
           () => true,
           () => false,
         ),
-    loadRecord: async (id) => records.get(id) ?? null,
-    saveRecord: async (id, record) => {
-      records.set(id, record);
-    },
+    ...records,
     shipped,
+    carried: [packed.pin],
+    artifact: async () => verifyPacked(packed),
   };
 }
 
@@ -139,9 +201,8 @@ export function describeOutcome(
 export async function installPlugin(
   session: OperatorSession,
   packed: Packed,
-  records = new Map<string, PluginRecord | null>(),
+  records: RecordStore = recordMap(new Map()),
 ): Promise<PluginOutcome> {
-  const engine = new PluginInstaller(operatorContext(session, records));
   const confirm = CONFIRM[packed.pin.pluginId]!;
   const pin = {
     ...packed.pin,
@@ -153,13 +214,13 @@ export async function installPlugin(
       ]),
     ),
   };
-  // An attempt this tool left resumes, and its outcome is final: a recovery's stop never turns
-  // into a fresh Add again or Turn on.
-  if (records.get(packed.pin.pluginId)) return engine.resume(pin, packed.archive, confirm);
-  const first = await engine.install(pin, packed.archive, confirm);
+  const engine = new PluginInstaller(operatorContext(session, records, { ...packed, pin }));
+  // An attempt this tool left, on an earlier run too, resumes, and its outcome is final: a
+  // recovery's stop never turns into a fresh Add again or Turn on.
+  if (await records.loadRecord(packed.pin.pluginId)) return engine.resume(pin, confirm);
+  const first = await engine.install(pin, confirm);
   if (first.kind === "stopped" && first.stop === "not-listed-off")
-    return engine.addAgain(pin, packed.archive, confirm);
-  if (first.kind === "stopped" && first.stop === "listed-off")
-    return engine.turnOn(pin, packed.archive, confirm);
+    return engine.addAgain(pin, confirm);
+  if (first.kind === "stopped" && first.stop === "listed-off") return engine.turnOn(pin, confirm);
   return first;
 }

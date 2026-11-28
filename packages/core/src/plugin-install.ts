@@ -34,6 +34,12 @@ export const DECLARED_GROUPS = [
 ] as const;
 export type DeclaredGroup = (typeof DECLARED_GROUPS)[number];
 
+/**
+ * The plugins Clawtrate carries, the only ones the engine installs, whatever a caller passes: a
+ * pin of another id is refused before any gateway call.
+ */
+export const CARRIED_PLUGIN_IDS = ["clawtrate-voice"] as const;
+
 /** One plugin the app carries, as its signed list pins it (section 3.3). */
 export type PluginPin = {
   packageName: string;
@@ -69,6 +75,24 @@ export type PluginRecord = {
   again?: boolean;
   /** The config hash after this device's last write. */
   configHash: string | null;
+  /**
+   * The person's Take it off, kept before its first write: no later run resumes the install, and
+   * the next attempt finishes the take-off before anything else (section 12).
+   */
+  takingOff?: boolean;
+};
+
+/**
+ * The tarball the host hands the engine for a stage, checked by the host at that moment
+ * (docs/design/plugins-install.md, 3.6, "The host's tarball").
+ */
+export type VerifiedArtifact = {
+  /** Absolute, as the host resolved it: no symbolic link on the way, no `.` or `..` in it. */
+  path: string;
+  /** The folder of the app's own resources the host found it in, absolute and resolved too. */
+  root: string;
+  /** `sha512-<base64>` of the bytes the host read for this call: it must be the pin's. */
+  integrity: string;
 };
 
 /** Why an attempt stopped: each is one of section 10's lines, chosen by the step 3 interface. */
@@ -92,7 +116,10 @@ export type PluginStop =
   | "another-device"
   | "already-on"
   | "in-progress"
-  | "connection-changed";
+  | "connection-changed"
+  | "not-carried"
+  | "artifact"
+  | "cancelled";
 
 export type PluginOutcome =
   | { kind: "enabled" }
@@ -127,6 +154,14 @@ export type PluginInstallContext = {
   saveRecord(pluginId: string, record: PluginRecord | null): Promise<void>;
   /** Releases this app's earlier versions shipped, for Update: each version and integrity. */
   shipped: readonly { version: string; integrity: string }[];
+  /** The app's carried list, as the host read it from its own resources: the pins it may install. */
+  carried: readonly PluginPin[];
+  /**
+   * The pin's tarball, checked by the host now (each stage asks again): its path resolved inside
+   * the app's resources and its SHA-512 measured from the bytes. It throws when the file can't be
+   * read or isn't the app's.
+   */
+  artifact(pin: PluginPin): Promise<VerifiedArtifact>;
 };
 
 /** The plugin's own read that step 8 calls, answering `{version}`. */
@@ -258,6 +293,49 @@ const staleHash = (error: unknown) => /config changed since last load/i.test(wor
 const words = (error: unknown) => str(rec(error).message) ?? String(error);
 const busyRefusal = (error: unknown) =>
   /already running/i.test(words(error)) && rec(error).retryable !== false;
+/** A take-off write found already applied by the fresh read before it. */
+class AlreadyApplied extends Error {}
+
+/** An absolute path's parts: POSIX (`/a/b`) or Windows (`C:\\a\\b`), or null when relative. */
+const pathParts = (path: string): string[] | null => {
+  const windows = /^[A-Za-z]:[\\/]/.test(path);
+  if (!windows && !path.startsWith("/")) return null;
+  return (windows ? path.slice(3) : path.slice(1)).split(/[\\/]/);
+};
+
+/** What is wrong with the host's tarball for this pin, or null (3.6, "The host's tarball"). */
+export function artifactProblem(artifact: VerifiedArtifact, pin: PluginPin): string | null {
+  const path = pathParts(artifact.path);
+  const root = pathParts(artifact.root);
+  if (!path || !root) return "the tarball's path isn't absolute";
+  if ([...path, ...root].some((part) => part === "" || part === "." || part === ".."))
+    return "the tarball's path isn't resolved";
+  const drive = (p: string) => (/^[A-Za-z]:/.test(p) ? p.slice(0, 1).toLowerCase() : "");
+  if (
+    drive(artifact.path) !== drive(artifact.root) ||
+    path.length <= root.length ||
+    root.some((part, i) => part !== path[i])
+  )
+    return "the tarball isn't in the app's resources";
+  if (artifact.integrity !== pin.integrity) return "the tarball's bytes aren't the pin's";
+  return null;
+}
+
+/** The record a Take it off keeps when no attempt left one. */
+const takeOffRecord = (pin: PluginPin): PluginRecord => ({
+  mode: "install",
+  integrity: pin.integrity,
+  step: 0,
+  pending: null,
+  turningOff: false,
+  sourceDigest: null,
+  configHash: null,
+  takingOff: true,
+});
+
+/** A record whose plugin may be running: an enable sent or not confirmed, or a disable not seen. */
+const tracksRunning = (record: PluginRecord) =>
+  record.turningOff || record.pending === 7 || record.step >= 7;
 
 export class PluginInstaller {
   private readonly ctx: PluginInstallContext;
@@ -265,6 +343,10 @@ export class PluginInstaller {
   private writes = 0;
   /** The attempt under way, if any: one at a time, for every plugin. */
   private current: Promise<PluginOutcome> | null = null;
+  /** The attempt under way's "may be running", for a call that finds it under way. */
+  private live = false;
+  /** A Take it off asked the attempt under way to stop, at its next check. */
+  private cancelling = false;
 
   constructor(ctx: PluginInstallContext) {
     this.ctx = ctx;
@@ -275,38 +357,81 @@ export class PluginInstaller {
     return this.writes;
   }
 
+  // Each takes a pin from the app's carried list as it is, and the tarball comes from the host's
+  // `artifact`, checked at the moment of the stage: no caller hands the engine a path.
+
   /** First setup, or a person already paired: the plugin isn't listed and has no entry. */
-  install(pin: PluginPin, archivePath: string, confirm: ConfirmCall) {
-    return this.one(() => this.attempt(pin, archivePath, confirm, "install"));
+  install(pin: PluginPin, confirm: ConfirmCall) {
+    return this.one(() => this.attempt(pin, confirm, "install"));
   }
   /** The person's "Add again": not listed, entry `OFF`. */
-  addAgain(pin: PluginPin, archivePath: string, confirm: ConfirmCall) {
-    return this.one(() => this.attempt(pin, archivePath, confirm, "add-again"));
+  addAgain(pin: PluginPin, confirm: ConfirmCall) {
+    return this.one(() => this.attempt(pin, confirm, "add-again"));
   }
   /** The person's "Turn on": listed `unloaded` at the pin, entry `OFF` or `OFF+G`. */
-  turnOn(pin: PluginPin, archivePath: string, confirm: ConfirmCall) {
-    return this.one(() => this.attempt(pin, archivePath, confirm, "turn-on"));
+  turnOn(pin: PluginPin, confirm: ConfirmCall) {
+    return this.one(() => this.attempt(pin, confirm, "turn-on"));
   }
   /** The person's "Update": listed `active` at an older shipped release, entry `ON+G`. */
-  update(pin: PluginPin, archivePath: string, confirm: ConfirmCall) {
-    return this.one(() => this.attempt(pin, archivePath, confirm, "update"));
+  update(pin: PluginPin, confirm: ConfirmCall) {
+    return this.one(() => this.attempt(pin, confirm, "update"));
   }
   /** At a connection: goes on with this device's record, if it has one. */
-  resume(pin: PluginPin, archivePath: string, confirm: ConfirmCall) {
-    return this.one(() => this.attempt(pin, archivePath, confirm, null));
+  resume(pin: PluginPin, confirm: ConfirmCall) {
+    return this.one(() => this.attempt(pin, confirm, null));
   }
-  /** "Take it off" (section 12): turned off, its grants removed, left installed. */
-  takeOff(pin: PluginPin) {
+  /**
+   * "Take it off" (section 12): turned off, its grants removed, left installed. An attempt under
+   * way is asked to stop at its next check and waited for; the take-off then keeps its own
+   * record before its first write, so nothing resumes the install after it.
+   */
+  async takeOff(pin: PluginPin): Promise<PluginOutcome> {
+    if (this.current) {
+      this.cancelling = true;
+      try {
+        await this.current;
+      } finally {
+        this.cancelling = false;
+      }
+    }
     return this.one(() => this.takeOffNow(pin));
   }
 
   private async one(run: () => Promise<PluginOutcome>): Promise<PluginOutcome> {
-    if (this.current) return { kind: "stopped", stop: "in-progress", mayBeRunning: false };
+    // Under way: what it last knew, never "not running" for a plugin it may have turned on.
+    if (this.current) return { kind: "stopped", stop: "in-progress", mayBeRunning: this.live };
+    this.live = false;
     const running = run().finally(() => {
       this.current = null;
     });
     this.current = running;
     return running;
+  }
+
+  /** The attempt under way stops here when a Take it off asked it to. */
+  private checkCancel() {
+    if (this.cancelling) throw new Stop("cancelled");
+  }
+
+  /** The pin is one the app carries, as its list has it: anything else is refused (3.6). */
+  private requireCarried(pin: PluginPin) {
+    const carried =
+      (CARRIED_PLUGIN_IDS as readonly string[]).includes(pin.pluginId) &&
+      this.ctx.carried.some((entry) => deepEqual(entry, pin));
+    if (!carried) throw new Stop("not-carried");
+  }
+
+  /** The host's tarball for the pin, checked now; a problem is a stop before the stage. */
+  private async verifiedArtifact(pin: PluginPin): Promise<VerifiedArtifact> {
+    let artifact: VerifiedArtifact;
+    try {
+      artifact = await this.ctx.artifact(pin);
+    } catch (error) {
+      throw new Stop("artifact", words(error));
+    }
+    const problem = artifactProblem(artifact, pin);
+    if (problem) throw new Stop("artifact", problem);
+    return artifact;
   }
 
   // --- Requests -------------------------------------------------------------------------------
@@ -339,12 +464,13 @@ export class PluginInstaller {
     try {
       return await this.writeTries(epoch, method, prepare);
     } catch (error) {
-      // Refused, or never sent (a before-write read that stopped a retry): it didn't apply, so the
-      // write it marked as in flight isn't. A lost reply, or a connection gone mid-request, may
-      // have applied, and keeps its mark for the resume to decide.
-      const unknown =
-        error instanceof Lost || (error instanceof Stop && error.stop === "connection-changed");
-      if (!unknown) await notApplied?.();
+      // Never sent, or refused before it could start (a before-write read that stopped a retry,
+      // three "already running", no admin): it didn't apply, so the write it marked as in flight
+      // isn't. Anything else keeps its mark for a read to decide: a lost reply, a connection gone
+      // mid-request, and an answered error too, which both versions can send after a change has
+      // committed (plugins-install.md, 3.4, "An answered error").
+      const neverSent = error instanceof Stop && error.stop !== "connection-changed";
+      if (neverSent) await notApplied?.();
       throw error;
     }
   }
@@ -356,6 +482,7 @@ export class PluginInstaller {
   ): Promise<Json> {
     for (let attempt = 0; ; attempt += 1) {
       const params = await prepare();
+      this.checkCancel();
       if (!this.ctx.admin()) throw new Stop("no-admin");
       this.writes += 1;
       try {
@@ -398,17 +525,48 @@ export class PluginInstaller {
   }
 
   /**
-   * Whether any session has a run going, over every page of `sessions.list` (`hasMore` and
-   * `nextOffset`). More pages than `MAX_SESSION_PAGES` count as busy: idle is never assumed.
+   * Whether a run is going that a read can show (3.4, "No run going"): a session's, over every
+   * page of `sessions.list` with the global and unknown rows it leaves out by default, and a
+   * routine's, over every page of `cron.list`, since `sessions.list` never lists a routine's run
+   * on either version. More pages than `MAX_SESSION_PAGES`, or a page that says there are more
+   * without saying where, count as busy: idle is never assumed.
    */
   private async anyRunGoing(epoch: number): Promise<boolean> {
-    let params: Json = { limit: SESSION_PAGE };
+    const sessions = this.anyPage(
+      epoch,
+      "sessions.list",
+      { limit: SESSION_PAGE, includeGlobal: true, includeUnknown: true },
+      "sessions",
+      (row) => row.hasActiveRun === true,
+    );
+    const routines = this.anyPage(
+      epoch,
+      "cron.list",
+      { includeDisabled: true, compact: true, limit: SESSION_PAGE },
+      "jobs",
+      (job) => typeof job.runningAtMs === "number" && job.runningAtMs > 0,
+    );
+    const [session, routine] = await Promise.all([sessions, routines]);
+    return session || routine;
+  }
+
+  /** Whether any row of any page of `method` is `going`; a page that can't be followed is busy. */
+  private async anyPage(
+    epoch: number,
+    method: string,
+    first: Json,
+    field: string,
+    going: (row: Json) => boolean,
+  ): Promise<boolean> {
+    let params = first;
     for (let pages = 0; pages < MAX_SESSION_PAGES; pages += 1) {
-      const page = await this.call(epoch, "sessions.list", params);
-      if (!Array.isArray(page.sessions)) throw new Lost("a read missing a field");
-      if (page.sessions.some((s) => rec(s).hasActiveRun === true)) return true;
-      if (page.hasMore !== true || typeof page.nextOffset !== "number") return false;
-      params = { limit: SESSION_PAGE, offset: page.nextOffset };
+      const page = await this.call(epoch, method, params);
+      const rows = page[field];
+      if (!Array.isArray(rows)) throw new Lost("a read missing a field");
+      if (rows.some((row) => going(rec(row)))) return true;
+      if (page.hasMore !== true) return false;
+      if (typeof page.nextOffset !== "number") return true;
+      params = { ...first, offset: page.nextOffset };
     }
     return true;
   }
@@ -453,10 +611,23 @@ export class PluginInstaller {
   ) {
     const started = this.ctx.now();
     for (;;) {
+      this.checkCancel();
       const read = await this.readGateway(epoch, pin);
       if (read.keptOut || read.shape === null) throw new Stop(this.describe(read, pin));
       if (!this.matches(read, pin, mode, after, olderVersion))
         throw new Stop(this.describe(read, pin));
+      if (!read.busy) return read;
+      if (this.ctx.now() - started >= RUN_WAIT_MS) throw new Stop("bots-busy");
+      await this.ctx.sleep(RUN_POLL_MS);
+    }
+  }
+
+  /** A read with no run going, waited for as before a write; for Take it off, which acts on it. */
+  private async idleRead(epoch: number, pin: PluginPin, seen?: (read: GatewayRead) => void) {
+    const started = this.ctx.now();
+    for (;;) {
+      const read = await this.readGateway(epoch, pin);
+      seen?.(read);
       if (!read.busy) return read;
       if (this.ctx.now() - started >= RUN_WAIT_MS) throw new Stop("bots-busy");
       await this.ctx.sleep(RUN_POLL_MS);
@@ -525,17 +696,11 @@ export class PluginInstaller {
 
   private async attempt(
     pin: PluginPin,
-    archivePath: string,
     confirm: ConfirmCall,
     wanted: PluginMode | null,
   ): Promise<PluginOutcome> {
     const epoch = this.ctx.epoch();
-    let record = await this.ctx.loadRecord(pin.pluginId);
-    if (record && record.integrity !== pin.integrity) {
-      // Another pin's attempt: it isn't this app's to finish.
-      await this.ctx.saveRecord(pin.pluginId, null);
-      record = null;
-    }
+    let record: PluginRecord | null = null;
     const save = async (patch: Partial<PluginRecord>) => {
       record = { ...record!, ...patch };
       await this.ctx.saveRecord(pin.pluginId, record);
@@ -545,7 +710,13 @@ export class PluginInstaller {
       await this.ctx.saveRecord(pin.pluginId, null);
     };
     let mayBeRunning = false;
+    const running = (value: boolean) => {
+      mayBeRunning = value;
+      this.live = value;
+    };
     try {
+      // Only a pin the app carries, before any gateway call.
+      this.requireCarried(pin);
       // Step 0.
       if (!this.ctx.admin()) throw new Stop("no-admin");
       const route = this.ctx.route();
@@ -553,15 +724,34 @@ export class PluginInstaller {
       const openclaw = this.ctx.serverVersion() ?? "";
       const digest = pin.sourceDigests[openclaw];
       if (!digest) throw new Stop("openclaw-version");
+      await this.verifiedArtifact(pin);
+
+      record = await this.ctx.loadRecord(pin.pluginId);
+      if (record?.takingOff) {
+        // The person's Take it off comes first: finished before anything else runs.
+        const off = await this.takeOffNow(pin);
+        if (off.kind !== "taken-off" || wanted === null) return off;
+        record = null;
+      }
+      if (record && record.integrity !== pin.integrity) {
+        // Another pin's attempt. One that may have left the plugin running is finished first: its
+        // plugin turned off, its record kept until a read shows that (#832, 4).
+        if (tracksRunning(record)) {
+          running(true);
+          await save({ turningOff: true });
+          if (!(await this.turnOffUntilApplied(epoch, pin))) throw new Stop("lost");
+          running(false);
+        }
+        await drop();
+      }
 
       // A record left by this device: go on where it stopped, or stop. Until a read shows the
       // plugin off, a record whose write could have left it running says it may be (#832, 4).
       if (record)
-        mayBeRunning =
-          record.turningOff ||
-          record.pending === 7 ||
-          record.step >= 7 ||
-          (record.mode === "update" && (record.step < 2 || record.pending === 2));
+        running(
+          tracksRunning(record) ||
+            (record.mode === "update" && (record.step < 2 || record.pending === 2)),
+        );
       if (record) {
         const resumed = await this.resumeFrom(
           epoch,
@@ -569,19 +759,19 @@ export class PluginInstaller {
           record,
           (patch) => save(patch),
           () => drop(),
+          running,
         );
         if (resumed.kind !== "continue") return resumed.outcome;
         return await this.steps(
           epoch,
           pin,
-          archivePath,
           confirm,
           record!,
           resumed.from,
           digest,
           save,
           drop,
-          (v) => (mayBeRunning = v),
+          running,
         );
       }
       if (wanted === null) return { kind: "stopped", stop: "lost", mayBeRunning: false };
@@ -591,14 +781,13 @@ export class PluginInstaller {
           return await this.fromStepOne(
             epoch,
             pin,
-            archivePath,
             confirm,
             wanted,
             digest,
             (r) => (record = r),
             save,
             drop,
-            (v) => (mayBeRunning = v),
+            running,
           );
         } catch (error) {
           if (!(error instanceof Stale) || tries > 0) throw error;
@@ -615,7 +804,6 @@ export class PluginInstaller {
   private async fromStepOne(
     epoch: number,
     pin: PluginPin,
-    archivePath: string,
     confirm: ConfirmCall,
     wanted: PluginMode,
     digest: string,
@@ -632,6 +820,7 @@ export class PluginInstaller {
       if (read.shape === "OFF" || read.shape === "OFF+G") {
         // Another device's attempt, most likely, finishing: wait for it before saying anything.
         if (await this.ctx.changed(OTHER_DEVICE_MS)) read = await this.readGateway(epoch, pin);
+        this.checkCancel();
       }
       throw new Stop(this.describe(read, pin));
     }
@@ -653,7 +842,6 @@ export class PluginInstaller {
     return await this.steps(
       epoch,
       pin,
-      archivePath,
       confirm,
       record,
       2,
@@ -728,7 +916,23 @@ export class PluginInstaller {
     record: PluginRecord,
     save: (patch: Partial<PluginRecord>) => Promise<void>,
     drop: () => Promise<void>,
+    running: (value: boolean) => void,
   ): Promise<{ kind: "continue"; from: number } | { kind: "done"; outcome: PluginOutcome }> {
+    // A state the record can't go on from. A plugin the read shows active, or an entry that says
+    // enabled, keeps the record and the warning: no read has shown it off (#832, 4).
+    const stopHere = async (read: GatewayRead) => {
+      const risky = read.listed?.active === true || read.enabledSet;
+      if (!risky) await drop();
+      running(risky);
+      return {
+        kind: "done" as const,
+        outcome: {
+          kind: "stopped" as const,
+          stop: this.describe(read, pin),
+          mayBeRunning: risky,
+        },
+      };
+    };
     if (record.turningOff) {
       const off = await this.turnOffUntilApplied(epoch, pin);
       // Kept until a read shows it off, so the next connection goes on turning it off.
@@ -756,14 +960,12 @@ export class PluginInstaller {
         // Step 7 applied but its answer was lost: turn it off, then steps 6 and 7 again for the digest.
         await save({ turningOff: true });
         if (!(await this.turnOffUntilApplied(epoch, pin))) throw new Stop("lost");
+        running(false);
         await save({ turningOff: false, step: 6, pending: null, sourceDigest: null, again: true });
         return { kind: "continue", from: 6 };
       }
-      await drop();
-      return {
-        kind: "done",
-        outcome: { kind: "stopped", stop: this.describe(read, pin), mayBeRunning: false },
-      };
+      // `OFF+G` and unloaded: a stop, never a retry, the owner may have turned it off (#832, 1).
+      return await stopHere(read);
     }
     if (record.step === 7 && record.sourceDigest !== null && this.matches(read, pin, mode, 7))
       return { kind: "continue", from: 8 };
@@ -776,22 +978,13 @@ export class PluginInstaller {
       await save({ pending: null });
       return { kind: "continue", from: record.step + 1 };
     }
-    await drop();
-    return {
-      kind: "done",
-      outcome: {
-        kind: "stopped",
-        stop: this.describe(read, pin),
-        mayBeRunning: read.listed?.active === true,
-      },
-    };
+    return await stopHere(read);
   }
 
   /** Steps `from` to 8. */
   private async steps(
     epoch: number,
     pin: PluginPin,
-    archivePath: string,
     confirm: ConfirmCall,
     record: PluginRecord,
     from: number,
@@ -834,14 +1027,16 @@ export class PluginInstaller {
     const disable = async (
       reason: PluginStop = "turned-off",
       reported?: string,
+      said?: string,
     ): Promise<never> => {
+      running(true);
       await save({ turningOff: true });
       const off = await this.turnOffUntilApplied(epoch, pin);
       if (off) {
         running(false);
         await drop();
       }
-      const stop = new Stop(off ? reason : "lost");
+      const stop = new Stop(off ? reason : "lost", said);
       if (reported) stop.reported = reported;
       throw stop;
     };
@@ -849,6 +1044,7 @@ export class PluginInstaller {
     let stepDigest: string | null = record.sourceDigest;
     // Step 7 needs step 6's inspect, for its review token (#832, 3).
     for (let step = from === 7 ? 6 : from; step <= 8; step += 1) {
+      this.checkCancel();
       if (step === 2) {
         if (mode === "install") await patch(1, { enabled: false }, 2);
         else if (mode === "update") {
@@ -870,7 +1066,13 @@ export class PluginInstaller {
             );
           } catch (error) {
             if (error instanceof Lost) throw new Stop("lost", error.message);
-            throw error;
+            if (error instanceof Stop) throw error;
+            // Answered, which is no proof either way: a read decides. Still on, it didn't apply.
+            const read = await this.readGateway(epoch, pin);
+            if (!this.matches(read, pin, mode, 2, olderVersion)) {
+              if (this.matches(read, pin, mode, 1, olderVersion)) await save({ pending: null });
+              throw new Stop("refused", words(error));
+            }
           }
           const read = await this.readGateway(epoch, pin);
           if (!this.matches(read, pin, mode, 2, olderVersion))
@@ -886,11 +1088,13 @@ export class PluginInstaller {
             epoch,
             "plugins.install",
             async () => {
+              // The host's tarball, checked again for this try: its path and bytes the pin's.
+              const artifact = await this.verifiedArtifact(pin);
               await this.beforeWrite(epoch, pin, mode, 2, olderVersion);
               await save({ pending: 3 });
               return {
                 source: "npm-pack",
-                archivePath,
+                archivePath: artifact.path,
                 enable: false,
                 ...(mode === "update" ? { mode: "update" } : {}),
               };
@@ -914,6 +1118,15 @@ export class PluginInstaller {
         if (id in rec(runtime.sourceDigests) || id in rec(runtime.selectedEntries)) {
           running(true);
           await disable();
+        }
+        if (plugin.id !== id || plugin.packageName !== pin.packageName) {
+          // The gateway staged another package than the one the host checked: never the engine's
+          // to turn on or off. Its code may run if an entry of its own says so.
+          const ran = [rec(runtime.sourceDigests), rec(runtime.selectedEntries)].some(
+            (map) => Object.keys(map).length > 0,
+          );
+          running(ran);
+          throw new Stop("mismatch", `the gateway staged ${String(plugin.id)}`);
         }
         if (answer.restartRequired === true) throw new Stop("restart");
         if (
@@ -978,11 +1191,20 @@ export class PluginInstaller {
           if (error instanceof Lost && record.again) await disable("lost");
           if (error instanceof Stop || error instanceof Lost) throw error;
           const text = words(error);
+          const reason: PluginStop = /blocked by (allowlist|denylist)/i.test(text)
+            ? "owner-settings"
+            : /not installed/i.test(text)
+              ? "not-listed-off"
+              : "refused";
+          // Answered, which is no proof the enable didn't apply: both versions answer an error
+          // after a committed runtime change (3.4, "An answered error"). A read decides; until it
+          // does, the mark and the warning stay.
+          const read = await this.readGateway(epoch, pin);
+          const off = read.disabled && (!read.listed || read.listed.unloaded);
+          if (!off) await disable(reason, undefined, text);
           running(false);
           await save({ pending: null });
-          if (/blocked by (allowlist|denylist)/i.test(text)) throw new Stop("owner-settings", text);
-          if (/not installed/i.test(text)) throw new Stop("not-listed-off", text);
-          throw new Stop("refused", text);
+          throw new Stop(reason, text);
         }
         const got = str(rec(rec(answer.runtime).sourceDigests)[id]);
         if (answer.restartRequired === true) throw new Stop("restart");
@@ -1026,8 +1248,9 @@ export class PluginInstaller {
    */
   private async turnOffUntilApplied(epoch: number, pin: PluginPin): Promise<boolean> {
     for (let attempt = 0; attempt < MAX_OFF_TRIES; attempt += 1) {
-      // Without a confirmed admin grant nothing is sent: the record keeps "turning off".
-      if (this.ctx.epoch() !== epoch || !this.ctx.admin()) return false;
+      // Without a confirmed admin grant nothing is sent: the record keeps "turning off". A Take
+      // it off asking the attempt to stop takes the turning off over.
+      if (this.ctx.epoch() !== epoch || !this.ctx.admin() || this.cancelling) return false;
       try {
         this.writes += 1;
         await this.call(epoch, "plugins.setEnabled", {
@@ -1050,47 +1273,74 @@ export class PluginInstaller {
   }
 
   /**
-   * Take it off: after the before-write read, `setEnabled false` and then the grants written
-   * `null`, which leaves the entry `OFF` and the plugin installed and unloaded.
+   * Take it off (section 12): its record kept first, then, with no run going, the plugin turned
+   * off until a read shows it unloaded, then its grants written `null` under the hash of the
+   * same read that found them. That leaves the entry `OFF` and the plugin installed. The record
+   * goes only once a read shows that; until then the next attempt finishes the take-off first.
    */
   private async takeOffNow(pin: PluginPin): Promise<PluginOutcome> {
     const epoch = this.ctx.epoch();
+    const id = pin.pluginId;
     let mayBeRunning = false;
+    const saw = (read: GatewayRead) => {
+      if (read.listed?.active === true || read.enabledSet) mayBeRunning = true;
+      else if (read.disabled && !read.listed?.active) mayBeRunning = false;
+      this.live = mayBeRunning;
+    };
     try {
+      this.requireCarried(pin);
       if (!this.ctx.admin()) throw new Stop("no-admin");
       const route = this.ctx.route();
       if (route !== "same-computer" && route !== "ssh") throw new Stop("route");
-      const read = await this.readGateway(epoch, pin);
-      if (read.shape === null || !read.listed) throw new Stop(this.describe(read, pin));
-      if (read.shape === "ON+G" || read.listed.active) {
+      // Kept before any write: an install this device had under way never resumes after this.
+      const kept = await this.ctx.loadRecord(id);
+      if (kept && tracksRunning(kept)) mayBeRunning = true;
+      await this.ctx.saveRecord(id, { ...(kept ?? takeOffRecord(pin)), takingOff: true });
+
+      const read = await this.idleRead(epoch, pin, saw);
+      if (read.shape === null || read.keptOut) throw new Stop(this.describe(read, pin));
+      // Not installed but its entry on: the owner's, and nothing a disable can reach.
+      if (!read.listed && read.enabledSet) throw new Stop(this.describe(read, pin));
+      if (read.enabledSet || read.listed?.active) {
         mayBeRunning = true;
-        await this.write(epoch, "plugins.setEnabled", async () => ({
-          pluginId: pin.pluginId,
-          enabled: false,
-          allowlistPolicy: "preserve",
-        }));
+        if (!(await this.turnOffUntilApplied(epoch, pin))) throw new Stop("lost");
+        mayBeRunning = false;
       }
-      const grantKeys = Object.keys(pin.grants).length;
       const raw = JSON.stringify({
         plugins: {
           entries: {
-            [pin.pluginId]: {
+            [id]: {
               enabled: false,
               ...Object.fromEntries(Object.keys(pin.grants).map((key) => [key, null])),
             },
           },
         },
       });
-      if (grantKeys > 0 && (await this.readGateway(epoch, pin)).shape === "OFF+G")
-        await this.write(epoch, "config.patch", async () => ({
-          baseHash: (await this.readGateway(epoch, pin)).hash,
-          raw,
-        }));
+      if (Object.keys(pin.grants).length > 0) {
+        for (let attempt = 0; ; attempt += 1) {
+          try {
+            await this.write(epoch, "config.patch", async () => {
+              // One fresh read checks the entry and gives the hash the patch is sent under.
+              const now = await this.idleRead(epoch, pin, saw);
+              if (now.shape === "OFF" || now.shape === "none") throw new AlreadyApplied();
+              if (now.shape !== "OFF+G" || now.listed?.active)
+                throw new Stop(this.describe(now, pin));
+              return { baseHash: now.hash, raw };
+            });
+            break;
+          } catch (error) {
+            if (error instanceof AlreadyApplied) break;
+            if (error instanceof Stop || error instanceof Lost) throw error;
+            if (!staleHash(error) || attempt > 0) throw error;
+          }
+        }
+      }
       const after = await this.readGateway(epoch, pin);
-      if (after.shape !== "OFF" || !after.listed?.unloaded)
+      saw(after);
+      if ((after.shape !== "OFF" && after.shape !== "none") || after.listed?.active)
         throw new Stop(this.describe(after, pin));
-      // Taken off on purpose: an attempt this device had under way is over.
-      await this.ctx.saveRecord(pin.pluginId, null);
+      // Taken off: the record, the take-off's and any attempt's before it, is over.
+      await this.ctx.saveRecord(id, null);
       return { kind: "taken-off" };
     } catch (error) {
       return this.stopped(error, mayBeRunning);

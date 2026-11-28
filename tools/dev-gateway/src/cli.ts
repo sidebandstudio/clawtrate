@@ -107,6 +107,7 @@ import {
   INSTALLED_GRANTS,
   installPlugin,
   packCarried,
+  recordFile,
 } from "./install-plugin.ts";
 import { instanceLockPath, portLockPath, withLock } from "./lock.ts";
 import {
@@ -161,6 +162,7 @@ import {
 } from "./dev-plugins.ts";
 import { SEED_ANSWER_MS, SEED_CAPS, SEED_SCOPES, seedExample, verifyExample } from "./examples.ts";
 import { OperatorSession } from "./operator.ts";
+import type { PluginOutcome } from "../../../packages/core/src/plugin-install.ts";
 import {
   MESSAGING_PAIR,
   messagingPartner,
@@ -1616,29 +1618,71 @@ const INSTALL_SCOPES = ["operator.admin", "operator.read", "operator.write"];
  */
 const INSTALL_CONNECT_MS = 240_000;
 
+/** The install engine's records on an instance: in its own state folder, gone with it at a reset. */
+export const installRecordsFile = (inst: { stateDir: string }) =>
+  join(inst.stateDir, "clawtrate-plugin-installs.json");
+
+/** How `installCarried` reaches the gateway: a paired client of its own, unpaired afterwards. */
+export type InstallIo = {
+  open(inst: DevInstance): Promise<OperatorSession>;
+  unpair(inst: DevInstance, deviceId: string): Promise<unknown>;
+};
+const INSTALL_IO: InstallIo = {
+  open: (inst) =>
+    openOperator(inst, "Clawtrate plugin install", INSTALL_SCOPES, [], INSTALL_CONNECT_MS),
+  unpair: (inst, deviceId) => must(inst, ["devices", "remove", deviceId]),
+};
+
 /**
  * Installs `plugin`, packed from the checkout, through the desktop app's install engine on a
- * paired admin connection of its own, which it unpairs afterwards (install-plugin.ts).
+ * paired admin connection of its own, which it unpairs afterwards (install-plugin.ts). The
+ * engine's record of the attempt is kept in the instance's state folder, so a run that lost a
+ * reply is resumed by the next one on the same instance (`install-plugin`), never started over.
  */
-async function installCarried(inst: DevInstance, plugin: string): Promise<void> {
+export async function installCarried(
+  inst: DevInstance,
+  plugin: string,
+  io: InstallIo = INSTALL_IO,
+): Promise<PluginOutcome> {
   const packed = packCarried(inst.checkout, join(inst.runDir, "carried-plugins"), plugin);
-  const op = await openOperator(
-    inst,
-    "Clawtrate plugin install",
-    INSTALL_SCOPES,
-    [],
-    INSTALL_CONNECT_MS,
-  );
+  const op = await io.open(inst);
   try {
-    const outcome = await installPlugin(op, packed);
+    const outcome = await installPlugin(op, packed, recordFile(installRecordsFile(inst)));
     console.log(describeOutcome(plugin, op.serverVersion, outcome));
     if (outcome.kind !== "enabled") process.exitCode = 1;
+    return outcome;
   } finally {
     await op.close();
-    await must(inst, ["devices", "remove", op.deviceId]).catch((error: unknown) =>
-      console.log(`Could not unpair the install client: ${String(error)}`),
-    );
+    await io
+      .unpair(inst, op.deviceId)
+      .catch((error: unknown) =>
+        console.log(`Could not unpair the install client: ${String(error)}`),
+      );
   }
+}
+
+/**
+ * `install-plugin <plugin>` on a running named instance: records the plugin with the start's
+ * options first, so the config contract accepts its entry, then installs it or resumes the
+ * attempt an earlier run left.
+ */
+async function installOnRunning(inst: DevInstance, plugin: string): Promise<void> {
+  if (inst.name === null)
+    throw new Error("install-plugin is for a named instance; use --instance <name>");
+  const refusal = inst.runner.refusal();
+  if (refusal) throw new Error(refusal);
+  if (recordedPlugins(inst).some((loaded) => loaded.id === plugin))
+    throw new Error(
+      `${plugin} is loaded with --with-plugin on ${label(inst)}; it can't be installed too`,
+    );
+  const options = recordedStartOptions(inst);
+  const installed = new Set(options.installPlugins ?? []);
+  installed.add(plugin as (typeof INSTALLABLE)[number]);
+  writeFileAtomic(
+    startOptionsFile(inst),
+    `${JSON.stringify({ ...options, installPlugins: [...installed] })}\n`,
+  );
+  await installCarried(inst, plugin);
 }
 
 /**
@@ -3118,6 +3162,7 @@ const USAGE =
   "       pnpm dev-gateway <start|up|seed|routines|approve [requestId]|status|stop|reset> [--instance <name>] [--no-seed] [--run-id <id>] [--with-accounts] [--default-local-pairing] [--with-node] [--with-images] [--with-message-tool] [--with-http-api] [--with-skill-review] [--with-plugin <plugin>]... [--install-plugin <plugin>]... [--renew-timeout-ms <ms>]\n" +
   "       pnpm dev-gateway lock --instance <name> --agent <bot> --provider <provider> <profileId>\n" +
   "       pnpm dev-gateway unlock --instance <name> --agent <bot> --provider <provider>\n" +
+  "       pnpm dev-gateway install-plugin --instance <name> <plugin>   (on a running instance; resumes an attempt it left)\n" +
   "       pnpm dev-gateway <list [--json]|prune>   (every instance on this machine)";
 
 export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env): Promise<void> {
@@ -3147,15 +3192,24 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
   // The selector is validated before any command runs or any path is built.
   const selected = selectInstance(values.instance, env);
   const [command, ...rest] = positionals;
-  // Before any command runs or any instance changes: only start takes it, and only with plugins
-  // the desktop app carries.
+  // Before any command runs, any version is probed or any instance changes: only start takes
+  // it, only with plugins the desktop app carries, and never with the same plugin loaded.
   if (values["install-plugin"] && command !== "start" && command !== "up")
     throw new Error(`--install-plugin is a start option; ${command} does not take it`);
-  for (const name of values["install-plugin"] ?? [])
+  const installing =
+    command === "install-plugin" ? rest.slice(0, 1) : (values["install-plugin"] ?? []);
+  if (command === "install-plugin" && installing.length === 0)
+    throw new Error(`install-plugin takes the plugin to install: ${INSTALLABLE.join(", ")}`);
+  for (const name of installing)
     if (!(INSTALLABLE as readonly string[]).includes(name))
       throw new Error(
         `--install-plugin takes ${INSTALLABLE.join(", ")}, not ${JSON.stringify(name)}`,
       );
+  const both = installing.find((name) => (values["with-plugin"] ?? []).includes(name));
+  if (both)
+    throw new Error(
+      `${both} is loaded with --with-plugin and installed with --install-plugin; start with one of them`,
+    );
   if (command === "setup") {
     if (selected !== null)
       throw new Error("setup is for this checkout; it does not take --instance");
@@ -3186,6 +3240,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
     "approve",
     "lock",
     "unlock",
+    "install-plugin",
   ];
   if (!command || !known.includes(command)) {
     console.log(USAGE);
@@ -3233,6 +3288,8 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
       return stop(inst);
     case "seed":
       return seed(inst);
+    case "install-plugin":
+      return installOnRunning(inst, rest[0]!);
     case "routines": {
       const ids = await addScriptedRoutines(async (method, params) =>
         parseJsonOutput(

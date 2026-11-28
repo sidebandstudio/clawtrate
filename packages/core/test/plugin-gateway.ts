@@ -7,7 +7,12 @@
 
 import v1006 from "./fixtures/plugin-install/2026.10.6.json" with { type: "json" };
 import v1110 from "./fixtures/plugin-install/2026.11.10.json" with { type: "json" };
-import type { PluginInstallContext, PluginPin, PluginRecord } from "../src/plugin-install.ts";
+import type {
+  PluginInstallContext,
+  PluginPin,
+  PluginRecord,
+  VerifiedArtifact,
+} from "../src/plugin-install.ts";
 
 export const VERSIONS = ["2026.10.6", "2026.11.10"] as const;
 export type Version = (typeof VERSIONS)[number];
@@ -47,6 +52,8 @@ export const TARBALLS: Record<string, { version: string; integrity: string; dige
   },
 };
 export const ARCHIVE = "/app/plugins/clawtrate-clawtrate-voice-0.1.0.tgz";
+/** The app's resources folder the host finds its tarball in. */
+export const RESOURCES = "/app/plugins";
 export const OLDER_ARCHIVE = "/old/plugins/clawtrate-clawtrate-voice-0.0.9.tgz";
 export const OTHER_ARCHIVE = "/other/plugins/clawtrate-clawtrate-voice-0.1.0.tgz";
 
@@ -90,6 +97,34 @@ export class Refusal extends Error {
 /** A request whose reply never came. */
 export class LostReply extends Error {}
 
+/**
+ * The error both versions answer a plugin change with when something after its runtime change
+ * failed: the change applied, and the answer is an error all the same. Built as the gateway
+ * builds it, since no development run makes it happen on purpose: `pluginLifecycleError` (on
+ * 2026.10.6 `plugins-lifecycle-error-61PGW2_G.mjs:23-52`, on 2026.11.10
+ * `plugins-mutations-MjAXEDgk.mjs:3`) with `projectPluginRuntimeFailure`'s `committed: true`
+ * runtime (2026.10.6 `lifecycle-CvKiePUp.mjs:69-78`, 2026.11.10 `lifecycle-rUzhDmbF.mjs:4`).
+ */
+export function committedError(digest: string): Json {
+  return {
+    code: "UNAVAILABLE",
+    message:
+      "Plugin config could not be persisted.\nAn earlier runtime change from this operation was applied in Gateway generation 7.",
+    details: {
+      runtime: {
+        operationId: "a1d50d7d-069f-4544-babc-b1331e996fb9",
+        generation: 7,
+        pluginIds: [ID],
+        sourceDigests: { [ID]: digest },
+        selectedEntries: {
+          [ID]: "/gateway-state/npm/projects/voice/node_modules/@clawtrate/clawtrate-voice/index.js",
+        },
+        committed: true,
+      },
+    },
+  };
+}
+
 export type Call = { method: string; params: Json };
 /** What a test does at a call: before the gateway handles it, or instead of its reply. */
 export type Hook = {
@@ -102,6 +137,8 @@ export type Hook = {
   lose?: "before" | "after";
   /** The gateway answers this refusal instead (from the captured errors, by name). */
   refuse?: string | Json;
+  /** The gateway handles the call, then answers this error: a change that committed anyway. */
+  refuseAfter?: string | Json;
   /** Answer with this instead (for a field missing, or an answer the run never saw). */
   answer?: (answer: Json) => Json;
 };
@@ -122,6 +159,10 @@ export class FakeGateway {
   busy = false;
   /** Sessions served a page at a time, as the gateway pages `sessions.list`; one page when null. */
   sessionPages: Json[][] | null = null;
+  /** A routine's run going, which `cron.list` shows and `sessions.list` never does. */
+  routineRunning = false;
+  /** Routines served a page at a time, as the gateway pages `cron.list`; one page when null. */
+  routinePages: Json[][] | null = null;
   hash = 0;
   token = "review-token-of-the-captured-inspect";
   readonly calls: Call[] = [];
@@ -210,6 +251,29 @@ export class FakeGateway {
           return answer;
         }
         answer.sessions = this.busy ? [{ key: "agent:main:main", hasActiveRun: true }] : [];
+        return answer;
+      }
+      case "cron.list": {
+        const answer = clone(this.f.cron);
+        if (this.routinePages) {
+          const at = typeof params.offset === "number" ? params.offset : 0;
+          answer.jobs = this.routinePages[at] ?? [];
+          answer.total = this.routinePages.flat().length;
+          answer.hasMore = at + 1 < this.routinePages.length;
+          answer.nextOffset = answer.hasMore ? at + 1 : null;
+          return answer;
+        }
+        answer.jobs = this.routineRunning
+          ? [
+              {
+                id: "daily-digest",
+                name: "Daily digest",
+                enabled: true,
+                runningAtMs: 1_795_800_000_000,
+              },
+            ]
+          : [];
+        answer.total = answer.jobs.length;
         return answer;
       }
       case "config.patch": {
@@ -309,6 +373,7 @@ export class FakeGateway {
     if (hook?.refuse) throw this.refusal(hook.refuse);
     if (hook?.lose === "before") throw new LostReply(`${method}: the reply didn't come`);
     let answer = this.handle(method, p);
+    if (hook?.refuseAfter) throw this.refusal(hook.refuseAfter);
     if (hook?.lose === "after") throw new LostReply(`${method}: the reply didn't come`);
     if (hook?.answer) answer = hook.answer(answer);
     return answer;
@@ -372,6 +437,10 @@ export function contextFor(
     records?: Map<string, PluginRecord | null>;
     epoch?: () => number;
     serverVersion?: string;
+    /** The app's carried list; the pin alone by default. */
+    carried?: PluginPin[];
+    /** The host's check of its tarball; the app's own, verified, by default. */
+    artifact?: (pin: PluginPin) => Promise<VerifiedArtifact>;
   } = {},
 ): PluginInstallContext & { slept: number[]; records: Map<string, PluginRecord | null> } {
   const records = options.records ?? new Map<string, PluginRecord | null>();
@@ -402,6 +471,14 @@ export function contextFor(
       records.set(id, record ? JSON.parse(JSON.stringify(record)) : null);
     },
     shipped: SHIPPED,
+    carried: options.carried ?? [PIN],
+    artifact:
+      options.artifact ??
+      (async () => ({
+        path: ARCHIVE,
+        root: RESOURCES,
+        integrity: TARBALLS[ARCHIVE]!.integrity,
+      })),
     slept,
     records,
   };

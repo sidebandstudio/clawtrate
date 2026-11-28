@@ -60,6 +60,10 @@ export class OperatorSession {
   private client: GatewayClient | null = null;
   /** Between a close and the client's own reconnect, requests wait for the next hello. */
   private ready = false;
+  /** A hello is in effect and no close has come since. */
+  get isUp(): boolean {
+    return this.ready;
+  }
   /** Moves on with each hello: what was read on one connection is never written on the next. */
   generation = 0;
   private readonly helloWaiters = new Set<() => void>();
@@ -68,6 +72,8 @@ export class OperatorSession {
   deviceId = "";
   /** The OpenClaw version the gateway reported in its hello. */
   serverVersion: OpenclawVersion | null = null;
+  /** The scopes the gateway granted in its latest hello (`auth.scopes`): what this connection holds. */
+  grantedScopes: string[] = [];
   /** Each request's limit when it names none. */
   private requestTimeoutMs = 60_000;
 
@@ -162,6 +168,10 @@ export class OperatorSession {
               settle({ ok: false, error: error as Error });
               return;
             }
+            const scopes = asRecord(asRecord(hello).auth).scopes;
+            session.grantedScopes = Array.isArray(scopes)
+              ? scopes.filter((scope): scope is string => typeof scope === "string")
+              : [];
             session.client = client;
             session.generation += 1;
             session.ready = true;

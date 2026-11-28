@@ -11,7 +11,15 @@
 // is cleaned up by the next `pnpm e2e`.
 import { expect, test } from "@playwright/test";
 import { randomBytes } from "node:crypto";
-import { cpSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  cpSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -22,7 +30,7 @@ import {
 } from "../apps/desktop/packaging/carried-plugins.ts";
 import { PluginInstaller, type PluginRecord } from "../packages/core/src/plugin-install.ts";
 import { openInstance, readDevConnection } from "../tools/dev-gateway/src/cli.ts";
-import { operatorContext } from "../tools/dev-gateway/src/install-plugin.ts";
+import { operatorContext, recordMap } from "../tools/dev-gateway/src/install-plugin.ts";
 import { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
 import { newRunId, ownIdentity } from "../tools/dev-gateway/src/state-guard.ts";
 import { devGateway, FORBIDDEN_PORTS, listInstances, resetInstance } from "./global-setup.ts";
@@ -73,9 +81,13 @@ async function operator(displayName: string): Promise<OperatorSession> {
 
 /** The engine on this device's connection; `before` runs before each request it sends. */
 function engine(before?: (method: string, params: Record<string, unknown>) => Promise<void>) {
-  const ctx = operatorContext(device, records, [
-    { version: older.version, integrity: older.integrity },
-  ]);
+  // The app's tarball as the host hands it: checked at each stage, inside its packing folder.
+  const ctx = operatorContext(
+    device,
+    recordMap(records),
+    { pin, archive, dir: join(archive, "..") },
+    [{ version: older.version, integrity: older.integrity }],
+  );
   return new PluginInstaller({
     ...ctx,
     request: async (method, params) => {
@@ -141,7 +153,9 @@ test.beforeAll(async () => {
       throw new Error(`instance ${INSTANCE} is on port ${port}, which e2e never uses`);
 
   // The app's own tarball, as its build packs it, with the pin its build writes.
-  const dir = mkdtempSync(join(tmpdir(), TEMP_PREFIX));
+  // Resolved: the system's temporary folder can be reached through a symbolic link (macOS),
+  // which the tarball's check refuses.
+  const dir = realpathSync(mkdtempSync(join(tmpdir(), TEMP_PREFIX)));
   record.dirs.push(dir);
   saveRecord(RECORDS, record);
   const list = packCarried(join(dir, "app"));
@@ -208,7 +222,7 @@ test("row 1: installs the app's tarball, off until the enable, with the source d
       seen.push(
         `${method} ${JSON.stringify((await state()).entry ?? null)} ${params.enabled ?? ""}`,
       );
-  }).install(pin, archive, CONFIRM);
+  }).install(pin, CONFIRM);
   expect(outcome).toEqual({ kind: "enabled" });
   // Before each write the entry was off, or absent before the first. A write the gateway answered
   // "already running" is sent again, so it is seen twice: repeats are folded.
@@ -235,8 +249,8 @@ test("row 3: taken off it stays installed and off; nothing installs it again; Tu
     listed: { version: pin.version, state: "unloaded" },
   });
   expect((await state()).entry).toEqual({ enabled: false });
-  expect(await engine().install(pin, archive, CONFIRM)).toMatchObject({ stop: "listed-off" });
-  expect(await engine().turnOn(pin, archive, CONFIRM)).toEqual({ kind: "enabled" });
+  expect(await engine().install(pin, CONFIRM)).toMatchObject({ stop: "listed-off" });
+  expect(await engine().turnOn(pin, CONFIRM)).toEqual({ kind: "enabled" });
   expect((await state()).listed).toMatchObject({ state: "active" });
 });
 
@@ -245,8 +259,8 @@ test("row 2: after an uninstall elsewhere, Add again installs it", async () => {
   // Another tool uninstalls it: the gateway leaves the entry OFF.
   await ownerCall("plugins.uninstall", { pluginId: ID });
   expect(await state()).toMatchObject({ entry: { enabled: false }, listed: null });
-  expect(await engine().install(pin, archive, CONFIRM)).toMatchObject({ stop: "not-listed-off" });
-  expect(await engine().addAgain(pin, archive, CONFIRM)).toEqual({ kind: "enabled" });
+  expect(await engine().install(pin, CONFIRM)).toMatchObject({ stop: "not-listed-off" });
+  expect(await engine().addAgain(pin, CONFIRM)).toEqual({ kind: "enabled" });
 });
 
 test("row 4: an update the person asks for, from an older shipped release", async () => {
@@ -270,8 +284,8 @@ test("row 4: an update the person asks for, from an older shipped release", asyn
   });
   expect((await state()).listed).toMatchObject({ version: older.version, state: "active" });
   // Nothing updates by itself.
-  expect(await engine().install(pin, archive, CONFIRM)).toMatchObject({ stop: "other-copy" });
-  expect(await engine().update(pin, archive, CONFIRM)).toEqual({ kind: "enabled" });
+  expect(await engine().install(pin, CONFIRM)).toMatchObject({ stop: "other-copy" });
+  expect(await engine().update(pin, CONFIRM)).toEqual({ kind: "enabled" });
   expect((await state()).listed).toMatchObject({ version: pin.version, state: "active" });
 });
 
@@ -284,7 +298,7 @@ test("row 7b: the owner's deny between the last check and the enable is kept", a
       denied = true;
       await ownerPatch({ plugins: { deny: [ID] } });
     }
-  }).turnOn(pin, archive, CONFIRM);
+  }).turnOn(pin, CONFIRM);
   expect(outcome).toMatchObject({ stop: "owner-settings" });
   expect(await state()).toMatchObject({ deny: [ID], listed: { state: "unloaded" } });
   await ownerPatch({ plugins: { deny: [] } }, ["plugins.deny"]);
@@ -298,7 +312,7 @@ test("row 7e: the owner's revoked grant before the enable: never left running", 
       revoked = true;
       await ownerPatch({ plugins: { entries: { [ID]: { enabled: false, hooks: null } } } });
     }
-  }).turnOn(pin, archive, CONFIRM);
+  }).turnOn(pin, CONFIRM);
   // Which of two safe ends depends on the gateway's timing. If it takes the enable at once, step
   // 8 finds the grant gone and turns the plugin off ("owner-settings"). If it answers "already
   // running" just after the owner's write (it often does), the read before the enable is sent

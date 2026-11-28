@@ -1,13 +1,23 @@
 // `--install-plugin`: which plugins it takes, how it packs them, and what it says. The install
 // itself is the engine's (packages/core/test/plugin-install.test.ts) and the e2e spec's
 // (e2e/plugin-install.spec.ts).
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { spawnSync } from "node:child_process";
 import {
   devConfig,
+  installCarried,
+  installRecordsFile,
   openInstance,
   recordedStartOptions,
   sandboxProblems,
@@ -19,7 +29,10 @@ import {
   INSTALLED_GRANTS,
   installPlugin,
   operatorContext,
+  type Packed,
   packCarried,
+  recordMap,
+  verifyPacked,
 } from "../src/install-plugin.ts";
 import type { OperatorSession } from "../src/operator.ts";
 import type { PluginRecord } from "../../../packages/core/src/plugin-install.ts";
@@ -29,6 +42,7 @@ import {
   ID,
   PIN,
   Refusal,
+  TARBALLS,
 } from "../../../packages/core/test/plugin-gateway.ts";
 import { tempDir } from "../../../test/temp-dir.ts";
 import type { InstancePorts } from "../src/registry.ts";
@@ -91,14 +105,36 @@ describe("--install-plugin", () => {
 
   it("refuses the option before any command runs or any instance changes", () => {
     const cli = join(CHECKOUT, "tools/dev-gateway/src/cli.ts");
+    // An OpenClaw that isn't there: a refusal that comes after the version probe would say so.
     const run = (...args: string[]) =>
-      spawnSync(process.execPath, [cli, ...args], { encoding: "utf8" });
+      spawnSync(process.execPath, [cli, ...args], {
+        encoding: "utf8",
+        env: { ...process.env, OPENCLAW_BIN: "/nowhere/openclaw" },
+      });
     const prune = run("prune", "--install-plugin", "clawtrate-voice");
     expect(prune.status).toBe(1);
     expect(prune.stderr).toContain("--install-plugin is a start option; prune does not take it");
     const typo = run("start", "--instance", "never-made", "--install-plugin", "clawtrate-vioce");
     expect(typo.status).toBe(1);
     expect(typo.stderr).toContain('--install-plugin takes clawtrate-voice, not "clawtrate-vioce"');
+    // Loaded and installed at once: refused before the version probe or anything else, and the
+    // command on a running instance needs its plugin's name.
+    const both = run(
+      "start",
+      "--instance",
+      "never-made",
+      "--with-plugin",
+      "clawtrate-voice",
+      "--install-plugin",
+      "clawtrate-voice",
+    );
+    expect(both.status).toBe(1);
+    expect(both.stderr).toContain(
+      "clawtrate-voice is loaded with --with-plugin and installed with --install-plugin",
+    );
+    const unnamed = run("install-plugin", "--instance", "never-made");
+    expect(unnamed.status).toBe(1);
+    expect(unnamed.stderr).toContain("install-plugin takes the plugin to install: clawtrate-voice");
     // Two Node processes start the tool's CLI, which takes more than Vitest's 5 s under load.
   }, 40_000);
 
@@ -190,16 +226,45 @@ describe("--install-plugin", () => {
   });
 
   /** An operator session over the engine tests' stand-in gateway, one connection at a time. */
-  function session(gateway: FakeGateway): OperatorSession {
+  function session(
+    gateway: FakeGateway,
+    grantedScopes = ["operator.admin", "operator.read", "operator.write"],
+  ): OperatorSession {
     const fake = {
       generation: 1,
+      isUp: true,
+      grantedScopes,
       serverVersion: gateway.version,
+      deviceId: "install-test-device",
       events: [],
       waitFor: () => Promise.reject(new Error("no event")),
       requestOnce: (method: string, params: unknown) => gateway.request(method, params),
+      close: async () => {},
     };
     return fake as unknown as OperatorSession;
   }
+
+  /** The app's packing, in a folder this file keeps to its end, known to the stand-in gateway. */
+  let packing: Packed;
+  beforeAll(() => {
+    packing = packCarried(CHECKOUT, realpathSync(tempDir("install-plugin-pack-")), ID);
+    TARBALLS[packing.archive] = TARBALLS[ARCHIVE]!;
+  }, 40_000);
+  const packedOnce = (): Packed => packing;
+
+  it("checks the packed tarball as the app's host checks its own: resolved, inside, its bytes", () => {
+    const packed = packedOnce();
+    expect(verifyPacked(packed)).toEqual({
+      path: packed.archive,
+      root: packed.dir,
+      integrity: PIN.integrity,
+    });
+    const link = join(realpathSync(tempDir("install-plugin-link-")), "pack");
+    symlinkSync(packed.dir, link);
+    expect(() =>
+      verifyPacked({ archive: join(link, packed.archive.slice(packed.dir.length + 1)), dir: link }),
+    ).toThrow("symbolic link");
+  });
 
   it("resumes an attempt it left, and never turns its stop into a fresh enable", async () => {
     const gateway = FakeGateway.at("2026.10.6", "off");
@@ -217,15 +282,56 @@ describe("--install-plugin", () => {
         },
       ],
     ]);
-    const packed = { pin: PIN, archive: ARCHIVE, unrecorded: false };
-    const outcome = await installPlugin(session(gateway), packed, records);
+    const outcome = await installPlugin(session(gateway), packedOnce(), recordMap(records));
     // A lost enable with the entry still off is a stop (#832): no Turn on after it.
     expect(outcome).toMatchObject({ kind: "stopped", stop: "listed-off" });
     expect(gateway.calls.some((c) => c.method === "plugins.setEnabled")).toBe(false);
   });
 
+  it("the command run again on the same instance resumes the attempt the first run left", async () => {
+    const home = realpathSync(tempDir("install-plugin-instance-"));
+    const inst = openInstance("install-check", { home, runRoot: join(home, "run") });
+    // Its packing lands where every run packs: known to the stand-in gateway as the app's.
+    TARBALLS[join(inst.runDir, "carried-plugins", "clawtrate-clawtrate-voice-0.1.0.tgz")] =
+      TARBALLS[ARCHIVE]!;
+    const gateway = FakeGateway.at("2026.10.6", "fresh");
+    // The enable applies and its reply is lost.
+    gateway.hooks.push({ method: "plugins.setEnabled", nth: 1, lose: "after" });
+    const io = { open: async () => session(gateway), unpair: async () => {} };
+    const exit = process.exitCode;
+    try {
+      const first = await installCarried(inst, ID, io);
+      expect(first).toMatchObject({ stop: "lost", mayBeRunning: true });
+      expect(JSON.parse(readFileSync(installRecordsFile(inst), "utf8"))[ID]).toMatchObject({
+        pending: 7,
+      });
+      const staged = gateway.calls.filter((c) => c.method === "plugins.install").length;
+      const second = await installCarried(inst, ID, io);
+      expect(second).toEqual({ kind: "enabled" });
+      // Resumed: turned off, then steps 6 and 7 again; nothing staged again.
+      expect(gateway.calls.filter((c) => c.method === "plugins.install")).toHaveLength(staged);
+      expect(JSON.parse(readFileSync(installRecordsFile(inst), "utf8"))).toEqual({});
+    } finally {
+      process.exitCode = exit;
+    }
+  });
+
+  it("writes only when the gateway's hello granted operator.admin", async () => {
+    const gateway = FakeGateway.at("2026.10.6", "fresh");
+    const outcome = await installPlugin(
+      session(gateway, ["operator.read", "operator.write"]),
+      packedOnce(),
+    );
+    expect(outcome).toMatchObject({ stop: "no-admin" });
+    expect(gateway.writes()).toEqual([]);
+  });
+
   it("tells the gateway's refusals from a request that wasn't answered", () => {
-    const ctx = operatorContext(session(FakeGateway.at("2026.10.6", "fresh")), new Map());
+    const ctx = operatorContext(
+      session(FakeGateway.at("2026.10.6", "fresh")),
+      recordMap(new Map()),
+      packedOnce(),
+    );
     expect(ctx.answered(new Refusal({ message: "no", code: "INVALID_REQUEST" }))).toBe(true);
     expect(ctx.answered(new Error("not connected"))).toBe(false);
   });
