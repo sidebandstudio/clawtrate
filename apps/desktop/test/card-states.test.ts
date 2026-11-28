@@ -330,7 +330,7 @@ describe("Messaged cards from the engine's state", () => {
     ["messaged-sent", "sent"],
     ["messaged-working", "working"],
     ["messaged-recipient-waiting", "recipient-waiting"],
-    ["messaged-no-reply", "no-reply"],
+    ["messaged-no-reply", "finished"],
     ["messaged-no-reply-timeout", "no-reply"],
     ["messaged-replied", "replied"],
     ["messaged-recipient-stopped", "recipient-stopped"],
@@ -379,6 +379,7 @@ describe("Messaged cards from the engine's state", () => {
       "This message waits for your approval. Nothing has been sent.",
     );
     expect(say("messaged-sent")).toBe("Marlow received it. No reply yet.");
+    expect(say("messaged-no-reply")).toBe("Finished. The answer is in Marlow's task.");
     expect(say("messaged-no-reply-timeout")).toMatch(
       /^The message was sent, and no reply came in time\./,
     );
@@ -937,6 +938,7 @@ describe("the Messaged cards claim only what an event established", () => {
       "working",
       "recipient-waiting",
       "no-reply",
+      "finished",
       "replied",
       "recipient-stopped",
       "recipient-failed",

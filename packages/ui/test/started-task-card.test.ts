@@ -480,8 +480,12 @@ describe("F-587: a follow-up to the bot's own task on the Messaged card", () => 
     delivery: { status: "pending" },
   };
   /** The follow-up's card, drawn by the conversation's own card scope, against this list. */
-  const messaged = (tasks: Task[], rows = followUp(accepted)) => {
-    const transcript = transcriptOf(rows);
+  const messaged = (
+    tasks: Task[],
+    rows = followUp(accepted),
+    linkedRuns: Transcript["linkedRuns"] = {},
+  ) => {
+    const transcript = { ...transcriptOf(rows), linkedRuns };
     shown.state = {
       ...initialState,
       bots: [pip, marlow],
@@ -515,6 +519,26 @@ describe("F-587: a follow-up to the bot's own task on the Messaged card", () => 
     expect(words(markup)).toContain("Sent to Compare trail maps");
     expect(markup).toContain('aria-label="Open Compare trail maps"');
     expect(markup).toContain(">Open Compare trail maps</button>");
+  });
+
+  it("F-587: once the task's run for it has finished, says so and where the answer is", () => {
+    const run = (state: "completed" | "running") => ({
+      "34fc6031": {
+        id: "34fc6031",
+        sessionKey: CHILD,
+        state,
+        outcomeKnown: true,
+        startedAt: T + 700,
+        endedAt: state === "completed" ? T + 9_000 : null,
+      },
+    });
+    const markup = messaged([listedTask("done")], followUp(accepted), run("completed"));
+    expect(markup).toContain('data-state="finished"');
+    expect(words(markup)).toContain("Finished. The answer is in Compare trail maps.");
+    expect(words(markup)).not.toContain("No reply yet");
+    expect(messaged([listedTask("running")], followUp(accepted), run("running"))).toContain(
+      'data-state="working"',
+    );
   });
 
   it("F-587: a task started from another conversation stays Messaged <bot>", () => {

@@ -759,7 +759,8 @@ One card for each message a bot sends to another bot: the action card for `sessi
 | Sent                 | check               | The call returned and its result says the recipient accepted the message                                                                                                                                                                      |
 | Working              | working, `--accent` | The result named the recipient's run, and that run's own events show it active                                                                                                                                                                |
 | Recipient waiting    | waiting, `--warn`   | That run is waiting on its user: it asked a question, or it needs an approval                                                                                                                                                                 |
-| No reply yet         | hollow ring         | That run finished, or the call returned, without a reply. This includes a result that reports a timeout and says the message was sent before the error: the message went, and a reply may still come.                                         |
+| Finished             | check               | The call didn't wait (`accepted`), and that run's own events show it completed: its answer is in the recipient's task                                                                                                                         |
+| No reply yet         | hollow ring         | That run finished after a call that waited, or the call returned, without a reply. This includes a result that reports a timeout and says the message was sent before the error: the message went, and a reply may still come.                |
 | Replied              | check, `--accent`   | A reply arrived that an identifier ties to this message                                                                                                                                                                                       |
 | Recipient stopped    | stopped             | That run ended as stopped or cancelled without a reply (F-434)                                                                                                                                                                                |
 | Recipient failed     | failed, `--danger`  | That run ended as failed. The message was delivered; the failure is the recipient's.                                                                                                                                                          |
@@ -777,12 +778,13 @@ Call started ─► Waiting for approval ─► Call started     (allowed: the s
      ├─► Not sent                       (skipped before it ran)
      ├─► Sent ─► Working ⇄ Recipient waiting
      │     │        │
-     │     └────────┴─► Replied | No reply yet | Recipient stopped | Recipient failed
+     │     └────────┴─► Replied | Finished | No reply yet | Recipient stopped | Recipient failed
      ├─► No reply yet                   (a timeout that says the message was sent)
      ├─► Failed                         (an error, with nothing to say it was sent)
      └─► Unknown | Not sent             (the sender was stopped)
 
 No reply yet ─► Replied          only on a reply an identifier ties to this message
+Finished     ─► Replied          likewise
 Unknown      ─► whatever a later event that names this message establishes
 ```
 
@@ -804,6 +806,7 @@ Unknown      ─► whatever a later event that names this message establishes
 | Sent                 | "Marlow received it. No reply yet."                                                                                                                                                                                    |
 | Working              | The recipient's state avatar at 22 px, its name and its current phrase on one row, updating as its actions change: "Marlow · Reading the house log". Nothing else: the folded line already says Working. (F-438)       |
 | Recipient waiting    | "Marlow asked a question in its own task and is waiting for the answer.", or "Marlow needs your approval in its own task." Either has "Open in Marlow", which goes to that card.                                       |
+| Finished             | "Finished. The answer is in Marlow's task.", naming the task's title on a "Sent to <task>" card                                                                                                                        |
 | No reply yet         | "Marlow's run finished without a reply." or, after a timeout, "The message was sent, and no reply came in time." Then: "A reply that names this message appears here; any other arrives as a message from Marlow."     |
 | Replied              | "Marlow replied" and the time, then the reply on an inset                                                                                                                                                              |
 | Recipient stopped    | "Marlow's run for this message was stopped before it replied."                                                                                                                                                         |

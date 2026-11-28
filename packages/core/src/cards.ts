@@ -630,12 +630,12 @@ export function selectMessageCards(input: CardInput, options: CardOptions): Sele
   // A previous state holds only for the same result: an explicit correction starts again from the facts.
   const previousBot = new Map(options.previous?.botMessages.map((card) => [card.id, card]));
   const previousMcp = new Map(options.previous?.mcpCalls.map((card) => [card.id, card]));
-  const prior = <T extends { state: S; correction: number }, S>(
+  const prior = <T extends { correction: number }>(
     previous: Map<string, T>,
     card: { id: string; correction: number },
-  ): S | undefined => {
+  ): T | undefined => {
     const before = previous.get(card.id);
-    return before && before.correction === card.correction ? before.state : undefined;
+    return before && before.correction === card.correction ? before : undefined;
   };
   const botMessages: BotMessageCard[] = [];
   const mcpCalls: McpCallCard[] = [];
@@ -646,14 +646,17 @@ export function selectMessageCards(input: CardInput, options: CardOptions): Sele
       const raw = rawOf(step);
       if (step.toolName === BOT_MESSAGE_TOOL) {
         const card = botMessageCard(step, run, raw, input);
-        card.state = advanceBotMessageState(prior(previousBot, card), card.state);
+        const before = prior(previousBot, card);
+        card.state = advanceBotMessageState(before?.state, card.state);
+        // The recipient's outcome once seen holds after its run leaves `linkedRuns`: Finished reads it.
+        card.recipientRunState ??= before?.recipientRunState ?? null;
         botMessages.push(card);
         continue;
       }
       const identity = mcpIdentity(step, resultBody(raw), options);
       if (!identity) continue;
       const card = mcpCallCard(step, run, raw, identity, input);
-      card.state = advanceMcpCallState(prior(previousMcp, card), card.state);
+      card.state = advanceMcpCallState(prior(previousMcp, card)?.state, card.state);
       mcpCalls.push(card);
     }
   }
