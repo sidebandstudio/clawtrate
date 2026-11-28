@@ -35,6 +35,7 @@ import { useAccountsSection } from "./bots/AccountsSection.tsx";
 import { useCheckInsSection } from "./check-ins/CheckIns.tsx";
 import { useUsageSection } from "./usage/UsageSection.tsx";
 import { useMachinesSection } from "./machines/Machines.tsx";
+import { useSkillsSection } from "./skills/SkillsSection.tsx";
 import { Dialog } from "./bots/Dialog.tsx";
 import { recall, remember } from "./bots/memory.ts";
 import { useAnnouncer } from "./bots/parts.tsx";
@@ -140,6 +141,7 @@ export type SettingsSection =
   | "usage"
   | "machines"
   | "checkins"
+  | "skills"
   | "updates"
   | "advanced";
 type Section = SettingsSection;
@@ -151,6 +153,7 @@ export const SETTINGS_SECTIONS: Array<[Section, string, string]> = [
   ["usage", "Usage", "Tokens, cost and warning budgets"],
   ["machines", "Machines", "Where the bots run"],
   ["checkins", "Check-ins", "When each bot checks in on its own"],
+  ["skills", "Skills", "Your gateway skill library and importing SKILL.md files"],
   ["updates", "Updates", "Clawtrate's own updates, and OpenClaw's on the gateway"],
   [
     "advanced",
@@ -1054,6 +1057,13 @@ export function Settings({
     toNav,
     openRoutines: onOpenRoutines,
   });
+  const skillsSection = useSkillsSection({
+    active: section === "skills",
+    connection,
+    info,
+    announce,
+    toNav,
+  });
 
   const gatewayPane = (
     <>
@@ -1221,42 +1231,44 @@ export function Settings({
         ? accountsSection.view
         : section === "checkins"
           ? checkInsSection
-          : section === "conversation"
-            ? {
-                title: "Conversation",
-                back: toNav,
-                body: (
-                  <ConversationPane
-                    announce={announce}
-                    canWrite={connection.canWrite && !info.readOnly}
-                    canAdmin={connection.canAdmin && !info.readOnly}
-                  />
-                ),
-                foot: null,
-              }
-            : section === "usage"
-              ? usageSection
-              : section === "machines"
-                ? machinesSection
-                : section === "updates"
-                  ? {
-                      title: "Updates",
-                      back: toNav,
-                      foot: null,
-                      body: (
-                        <UpdatesWithOpenClaw
-                          app={<Updates waitingMessages={waitingMessages} {...updateReading} />}
-                        />
-                      ),
-                    }
-                  : section === "advanced"
+          : section === "skills"
+            ? skillsSection
+            : section === "conversation"
+              ? {
+                  title: "Conversation",
+                  back: toNav,
+                  body: (
+                    <ConversationPane
+                      announce={announce}
+                      canWrite={connection.canWrite && !info.readOnly}
+                      canAdmin={connection.canAdmin && !info.readOnly}
+                    />
+                  ),
+                  foot: null,
+                }
+              : section === "usage"
+                ? usageSection
+                : section === "machines"
+                  ? machinesSection
+                  : section === "updates"
                     ? {
-                        title: "Advanced",
+                        title: "Updates",
                         back: toNav,
                         foot: null,
-                        body: <AdvancedPane announce={announce} />,
+                        body: (
+                          <UpdatesWithOpenClaw
+                            app={<Updates waitingMessages={waitingMessages} {...updateReading} />}
+                          />
+                        ),
                       }
-                    : { title: "Gateway", back: toNav, body: gatewayPane, foot: null };
+                    : section === "advanced"
+                      ? {
+                          title: "Advanced",
+                          back: toNav,
+                          foot: null,
+                          body: <AdvancedPane announce={announce} />,
+                        }
+                      : { title: "Gateway", back: toNav, body: gatewayPane, foot: null };
     content = (
       <>
         <header className="b-section-head">
