@@ -121,6 +121,115 @@ export function messageOf(transcript: Transcript, messageId: string): MessageRef
   return null;
 }
 
+/** What a touch acts on: a link, a button, a field or a disclosure. */
+const CONTROLS = "a[href], button, input, select, summary, textarea";
+
+/** A box on the screen, by its edges. */
+type Area = { top: number; right: number; bottom: number; left: number };
+
+/** Where a control takes a touch: its box, grown to its touch area, centred on it, where larger. */
+function touchArea(control: Element): Area {
+  const box = control.getBoundingClientRect();
+  const after = getComputedStyle(control, "::after");
+  // A control with no touch area of its own has an "auto" one, and reaches no further than drawn.
+  const x = Math.max(0, Number.parseFloat(after.width) - box.width) / 2 || 0;
+  const y = Math.max(0, Number.parseFloat(after.height) - box.height) / 2 || 0;
+  return { top: box.top - y, right: box.right + x, bottom: box.bottom + y, left: box.left - x };
+}
+
+/** How far a bar's buttons' touch areas reach past its edges, where they are larger than drawn. */
+function reachPast(toolbar: HTMLElement): number {
+  const bar = toolbar.getBoundingClientRect();
+  let reach = 0;
+  for (const button of toolbar.querySelectorAll(":scope > button")) {
+    const area = touchArea(button);
+    reach = Math.max(
+      reach,
+      bar.left - area.left,
+      area.right - bar.right,
+      bar.top - area.top,
+      area.bottom - bar.bottom,
+    );
+  }
+  return reach;
+}
+
+/** Where a transcript's text shows whole: past the fade of its mask under the header and strip. */
+function shownFrom(scroller: HTMLElement): number {
+  const style = getComputedStyle(scroller);
+  // The mask's last stop, in px as the browser computes it.
+  const fade = /([\d.]+)px\)$/.exec(style.maskImage || style.webkitMaskImage);
+  return scroller.getBoundingClientRect().top + (fade ? Number.parseFloat(fade[1]!) : 0);
+}
+
+/**
+ * What takes a touch in a transcript's view while a bar shows, the bar's own buttons apart: the
+ * touch area of each control there that takes the pointer, and what is drawn over the transcript:
+ * Jump to latest, a thread, the header and the strip.
+ */
+function takenIn(scroller: HTMLElement, toolbar: HTMLElement): Area[] {
+  const view = scroller.getBoundingClientRect();
+  const conversation = scroller.closest(".conversation") ?? scroller;
+  const taken: Area[] = [];
+  for (const each of conversation.querySelectorAll(CONTROLS)) {
+    if (toolbar.contains(each) || each.closest("details:not([open]) > :not(summary)")) continue;
+    const box = each.getBoundingClientRect();
+    if (!box.width) continue;
+    const style = getComputedStyle(each);
+    if (style.pointerEvents === "none" || style.visibility !== "visible") continue;
+    const areas = style.display === "inline" ? each.getClientRects() : [touchArea(each)];
+    for (const area of areas)
+      if (area.bottom > view.top && area.top < view.bottom) taken.push(area);
+  }
+  const over = conversation.querySelectorAll(":scope > .status-strip-detail");
+  for (const each of [...(scroller.parentElement?.children ?? []), ...over])
+    if (each !== scroller) taken.push(each.getBoundingClientRect());
+  return taken;
+}
+
+type Placement = { top: number; left: number };
+
+/** Find the closest free origin along the preferred column or the edges of the blocked areas. */
+function nearestFree(
+  preferred: Placement,
+  max: number,
+  first: number,
+  last: number,
+  blocked: Area[],
+): Placement | undefined {
+  if (first > last) return;
+  const columns = new Set([
+    preferred.left,
+    0,
+    max,
+    ...blocked.flatMap(({ left, right }) => [left, right]),
+  ]);
+  const bands = [...blocked].sort((a, b) => a.top - b.top);
+  let best: Placement | undefined;
+  let distance = Infinity;
+  for (const left of columns) {
+    if (left < 0 || left > max) continue;
+    let start = first;
+    const consider = (end: number) => {
+      if (start > end) return;
+      const top = Math.min(end, Math.max(start, preferred.top));
+      const away = Math.abs(top - preferred.top) + Math.abs(left - preferred.left);
+      if (away >= distance) return;
+      best = { top, left };
+      distance = away;
+    };
+    for (const band of bands) {
+      if (band.top >= last) break;
+      if (left <= band.left || left >= band.right || band.bottom <= start) continue;
+      consider(band.top);
+      start = band.bottom;
+      if (start > last) break;
+    }
+    consider(last);
+  }
+  return best;
+}
+
 /**
  * React, reply and more, shown beside a message while it is hovered, while focus is in
  * them, or after a touch and hold. One tab stop: Left and Right move between them.
@@ -137,8 +246,10 @@ export function MessageActions({
   const env = useMessages();
   const bridge = useBridge();
   const [menu, setMenu] = useState<null | "react" | "more">(null);
-  const [place, setPlace] = useState<{ top: number; left: number } | null>(null);
+  const [place, setPlace] = useState<Placement | null>(null);
   const [held, setHeld] = useState(false);
+  /** A finger opened the bar, which keeps its buttons where a touch reaches them. */
+  const touched = useRef(false);
   const bar = useRef<HTMLDivElement>(null);
   const reactRef = useRef<HTMLButtonElement>(null);
   const moreRef = useRef<HTMLButtonElement>(null);
@@ -157,22 +268,83 @@ export function MessageActions({
     const turnBox = turn.getBoundingClientRect();
     const box = bubble.getBoundingClientRect();
     const width = toolbar.offsetWidth;
+    const height = toolbar.offsetHeight;
     const left =
       role === "user" ? box.left - turnBox.left - width - 6 : box.right - turnBox.left + 6;
     // Within the column: where there is no room beside it, it sits above the bubble's outer corner.
     const max = turnBox.width - width;
     const room = left >= 0 && left <= max;
     const top = box.top - turnBox.top;
-    if (room) setPlace({ top, left });
-    else
-      setPlace({
-        top: top - toolbar.offsetHeight - 4,
-        left:
-          role === "user"
-            ? box.left - turnBox.left
-            : Math.min(max, box.right - turnBox.left - width),
-      });
+    const corner = Math.max(
+      0,
+      Math.min(max, role === "user" ? box.left - turnBox.left : box.right - turnBox.left - width),
+    );
+    // A finger's bar goes where its touch areas show, past the fade under the header and the
+    // strip, and where they cover no other touch area: beside the bubble where there is room,
+    // moved up or down only as far as it must; else at the outer corner, above the bubble, below
+    // it, below what is under it, or over the top of what shows of it. Keep a 2 px margin
+    // at the edges of the view, separate from the reach of the buttons' touch areas.
+    const scroller = touched.current ? turn.closest<HTMLElement>(".transcript") : null;
+    const reach = scroller ? reachPast(toolbar) : 0;
+    const first = scroller ? shownFrom(scroller) + reach + 2 - turnBox.top : -Infinity;
+    const last = scroller
+      ? scroller.getBoundingClientRect().bottom - reach - 2 - height - turnBox.top
+      : Infinity;
+    const blocked = scroller
+      ? takenIn(scroller, toolbar).map((area) => ({
+          top: area.top - turnBox.top - height - reach,
+          right: area.right - turnBox.left + reach,
+          bottom: area.bottom - turnBox.top + reach,
+          left: area.left - turnBox.left - width - reach,
+        }))
+      : [];
+    const nudged = Math.min(last, Math.max(first, top));
+    const above = top - height - 4;
+    // Under the bubble: its reactions and replies link, as far as a touch on them reaches.
+    let under = box.bottom;
+    if (scroller)
+      for (const each of turn.querySelectorAll(CONTROLS))
+        if (!toolbar.contains(each) && each.getBoundingClientRect().top >= box.bottom)
+          under = Math.max(under, touchArea(each).bottom);
+    const lowest = under - turnBox.top + reach + (scroller ? 2 : 0);
+    const places = [
+      ...(room
+        ? [
+            { top, left },
+            { top: nudged, left },
+          ]
+        : []),
+      { top: above, left: corner },
+      { top: box.bottom - turnBox.top + 4, left: corner },
+      { top: lowest, left: corner },
+      { top: nudged, left: corner },
+    ];
+    const shows = ({ top }: Placement) => top >= first && top <= last;
+    const fits = (place: Placement) =>
+      shows(place) &&
+      blocked.every(
+        ({ top, right, bottom, left }) =>
+          place.top <= top || place.top >= bottom || place.left <= left || place.left >= right,
+      );
+    setPlace(
+      places.find(fits) ??
+        nearestFree(places[0]!, max, first, last, blocked) ??
+        places.find(shows) ??
+        places[0]!,
+    );
   }, [turnRef, role]);
+
+  // A bar whose width changes while it shows, as when write access comes or goes, is placed
+  // again. It shows while the stylesheet lets it take the pointer.
+  useEffect(() => {
+    const toolbar = bar.current;
+    if (!toolbar) return;
+    const observer = new ResizeObserver(() => {
+      if (getComputedStyle(toolbar).pointerEvents !== "none") measure();
+    });
+    observer.observe(toolbar);
+    return () => observer.disconnect();
+  }, [measure]);
 
   // After the commit: the turn's own ref is set only once its children's layout effects ran.
   useEffect(() => {
@@ -214,6 +386,7 @@ export function MessageActions({
       stop();
       // The transcript can scroll before its scroll event comes: a message that moved opens nothing.
       if (turn.getBoundingClientRect().top !== start.top) return;
+      touched.current = true;
       measure();
       setHeld(true);
     };
@@ -284,7 +457,10 @@ export function MessageActions({
   }, [turnRef, measure]);
 
   useEffect(() => {
-    if (!held) return;
+    if (!held) {
+      touched.current = false;
+      return;
+    }
     const onDown = (event: PointerEvent) => {
       if (!turnRef.current?.contains(event.target as Node)) setHeld(false);
     };
