@@ -25,7 +25,8 @@ export const FILES_READ_TIMEOUT_MS = 5_000;
  * (`agents.files.list`, a development gateway of 2026.10.6 and of 2026.11.10): an all-missing
  * answer counts as untouched only when it names these.
  */
-const STARTING_FILES = ["AGENTS.md", "SOUL.md", "USER.md"];
+const STARTING_FILE = /^(?:AGENTS|SOUL|USER)\.md$/;
+const STARTING_FILE_COUNT = 3;
 
 /**
  * Whether an `agents.files.list` answer for `botId` says the bot is untouched: true only for an
@@ -44,7 +45,7 @@ export function filesSayUntouched(answer: unknown, botId: string): boolean {
     const file = asRecord(entry);
     if (!file || typeof file.name !== "string") return false;
     if (file.missing !== undefined && typeof file.missing !== "boolean") return false;
-    if (STARTING_FILES.includes(file.name)) starting += 1;
+    if (STARTING_FILE.test(file.name)) starting += 1;
     if (file.missing === true) continue;
     anyPresent = true;
     if (file.name === "BOOTSTRAP.md") bootstrap = true;
@@ -53,7 +54,7 @@ export function filesSayUntouched(answer: unknown, botId: string): boolean {
   if (record.files.length === 0 || memory) return false;
   // Every file missing is a bot before its first turn only when the answer names its starting
   // files; a partial or changed answer is a doubt.
-  return bootstrap || (!anyPresent && starting === STARTING_FILES.length);
+  return bootstrap || (!anyPresent && starting === STARTING_FILE_COUNT);
 }
 
 type Deps = {
