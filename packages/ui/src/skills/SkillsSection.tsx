@@ -11,12 +11,14 @@ import {
   parseSkillMarkdown,
   sameStamp,
   skillSlugProblem,
+  type ClawtrateBridge,
   type ConnectionState,
   type GatewayStamp,
   type HostInfo,
   type SkillImportPreview,
   type SkillLibraryEntry,
   type SkillLibraryList,
+  type SkillLibrarySaveResult,
 } from "@clawtrate/core";
 import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from "react";
 import { useBridge, useCommand } from "../bridge.tsx";
@@ -155,6 +157,32 @@ export async function readPickedSkillFile(
   }
 }
 
+/** Upload local SKILL.md bytes and run `importLibrarySkill`, releasing the upload on failure. */
+export async function importSkillDraft(
+  bridge: Pick<ClawtrateBridge, "attach" | "invoke" | "send">,
+  input: { bytes: Uint8Array; fileName: string; slug: string; stamp: GatewayStamp },
+): Promise<SkillLibrarySaveResult> {
+  const copy = new Uint8Array(input.bytes.byteLength);
+  copy.set(input.bytes);
+  const attached = await bridge.attach({
+    name: input.fileName,
+    type: "text/markdown",
+    data: copy.buffer,
+  });
+  try {
+    return await bridge.invoke({
+      type: "importLibrarySkill",
+      slug: input.slug,
+      attachmentId: attached.id,
+      stamp: input.stamp,
+    });
+  } catch (failure) {
+    // Release is a no-op if the host already consumed the file, and frees it if invoke failed before dispatch.
+    void bridge.send({ type: "releaseAttachments", attachmentIds: [attached.id] }).catch(() => {});
+    throw failure;
+  }
+}
+
 type SavedNotice = {
   slug: string;
   nextAction: string | null;
@@ -167,8 +195,11 @@ function formatBytes(size: number): string {
   return `${(size / (1024 * 1024)).toFixed(2)} MB`;
 }
 
-function tagFor(entry: SkillLibraryEntry, profileId: string | null) {
-  return profileId !== null && entry.ownerProfileId === profileId ? "Your skill" : "Team skill";
+// An admin's list includes other profiles' private skills; only shared or workspace skills are team skills.
+function tagFor(entry: SkillLibraryEntry, profileId: string | null): string | null {
+  if (profileId !== null && entry.ownerProfileId === profileId) return "Your skill";
+  if (entry.shared || entry.ownerProfileId === null) return "Team skill";
+  return null;
 }
 
 /** Library list area: loading, error, unidentified gateway, notices, and entries. */
@@ -251,16 +282,19 @@ export function SkillLibraryView({
             )
           ) : (
             <ul className="sk-list" data-testid="skills-list">
-              {list.entries.map((entry) => (
-                <li key={entry.skillId} className="sk-row" data-testid="skills-row">
-                  <div className="sk-row-head">
-                    <span className="sk-row-slug">{entry.slug}</span>
-                    <span className="sk-tag">{tagFor(entry, list.profileId)}</span>
-                    {!entry.enabled && <span className="sk-tag">Disabled</span>}
-                  </div>
-                  {entry.description && <p className="sk-row-desc">{entry.description}</p>}
-                </li>
-              ))}
+              {list.entries.map((entry) => {
+                const tag = tagFor(entry, list.profileId);
+                return (
+                  <li key={entry.skillId} className="sk-row" data-testid="skills-row">
+                    <div className="sk-row-head">
+                      <span className="sk-row-slug">{entry.slug}</span>
+                      {tag && <span className="sk-tag">{tag}</span>}
+                      {!entry.enabled && <span className="sk-tag">Disabled</span>}
+                    </div>
+                    {entry.description && <p className="sk-row-desc">{entry.description}</p>}
+                  </li>
+                );
+              })}
             </ul>
           )}
         </>
@@ -404,6 +438,7 @@ export function useSkillsSection({
     const seq = ++pickSeq.current;
     setPickError(null);
     setSavedNotice(null);
+    setDraft(null);
     const outcome = await readPickedSkillFile(
       file,
       seq,
@@ -426,19 +461,7 @@ export function useSkillsSection({
     const { id: draftId, bytes, fileName, slug, stamp } = activeDraft;
     setDraft((current) => applyDraftSaveStart(current, draftId));
     try {
-      const copy = new Uint8Array(bytes.byteLength);
-      copy.set(bytes);
-      const attached = await bridge.attach({
-        name: fileName,
-        type: "text/markdown",
-        data: copy.buffer,
-      });
-      const result = await bridge.invoke({
-        type: "importLibrarySkill",
-        slug,
-        attachmentId: attached.id,
-        stamp,
-      });
+      const result = await importSkillDraft(bridge, { bytes, fileName, slug, stamp });
       if (result.outcome === "conflict") {
         setDraft((current) => applyDraftSaveConflict(current, draftId, result.message));
         return;

@@ -206,4 +206,38 @@ test.describe("skills import behaviour", () => {
     expect(result.secondOutcome).toBe("saved");
     expect(result.secondDescription).toBe("Second skill description.");
   });
+
+  test("F-361: picking a new file clears the earlier draft before the new read finishes", async ({
+    page,
+  }) => {
+    const settings = await openSkills(page, "&access=write", "dark");
+    await pickSkillFile(page, CONFLICT_SKILL, "first.md");
+    await expect(settings.getByTestId("skill-import-preview")).toBeVisible();
+    await expect(settings.getByTestId("skill-preview-name")).toHaveText("Deploy Checklist");
+
+    // Hold the next file read open so we can verify the old draft disappears immediately.
+    await page.evaluate(() => {
+      const orig = File.prototype.arrayBuffer;
+      const w = window as unknown as { __releaseSkillRead?: () => void };
+      File.prototype.arrayBuffer = function patchedArrayBuffer(this: File) {
+        File.prototype.arrayBuffer = orig;
+        const pending = orig.call(this);
+        return new Promise<ArrayBuffer>((resolve, reject) => {
+          w.__releaseSkillRead = () => {
+            pending.then(resolve, reject);
+          };
+        });
+      };
+    });
+
+    await pickSkillFile(page, NEW_SKILL, "second.md");
+    await expect(settings.getByTestId("skill-import-preview")).toHaveCount(0);
+    await expect(settings.getByTestId("skill-import-save")).toHaveCount(0);
+
+    await page.evaluate(() => {
+      (window as unknown as { __releaseSkillRead?: () => void }).__releaseSkillRead?.();
+    });
+    await expect(settings.getByTestId("skill-import-preview")).toBeVisible();
+    await expect(settings.getByTestId("skill-preview-name")).toHaveText("Harbour Tide Check");
+  });
 });

@@ -4,8 +4,11 @@
 import {
   parseSkillMarkdown,
   utf8Bytes,
+  type BridgeCommand,
+  type ClawtrateBridge,
   type GatewayStamp,
   type SkillLibraryList,
+  type SkillLibrarySaveResult,
 } from "@clawtrate/core";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
@@ -15,6 +18,7 @@ import {
   applyDraftSaveError,
   applyDraftSaveStart,
   applyDraftSaveSuccess,
+  importSkillDraft,
   readPickedSkillFile,
   SkillLibraryView,
   skillsLoadView,
@@ -147,6 +151,89 @@ describe("Settings → Skills load states and notices", () => {
     expect(emptyTruncated).toContain('data-testid="skills-truncated"');
     expect(emptyTruncated).not.toContain('data-testid="skills-empty"');
   });
+
+  it("F-361: does not label another profile's private skill as a team skill", () => {
+    const baseEntry = listOf().entries[0]!;
+    const html = renderToStaticMarkup(
+      createElement(SkillLibraryView, {
+        list: listOf({
+          profileId: "gateway-owner",
+          entries: [
+            {
+              ...baseEntry,
+              skillId: "own-1",
+              slug: "own-private",
+              ownerProfileId: "gateway-owner",
+              shared: false,
+            },
+            {
+              ...baseEntry,
+              skillId: "team-1",
+              slug: "shared-team",
+              ownerProfileId: "profile-kit",
+              shared: true,
+            },
+            {
+              ...baseEntry,
+              skillId: "ws-1",
+              slug: "workspace-skill",
+              ownerProfileId: null,
+              shared: false,
+            },
+            {
+              ...baseEntry,
+              skillId: "other-1",
+              slug: "other-private",
+              ownerProfileId: "profile-sam",
+              shared: false,
+            },
+          ],
+        }),
+        loadError: null,
+        loading: false,
+        unidentified: false,
+        onRetry: () => {},
+      }),
+    );
+
+    const rows = html.split('<li class="sk-row"').slice(1);
+    expect(rows).toHaveLength(4);
+    expect(rows[0]).toContain("own-private");
+    expect(rows[0]).toContain('<span class="sk-tag">Your skill</span>');
+    expect(rows[1]).toContain("shared-team");
+    expect(rows[1]).toContain('<span class="sk-tag">Team skill</span>');
+    expect(rows[2]).toContain("workspace-skill");
+    expect(rows[2]).toContain('<span class="sk-tag">Team skill</span>');
+    expect(rows[3]).toContain("other-private");
+    expect(rows[3]).not.toContain("Team skill");
+    expect(rows[3]).not.toContain("Your skill");
+    expect(rows[3]).not.toContain("sk-tag");
+
+    // Without a caller profileId, an unshared profile-owned skill still must not claim Team skill.
+    const noProfile = renderToStaticMarkup(
+      createElement(SkillLibraryView, {
+        list: listOf({
+          profileId: null,
+          entries: [
+            {
+              ...baseEntry,
+              skillId: "other-2",
+              slug: "unowned-view",
+              ownerProfileId: "profile-sam",
+              shared: false,
+            },
+          ],
+        }),
+        loadError: null,
+        loading: false,
+        unidentified: false,
+        onRetry: () => {},
+      }),
+    );
+    expect(noProfile).toContain("unowned-view");
+    expect(noProfile).not.toContain("Team skill");
+    expect(noProfile).not.toContain("Your skill");
+  });
 });
 
 describe("Settings → Skills picker and save concurrency", () => {
@@ -219,5 +306,98 @@ describe("Settings → Skills picker and save concurrency", () => {
       error: "failed",
     });
     expect(applyDraftSaveSuccess(draftBSaving, draftB.id)).toBeNull();
+  });
+
+  it("F-361: releases the uploaded attachment when importLibrarySkill fails before dispatch", async () => {
+    const stamp: GatewayStamp = { gatewayId: "gw-one", target: 1 };
+    const sent: BridgeCommand[] = [];
+    const busy = "Too many requests are waiting; try again when they finish.";
+    const failingBridge: Pick<ClawtrateBridge, "attach" | "invoke" | "send"> = {
+      attach: async (file) => ({
+        id: "att-1",
+        fileName: file.name,
+        mimeType: file.type,
+        sizeBytes: file.data.byteLength,
+      }),
+      invoke: async () => {
+        throw new Error(busy);
+      },
+      send: async (command) => {
+        sent.push(command);
+      },
+    };
+
+    await expect(
+      importSkillDraft(failingBridge, {
+        bytes: utf8Bytes(VALID_A),
+        fileName: "SKILL.md",
+        slug: "skill-a",
+        stamp,
+      }),
+    ).rejects.toThrow(busy);
+    expect(sent).toEqual([{ type: "releaseAttachments", attachmentIds: ["att-1"] }]);
+
+    // A failing release must not mask the original import error.
+    const releaseFailsBridge: Pick<ClawtrateBridge, "attach" | "invoke" | "send"> = {
+      ...failingBridge,
+      send: async () => {
+        throw new Error("queue still full");
+      },
+    };
+    await expect(
+      importSkillDraft(releaseFailsBridge, {
+        bytes: utf8Bytes(VALID_A),
+        fileName: "SKILL.md",
+        slug: "skill-a",
+        stamp,
+      }),
+    ).rejects.toThrow(busy);
+
+    // When attach itself fails, nothing was uploaded to release.
+    const attachFailedSent: BridgeCommand[] = [];
+    const attachFailsBridge: Pick<ClawtrateBridge, "attach" | "invoke" | "send"> = {
+      attach: async () => {
+        throw new Error("upload failed");
+      },
+      invoke: async () => {
+        throw new Error("unexpected");
+      },
+      send: async (command) => {
+        attachFailedSent.push(command);
+      },
+    };
+    await expect(
+      importSkillDraft(attachFailsBridge, {
+        bytes: utf8Bytes(VALID_A),
+        fileName: "SKILL.md",
+        slug: "skill-a",
+        stamp,
+      }),
+    ).rejects.toThrow("upload failed");
+    expect(attachFailedSent).toEqual([]);
+
+    // When invoke succeeds, the host already consumed the upload.
+    const savedSent: BridgeCommand[] = [];
+    const savedResult: SkillLibrarySaveResult = {
+      outcome: "conflict",
+      message: "exists",
+      stamp,
+    };
+    const okBridge: Pick<ClawtrateBridge, "attach" | "invoke" | "send"> = {
+      attach: failingBridge.attach,
+      invoke: (async () => savedResult) as ClawtrateBridge["invoke"],
+      send: async (command) => {
+        savedSent.push(command);
+      },
+    };
+    expect(
+      await importSkillDraft(okBridge, {
+        bytes: utf8Bytes(VALID_A),
+        fileName: "SKILL.md",
+        slug: "skill-a",
+        stamp,
+      }),
+    ).toEqual(savedResult);
+    expect(savedSent).toEqual([]);
   });
 });

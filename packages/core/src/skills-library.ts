@@ -272,6 +272,19 @@ function unquoteYaml(
   return { ok: true, value: raw };
 }
 
+function isFlowSeparatorAfterColon(next: string | undefined): boolean {
+  return (
+    next === undefined ||
+    next === " " ||
+    next === "\t" ||
+    next === "," ||
+    next === "]" ||
+    next === "}" ||
+    next === "[" ||
+    next === "{"
+  );
+}
+
 function scanFlowValue(
   lines: string[],
   startIndex: number,
@@ -283,6 +296,8 @@ function scanFlowValue(
   let inSingle = false;
   let inDouble = false;
   let escaped = false;
+  let atValueStart = true;
+  let afterJsonKey = false;
   for (let lineIndex = startIndex; lineIndex < lines.length; lineIndex += 1) {
     const text = lineIndex === startIndex ? initial : lines[lineIndex]!;
     parts.push(text.trim());
@@ -291,7 +306,10 @@ function scanFlowValue(
       if (inSingle) {
         if (ch === "'") {
           if (text[j + 1] === "'") j += 1;
-          else inSingle = false;
+          else {
+            inSingle = false;
+            afterJsonKey = true;
+          }
         }
         continue;
       }
@@ -302,18 +320,42 @@ function scanFlowValue(
           escaped = true;
         } else if (ch === '"') {
           inDouble = false;
+          afterJsonKey = true;
         }
         continue;
       }
       if (ch === "#" && (j === 0 || text[j - 1] === " " || text[j - 1] === "\t")) break;
-      if (ch === "'") {
+      if (ch === " " || ch === "\t") continue;
+      // In YAML flow collections, quotes start a quoted scalar only at the start of a token;
+      // apostrophes and quotes inside plain scalars (such as `[O'Brien]`) are literal text.
+      if (atValueStart && ch === "'") {
         inSingle = true;
-      } else if (ch === '"') {
+        atValueStart = false;
+        afterJsonKey = false;
+      } else if (atValueStart && ch === '"') {
         inDouble = true;
+        atValueStart = false;
+        afterJsonKey = false;
       } else if (ch === "[") {
         stack.push("]");
+        atValueStart = true;
+        afterJsonKey = false;
       } else if (ch === "{") {
         stack.push("}");
+        atValueStart = true;
+        afterJsonKey = false;
+      } else if (ch === ",") {
+        atValueStart = true;
+        afterJsonKey = false;
+      } else if (ch === ":" && (afterJsonKey || isFlowSeparatorAfterColon(text[j + 1]))) {
+        atValueStart = true;
+        afterJsonKey = false;
+      } else if (
+        atValueStart &&
+        ch === "?" &&
+        (text[j + 1] === undefined || text[j + 1] === " " || text[j + 1] === "\t")
+      ) {
+        afterJsonKey = false;
       } else if (ch === "]" || ch === "}") {
         if (stack.pop() !== ch)
           return {
@@ -328,6 +370,11 @@ function scanFlowValue(
             };
           return { ok: true, endIndex: lineIndex, value: parts.join(" ").trim() };
         }
+        atValueStart = false;
+        afterJsonKey = true;
+      } else {
+        atValueStart = false;
+        afterJsonKey = false;
       }
     }
     if (inSingle || inDouble || escaped)

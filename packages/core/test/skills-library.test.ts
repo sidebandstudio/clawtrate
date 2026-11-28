@@ -211,6 +211,30 @@ describe("SKILL.md validation and preview", () => {
     expect(parseSkillMarkdown(utf8Bytes(goodFlow)).ok).toBe(true);
   });
 
+  it("F-361: keeps apostrophes inside plain YAML flow values while preserving quoted scalars", () => {
+    const plainApostrophe =
+      "---\nname: Tide Table\ndescription: Checks tides.\nmetadata: [O'Brien]\n---\nBody.";
+    expect(parseSkillMarkdown(utf8Bytes(plainApostrophe)).ok).toBe(true);
+
+    const mixedFlow =
+      "---\nname: Tide Table\ndescription: Checks tides.\nmetadata: [Harbour O'Brien, 'O''Brien', \"Mc'Donald\"]\nextra: {author: Tim O'Brien, note: 'O''Brien]', \"k\":'v]'}\n---\nBody.";
+    expect(parseSkillMarkdown(utf8Bytes(mixedFlow)).ok).toBe(true);
+
+    const unclosedQuoted =
+      "---\nname: Tide Table\ndescription: Checks tides.\nmetadata: ['O''Brien]\n---\nBody.";
+    expect(parseSkillMarkdown(utf8Bytes(unclosedQuoted))).toEqual({
+      ok: false,
+      error: expect.stringMatching(/metadata.*unclosed quote/i),
+    });
+
+    const unclosedAfterComma =
+      "---\nname: Tide Table\ndescription: Checks tides.\nmetadata: [O'Brien, 'unclosed]\n---\nBody.";
+    expect(parseSkillMarkdown(utf8Bytes(unclosedAfterComma))).toEqual({
+      ok: false,
+      error: expect.stringMatching(/metadata.*unclosed quote/i),
+    });
+  });
+
   it("F-361: rejects empty, oversized, non-UTF-8, binary and invalid front matter files at the trust boundary", () => {
     expect(parseSkillMarkdown(new Uint8Array(0))).toEqual({
       ok: false,
