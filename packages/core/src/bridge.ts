@@ -110,6 +110,7 @@ export type BridgeCommand =
   | { type: "setupLook" }
   | { type: "setupCancel" }
   | { type: "setupConnect" }
+  | { type: "setupStart" }
   | { type: "setupReset" }
   /** Close the connection and keep the gateway and the pairing, until `retry` reconnects. */
   | { type: "suspend" }
@@ -1621,6 +1622,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
     case "setupLook":
     case "setupCancel":
     case "setupConnect":
+    case "setupStart":
     case "setupReset":
       return { type: command.type };
     case "sendMessage": {
@@ -2315,11 +2317,13 @@ class ViewerSession implements BridgeSession {
       case "setupLook":
       case "setupCancel":
       case "setupConnect":
+      case "setupStart":
       case "setupReset": {
         const setup = policy.setup;
         if (!setup) throw new Error("This host doesn't set up OpenClaw on its computer.");
         if (command.type === "setupLook") return setup.look();
         if (command.type === "setupConnect") return setup.connect();
+        if (command.type === "setupStart") return setup.start();
         if (command.type === "setupCancel") return setup.cancel();
         return setup.reset();
       }

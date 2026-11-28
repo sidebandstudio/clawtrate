@@ -1,0 +1,12 @@
+- status
+- main:
+  - button "Back"
+  - heading "On this computer" [level=2]
+  - heading "OpenClaw's gateway isn't running" [level=3]
+  - term: Port
+  - definition: No gateway answered on port 18789
+  - paragraph: Clawtrate couldn't find a service it can start for this gateway.
+  - button "Look again"
+  - paragraph:
+    - button "Advanced"
+  - paragraph: On this computer

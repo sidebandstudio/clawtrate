@@ -1,0 +1,8 @@
+- status
+- main:
+  - heading "On this computer" [level=2]
+  - heading "OpenClaw settings found for work" [level=3]
+  - paragraph: Clawtrate needs this profile's gateway address to connect.
+  - button "Use Advanced"
+  - button "Look again"
+  - paragraph: On this computer

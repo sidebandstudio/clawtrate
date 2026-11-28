@@ -9,7 +9,7 @@
   - definition: LaunchAgent, stopped
   - term: Port
   - definition: No gateway answered on port 18789
-  - paragraph: Start OpenClaw yourself, then look again.
+  - paragraph: Clawtrate couldn't find a service it can start for this gateway.
   - button "Look again"
   - paragraph:
     - button "Advanced"
