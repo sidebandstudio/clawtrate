@@ -8,7 +8,7 @@ import { describe, expect, it } from "vitest";
 import { ClawtrateClient, FULL_PAIRING_LIMIT, type ProvedRoute } from "../src/client.ts";
 import { endpointSpellings, gatewayEndpoint, validateGatewayUrl } from "../src/gateway-url.ts";
 import type { KeyValueStore } from "../src/host.ts";
-import { FULL_SCOPES, READ_SCOPES } from "../src/scopes.ts";
+import { FULL_SCOPES, INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
 import { gatewayStamp } from "../src/types.ts";
 import {
   deferred,
@@ -587,6 +587,121 @@ describe("the one-time offer of full control (F-500)", () => {
     await until(() => gateway.connects.length > 0);
     expect((gateway.connects[0] as ConnectParams).auth?.deviceToken).toBe("token-A");
     await until(() => !storage.data.has(tokenKey(dotted)));
+    client.stop();
+  });
+
+  it("F-549: an accept whose request a reconnect to another gateway drops can be made again there (#782)", async () => {
+    const storage = pairedAt();
+    const { gateway } = gatewayFor();
+    const client = await connected(clientOn(gateway, storage));
+    await accept(client);
+    await until(() => gateway.calls("device.scopes.requestUpgrade").length === 1);
+    // A task change waits on the same request, for this gateway.
+    const renaming = client
+      .renameTask("agent:main:main", "Weekly", { stamp: gatewayStamp(client.state.connection) })
+      .then(
+        () => "done",
+        (error: Error) => error.message,
+      );
+    await until(() => client.pendingAccessWaiters === 1);
+    // Another gateway answers the reconnect at the same address.
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway-b" });
+    gateway.dropAll();
+    expect(await renaming).toBe("This change was made for another gateway, so nothing was sent.");
+    await until(() => client.state.connection.gatewayId === "gateway-b");
+    await accept(client);
+    await until(() => gateway.calls("device.scopes.requestUpgrade").length === 2);
+    client.stop();
+  });
+
+  it("F-549: an accept still asks after the same gateway's reconnect settles a change that waited beside it (#782)", async () => {
+    const storage = pairedAt(
+      URL,
+      JSON.stringify({
+        token: "token-A",
+        grantedScopes: INTERACTIVE_SCOPES,
+        heldScopes: INTERACTIVE_SCOPES,
+      }),
+    );
+    const { gateway } = gatewayFor();
+    const client = await connected(clientOn(gateway, storage));
+    const stamp = gatewayStamp(client.state.connection);
+    await accept(client);
+    await until(() => gateway.calls("device.scopes.requestUpgrade").length === 1);
+    gateway.dropAll();
+    // Made while reconnecting, the change waits for the hello, which brings it write access.
+    const renaming = client.renameTask("agent:main:main", "Weekly", { stamp }).catch(() => {});
+    await until(() => client.pendingAccessWaiters === 1);
+    await until(() => client.state.connection.status === "connected");
+    await renaming;
+    // The same gateway answered: the accept's request is asked again there.
+    await until(() => gateway.calls("device.scopes.requestUpgrade").length === 2);
+    client.stop();
+  });
+
+  it("F-549: an accept still saving when a task's ask is dropped keeps its place, so a second accept sends no second request (#782)", async () => {
+    const storage = pairedAt();
+    const { gateway, decide } = gatewayFor();
+    const client = await connected(clientOn(gateway, storage));
+    const stamp = gatewayStamp(client.state.connection);
+    // The first accept's save of its answer waits.
+    const set = storage.set.bind(storage);
+    const held = deferred<void>();
+    let writes = 0;
+    storage.set = async (key: string, value: string) => {
+      if (key === offerKey() && ++writes === 1) await held.promise;
+      await set(key, value);
+    };
+    const first = accept(client).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    // A rename made while reconnecting waits for access; the next hello can't read the name.
+    gateway.handlers["gateway.identity.get"] = () => {
+      throw new Error("unavailable");
+    };
+    gateway.dropAll();
+    const renaming = client.renameTask("agent:main:main", "Weekly", { stamp }).then(
+      () => "done",
+      (error: Error) => error.message,
+    );
+    expect(await renaming).toContain("couldn't confirm which gateway");
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway-a" });
+    // Read again, the gateway names itself: the same one.
+    await until(() => client.state.connection.gatewayId === "gateway-a", 6_000);
+    const second = accept(client).then(
+      () => null,
+      (error: unknown) => error,
+    );
+    await sleep(50);
+    // The owner refuses whatever is pending, between the two saves.
+    decide({ status: "rejected" });
+    await sleep(50);
+    held.resolve();
+    await Promise.all([first, second]);
+    await sleep(50);
+    expect(gateway.calls("device.scopes.requestUpgrade")).toHaveLength(1);
+    client.stop();
+  });
+
+  it("F-549: an accept pending when a reconnect can't read its gateway's name ends as a failure in Settings, never quietly (#782)", async () => {
+    const storage = pairedAt();
+    const { gateway } = gatewayFor();
+    const client = await connected(clientOn(gateway, storage));
+    const stamp = gatewayStamp(client.state.connection);
+    await accept(client);
+    await until(() => gateway.calls("device.scopes.requestUpgrade").length === 1);
+    gateway.handlers["gateway.identity.get"] = () => {
+      throw new Error("unavailable");
+    };
+    gateway.dropAll();
+    const renaming = client.renameTask("agent:main:main", "Weekly", { stamp }).then(
+      () => "done",
+      (error: Error) => error.message,
+    );
+    expect(await renaming).toContain("couldn't confirm which gateway");
+    await until(() => client.state.connection.upgrade.status === "error");
+    expect(client.state.connection.upgrade.error).toContain("couldn't confirm which gateway");
     client.stop();
   });
 });
