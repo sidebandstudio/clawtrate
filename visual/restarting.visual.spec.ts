@@ -25,6 +25,8 @@ const restarting = (page: Page, restart: boolean) =>
         ...state.connection,
         status: "reconnecting",
         retryAt: null,
+        // A device paired to send: while away, the composer stays (`access.ts`).
+        requestedScopes: [...new Set([...state.connection.requestedScopes, "operator.write"])],
         restart: restart
           ? { cause: "announced", since: Date.now(), until: Date.now() + 180_000 }
           : null,
