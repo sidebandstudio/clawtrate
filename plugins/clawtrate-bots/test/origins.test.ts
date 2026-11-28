@@ -460,41 +460,27 @@ describe("fix round: tasks a bot started", () => {
     expect(new RunOrigins().sawPrompt(hidden)!.kind).toBe("task");
   });
 
-  it("a task's first run, before the spawn's result names its session, is a task and carries what its starter read", () => {
+  it("a task's first run, before the spawn's result names its session, is pending, then the task with what its starter read", () => {
     const store = new RunOrigins();
     const parent = store.sawPrompt(pip)!;
     store.markRead(parent, "web", "web_search");
-    store.sawSpawn(parent, "marlow");
-    const task = store.sawPrompt({
+    store.sawSpawn(parent, "marlow", "c1", "agent:pip:main");
+    const early = {
       runId: "t1",
       sessionKey: "agent:marlow:dashboard:9",
       agentId: "marlow",
       trigger: "user",
       channel: "webchat",
-    })!;
+    };
+    const task = store.sawPrompt(early)!;
+    // Nothing names it yet: it may be the child, so it is C with something lost meanwhile.
+    expect(store.pending(task)).toBe(true);
+    store.sawSpawned(parent, "agent:marlow:dashboard:9", "c1", "agent:pip:main");
+    expect(store.pending(task)).toBe(false);
     expect(task.kind).toBe("task");
     expect(task.readOutside).toMatchObject({ source: "web", tool: "web_search" });
-    // Its later runs too, by the session the spawn took.
-    expect(
-      store.sawPrompt({
-        runId: "t2",
-        sessionKey: "agent:marlow:dashboard:9",
-        agentId: "marlow",
-        trigger: "user",
-        channel: "webchat",
-      })!.kind,
-    ).toBe("task");
-    // The bot's own main conversation is never taken for a task.
-    store.sawSpawn(parent, "marlow");
-    expect(
-      store.sawPrompt({
-        runId: "m1",
-        sessionKey: "agent:marlow:main",
-        agentId: "marlow",
-        trigger: "user",
-        channel: "webchat",
-      })!.kind,
-    ).toBe("typed");
+    // Its later runs too, by the session the result named.
+    expect(store.sawPrompt({ ...early, runId: "t2" })!.kind).toBe("task");
   });
 
   it("the spawn's result marks the task's session, and runs already in it", () => {
@@ -574,6 +560,8 @@ describe("tasks and what their starter read", () => {
     const starter = store.seen("r-unheld"); // first seen at its call: lost
     store.sawSpawn(starter, "pip", "c1");
     const early = store.sawPrompt(prompt("r-task", "agent:pip:dashboard:1"))!;
+    expect(store.pending(early)).toBe(true);
+    store.sawSpawned(starter, "agent:pip:dashboard:1", "c1");
     expect(early.kind).toBe("task");
     expect(early.readOutside).toMatchObject({ source: "lost" });
     store.sawSpawned(starter, "agent:pip:dashboard:2", "c2");
@@ -600,17 +588,15 @@ describe("tasks and what their starter read", () => {
     store.sawSpawn(pip, "marlow", "call_1", "agent:pip:main");
     store.sawSpawn(pip, "marlow", "call_1", "agent:otto:main");
     store.dropSpawn("call_1", "agent:pip:main");
-    // The other session's spawn under the same id still waits for its task.
-    const first = store.sawPrompt({
+    // The other session's spawn under the same id still waits: a new run may be its child.
+    const run = store.sawPrompt({
       ...prompt("r-m", "agent:marlow:dashboard:1"),
       agentId: "marlow",
     })!;
-    expect(first.kind).toBe("task");
-    const second = store.sawPrompt({
-      ...prompt("r-m2", "agent:marlow:dashboard:2"),
-      agentId: "marlow",
-    })!;
-    expect(second.kind).toBe("typed");
+    expect(store.pending(run)).toBe(true);
+    store.dropSpawn("call_1", "agent:otto:main");
+    expect(store.pending(run)).toBe(false);
+    expect(run.kind).toBe("typed");
   });
 
   it("for a day after the lost set forgot a run, a run the store hasn't seen counts as having lost track of what it read", () => {
@@ -663,26 +649,31 @@ describe("fix round 2b", () => {
     expect(store.sawPrompt(at("p1", "agent:pip:dashboard:9"))!.kind).toBe("typed");
   });
 
-  it("spawn waits are bounded across every bot; a run within a minute of one dropped is a lost task", () => {
-    const store = new RunOrigins({ limits: { ...LIMITS, spawning: 2 } });
+  it("spawn waits are bounded across every bot; a run within a minute of one dropped is pending, never left a task", () => {
+    let t = 1_000;
+    const store = new RunOrigins({ now: () => t, limits: { ...LIMITS, spawning: 2 } });
     const parent = store.sawPrompt(at("r1", "agent:pip:main"))!;
     store.sawSpawn(parent, "marlow", "c1", "agent:pip:main");
     store.sawSpawn(parent, "otto", "c2", "agent:pip:main");
     store.sawSpawn(parent, "juniper", "c3", "agent:pip:main"); // drops marlow's
     expect([...store.spawning.values()].flat()).toHaveLength(2);
     const marlow = store.sawPrompt(at("m1", "agent:marlow:dashboard:1", "marlow"))!;
-    expect(marlow.kind).toBe("task");
-    expect(marlow.readOutside).toMatchObject({ source: "lost" });
+    expect(store.pending(marlow)).toBe(true);
+    t += LIMITS.spawnWaitMs + 1;
+    expect(store.pending(marlow)).toBe(false);
+    expect(marlow.kind).toBe("typed");
   });
 
-  it("within a minute of a dropped wait, a run that takes a surviving clean wait still counts as a lost task", () => {
+  it("within a minute of a dropped wait, a run stays pending even after a surviving wait is named elsewhere", () => {
     const store = new RunOrigins({ limits: { ...LIMITS, spawning: 2 } });
     const parent = store.sawPrompt(at("r1", "agent:pip:main"))!;
     store.sawSpawn(parent, "marlow", "c1", "agent:pip:main");
     store.sawSpawn(parent, "otto", "c2", "agent:pip:main");
     store.sawSpawn(parent, "marlow", "c3", "agent:pip:main"); // drops marlow's c1
     const marlow = store.sawPrompt(at("m1", "agent:marlow:dashboard:1", "marlow"))!;
-    expect(marlow.readOutside).toMatchObject({ source: "lost" });
+    store.sawSpawned(parent, "agent:marlow:dashboard:2", "c3", "agent:pip:main");
+    // It may be c1's child, which nothing will name: C with something lost for the minute.
+    expect(store.pending(marlow)).toBe(true);
   });
 
   it("a spawn's snapshot is invalidated with the held records, so its task counts as lost", () => {
@@ -702,5 +693,42 @@ describe("fix round 2b", () => {
     store.sawSpawn(unheld, "pip", "c1", "agent:pip:main");
     store.sawEnd({ runId: "r-unheld" });
     expect(store.sawPrompt(at("p1", "agent:pip:dashboard:9"))!.kind).toBe("typed");
+  });
+
+  it("an unrelated session's prompt and the child's, both before the result, never swap attribution", () => {
+    const store = new RunOrigins();
+    const parent = store.sawPrompt(at("r1", "agent:pip:main"))!;
+    store.markRead(parent, "web", "web_search");
+    store.sawSpawn(parent, "pip", "c1", "agent:pip:main");
+    // The person's own session first, then the child, before the receipt.
+    const unrelated = store.sawPrompt(at("u1", "agent:pip:dashboard:person"))!;
+    const child = store.sawPrompt(at("k1", "agent:pip:dashboard:child"))!;
+    expect(store.pending(unrelated) && store.pending(child)).toBe(true);
+    store.sawSpawned(parent, "agent:pip:dashboard:child", "c1", "agent:pip:main");
+    expect(child.kind).toBe("task");
+    expect(child.readOutside).toMatchObject({ source: "web" });
+    // The person's session is theirs again, with nothing read, and stays so.
+    expect(store.pending(unrelated)).toBe(false);
+    expect(unrelated.kind).toBe("typed");
+    expect(unrelated.readOutside).toBeNull();
+    expect(store.sawPrompt(at("u2", "agent:pip:dashboard:person"))!.kind).toBe("typed");
+  });
+
+  it("with two waits, each child gets its own parent's read, and none another's meanwhile", () => {
+    const store = new RunOrigins();
+    const reader = store.sawPrompt(at("r1", "agent:pip:main"))!;
+    store.markRead(reader, "web", "web_search");
+    const clean = store.sawPrompt(at("r2", "agent:pip:dashboard:clean"))!;
+    store.sawSpawn(reader, "marlow", "a1", "agent:pip:main");
+    store.sawSpawn(clean, "marlow", "b1", "agent:pip:dashboard:clean");
+    const first = store.sawPrompt(at("m1", "agent:marlow:dashboard:1", "marlow"))!;
+    const second = store.sawPrompt(at("m2", "agent:marlow:dashboard:2", "marlow"))!;
+    // The clean parent's result names the first-arrived session; the reader's is still out.
+    store.sawSpawned(clean, "agent:marlow:dashboard:1", "b1", "agent:pip:dashboard:clean");
+    expect(first.readOutside).toBeNull();
+    expect(store.pending(second)).toBe(true); // not given the clean read by arrival
+    store.sawSpawned(reader, "agent:marlow:dashboard:2", "a1", "agent:pip:main");
+    expect(second.readOutside).toMatchObject({ source: "web" });
+    expect(store.pending(second)).toBe(false);
   });
 });

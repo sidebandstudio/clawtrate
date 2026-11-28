@@ -28,7 +28,7 @@ A screen shows what the gateway confirmed and no more. Where the gateway lacks s
 
 ### Our own identity
 
-The name Clawtrate and the slogan "Your OpenClaw agents, orchestrated." are fixed. Saying what Clawtrate works with, including naming OpenClaw, is fine, and so is using common layout and interaction patterns. Never use OpenClaw's or any other product's logos, icons or copied assets. The logo is `assets/brand/logo.png`. App icons, the favicon and the interface's accent color all come from that one file, so it can be swapped in one place.
+The name Clawtrate and the slogan "Your OpenClaw agents, orchestrated." are fixed. Saying what Clawtrate works with, including naming OpenClaw, is fine, and so is using common layout and interaction patterns. Never use OpenClaw's or any other product's logos, icons or copied assets, with one exception: each model provider's own logo on its tile in Connect an account (`docs/decisions.md`, Brand). The logo is `assets/brand/logo.png`. App icons, the favicon and the interface's accent color all come from that one file, so it can be swapped in one place.
 
 ## What we are building
 

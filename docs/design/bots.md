@@ -49,7 +49,7 @@ Work pane, Settings tab          a bot's settings
   Model and effort                 side by side, from the account's provider
   Tools                            tools that come with the account; T3 Code for this bot
 transcript                       event lines and the turn error, as conversation.md has them
-rail                             a bot's line two carries an account notice
+rail                             a bot's row's name carries an account notice
 ```
 
 A bot is created in one sheet: a large picture, a name, shapes, colours, then one more step, Account, before Create. Everything else a bot has lives in the panel that opens from the title pill, the Work pane, under a Settings tab.
@@ -69,7 +69,7 @@ A bot is created in one sheet: a large picture, a name, shapes, colours, then on
 | Event line, the opening event line with Raw                     | `visual-language.md` §8, `conversation.md` §9 | Served by another account, an account change                     |
 | The turn error                                                  | `conversation.md` §17                         | A run that failed on its account                                 |
 | State marks                                                     | `conversation.md` §2                          | Account states, waiting lines                                    |
-| Bot row line two and its tones                                  | `conversation.md` §20                         | The account notice on a bot's row                                |
+| Bot row's accessible name                                       | `conversation.md` §20                         | The account notice on a bot's row                                |
 | Copy button and its two outcomes                                | `conversation.md` §9                          | Codes, commands, ids                                             |
 
 ### New components
@@ -220,14 +220,18 @@ One component, in two places: inside New bot (title "Connect an account", Back t
 
 ### Choosing how
 
-A sentence: "Sign in with a subscription you already pay for. Your gateway does the sign-in and keeps it; Clawtrate never sees your password and never keeps the sign-in." Then the sign-in methods the gateway can start, in two groups (section 20, row 6):
+A sentence: "Sign in with a subscription you already pay for. Your gateway does the sign-in and keeps it; Clawtrate never sees your password and never keeps the sign-in." Then a grid of providers, one tile per provider the gateway can sign in to (section 20, row 6): its logo and its name, two columns and one at phone width, read left to right, row by row. A tile says "Connected" when the gateway already has an account of that provider, and OpenRouter's says "Billed per token" (its sign-in saves a key). The grouping is one table, `packages/ui/src/bots/provider-tiles.ts`: which of the gateway's provider ids are one provider, its name and logo, and its methods in order, the usual one first, each with a short plain name. Regional and enterprise variants are methods behind their provider's tile, not tiles of their own.
 
-| Group            | Methods (as the installed gateway offers them)                                                                                                     |
-| ---------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
-| Subscriptions    | xAI; ChatGPT (a code); ChatGPT in the browser; Sign in with ChatGPT (on the gateway's machine); GitHub Copilot; GitHub Copilot Enterprise; MiniMax |
-| Billed per token | OpenRouter (its sign-in saves a key, billed per token)                                                                                             |
+| Provider       | Its methods, the usual one first (as OpenClaw 2026.10.6 and 2026.11.10 offer them)                  |
+| -------------- | --------------------------------------------------------------------------------------------------- |
+| OpenAI         | Use a device code; Sign in with a browser; Sign in with ChatGPT (finishes on the gateway's machine) |
+| GitHub Copilot | Use a device code; GitHub Enterprise (your company's GitHub address, then a code)                   |
+| xAI            | Use a device code                                                                                   |
+| OpenRouter     | Sign in with a browser (saves a key, billed per token)                                              |
+| MiniMax        | Global account; China account                                                                       |
+| OpenCode Go    | Sign in with a browser (2026.11.10)                                                                 |
 
-Each row's title is the gateway's label for the method, with its hint after a middle dot; the line under it is what the person will do, from the method's kind: "Open a page and enter a code", "Open a page, then paste a code back here", "Finishes in a browser on the gateway's machine", "Your company's GitHub address, then a code". The provider is named in text; no provider's logo is drawn. Methods the gateway cannot start (Anthropic's sign-ins, local servers) are not listed.
+The four most used show first, in the table's order; the others wait behind "Show more", which moves focus to the first tile it shows. A tile with one method starts it at once; a tile with several shows them in the same place, titled with the provider's name, each row its plain name with what the person will do under it, from the method's kind: "Open a page and enter a code", "Open a page, then paste a code back here", "Finishes in a browser on the gateway's machine", "Your company's GitHub address, then a code". Back from there, or from a sign-in chosen there (started again or not), returns to where it was chosen, and the grid gives focus back to the tile last chosen. Each provider's own logo is drawn (sources in `packages/ui/src/bots/logos/SOURCES.md`). A provider the table doesn't have, from a newer gateway or a plugin, still shows and works, after the known ones, under the gateway's own name for it, with its initial in place of a logo; a method the table doesn't have goes behind its provider's tile, after the known ones, under the gateway's label. Methods the gateway cannot start (Anthropic's sign-ins, local servers) are not listed. The sign-in steps that follow are unchanged.
 
 **The API key path** sits under the list, closed: a disclosure "Use an API key instead" (F-475). It is never open by default and never preselected. Open, it holds:
 
@@ -435,7 +439,7 @@ The press acts on the gateway and the bot the page showed, and on the order it l
 | -------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | The read finds no stored order                                                                     | "Unlocked. The gateway no longer keeps an order for Marlow that names only OpenAI · Work, so Marlow follows its other orders. Checked with the gateway at 5:52 PM." (Clear order: "Cleared. … so it chooses among OpenAI's accounts for Marlow.") Focus moves to it. No "The lock is gone" follows: the person unlocked it. |
 | The gateway refuses                                                                                | On `--warn-soft`: "The gateway refused to unlock Marlow: <its words>."                                                                                                                                                                                                                                                      |
-| No answer comes (20 s, or the connection drops)                                                    | "The gateway didn't answer (<why>), so Clawtrate can't tell yet whether Marlow's order was cleared. Check now reads it again."                                                                                                                                                                                              |
+| No answer comes (20 s, or the connection drops)                                                    | "The gateway didn't answer, so Clawtrate can't tell yet whether Marlow's order was cleared. Check now reads it again."                                                                                                                                                                                                      |
 | The answer came and the order is still there                                                       | "The gateway answered, but its order for Marlow still names only OpenAI · Work. Check now reads it again." (an order that is no longer that one account: "…but it still keeps an order for Marlow. …")                                                                                                                      |
 | The answer came and the read after failed                                                          | "The gateway answered, but Clawtrate couldn't read Marlow's order back, so it can't say yet whether it was cleared. Check now reads it again."                                                                                                                                                                              |
 | The order changed while the confirmation was open                                                  | "Marlow's order changed on the gateway while this was open, so Clawtrate sent nothing. The page shows the order as the gateway has it now."                                                                                                                                                                                 |
@@ -490,7 +494,7 @@ The reason is the gateway's failure reason in words: "signed out" (auth), "out o
 
 **Opened**, the line shows a card: "The gateway's log for this run says OpenAI · Work failed after a rate limit and the gateway moved on to another OpenAI account. It doesn't say which account served the run." With "likely": "**Inferred:** OpenAI · Home was the only other OpenAI account <Bot> could use, so it is likely. The gateway doesn't confirm it." Then "Lock <Bot> to <account>, in its settings, to have a failure stop the run instead.", "Open <Bot>'s settings" and "Raw", which shows the log record as the gateway wrote it (the failed account appears there as a hash).
 
-**On the bot's row**, line two takes the warning in `--warn`, in place of the latest message, when the bot is otherwise calm (done, stopped or idle; a waiting, failed, blocked or working row keeps its own line, `conversation.md` §20): "Tried another account". The row's name adds ", the gateway tried another account". No new mark and no badge. A pinned tile shows nothing extra.
+**On the bot's row**, which is its picture and its name with no line of words (#790, `conversation.md` §20), when the bot is otherwise calm (done, stopped or idle): the row's name adds ", the gateway tried another account". No new mark and no badge. A pinned tile shows nothing extra.
 
 **It clears**, and only on something Clawtrate observes:
 
@@ -527,7 +531,7 @@ A run that fails on its account ends with the turn error of `conversation.md` §
 - When the bot is bound, not locked, and the log shows a rotation, the line of section 12 sits above the card.
 - "Copy request ID" and "Raw" stay as in `conversation.md` §17.
 - "Sign in again" opens Settings on the connect component, starting the same provider's sign-in. "Change account" opens the bot's Settings tab on Change account.
-- **The bot's row** uses its failed state: the failed badge and line two "Couldn't finish: OpenAI refused for quota" or "Couldn't finish: OpenAI sign-in refused" in `--danger`.
+- **The bot's row** uses its failed state: the failed badge, and its name says "a run failed".
 - **The bot's settings** add, in the Model group, a note on `--danger-soft` with the same cause and the two ways forward in words.
 - **Settings, Accounts** shows the account's own state as the gateway reports it. The gateway does not report a pause or a billing failure there, so the account can read "Connected" while its runs are refused; when the log named it as the account that failed, its page adds "Otto's last run failed on it: refused for quota, 5:58 PM."
 
@@ -793,7 +797,7 @@ Only the target column changes. The rows below are the whole set this design pro
 | A bot's Settings tab | Tabs, fact block, group word, `.menu`, empty state, skeleton, the access bar, the pairing command block and waiting line, notes | Select, sub-page head, the lock's waiting row |
 | The served line | Event line, the opening event line and Raw (`conversation.md` §9) | Nothing |
 | An account's failure | The turn error (`conversation.md` §17), the bot row's failed state | Nothing |
-| The row's warning | Bot row line two (`conversation.md` §20), in `--warn` | Nothing |
+| The row's warning | The bot row's accessible name (`conversation.md` §20) | Nothing |
 
 | Settings, Integrations | Fact block, group word, the command block and waiting line, notes, result, the access bar, confirmation | Switch |
 | A bot's T3 Code | Fact block, `b-open` rows, radio group, checkboxes | Switch |

@@ -11,7 +11,6 @@ import type { ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { plainPreview } from "../packages/core/src/mapping.ts";
 import { openInstance, openOperator } from "../tools/dev-gateway/src/cli.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
 import { devGateway, startHost, stopChild } from "./global-setup.ts";
@@ -178,14 +177,11 @@ test.afterAll(async () => {
 });
 process.once("exit", () => host?.child.kill("SIGKILL"));
 
-test("F-519: on a read-only connection, chats from Discord and Slack stay out of the list, its preview, unread and order until shown, and the main conversation stays", async () => {
+test("F-519: on a read-only connection, chats from Discord and Slack stay out of the list, unread and order until shown, and the main conversation stays", async () => {
   test.setTimeout(420_000);
   const key = keys(botId!);
   await unfold();
   await expect(tasks()).toHaveCount(2, { timeout: 30_000 });
-  const native = (await rows(botId!)).find((row) => row.key === key.native)!;
-  const preview = botRow().first().locator(".bot-preview");
-  await expect(preview).toHaveText(plainPreview(native.lastMessagePreview ?? null)!);
   // Both of the bot's own tasks read, so an unread mark can only come from a channel chat.
   for (const each of [key.main, key.native])
     await admin.request("sessions.patch", { key: each, unread: false });
@@ -214,14 +210,12 @@ test("F-519: on a read-only connection, chats from Discord and Slack stay out of
   await expect(tasks()).toHaveCount(4, { timeout: 30_000 });
   await expect(tasks().filter({ hasText: "Discord chat" })).toHaveCount(1);
   await expect(botRow().first().locator(".unread-dot")).toHaveCount(1, { timeout: 20_000 });
-  await expect(preview).not.toHaveText(plainPreview(native.lastMessagePreview ?? null)!);
 
-  // Hidden again, the default: the list, the preview, unread and the order are as before.
+  // Hidden again, the default: the list, unread and the order are as before.
   await setShown(false);
   await expect(tasks()).toHaveCount(2);
   await expect(tasks().filter({ hasText: "Discord chat" })).toHaveCount(0);
   await expect(tasks().filter({ hasText: "Main" })).toHaveCount(1);
-  await expect(preview).toHaveText(plainPreview(native.lastMessagePreview ?? null)!);
   await expect(botRow().first().locator(".unread-dot")).toHaveCount(0);
   expect(await botNames()).toEqual(order);
 

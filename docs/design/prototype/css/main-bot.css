@@ -240,14 +240,6 @@
   font-weight: var(--weight-medium);
 }
 
-.mb-preview {
-  overflow: hidden;
-  color: var(--text-muted);
-  font-size: var(--text-md);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .mb-rail-foot {
   padding: var(--space-3);
 }
@@ -758,4 +750,113 @@
   padding: var(--space-3) var(--space-4);
   border: 1px solid var(--border);
   border-radius: var(--radius-lg);
+}
+
+/* ---- a gateway the person brings (section 15) ---- */
+
+/* "i": its explanation shows under the line it belongs to, on press. */
+.mb-info {
+  display: inline-grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  margin-left: 2px;
+  padding: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-muted);
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-style: italic;
+  font-weight: var(--weight-strong);
+  line-height: 1;
+  vertical-align: 1px;
+  cursor: pointer;
+}
+
+.mb-info[aria-expanded="true"] {
+  border-color: var(--accent-line);
+  color: var(--text);
+}
+
+.mb-tip {
+  margin: var(--space-2) 0 0;
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-raised);
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: 1.45;
+  text-align: left;
+}
+
+.mb-tip[hidden] {
+  display: none;
+}
+
+/* "Set up your Main Bot": the Main Bot's place while the gateway lists none. */
+.mb-setup {
+  display: grid;
+  gap: var(--space-2);
+  justify-items: center;
+  width: 100%;
+  padding: var(--space-3) var(--space-3) var(--space-3);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius-lg);
+  text-align: center;
+}
+
+.mb-setup .mb-hint {
+  max-width: 34ch;
+}
+
+.mb-setup .mb-tip {
+  width: 100%;
+}
+
+.mb-empty {
+  border: 1.5px dashed var(--border-strong);
+  border-radius: 50%;
+}
+
+.mb-star.is-outline {
+  background: var(--bg-rail);
+  box-shadow: inset 0 0 0 1.5px var(--star);
+}
+
+.mb-star.is-outline svg {
+  fill: none;
+  stroke: var(--star);
+  stroke-width: 1.4;
+}
+
+.mb-setup-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  justify-content: center;
+}
+
+.mb-shell[data-phone="true"] > .mb-rail {
+  border-right: 0;
+}
+
+/* On a phone the tile is the list's first item, full width, the name beside it. */
+.mb-shell[data-phone="true"] .mb-tile-wrap {
+  justify-items: stretch;
+}
+
+.mb-shell[data-phone="true"] .mb-tile {
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+  width: 100%;
+  padding: var(--space-2) var(--space-3);
+  text-align: left;
+}
+
+.mb-empty {
+  border-color: var(--text-faint);
 }

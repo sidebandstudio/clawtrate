@@ -277,6 +277,7 @@ export class RunOrigins {
     const facts = factsFrom(ctx);
     const parent = this.taskOf(facts);
     facts.task = parent !== undefined;
+    const maybe = facts.task ? null : this.maybeTaskOf(facts);
     // No positive evidence that this is the run's start while a lost run may
     // have been forgotten: it may be that run, back, with nothing it read.
     const unsure = this.forgetting() ? { source: "lost", tool: null } : null;
@@ -293,6 +294,7 @@ export class RunOrigins {
       steers: 0,
       ended: false,
       lost: false,
+      maybe,
       firstSeenAt: this.now(),
       lastSeenAt: this.now(),
     };
@@ -310,30 +312,46 @@ export class RunOrigins {
 
   /**
    * Whether a run's session is a task a bot's own call made, and what the run
-   * that made it had read (null for nothing): undefined when it isn't one. A
-   * spawn whose session isn't known yet takes the first new run of its bot in
-   * any session but the bot's main one, within a minute: that may take a run
-   * someone typed for a task, which errs toward doing less.
+   * that made it had read (null for nothing): undefined when it isn't one.
+   * Only a session a spawn's result named, or a hidden task's, is one; a run
+   * that may be an unnamed spawn's child is pending instead (maybeTaskOf).
    */
   taskOf(facts) {
     const key = facts.sessionKey;
-    if (key && this.tasks.has(key)) return this.tasks.get(key);
-    if (!key || /^agent:[^:]+:main$/i.test(key) || facts.trigger !== "user") return undefined;
-    const waiting = facts.agentId ? this.spawning.get(facts.agentId) : undefined;
-    const fresh = (waiting ?? []).filter((w) => w.at > this.now() - this.limits.spawnWaitMs);
-    const taken = fresh.shift();
-    if (fresh.length) this.spawning.set(facts.agentId, fresh);
-    else if (facts.agentId) this.spawning.delete(facts.agentId);
-    // A live wait was dropped at the bound within the minute: this run may be its
-    // task, whichever wait it takes, so it is one, having read something lost.
-    const dropped =
-      this.spawnDroppedAt !== null && this.spawnDroppedAt > this.now() - this.limits.spawnWaitMs;
-    if (taken || dropped) {
-      const read = taken && !dropped ? taken.read : { source: "lost", tool: null };
-      this.rememberTask(key, read);
-      return read;
-    }
-    return undefined;
+    return key && this.tasks.has(key) ? this.tasks.get(key) : undefined;
+  }
+
+  /**
+   * Whether a new run might be the child of a spawn whose result hasn't named
+   * it yet: a run of that bot, in any session but its main one, started while
+   * one of its spawns waits (or within the minute after a live wait was dropped
+   * at the bound). Arrival order names nothing, so no wait is consumed: the run
+   * is pending, C with something lost (pending()), until no wait it could belong
+   * to is left; the result that names the child makes that session the task.
+   */
+  maybeTaskOf(facts) {
+    const key = facts.sessionKey;
+    if (!key || /^agent:[^:]+:main$/i.test(key) || facts.trigger !== "user") return null;
+    const cutoff = this.now() - this.limits.spawnWaitMs;
+    const waits = (facts.agentId ? (this.spawning.get(facts.agentId) ?? []) : [])
+      .filter((w) => w.at > cutoff)
+      .map((w) => w.id);
+    const until =
+      this.spawnDroppedAt !== null && this.spawnDroppedAt > cutoff
+        ? this.spawnDroppedAt + this.limits.spawnWaitMs
+        : 0;
+    return waits.length || until ? { waits, until } : null;
+  }
+
+  /** Whether a run may still be an unnamed spawn's child (maybeTaskOf). */
+  pending(run) {
+    const maybe = run?.maybe;
+    if (!maybe || run.task) return false;
+    if (this.now() < maybe.until) return true;
+    const cutoff = this.now() - this.limits.spawnWaitMs;
+    for (const list of this.spawning.values())
+      for (const w of list) if (w.at > cutoff && maybe.waits.includes(w.id)) return true;
+    return false;
   }
 
   rememberTask(key, read) {
@@ -351,6 +369,7 @@ export class RunOrigins {
     if (!bot) return;
     const read = readOf(run);
     const wait = {
+      id: (this.waitIds = (this.waitIds ?? 0) + 1),
       read,
       at: this.now(),
       callId: str(callId),
@@ -423,6 +442,7 @@ export class RunOrigins {
       if (held.sessionKey !== sessionKey) continue;
       held.kind = "task";
       held.task = true;
+      held.maybe = null;
       if (read && !held.readOutside) held.readOutside = { ...read, at: this.now() };
     }
   }

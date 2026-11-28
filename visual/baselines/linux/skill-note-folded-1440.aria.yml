@@ -1,0 +1,64 @@
+- banner: Clawtrate
+- status
+- navigation "Bots":
+  - button "Routines"
+  - 'button "Sort bots: Recent activity"'
+  - button "Search"
+  - button "New"
+  - list:
+    - listitem:
+      - button "Otto, working, 14 tasks, unread, home server operations" [expanded]: Otto home server operations
+      - list "Otto's tasks":
+        - listitem:
+          - button "Disk almost full on the media box"
+        - listitem:
+          - button "Rotate the logs on every machine in the rack before the disks fill up again, working": Rotate the logs on every machine in the rack before the disks fill up again
+        - listitem:
+          - button "Weekly backup check, unread": Weekly backup check
+        - listitem:
+          - button "Certificate renewal warning"
+        - listitem:
+          - button "Router firmware"
+        - listitem:
+          - button "Printer offline again"
+        - listitem:
+          - button "Show all 14"
+        - listitem:
+          - button "New task"
+        - listitem:
+          - button "Archived"
+    - listitem:
+      - button "Juniper, 3 tasks, unread, research": Juniper research
+    - listitem:
+      - button "Marlow, 1 task, editing": Marlow editing
+    - listitem:
+      - button "Pip, a run failed, 4 tasks, unread, planning": Pip planning
+    - listitem:
+      - button "Quartermaster of the Family Calendar and Errands, 2 tasks, household logistics": Quartermaster of the Family Calendar and Errands household logistics
+  - status
+  - button "127.0.0.1:18789, connected. Open the gateway menu."
+  - button "Settings"
+- region "Conversation":
+  - button "Otto, Disk almost full on the media box. Show details.": Otto ·Disk almost full on the media box
+  - button "Show work panel"
+  - region "Transcript":
+    - heading "Disk almost full on the media box" [level=1]
+    - paragraph: "Context: 18,432 of 128,000 tokens"
+    - text: Today 5:38 PM
+    - paragraph: How much space is left on the disk?
+    - toolbar "Message actions":
+      - button "Add a reaction"
+      - button "Reply in a thread"
+      - button "More"
+    - paragraph: About 40 GB are free. The cache uses most of the rest.
+    - toolbar "Message actions":
+      - button "Add a reaction"
+      - button "Reply in a thread"
+      - button "More"
+    - group: "Worked 1 action Saved a skill: disk-check"
+    - status
+  - button "Attach files"
+  - textbox "Message Otto"
+  - button "Send" [disabled]
+  - status
+- status

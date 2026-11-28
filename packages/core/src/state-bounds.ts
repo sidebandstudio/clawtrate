@@ -22,6 +22,14 @@ import {
 } from "./device-approval.ts";
 import { MAX_UPDATED_RUNS, type UpdatedRun } from "./update-notice.ts";
 import {
+  MAX_SKILL_NAME_CHARS,
+  MAX_SKILL_NOTE_AGENT_CHARS,
+  MAX_SKILL_NOTE_SKILLS,
+  SKILL_REVIEW_ID_CHARS,
+  type SkillNote,
+  type SkillNoteSkill,
+} from "./skill-notes.ts";
+import {
   MAX_ACCOUNTS,
   MAX_CATALOG_MODELS,
   MAX_EFFORT_LEVELS,
@@ -286,6 +294,18 @@ export function attachmentsCut(item: { cut?: string[] }): boolean {
   const cut = item.cut ?? [];
   return cut.length >= MAX_CUT_PATHS || cut.some((path) => path.startsWith("attachments"));
 }
+/**
+ * A person's message whose words may not be whole (#726): the gateway cut its row (`truncated`),
+ * a text block was cut to `MAX_BLOCK_CHARS`, or a full list of cut paths may have let that one go.
+ */
+export function wordsCut(item: { truncated?: boolean; cut?: string[] }): boolean {
+  const cut = item.cut ?? [];
+  return (
+    item.truncated === true ||
+    cut.length >= MAX_CUT_PATHS ||
+    cut.some((path) => path.startsWith("blocks"))
+  );
+}
 /** Inter-session messages kept per task, newest. */
 export const MAX_INTER_SESSION = 64;
 /** Outgoing messages per task (also `MAX_OUTBOX_PER_TASK`). */
@@ -462,10 +482,12 @@ export const RUN: Bound = flagged<Run>()({
     uncertain: list(MAX_STOPPED_NAMED, ID),
     refused: list(MAX_STOPPED_NAMED, ID),
     unanswered: list(MAX_STOPPED_NAMED, ID),
+    followUps: list(MAX_STOPPED_NAMED, ID),
     omitted: NUMBER,
     recipientsAsked: FLAG,
   }),
   stoppedForTimeouts: NUMBER,
+  stoppedAsFollowUp: FLAG,
   turnLimit: NUMBER,
   retry: object<NonNullable<Run["retry"]>>()({ attempt: NUMBER, of: NUMBER, reason: NAME }),
 });
@@ -650,6 +672,17 @@ const sentAttachment = object<SentAttachment>()({
   mimeType: NAME,
   sizeBytes: NUMBER,
 });
+// Each id with its two quotes, as bounds count JSON characters.
+const skillNoteSkill = object<SkillNoteSkill>()({
+  name: id(MAX_SKILL_NAME_CHARS + 2),
+  action: ENUM,
+});
+const skillNote = object<SkillNote>()({
+  reviewId: id(SKILL_REVIEW_ID_CHARS + 2),
+  skills: list(MAX_SKILL_NOTE_SKILLS, skillNoteSkill),
+  agentId: id(MAX_SKILL_NOTE_AGENT_CHARS + 2),
+  after: NUMBER,
+});
 const item = flagged<TranscriptItem>()({
   id: ID,
   role: ENUM,
@@ -658,7 +691,6 @@ const item = flagged<TranscriptItem>()({
   model: NAME,
   pictures: list(MAX_PICTURES_PER_ITEM, picture, { pool: "pictures" }),
   files: list(MAX_FILES_PER_ITEM, chatFile, { pool: "files" }),
-  filesPreview: NAME,
   attachments: list(MAX_ATTACHMENTS_PER_ITEM, sentAttachment, { pool: "attachments" }),
   truncated: FLAG,
   messageId: ID,
@@ -669,6 +701,7 @@ const item = flagged<TranscriptItem>()({
   }),
   idempotencyKey: ID,
   runless: FLAG,
+  skillNote,
   brief: FLAG,
   reportRunId: ID,
   updateRunId: ID,
@@ -1184,6 +1217,7 @@ const account = object<GatewayAccount>()({
 const signInMethod = object<SignInMethod>()({
   id: ID,
   provider: ID,
+  providerLabel: NAME,
   label: NAME,
   hint: NAME,
   kind: ENUM,
