@@ -2224,7 +2224,9 @@ describe("the iOS app", () => {
       await steps("file-sheet", [
         tap(save),
         waitFor("Save to Files", 60_000),
-        see("reviews-draft"),
+        // The header's name and size are iOS's own caption, filled in after the sheet is up:
+        // waited for, as the size below is, never assumed at once.
+        waitFor("reviews-draft", 20_000),
         // While the sheet is open the row says nothing: no failure, no outcome yet.
         notSee({ id: "bot-file-note" }),
         // iOS reads the size from the file once it has the sheet up: given a moment, never
