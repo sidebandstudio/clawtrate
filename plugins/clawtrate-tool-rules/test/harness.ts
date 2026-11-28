@@ -58,6 +58,7 @@ export function load(
     now?: () => number;
     log?: { now?: () => number; retentionMs?: number; max?: number };
     startService?: boolean;
+    toolHooks?: () => string[] | null;
   } = { stateDir: "" },
 ) {
   const methods = new Map<string, { handler: (opts: Json) => Promise<void>; opts: Json }>();
@@ -107,6 +108,8 @@ export function load(
     stateDir: options.stateDir,
     // The gateway's global plugin folder, in the test's own state folder (never a real one).
     pluginFolders: [join(options.stateDir, "extensions")],
+    // The other plugins holding a before_tool_call hook: none, unless the test says.
+    toolHooks: options.toolHooks ?? (() => []),
     slots,
     ...(options.now ? { now: options.now } : {}),
     ...(options.log ? { log: options.log } : {}),

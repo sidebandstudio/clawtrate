@@ -33,7 +33,7 @@ import { createHash, randomBytes } from "node:crypto";
 import { readdirSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
-import { evaluate } from "./lib/evaluate.js";
+import { evaluate, targetDecides } from "./lib/evaluate.js";
 import { configuredAgents, explicitlyDenied, exposureWarnings } from "./lib/exposure.js";
 import {
   EVERY_BOT,
@@ -547,6 +547,56 @@ export function globalPluginFolders(stateDir, env = process.env) {
   ];
 }
 
+/** Where OpenClaw 2026.10.6 and 2026.11.10 keep the hooks their plugins registered. */
+const HOOK_RUNNER_STATE = Symbol.for("openclaw.plugins.hook-runner-global-state");
+const PLUGIN_REGISTRY_STATE = Symbol.for("openclaw.pluginRegistryState");
+
+/**
+ * The other plugins holding a `before_tool_call` hook in this gateway
+ * process, from the registries both versions keep there (the hook runner's
+ * and the active one; each `typedHooks` entry names its `pluginId` and
+ * `hookName`), sorted; null where the plugin cannot read them. Such a hook can
+ * change a call's arguments after this plugin decided it: both versions give
+ * each handler the original call and apply the merged arguments only after
+ * the last one (`runBeforeToolCall`), with nothing after that can refuse.
+ *
+ * @param {Record<PropertyKey, any>} [store] where the registries are kept: the process itself
+ * @returns {string[] | null}
+ */
+export function otherToolHooks(store = globalThis) {
+  const registries = [
+    store[HOOK_RUNNER_STATE]?.registry,
+    store[PLUGIN_REGISTRY_STATE]?.activeRegistry,
+  ].filter((registry) => registry !== null && registry !== undefined);
+  if (registries.length === 0) return null;
+  const ids = new Set();
+  for (const registry of registries) {
+    if (!Array.isArray(registry?.typedHooks)) return null;
+    for (const hook of registry.typedHooks) {
+      if (hook?.hookName !== "before_tool_call") continue;
+      const id = text(hook.pluginId);
+      if (!id) return null;
+      if (id !== PLUGIN_ID) ids.add(id);
+    }
+  }
+  return [...ids].sort();
+}
+
+const PLUGIN_ID_FORM = /^[a-z0-9][a-z0-9._/-]{0,63}$/i;
+
+/**
+ * The refusal of a call that would run without a card, when what it acts on
+ * decides that and another plugin can change it after this plugin decided.
+ */
+export function rewritableReason(tool, others) {
+  const named = (others ?? []).filter((id) => PLUGIN_ID_FORM.test(id));
+  const who = named.length > 0 ? `another plugin (${named.join(", ")})` : "another plugin";
+  return clip(
+    `Refused by Clawtrate's rules plugin without asking anyone: whether ${tool} may run depends on what it acts on, and ${who} can change a call after this plugin decides it, so the call's final form cannot be checked. The call did not run.`,
+    DESCRIPTION_MAX,
+  );
+}
+
 /** A key-order-free text of a call's arguments, or null where it has none. */
 function stableText(value) {
   return JSON.stringify(value ?? {}, (_key, v) =>
@@ -681,6 +731,8 @@ export function createToolRules(api, options = {}) {
   const logger = api.logger ?? {};
   const registration = Symbol("registration");
   const now = options.now ?? Date.now;
+  /** The other plugins holding a before_tool_call hook (tests give their own). */
+  const toolHooks = options.toolHooks ?? (() => otherToolHooks());
   /** The global plugin folders looked in for an untracked Codex plugin (tests give their own). */
   const pluginFolders = options.pluginFolders ?? globalPluginFolders(stateDir);
   let codexSeen = { at: -Infinity, found: false };
@@ -1080,6 +1132,20 @@ export function createToolRules(api, options = {}) {
       return { block: true, blockReason: LOST_RULES_REASON };
     }
     const result = evaluate(view.enforced, { agentId, tool, target });
+    // A call that would run without a card, where what it acts on decides that: another
+    // plugin's hook can change it after this decision, unseen, so it is taken as an Ask
+    // and refused, asking no one.
+    if (
+      (result.decision === "none" || result.decision === "allow") &&
+      targetDecides(view.enforced, { agentId, tool })
+    ) {
+      const others = toolHooks();
+      if (others === null || others.length > 0) {
+        const asked = log.add({ ...base, rules, decision: "ask", source: { kind: "rewritable" } });
+        log.answer(asked, "cancelled");
+        return { block: true, blockReason: rewritableReason(tool, others) };
+      }
+    }
     const id = log.add({ ...base, rules, decision: result.decision, source: result.source });
     if (result.decision === "block") return { block: true, blockReason: blockReason(result) };
     if (result.decision !== "ask") return undefined;
@@ -1269,6 +1335,9 @@ export function createToolRules(api, options = {}) {
         // What decided that call: the trusted policy, or the hook where the gateway did not
         // run the policy; null before any call.
         decidedBy: shared.decidedBy,
+        // The other plugins holding a before_tool_call hook, which can change a call after
+        // this plugin decides it; null where the plugin cannot read the gateway's registry.
+        otherToolHooks: toolHooks(),
       },
       matches: view.enforced ? matchesOf(view.enforced) : null,
       cardDetails: cardDetails(cardSetting, currentConfig()),

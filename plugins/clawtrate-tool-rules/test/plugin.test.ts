@@ -8,6 +8,7 @@ import { chmodSync, mkdirSync, readFileSync, rmSync, truncateSync, writeFileSync
 import { join, relative, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin, {
+  otherToolHooks,
   resolveUserPath,
   codexAtPath,
   codexInFolder,
@@ -157,7 +158,7 @@ describe("status says only what the plugin itself knows", () => {
         rulesSchema: 1,
         rules: { state: "none" },
         enforcing: "nothing",
-        hook: { registered: true, lastCallAt: null, decidedBy: null },
+        hook: { registered: true, lastCallAt: null, decidedBy: null, otherToolHooks: [] },
         matches: { tools: [], fallback: [], exempt: ["ask_user"] },
         cardDetails: { mode: "full", because: "no-forwarding" },
         decisions: { state: "kept", setAside: [] },
@@ -168,7 +169,12 @@ describe("status says only what the plugin itself knows", () => {
     now = 2000;
     h.before("pip", "read", { path: "a" });
     const after = (await h.call("status")).payload!;
-    expect(after.hook).toEqual({ registered: true, lastCallAt: 2000, decidedBy: "policy" });
+    expect(after.hook).toEqual({
+      registered: true,
+      lastCallAt: 2000,
+      decidedBy: "policy",
+      otherToolHooks: [],
+    });
     expect(after.matches).toEqual({
       tools: ["coder__deploy_*", "edit", "write"],
       fallback: ["otto"],
@@ -182,6 +188,7 @@ describe("status says only what the plugin itself knows", () => {
       registered: false,
       lastCallAt: null,
       decidedBy: null,
+      otherToolHooks: [],
     });
     const stopped = host();
     stopped.stop();
@@ -1509,6 +1516,96 @@ describe("a call another plugin's policy changed after this one decided it (#606
       { agentId: "main", sessionKey: "agent:main:main", runId: "run-1", toolCallId: "call-1" },
     ) as { blockReason?: string };
     expect(result?.blockReason).toMatch(/could not be checked again before the call runs/);
+  });
+});
+
+describe("another plugin's hook can change a call after the rules decided it (#606)", () => {
+  // Both versions give each before_tool_call handler the original call, and apply the merged
+  // arguments only after the last one, with nothing after that can refuse: the plugin never sees
+  // the final form. A call that would run without a card, where what it acts on decides that,
+  // is taken as an Ask and refused, asking no one, while another plugin holds such a hook.
+  const rules = [
+    { action: "never", tools: ["write"], target: { kind: "path", pattern: "secrets/**" } },
+    { action: "ask", tools: ["exec"] },
+  ];
+
+  it("refuses without a card a call whose target decides it, and only that call", async () => {
+    let others: string[] | null = ["notes-rewriter"];
+    const h = host({ toolHooks: () => others });
+    await h.save("main", rules);
+    const write = h.before("main", "write", { path: "tmp/a" });
+    expect(write?.requireApproval).toBeUndefined();
+    expect(write?.blockReason).toBe(
+      "Refused by Clawtrate's rules plugin without asking anyone: whether write may run depends on what it acts on, and another plugin (notes-rewriter) can change a call after this plugin decides it, so the call's final form cannot be checked. The call did not run.",
+    );
+    const [record] = (await h.call("decisions.list")).payload!.records as Record<string, unknown>[];
+    expect([record?.decision, record?.source, record?.answer]).toEqual([
+      "ask",
+      { kind: "rewritable" },
+      "cancelled",
+    ]);
+    // A Never still blocks; a tool-wide Ask still asks (a changed call is refused by the gateway
+    // after a card's answer); a tool no rule about a target names runs.
+    expect(h.before("main", "write", { path: "secrets/k" })?.blockReason).toMatch(/^Blocked by/);
+    expect(h.before("main", "exec", { command: "ls" })?.requireApproval).toBeDefined();
+    expect(h.before("main", "read", { path: "a" })).toBeUndefined();
+    expect((await h.call("status")).payload?.hook).toMatchObject({
+      otherToolHooks: ["notes-rewriter"],
+    });
+    // Where the plugin cannot read the gateway's registry, the same.
+    others = null;
+    expect(h.before("main", "write", { path: "tmp/a" })?.blockReason).toMatch(
+      /and another plugin can change a call/,
+    );
+    // No other such hook: the call runs.
+    others = [];
+    expect(h.before("main", "write", { path: "tmp/a" })).toBeUndefined();
+  });
+
+  it("refuses a call an Allow about its target lets run under the fallback, not one a tool-wide Allow does", async () => {
+    const h = host({ toolHooks: () => ["notes-rewriter"] });
+    await h.save(
+      "main",
+      [
+        { action: "allow", tools: ["write"], target: { kind: "path", pattern: "notes/**" } },
+        { action: "allow", tools: ["web_fetch"] },
+      ],
+      true,
+    );
+    expect(h.before("main", "write", { path: "notes/a" })?.blockReason).toMatch(
+      /depends on what it acts on/,
+    );
+    expect(h.before("main", "web_fetch", { url: "x" })).toBeUndefined();
+  });
+
+  it("reads which plugins hold a before_tool_call hook from the registries both versions keep", () => {
+    const HOOKS = Symbol.for("openclaw.plugins.hook-runner-global-state");
+    const ACTIVE = Symbol.for("openclaw.pluginRegistryState");
+    const hook = (pluginId: string, hookName = "before_tool_call") => ({
+      pluginId,
+      hookName,
+      handler: () => undefined,
+      priority: undefined,
+    });
+    // 2026.10.6 and 2026.11.10 both: the hook runner's registry and the active one.
+    expect(
+      otherToolHooks({
+        [HOOKS]: {
+          hookRunner: null,
+          registry: { typedHooks: [hook("rewriter"), hook("clawtrate-tool-rules")] },
+        },
+        [ACTIVE]: { activeRegistry: { typedHooks: [hook("other"), hook("x", "after_tool_call")] } },
+      }),
+    ).toEqual(["other", "rewriter"]);
+    expect(
+      otherToolHooks({ [HOOKS]: { registry: { typedHooks: [hook("clawtrate-tool-rules")] } } }),
+    ).toEqual([]);
+    // Nothing there, or a shape the plugin cannot read: it cannot say none.
+    expect(otherToolHooks({})).toBeNull();
+    expect(otherToolHooks({ [HOOKS]: { registry: {} } })).toBeNull();
+    expect(
+      otherToolHooks({ [HOOKS]: { registry: { typedHooks: [{ hookName: "before_tool_call" }] } } }),
+    ).toBeNull();
   });
 });
 

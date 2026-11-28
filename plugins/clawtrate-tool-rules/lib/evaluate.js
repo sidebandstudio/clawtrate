@@ -78,3 +78,25 @@ export function evaluate(scopes, call) {
   }
   return { decision: "ask", source: { kind: "fallback", scope: asking[0] } };
 }
+
+/**
+ * Whether what a call acts on could change its decision from running without
+ * a card: a Never or an Ask about what the tool acts on, or, with "Ask when
+ * nothing else decides" on, an Allow about it. A call another plugin rewrites
+ * after the decision could reach such a rule unseen.
+ */
+export function targetDecides(scopes, call) {
+  const order = [call.agentId, EVERY_BOT]
+    .filter((id, i, all) => typeof id === "string" && all.indexOf(id) === i)
+    .map((id) => scopes.get(id))
+    .filter(Boolean);
+  const fallback = order.some((scope) => scope.fallback);
+  return order.some((scope) =>
+    scope.rules.some(
+      (rule) =>
+        rule.target &&
+        rule.tools.some((entry) => toolMatches(entry, call.tool)) &&
+        (rule.action !== "allow" || fallback),
+    ),
+  );
+}
