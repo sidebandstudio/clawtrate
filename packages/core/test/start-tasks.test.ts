@@ -116,3 +116,21 @@ describe("whether a bot can start tasks", () => {
     }
   });
 });
+
+describe("F-566 #799: a bot that has only sessions_create (OpenClaw 2026.11.10)", () => {
+  it("can start tasks: either tool starts a task the person sees", () => {
+    const denied = excluded("Not included in tools.allow");
+    expect(startTasksFrom(effective([tool("sessions_create")], [denied]))).toEqual({
+      can: true,
+      reason: null,
+    });
+    // Denied for this session, it doesn't count; neither tool, the spawn tool's reason.
+    expect(
+      startTasksFrom(effective([tool("sessions_create", { deniedBySession: true })], [denied])),
+    ).toEqual({ can: false, reason: "Not included in tools.allow" });
+    expect(startTasksFrom(effective([tool("read")], [denied]))).toEqual({
+      can: false,
+      reason: "Not included in tools.allow",
+    });
+  });
+});
