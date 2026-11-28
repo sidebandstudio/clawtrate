@@ -208,14 +208,19 @@ try {
   });
   await step(1, async () => {
     launch();
-    await waitFor("Where does OpenClaw run?", () => hasText(/^Where does OpenClaw run\?$/), 60);
+    const notFound = () => hasText(/^Clawtrate didn't find OpenClaw here$/);
+    const chooseLocation = () => hasText(/^Where does OpenClaw run\?$/);
+    await waitFor(
+      "the not-found card or location choice",
+      () => notFound() || chooseLocation(),
+      60,
+    );
     await ax("focus");
+    if (notFound()) return "Clawtrate didn't find OpenClaw here (opened automatically)";
     await screenshot("02-where-openclaw-runs.png");
     await press("This computer");
-    await waitFor("the card for a Mac without OpenClaw", () =>
-      hasText(/^Clawtrate didn't find OpenClaw here$/),
-    );
-    return "Clawtrate didn't find OpenClaw here";
+    await waitFor("the card for a Mac without OpenClaw", notFound);
+    return 'Clawtrate didn\'t find OpenClaw here (after pressing "This computer")';
   });
   await step(2, async () => {
     if (!hasButton("Set up OpenClaw here")) {
@@ -275,8 +280,9 @@ try {
       () => composer() || !!firstBotAction(),
       60,
     );
-    if (!composer()) {
-      await press(firstBotAction()!.text);
+    const action = firstBotAction();
+    if (action) {
+      await press(action.text);
       await waitFor("the first conversation's composer", composer);
     }
     if ((await ax("compose")) !== "ok")
