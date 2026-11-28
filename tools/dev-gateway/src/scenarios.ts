@@ -350,6 +350,12 @@ export const HAND_OFF_PARTNER = {
   label: "Review the route",
   task: "Read over the Saturday route and say what you would change. Reply in plain text.",
 } as const;
+/** What `#create-task` asks `sessions_create` (OpenClaw 2026.11.10) to start. */
+export const CREATE_TASK = {
+  label: "Plan the picnic",
+  message:
+    "Plan a picnic by the lake for Saturday: where to sit and what to bring. Reply in plain text.",
+} as const;
 /** What `#follow-up` sends to the task the bot started last. */
 export const FOLLOW_UP_MESSAGE = "Also say which route has more shade. Reply in plain text.";
 
@@ -380,11 +386,22 @@ const afterSpawn =
     return [say(`The task did not start (${String(result?.status ?? "unknown")})${reason}`)];
   };
 
+/** The reply after sessions_create: what started, or the gateway's reason it did not. */
+const afterCreate: Step = (ctx) => {
+  const result = lastResult(ctx, "sessions_create");
+  if (typeof result?.sessionKey === "string")
+    return [say(`I started a task for it: ${CREATE_TASK.label}.`)];
+  const reason = typeof result?.error === "string" ? `: ${result.error}` : "";
+  return [say(`The task did not start (${String(result?.status ?? "unknown")})${reason}`)];
+};
+
 /** The task the bot started last in this conversation, from its sessions_spawn results. */
 export function lastStartedTask(ctx: PlanContext): string | null {
   for (const found of [...(ctx.history ?? [])].reverse()) {
-    if (found.name !== "sessions_spawn") continue;
-    const key = lastResult({ ...ctx, results: [found] }, "sessions_spawn")?.childSessionKey;
+    // `sessions_spawn` names the task `childSessionKey`; 2026.11.10's `sessions_create`, `sessionKey`.
+    if (found.name !== "sessions_spawn" && found.name !== "sessions_create") continue;
+    const result = lastResult({ ...ctx, results: [found] }, found.name);
+    const key = found.name === "sessions_spawn" ? result?.childSessionKey : result?.sessionKey;
     if (typeof key === "string") return key;
   }
   return null;
@@ -953,6 +970,16 @@ export const SCENARIOS: Scenario[] = [
     steps: () => [
       spawn(HAND_OFF_HIDDEN),
       afterSpawn(() => "I started a helper on it in the background."),
+    ],
+  },
+  {
+    name: "create-task",
+    phrase: "start a separate task",
+    bots: "any bot, on OpenClaw 2026.11.10",
+    summary: `Starts a task of the bot's own with \`sessions_create\`, the tool OpenClaw 2026.11.10 adds for a task a person asks for, labelled "${CREATE_TASK.label}", whose first message is the bot's brief. 2026.10.6 has no such tool.`,
+    steps: () => [
+      tool("sessions_create", { label: CREATE_TASK.label, message: CREATE_TASK.message }),
+      afterCreate,
     ],
   },
   {
