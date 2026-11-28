@@ -8,12 +8,15 @@ import {
   applyQuestionRequested,
   emptyActivity,
   INTERACTIVE_SCOPES,
+  matchesMenuQuery,
+  MAX_MENU_ROWS,
   newRun,
   parseExecApproval,
   RawTable,
   type ApprovalCard,
   type BridgeCommand,
   type ClawtrateState,
+  type MenuRow,
   type OutgoingMessage,
   type QuestionCard,
   type Run,
@@ -1147,10 +1150,10 @@ export function liveCommand(
     case "setShowGatewayBot":
       set({ ...get(), showGatewayBot: command.on });
       return Promise.resolve();
-    case "readComposerMenu":
+    case "readComposerMenu": {
       // As the gateway lists them for Otto's task: the library skills it has (the person's own and a
       // team skill), its skills and commands; or the bots and a routine.
-      return Promise.resolve(
+      const rows: MenuRow[] =
         command.trigger === "/"
           ? [
               {
@@ -1204,8 +1207,12 @@ export function liveCommand(
                 description: null,
                 insert: "@Morning disk check",
               },
-            ],
+            ];
+      const query = command.query ?? "";
+      return Promise.resolve(
+        (query ? rows.filter((row) => matchesMenuQuery(row, query)) : rows).slice(0, MAX_MENU_ROWS),
       );
+    }
     case "setReaction":
       // As the gateway answers: the message's reactions now, this person's marked.
       update((transcript) => {

@@ -41,6 +41,21 @@ const MAX_DESCRIPTION_CHARS = 160;
 const MAX_NAME_CHARS = 120;
 /** The longest text a row inserts. */
 const MAX_INSERT_CHARS = 256;
+/** The longest menu filter query: nothing longer can match a row's name or inserted text. */
+export const MAX_MENU_QUERY_CHARS = MAX_INSERT_CHARS;
+
+/** Whether a row matches what the person typed after "/" or "@". */
+export function matchesMenuQuery(row: MenuRow, query: string): boolean {
+  const needle = query.toLowerCase();
+  return (
+    !needle || row.name.toLowerCase().includes(needle) || row.insert.toLowerCase().includes(needle)
+  );
+}
+
+function takeMatches(rows: MenuRow[], query: string): MenuRow[] {
+  const matched = query ? rows.filter((row) => matchesMenuQuery(row, query)) : rows;
+  return matched.slice(0, MAX_MENU_ROWS);
+}
 
 const cut = (text: string | null, max: number) =>
   text === null ? null : text.length > max ? `${text.slice(0, max - 1)}…` : text;
@@ -78,6 +93,7 @@ export function slashRows(
   skillsAnswer: unknown,
   metadataAnswer: unknown,
   libraryAnswer: unknown = null,
+  query = "",
 ): MenuRow[] {
   const commands = (
     Array.isArray(asRecord(metadataAnswer)?.commands) ? asRecord(metadataAnswer)!.commands : []
@@ -127,13 +143,14 @@ export function slashRows(
       insert,
     });
   }
-  return rows.slice(0, MAX_MENU_ROWS);
+  return takeMatches(rows, query);
 }
 
 /** The "@" menu: the bots the state lists, then the routines a `cron.list` answer names. */
 export function mentionRows(
   bots: Array<{ id: string; name: string }>,
   cronAnswer: unknown,
+  query = "",
 ): MenuRow[] {
   const rows: MenuRow[] = bots.map((bot) => ({
     kind: "bot",
@@ -157,5 +174,5 @@ export function mentionRows(
       insert: `@${name}`,
     });
   }
-  return rows.slice(0, MAX_MENU_ROWS);
+  return takeMatches(rows, query);
 }
