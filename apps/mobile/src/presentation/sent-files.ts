@@ -12,7 +12,42 @@ export type SentPictureShown =
   | { status: "not-a-picture" }
   | { status: "cannot-load" }
   | { status: "gone" }
-  | { status: "failed" };
+  /**
+   * Not read this time: Try again reads it again. `reason` says why, for the app's log, and
+   * `answered` is the gateway's status when it answered with one.
+   */
+  | { status: "failed"; reason: PictureReason; answered?: number };
+
+/**
+ * Why a sent picture didn't load, as the app's log names it: a fixed few, never an error's own
+ * words, which can carry a ticket, a token, an address or a path. The log ships in the app.
+ */
+export const PICTURE_REASONS = [
+  // Core's own fixed reasons (`sent-pictures.ts` reads them from its words).
+  "busy",
+  "not-connected",
+  "connection-changed",
+  "gateway-answered",
+  "ticket-ran-out",
+  "nothing-sent",
+  "too-slow",
+  "unreachable",
+  // Core failed the read, or the read threw, with words this app doesn't know.
+  "other",
+  "threw",
+  // The app's own: the picture's parts didn't all arrive, or its bytes couldn't be drawn.
+  "parts-missing",
+  "not-drawn",
+] as const;
+
+export type PictureReason = (typeof PICTURE_REASONS)[number];
+
+/** The app's log line for a picture that didn't load: `[picture] reason=<reason>`, and the status. */
+export const pictureLogLine = ({
+  reason,
+  answered,
+}: Extract<SentPictureShown, { status: "failed" }>) =>
+  `[picture] reason=${reason}${answered === undefined ? "" : ` status=${answered}`}`;
 
 /** The one line a picture that isn't shown carries, by why. */
 export const SENT_PICTURE_LINES = {

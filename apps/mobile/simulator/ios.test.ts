@@ -61,6 +61,7 @@ import {
   containerHits,
   deadPort,
   describeConnections,
+  describeFrontRequests,
   devGateway,
   devices,
   displays,
@@ -82,6 +83,7 @@ import {
   operator,
   relay,
   pasteboard,
+  pictureFailure,
   protectedFront,
   protocolFiveGateway,
   Proxy,
@@ -2112,11 +2114,27 @@ describe("the iOS app", () => {
         waitFor({ id: "pairing" }, 90_000),
       ]);
       devGateway("approve");
-      await steps("picture-far", [
-        ...openTask(lineFor("moved.png")),
-        waitFor({ id: "sent-picture", text: lit(alt) }, 60_000),
-        see({ id: "sent-picture", text: lineFor("moved.png") }),
-      ]);
+      const farSince = Date.now();
+      try {
+        await steps("picture-far", [
+          ...openTask(lineFor("moved.png")),
+          waitFor({ id: "sent-picture", text: lit(alt) }, 60_000),
+          see({ id: "sent-picture", text: lineFor("moved.png") }),
+        ]);
+      } catch (error) {
+        // What the front was asked and answered, and the app's reason, each read in a minute at
+        // most; Maestro's failure is the one that stands.
+        const bound = 60_000;
+        throw await pictureFailure(
+          error,
+          {
+            screen: () => screenText(bound),
+            front: () => describeFrontRequests(front!.requests),
+            log: () => appLog(Math.ceil((Date.now() - farSince) / 1000) + 30, bound),
+          },
+          bound,
+        );
+      }
       await shoot("sent-picture-protected");
       // The exact picture sent, drawn from the bytes the gateway gave.
       const at = await layout();

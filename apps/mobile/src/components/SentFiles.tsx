@@ -12,6 +12,7 @@ import { useRuntime } from "../runtime.ts";
 import {
   drawsAsPicture,
   fileSize,
+  pictureLogLine,
   pictureRatio,
   SENT_PICTURE_LINES,
   sentPictureAlt,
@@ -199,6 +200,11 @@ function SentPicture({
   const [shown, setShown] = useState<SentPictureShown>(
     messageKey ? { status: "loading" } : { status: "cannot-load" },
   );
+  // Why it didn't load goes to the app's log, by its fixed reason: the line on screen says only
+  // that it didn't.
+  useEffect(() => {
+    if (shown.status === "failed") console.error(pictureLogLine(shown));
+  }, [shown]);
   const [attempt, setAttempt] = useState(0);
   const [size, setSize] = useState<{ width: number; height: number } | null>(null);
   const [open, setOpen] = useState(false);
@@ -248,7 +254,7 @@ function SentPicture({
             onLoad={({ nativeEvent }) =>
               setSize({ width: nativeEvent.source.width, height: nativeEvent.source.height })
             }
-            onError={() => setShown({ status: "failed" })}
+            onError={() => setShown({ status: "failed", reason: "not-drawn" })}
           />
         </Pressable>
         {open && (

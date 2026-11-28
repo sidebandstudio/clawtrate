@@ -11,7 +11,7 @@ import {
   type FileTransferStart,
 } from "@clawtrate/core";
 import { screenStamp, type ShownStamp } from "../../../packages/ui/src/stamp.ts";
-import type { SentPictureShown } from "./presentation/sent-files.ts";
+import type { PictureReason, SentPictureShown } from "./presentation/sent-files.ts";
 
 type Send = <C extends BridgeCommand>(command: C) => Promise<BridgeResultFor<C>>;
 type StateSource = Parameters<typeof screenStamp>[0];
@@ -51,6 +51,30 @@ export async function collectPicture(
   return joined.length === bytes ? joined : null;
 }
 
+type Failed = Extract<SentPictureShown, { status: "failed" }>;
+
+/** Core's fixed words for a picture's read that failed, by the reason the app's log gives. */
+const CORE_REASONS = new Map<string, PictureReason>([
+  ["Too many pictures are being read; try again in a moment.", "busy"],
+  ["Other files are being read; try again in a moment.", "busy"],
+  ["Not connected to the gateway.", "not-connected"],
+  ["The connection changed while this picture was read.", "connection-changed"],
+  ["The gateway's ticket for this picture had already run out.", "ticket-ran-out"],
+  ["The gateway sent no picture.", "nothing-sent"],
+  ["The picture took too long to arrive.", "too-slow"],
+  ["The gateway couldn't be reached for this picture.", "unreachable"],
+]);
+
+/**
+ * Why a read failed, from core's words when they are exactly its fixed ones, `unknown` otherwise.
+ * The words themselves are never kept: only the reason, and a gateway's status of three digits.
+ */
+function failedWith(message: string, unknown: PictureReason): Failed {
+  const answered = /^The gateway answered ([1-5]\d\d) for this picture\.$/.exec(message)?.[1];
+  if (answered) return { status: "failed", reason: "gateway-answered", answered: Number(answered) };
+  return { status: "failed", reason: CORE_REASONS.get(message) ?? unknown };
+}
+
 /** Your picture `index` of the message `messageKey` in task `key`, as the chat shows it. */
 export async function loadSentPicture(
   send: Send,
@@ -61,12 +85,12 @@ export async function loadSentPicture(
   try {
     const stamp = await screenStamp(source, drawnOn);
     const read = await send({ type: "readSentPicture", ...picture, stamp });
-    if (read.status === "failed") return { status: "failed" };
+    if (read.status === "failed") return failedWith(read.message, "other");
     if (read.status !== "content") return { status: read.status };
     const bytes = await collectPicture(send, read.transfer, read.bytes);
-    if (!bytes) return { status: "failed" };
+    if (!bytes) return { status: "failed", reason: "parts-missing" };
     return { status: "shown", uri: `data:${read.mimeType};base64,${toBase64(bytes)}` };
-  } catch {
-    return { status: "failed" };
+  } catch (error) {
+    return failedWith(error instanceof Error ? error.message : "", "threw");
   }
 }

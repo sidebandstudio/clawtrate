@@ -15,18 +15,20 @@ import {
   writeFileSync,
   type Dirent,
 } from "node:fs";
-import { request as httpRequest } from "node:http";
+import { request as httpRequest, type ServerResponse } from "node:http";
 import { createServer as createHttpsServer } from "node:https";
 import { createServer, Socket, type Server } from "node:net";
 import { networkInterfaces, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { WebSocket, WebSocketServer } from "ws";
+import { INBOUND_MEDIA_ROUTE } from "@clawtrate/core";
 import { callGateway, openInstance, openOperator } from "../../../tools/dev-gateway/src/cli.ts";
 import { IOS_STREAM_HOLD_FILE, parseJsonOutput } from "../../../tools/dev-gateway/src/env.ts";
 import type { OperatorSession } from "../../../tools/dev-gateway/src/operator.ts";
 import { decodePng } from "../../../tools/brand/src/png.ts";
 import { clockTime } from "../../../packages/ui/src/format.ts";
+import { PICTURE_REASONS, SENT_PICTURE_LINES } from "../src/presentation/sent-files.ts";
 
 const run = promisify(execFile);
 const REPO = join(import.meta.dirname, "../../..");
@@ -842,7 +844,170 @@ export type FrontRequest = {
   /** How many Authorization fields it carried, before Node keeps only the first. */
   authorizations: number;
   cookie: string | undefined;
+  /** When it came, in milliseconds since the front opened. */
+  at: number;
+  /** The status the front answered with, once it answered. */
+  status?: number;
+  /** Milliseconds from its arrival until its answer was sent whole or its connection closed. */
+  ms?: number;
+  /** Whether its answer was sent whole, or its connection closed before that. */
+  ended?: "sent" | "closed";
 };
+
+/**
+ * Keep in `request` the status `res` answered with, and when and how the answer ended: sent
+ * whole, or cut off by a closed connection, including one closed before any answer.
+ */
+export function trackAnswer(request: FrontRequest, res: ServerResponse, opened: number): void {
+  res.once("finish", () => {
+    request.status = res.statusCode;
+    request.ended = "sent";
+    request.ms = Date.now() - opened - request.at;
+  });
+  res.once("close", () => {
+    if (request.ended) return;
+    if (res.headersSent) request.status = res.statusCode;
+    request.ended = "closed";
+    request.ms = Date.now() - opened - request.at;
+  });
+}
+
+/** The methods the front's log names; any other is `other`. */
+const FRONT_METHODS = new Set(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]);
+/** F-557's own pictures, the only ones the front's log names. */
+const FRONT_PICTURES = ["shot", "moved"] as const;
+
+/**
+ * A request's route by a fixed name: the media route's `ticket` or `media` (its bytes) read, or
+ * `elsewhere`, with ` for <picture>` when it read one of F-557's own.
+ */
+function frontRoute(target: string): string {
+  let url: URL;
+  try {
+    url = new URL(target, "https://front");
+  } catch {
+    return "elsewhere";
+  }
+  if (url.pathname !== INBOUND_MEDIA_ROUTE) return "elsewhere";
+  const source = url.searchParams.get("source") ?? "";
+  const picture = FRONT_PICTURES.find((name) => source.startsWith(`media://inbound/${name}---`));
+  return `${url.searchParams.get("meta") === "1" ? "ticket" : "media"}${picture ? ` for ${picture}` : ""}`;
+}
+
+/**
+ * The front's requests, one line each, for a failure's message: when each came, its method, its
+ * route by a fixed name and the F-557 picture it read (`frontRoute`), and its answer's status and
+ * time. No path or query is ever printed: they are public in CI, a query holds the ticket, and
+ * Clawtrate's outgoing media path holds a task's session key.
+ */
+export function describeFrontRequests(requests: readonly FrontRequest[]): string {
+  if (requests.length === 0) return "(no requests)";
+  return requests
+    .map((request) => {
+      const method = FRONT_METHODS.has(request.method) ? request.method : "other";
+      const answer =
+        request.ended === "sent"
+          ? `${request.status} in ${request.ms} ms`
+          : request.ended === "closed"
+            ? `${request.status === undefined ? "no answer" : `${request.status}, cut off`}: closed after ${request.ms} ms`
+            : "no answer yet";
+      return `+${(request.at / 1000).toFixed(1)} s ${method} ${frontRoute(request.url)} -> ${answer}`;
+    })
+    .join("\n");
+}
+
+/** A line of the app's log that ends with exactly `pictureLogLine`'s record, which it captures. */
+const PICTURE_LINE = new RegExp(
+  `(?:^|\\s)(\\[picture\\] reason=(?:${PICTURE_REASONS.join("|")})(?: status=[1-5]\\d\\d)?)$`,
+);
+
+/**
+ * The app's reasons a picture didn't load, from its log: each line that ends with exactly the
+ * app's record (`[picture] reason=<one of PICTURE_REASONS>`, and ` status=<three digits>`), and
+ * only that record. Any other line holding `[picture]` is dropped, whatever else it says.
+ */
+export function pictureReasons(log: string): string[] {
+  return log.split(/\r?\n/).flatMap((line) => {
+    const record = PICTURE_LINE.exec(line)?.[1];
+    return record ? [record] : [];
+  });
+}
+
+/** A read for a failure's message, given `ms`: what it gave, or that it threw or ran past `ms`. */
+async function within<T>(
+  read: () => T | Promise<T>,
+  ms: number,
+): Promise<{ ok: true; value: T } | { ok: false; why: "threw" | "timed out" }> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const late = new Promise<{ ok: false; why: "timed out" }>((resolve) => {
+    timer = setTimeout(() => resolve({ ok: false, why: "timed out" }), ms);
+  });
+  try {
+    return await Promise.race([
+      Promise.resolve()
+        .then(read)
+        .then((value) => ({ ok: true as const, value })),
+      late,
+    ]);
+  } catch {
+    return { ok: false, why: "threw" };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** What F-557's check reads to explain a failure at the protected address. */
+export type PictureFailureReads = {
+  /** Maestro's view of the screen, as text. */
+  screen: () => Promise<string>;
+  /** The front's requests, described (`describeFrontRequests`). */
+  front: () => string;
+  /** The app's log since the steps began. */
+  log: () => string | Promise<string>;
+};
+
+/**
+ * What F-557's check throws when its steps at the protected address failed with `error`,
+ * Maestro's failure. When the screen says the picture didn't load, the front's requests and the
+ * app's reasons are printed and added to `error`'s message, with `error` as the cause. When the
+ * screen can't be read, they are printed and `error` is thrown as it was, as it is when the screen
+ * shows another failure. Each read is given `ms`: one that throws or runs past it is noted in a
+ * fixed line, and anything else that fails here leaves `error` as it was.
+ */
+export async function pictureFailure(
+  error: unknown,
+  reads: PictureFailureReads,
+  ms = 60_000,
+): Promise<unknown> {
+  try {
+    const screen = await within(reads.screen, ms);
+    if (screen.ok && !screen.value.includes(SENT_PICTURE_LINES.failed)) return error;
+    const front = await within(reads.front, ms);
+    const log = await within(reads.log, ms);
+    const reasons = log.ok ? pictureReasons(log.value) : [];
+    const why = [
+      "The protected front's requests:",
+      front.ok ? front.value : `(they couldn't be described: it ${front.why})`,
+      "The app's reason:",
+      ...(!log.ok
+        ? [`(the app's log couldn't be read: it ${log.why})`]
+        : reasons.length > 0
+          ? reasons
+          : ["(none in the app's log)"]),
+    ].join("\n");
+    if (!screen.ok) {
+      console.log(`F-557: the screen couldn't be read (it ${screen.why}).\n${why}`);
+      return error;
+    }
+    console.log(`F-557: the picture didn't load.\n${why}`);
+    return new Error(`${error instanceof Error ? error.message : String(error)}\n${why}`, {
+      cause: error,
+    });
+  } catch {
+    console.log("F-557: what explains the failure couldn't be gathered; Maestro's failure stands.");
+    return error;
+  }
+}
 
 /** This Mac's own address on its network, never loopback: en0's, or the first there is. */
 function ownAddress(): string {
@@ -925,10 +1090,11 @@ export async function protectedFront(
 
   const requests: FrontRequest[] = [];
   const sockets = new Set<Socket>();
+  const opened = Date.now();
   const server = createHttpsServer(
     { key: readFileSync(file("key.pem")), cert: readFileSync(file("cert.pem")) },
     (req, res) => {
-      requests.push({
+      const request: FrontRequest = {
         method: req.method ?? "",
         url: req.url ?? "",
         authorization: req.headers.authorization,
@@ -936,7 +1102,10 @@ export async function protectedFront(
           (field, i) => i % 2 === 0 && field.toLowerCase() === "authorization",
         ).length,
         cookie: req.headers.cookie,
-      });
+        at: Date.now() - opened,
+      };
+      requests.push(request);
+      trackAnswer(request, res, opened);
       const own = answer(new URL(req.url ?? "/", `https://${address}`));
       if (own) return void res.writeHead(own.status, own.headers).end();
       const upstream = httpRequest(
@@ -1203,9 +1372,12 @@ export async function relay(
   };
 }
 
-/** Maestro's whole view of the screen as text: every label and value the app exposes. */
-export async function screenText(): Promise<string> {
-  return hierarchy();
+/**
+ * Maestro's whole view of the screen as text: every label and value the app exposes. With
+ * `timeoutMs`, a read that takes longer is stopped and fails.
+ */
+export async function screenText(timeoutMs?: number): Promise<string> {
+  return hierarchy(timeoutMs);
 }
 
 /** How many of the app's own data files hold each needle, as UTF-8 or UTF-16. */
@@ -1245,8 +1417,11 @@ export function sharedFolders(): string[] {
   }
 }
 
-/** The app's own log lines since a time, from the device's unified log. */
-export function appLog(sinceSeconds: number): string {
+/**
+ * The app's own log lines since a time, from the device's unified log. With `timeoutMs`, a read
+ * that takes longer is stopped and fails.
+ */
+export function appLog(sinceSeconds: number, timeoutMs?: number): string {
   const result = spawnSync(
     "xcrun",
     [
@@ -1262,7 +1437,11 @@ export function appLog(sinceSeconds: number): string {
       "--predicate",
       'process == "Clawtrate"',
     ],
-    { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
+    {
+      encoding: "utf8",
+      maxBuffer: 64 * 1024 * 1024,
+      ...(timeoutMs ? { timeout: timeoutMs, killSignal: "SIGKILL" as const } : {}),
+    },
   );
   if (result.status !== 0) throw new Error(`log show: ${result.stderr}`);
   return result.stdout;

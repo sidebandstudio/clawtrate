@@ -9,9 +9,11 @@ import {
   ClawtrateClient,
   createBridgeSession,
   fetchInboundPicture,
+  initialState,
   INBOUND_MEDIA_ROUTE,
   MAX_PICTURE_BYTES,
   toBase64,
+  type BridgeCommand,
   type ClientOptions,
   type HttpFetch,
   type SentAttachment,
@@ -33,10 +35,13 @@ import { createHostFetch, type NativeFetch } from "../src/host/fetch.ts";
 import {
   drawsAsPicture,
   fileSize,
+  PICTURE_REASONS,
+  pictureLogLine,
   pictureRatio,
   rowsOnScreen,
   SENT_PICTURE_LINES,
   sentPictureAlt,
+  type SentPictureShown,
 } from "../src/presentation/sent-files.ts";
 import { loadSentPicture } from "../src/sent-pictures.ts";
 import { chatRows } from "../src/transcript.ts";
@@ -360,9 +365,116 @@ describe("F-557: your picture in the iPhone chat", () => {
     const { client, load } = await iphone(fake.native);
     await until(() => client.state.connection.gatewayId === "gateway-1");
     const drawn = shownStamp(client.store.get().connection);
-    expect(await load({ ...drawn, gatewayId: "gateway-2" })).toEqual({ status: "failed" });
+    expect(await load({ ...drawn, gatewayId: "gateway-2" })).toEqual({
+      status: "failed",
+      reason: "connection-changed",
+    });
     expect(fake.started).toEqual([]);
     client.stop();
+  });
+
+  it("F-557: a picture that didn't load keeps core's reason for the app's log", async () => {
+    const fake = fakeNative((url) =>
+      isTicket(url) ? { status: 503, headers: {}, parts: [] } : pictureAnswer(),
+    );
+    const { client, load } = await iphone(fake.native);
+    await until(() => client.state.connection.gatewayId === "gateway-1");
+    expect(await load()).toEqual({ status: "failed", reason: "gateway-answered", answered: 503 });
+    client.stop();
+  });
+
+  it("F-557: a picture whose parts didn't all arrive, or whose read threw, says so for the app's log", async () => {
+    const connection = {
+      ...initialState.connection,
+      status: "connected" as const,
+      gatewayId: "gateway-1",
+    };
+    const source = { getState: () => ({ connection }), subscribe: () => () => {} };
+    const drawnOn = shownStamp(connection);
+    const picture = { key: KEY, messageKey: "m1:user", index: 0 };
+    const cut = (async (command: BridgeCommand) => {
+      if (command.type === "readSentPicture")
+        return {
+          status: "content",
+          kind: "image",
+          mimeType: "image/png",
+          bytes: RED.length,
+          transfer: { id: "t1", chunks: 2, data: toBase64(RED.slice(0, 10)) },
+        };
+      if (command.type === "readFileChunk") throw new Error("The transfer was released.");
+      return undefined;
+    }) as Parameters<typeof loadSentPicture>[0];
+    expect(await loadSentPicture(cut, source, drawnOn, picture)).toEqual({
+      status: "failed",
+      reason: "parts-missing",
+    });
+    const offline = (async () => {
+      throw new Error("Not connected to the gateway.");
+    }) as Parameters<typeof loadSentPicture>[0];
+    expect(await loadSentPicture(offline, source, drawnOn, picture)).toEqual({
+      status: "failed",
+      reason: "not-connected",
+    });
+  });
+
+  it("F-557: the app's log says why by a fixed reason, never by an error's own words", async () => {
+    const connection = {
+      ...initialState.connection,
+      status: "connected" as const,
+      gatewayId: "gateway-1",
+    };
+    const source = { getState: () => ({ connection }), subscribe: () => () => {} };
+    const drawnOn = shownStamp(connection);
+    const picture = { key: KEY, messageKey: "m1:user", index: 0 };
+    // Words a failure could carry: a message, an address with a ticket, a token, a session key,
+    // a cookie and a path in the app's container. Each is made up.
+    const secrets = [
+      "The keychain said no",
+      `https://gateway.example/api/chat/media/outgoing/agent%3Apip%3Acheck/a1/full?mediaTicket=${TICKET}`,
+      "Bearer tok-4f1c9a",
+      "agent:pip:check",
+      "session=c00k1e",
+      "/private/var/mobile/Containers/Data/Application/0A1B/Library/clawtrate.json",
+    ];
+    const words = secrets.join(" ");
+    const RECORD = /^\[picture\] reason=[a-z-]+( status=\d{3})?$/;
+    const failures = [
+      // Thrown, as an Error or as anything else.
+      (async () => {
+        throw new Error(words);
+      }) as Parameters<typeof loadSentPicture>[0],
+      (async () => {
+        throw words;
+      }) as Parameters<typeof loadSentPicture>[0],
+      // Core's failure, with words that aren't its fixed ones, and its fixed words with more.
+      (async () => ({ status: "failed", message: words })) as Parameters<typeof loadSentPicture>[0],
+      (async () => ({
+        status: "failed",
+        message: `The gateway answered 503 for this picture. ${words}`,
+      })) as Parameters<typeof loadSentPicture>[0],
+    ];
+    const lines: string[] = [];
+    for (const send of failures) {
+      const shown = await loadSentPicture(send, source, drawnOn, picture);
+      expect(shown.status).toBe("failed");
+      lines.push(pictureLogLine(shown as Extract<SentPictureShown, { status: "failed" }>));
+    }
+    expect(lines).toEqual([
+      "[picture] reason=threw",
+      "[picture] reason=threw",
+      "[picture] reason=other",
+      "[picture] reason=other",
+    ]);
+    for (const line of lines) {
+      expect(line).toMatch(RECORD);
+      for (const secret of [...secrets, TICKET, "https://", "/private/"])
+        expect(line).not.toContain(secret);
+    }
+    // Core's own fixed words, by their reasons, and the status it answered with.
+    expect(pictureLogLine({ status: "failed", reason: "gateway-answered", answered: 503 })).toBe(
+      "[picture] reason=gateway-answered status=503",
+    );
+    expect(PICTURE_REASONS.every((reason) => /^[a-z]+(-[a-z]+)*$/.test(reason))).toBe(true);
   });
 });
 
