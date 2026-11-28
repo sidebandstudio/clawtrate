@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { once } from "node:events";
 import { lstatSync, readFileSync, renameSync, writeFileSync } from "node:fs";
+import type { Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { dirname, join } from "node:path";
 import {
@@ -10,9 +11,23 @@ import {
 } from "../../tools/dev-gateway/src/accounts.ts";
 import { MODEL_ID } from "../../tools/dev-gateway/src/env.ts";
 import { startFakeProvider } from "../../tools/dev-gateway/src/fake-provider.ts";
+import type { RequestRecord } from "../../tools/dev-gateway/src/scripted-accounts.ts";
 
 export const FIRST_MESSAGE = "Hello from the packaged first-run check.";
 export const SCRIPTED_REPLY = "This is the scripted development model.";
+
+export async function successfulScriptedRequests(server: Server): Promise<number> {
+  const { port } = server.address() as AddressInfo;
+  const reply = await fetch(`http://127.0.0.1:${port}/scripted/requests`, {
+    signal: AbortSignal.timeout(3000),
+  });
+  if (!reply.ok) throw new Error("The scripted provider did not return its request receipt.");
+  const { requests } = (await reply.json()) as { requests: RequestRecord[] };
+  return requests.filter(
+    ({ account, model, status }) =>
+      account === SCRIPTED_ACCOUNTS[0]!.id && model === MODEL_ID && status === 200,
+  ).length;
+}
 
 export async function scriptedProvider(
   profile: string,
