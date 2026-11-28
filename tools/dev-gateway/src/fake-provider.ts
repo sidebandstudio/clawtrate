@@ -60,9 +60,94 @@ export type FakeProviderOptions = {
   streamHoldFile?: string;
   /** The instance was started with `--with-skill-review`: answer the gateway's skill reviews. */
   skillReview?: boolean;
+  /** How long a held reply waits for its check (`ReplyHolds`); five minutes unless set. */
+  replyHoldLimitMs?: number;
 };
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/** Where a check holds a task's scripted replies open before their end (`ReplyHolds`). */
+export const HOLD_PATH = "/scripted/hold";
+/** How long a held reply waits for its check before it fails, so a check that died frees its task. */
+const HOLD_LIMIT_MS = 5 * 60_000;
+
+/**
+ * One reply waiting at its end: whether it must still wait, until when (`limit`), its leaving,
+ * and the end of its task's hold when no check let it go in time (`expire`).
+ */
+type HeldReply = { waiting: () => boolean; limit: number; leave: () => void; expire: () => void };
+
+/**
+ * Holds a check puts on a task's replies, so it can act while the gateway waits on the model.
+ * While a task is held, each reply streamed in it sends all its steps and then waits before its
+ * end (the gateway has the message's text, and writes its row only at the end), until the check
+ * lets the oldest waiting reply end (`next`) or lifts the hold (`release`).
+ */
+export class ReplyHolds {
+  private readonly holds = new Map<
+    string,
+    { reached: number; waiting: Set<number>; freed: Set<number> }
+  >();
+
+  private readonly limitMs: number;
+
+  constructor(limitMs = HOLD_LIMIT_MS) {
+    this.limitMs = limitMs;
+  }
+
+  hold(session: string): void {
+    if (!this.holds.has(session))
+      this.holds.set(session, { reached: 0, waiting: new Set(), freed: new Set() });
+  }
+
+  /** Lets the oldest reply waiting in `session` end; false when none waits. */
+  next(session: string): boolean {
+    const hold = this.holds.get(session);
+    // A set keeps the order its tickets came in: the first not yet let go is the oldest.
+    for (const ticket of hold?.waiting ?? []) {
+      if (hold!.freed.has(ticket)) continue;
+      hold!.freed.add(ticket);
+      return true;
+    }
+    return false;
+  }
+
+  release(session: string): void {
+    this.holds.delete(session);
+  }
+
+  /** Whether `session` is held, how many replies reached their end since, and how many wait. */
+  state(session: string) {
+    const hold = this.holds.get(session);
+    return {
+      session,
+      held: hold !== undefined,
+      reached: hold?.reached ?? 0,
+      waiting: hold ? hold.waiting.size - hold.freed.size : 0,
+    };
+  }
+
+  /** A reply in `session` reaches its end: it waits while this says so, or not at all (null). */
+  arrive(session: string): HeldReply | null {
+    const hold = this.holds.get(session);
+    if (!hold) return null;
+    const ticket = ++hold.reached;
+    hold.waiting.add(ticket);
+    return {
+      waiting: () => this.holds.get(session) === hold && !hold.freed.has(ticket),
+      limit: Date.now() + this.limitMs,
+      leave: () => {
+        hold.waiting.delete(ticket);
+        hold.freed.delete(ticket);
+      },
+      // The check that held the task is gone: the task's later replies are not held again, and
+      // those still waiting end.
+      expire: () => {
+        if (this.holds.get(session) === hold) this.holds.delete(session);
+      },
+    };
+  }
+}
 
 /** Split text into small word-aligned pieces so the gateway sees a real stream. */
 export function chunkText(text: string, size = 24): string[] {
@@ -114,6 +199,7 @@ async function streamSteps(
   steps: ReplyStep[],
   delayMs: number,
   held?: () => boolean,
+  atEnd?: () => HeldReply | null,
 ): Promise<void> {
   res.writeHead(200, {
     "content-type": "text/event-stream",
@@ -167,6 +253,27 @@ async function streamSteps(
       }
       toolIndex += 1;
       finish = "tool_calls";
+    }
+  }
+  const reply = atEnd?.();
+  if (reply) {
+    try {
+      let beat = Date.now();
+      while (!res.destroyed && reply.waiting()) {
+        if (Date.now() >= reply.limit) {
+          reply.expire();
+          res.destroy(new Error("No check let the held reply end"));
+          return;
+        }
+        // An empty chunk now and then, as below, keeps the stream alive while it waits.
+        if (Date.now() - beat >= 1_000) {
+          send({});
+          beat = Date.now();
+        }
+        await sleep(50);
+      }
+    } finally {
+      reply.leave();
     }
   }
   const deadline = Date.now() + 15 * 60_000;
@@ -268,6 +375,7 @@ export function startFakeProvider(options: FakeProviderOptions) {
   const delayMs = options.chunkDelayMs ?? 8;
   // Which account each request came from, failures per account, and the
   // scripted sign-ins (scripted-accounts.ts).
+  const holds = new ReplyHolds(options.replyHoldLimitMs);
   const accounts = new ScriptedAccounts({
     baseUrl: () => {
       const address = server.address();
@@ -320,6 +428,36 @@ export function startFakeProvider(options: FakeProviderOptions) {
           system: systems.get(session) ?? null,
           user: users.get(session) ?? null,
         });
+        return;
+      }
+      if (url.pathname === HOLD_PATH) {
+        if (req.method === "GET") {
+          sendJson(res, 200, holds.state(url.searchParams.get("session") ?? ""));
+          return;
+        }
+        let body: { session?: unknown; action?: unknown } = {};
+        try {
+          const parsed: unknown = JSON.parse(await readBody(req));
+          // Only an object names a task: `null`, a number or a list is a request without one.
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed))
+            body = parsed as typeof body;
+        } catch {
+          // answered below as a request without a task
+        }
+        const session = typeof body.session === "string" ? body.session : "";
+        if (req.method !== "POST" || !session) {
+          sendJson(res, 400, { error: { message: "POST {session, action}", type: "invalid" } });
+          return;
+        }
+        if (body.action === "hold") holds.hold(session);
+        else if (body.action === "release") holds.release(session);
+        else if (body.action !== "next" || !holds.next(session)) {
+          const message = body.action === "next" ? "no reply is waiting" : "unknown action";
+          sendJson(res, 409, { error: { message, type: "invalid" } });
+          return;
+        }
+        log(`hold ${String(body.action)} ${session}`);
+        sendJson(res, 200, holds.state(session));
         return;
       }
       if (req.method === "GET" && url.pathname === QUIET_TURNS_PATH) {
@@ -433,6 +571,7 @@ export function startFakeProvider(options: FakeProviderOptions) {
           steps,
           delayMs,
           holdFile && session ? () => heldSession(holdFile) === session : undefined,
+          session ? () => holds.arrive(session) : undefined,
         );
         return;
       }
