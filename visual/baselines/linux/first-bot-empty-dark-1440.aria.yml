@@ -1,0 +1,20 @@
+- banner: Clawtrate
+- status
+- navigation "Bots":
+  - button "Routines"
+  - 'button "Sort bots: Recent activity"'
+  - button "Search"
+  - button "New"
+  - list:
+    - listitem:
+      - button "main, 0 tasks, primary bot": main
+  - status
+  - button "New gateway, connected. Open the gateway menu."
+  - button "Settings"
+- region "Conversation":
+  - button "main, no task selected. Show details.": main
+  - button "Show work panel"
+  - heading "Set up your first bot" [level=1]
+  - button "Get started"
+  - status
+- status

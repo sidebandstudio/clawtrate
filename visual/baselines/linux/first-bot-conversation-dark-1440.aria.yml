@@ -1,0 +1,22 @@
+- banner: Clawtrate
+- status
+- navigation "Bots":
+  - button "Routines"
+  - 'button "Sort bots: Recent activity"'
+  - button "Search"
+  - button "New"
+  - list:
+    - listitem:
+      - button "Juniper, 1 task": Juniper
+  - status
+  - button "New gateway, connected. Open the gateway menu."
+  - button "Settings"
+- region "Conversation":
+  - button "Juniper, Main. Show details.": Juniper ·Main
+  - button "Show work panel"
+  - heading "Send a message to start" [level=1]
+  - button "Attach files"
+  - textbox "Message Juniper"
+  - button "Send" [disabled]
+  - status
+- status

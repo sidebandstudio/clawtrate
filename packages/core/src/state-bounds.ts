@@ -1323,6 +1323,8 @@ const botCreation = object<BotCreationState>()({
   slow: FLAG,
   botId: ID,
   error: text(MAX_MESSAGE_LINE_CHARS),
+  accountCheck: ENUM,
+  accountChecked: ID,
   missing: list(6, ENUM),
   uncertain: FLAG,
 });

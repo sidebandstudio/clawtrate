@@ -87,6 +87,9 @@ export const MAX_SECRET_CHARS = 8_192;
 export const MAX_SECRET_JSON_CHARS = 6 * MAX_SECRET_CHARS + 2;
 /** How long "Still creating" waits before it shows (bots.md section 3). */
 export const SLOW_CREATE_MS = 4_000;
+/** The gateway can spend 20 seconds on the completion. The client gives the check 25. */
+export const FIRST_BOT_PROBE_MS = 20_000;
+export const FIRST_BOT_ACCOUNT_CHECK_MS = 25_000;
 /** Preference keys Clawtrate keeps on the gateway, per person. */
 export const KIND_PREF_PREFIX = "clawtrate.account-kind.";
 export const INTENT_PREF_PREFIX = "clawtrate.bot-account.";
@@ -505,6 +508,9 @@ export type BotCreationState = {
   slow: boolean;
   botId: string | null;
   error: string | null;
+  accountCheck?: "checking" | "unusable" | "unchecked";
+  /** The last account checked for the first bot. */
+  accountChecked?: string;
   /** What a partial creation lacks, each finished by the bot's id. */
   missing: MissingStep[];
   /**
@@ -1005,6 +1011,30 @@ export function modelForAccount(answer: unknown, ref: ModelRef): CatalogModel | 
   if (!ref.account || selection?.kind !== "shared" || selection.authProfileId !== ref.account)
     return null;
   return availableModel(modelRows(answer), ref.provider, ref.model);
+}
+
+/** The gateway's per-profile result is authoritative. Its model is the final part of the label. */
+export function readAccountProbe(answer: unknown, ref: ModelRef) {
+  const reply = asRecord(answer);
+  const results = Array.isArray(reply?.results) ? reply.results : [];
+  const own = results.map(asRecord).filter((result) => result?.profileId === ref.account);
+  if (!ref.account || reply?.provider !== ref.provider || own.length !== 1)
+    return { status: "unchecked" } as const;
+  const row = own[0]!;
+  if (row.status === "no_model" || row.status === "auth" || row.status === "billing")
+    return { status: "unusable" } as const;
+  if (reply.status !== "ok" || row.status !== "ok" || typeof row.label !== "string")
+    return { status: "unchecked" } as const;
+  const separator = row.label.lastIndexOf(" · ");
+  if (!row.label.startsWith("Profile ") || separator < 0) return { status: "unchecked" } as const;
+  const tested = parseModelRef(row.label.slice(separator + 3));
+  if (tested?.provider !== ref.provider || tested.account !== null)
+    return { status: "unchecked" } as const;
+  return { status: "usable", model: tested.model } as const;
+}
+
+export function catalogModel(answer: unknown, provider: string, id: string): CatalogModel | null {
+  return modelRows(answer).find((row) => row.provider === provider && row.id === id) ?? null;
 }
 
 /** The providers whose picker rows `readCatalog` cut, with how many the gateway listed. */

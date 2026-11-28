@@ -278,6 +278,7 @@ export function Shell({
     interactive &&
     state.connection.status === "connected" &&
     state.connection.canAdmin &&
+    firstGateway !== null &&
     state.discovery.status === "ready" &&
     !state.discovery.partial &&
     (state.bots.length === 0 ||

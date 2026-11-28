@@ -36,7 +36,12 @@ import { CLIENT_OWNERS } from "../src/owners.ts";
 import { ClawtrateClient } from "../src/client.ts";
 import { ADMIN_SCOPES, INTERACTIVE_SCOPES, READ_SCOPES } from "../src/scopes.ts";
 import { ACCOUNTS_READ_CUT_OFF, AccountsEngine, identityFile } from "../src/accounts-engine.ts";
-import { initialAccountsState, modelIdProblem, type AccountsState } from "../src/accounts.ts";
+import {
+  FIRST_BOT_PROBE_MS,
+  initialAccountsState,
+  modelIdProblem,
+  type AccountsState,
+} from "../src/accounts.ts";
 import { AccountsGateway, accountsClient, CHOICES, IDENTITY_TEMPLATE } from "./accounts-fake.ts";
 import { FAST, stampOn, URL_A } from "./client-harness.ts";
 import type { helloOk } from "./fake-gateway.ts";
@@ -1163,8 +1168,92 @@ describe("a bot left half-made", () => {
     client.stop();
   });
 
+  it("F-504: an unusable subscription writes nothing and the API key can create the bot", async () => {
+    const gateway = new AccountsGateway();
+    gateway.shared = [
+      { id: "acme:home", provider: "acme", type: "oauth" },
+      { id: "acme:work", provider: "acme", type: "api_key" },
+    ];
+    const { client, fake, accounts } = await accountsClient({ gateway });
+    fake.gateway.handlers["models.probe"] = (params) => {
+      const { profileId } = params as { profileId: string };
+      const status = profileId === "acme:work" ? "ok" : "no_model";
+      return {
+        provider: "acme",
+        status,
+        results: [{ profileId, status, label: "Profile Work · acme/dev-2" }],
+      };
+    };
+    await expect(
+      client.createBot({ ...input, account: "acme:home", verifyAccountModel: true }),
+    ).rejects.toThrow("This account can’t run a model here.");
+    expect(accounts().creation).toMatchObject({
+      status: "failed",
+      accountCheck: "unusable",
+      accountChecked: "acme:home",
+    });
+    expect(fake.gateway.calls("agents.create")).toEqual([]);
+    expect(fake.gateway.calls("sessions.create")).toEqual([]);
+    await expect(client.createBot({ ...input, verifyAccountModel: true })).resolves.toEqual({
+      botId: "viral",
+      missing: [],
+    });
+    expect(fake.gateway.calls("agents.create")).toEqual([
+      expect.objectContaining({ model: "acme/dev-2@acme:work" }),
+    ]);
+    expect(fake.gateway.calls("sessions.patch")).toEqual([]);
+    client.stop();
+  });
+
+  it.each(["timeout", "bad-model", "refused"])(
+    "F-504: an account check the gateway cannot confirm writes nothing (%s)",
+    async (why) => {
+      const { client, fake, accounts } = await accountsClient();
+      fake.gateway.handlers["models.probe"] = () => {
+        if (why === "refused")
+          throw new GatewayError({ code: "FORBIDDEN", message: "No permission for models.probe" });
+        const status = why === "timeout" ? "timeout" : "ok";
+        return {
+          provider: "acme",
+          status,
+          results: [{ profileId: "acme:work", status, label: "Profile Work · acme/unlisted" }],
+        };
+      };
+      await expect(client.createBot({ ...input, verifyAccountModel: true })).rejects.toThrow(
+        "Clawtrate couldn’t check this account.",
+      );
+      expect(accounts().creation).toMatchObject({ status: "failed", accountCheck: "unchecked" });
+      expect(fake.gateway.calls("models.probe")).toHaveLength(1);
+      expect(fake.gateway.calls("agents.create")).toHaveLength(0);
+      expect(fake.gateway.calls("sessions.create")).toHaveLength(0);
+      client.stop();
+    },
+  );
+
+  it("F-504: one Create sends one probe with its account and time limit", async () => {
+    const { client, fake } = await accountsClient();
+    const answer = deferred<unknown>();
+    fake.gateway.handlers["models.probe"] = () => answer.promise;
+    const sent = client.createBot({ ...input, verifyAccountModel: true });
+    await until(() => fake.gateway.calls("models.probe").length === 1);
+    await expect(client.createBot({ ...input, verifyAccountModel: true })).rejects.toThrow(
+      "A bot is already being created.",
+    );
+    expect(fake.gateway.calls("agents.create")).toHaveLength(0);
+    answer.resolve({
+      provider: "acme",
+      status: "ok",
+      results: [{ profileId: "acme:work", status: "ok", label: "Profile Work · acme/dev-2" }],
+    });
+    await sent;
+    expect(fake.gateway.calls("models.probe")).toEqual([
+      { agentId: "main", provider: "acme", profileId: "acme:work", timeoutMs: FIRST_BOT_PROBE_MS },
+    ]);
+    client.stop();
+  });
+
   it.each([true, false])(
-    "F-504: the first bot uses only the catalogue projected for its selected account (%s)",
+    "F-504: without the probe, setup checks the task catalogue and won't repeat an unusable account (%s)",
     async (projected) => {
       const { client, fake } = await accountsClient();
       const list = fake.gateway.handlers["models.list"]!;
@@ -1198,6 +1287,12 @@ describe("a bot left half-made", () => {
         key: "agent:viral:main",
         model: null,
       });
+      if (!projected) {
+        await expect(client.finishBot("viral")).rejects.toThrow(
+          "Choose another account to finish this bot.",
+        );
+        expect(fake.gateway.calls("agents.create")).toHaveLength(1);
+      }
       client.stop();
     },
   );

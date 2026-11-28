@@ -9,8 +9,11 @@
 import {
   ACCOUNT_READ_CONCURRENCY,
   accountProvider,
+  catalogModel,
   endingOf,
   evaluateOrder,
+  FIRST_BOT_ACCOUNT_CHECK_MS,
+  FIRST_BOT_PROBE_MS,
   formatModelRef,
   INTENT_PREF_PREFIX,
   isBusy,
@@ -32,6 +35,7 @@ import {
   prefProfileId,
   providerNotListed,
   readBotView,
+  readAccountProbe,
   unconfirmedOrder,
   readCatalog,
   readFirstBotModels,
@@ -2318,7 +2322,7 @@ export class AccountsEngine {
     )
       throw new Error(`Check whether ${previous.name} was created before making another bot.`);
     const retryPlan = previous?.status === "failed" && previous.uncertain ? this.planned : null;
-    const ref: ModelRef = retryPlan?.ref ?? {
+    let ref: ModelRef = retryPlan?.ref ?? {
       provider: input.provider,
       model: input.model,
       account: input.account,
@@ -2354,6 +2358,12 @@ export class AccountsEngine {
         slow: false,
         botId: null,
         error: null,
+        ...(input.verifyAccountModel && !retrying
+          ? {
+              accountCheck: "checking" as const,
+              ...(ref.account ? { accountChecked: ref.account } : {}),
+            }
+          : {}),
         missing: [],
         uncertain: false,
       },
@@ -2369,10 +2379,40 @@ export class AccountsEngine {
     const assertCreating = () => {
       if (this.creating !== mark) throw new WriteRetired();
     };
-    const failed = (error: unknown, uncertain: boolean): never => {
+    const failed = (
+      error: unknown,
+      uncertain: boolean,
+      accountCheck?: "unusable" | "unchecked",
+    ): never => {
       assertCreating();
-      return this.creationFailed(ctx, error, uncertain);
+      const unidentified =
+        accountCheck &&
+        mark.gatewayId !== null &&
+        this.ctx.gatewayNow() === null &&
+        this.ctx.target() === mark.target;
+      return this.creationFailed(unidentified ? this.ctx : ctx, error, uncertain, accountCheck);
     };
+    if (input.verifyAccountModel && !retrying) {
+      const check = await this.checkFirstBotAccount(ctx, ref);
+      assertCreating();
+      if (check.status === "unusable")
+        return failed(new Error("This account can’t run a model here."), false, "unusable");
+      if (check.status === "unchecked")
+        return failed(new Error("Clawtrate couldn’t check this account."), false, "unchecked");
+      if (check.status === "usable") {
+        ref = { ...ref, model: check.model.id };
+        const effort =
+          input.effort && check.model.levels.includes(input.effort)
+            ? input.effort
+            : check.model.defaultLevel;
+        this.planned = { ...this.planned, ref, effort, verifyAccountModel: false };
+      }
+      ctx.update((a) => {
+        if (!a.creation) return a;
+        const { accountCheck: _checked, ...creation } = a.creation;
+        return { ...a, creation };
+      });
+    }
     let botId: string | null = null;
     // After an answer that settled nothing, the bot may exist: look before asking again.
     if (retrying) botId = await this.findMade(ctx, name, mark);
@@ -2411,6 +2451,52 @@ export class AccountsEngine {
       ],
       mark,
     );
+  }
+
+  /** Check the chosen account once, before making a bot or conversation. */
+  private async checkFirstBotAccount(ctx: AccountsContext, ref: ModelRef) {
+    if (!ref.account) return { status: "unchecked" } as const;
+    const began = ctx.readStamp();
+    const current = () => ctx.connected() && answeredBy(began, ctx.readStamp()) !== null;
+    const clock = () => (ctx.clock ? ctx.clock() : ctx.now());
+    const deadline = clock() + FIRST_BOT_ACCOUNT_CHECK_MS;
+    const agentId = ctx.bots().find((bot) => bot.isDefault)?.id ?? ctx.bots()[0]?.id;
+    const scope = agentId ? { agentId } : {};
+    let answer: unknown;
+    try {
+      answer = await ctx.request(
+        "models.probe",
+        { ...scope, provider: ref.provider, profileId: ref.account, timeoutMs: FIRST_BOT_PROBE_MS },
+        { timeoutMs: FIRST_BOT_ACCOUNT_CHECK_MS },
+      );
+    } catch (error) {
+      if (
+        current() &&
+        error instanceof GatewayProtocolRequestError &&
+        (error.code === "UNKNOWN_METHOD" ||
+          /^unknown method:?\s+models\.probe\b/i.test(error.message))
+      )
+        return { status: "missing-method" } as const;
+      return { status: "unchecked" } as const;
+    }
+    if (!current()) return { status: "unchecked" } as const;
+    const checked = readAccountProbe(answer, ref);
+    if (checked.status !== "usable") return checked;
+    const remaining = deadline - clock();
+    if (remaining < 1) return { status: "unchecked" } as const;
+    try {
+      const catalogue = await ctx.request(
+        "models.list",
+        { ...scope, provider: ref.provider },
+        { timeoutMs: Math.floor(remaining) },
+      );
+      const model = catalogModel(catalogue, ref.provider, checked.model);
+      return model && current()
+        ? ({ status: "usable", model } as const)
+        : ({ status: "unchecked" } as const);
+    } catch {
+      return { status: "unchecked" } as const;
+    }
   }
 
   /**
@@ -2666,6 +2752,7 @@ export class AccountsEngine {
       mark.resets === this.resets &&
       mark.gatewayId !== null &&
       this.ctx.gatewayNow() === null;
+    const account = this.planned?.ref.account;
     (unidentified ? this.ctx : ctx).update((a) => ({
       ...a,
       creation: {
@@ -2678,6 +2765,7 @@ export class AccountsEngine {
             ? this.scrub(`${name} was created, but ${errors.join(", and ")}.`)
             : null,
         missing,
+        ...(missing.includes("account-model") && account ? { accountChecked: account } : {}),
         uncertain: false,
       },
     }));
@@ -2731,28 +2819,47 @@ export class AccountsEngine {
    * (the record of its account, its model with the empty fallback list and
    * effort, the bot list showing it, the first task), never create it again.
    */
-  async finishBot(botId: string, binding?: WriteBinding): Promise<CreatedBot> {
+  async finishBot(botId: string, binding?: WriteBinding, account?: string): Promise<CreatedBot> {
     // Bound to the gateway it was asked of, or else the creation's: never finished on another.
     const creation =
       this.creationGateway === null
         ? undefined
         : { gatewayId: this.creationGateway, target: this.creationTarget };
-    return this.boundTo(binding ?? creation, (ctx, mark) => this.finish(ctx, botId, mark));
+    return this.boundTo(binding ?? creation, (ctx, mark) => this.finish(ctx, botId, mark, account));
   }
 
-  private async finish(ctx: AccountsContext, botId: string, mark: WriteMark): Promise<CreatedBot> {
+  private async finish(
+    ctx: AccountsContext,
+    botId: string,
+    mark: WriteMark,
+    account?: string,
+  ): Promise<CreatedBot> {
     this.requireAdmin("Creating a bot");
     const creation = ctx.get().creation;
     if (!creation || creation.status !== "partial" || creation.botId !== botId)
       throw new Error("That bot has nothing left to finish.");
     if (this.finishing === creation) throw new Error("That bot is already being finished.");
+    const steps = [...creation.missing];
+    if (creation.accountChecked && !steps.includes("task")) {
+      const shared = ctx.get().accounts.find((row) => row.id === account && row.keptBy === null);
+      const candidate = ctx.get().firstBotModels?.find((row) => row.provider === shared?.provider);
+      if (!account || account === creation.accountChecked || !candidate || !this.planned)
+        throw new Error("Choose another account to finish this bot.");
+      this.planned = {
+        ...this.planned,
+        ref: { ...candidate, account },
+        effort: null,
+        intent: { mode: "account", account },
+      };
+      steps.push("preference", "fallbacks");
+    }
     this.finishing = creation;
     this.creating = mark;
     try {
       ctx.update((a) =>
         a.creation ? { ...a, creation: { ...a.creation, status: "creating", error: null } } : a,
       );
-      return await this.complete(ctx, creation.name, botId, creation.missing, mark);
+      return await this.complete(ctx, creation.name, botId, steps, mark);
     } finally {
       if (this.finishing === creation) this.finishing = null;
     }
@@ -2783,7 +2890,12 @@ export class AccountsEngine {
     this.ctx.update((a) => (a.creation ? { ...a, creation: null } : a));
   }
 
-  private creationFailed(ctx: AccountsContext, error: unknown, uncertain: boolean): never {
+  private creationFailed(
+    ctx: AccountsContext,
+    error: unknown,
+    uncertain: boolean,
+    accountCheck?: "unusable" | "unchecked",
+  ): never {
     if (this.slowTimer) clearTimeout(this.slowTimer);
     this.slowTimer = null;
     const name = ctx.get().creation?.name ?? "the bot";
@@ -2795,6 +2907,7 @@ export class AccountsEngine {
             status: "failed",
             slow: false,
             uncertain,
+            ...(accountCheck ? { accountCheck } : {}),
             error: uncertain
               ? `The gateway's answer did not say whether ${name} was made (${errorText(error)}). Create again looks for it first.`
               : errorText(error),

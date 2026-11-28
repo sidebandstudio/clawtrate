@@ -78,6 +78,7 @@ export function useConnect({
   startWith,
   skipLabel = false,
   waitingForGateway = false,
+  onRetryGateway,
 }: {
   from: "create" | "settings";
   draftName: string | null;
@@ -98,6 +99,7 @@ export function useConnect({
   skipLabel?: boolean;
   /** First setup keeps the same sign-in open while its gateway reconnects. */
   waitingForGateway?: boolean;
+  onRetryGateway?: () => void;
 }): ConnectView {
   const bridge = useBridge();
   const admin = connection.canAdmin;
@@ -265,10 +267,16 @@ export function useConnect({
       backLabel: "Close",
       body: (
         <Wait>
-          Waiting for your gateway to reconnect. Clawtrate will check your account when it returns.
+          {onRetryGateway
+            ? "Your gateway hasn’t reconnected. Try again to finish setup."
+            : "Waiting for your gateway to reconnect. Clawtrate will check your account when it returns."}
         </Wait>
       ),
-      foot: null,
+      foot: onRetryGateway ? (
+        <button type="button" className="button" onClick={onRetryGateway}>
+          Try again
+        </button>
+      ) : null,
       onBack: onLeave,
     };
   }
