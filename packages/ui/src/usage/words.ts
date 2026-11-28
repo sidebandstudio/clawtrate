@@ -5,7 +5,6 @@ import {
   BUDGET_UNCONFIRMED,
   budgetPercent,
   currentCount,
-  rangeFor,
   SESSIONS_LIMIT,
   type Budget,
   type BudgetCount,
@@ -54,30 +53,6 @@ export function asOf(at: number | null): string {
 export const zoneWords = (timeZone: string): string =>
   timeZone === deviceTimeZone() ? "your time" : timeZone;
 
-/** When a budget's period starts again, in its own time zone. */
-export function resetWords(budget: Budget): string {
-  const where = zoneWords(budget.timeZone);
-  return budget.period === "daily"
-    ? `Resets at 00:00, ${where}.`
-    : `Resets Monday at 00:00, ${where}.`;
-}
-
-const dayWords = (date: string) =>
-  new Date(`${date}T12:00:00Z`).toLocaleDateString("en-US", {
-    month: "short",
-    day: "numeric",
-    timeZone: "UTC",
-  });
-
-/** The days a figure covers and the time zone they are counted in: "Nov 16 to Nov 19, your time". */
-export function rangeWords(range: DateRange): string {
-  const days =
-    range.startDate === range.endDate
-      ? dayWords(range.startDate)
-      : `${dayWords(range.startDate)} to ${dayWords(range.endDate)}`;
-  return `${days}, ${zoneWords(range.timeZone)}`;
-}
-
 /**
  * Whether a report is for this bot (or every bot), this period and exactly these days, in this
  * time zone: on a Monday, This week and Today are the same day, but each is said as its own.
@@ -101,22 +76,6 @@ export function reportFits(
 export function refreshFailed(error: string, report: UsageReport): string {
   const said = /[.!?]$/.test(error) ? error : `${error}.`;
   return `Couldn't read these again: ${said} Shown: the figures ${asOf(report.figure.asOf)}.`;
-}
-
-/** A report's period in words: "this week (Nov 16 to Nov 19, your time)". */
-export function reportWindow(period: UsagePeriod, range: DateRange): string {
-  const name = period === "today" ? "today" : period === "week" ? "this week" : "the last 30 days";
-  return `${name} (${rangeWords(range)})`;
-}
-
-/**
- * What a budget counts, over its own days and in its own time zone, which may
- * be another period or zone than the figures shown with it.
- */
-export function budgetWindow(budget: Budget, count: BudgetCount | null, now: number): string {
-  const range = count?.range ?? rangeFor(budget.period, now, budget.timeZone);
-  const at = count && count.used !== null ? `, ${asOf(count.asOf)}` : "";
-  return `Counts the total the gateway reports ${periodWord(budget.period)} (${rangeWords(range)}): input, output and cache${at}.`;
 }
 
 /**
@@ -172,17 +131,16 @@ export function costShort(cost: UsageCost, counting = false): string {
 
 const records = (n: number) => (n === 1 ? "1 usage record has" : `${full(n)} usage records have`);
 
-/** What the cost is, said under it. */
-export function costHint(cost: UsageCost, at: number | null, counting = false): string {
+/** What a cost is short of, said under it: nothing for a full estimate. */
+export function costHint(cost: UsageCost, at: number | null, counting = false): string | null {
   const when = counting ? "while the gateway is still counting" : asOf(at);
   if (cost.status === "unavailable")
     return cost.unpriced === 0
       ? `Cost unavailable: the gateway's answer gave no cost, ${when}.`
       : `Cost unavailable: the gateway has no price configured for what was used, ${when}.`;
-  const base = `The gateway's estimate${soFar(counting)} from its configured prices, in US dollars, ${when}.`;
   return cost.status === "partial"
-    ? `${base} Partial: ${records(cost.unpriced)} no price configured.`
-    : base;
+    ? `Partial: ${records(cost.unpriced)} no price configured.`
+    : null;
 }
 
 /** A bar: its name, its tokens (null when they couldn't be read), and what they are short of. */
@@ -293,6 +251,16 @@ export function budgetLine(budget: Budget, count: BudgetCount | null): string {
     : `${full(used)} of ${full(budget.tokens)} tokens ${periodWord(budget.period)}${count?.counting ? " so far" : ""}${count?.partial ? ", partial" : ""}${count?.error ? ", refresh failed" : ""}`;
 }
 
+/**
+ * The bot page's budget meter: its line; after a failed recount, when the count it kept is
+ * from; and the budget's time zone when it isn't this device's, as the Settings row says it.
+ */
+export function budgetMeterLine(budget: Budget, count: BudgetCount | null): string {
+  const kept = count?.error && count.used !== null ? `, ${asOf(count.asOf)}` : "";
+  const zone = budget.timeZone === deviceTimeZone() ? "" : ` · ${zoneWords(budget.timeZone)}`;
+  return `${budgetLine(budget, count)}${kept}${zone}`;
+}
+
 /** What a partial count is short of. */
 export const PARTIAL_COUNT =
   "Partial: the gateway lists only its most recently updated tasks at once, and some of this routine's may not be among them.";
@@ -330,11 +298,6 @@ export function stillClosed(
 export function budgetFailure(op: "set" | "remove", message: string): string {
   if (message.startsWith(BUDGET_UNCONFIRMED)) return message;
   return `Couldn't ${op === "set" ? "save" : "remove"} the budget: ${message}`;
-}
-
-/** What a budget is, said under its meter. */
-export function warningWords(name: string): string {
-  return `A warning: at 80% a line in ${name}'s task, at 100% a note above the composer. Runs continue when it appears: nothing stops ${name} at the limit, here or in other apps, channels or routines.`;
 }
 
 /** A meter's tone: a warning's from 80 percent, at 100 percent and past it too, never a stop's. */

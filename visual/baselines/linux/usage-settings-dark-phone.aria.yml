@@ -18,7 +18,6 @@
       - radio "Today"
       - radio "This week" [checked]
       - radio "30 days"
-    - paragraph: From the gateway's usage records this week (Nov 16, your time).
     - list:
       - 'listitem "main: 0 tokens, as of 5:39 PM"': main
       - 'listitem "Juniper: 2,239,000 tokens, as of 5:39 PM"': Juniper

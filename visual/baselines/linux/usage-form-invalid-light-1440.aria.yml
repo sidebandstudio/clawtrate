@@ -136,7 +136,6 @@
       - radio "Today"
       - radio "This week" [checked]
       - radio "30 days"
-    - paragraph: From the gateway's usage records for Otto this week (Nov 16, your time), as of 5:39 PM.
     - term: Input
     - definition: 322,000 tokens
     - term: Output
@@ -149,7 +148,6 @@
     - definition: 1,640,000 tokens
     - term: Cost
     - definition: About $3.29
-    - paragraph: The gateway's estimate from its configured prices, in US dollars, as of 5:39 PM.
     - heading "By source" [level=4]
     - list:
       - 'listitem "Messages from people: 1,240,000 tokens"': Messages from people
