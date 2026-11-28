@@ -113,6 +113,8 @@ export class InstallRunner {
   private readonly groups = new Map<number, Promise<boolean>>();
   /** Each group's one end: asked once, by its step or by the quit, and waited for by both. */
   private readonly ends = new Map<number, () => Promise<boolean>>();
+  /** Groups whose end couldn't be confirmed, kept until a signal 0 finds none of them left. */
+  private readonly unended = new Set<number>();
   private readonly spawnImpl: typeof nodeSpawn;
   private readonly timing: GroupTiming;
   private closed = false;
@@ -184,9 +186,10 @@ export class InstallRunner {
         return end();
       })();
       this.groups.set(pgid, drained);
-      void drained.then(() => {
+      void drained.then((gone) => {
         this.groups.delete(pgid);
         this.ends.delete(pgid);
+        if (!gone) this.unended.add(pgid);
       });
       const kept: string[] = [];
       let size = 0;
@@ -295,6 +298,17 @@ export class InstallRunner {
   /** The process groups still running or draining. */
   running(): number[] {
     return [...this.groups.keys()];
+  }
+
+  /**
+   * Whether a program this runner started may still be running: a group it still tracks, or one
+   * whose end it couldn't confirm, that a signal 0 to the group still finds. A group found gone
+   * is forgotten, so this turns false once every one has ended.
+   */
+  stillRunning(): boolean {
+    const { alive } = this.timing;
+    for (const pgid of this.unended) if (!alive(pgid)) this.unended.delete(pgid);
+    return this.unended.size > 0 || [...this.groups.keys()].some((pgid) => alive(pgid));
   }
 
   /** Ends every group this runner started that still runs. */

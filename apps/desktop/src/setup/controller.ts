@@ -29,9 +29,11 @@ import {
   type ClawtrateClient,
   type ClawtrateState,
   type InstallAction,
+  type InstallFailure,
   type InstallRecovery,
   type SetupFailure,
   type SetupHost,
+  type SetupInstall,
   type SetupState,
 } from "@clawtrate/core";
 import { proveFor, provedSockets, routeOf, type LocalConnect } from "./local-connect.ts";
@@ -144,6 +146,16 @@ function recoveryAllows(recovery: InstallRecovery | undefined, action: InstallAc
     : recovery === "replace" || recovery === "staged" || recovery === "finish";
 }
 
+/** Before any step: a program an earlier attempt started may still be running. */
+const STILL_RUNNING: InstallFailure = {
+  kind: "running",
+  step: -1,
+  exitCode: null,
+  classification: null,
+  retry: false,
+  cleanup: "none",
+};
+
 /** Said when a look, a Connect or a second install is asked for while one is under way. */
 const BUSY = "OpenClaw is being set up. Wait until it finishes.";
 
@@ -208,6 +220,8 @@ export class SetupController implements SetupHost {
   private closed = false;
   /** Setting OpenClaw up, from its dialog to the look that follows, while it runs. */
   private operation: Promise<void> | null = null;
+  /** The card of a step whose program may still be running: shown again by each look until it ends. */
+  private stillRunning: SetupInstall | null = null;
 
   constructor(options: SetupControllerOptions) {
     this.options = options;
@@ -466,6 +480,19 @@ export class SetupController implements SetupHost {
       else if (signs !== "nothing") look = { ...look, outcome: "cant-tell", reason: "shape" };
       else if (leftover) look = { ...look, leftover: true };
     }
+    // A program an install started may still be running: setting up isn't offered, since it
+    // would move that attempt's files. A step's own card stays; Try again looks once more.
+    if (look.outcome === "not-found" && this.installer?.().running?.()) {
+      if (attempt !== this.attempt) return;
+      this.publish({
+        ...initialSetupState,
+        phase: "install-failed",
+        look,
+        install: this.stillRunning ?? { step: 0, nodeChecked: false, failure: STILL_RUNNING },
+      });
+      return;
+    }
+    this.stillRunning = null;
     const recovery = await this.installRecovery();
     if (attempt !== this.attempt) return;
     if (
@@ -875,6 +902,7 @@ export class SetupController implements SetupHost {
           ...(recovery?.location ? { recoveryLocation: recovery.location } : {}),
         },
       });
+      if (outcome.failure.cleanup === "running") this.stillRunning = this.state.install ?? null;
       return false;
     }
     // The look finds what was set up; Connect follows only for that gateway, on its port.

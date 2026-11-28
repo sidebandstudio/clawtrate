@@ -84,6 +84,8 @@ function harness(
     withoutLocal?: boolean;
     recovery?: { id: string; action: "continue" | "replace" };
     recoveryCalls?: unknown[];
+    /** Whether a program an install started may still be running. */
+    running?: () => boolean;
   } = {},
 ): Fake {
   const client = new ClawtrateClient(testHost(new FakeGateway(), memoryStorage()));
@@ -203,6 +205,7 @@ function harness(
               },
               leftoverProgram: async () => options.leftover ?? null,
               recovery: async () => (installed ? null : (options.recovery ?? null)),
+              running: () => options.running?.() ?? false,
             }) as unknown as Installer,
   });
   client.store.subscribe((state) => {
@@ -481,6 +484,43 @@ describe("F-502 F-505: the steps, then the look of the gateway just set up", () 
     await new Promise((done) => setTimeout(done, 50));
     expect(vi.mocked(lookLocally).mock.calls.length).toBe(scans);
     expect(fake.setup.current.phase).toBe("install-failed");
+  });
+
+  it("F-502: while a step's program may still run, Try again keeps its card and offers no setup; once it ends, the look offers setting up", async () => {
+    let left = false;
+    const failure = {
+      kind: "installer" as const,
+      step: 1,
+      exitCode: null,
+      classification: null,
+      retry: false,
+      cleanup: "running" as const,
+    };
+    const fake = harness({ outcome: { ok: false, failure }, running: () => left });
+    await notFound(fake);
+    // The step's program outlives it.
+    left = true;
+    await fake.setup.install();
+    const card = fake.setup.current;
+    expect(card).toMatchObject({ phase: "install-failed", install: { failure } });
+    // Try again is a look: the same card, no dialog, no install.
+    await fake.setup.look();
+    expect(fake.setup.current).toMatchObject({ phase: "install-failed", install: card.install });
+    expect(fake.dialogs).toHaveLength(1);
+    expect(fake.runs).toBe(1);
+    left = false;
+    await fake.setup.look();
+    expect(fake.setup.current).toMatchObject({ phase: "found", look: { outcome: "not-found" } });
+  });
+
+  it("F-502: a look while an earlier setup's program may still run says so before any step, and offers no setup", async () => {
+    const fake = harness({ running: () => true });
+    await fake.setup.look();
+    expect(fake.setup.current).toMatchObject({
+      phase: "install-failed",
+      install: { step: 0, failure: { kind: "running", step: -1, retry: false } },
+    });
+    expect(fake.dialogs).toHaveLength(0);
   });
 
   it("F-502: while an install runs, a look, Connect, a second install, Back and the first screen are refused or do nothing, and the install's own look still follows", async () => {

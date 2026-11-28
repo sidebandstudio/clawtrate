@@ -24,6 +24,7 @@ const STATES = [
   "install-node",
   "install-unproven",
   "install-running",
+  "install-still-running",
   "install-onboard",
   "install-service",
   "install-service-removed",
@@ -232,6 +233,17 @@ test.describe("behaviour", () => {
     await openFixture(page, "setup=install-running", "dark");
     await expect(page.getByRole("alert")).toHaveText(
       "Install Node.js and OpenClaw failed. The installer didn't finish successfully. A program this step started is still running, so Clawtrate left this attempt’s files where they are.",
+    );
+    await page.getByRole("button", { name: "Try again" }).click();
+    expect(await sent(page)).toEqual(["setupLook"]);
+  });
+
+  test("F-502: a program an earlier setup started that is still running is said before any step, and Try again looks", async ({
+    page,
+  }) => {
+    await openFixture(page, "setup=install-still-running", "dark");
+    await expect(page.getByRole("alert")).toHaveText(
+      "A program an earlier setup started is still running. Clawtrate left that attempt’s files where they are.",
     );
     await page.getByRole("button", { name: "Try again" }).click();
     expect(await sent(page)).toEqual(["setupLook"]);

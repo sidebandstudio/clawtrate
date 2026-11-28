@@ -1815,6 +1815,99 @@ describe("F-502 F-503: the CodeRabbit round's cases", () => {
     expect(own.running()).toHaveLength(1);
   }, 20_000);
 
+  it("F-502: a group whose end couldn't be confirmed counts as running until a signal 0 finds it gone", async () => {
+    const stand = await make();
+    let up = true;
+    const own = new InstallRunner({ alive: () => up, graceMs: 100, killWaitMs: 200 });
+    expect(own.stillRunning()).toBe(false);
+    const result = await own.run(
+      {
+        program: "/bin/sleep",
+        args: ["30"],
+        env: { PATH: "/usr/bin:/bin" },
+        cwd: stand.root,
+        timeoutMs: 200,
+        maxBytes: 1024,
+      },
+      () => {},
+    );
+    expect(result).toMatchObject({ timedOut: true, lingering: true });
+    // Its step is over and the runner no longer tracks it as one; it is still reported.
+    for (let waited = 0; own.running().length > 0; waited += 50) {
+      expect(waited, "the group's step ends").toBeLessThan(10_000);
+      await pause(50);
+    }
+    expect(own.stillRunning()).toBe(true);
+    up = false;
+    expect(own.stillRunning()).toBe(false);
+  }, 20_000);
+
+  it("F-502: while an earlier attempt's program may still run, Try again moves nothing, and once it ends the leftover goes and setup proceeds", async () => {
+    const stand = await make();
+    let left = false;
+    const programsLeft = () => left;
+    const { outcome } = await runAll(
+      installer(stand, {
+        programsLeft,
+        run: async (request, check) => {
+          const result = await runner.run(request, check);
+          if (!request.args.includes("--runtime-only")) return result;
+          left = true;
+          return { ...result, lingering: true };
+        },
+      }),
+    );
+    expect(outcome).toMatchObject({
+      ok: false,
+      failure: { kind: "installer", step: 1, retry: false, cleanup: "running" },
+    });
+    const identity = (path: string) => {
+      const { dev, ino } = statSync(path);
+      return `${dev}:${ino}`;
+    };
+    const program = identity(stand.place.programDir);
+    const record = identity(stand.place.recordFile);
+    // A new attempt, as Try again makes: refused before anything is made or moved.
+    expect((await runAll(installer(stand, { programsLeft }))).outcome).toMatchObject({
+      ok: false,
+      failure: { kind: "running", step: -1, cleanup: "none" },
+    });
+    expect(identity(stand.place.programDir)).toBe(program);
+    expect(identity(stand.place.recordFile)).toBe(record);
+    // The earlier group has ended: the leftover is removed and the install goes on.
+    left = false;
+    expect((await runAll(installer(stand, { programsLeft }))).outcome).toMatchObject({ ok: true });
+  });
+
+  it.each(["continue", "replace"] as const)(
+    "F-502: while an earlier attempt's program may still run, %s after onboarding moves nothing",
+    async (action) => {
+      const stand = await make();
+      const stop = new AbortController();
+      await runAll(
+        installer(stand, {
+          signal: stop.signal,
+          run: async (request, check) => {
+            const result = await runner.run(request, check);
+            if (request.args.includes("onboard")) stop.abort();
+            return result;
+          },
+        }),
+      );
+      const pending = await installer(stand).recovery();
+      expect(pending).not.toBeNull();
+      const held = installer(stand, { programsLeft: () => true });
+      expect(await held.run(() => {}, action, pending?.id)).toMatchObject({
+        ok: false,
+        failure: { kind: "running", step: -1 },
+      });
+      expect(existsSync(stand.place.stateDir)).toBe(true);
+      expect(existsSync(stand.place.programDir)).toBe(true);
+      expect(existsSync(stand.place.recordFile)).toBe(true);
+      expect(stand.calls().filter((line) => line.includes("gateway install"))).toHaveLength(0);
+    },
+  );
+
   it("F-502: an attempt one of whose programs may still be running keeps its files: the cleanup is unproven", async () => {
     const stand = await make({ scenario: "installer-fails" });
     const { outcome } = await runAll(

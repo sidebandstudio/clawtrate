@@ -1131,6 +1131,12 @@ export type InstallOptions = {
   signal?: AbortSignal;
   /** Moves the staged setup folders as one item to the system Trash. */
   trashSetup?: (path: string) => Promise<void>;
+  /**
+   * Whether a program an install started, this attempt's or an earlier one's, may still be
+   * running: the app's one runner (`InstallRunner.stillRunning`). Without it, only this
+   * attempt's own steps count.
+   */
+  programsLeft?: () => boolean;
   /** For the host's tests: asked before each file the install makes is opened, then before it is written; may throw. */
   beforeWrite?: (path: string, at: "open" | "write") => void | Promise<void>;
   log?: (line: string) => void;
@@ -1396,6 +1402,16 @@ export class Installer {
     );
   }
 
+  /** Whether a program an attempt started may still be running; nothing of any attempt is moved then. */
+  running(): boolean {
+    return this.programsLeft();
+  }
+
+  /** The app's runner when there is one, so a group found ended clears it; else this attempt's steps. */
+  private programsLeft(): boolean {
+    return this.options.programsLeft ? this.options.programsLeft() : this.lingering;
+  }
+
   /** Removes an early attempt, before any profile was created. */
   async discard(id: string | null = null): Promise<boolean> {
     const { place } = this.options;
@@ -1625,7 +1641,7 @@ export class Installer {
       !proof ||
       proof.id !== id ||
       proof.staging ||
-      this.lingering ||
+      this.programsLeft() ||
       !trashSetup ||
       !(await this.serviceAbsent()) ||
       !(await this.sameProfile(place.stateDir, id, profile))
@@ -1666,7 +1682,7 @@ export class Installer {
     const { place, trashSetup } = this.options;
     const { bundle } = this.removalPaths;
     let removal = await this.removal();
-    if (!removal || removal.id !== id || !(await this.serviceAbsent()) || this.lingering)
+    if (!removal || removal.id !== id || !(await this.serviceAbsent()) || this.programsLeft())
       return "kept";
     if (removal.bundleGone) {
       if (
@@ -1691,7 +1707,7 @@ export class Installer {
         removal.bundleGone ||
         removal.moves.some((move) => !move.staged) ||
         !(await this.serviceAbsent()) ||
-        this.lingering
+        this.programsLeft()
       )
         throw new Error("setup changed");
       await trashSetup(bundle);
@@ -1941,7 +1957,9 @@ export class Installer {
       failure: failure(kind, step, extra),
     });
 
-    // Before anything is made: the user manager, then the place again.
+    // Before anything is made or moved: no program an earlier attempt started may still write.
+    if (this.programsLeft()) return stopped("running", -1);
+    // Then the user manager, then the place again.
     if (!(await this.userManager())) return stopped("user-service", -1);
     if (action) {
       if (!expectedId || this.closing) return stopped("changed", -1);
@@ -1995,8 +2013,9 @@ export class Installer {
       extra: Partial<InstallFailure> = {},
     ) => {
       // A program that may still write there: nothing of the attempt is removed under it.
-      const removed = !this.lingering && (await this.discard(id));
-      const cleanup: InstallCleanup = this.lingering ? "running" : removed ? "removed" : "unproven";
+      const running = this.programsLeft();
+      const removed = !running && (await this.discard(id));
+      const cleanup: InstallCleanup = running ? "running" : removed ? "removed" : "unproven";
       return stopped(kind, step, {
         ...extra,
         cleanup,
@@ -2183,7 +2202,7 @@ export class Installer {
         this.log(
           `the service wasn't confirmed installed: exit=${installed.exitCode} timedOut=${installed.timedOut} definition=${written}`,
         );
-        if (written === "absent" && !this.lingering) {
+        if (written === "absent" && !this.programsLeft()) {
           const discarded = (await this.prepareRemoval(id, profile))
             ? await this.finishRemoval(id)
             : "kept";
