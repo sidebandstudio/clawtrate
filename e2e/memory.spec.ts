@@ -115,8 +115,23 @@ test("F-212: edits a root item after an explicit admin request", async ({ page }
   await item.getByRole("button", { name: "Edit", exact: true }).click();
   await memory.getByLabel("Memory text").fill(revised);
   await memory.getByRole("button", { name: "Save memory" }).click();
-  await expect(memory.getByText(revised, { exact: true })).toBeVisible({ timeout: 15_000 });
-  await expect.poll(async () => (await root()).content, { timeout: 30_000 }).toBe(revised);
+  // The open editor's text is the new text too, so the item's text alone can be found before the
+  // save is sent. The editor closes once the gateway has answered the save; a read of MEMORY.md
+  // while the gateway is still writing it can be refused with `unsafe workspace file`.
+  await expect(
+    memory.getByLabel("Memory text"),
+    "the gateway answers the save and the editor closes",
+  ).toHaveCount(0, { timeout: 15_000 });
+  await expect(
+    memory.getByText(revised, { exact: true }),
+    "the page reads MEMORY.md again and shows the saved item",
+  ).toBeVisible();
+  await expect
+    .poll(async () => (await root()).content, {
+      timeout: 30_000,
+      message: "the gateway returns the saved MEMORY.md",
+    })
+    .toBe(revised);
   expect(await askMemory()).toBe(revised);
 });
 
