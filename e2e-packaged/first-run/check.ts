@@ -393,7 +393,9 @@ async function configureAccount(profile: string, appData: string) {
     record({ kind: "fixture", text }),
   );
   provider = fixture.server;
-  // Start the CLI early and keep its stdin closed to data until the chosen time.
+  fixture.applyConfig();
+  accountTiming.configAt = seconds(performance.now() - start);
+  // Start the CLI early and withhold stdin until the chosen time.
   const writer = fixture.prepareAccountSave();
   async function save() {
     accountTiming.saveInputAt = seconds(performance.now() - start);
@@ -402,12 +404,14 @@ async function configureAccount(profile: string, appData: string) {
     accountTiming.savedAt = seconds(accountSavedAt - start);
   }
   try {
-    if (timing === "before") await save();
-    fixture.applyConfig();
-    accountTiming.configAt = seconds(performance.now() - start);
-    const returned = await waitForGatewayReturn();
+    const [returned, earlySave] = await Promise.allSettled([
+      waitForGatewayReturn(),
+      timing === "before" ? save() : Promise.resolve(),
+    ]);
+    if (earlySave.status === "rejected") throw earlySave.reason;
+    if (returned.status === "rejected") throw returned.reason;
     if (timing === "late") {
-      while (performance.now() - returned < 24_000) {
+      while (performance.now() - returned.value < 24_000) {
         await readWindow();
         await sleep(350);
       }
