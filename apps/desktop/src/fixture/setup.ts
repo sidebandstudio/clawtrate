@@ -74,6 +74,7 @@ const installFailed = (
   install: {
     step: Math.max(step, 0),
     nodeChecked: step > 1,
+    ...(kind === "service" && extra.cleanup === "removed" ? { profileTrashed: true } : {}),
     failure: {
       kind,
       step,
@@ -87,6 +88,8 @@ const installFailed = (
 });
 
 /** Every setup state the fixture shows, by the name used in `?setup=`. */
+const trashRefused = installFailed("trash", -1);
+
 export const SETUP_STATES: Record<string, SetupState> = {
   first: initialSetupState,
   looking: { ...initialSetupState, phase: "looking", step: 1 },
@@ -178,6 +181,11 @@ export const SETUP_STATES: Record<string, SetupState> = {
   "install-recovery": {
     ...installing({ step: 2, nodeChecked: true, recovery: "replace" }),
     phase: "install-failed",
+  },
+  "install-replaced": installing({ profileTrashed: true }),
+  "install-trash-refused": {
+    ...trashRefused,
+    install: { ...trashRefused.install!, step: 2, nodeChecked: true, recovery: "replace" },
   },
   "install-recovery-inspect": {
     ...installing({ step: 2, nodeChecked: true, recovery: "inspect" }),
@@ -340,9 +348,13 @@ export function setupCommand(
     }
     case "setupInstall": {
       // As the host runs it after its dialog: the four steps, then the look finds the gateway.
-      setup(installing(command.action === "continue" ? { step: 2, nodeChecked: true } : {}));
+      const trashed = command.action === "replace" ? { profileTrashed: true } : {};
+      setup(installing(command.action === "continue" ? { step: 2, nodeChecked: true } : trashed));
       const at = (ms: number, install: Partial<SetupInstall>) =>
-        after(ms, () => current().phase === "installing" && setup(installing(install)));
+        after(
+          ms,
+          () => current().phase === "installing" && setup(installing({ ...trashed, ...install })),
+        );
       if (command.action !== "continue") {
         at(300, { step: 1 });
         at(500, { step: 1, nodeChecked: true });

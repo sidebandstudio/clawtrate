@@ -860,6 +860,8 @@ function installCause(failure: InstallFailure): string {
       return "Clawtrate couldn't confirm the new gateway was running on its chosen port.";
     case "expired":
       return "Try again.";
+    case "trash":
+      return "";
     case "changed":
     case "unchecked":
       return "Look again.";
@@ -883,6 +885,7 @@ const BEFORE: Partial<Record<InstallFailure["kind"], string>> = {
   changed: "This changed since you looked.",
   unchecked: "Clawtrate couldn't check whether OpenClaw was already set up.",
   expired: "This setup confirmation expired.",
+  trash: "Clawtrate couldn’t move the unfinished setup folder to the Trash.",
 };
 
 /** The typed record of a failed step (§10): the step, the error category, the exit code. */
@@ -906,6 +909,7 @@ const CATEGORY: Record<InstallFailure["kind"], string> = {
   changed: "Changed",
   unchecked: "Not checked",
   expired: "Expired",
+  trash: "Trash",
 };
 
 /** "Setting up OpenClaw" (§10, F-502): the steps, and a failed step with its cause and record. */
@@ -942,6 +946,10 @@ function Installing({
             : "Clawtrate set up the gateway profile. Continue to finish setting up its service."}
         </Lede>
       )}
+      {install.recovery === "replace" && (
+        <Hint>Starting again moves the unfinished setup folder to the Trash.</Hint>
+      )}
+      {install.profileTrashed && <Hint>The unfinished setup folder is in the Trash.</Hint>}
       <Steps
         steps={INSTALL_STEPS}
         current={current}
@@ -953,9 +961,7 @@ function Installing({
         <>
           <Note tone="danger" lead={lead}>
             {installCause(failure)}
-            {failure.kind === "service" && failure.cleanup === "removed"
-              ? " Clawtrate removed this attempt’s gateway profile and program files."
-              : CLEANUP[failure.cleanup]}
+            {CLEANUP[failure.cleanup]}
           </Note>
           {failure.step >= 0 && failure.kind !== "changed" && (
             <details className="b-disclosure s-disclosure" data-testid="setup-install-details">

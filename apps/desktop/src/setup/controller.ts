@@ -112,7 +112,7 @@ const RECOVERY_CONFIRMATION: Record<InstallAction, Confirmation> = {
   replace: {
     message: "Remove this setup attempt and start again?",
     detail:
-      "Clawtrate removes the program and gateway profile created by this attempt. It will check new OpenClaw and Node.js downloads. npm also downloads packages Clawtrate hasn't verified. They can run with your account's permissions. Clawtrate connects this Mac with full control.",
+      "Clawtrate moves the unfinished gateway profile to the Trash and removes this attempt’s program files. It will check new OpenClaw and Node.js downloads. npm also downloads packages Clawtrate hasn't verified. They can run with your account's permissions. Clawtrate connects this Mac with full control.",
     confirm: "Remove and Start Again",
   },
 };

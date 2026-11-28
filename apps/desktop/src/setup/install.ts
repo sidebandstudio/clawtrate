@@ -1099,6 +1099,8 @@ export type InstallOptions = {
   statusWaitMs?: number;
   /** Aborted when the app quits: no download goes on, and no step after it starts. */
   signal?: AbortSignal;
+  /** Moves a proven profile folder to the system Trash. */
+  trashProfile?: (path: string) => Promise<void>;
   /** For the host's tests: asked before each file the install makes is opened, then before it is written; may throw. */
   beforeWrite?: (path: string, at: "open" | "write") => void | Promise<void>;
   log?: (line: string) => void;
@@ -1337,11 +1339,15 @@ export class Installer {
   }
 
   /**
-   * Quarantines and removes an early attempt. The active attempt can also remove its profile
-   * after a failed service install, if it owns the profile and no service was left behind.
+   * Quarantines and removes an early attempt. A profile that reached onboarding goes to the Trash
+   * after we prove ownership and confirm that no service was left behind.
    */
-  async discard(id: string | null = null, profile?: ProfileProof): Promise<boolean> {
-    const { place } = this.options;
+  async discard(
+    id: string | null = null,
+    profile?: ProfileProof,
+  ): Promise<"removed" | "kept" | "trash-failed"> {
+    const { place, trashProfile } = this.options;
+    if (profile && !trashProfile) return "trash-failed";
     if (profile) {
       if (
         !id ||
@@ -1350,14 +1356,14 @@ export class Installer {
         this.lingering ||
         !(await this.sameProfile(place.stateDir, id, profile))
       )
-        return false;
+        return "kept";
     } else if (id === null) {
       if ((await presence(place.stateDir)) !== "absent" || !(await this.serviceAbsent()))
-        return false;
+        return "kept";
     }
     const stage = profile ? "onboarded" : "installing";
     const proof = await this.prove(stage);
-    if (!proof || (id !== null && proof.id !== id)) return false;
+    if (!proof || (id !== null && proof.id !== id)) return "kept";
     const name = `.openclaw-removing-${randomUUID()}`;
     const quarantine = join(dirname(place.programDir), name);
     // Rename within the profile's own parent, which can be on another volume than app data.
@@ -1365,19 +1371,21 @@ export class Installer {
     try {
       await mkdir(quarantine, { mode: 0o700 });
     } catch {
-      return false;
+      return "kept";
     }
     if (profileQuarantine) {
       try {
         await mkdir(profileQuarantine, { mode: 0o700 });
       } catch {
         await rmdir(quarantine).catch(() => {});
-        return false;
+        return "trash-failed";
       }
     }
     const staging = stagingDir(place, proof.id);
     const ownStaging = proof.staging !== null && (id === null || this.stagingMade === id);
-    const movedProfile = profileQuarantine ? join(profileQuarantine, "profile") : null;
+    const movedProfile = profileQuarantine
+      ? join(profileQuarantine, "Unfinished OpenClaw setup")
+      : null;
     const moves: Array<{ from: string; to: string }> = [
       ...(movedProfile ? [{ from: place.stateDir, to: movedProfile }] : []),
       { from: place.programDir, to: join(quarantine, "program") },
@@ -1386,12 +1394,14 @@ export class Installer {
     ];
     const moved: typeof moves = [];
     let intact = true;
+    let trashFailed = false;
     for (const move of moves) {
       try {
         await rename(move.from, move.to);
         moved.push(move);
       } catch {
         intact = false;
+        trashFailed = move.to === movedProfile;
         break;
       }
     }
@@ -1402,17 +1412,28 @@ export class Installer {
         (await this.sameProfile(movedProfile, proof.id, profile));
     }
     if (intact) intact = await this.stillProven(quarantine, proof);
-    if (!intact) {
+    if (intact && movedProfile && trashProfile) {
+      try {
+        await trashProfile(movedProfile);
+        trashFailed = (await presence(movedProfile)) !== "absent";
+      } catch {
+        trashFailed = true;
+      }
+    }
+    if (!intact || trashFailed) {
       for (const move of moved.reverse())
         if ((await presence(move.from)) === "absent")
           await rename(move.to, move.from).catch(() => {});
       if (profileQuarantine) await rmdir(profileQuarantine).catch(() => {});
       await rmdir(quarantine).catch(() => {});
-      this.log("an attempt changed while it was being removed");
-      return false;
+      this.log(
+        trashFailed
+          ? "could not move the profile to the Trash"
+          : "an attempt changed while it was being removed",
+      );
+      return trashFailed ? "trash-failed" : "kept";
     }
-    if (profileQuarantine)
-      await rm(profileQuarantine, { recursive: true, force: true }).catch(() => {});
+    if (profileQuarantine) await rmdir(profileQuarantine).catch(() => {});
     await rm(quarantine, { recursive: true, force: true }).catch(() => {});
     await unlinkIfSame(this.scratch(proof.id, stage), proof.record.stat);
     const left = await Promise.all(
@@ -1425,9 +1446,9 @@ export class Installer {
         ...(profileQuarantine ? [place.stateDir, profileQuarantine] : []),
       ].map(presence),
     );
-    if (left.some((state) => state !== "absent")) return false;
+    if (left.some((state) => state !== "absent")) return "kept";
     this.log("removed the failed attempt");
-    return true;
+    return "removed";
   }
 
   /** In quarantine: the same folder, staging folder, marker and record, by identity and text. */
@@ -1639,13 +1660,19 @@ export class Installer {
           !pending.canRemove,
         );
       }
-      if (!pending.canRemove || !(await this.discard(pending.id, pending.profile)))
-        return stopped("changed", -1, { cleanup: "unproven" });
+      if (!pending.canRemove) return stopped("changed", -1);
+      const discarded = await this.discard(pending.id, pending.profile);
+      if (discarded === "trash-failed") {
+        publish({ step: 2, nodeChecked: true });
+        return stopped("trash", -1);
+      }
+      if (discarded !== "removed") return stopped("changed", -1, { cleanup: "unproven" });
+      publish({ step: 0, nodeChecked: false, profileTrashed: true });
     }
     const site = await this.site();
     if (site === "unreadable") return stopped("write", -1);
     if (site === "exists") return stopped("exists", -1);
-    if (site === "leftover" && !(await this.discard())) return stopped("exists", -1);
+    if (site === "leftover" && (await this.discard()) !== "removed") return stopped("exists", -1);
     if (this.closing) return stopped("download", -1);
 
     const id = (this.options.newId ?? randomUUID)();
@@ -1659,7 +1686,7 @@ export class Installer {
       extra: Partial<InstallFailure> = {},
     ) => {
       // A program that may still write there: nothing of the attempt is removed under it.
-      const removed = !this.lingering && (await this.discard(id));
+      const removed = !this.lingering && (await this.discard(id)) === "removed";
       const cleanup: InstallCleanup = removed ? "removed" : "unproven";
       return stopped(kind, step, {
         ...extra,
@@ -1848,7 +1875,11 @@ export class Installer {
           `the service wasn't confirmed installed: exit=${installed.exitCode} timedOut=${installed.timedOut} definition=${written}`,
         );
         if (written === "absent" && !this.lingering) {
-          const removed = await this.discard(id, profile);
+          const discarded = await this.discard(id, profile);
+          if (discarded === "trash-failed")
+            return kept("service", { exitCode: installed.exitCode });
+          const removed = discarded === "removed";
+          if (removed) publish({ profileTrashed: true });
           return stopped("service", 2, {
             exitCode: installed.exitCode,
             cleanup: removed ? "removed" : "unproven",
