@@ -60,6 +60,7 @@ import {
   closeWithin,
   containerHits,
   deadPort,
+  describeConnections,
   devGateway,
   devices,
   displays,
@@ -85,6 +86,7 @@ import {
   protocolFiveGateway,
   Proxy,
   quit,
+  reconnectedOnce,
   reduceMotion,
   reinstall,
   running,
@@ -1468,11 +1470,31 @@ describe("the iOS app", () => {
     ]);
     // Disconnected keeps the pairing: the gateway still has the device, and Reconnect connects it.
     expect((await devices()).paired.some((d) => d.deviceId === deviceId)).toBe(true);
+    // A hosted runner can take more than a minute to connect again (#611), so the wait is three.
+    const upgrades = () => proxy.requests.filter((request) => request.upgrade);
+    const sockets = upgrades().length;
+    const tapped = Date.now();
     await steps("reconnect", [
       tap({ id: "status-strip-action", text: "Reconnect" }),
-      waitFor({ id: "connection-dot-connected" }, 60_000),
-      waitGone({ id: "status-strip" }, 60_000),
+      waitFor({ id: "connection-dot-connected" }, 180_000),
     ]);
+    // Then it settles: the strip goes and the dot stays connected. The strip goes only once the
+    // app has caught up and shown Synced for four seconds without a drop, but those states can
+    // pass between two of Maestro's looks, so they aren't asserted on their own. Reconnect opened
+    // one socket that got the gateway's hello, and no other since, so nothing dropped and
+    // reconnected. On a slow hosted runner the app can give up on a first connect the gateway
+    // hasn't answered and open another (#611), so one such abandoned connect before it is allowed;
+    // two that each got hello are a drop and a reconnect, and fail. The list is logged either way.
+    await steps("reconnect-settles", [
+      waitGone({ id: "status-strip" }, 120_000),
+      see({ id: "connection-dot-connected" }),
+    ]);
+    const since = upgrades().slice(sockets);
+    const opened = describeConnections(since, tapped);
+    console.log(`WebSockets since Reconnect was tapped:\n${opened}`);
+    expect(reconnectedOnce(since), `Reconnect did not settle on one connection:\n${opened}`).toBe(
+      true,
+    );
 
     // Deleted and installed again, the app does not walk back into the gateway:
     // it offers it, and the same device reconnects when asked.
