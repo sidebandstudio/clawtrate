@@ -3,7 +3,7 @@ import { PassThrough } from "node:stream";
 import { fstatSync } from "node:fs";
 import { EventEmitter } from "node:events";
 import { createHash } from "node:crypto";
-import { linkSync, watch } from "node:fs";
+import { linkSync, watch, type FSWatcher, type WatchListener } from "node:fs";
 import { macInstaller } from "../../src/main/mac-install.ts";
 import type { UpdateInstaller } from "../../src/main/update/install.ts";
 import type { DesktopUpdateReply, DesktopUpdateSnapshot } from "@clawtrate/core";
@@ -12,7 +12,7 @@ import { updateDefines } from "../../packaging/update-defines.ts";
 import { checkFeedAddress } from "../../src/main/update/address.ts";
 import { symlinkSync, statSync, readFileSync } from "node:fs";
 import { existsSync, mkdirSync, writeFileSync, readdirSync, renameSync, rmSync } from "node:fs";
-import { join } from "node:path";
+import { basename, join } from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { UpdateEngine } from "../../src/main/update/engine.ts";
 import { DesktopUpdateService } from "../../src/main/update/service.ts";
@@ -23,26 +23,34 @@ vi.mock(import("node:child_process"), async (original) => {
   vi.spyOn(cp, "spawn");
   return cp;
 });
-// The download folder's watch is a stand-in. On macOS a real one is an FSEvents stream, and
-// closing it blocks until the system's fseventsd answers, which on a busy Mac took seconds
-// per close and most of the file's time (#677). No test here waits for a watch event: each
-// finds a changed file by reading it again. A test can still emit "error" on the stand-in.
+// The download's watch is a stand-in that keeps its listener, so a test can fire an event
+// or emit "error" on it. On macOS a folder's watch is an FSEvents stream, and closing it
+// blocks the thread until fseventsd answers: 1.7 s on average and up to 6.2 s per close on a
+// busy Mac (#677). The stand-in blocks as long as that when a folder's watch is closed; a
+// file's watch is a kqueue descriptor and closes at once (#940).
+const watchCloses = vi.hoisted(() => ({ folderMs: 2000, blockedMs: [] as number[] }));
 vi.mock(import("node:fs"), async (original) => {
   const fs = { ...(await original()) };
   const { EventEmitter } = await import("node:events");
-  vi.spyOn(fs, "watch").mockImplementation(() => {
+  vi.spyOn(fs, "watch").mockImplementation(((target: string, _options: unknown, listener) => {
+    const folder = fs.statSync(target).isDirectory();
     let closed = false;
     const watcher = Object.assign(new EventEmitter(), {
+      listener,
       close() {
         if (closed) return;
         closed = true;
+        const started = performance.now();
+        if (folder)
+          Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, watchCloses.folderMs);
+        watchCloses.blockedMs.push(performance.now() - started);
         process.nextTick(() => watcher.emit("close"));
       },
       ref: () => watcher,
       unref: () => watcher,
     });
     return watcher as unknown as ReturnType<typeof fs.watch>;
-  });
+  }) as typeof fs.watch);
   return fs;
 });
 
@@ -1402,6 +1410,101 @@ it("withdraws Restart when the already inspected download is replaced", async ()
   expect(service.get().install).toMatchObject({ reason: "artifact-changed" });
   expect((await service.restart(id)).outcome).toBe("stale");
 });
+
+const lastWatch = () =>
+  vi.mocked(watch).mock.results.at(-1)!.value as FSWatcher & { listener: WatchListener<string> };
+const changeFile = (path: string) => writeFileSync(path, Buffer.alloc(fixture.body.length, 7));
+
+it("a watch event for the changed download withdraws Restart without reading it again", async () => {
+  const service = await start({ installer: installStandIn() });
+  const id = await offer(service);
+  await service.download(id);
+  const folder = join(updates, id),
+    name = readdirSync(folder)[0]!;
+  expect(snapshots.at(-1)!.install).toEqual({ kind: "restart-available", offerId: id });
+  changeFile(join(folder, name));
+  lastWatch().listener("change", name);
+  expect(snapshots.at(-1)).toMatchObject({
+    state: { kind: "failed", reason: "artifact-changed" },
+    install: { kind: "unavailable-in-this-build", reason: "artifact-changed" },
+  });
+  expect((await service.restart(id)).outcome).toBe("stale");
+});
+
+it("a watch event for another file beside the download leaves Restart offered", async () => {
+  const service = await start({ installer: installStandIn() });
+  const id = await offer(service);
+  await service.download(id);
+  writeFileSync(join(updates, id, "other"), "other");
+  lastWatch().listener("rename", "other");
+  expect(snapshots.at(-1)!.install).toEqual({ kind: "restart-available", offerId: id });
+  expect(service.get().install).toEqual({ kind: "restart-available", offerId: id });
+});
+
+type WatchCloseSite = (
+  service: DesktopUpdateService,
+  path: string,
+  id: string,
+  installer: UpdateInstaller,
+) => unknown;
+it.each<[string, WatchCloseSite]>([
+  [
+    "a watch event",
+    (_, path) => {
+      changeFile(path);
+      lastWatch().listener("change", basename(path));
+    },
+  ],
+  [
+    "a read that finds the file changed",
+    (service, path) => {
+      changeFile(path);
+      service.get();
+    },
+  ],
+  [
+    "a recheck that finds the file changed",
+    (service, path, id) => {
+      changeFile(path);
+      return service.recheckVerified(id);
+    },
+  ],
+  ["a track change", (service) => service.chooseTrack("nightly")],
+  ["a new check", (service) => service.check("stable", service.get().revision)],
+  ["Restart", (service, _, id) => service.restart(id)],
+  [
+    "a Restart the installer refuses",
+    (service, _, id, installer) => {
+      installer.inspect = async () => "inspection-failed";
+      return service.restart(id);
+    },
+  ],
+  ["quitting", (service) => service.shutdown()],
+])("closing the download's watch on %s never blocks the main process", async (_, site) => {
+  const installer = installStandIn();
+  const service = await start({ installer });
+  const id = await offer(service);
+  await service.download(id);
+  const folder = join(updates, id);
+  watchCloses.blockedMs.length = 0;
+  await site(service, join(folder, readdirSync(folder)[0]!), id, installer);
+  expect(watchCloses.blockedMs.length).toBeGreaterThan(0);
+  expect(Math.max(...watchCloses.blockedMs)).toBeLessThan(watchCloses.folderMs / 2);
+});
+
+it.each(["inspection-failed", "artifact-changed"] as const)(
+  "closing the download's watch when inspection gives %s never blocks the main process",
+  async (reason) => {
+    const installer = installStandIn();
+    installer.inspect = async () => reason;
+    const service = await start({ installer });
+    const id = await offer(service);
+    watchCloses.blockedMs.length = 0;
+    await service.download(id);
+    expect(watchCloses.blockedMs.length).toBeGreaterThan(0);
+    expect(Math.max(...watchCloses.blockedMs)).toBeLessThan(watchCloses.folderMs / 2);
+  },
+);
 
 it("refuses an old same-track revision or a malformed revision without replacing the result", async () => {
   const service = await start();
