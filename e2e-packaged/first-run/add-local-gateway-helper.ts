@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, type ExecFileSyncOptions } from "node:child_process";
 import { existsSync, mkdirSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { LOCAL_GATEWAY_HELPER, localGatewayBuild } from "../../apps/desktop/packaging/config.ts";
@@ -29,9 +29,9 @@ if (existsSync(helper)) {
 } else {
   mkdirSync(helpers, { recursive: true });
   // Keep stdout for the provenance value the workflow passes to the check.
-  const stdio = { stdio: ["ignore", 2, 2] as const };
-  execFileSync("/usr/bin/xcrun", localGatewayBuild(helper), stdio);
-  execFileSync("/usr/bin/codesign", ["--force", "--deep", "--sign", "-", app], stdio);
-  execFileSync("/usr/bin/codesign", ["--verify", "--deep", "--strict", app], stdio);
+  const options: ExecFileSyncOptions = { stdio: ["ignore", 2, 2] };
+  execFileSync("/usr/bin/xcrun", localGatewayBuild(helper), options);
+  execFileSync("/usr/bin/codesign", ["--force", "--deep", "--sign", "-", app], options);
+  execFileSync("/usr/bin/codesign", ["--verify", "--deep", "--strict", app], options);
   console.log("added-by-check");
 }
