@@ -30,8 +30,7 @@
 //
 // Every program is one of the exact commands `commands` builds for this
 // place, started without a shell for any value. The one thing it removes is
-// an attempt of its own that never reached onboarding, after proving that
-// again, by the identities of what it made.
+// an attempt whose files it can prove it made, with no service left to use them.
 
 import type {
   InstallCleanup,
@@ -1002,7 +1001,7 @@ export type InstallRecord = {
   stateDir: string;
   service: string;
   port: number | null;
-  /** `installing` until onboarding starts; only an attempt still `installing` is ever removed. */
+  /** A later attempt can clear only an early leftover. The active attempt can prove its own profile. */
   stage: Stage;
 };
 
@@ -1010,6 +1009,8 @@ export type InstallRecord = {
 type FolderRecord = { id: string; version: string; profile: string };
 
 /** What an earlier attempt was proven to be, by identity, before any of it is removed. */
+type ProfileProof = { dir: Stats; owner: Stats };
+
 type Proof = {
   id: string;
   dir: Stats;
@@ -1215,12 +1216,10 @@ export class Installer {
   }
 
   /**
-   * An attempt of Clawtrate's that never reached onboarding, proven from both
-   * records and the folder itself, each opened without following a link, or
-   * null: the same id, version and profile in both, Clawtrate's at stage
-   * `installing`, for this folder.
+   * Proves the attempt from both records and the program folder. The records must agree
+   * on id, version and profile, and the app record must say the expected stage.
    */
-  private async prove(): Promise<Proof | null> {
+  private async prove(stage: Stage = "installing"): Promise<Proof | null> {
     const { place, pins } = this.options;
     const dir = await lstat(place.programDir).catch(() => null);
     if (!dir?.isDirectory()) return null;
@@ -1238,7 +1237,7 @@ export class Installer {
       !ATTEMPT_ID.test(own.id) ||
       own.id !== there.id ||
       Object.keys(there).sort().join(",") !== "id,profile,version" ||
-      own.stage !== "installing" ||
+      own.stage !== stage ||
       own.version !== pins.version ||
       there.version !== pins.version ||
       own.profile !== INSTALL_PROFILE ||
@@ -1269,36 +1268,60 @@ export class Installer {
     return (await this.prove()) !== null ? this.at.openclaw : null;
   }
 
+  /** Checks the profile's original directory and the ownership record this attempt wrote. */
+  private async sameProfile(path: string, id: string, profile: ProfileProof): Promise<boolean> {
+    const dir = await lstat(path).catch(() => null);
+    if (!dir?.isDirectory() || !same(dir, profile.dir)) return false;
+    const owner = await readOwn(join(path, ".clawtrate-owner.json"));
+    return (
+      owner !== null && same(owner.stat, profile.owner) && owner.text === JSON.stringify({ id })
+    );
+  }
+
   /**
-   * Removes an attempt that never reached onboarding (`id`, or an earlier
-   * run's): its program folder, its staging folder and Clawtrate's record.
-   * Every question to the service manager comes first; then the attempt is
-   * proven, moved into a new private folder beside it, proven again there by
-   * the same identities, and only then removed. Anything that changed is put
-   * back as it was. Resolves whether nothing of it is left.
+   * Quarantines and removes an early attempt. The active attempt can also remove its profile
+   * after a failed service install, if it owns the profile and no service was left behind.
    */
-  async discard(id: string | null = null): Promise<boolean> {
+  async discard(id: string | null = null, profile?: ProfileProof): Promise<boolean> {
     const { place } = this.options;
-    // An earlier run's attempt is removed only where nothing of the profile is: a profile or
-    // service there may be what it began. This run's own attempt, before onboarding, never
-    // reached them, and is removed whoever else has made them since.
-    if (id === null) {
-      if ((await presence(place.stateDir)) !== "absent") return false;
-      if (!(await this.serviceAbsent())) return false;
+    if (profile) {
+      if (
+        !id ||
+        this.lingering ||
+        !(await this.serviceAbsent()) ||
+        this.lingering ||
+        !(await this.sameProfile(place.stateDir, id, profile))
+      )
+        return false;
+    } else if (id === null) {
+      if ((await presence(place.stateDir)) !== "absent" || !(await this.serviceAbsent()))
+        return false;
     }
-    const proof = await this.prove();
+    const stage = profile ? "onboarding" : "installing";
+    const proof = await this.prove(stage);
     if (!proof || (id !== null && proof.id !== id)) return false;
-    const quarantine = join(dirname(place.programDir), `.openclaw-removing-${randomUUID()}`);
+    const name = `.openclaw-removing-${randomUUID()}`;
+    const quarantine = join(dirname(place.programDir), name);
+    // Rename within the profile's own parent, which can be on another volume than app data.
+    const profileQuarantine = profile ? join(dirname(place.stateDir), name) : null;
     try {
       await mkdir(quarantine, { mode: 0o700 });
     } catch {
       return false;
     }
+    if (profileQuarantine) {
+      try {
+        await mkdir(profileQuarantine, { mode: 0o700 });
+      } catch {
+        await rmdir(quarantine).catch(() => {});
+        return false;
+      }
+    }
     const staging = stagingDir(place, proof.id);
-    // This run's own attempt removes a staging folder only if it made it; one that was in the
-    // way is left, and the removal is then unproven.
     const ownStaging = proof.staging !== null && (id === null || this.stagingMade === id);
+    const movedProfile = profileQuarantine ? join(profileQuarantine, "profile") : null;
     const moves: Array<{ from: string; to: string }> = [
+      ...(movedProfile ? [{ from: place.stateDir, to: movedProfile }] : []),
       { from: place.programDir, to: join(quarantine, "program") },
       { from: place.recordFile, to: join(quarantine, "record") },
       ...(ownStaging ? [{ from: staging, to: join(quarantine, "staging") }] : []),
@@ -1314,30 +1337,38 @@ export class Installer {
         break;
       }
     }
+    if (intact && profile && movedProfile) {
+      intact =
+        (await this.serviceAbsent()) &&
+        !this.lingering &&
+        (await this.sameProfile(movedProfile, proof.id, profile));
+    }
     if (intact) intact = await this.stillProven(quarantine, proof);
     if (!intact) {
-      // Put back, each only where nothing has taken its place.
       for (const move of moved.reverse())
         if ((await presence(move.from)) === "absent")
           await rename(move.to, move.from).catch(() => {});
+      if (profileQuarantine) await rmdir(profileQuarantine).catch(() => {});
       await rmdir(quarantine).catch(() => {});
-      this.log("an attempt changed while it was being removed; it was left as it was");
+      this.log("an attempt changed while it was being removed");
       return false;
     }
+    if (profileQuarantine)
+      await rm(profileQuarantine, { recursive: true, force: true }).catch(() => {});
     await rm(quarantine, { recursive: true, force: true }).catch(() => {});
-    // The record's scratch link, if its own removal failed: the same file as the record.
-    await unlinkIfSame(this.scratch(proof.id, "installing"), proof.record.stat);
+    await unlinkIfSame(this.scratch(proof.id, stage), proof.record.stat);
     const left = await Promise.all(
       [
         place.programDir,
         place.recordFile,
         staging,
         quarantine,
-        this.scratch(proof.id, "installing"),
+        this.scratch(proof.id, stage),
+        ...(profileQuarantine ? [place.stateDir, profileQuarantine] : []),
       ].map(presence),
     );
     if (left.some((state) => state !== "absent")) return false;
-    this.log("removed an attempt that never reached onboarding");
+    this.log("removed the failed attempt");
     return true;
   }
 
@@ -1576,8 +1607,9 @@ export class Installer {
         classification: onboarded.ok ? null : onboarded.classification,
       });
     }
+    let owner: Stats;
     try {
-      await this.writeNew(this.at.owner, JSON.stringify({ id }));
+      owner = await this.writeNew(this.at.owner, JSON.stringify({ id }));
     } catch {
       return kept("write");
     }
@@ -1612,6 +1644,14 @@ export class Installer {
       this.log(
         `the service wasn't confirmed installed: exit=${installed.exitCode} timedOut=${installed.timedOut} definition=${written}`,
       );
+      if (written === "absent" && !this.lingering) {
+        const removed = await this.discard(id, { dir: state, owner });
+        return stopped("service", 2, {
+          exitCode: installed.exitCode,
+          cleanup: removed ? "removed" : "unproven",
+          retry: removed,
+        });
+      }
       return kept("service", { exitCode: installed.exitCode });
     }
     try {

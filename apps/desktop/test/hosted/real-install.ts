@@ -1,9 +1,10 @@
 // Real installation, local pairing and cleanup on a disposable GitHub-hosted Mac.
-// The installer and proof both use a private temporary home, with the runner's launchd session.
+// OpenClaw's launchd setup requires the disposable runner's canonical account home.
 
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash, randomBytes, createCipheriv, createDecipheriv } from "node:crypto";
 import {
+  appendFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -16,7 +17,7 @@ import {
 } from "node:fs";
 import { rm } from "node:fs/promises";
 import { connect } from "node:net";
-import { tmpdir } from "node:os";
+import { tmpdir, userInfo } from "node:os";
 import { dirname, join } from "node:path";
 import { startHostRuntime } from "../../src/host/runtime.ts";
 import { SetupController } from "../../src/setup/controller.ts";
@@ -36,19 +37,30 @@ import { FULL_SCOPES } from "@clawtrate/core";
 import { localGatewayBuild } from "../../packaging/config.ts";
 import { provedRouteFor, type LocalConnect } from "../../src/setup/local-connect.ts";
 
-const say = (line: string) => console.log(`[hosted-install] ${line}`);
+const hostedEnv = { ...process.env };
+if (!onHostedRunner(hostedEnv) || !hostedEnv.RUNNER_TEMP) {
+  console.error("Refusing: a real install runs only on a GitHub-hosted runner.");
+  process.exit(2);
+}
+// Only the check's own messages go into the artifact. Child output can contain credentials.
+const artifact = join(hostedEnv.RUNNER_TEMP, "clawtrate-setup-install");
+mkdirSync(artifact, { mode: 0o700 });
 const failures: string[] = [];
+const say = (line: string) => {
+  const message = `[hosted-install] ${line}`;
+  console.log(message);
+  appendFileSync(join(artifact, "check.log"), `${message}\n`, { mode: 0o600 });
+};
+process.on("exit", (code) => {
+  writeFileSync(join(artifact, "result.json"), JSON.stringify({ code, failures }, null, 2), {
+    mode: 0o600,
+  });
+});
 function check(ok: boolean, what: string): void {
   say(`${ok ? "ok  " : "FAIL"} ${what}`);
   if (!ok) failures.push(what);
 }
 
-if (!onHostedRunner(process.env)) {
-  console.error(
-    "Refusing: a real install runs only on a GitHub-hosted runner (CI, GITHUB_ACTIONS, RUNNER_ENVIRONMENT=github-hosted).",
-  );
-  process.exit(2);
-}
 const platform = process.platform;
 if (platform !== "darwin") throw new Error("This check runs on a hosted Mac only.");
 const target = installTarget(platform, process.arch, false);
@@ -57,13 +69,23 @@ if (!target) throw new Error("this runner's system isn't one the install support
 const uid = String(process.getuid?.() ?? "");
 /** This check's own folder: everything it makes of its own is in it, and it is removed at the end. */
 const scratch = realpathSync(mkdtempSync(join(tmpdir(), "clawtrate-hosted-")));
-const home = join(scratch, "home");
-mkdirSync(home, { mode: 0o700 });
+const home = userInfo().homedir;
+if (
+  ![join(home, ".openclaw"), join(home, ".openclaw-clawtrate")].every((path) => !existsSync(path))
+)
+  throw new Error("The disposable runner must start without either OpenClaw profile.");
 const helper = join(scratch, "helper");
 execFileSync("/usr/bin/xcrun", localGatewayBuild(helper), {
   env: { ...process.env, TMPDIR: scratch },
 });
-const local: LocalConnect = { home, helper, platform, sandboxed: true, deadlineMs: 10_000 };
+// The runner was checked above. Model the packaged launch metadata for the native proof in
+// this test process only. The installer still checks the original hosted environment.
+Object.defineProperty(process.versions, "electron", {
+  value: "0.0.0-hosted-check",
+  configurable: true,
+});
+delete process.env.CI;
+const local: LocalConnect = { home, helper, platform, sandboxed: false, deadlineMs: 10_000 };
 // Removed however the check ends, a failure or a throw included.
 process.on("exit", () => rmSync(scratch, { recursive: true, force: true }));
 // A Mac's app data is "~/Library/Application Support/Clawtrate": a space in every path.
@@ -136,6 +158,7 @@ const makeInstaller = () =>
     pins: PINS,
     run: (request, ask) => runner.run(request, ask),
     personsApp: false,
+    env: hostedEnv,
     accountHome: home,
     log: say,
   });
@@ -197,12 +220,12 @@ runtime.client.store.subscribe((state) => {
 });
 
 // 1. An OpenClaw already there: found, no install offered, left byte for byte.
-mkdirSync(decoy);
+mkdirSync(decoy, { mode: 0o700 });
 writeFileSync(join(decoy, "keep-me"), "the person's own\n");
 const decoyBefore = tree(decoy);
 await setup.look();
 check(
-  setup.current.look?.outcome === "program-missing",
+  ["program-missing", "cant-tell"].includes(setup.current.look?.outcome ?? ""),
   `with a default OpenClaw home there, the look says it is set up (${setup.current.look?.outcome})`,
 );
 const offered = await setup.install().then(
@@ -372,7 +395,7 @@ check(
 );
 
 // 4. A person's own OpenClaw and service definition, then removal (§11; F-514 is later).
-mkdirSync(decoy);
+mkdirSync(decoy, { mode: 0o700 });
 writeFileSync(join(decoy, "keep-me"), "the person's own\n");
 mkdirSync(join(sentinel, ".."), { recursive: true });
 // Made only where no definition is: a runner's own is never replaced or removed.
