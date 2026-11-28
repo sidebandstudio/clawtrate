@@ -78,6 +78,11 @@ const ALLOWED: { file: string; pattern: string; reason: string }[] = [
       "checks absence before launching the app, after refusing to run outside a disposable GitHub-hosted Mac",
   },
   {
+    file: ".github/workflows/setup-install.yml",
+    pattern: "the default state folder",
+    reason: "only checks absence on a disposable GitHub-hosted Mac before the install test",
+  },
+  {
     file: ".github/workflows/ci.yml",
     pattern: "the global npm folder",
     reason:

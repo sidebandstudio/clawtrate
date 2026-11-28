@@ -42,6 +42,8 @@ export type LocalConnect = {
   sandboxed: boolean;
   /** The helper's and the parse worker's deadline: `READ_DEADLINE_MS` unless a test lengthens it. */
   deadlineMs?: number;
+  /** Only the handover after an install may retry a native helper timeout. */
+  retryHelperTimeout?: () => boolean;
   /**
    * Runs a bounded launchd request in the current account's session. A person's packaged Mac
    * app provides it. Tests may inject a stand-in.
@@ -148,7 +150,16 @@ export function proveFor(
   refused: (why: ProveRefusal) => void = () => {},
 ): ProveSocket {
   return async (localPort, live = () => true) => {
-    const ask = () => proveLocalGateway({ ...local, folder, identity, port, localPort });
+    const retryTimeout = local.retryHelperTimeout;
+    const ask = () =>
+      proveLocalGateway({
+        ...local,
+        folder,
+        identity,
+        port,
+        localPort,
+        ...(retryTimeout ? { retryHelperTimeout: () => live() && retryTimeout() } : {}),
+      });
     let proof = await ask();
     if (!proof.proved && proof.why === "holder" && live()) {
       await new Promise((done) => setTimeout(done, HOLDER_RETRY_MS));
