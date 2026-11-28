@@ -321,10 +321,12 @@ test("F-515: the too-old card speaks of the version it read, and of no protocol"
   await openFixture(page, "setup=too-old", "light");
   await expect(
     page.getByText(
-      /OpenClaw 2026\.6\.2 is below the version this Clawtrate offers for automatic setup \(2026\.7\.0\)\. Update it, then look again\./,
+      "Automatic setup requires OpenClaw 2026.7.0 or later. Clawtrate found 2026.6.2.",
+      { exact: true },
     ),
   ).toBeVisible();
   await expect(page.getByText(/protocol/)).toHaveCount(0);
+  await expect(page.getByRole("button", { name: "Use Advanced" })).toBeVisible();
 });
 
 test("a refused sandbox says why it was refused", async ({ page }) => {
