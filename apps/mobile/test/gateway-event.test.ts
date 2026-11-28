@@ -6,6 +6,7 @@ import {
   initialState,
   mapHistory,
   type Bot,
+  type ClawtrateState,
   type Task,
   type Transcript,
   type TranscriptItem,
@@ -16,11 +17,9 @@ import type { LayoutChangeEvent } from "react-native";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { grantingGateway, KEY, openTask } from "../../../packages/core/test/client-harness.ts";
 import { helloOk, until } from "../../../packages/core/test/fake-gateway.ts";
-import { PROTECTED_BAND } from "../src/components/Top.tsx";
 import { GatewayEvent } from "../src/components/GatewayEvent.tsx";
 import { Txt } from "../src/components/ui.tsx";
 import { createSecrets, REDACTED } from "../src/host/secrets.ts";
-import { Chat } from "../src/screens/Chat.tsx";
 import type * as ThemeModule from "../src/theme/index.ts";
 import { chatRows, type ChatRow } from "../src/transcript.ts";
 
@@ -92,6 +91,22 @@ type NativeProps = {
   row?: ChatRow;
 };
 type NativeElement = ReactElement<NativeProps>;
+
+// The app's TypeScript project checks these components with native globals.
+// Load them at runtime here so Expo's globals stay out of the Node project.
+const { Chat } = await vi.importActual<{
+  Chat(props: {
+    state: ClawtrateState;
+    bot: Bot;
+    task: Task;
+    now: number;
+    onBack: () => void;
+    onRead: (task: Task) => void;
+  }): NativeElement;
+}>("../src/screens/Chat.tsx");
+const { PROTECTED_BAND } = await vi.importActual<{ PROTECTED_BAND: number }>(
+  "../src/components/Top.tsx",
+);
 
 function renderEvent(line = LINE, text: string | undefined = EXEC): NativeElement {
   return GatewayEvent({ line, text });
