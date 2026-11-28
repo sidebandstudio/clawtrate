@@ -1798,6 +1798,8 @@ export class ClawtrateClient {
    * connection stops before the gateway answers, to try again.
    */
   private fullAttempt: Promise<void> | null = null;
+  /** The gateway the offer of full control was accepted on: its request is asked of no other (#902). */
+  private fullGateway: string | null = null;
   /** The scopes a `held` request keeps, as the connection held them when it was made. */
   private heldBase: readonly string[] = [];
   /** The access request under way also asks for device access (`operator.pairing`). */
@@ -3329,6 +3331,7 @@ export class ClawtrateClient {
       this.scopeUpgrade?.cancelScopeUpgrade();
       this.scopeUpgrade = null;
       this.upgradeTier = "full";
+      this.fullGateway = binding.stamp.gatewayId;
       this.pairingWanted = false;
       this.upgradeWanted = true;
       this.directAsk = { tier: "full", pairing: false };
@@ -3612,7 +3615,7 @@ export class ClawtrateClient {
    * (#782): the request waits for this connection's identity, and a change whose gateway this
    * isn't is refused, rather than asking a gateway that answered the reconnect at the same address.
    */
-  private resumeUpgrade(): void {
+  private resumeUpgrade(named: string | null = null): void {
     // A waiter this hello grants (`settleAccessWaiters`) is gone by the read, but still named
     // its gateway. One withdrawn meanwhile names none.
     const granted = new Set(
@@ -3634,7 +3637,8 @@ export class ClawtrateClient {
             this.state.connection.scopes.includes(scope),
           );
       }
-      return this.startUpgrade();
+      // An accept of full control waits for the read to name the gateway it was made for.
+      if (this.upgradeTier !== "full" || named === this.fullGateway) return this.startUpgrade();
     }
     const epoch = this.epoch;
     this.resumeRead = epoch;
@@ -3654,21 +3658,22 @@ export class ClawtrateClient {
         this.scopeUpgrade?.cancelScopeUpgrade();
         this.scopeUpgrade = null;
       }
-      if (this.accessWaiters.length > 0 || (id !== null && granted.has(id)))
-        return this.startUpgrade();
-      // A request asked for on this connection meanwhile is under way: its answer settles it.
-      if (this.scopeUpgrade) return;
-      // Beside changes refused here, the person's accept of full control ends as a failure they
-      // can try again from Settings, never quietly; an accept still being saved keeps its place.
-      if (this.upgradeTier === "full" && (waiters.length > 0 || granted.size > 0)) {
+      // An accept of full control made on another gateway, or on one this read can't name, ends
+      // as a failure the person can try again from Settings, never quietly, and nothing is sent.
+      // An accept still being saved keeps its place: its tier isn't set yet.
+      if (this.upgradeTier === "full" && id !== this.fullGateway) {
         this.fullAttempt = null;
         this.failAccess(
           new AccessRequestError("error", id === null ? IDENTITY_UNREAD : ANOTHER_GATEWAY),
         );
         return;
       }
+      if (this.accessWaiters.length > 0 || (id !== null && granted.has(id)))
+        return this.startUpgrade();
+      // A request asked for on this connection meanwhile is under way: its answer settles it.
+      if (this.scopeUpgrade) return;
       // No waiter is left: as if none had waited.
-      this.resumeUpgrade();
+      this.resumeUpgrade(id);
     });
   }
 

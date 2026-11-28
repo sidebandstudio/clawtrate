@@ -569,6 +569,36 @@ export function Composer({
         }
       }
     }
+    // Up in an empty field brings back the person's latest message in this task, to edit and send
+    // again (after a Stop, say). In a draft it moves the caret, as ever.
+    if (
+      event.key === "ArrowUp" &&
+      !event.shiftKey &&
+      !event.altKey &&
+      !command(event) &&
+      !event.nativeEvent.isComposing &&
+      text === "" &&
+      tokens.length === 0 &&
+      files.length === 0
+    ) {
+      // A sent message not in history yet is the newest; one on the shelf keeps its own Edit.
+      const shelf = shelfMessages(transcript);
+      const last = (
+        transcript?.outbox.filter((message) => !shelf.includes(message)).at(-1)?.text ??
+        transcript?.items
+          .findLast((item) => item.role === "user")
+          ?.blocks.flatMap((block) => (block.kind === "text" ? [block.text] : []))
+          .join("\n")
+      )?.trim();
+      if (last) {
+        event.preventDefault();
+        setText(last);
+        const field = event.currentTarget;
+        requestAnimationFrame(() => field.setSelectionRange(last.length, last.length));
+        onAnnounce("Last message back in the field");
+        return;
+      }
+    }
     if (
       event.key === "Backspace" &&
       tokens.length > 0 &&
