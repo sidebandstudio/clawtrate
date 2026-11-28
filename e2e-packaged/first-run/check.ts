@@ -182,7 +182,9 @@ function cleanMac() {
 }
 
 function launch() {
-  const data = mkdtempSync(join(process.env.RUNNER_TEMP!, "first-run-data-"));
+  const scratch = mkdtempSync(join(process.env.RUNNER_TEMP!, "first-run-data-"));
+  const data = join(scratch, "Clawtrate App Data");
+  mkdirSync(data, { mode: 0o700 });
   const env = appEnv();
   // CI and debugger switches classify an app launch as sandboxed. Drive its
   // production window via the OS, with no debugging port and no setup stand-ins.
@@ -229,16 +231,18 @@ try {
       );
     }
     await press("Set up OpenClaw here");
+    const confirmation = () =>
+      buttons().find(({ role, text }) => role === "AXButton" && /^Set up OpenClaw$/i.test(text));
     await waitFor(
       "the Mac's install confirmation",
       () =>
         nativeDialog() &&
         hasText(/^Set up OpenClaw on this computer\?$/i) &&
-        hasButton("Set up OpenClaw") &&
+        !!confirmation() &&
         hasButton("Cancel"),
     );
     await screenshot("03-mac-install-confirmation.png");
-    await press("Set up OpenClaw");
+    await press(confirmation()!.text);
     await waitFor("installation progress", () => hasText(/^Setting up OpenClaw/i), 45);
     await screenshot("03-install-progress.png");
     await waitFor(
