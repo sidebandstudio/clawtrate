@@ -265,6 +265,7 @@ Phrases are in the user's language, have no bot name in front and no trailing el
 ## 6. Streaming text and message captions
 
 - Reply text streams into its bubble as the gateway emits it. A caret follows the last character: 2 px wide, the height of the text, `--accent-line`, breathing between 100% and 35% over 1.2 s (steady under reduced motion). The bubble has `aria-busy="true"` until the message is complete. Text is never revealed more slowly than it arrives. (F-095, F-433)
+- The gateway writes a message's row into history when the message ends, before the run ends. While the run is still drawn live, that row's text is the reply already on screen: it is drawn once, as the reply, where it was read. That row is known by where it stands, as the first text of the message after the call the reply came after, or after the person's message, never by its words. History gives up a row only then, so no words leave the screen. Where it can't be known so (after a reconnect, in a task opened while the run went on, with a steer in between, text after the call in the call's own message, a row the gateway cut), the reply is shown twice until the run ends, never left out (decisions.md, "Text beside a tool call").
 - Progress messages the bot writes mid-run are ordinary bubbles, and so is the text it writes beside a tool call (section 7.6). (F-088)
 
 A caption is a 12 px line under a bubble, on the bubble's side:
@@ -850,7 +851,7 @@ Working and Waiting for you may alternate. Completed becomes Replied when a late
 
 The same component, for work a bot sends to T3 Code. It is drawn only from the bot's own tool events on the gateway, and the app never connects to T3 Code (F-138). Clawtrate has an optional T3 Code integration: a switch in settings, off by default, with which a person adds a T3 Code server to the gateway and gives it to chosen bots (F-482 to F-487). The cards do not depend on that switch: a bot's T3 Code calls are drawn whenever its tool events show them, with the switch on or off. (F-132, F-487)
 
-**Identity.** The text "T3 Code" and a mark drawn for Clawtrate: code brackets in a 20 px rounded tile on `--bg-inverse`. No third-party logo.
+**Identity.** The text "T3 Code" and T3 Code's own logo, a black tile with white letters "T3" taken unchanged from `pingdotgg/t3code` (`assets/prod/logo.svg`, commit `d249e628eef2`), drawn at 20 px with a hairline around the tile so it reads on a dark card. It appears on the closed "Messaged T3 Code" line and beside "T3 Code" inside the open card (`docs/decisions.md`, Brand).
 
 **Each call's state.** Every call to T3 Code, whichever tool, has one of these states. They are the call's, not the work's.
 

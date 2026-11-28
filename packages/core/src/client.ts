@@ -290,6 +290,7 @@ import {
   questionPending,
   startQueuedRun,
   updateMessage,
+  unfollowed,
   type CaughtUp,
   type EngineContext,
   type OutgoingMessage,
@@ -555,16 +556,21 @@ function sessionOf(value: unknown): string | null {
  * A task this client names (`taskNames`): `waiting` for the gateway to accept the message it is
  * named from (`first`: the creation's message, or an empty task's first with text), with the ids of
  * the messages it sent there before with no text (a picture or a file alone), or `naming` while its
- * name is made. With the session the task was created as, when known.
+ * name is made. With the session the task was created as, when known, and the gateway it was made
+ * on, when its identity was read.
  */
 type TaskNaming = {
   stage: "waiting" | "naming";
   sessionId: string | null;
+  gatewayId: string | null;
   textless: string[];
   /** The message it is named from, once the gateway accepts its `chat.send`; null until chosen. */
   first: string | null;
-  /** Created with that message (`createTask`): no other message can come before it. */
-  withMessage: boolean;
+  /**
+   * This client's messages with text sent there after `first`, oldest first, up to
+   * `MAX_TEXTLESS_SENDS`: the next takes its place if it is deleted or taken back (`releaseFirst`).
+   */
+  later: string[];
 };
 /** Titles made from tasks' first messages the client keeps (`firstMessageTitles`); the oldest goes past it. */
 export const MAX_FIRST_MESSAGE_TITLES = 200;
@@ -4166,6 +4172,8 @@ export class ClawtrateClient {
       // The message a task waits to be named from goes under its new key.
       const naming = this.taskNames.get(key);
       if (naming?.first === messageId) naming.first = id;
+      if (naming?.later.includes(messageId))
+        naming.later = naming.later.map((each) => (each === messageId ? id : each));
       const kept = this.attachmentContent.get(messageId);
       if (kept) {
         this.attachmentContent.delete(messageId);
@@ -4247,6 +4255,7 @@ export class ClawtrateClient {
         message.status !== "handled")
     )
       return;
+    this.releaseFirst(key, messageId);
     this.dropAttachments(messageId);
     this.updateActivity(key, (activity) => ({
       ...removeMessage(activity, messageId),
@@ -4260,6 +4269,7 @@ export class ClawtrateClient {
   cancelQueued(key: string, messageId: string): void {
     const message = this.outgoing(key, messageId);
     if (!message || (message.status !== "queued" && message.status !== "held")) return;
+    this.releaseFirst(key, messageId);
     // A cancelled message is never sent: its files are not kept.
     this.dropAttachments(messageId);
     this.updateActivity(key, (activity) =>
@@ -4294,6 +4304,7 @@ export class ClawtrateClient {
 
   takeBack(key: string, messageId: string): { text: string; attachments: OutgoingAttachment[] } {
     const { text, attachments: files } = this.peekTakeBack(key, messageId);
+    this.releaseFirst(key, messageId);
     this.dropAttachments(messageId);
     this.updateActivity(key, (activity) =>
       updateMessage(cancelQueuedRun(activity, messageId, this.now()), messageId, {
@@ -4517,9 +4528,10 @@ export class ClawtrateClient {
       this.keepTaskName(key, {
         stage: "waiting",
         sessionId,
+        gatewayId: this.state.connection.gatewayId,
         textless: [],
         first: id,
-        withMessage: true,
+        later: [],
       });
     }
     // A caller holds one interest in the new task; one settled later is kept for its message.
@@ -4971,7 +4983,11 @@ export class ClawtrateClient {
       }
     }
     // Accepted is not confirmed: the files stay until history holds the message or the user deletes it.
-    if (command) this.dropAttachments(messageId);
+    if (command) {
+      this.dropAttachments(messageId);
+      // A command names no task: one waiting to be named from it waits for the next message.
+      this.releaseFirst(key, messageId);
+    }
     // Accepted: the message a task waits to be named from may be shown to a model now.
     else this.nameAccepted(key, messageId, message.text);
     this.scheduleHistory(key);
@@ -6163,10 +6179,13 @@ export class ClawtrateClient {
     if (next.runs.length > FOREIGN_RUNS_PER_SESSION) {
       next = { ...next, runs: next.runs.slice(-FOREIGN_RUNS_PER_SESSION) };
     }
-    // Steps of foreign runs are not shown; keep only the run states, within the run bound.
+    // Steps of foreign runs are not shown; keep only the run states, within the run bound. Nor is
+    // a run followed while its task is not open (`Run.followed`).
     next = {
       ...next,
-      runs: next.runs.map((run) => enforce(RUN, run.steps.length ? { ...run, steps: [] } : run)),
+      runs: next.runs.map((run) =>
+        enforce(RUN, unfollowed(run.steps.length ? { ...run, steps: [] } : run)),
+      ),
     };
     // The id pairs the session's turns were named by, newest kept, as a task's own are.
     const aliasKeys = Object.keys(next.queueAliases);
@@ -10380,6 +10399,13 @@ export class ClawtrateClient {
     this.settleAccessWaiters();
     this.checkCreations();
     this.checkUnknownDecisions();
+    // A new connection: a run's stream followed on the last one may have lost frames since.
+    for (const [key, transcript] of Object.entries(this.state.transcripts))
+      if (transcript.runs.some((run) => run.followed || run.textAfter))
+        this.updateActivity(key, (activity) => ({
+          ...activity,
+          runs: activity.runs.map(unfollowed),
+        }));
     // Whether the computer plugin is loaded comes from the hello's methods; panes that lost a
     // connection while control was held read the browser's leases again before offering anything.
     this.computer.reconnected();
@@ -12039,9 +12065,10 @@ export class ClawtrateClient {
       this.keepTaskName(key, {
         stage: "waiting",
         sessionId,
+        gatewayId: this.state.connection.gatewayId,
         textless: [],
         first: null,
-        withMessage: false,
+        later: [],
       });
     }
     return key;
@@ -12058,8 +12085,14 @@ export class ClawtrateClient {
    */
   private noteFirstSend(key: string, message: OutgoingMessage): void {
     const kept = this.taskNames.get(key);
-    // Its message is chosen already: only that one, once accepted, names the task.
-    if (kept?.stage !== "waiting" || kept.first !== null) return;
+    if (kept?.stage !== "waiting") return;
+    if (kept.first !== null) {
+      // Its message is chosen already: only that one, once accepted, names the task. One with no
+      // text is still this client's own row (`onlyOwnRows`), if that one is deleted or taken back.
+      const sent = message.text ? kept.later : kept.textless;
+      if (sent.length < MAX_TEXTLESS_SENDS) sent.push(message.id);
+      return;
+    }
     const row = this.rows.get(capId(key, MAX_ID_CHARS));
     if (!this.taskBot(key) || (kept.textless.length === 0 && row?.lastMessagePreview)) {
       this.taskNames.delete(key);
@@ -12076,8 +12109,8 @@ export class ClawtrateClient {
 
   /**
    * The gateway accepted a message's `chat.send`: the one a task this client names waits for starts
-   * its name, once. For an empty task it is checked again against the task's history as the gateway
-   * has it then (`onlyOwnRows`), which this client's copy can be behind.
+   * its name, once. It is checked again against the task's history as the gateway has it then
+   * (`onlyOwnRows`), which this client's copy can be behind.
    */
   private nameAccepted(key: string, messageId: string, text: string): void {
     const kept = this.taskNames.get(key);
@@ -12087,8 +12120,47 @@ export class ClawtrateClient {
       this.taskNames.delete(key);
       return;
     }
-    const ownSends = kept.withMessage ? undefined : [...kept.textless, messageId];
-    this.startNaming(key, bot, text, kept.sessionId, ownSends);
+    // A task created with its message too: another device can send in it before this one does.
+    this.startNaming(key, bot, text, kept.sessionId, [...kept.textless, messageId]);
+  }
+
+  /**
+   * The person deleted or took back a message before the gateway accepted it, or the gateway
+   * handled it as a command. If it was the one a task waits to be named from, the next with text
+   * this client sent after it there (`later`) takes its place: one still in the outbox, or one
+   * history holds, which has left it. Only those free the place: a message history confirmed
+   * still names the task once its answer comes.
+   */
+  private releaseFirst(key: string, messageId: string): void {
+    const kept = this.taskNames.get(key);
+    if (kept?.stage !== "waiting" || kept.first !== messageId) return;
+    const transcript = this.state.transcripts[key];
+    const sent = (id: string) => transcript?.outbox.find((each) => each.id === id);
+    const held = (id: string) =>
+      transcript?.items.find((item) => item.idempotencyKey === `${id}:user`);
+    // Those before it were deleted, taken back, cancelled or a command: they name nothing.
+    const at = kept.later.findIndex((id) => {
+      const message = sent(id);
+      if (message) return message.status !== "cancelled" && message.status !== "handled";
+      return held(id) !== undefined;
+    });
+    const next = at < 0 ? null : kept.later[at]!;
+    kept.first = next;
+    kept.later = at < 0 ? [] : kept.later.slice(at + 1);
+    // Accepted already: its text goes only to the gateway the task was made on, which another can
+    // have replaced at the same address since.
+    if (
+      next === null ||
+      kept.gatewayId === null ||
+      kept.gatewayId !== this.state.connection.gatewayId
+    )
+      return;
+    const message = sent(next);
+    if (message?.status === "sent") this.nameAccepted(key, next, message.text);
+    else if (!message) {
+      const text = held(next)?.blocks.find((block) => block.kind === "text")?.text ?? "";
+      this.nameAccepted(key, next, text);
+    }
   }
 
   /** Note a task this client names; the oldest goes past `MAX_NAMED_TASKS`. */
@@ -12113,20 +12185,24 @@ export class ClawtrateClient {
     botId: string,
     text: string,
     sessionId: string | null,
-    ownSends?: string[],
+    ownSends: string[],
   ): void {
     this.keepTaskName(key, {
       stage: "naming",
       sessionId,
+      gatewayId: null,
       textless: [],
       first: null,
-      withMessage: false,
+      later: [],
     });
     const ctx = this.actionContext(null, this.epoch);
-    const botModel = this.state.bots.find((bot) => bot.id === botId)?.model ?? null;
     void nameTask(
-      { request: ctx.request, row: () => this.rows.get(capId(key, MAX_ID_CHARS)) ?? null },
-      { key, sessionId, botId, botModel, text, ...(ownSends ? { ownSends } : {}) },
+      {
+        request: ctx.request,
+        row: () => this.rows.get(capId(key, MAX_ID_CHARS)) ?? null,
+        botModel: () => this.state.bots.find((bot) => bot.id === botId)?.model ?? null,
+      },
+      { key, sessionId, botId, text, ownSends },
     )
       .catch(() => null)
       .finally(() => {

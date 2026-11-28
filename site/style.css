@@ -160,7 +160,7 @@ code {
   font-size: 0.86em;
 }
 /* Without script, controls that could not respond are left out. */
-html:not(.js) :is([data-theme-toggle], [data-copy], .demo .card-actions, .demo figcaption) {
+html:not(.js) :is([data-theme-toggle], [data-copy]) {
   display: none;
 }
 .skip {
@@ -307,7 +307,7 @@ html:not(.js) :is([data-theme-toggle], [data-copy], .demo .card-actions, .demo f
   align-items: start;
   max-width: calc(var(--max) + 2 * var(--edge));
   margin: 0 auto;
-  /* Room above the demo window for the Clawling that sits on its edge. */
+  /* Room above the film window for the Clawling that sits on its edge. */
   padding: clamp(60px, 7vh, 80px) var(--edge) 0;
 }
 .hero h1 {
@@ -462,248 +462,60 @@ html:not(.js) .cmd-box + .cmd-box {
   background: rgba(255, 255, 255, 0.1);
 }
 
-/* The live approval, drawn the way the app draws its conversation. */
+/* The film in its window: a poster and a play button until it is pressed. */
 .win {
   border-radius: 24px;
-  background: var(--bg);
+  background: var(--bg-rail);
   box-shadow: var(--shadow-pop); /* taste-skill-ignore: the app's own floating window */
-  padding: 20px 22px 24px;
-  font-size: 15px;
-  line-height: 1.5;
-}
-.pill {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  width: max-content;
-  max-width: 100%;
-  margin: 0 auto 18px;
-  height: 36px;
-  padding: 0 14px 0 8px;
-  border-radius: 999px;
-  background: var(--bg-raised);
-  box-shadow: var(--shadow-raised); /* taste-skill-ignore: the app's title pill */
-  font-size: 14px;
-  white-space: nowrap;
   overflow: hidden;
 }
-.pill b {
-  font-weight: 500;
+.film-video {
+  display: block;
+  width: 100%;
+  height: auto;
+  aspect-ratio: 16 / 9;
 }
-.pill span {
-  color: var(--text-muted);
-}
-.pill .claw-art {
-  flex: none;
-  width: 22px;
-  height: 22px;
-}
-.pill-task {
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.talk {
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-.bubble {
-  max-width: 86%;
-  padding: 9px 14px;
-  border-radius: 18px;
-}
-.bubble.bot {
-  align-self: flex-start;
-  background: var(--bg-bubble);
-}
-.bubble.me {
-  align-self: flex-end;
-  max-width: 78%;
-  background: var(--bubble-user);
-  color: var(--bubble-user-text);
-  margin-bottom: 6px;
-}
-.card {
-  border-radius: 18px;
-  background: var(--bg-bubble);
-  box-shadow: inset 0 0 0 1px var(--warn-line); /* taste-skill-ignore: the app's outline for something that needs you */
-  padding: 14px 16px;
-  transition: box-shadow 240ms var(--ease);
-}
-.card-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-}
-.card-head b {
-  font-weight: 500;
-  font-size: 16px;
-}
-.tag {
-  flex: none;
-  padding: 2px 10px;
-  border-radius: 999px;
-  background: var(--warn-soft);
-  color: var(--warn);
-  font-size: 13px;
-}
-.card-body {
-  margin-top: 6px;
-}
-.card-body code {
-  padding: 1px 5px;
-  border-radius: 6px;
-  background: var(--bg-code);
-  overflow-wrap: anywhere;
-}
-.card-body b {
-  white-space: nowrap;
-}
-.card-actions {
-  display: flex;
-  gap: 8px;
-  margin-top: 14px;
-}
-.ui-btn {
-  min-height: 40px;
-  padding: 0 18px;
+.film-play {
+  position: absolute;
+  z-index: 2;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  width: 88px;
+  height: 88px;
+  margin: auto;
+  padding: 0;
   border: 0;
-  border-radius: 999px;
-  font-weight: 500;
-  font-size: 15px;
-  cursor: pointer;
-  transition:
-    transform 140ms var(--ease),
-    background-color 140ms var(--ease),
-    color 140ms var(--ease);
-}
-.ui-btn:active {
-  transform: scale(0.96);
-}
-.ui-primary {
+  border-radius: 50%;
   background: var(--bg-inverse);
   color: var(--text-inverse);
+  cursor: pointer;
+  transition:
+    transform 160ms var(--ease),
+    background-color 160ms var(--ease),
+    color 160ms var(--ease);
 }
-.ui-primary:hover {
+.film-play[hidden] {
+  display: none;
+}
+.film-play:hover {
   background: var(--accent);
   color: var(--accent-ink);
 }
-.ui-quiet {
-  margin-left: auto;
-  background: transparent;
-  color: var(--text-muted);
+.film-play:active {
+  transform: scale(0.97);
 }
-.ui-quiet:hover {
-  background: var(--bg-code);
-  color: var(--text);
+.film-play svg {
+  width: 34px;
+  height: 34px;
+  margin-left: 4px;
+  fill: currentColor;
 }
-.card-foot {
-  margin-top: 10px;
-  font-size: 13px;
-  color: var(--text-faint);
-}
-.event {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding-left: 14px;
-  font-size: 13px;
-  color: var(--text-faint);
-}
-.event svg,
-.run-card svg {
-  width: 14px;
-  height: 14px;
-  fill: none;
-  stroke: var(--accent-line);
-  stroke-width: 1.8;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-}
-/* A run's actions, behind one line that opens to plain-words cards. */
-.run summary {
-  width: fit-content;
-  min-height: 32px;
-  list-style: none;
-  cursor: pointer;
-}
-.run summary::-webkit-details-marker {
-  display: none;
-}
-.run summary:hover {
-  color: var(--text-muted);
-}
-.event .run-chevron {
-  stroke: currentColor;
-  transition: transform 140ms var(--ease);
-}
-.run[open] .run-chevron {
-  transform: rotate(90deg);
-}
-.run-failed {
-  color: var(--danger);
-}
-.run-state {
-  margin-left: auto;
-  font-size: 13px;
-  color: var(--text-muted);
-}
-.run-card {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin-top: 4px;
-  padding: 9px 14px;
-  border-radius: 14px;
-  background: var(--bg-bubble);
-  font-size: 14px;
-}
-.demo-live {
-  position: absolute;
-  width: 1px;
-  height: 1px; /* taste-skill-ignore: visually hidden live region */
-  overflow: hidden;
-  clip-path: inset(50%);
-}
-.demo figcaption {
+.film figcaption {
   margin-top: 12px;
-  min-height: 40px;
   font-size: var(--t-s);
   color: var(--text-muted);
   padding-left: 4px;
-}
-.link-btn {
-  min-height: 40px;
-  padding: 0;
-  border: 0;
-  background: none;
-  color: var(--text);
-  text-decoration: underline;
-  text-underline-offset: 3px;
-  cursor: pointer;
-}
-/* Which parts show in which state. Without script, the request stays open. */
-.demo:not([data-state="allowed"]) [data-when="allowed"],
-.demo:not([data-state="denied"]) [data-when="denied"],
-.demo:not([data-state="pending"]) [data-when="pending"],
-.demo[data-state="pending"] [data-when="answered"] {
-  display: none;
-}
-.demo:not([data-state="pending"]) .talk > [data-when] {
-  animation: arrive 360ms var(--ease) both;
-}
-.demo[data-state="allowed"] .card,
-.demo[data-state="denied"] .card {
-  box-shadow: none; /* taste-skill-ignore: removes the outline once answered */
-}
-.demo[data-state="allowed"] .tag {
-  background: var(--accent-soft);
-  color: var(--accent);
-}
-.demo[data-state="denied"] .tag {
-  background: var(--bg-code);
-  color: var(--text-muted);
 }
 @keyframes arrive {
   from {
@@ -911,58 +723,98 @@ h3 {
   max-width: 340px;
 }
 
-/* In the beta: what ships, and what is being built. */
+/* In the beta: an index of what ships, in three short columns on a faint wash,
+   and beside it, quieter, what is being built. */
 .beta {
   padding-top: var(--gap-section);
 }
-.lists {
+.index {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-  gap: clamp(32px, 6vw, 112px);
-  margin-top: 48px;
+  grid-template-columns: minmax(0, 3fr) minmax(0, 1fr);
+  gap: clamp(28px, 4vw, 64px);
+  margin-top: 40px;
 }
-.list h3 {
-  margin-bottom: 14px;
+.index-now {
+  border-radius: 28px;
+  padding: clamp(28px, 3.4vw, 48px);
+  background: color-mix(in srgb, var(--stage-green) var(--wash), var(--bg-rail));
 }
-.list-note {
-  margin: -6px 0 10px;
+.index-cols {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: clamp(24px, 3vw, 48px);
+  margin-top: clamp(24px, 2.6vw, 36px);
+}
+.index-col h4 {
+  margin: 0 0 6px;
   font-size: var(--t-s);
+  font-weight: 500;
   color: var(--text-muted);
 }
-.list ul {
+.index ul {
   list-style: none;
   padding: 0;
 }
-.list li {
+.index-col li {
   position: relative;
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 16px;
-  padding: 7px 0 7px 24px;
-  line-height: 1.45;
+  padding: 8px 0 8px 22px;
+  line-height: 1.3;
+  text-wrap: balance;
 }
-.list li::before {
+.index-col li::before {
   content: "";
   position: absolute;
   left: 0;
   top: 15px;
-  width: 9px;
-  height: 9px;
+  width: 8px;
+  height: 8px;
   border-radius: 999px;
   background: var(--accent);
 }
-.list-next li::before {
-  background: transparent;
+.index-more {
+  margin-top: clamp(20px, 2.2vw, 28px);
+  font-size: var(--t-s);
+  color: var(--text-muted);
+}
+.index-more a:hover {
+  color: var(--accent);
+}
+/* What is being built sits on the page itself: no fill, open dots, and each row a link to its work. */
+.index-next {
+  padding-top: clamp(28px, 3.4vw, 48px);
+}
+/* Its rows start level with the panel's first items, below their column headings. */
+.index-next ul {
+  margin-top: calc(clamp(24px, 2.6vw, 36px) + 28px);
+}
+.index-next a {
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 12px;
+  padding: 8px 0 8px 22px;
+  line-height: 1.3;
+  text-decoration: none;
+}
+.index-next a::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 15px;
+  width: 8px;
+  height: 8px;
+  border-radius: 999px;
   box-shadow: inset 0 0 0 1.5px var(--text-faint); /* taste-skill-ignore: an open dot for what is coming */
 }
-.list li > a {
+.index-ref {
   flex: none;
   font-size: var(--t-s);
   font-variant-numeric: tabular-nums;
   color: var(--text-muted);
 }
-.list li > a:hover {
+.index-next a:hover,
+.index-next a:hover .index-ref {
   color: var(--accent);
 }
 
@@ -1314,14 +1166,18 @@ h3 {
     max-width: 12ch;
   }
   /* Stacked, the space above the window is the Clawling's height and a little more. */
-  .demo {
+  .film {
     max-width: 640px;
     margin-top: calc(66px - clamp(32px, 5vw, 88px));
   }
   .row-split,
   .row-split:has(.stage-tall),
-  .row-wide .row-text {
+  .row-wide .row-text,
+  .index {
     grid-template-columns: minmax(0, 1fr);
+  }
+  .index-next {
+    padding: 0 clamp(28px, 3.4vw, 48px);
   }
   .row-flip .row-text {
     order: 0;
@@ -1332,12 +1188,18 @@ h3 {
     --t-b: 16px;
   }
   .paths,
-  .lists,
+  .index-cols,
   .close-inner {
     grid-template-columns: minmax(0, 1fr);
   }
-  .win {
-    padding: 16px 14px 20px;
+  .film-play {
+    width: 64px;
+    height: 64px;
+  }
+  .film-play svg {
+    width: 26px;
+    height: 26px;
+    margin-left: 3px;
   }
   .pc[data-wide] {
     display: none;
@@ -2015,13 +1877,13 @@ h3 {
   }
 }
 
-/* The home page's Clawling sits on the demo window's ledge. The window's top
+/* The home page's Clawling sits on the film window's ledge. The window's top
    edge cuts it off: the button shows only the part above, in front of the
    window's shadow. The window lines up with the headline. */
-.demo {
+.film {
   position: relative;
 }
-.demo .win {
+.film .win {
   position: relative;
   z-index: 1;
 }
