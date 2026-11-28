@@ -527,6 +527,17 @@ test("F-602: Start OpenClaw runs on one press, then the proved gateway offers Co
   expect(await sent(page)).toEqual(["setupStart"]);
 });
 
+test("F-602: Advanced opens after a local token refusal or an unfinished handshake", async ({
+  page,
+}) => {
+  for (const state of ["local-token-refused", "local-unanswered"]) {
+    await openFixture(page, `setup=${state}`, "dark");
+    await page.getByRole("button", { name: "Use Advanced" }).click();
+    await expect(page.getByPlaceholder("Gateway address")).toBeFocused();
+    expect(await sent(page)).toEqual(["setupReset"]);
+  }
+});
+
 test("F-602: a gateway local connect couldn't prove isn't offered: it says so, with Advanced and Look again", async ({
   page,
 }) => {

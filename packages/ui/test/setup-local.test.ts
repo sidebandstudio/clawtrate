@@ -8,6 +8,7 @@ import {
   LOCAL_ROUTE_ONLY,
   PROOF_REFUSAL_LINES,
   type ClawtrateBridge,
+  type ConnectionError,
   type HostInfo,
   type SetupLook,
   type SetupState,
@@ -47,7 +48,7 @@ const look = (more: Partial<SetupLook> = {}): SetupLook => ({
   ...more,
 });
 
-function render(info: HostInfo, setup: SetupState): string {
+function render(info: HostInfo, setup: SetupState, mismatch?: ConnectionError): string {
   return renderToStaticMarkup(
     createElement(BridgeProvider, {
       bridge: { info } as ClawtrateBridge,
@@ -55,6 +56,7 @@ function render(info: HostInfo, setup: SetupState): string {
         info,
         setup,
         connection: initialState.connection,
+        ...(mismatch ? { mismatch } : {}),
         discovery: initialState.discovery,
       }),
     }),
@@ -271,11 +273,20 @@ describe("the card for this computer, after This computer", () => {
     ["gateway-older", "This gateway speaks an older protocol than Clawtrate supports."],
     ["client-older", "This gateway needs a newer version of Clawtrate."],
   ] as const)("F-515: the setup card explains which side is older (%s)", (reason, line) => {
-    const html = render(local(), {
-      ...found(),
-      phase: "failed",
-      failure: { kind: "protocol", exitCode: null, port: PORT, reason },
-    });
+    const html = render(
+      local(),
+      {
+        ...found(),
+        phase: "failed",
+        failure: { kind: "protocol", exitCode: null, port: PORT, reason },
+      },
+      {
+        code: "PROTOCOL_MISMATCH",
+        message: "The gateway refused the protocol.",
+        hint: null,
+        protocol: { gateway: reason === "gateway-older" ? 3 : 5, client: 4 },
+      },
+    );
     expect(html).toContain(line);
     expect(html).toContain(">Look again</button>");
     expect(html).toContain(">Use Advanced</button>");
