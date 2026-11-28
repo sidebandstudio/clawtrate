@@ -1,38 +1,40 @@
-// The stamp F-063 expects before a seeded message (#640): built from the message's stored time, so
-// it matches what the app shows when the seed wrote it before the device's midnight and the check
-// opens it after.
+// The stamp the iPhone checks expect above a message (#640): its exact stored time under "Today"
+// or "Yesterday". A check can straddle the device's midnight, and the app redraws its stamps only
+// every 30 s, so near midnight either day word can be on screen. `stampTime`'s own tests in
+// packages/ui pin which day word is right.
 
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { stampTime } from "../../../packages/ui/src/format.ts";
 import { stampPattern } from "../simulator/harness.ts";
 
 // Maestro matches a whole text.
 const matches = (pattern: string, text: string) => new RegExp(`^(?:${pattern})$`).test(text);
 const storedAt = new Date(2026, 10, 26, 23, 53).getTime();
+const beforeMidnight = new Date(2026, 10, 26, 23, 59, 45).getTime();
+const afterMidnight = new Date(2026, 10, 27, 0, 18).getTime();
 
 describe("stampPattern", () => {
-  afterEach(() => {
-    vi.useRealTimers();
-  });
-
-  it("matches the app's Yesterday stamp when the check runs after midnight", () => {
-    vi.useFakeTimers({ now: new Date(2026, 10, 27, 0, 18) });
-    const shown = stampTime(storedAt, Date.now());
+  it("matches the app's Yesterday stamp, seen after midnight", () => {
+    const shown = stampTime(storedAt, afterMidnight);
     expect(shown).toMatch(/^Yesterday /);
     expect(matches(stampPattern(storedAt), shown)).toBe(true);
-    // What the check used to expect.
-    expect(matches("Today \\d{1,2}:\\d{2}.(AM|PM)", shown)).toBe(false);
   });
 
-  it("matches the app's Today stamp when the check runs before midnight", () => {
-    vi.useFakeTimers({ now: new Date(2026, 10, 26, 23, 58) });
-    const shown = stampTime(storedAt, Date.now());
+  it("matches the app's Today stamp, drawn before midnight and still shown after it", () => {
+    const shown = stampTime(storedAt, beforeMidnight);
     expect(shown).toMatch(/^Today /);
     expect(matches(stampPattern(storedAt), shown)).toBe(true);
   });
 
-  it("does not match another minute's stamp", () => {
-    vi.useFakeTimers({ now: new Date(2026, 10, 27, 0, 18) });
-    expect(matches(stampPattern(storedAt), stampTime(storedAt + 60_000, Date.now()))).toBe(false);
+  it("does not match another minute's stamp, on either day", () => {
+    const pattern = stampPattern(storedAt);
+    expect(matches(pattern, stampTime(storedAt + 60_000, beforeMidnight))).toBe(false);
+    expect(matches(pattern, stampTime(storedAt - 60_000, afterMidnight))).toBe(false);
+  });
+
+  it("does not match the stamp of a message from two days before", () => {
+    const shown = stampTime(storedAt, storedAt + 2 * 86_400_000);
+    expect(shown).not.toMatch(/^(Today|Yesterday) /);
+    expect(matches(stampPattern(storedAt), shown)).toBe(false);
   });
 });

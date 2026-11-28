@@ -812,8 +812,8 @@ describe("the iOS app", () => {
 
   it("F-063 F-065: on iPhone, a task's chat opens on its title under the header band, puts a stamp before the first message and after a pause, shows your messages and the bot's as bubbles with the bot's markdown and tables that scroll sideways, and each action as one line in the engine's words", async () => {
     const DISK_ASK = "The media box says the disk is 94% full. What is eating the space?";
-    // The seed wrote this before the check ran, maybe before the device's midnight
-    // (#640): the stamp's day word comes from that time, not "Today".
+    // The seed wrote this before the check ran, maybe before the device's midnight (#640). So
+    // the stamp shows this message's own time, under "Today" or "Yesterday".
     const diskAskAt = await storedAt("agent:otto:disk-space", DISK_ASK);
     await steps("read-disk", [
       tap({ id: "bot-otto" }),
