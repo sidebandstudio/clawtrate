@@ -303,7 +303,7 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   "notRunFiles.entries": {
     max: MAX_NOT_RUN_FILE_MESSAGES,
     each:
-      5 * ID +
+      6 * ID +
       2 * N +
       worstCase(OUTGOING) +
       MAX_ATTACHMENTS_PER_MESSAGE * (3 * MAX_FILE_NAME_CHARS + 4),
