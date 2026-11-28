@@ -1205,6 +1205,10 @@ describe("a run another bot's message started or reached (#606)", () => {
     // The busy run's next model call: to the plugin a run first seen, and it may be that one.
     h.modelCall("run-busy", PIP);
     refusedFor(h, "run-busy");
+    // That used the steer's mark up: the next run first seen, which no message names, is no
+    // longer taken for the run the steer went into.
+    h.modelCall("run-beat", PIP);
+    asks(h, "run-beat");
     // A person writes after the steer, and the run it names starts: it asks.
     personRun(h, "run-later");
     asks(h, "run-later");
