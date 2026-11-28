@@ -467,6 +467,12 @@ export type Run = {
   messageId: string | null;
   /** Whether this device still holds the files for a retry after the message left the outbox. */
   retryFiles?: "held" | "gone";
+  /** The direct address now answers as another gateway. This run's message stays here. */
+  retryGatewayChanged?: true;
+  /** A Computer Use change from this card belongs to the previous gateway. */
+  computerUseGatewayChanged?: true;
+  /** What the same gateway reported after an unconfirmed disable. */
+  computerUseReadback?: "already-off" | "changed";
   /** The transcript item (the user's message) the run belongs under, once known. */
   anchorItemId: string | null;
   /**
@@ -724,6 +730,8 @@ export type OutgoingStatus =
 export type OutgoingMessage = {
   /** Also the `idempotencyKey`, so a retry can never deliver it twice. */
   id: string;
+  /** A retry of a not-run message can only go to the gateway that held the first send. */
+  retryGatewayId?: string;
   text: string;
   /**
    * How it was delivered: a new run, a steer into the active run, or queued
@@ -993,6 +1001,10 @@ export class RawTable {
     return this.entries.get(this.key(sessionKey, stepId))?.raw ?? null;
   }
 
+  delete(sessionKey: string, stepId: string): void {
+    this.drop(this.key(sessionKey, stepId));
+  }
+
   set(sessionKey: string, stepId: string, raw: StepRaw): void {
     const key = this.key(sessionKey, stepId);
     this.drop(key);
@@ -1064,6 +1076,7 @@ export type EngineContext = {
   sessionKey: string;
   now: number;
   raw: RawTable;
+  scrub?: (text: string) => string;
 };
 
 // Small readers ------------------------------------------------------------------
@@ -1096,16 +1109,26 @@ export function capError(text: string): string {
   return text.length > MAX_ERROR_CHARS ? `${text.slice(0, MAX_ERROR_CHARS - 1)}…` : text;
 }
 
-function capRunError(error: RunError | null): RunError | null {
+function capRunError(error: RunError | null, ctx: EngineContext): RunError | null {
   if (!error) return error;
-  const capped =
-    error.message.length > MAX_ERROR_CHARS ? { ...error, message: capError(error.message) } : error;
-  return capped;
+  const message = capError(ctx.scrub?.(error.message) ?? error.message);
+  const kind = error.kind === null ? null : (ctx.scrub?.(error.kind) ?? error.kind);
+  return message === error.message && kind === error.kind ? error : { ...error, message, kind };
+}
+
+function scrubRawValue(value: unknown, scrub: (text: string) => string): unknown {
+  if (typeof value === "string") return scrub(value);
+  if (Array.isArray(value)) return value.map((item) => scrubRawValue(item, scrub));
+  const record = asRecord(value);
+  if (!record) return value;
+  return Object.fromEntries(
+    Object.entries(record).map(([key, item]) => [scrub(key), scrubRawValue(item, scrub)]),
+  );
 }
 
 /**
- * Keep what the gateway sent that failed the run, whole, beside the step payloads, and name it
- * for the state (F-301). One larger than a raw entry is not kept, and its Raw says so.
+ * Keep what the gateway sent that failed the run, with credentials removed. One larger than
+ * a raw entry is not kept, and its Raw says so.
  */
 function rawEvent(
   ctx: EngineContext,
@@ -1113,13 +1136,27 @@ function rawEvent(
   holds: RunErrorRaw["holds"],
   payload: RawRecord,
 ): RunErrorRaw {
-  ctx.raw.set(ctx.sessionKey, runErrorRawId(runId), {
+  const chars = jsonLength(payload);
+  const id = runErrorRawId(runId);
+  if (chars > MAX_RAW_ENTRY_CHARS) {
+    ctx.raw.delete(ctx.sessionKey, id);
+    return { holds, chars };
+  }
+  let call = payload;
+  try {
+    if (ctx.scrub) call = scrubRawValue(payload, ctx.scrub) as RawRecord;
+  } catch {
+    // An unusually deep payload can exceed the scrubber's recursion limit.
+    ctx.raw.delete(ctx.sessionKey, id);
+    return { holds, chars };
+  }
+  ctx.raw.set(ctx.sessionKey, id, {
     source: "live",
     runId,
-    call: payload,
+    call,
     result: null,
   });
-  return { holds, chars: jsonLength(payload) };
+  return { holds, chars: call === payload ? chars : jsonLength(call) };
 }
 
 export function capText(text: string): StepText {
@@ -1307,7 +1344,7 @@ export function finishRun(
     ...run,
     state: to,
     endedAt,
-    error: capRunError(error ?? run.error),
+    error: capRunError(error ?? run.error, ctx),
     steps,
     pendingCards: [],
     suspendedCards: [],
@@ -1328,7 +1365,9 @@ export function finishRun(
 function endMarkedQuiet(run: Run, ctx: EngineContext, error: RunError, at: number | null): Run {
   if (run.unansweredInHistory === true) return finishRun(run, "failed", ctx, error, at);
   const ended = finishRun(run, "completed", ctx, null, at);
-  return ended === run ? run : { ...ended, quietEnd: "pending", quietError: capRunError(error)! };
+  return ended === run
+    ? run
+    : { ...ended, quietEnd: "pending", quietError: capRunError(error, ctx)! };
 }
 
 /**
@@ -2355,7 +2394,7 @@ function withComputerUseReason(
     kind: run.error?.kind ?? null,
     raw: rawEvent(ctx, run.id, holds, payload),
   };
-  return replaceRun(activity, { ...run, error: capRunError(error) });
+  return replaceRun(activity, { ...run, error: capRunError(error, ctx) });
 }
 
 /**
@@ -2604,9 +2643,8 @@ function applyLifecycle(run: Run, data: RawRecord, ts: number, ctx: EngineContex
     case "error": {
       if (data.aborted !== true && !isDefinitiveLifecycleError(data)) {
         // An attempt failed and the gateway may retry or fall back: the run goes on.
-        const message = capError(
-          str(data.error) ?? str(asRecord(data.error)?.message) ?? "An attempt failed.",
-        );
+        const text = str(data.error) ?? str(asRecord(data.error)?.message) ?? "An attempt failed.";
+        const message = capError(ctx.scrub?.(text) ?? text);
         return {
           ...run,
           attemptErrors: [...run.attemptErrors, message].slice(-MAX_ATTEMPT_ERRORS),

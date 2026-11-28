@@ -9,8 +9,10 @@ import {
   emptyActivity,
   INTERACTIVE_SCOPES,
   newRun,
+  notRunRetryKey,
   parseExecApproval,
   RawTable,
+  retryPlan,
   type ApprovalCard,
   type BridgeCommand,
   type ClawtrateState,
@@ -1179,8 +1181,38 @@ export function liveCommand(
       return Promise.resolve({ text: taken.text, attachments });
     }
     case "dismissNotRun":
-    case "retryNotRun":
       return Promise.resolve();
+    case "retryNotRun": {
+      const transcript = get().transcripts[OPEN_TASK];
+      const run = transcript?.runs.find((each) => each.id === command.runId);
+      if (!transcript || !run) return Promise.resolve();
+      const plan = retryPlan(run, transcript);
+      const original =
+        plan?.kind === "again"
+          ? transcript.outbox.find((each) => each.id === plan.messageId)
+          : plan?.kind === "text"
+            ? { text: plan.text, attachments: [] }
+            : undefined;
+      if (!original) return Promise.resolve();
+      const id = notRunRetryKey(command.key, run.id);
+      if (transcript.outbox.some((each) => each.id === id)) return Promise.resolve();
+      update((current) => ({
+        ...current,
+        outbox: [
+          ...current.outbox,
+          message(id, original.text, now, {
+            runId: id,
+            attachments: original.attachments,
+            status: "sending",
+          }),
+        ],
+        runs: [
+          ...current.runs,
+          newRun(id, { state: "running", origin: "local", bound: true, messageId: id }, now),
+        ],
+      }));
+      return Promise.resolve();
+    }
     case "changeNotRunComputerUse": {
       const { computerUseUndo: _undo, ...state } = get();
       set(

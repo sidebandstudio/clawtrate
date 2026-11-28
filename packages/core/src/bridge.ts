@@ -179,7 +179,7 @@ export type BridgeCommand =
   | { type: "takeBackMessage"; key: string; messageId: string }
   /** Send a held message's words and files again as a new message (Try again on a failed turn). */
   | { type: "sendAgain"; key: string; messageId: string }
-  | { type: "retryNotRun" | "dismissNotRun"; key: string; runId: string }
+  | { type: "retryNotRun" | "dismissNotRun"; key: string; runId: string; stamp?: GatewayStamp }
   | {
       type: "changeNotRunComputerUse";
       key: string;
@@ -1690,6 +1690,9 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         type: command.type,
         key: sessionKey(command.key),
         runId: id(command.runId, "run id"),
+        ...(command.type === "retryNotRun" && command.stamp !== undefined
+          ? { stamp: gatewayStampOf(command.stamp) }
+          : {}),
       };
     case "retryMessage":
     case "deleteMessage":
@@ -2548,7 +2551,7 @@ class ViewerSession implements BridgeSession {
           this.open.get(command.key),
         );
       case "retryNotRun":
-        client.retryNotRun(this.mine(command.key), command.runId);
+        client.retryNotRun(this.mine(command.key), command.runId, command.stamp);
         return;
       case "dismissNotRun":
         return client.dismissNotRun(this.mine(command.key), command.runId);

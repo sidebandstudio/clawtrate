@@ -291,7 +291,7 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // Files of outgoing messages: their content is `outboxFiles`; these are the names kept beside it.
   attachmentContent: {
     max: T * MAX_OUTBOX,
-    each: 3 * ID + MAX_ATTACHMENTS_PER_MESSAGE * 3 * MAX_FILE_NAME_CHARS,
+    each: 4 * ID + MAX_ATTACHMENTS_PER_MESSAGE * 3 * MAX_FILE_NAME_CHARS,
     row: "outboxFiles",
   },
   "attachmentContent.*.files": {
@@ -303,7 +303,7 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   "notRunFiles.entries": {
     max: MAX_NOT_RUN_FILE_MESSAGES,
     each:
-      6 * ID +
+      7 * ID +
       2 * N +
       worstCase(OUTGOING) +
       MAX_ATTACHMENTS_PER_MESSAGE * (3 * MAX_FILE_NAME_CHARS + 4),

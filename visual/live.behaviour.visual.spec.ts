@@ -1837,7 +1837,7 @@ test.describe("errors and resync", () => {
     expect(shown).toBe("b3f0c2a1-4d5e-4f60-8a71-92c3d4e5f607");
     // Raw is read when it is opened, and labelled as exactly what it holds.
     await expect(card.getByTestId("turn-error-raw")).toContainText(
-      "The chat event that ended the turn, as received",
+      "The chat event that ended the turn",
     );
     await expect(card.getByTestId("run-raw")).toContainText('"errorKind": "provider"');
     await page.evaluate(() => navigator.clipboard.writeText("something else"));
@@ -2293,6 +2293,66 @@ test("F-480 #988: an unknown reason is behind Details", async ({ page }) => {
   await expect(card.getByText(raw, { exact: true })).toBeVisible();
 });
 
+test("F-480 #988: Try again is disabled while the retry is in flight", async ({ page }) => {
+  await open(page, "not-run-other");
+  const card = page.getByTestId("turn-error");
+  const again = card.getByRole("button", { name: "Try again" });
+  await again.click();
+  await expect(again).toBeDisabled();
+});
+
+test("F-480 #988: the card says its retry and setting belong to the previous gateway", async ({
+  page,
+}) => {
+  await open(page, "not-run-computer-use-off");
+  const card = page.locator('[data-testid="turn-error"][data-run="run-live"]');
+  await expect(card.getByRole("button", { name: "Put back" })).toBeVisible();
+  await page.evaluate(() => {
+    const fixture = (
+      window as unknown as {
+        clawtrateFixture: {
+          setState: (update: (state: ClawtrateState) => ClawtrateState) => void;
+        };
+      }
+    ).clawtrateFixture;
+    fixture.setState(({ computerUseUndo: _, ...state }) => {
+      const key = "agent:otto:disk-space";
+      const transcript = state.transcripts[key]!;
+      return {
+        ...state,
+        transcripts: {
+          ...state.transcripts,
+          [key]: {
+            ...transcript,
+            runs: transcript.runs.map((run) =>
+              run.id === "run-live"
+                ? {
+                    ...run,
+                    retryFiles: "gone",
+                    retryGatewayChanged: true,
+                    computerUseGatewayChanged: true,
+                  }
+                : run,
+            ),
+          },
+        },
+      };
+    });
+  });
+  await expect(
+    card.getByText(
+      "This message went to a different gateway. Its files are no longer available to retry.",
+      { exact: true },
+    ),
+  ).toBeVisible();
+  await expect(
+    card.getByText("The Computer Use setting belongs to the previous gateway.", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    card.getByRole("button", { name: /Try again|Put back|Turn off Computer Use/ }),
+  ).toHaveCount(0);
+});
+
 test("F-480 #988: after a repeated Computer Use timeout the card can turn it off and put it back", async ({
   page,
 }) => {
@@ -2301,11 +2361,19 @@ test("F-480 #988: after a repeated Computer Use timeout the card can turn it off
   await expect(card).toContainText(
     "This happened on the previous attempt too. Sending again is unlikely to help.",
   );
+  await expect(
+    card.getByText(
+      "This skips the Computer Use check at startup and automatic installation. Native tools set up separately can still work.",
+      { exact: true },
+    ),
+  ).toBeVisible();
   const actions = card.locator(".turn-error-actions button");
   await expect(actions.nth(0)).toHaveText("Turn off Computer Use on this gateway");
   await expect(actions.nth(1)).toHaveText("Try again");
   await actions.nth(0).press("Enter");
-  await expect(card.getByText("Computer Use is off on this gateway.")).toBeVisible();
+  await expect(
+    card.getByText("The Computer Use startup check is off on this gateway.", { exact: true }),
+  ).toBeVisible();
   await expect(actions.nth(0)).toHaveText("Try again");
   await expect(actions.nth(0)).toBeFocused();
   await card.getByRole("button", { name: "Put back" }).press("Enter");

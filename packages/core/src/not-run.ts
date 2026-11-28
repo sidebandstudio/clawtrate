@@ -5,11 +5,13 @@
 // text is kept for Details, one plain line, cut to `MAX_NOT_RUN_WORDS`. Nothing is
 // read from the gateway's log, and nothing is guessed from silence.
 
+import { sha256Hex, utf8Bytes } from "./bytes.ts";
 import { cleanLine } from "./gateway-names.ts";
 import { asRecord } from "./mapping.ts";
 import type { OutgoingAttachment } from "./client.ts";
 import type { OutgoingMessage, Run } from "./runs.ts";
-import type { TranscriptItem } from "./types.ts";
+import { attachmentsCut, MAX_ID_CHARS, wordsCut } from "./state-bounds.ts";
+import type { Transcript, TranscriptItem } from "./types.ts";
 
 /** The longest the gateway's own words are shown, in characters. */
 export const MAX_NOT_RUN_WORDS = 300;
@@ -255,12 +257,110 @@ export function repeatedNotRun(
   );
 }
 
+/**
+ * The person's message a run is known to have started from: its keyed anchor only (#686), and
+ * only a message of theirs: another session's message that started it (#645) is not sent again
+ * as theirs. A position decides where a run is drawn, never what Try again sends.
+ */
+function keyedAnchor(run: Run, transcript: Transcript) {
+  return run.anchorKeyed
+    ? transcript.items.find((item) => item.id === run.anchorItemId && item.role === "user")
+    : undefined;
+}
+
+/**
+ * What "Try again" sends for a failed run, if anything (#686). Nothing goes out without its files:
+ * - `again`: the outbox still holds the message and its files;
+ * - `retained`: the host still holds the text, reply and files for a send history confirmed;
+ * - `text`: only history has it, and it was words alone;
+ * - `files-gone`: only history has it, and it had files this device no longer holds: no Try
+ *   again, and the line says to send it again with them;
+ * - `files-unknown`: only history has it, and history's list of its files was cut to its bound, so
+ *   whether it had any isn't known: no Try again, and the line says to send it again with any;
+ * - `words-cut`: only history has it, and its words may be only their start (`wordsCut`): no Try
+ *   again, and the line says to send it again in full. A files plan says so too (`wordsCut`);
+ * - null: no message is known to have started the run.
+ */
+export type RetryPlan =
+  | { kind: "again"; messageId: string }
+  | { kind: "retained"; runId: string }
+  | { kind: "text"; text: string; replyToId: string | null }
+  | { kind: "files-gone"; wordsCut?: true }
+  | { kind: "files-unknown"; wordsCut?: true }
+  | { kind: "words-cut" }
+  | null;
+
+export function retryPlan(run: Run, transcript: Transcript): RetryPlan {
+  if (run.retryGatewayChanged) return null;
+  if (run.retryFiles === "held") return { kind: "retained", runId: run.id };
+  if (
+    run.messageId &&
+    run.retryFiles !== "gone" &&
+    transcript.outbox.some((message) => message.id === run.messageId)
+  )
+    return { kind: "again", messageId: run.messageId };
+  const anchor = keyedAnchor(run, transcript);
+  // Nor do words that may be only their start, which a files plan says as well.
+  const cut = anchor && wordsCut(anchor) ? ({ wordsCut: true } as const) : {};
+  if (run.retryFiles === "gone" || (anchor?.attachments?.length ?? 0) > 0)
+    return { kind: "files-gone", ...cut };
+  if (!anchor) return null;
+  // Words alone go again only when the message is known to have had no files.
+  if (attachmentsCut(anchor)) return { kind: "files-unknown", ...cut };
+  if ("wordsCut" in cut) return { kind: "words-cut" };
+  const text = messageTextOf(run, transcript);
+  return text ? { kind: "text", text, replyToId: messageReplyOf(run, transcript) } : null;
+}
+
+/**
+ * The message a run's own message replied to, from the outbox or from history's reference on the
+ * run's message. Try again sends it only through `retryPlan`, which first requires that message
+ * known by its key: a parent is never taken from a message the run is only drawn under (#686).
+ */
+export function messageReplyOf(run: Run, transcript: Transcript): string | null {
+  const outgoing = transcript.outbox.find((message) => message.id === run.messageId);
+  if (outgoing) return outgoing.replyToId ?? null;
+  return transcript.items.find((item) => item.id === run.anchorItemId)?.replyTo?.id ?? null;
+}
+
+/**
+ * The text of the message that started a run, for "Try again": null (no Try again) when no
+ * message is known to have started it, as for a failure history keyed to none (#686).
+ */
+export function messageTextOf(run: Run, transcript: Transcript): string | null {
+  const outgoing = transcript.outbox.find((message) => message.id === run.messageId);
+  if (outgoing) return outgoing.text;
+  const anchor = keyedAnchor(run, transcript);
+  if (!anchor) return null;
+  const text = anchor.blocks
+    .map((block) => (block.kind === "text" ? block.text : ""))
+    .join("\n")
+    .trim();
+  return text || null;
+}
+
+/** The same failed run gets the same retry key on every device. */
+export function notRunRetryKey(task: string, runId: string): string {
+  return `retry_${sha256Hex(utf8Bytes(JSON.stringify([task, runId]))).slice(0, 30)}`;
+}
+
+/** The retry still has a run or a keyed message in the transcript. */
+export function notRunRetryRecorded(transcript: Transcript, id: string): boolean {
+  return (
+    transcript.runs.some((run) => run.id === id && run.bound) ||
+    transcript.items.some(
+      (item) => item.idempotencyKey === id || item.idempotencyKey === `${id}:user`,
+    )
+  );
+}
+
 export const MAX_NOT_RUN_FILE_MESSAGES = 8;
 /** Decoded bytes, across tasks on the same gateway. */
 export const MAX_NOT_RUN_FILE_BYTES = 32 * 1024 * 1024;
 
 type RetryFiles = {
   task: string;
+  gatewayId: string;
   bot: string | null;
   runId: string;
   message: OutgoingMessage;
@@ -327,9 +427,16 @@ export type ComputerUseUndo = {
 
 export const COMPUTER_USE_UNDO_MS = 7 * 24 * 60 * 60 * 1000;
 
+/** Authored revisions are opaque tokens. Never keep another part of the patch answer. */
+export function computerUseHash(response: unknown): string | null {
+  const hash = asRecord(response)?.hash;
+  return typeof hash === "string" && hash.length > 0 && hash.length <= MAX_ID_CHARS ? hash : null;
+}
+
 /** Read only the setting this card can write. Null means its config key was absent. */
 export function readComputerUse(response: unknown) {
   const answer = asRecord(response);
+  const hash = computerUseHash(answer);
   const config = asRecord(answer?.config);
   const codex = asRecord(asRecord(asRecord(config?.plugins)?.entries)?.codex);
   const options = asRecord(asRecord(codex?.config)?.computerUse);
@@ -338,14 +445,13 @@ export function readComputerUse(response: unknown) {
     !answer ||
     !config ||
     answer.valid === false ||
-    typeof answer.hash !== "string" ||
-    !answer.hash ||
+    !hash ||
     (value !== undefined && typeof value !== "boolean")
   )
     return null;
   const saved = answer.configRevisionHash;
   return {
-    hash: answer.hash,
+    hash,
     value: value ?? null,
     applied: typeof saved === "string" && answer.appliedConfigHash === saved,
   };
