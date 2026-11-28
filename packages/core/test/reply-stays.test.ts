@@ -128,6 +128,29 @@ describe("#912: a run a live frame ended keeps its reply drawn until history hol
     client.stop();
   });
 
+  it("a follow-up that runs as a run of its own: the ended run is kept beside it, and the read after the end lets only it go", async () => {
+    const { client, gateway, reads, run } = await withHeldReads();
+    const NEXT = "run-10";
+    for (const payload of [lifecycle(1, "start"), said(2, "All clean."), lifecycle(3, "end")])
+      gateway.emit("agent", payload);
+    // The waiting message starts its own run before the read the end asked for is answered.
+    gateway.emit("agent", agentEvent(NEXT, 4, "lifecycle", { phase: "start" }));
+    gateway.emit(
+      "agent",
+      agentEvent(NEXT, 5, "assistant", { text: "Now", delta: "Now", itemId: "s:2" }),
+    );
+    const next = () => client.state.transcripts[KEY]?.runs.find((each) => each.id === NEXT);
+    await until(() => next()?.text === "Now");
+    expect(run()!.state).toBe("completed");
+    expect(run()!.awaitsRows).toBe(true);
+    await until(() => reads.length > 0);
+    reads.shift()!({ messages: [user, answerRow], hasMore: false, inFlightRun: { runId: NEXT } });
+    await until(() => run()?.awaitsRows === undefined);
+    expect(next()!.state).toBe("running");
+    expect(next()!.awaitsRows).toBeUndefined();
+    client.stop();
+  });
+
   it("a read that fails lets it go: no reply is drawn as if history held it", async () => {
     const { client, gateway, reads, run } = await withHeldReads();
     gateway.handlers["chat.history"] = () => Promise.reject(new Error("not reachable"));
@@ -194,7 +217,6 @@ describe("awaitRows and rowsRead", () => {
     expect(rowsRead(waiting, RUN)[0]!.awaitsRows).toBe(true);
     expect(rowsRead(waiting, null)[0]!.awaitsRows).toBeUndefined();
     expect(rowsRead(waiting, "another-run")[0]!.awaitsRows).toBeUndefined();
-    expect(rowsRead(waiting, RUN, undefined, true)[0]!.awaitsRows).toBeUndefined();
     // Never past a read asked for while it already waited, whatever that read says.
     expect(rowsRead(waiting, RUN, new Set([RUN]))[0]!.awaitsRows).toBeUndefined();
   });

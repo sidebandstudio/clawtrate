@@ -11526,12 +11526,7 @@ export class ClawtrateClient {
         ...(current ?? this.emptyTranscript(key)),
         // History unread can't show a quiet end to be one: each stays the failure it was sent as.
         // Nor does any run wait for its rows longer (#912).
-        runs: rowsRead(
-          settleQuietEnds(current?.runs ?? [], quietBefore, "unread"),
-          null,
-          undefined,
-          true,
-        ),
+        runs: rowsRead(settleQuietEnds(current?.runs ?? [], quietBefore, "unread"), null),
         status: "error",
         error: live ? errorMessage(error) : LIVE_UPDATES_NOT_STARTED,
       }));

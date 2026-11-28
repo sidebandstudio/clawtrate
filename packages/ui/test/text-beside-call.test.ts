@@ -650,6 +650,16 @@ describe("#912: a reply stays on screen when its run ends", () => {
     expect(count(draw(transcript), "All clean.")).toBe(1);
   });
 
+  it("a run whose row can't be tied, its row read before the end: drawn twice until the read after the end, never left out", () => {
+    // As #908's untied case while the run is live, a moment longer. Pinned, so that changing it
+    // is deliberate.
+    const rows = [user, row("a1", 2, [toolCall("c1")]), row("a2", 4, [text("All clean.")])];
+    const ended = endedLive(transcriptOf(events, rows), rows);
+    const transcript = { ...ended, runs: ended.runs.map(unfollowed) };
+    expect(heldByEngine(transcript.runs[0]!, transcript)).toBe(true);
+    expect(count(draw(transcript), "All clean.")).toBe(2);
+  });
+
   it("once a read shows the run past its end, history draws it and the engine lets it go", () => {
     const transcript = transcriptOf(events, [
       user,

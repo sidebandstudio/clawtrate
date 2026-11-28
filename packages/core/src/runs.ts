@@ -2910,19 +2910,18 @@ export function awaitRows(before: TaskActivity, after: TaskActivity): TaskActivi
  * gateway answered after its end, so its rows are in the read (`Run.awaitsRows` clears). One it
  * still shows in flight was answered before the end, and keeps waiting, but never past a read
  * asked for while it already waited (`waitedAtAsk`): the end had come before that read was asked,
- * so the gateway answered it after the end. `failed`: the read failed, and no row is waited for
- * longer.
+ * so the gateway answered it after the end. A read that failed names no run in flight: no row is
+ * waited for longer.
  */
 export function rowsRead(
   runs: Run[],
   inFlightId: string | null,
   waitedAtAsk: ReadonlySet<string> = new Set(),
-  failed = false,
 ): Run[] {
   if (!runs.some((run) => run.awaitsRows)) return runs;
   return runs.map((run) => {
     if (!run.awaitsRows) return run;
-    if (!failed && run.id === inFlightId && !waitedAtAsk.has(run.id)) return run;
+    if (run.id === inFlightId && !waitedAtAsk.has(run.id)) return run;
     const { awaitsRows: _awaits, ...rest } = run;
     return rest;
   });
