@@ -1968,7 +1968,7 @@ export class ClawtrateClient {
       })),
     connected: () => this.state.connection.status === "connected",
     admin: () => this.holds(ADMIN_SCOPE) && this.state.connection.scopes.includes(ADMIN_SCOPE),
-    refreshBots: () => this.refreshBots(),
+    refreshBots: async () => void (await this.refreshBots()),
     gateway: () => this.readGatewayIdentity(),
     gatewayNow: () => this.state.connection.gatewayId,
     readStamp: () => ({
@@ -7912,13 +7912,18 @@ export class ClawtrateClient {
     }
   }
 
-  /** Read the bot list again, after a bot was created or changed here. */
-  private async refreshBots(): Promise<void> {
+  /**
+   * Read the bot list again, after a bot was created or changed here. Answers with every bot the
+   * reply lists, past the display's cap too, held by no one (a name check reads it once), or null
+   * when the reply wasn't the newest on this connection and was set aside.
+   */
+  private async refreshBots(): Promise<ReturnType<typeof mapAgents> | null> {
     const generation = this.generation;
     const issued = ++this.botsIssued;
     const result = await this.request("agents.list", {});
-    if (generation !== this.generation || !this.newestBots(issued)) return;
+    if (generation !== this.generation || !this.newestBots(issued)) return null;
     this.applyBots(result);
+    return mapAgents(result);
   }
 
   /**

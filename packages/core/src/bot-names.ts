@@ -88,6 +88,8 @@ const MAX_RECORD_BOT_CHARS = 128;
 export const NAME_DECLINES_KEY = "clawtrate.bot-name-declines";
 /** A key of that record: a gateway's identity or address and a bot's id, each an id at most. */
 export const MAX_LEGACY_KEY_CHARS = 2 * 1_024 + 1;
+/** How many "Not now" answers the earlier build kept, the newest: all of them carry over. */
+export const MAX_LEGACY_DECLINES = 64;
 
 const PLACEHOLDERS = new Set(["not set yet", "pick something you like"]);
 /** A picture `agents.update` copied into IDENTITY.md from the config (R38). */
@@ -167,7 +169,7 @@ export const isPlainName = (value: unknown): value is string =>
   typeof value === "string" && plainName(value) === value;
 
 /** Whether another bot than `botId` has `name`, compared as names are. */
-export const nameTaken = (bots: readonly Bot[], botId: string, name: string) =>
+export const nameTaken = (bots: readonly Pick<Bot, "id" | "name">[], botId: string, name: string) =>
   bots.some((each) => each.id !== botId && folded(each.name) === folded(name));
 
 /** The record's tag for a run, or for a file's text: the first 16 hex digits of its SHA-256. */
@@ -289,6 +291,48 @@ function ownIdentityFile(tool: string, args: string | null): boolean {
     return files.length > 0 && files.every(isOwn);
   }
   return isOwn(parsed?.path ?? parsed?.file_path);
+}
+
+/**
+ * Whether a run's own steps wrote `name` into the bot's `IDENTITY.md`: a successful write of that
+ * file whose own text has a `Name:` line naming it (an edit's new text, a write's content, a
+ * patch's added lines). A write that changed only other lines, or whose arguments aren't all
+ * here, wrote no name: a name someone else put in the file meanwhile isn't the run's.
+ */
+export function nameWritten(steps: readonly RunStepFacts[] | null, name: string): boolean {
+  return (steps ?? []).some((step) => {
+    if (!step.ok || step.toolName === null || !NAME_WRITES.has(step.toolName)) return false;
+    if (!ownIdentityFile(step.toolName, step.args)) return false;
+    let parsed: Record<string, unknown> | null;
+    try {
+      parsed = asRecord(JSON.parse(step.args ?? "null"));
+    } catch {
+      return false;
+    }
+    const texts: unknown[] =
+      step.toolName === "write"
+        ? [parsed?.content]
+        : step.toolName === "apply_patch"
+          ? [
+              String(parsed?.input ?? parsed?.patch ?? "")
+                .split("\n")
+                .filter((line) => line.startsWith("+") && !line.startsWith("+++"))
+                .map((line) => line.slice(1))
+                .join("\n"),
+            ]
+          : [
+              parsed?.newText,
+              parsed?.new_string,
+              ...(Array.isArray(parsed?.edits)
+                ? parsed.edits.map((edit) => asRecord(edit)?.newText ?? asRecord(edit)?.new_string)
+                : []),
+            ];
+    return texts.some((text) => {
+      if (typeof text !== "string") return false;
+      const written = identityName(text);
+      return written !== null && plainName(written) === name;
+    });
+  });
 }
 
 /** An Undo's decline: that edit (the bot, the name and the file as it was), until it expires. */
@@ -502,7 +546,11 @@ export type BotNamesContext = {
   storage: KeyValueStore;
   /** Take one of the client's file reads, or null when they are all in use. */
   takeRead: () => (() => void) | null;
-  refreshBots: () => Promise<void>;
+  /**
+   * Read the bot list again. Answers with every bot the gateway's reply lists, past the display's
+   * cap too (for a name check, kept by no one), or null when that reply was set aside.
+   */
+  refreshBots: () => Promise<readonly Pick<Bot, "id" | "name">[] | null | void>;
   /**
    * The steps of a run in a task as the engine holds them, or null when it doesn't hold them
    * all, and whether a message other than the run's own was seen within it (a steer).
@@ -561,7 +609,10 @@ const UNRECORDED =
 export class BotNames {
   /** Each bot's line, and when it was set here: a later change on the gateway replaces an earlier line. */
   private lines = new Map<string, { line: NameLine; at: number }>();
-  /** The read under way for each bot, by a token of its own, so only that read ends it. */
+  /**
+   * The check under way for each bot (`MAX_NAME_CARDS` at most), by a token of its own, so only
+   * that check ends it.
+   */
   private readonly reading = new Map<string, object>();
   private readonly skipped = new Set<string>();
   /** Runs already checked (`MAX_CHECKED_RUNS`), so one run reads the file once. */
@@ -592,14 +643,14 @@ export class BotNames {
   private readonly starts = new Map<string, { botId: string; name: string | null }>();
   /**
    * The "Not now" answers an earlier build kept on this device (`NAME_DECLINES_KEY`), by gateway
-   * and bot, at most `MAX_NAME_CARDS`: read once, kept as they are.
+   * and bot, all of them (`MAX_LEGACY_DECLINES`, as many as it kept): read once, kept as they are.
    */
   private readonly legacy = new Map<string, string>();
   /** The one read of it, which every check waits for. */
   private legacyRead: Promise<void> | null = null;
   /**
-   * This device's Undo claims left standing because their outcome couldn't be read
-   * (`MAX_NAME_CARDS`), by gateway and change: pressing Undo again takes the same claim.
+   * This device's Undo claims (`MAX_NAME_CARDS`), by gateway and change, until each is let go or
+   * replaced: pressing Undo again takes the same claim, never waits on its own.
    */
   private readonly heldUndos = new Map<string, string>();
   /** Moves on with every reset, so a read begun before it changes nothing after. */
@@ -676,7 +727,9 @@ export class BotNames {
    * say why not. A run already checked (its end delivered twice) reads nothing again.
    */
   async afterRun(botId: string, sessionKey: string, runId?: string): Promise<void> {
-    if (this.reading.has(botId) || this.skipped.has(botId)) return;
+    // At most `MAX_NAME_CARDS` checks under way, whatever bots have left the roster meanwhile.
+    if (this.reading.has(botId) || this.skipped.has(botId) || this.reading.size >= MAX_NAME_CARDS)
+      return;
     const counted = runId !== undefined && runId.length <= MAX_CHECKED_RUN_CHARS;
     if (counted && this.checkedRuns.has(runId)) return;
     const bot = this.ctx.bots().find((each) => each.id === botId);
@@ -751,8 +804,9 @@ export class BotNames {
         steps: run?.steps ?? null,
       };
       const judged = judgeRename(facts, name);
-      // No write of the name seen in the run's own steps: not shown to be this run's change.
-      if (judged.whose === "file") return this.reconcile();
+      // The run's own write must have put this name on the `Name:` line: a write of another line
+      // while someone else changed the name isn't this run's rename.
+      if (!nameWritten(facts.steps, name)) return this.reconcile();
       // A name the person answered "Not now" to with an earlier build stays declined, unless the
       // person asks for it now in their own words.
       if (judged.whose !== "person" && (await this.legacyDeclined(stamp, botId, name))) {
@@ -820,8 +874,6 @@ export class BotNames {
     const read = await this.readRecord(op);
     if (epoch !== this.epoch) return;
     const record = read.record && settled(read.record, this.ctx.bots(), this.ctx.now());
-    // The same edit an Undo declined: not a request, so nothing is said.
-    if (this.isDeclined(record, stamp, botId, name, origin)) return;
     const existing = record?.changes.find((each) => each.run === origin.run && each.bot === botId);
     // Another device's, landed or undone: its line is the record's.
     if (
@@ -869,7 +921,6 @@ export class BotNames {
           const same = record.changes.find((each) => each.run === origin.run && each.bot === botId);
           if (same && (same.undone !== undefined || landed(same, record.changes, this.ctx.bots())))
             return "taken";
-          if (this.isDeclined(record, stamp, botId, name, origin)) return "declined";
           const day = dayOf(now);
           const confirmed = record.changes.filter(
             (each) => each.bot === botId && each.done !== undefined && dayOf(each.at) === day,
@@ -903,13 +954,12 @@ export class BotNames {
         if (epoch !== this.epoch) return;
         if (claimed === "busy") return this.giveUp(botId);
         if (claimed === "taken") return this.giveUp(botId);
-        if (claimed === "declined") return this.drop(botId);
         if (claimed === "limit") return line({ status: "not-done", reason: "limit" });
         if (claimed === "full") return line({ status: "not-done", reason: "full" });
         if (claimed === "unavailable") return line({ status: "not-done", reason: "no-record" });
         claimAt = claimedAt;
         // Holding the claim: the bot as the gateway lists it now, on the gateway the read was for.
-        await this.ctx.refreshBots();
+        const listed = await this.ctx.refreshBots();
         await this.ctx.sameGateway(stamp);
         if (epoch !== this.epoch) throw new Error(NOTHING_SENT);
         const still = this.ctx.bots().find((each) => each.id === botId);
@@ -918,10 +968,16 @@ export class BotNames {
           await this.release(op, opId, botId, origin.run, true);
           return this.giveUp(botId);
         }
-        // Another bot took the name meanwhile, or the one before: nothing is sent into a clash.
-        const clash = nameTaken(this.ctx.bots(), botId, name)
+        // Another bot took the name meanwhile, or the one before: nothing is sent into a clash,
+        // checked against every bot the reply listed, past the display's cap too. A reply set
+        // aside shows nothing to check against: nothing is sent either.
+        if (!listed) {
+          await this.release(op, opId, botId, origin.run, true);
+          return this.giveUp(botId);
+        }
+        const clash = nameTaken(listed, botId, name)
           ? ("taken" as const)
-          : nameTaken(this.ctx.bots(), botId, still.name)
+          : nameTaken(listed, botId, still.name)
             ? ("shared" as const)
             : null;
         if (clash) {
@@ -1036,7 +1092,8 @@ export class BotNames {
     const held = `${stamp.gatewayId}\n${run}`;
     const opId =
       this.heldUndos.get(held) ?? runTag(`undo\n${run}\n${this.ctx.now()}\n${Math.random()}`);
-    this.heldUndos.delete(held);
+    // Kept until this claim is let go or replaced: a press that fails before then takes it again.
+    this.holdUndo(held, opId);
     restore({ status: "undoing" });
     try {
       let sent = false;
@@ -1062,7 +1119,7 @@ export class BotNames {
         if (claimed === "gone") throw new Error(NO_LONGER);
         if (claimed !== "written")
           throw new Error("Clawtrate couldn't hold this Undo on the gateway, so nothing was sent.");
-        await this.ctx.refreshBots();
+        const listed = await this.ctx.refreshBots();
         await this.ctx.sameGateway(stamp);
         if (epoch !== this.epoch) throw new Error(NOTHING_SENT);
         // Exactly the name the change gave: a rename since, from anywhere, ends it here.
@@ -1071,8 +1128,8 @@ export class BotNames {
           this.reconcile();
           throw new Error(NO_LONGER);
         }
-        // Another bot has the name before now: nothing is sent into a clash.
-        if (nameTaken(this.ctx.bots(), botId, change.from)) {
+        // Another bot has the name before now, anywhere in the reply's list: nothing is sent.
+        if (!listed || nameTaken(listed, botId, change.from)) {
           await this.release(op, opId, botId, run, false);
           throw new Error(`Another bot is called ${change.from} now, so nothing was sent.`);
         }
@@ -1108,9 +1165,6 @@ export class BotNames {
       ));
     if (!reread || !this.current(op)) {
       // Undo stays offered: pressed again, it takes this claim again.
-      this.heldUndos.set(held, opId);
-      if (this.heldUndos.size > MAX_NAME_CARDS)
-        this.heldUndos.delete(this.heldUndos.keys().next().value!);
       restore({ status: "renamed", error: UNCONFIRMED });
       return;
     }
@@ -1139,13 +1193,13 @@ export class BotNames {
       after,
       error: kept
         ? null
-        : `Clawtrate couldn't keep this on the gateway yet, so another device may rename ${change.from} to ${change.to} again.`,
+        : "Clawtrate couldn't save this Undo to the gateway's record yet, so another device may still show the rename.",
     });
   }
 
   /**
-   * Write the declines Undo couldn't keep on the gateway, for that gateway only: the change marked
-   * undone, its edit declined, its claim let go. Whether none is left for it.
+   * Write the Undos this device couldn't record on the gateway, for that gateway only: the change
+   * marked undone and its claim let go. Whether none is left for it.
    */
   private async flushDeclines(op: RecordOp): Promise<boolean> {
     const mine = [...this.unrecorded].filter(([, each]) => sameStore(each.stamp, op.stamp));
@@ -1161,21 +1215,6 @@ export class BotNames {
             ? { ...each, undone: now }
             : each,
         ),
-        declined: [
-          ...record.declined.filter(
-            (each) =>
-              !mine.some(
-                ([, kept]) =>
-                  kept.botId === each.bot && kept.name === each.name && kept.file === each.file,
-              ),
-          ),
-          ...mine.map(([, kept]) => ({
-            bot: kept.botId,
-            name: kept.name,
-            file: kept.file,
-            at: now,
-          })),
-        ],
         claims: record.claims.filter((each) => !mine.some(([, kept]) => kept.op === each.op)),
       }),
       (value) => (kept = value),
@@ -1184,41 +1223,17 @@ export class BotNames {
       return "unavailable" as const;
     });
     if (result !== "written" || kept === null) return false;
-    // Only those the gateway kept: one the record's room left out stays here, and is written again.
     const saved: NameRecord = kept;
-    let all = true;
     for (const [key, each] of mine) {
-      if (
-        saved.declined.some(
-          (decline) =>
-            decline.bot === each.botId && decline.name === each.name && decline.file === each.file,
-        )
-      ) {
-        // A later Undo of the bot may have taken the key meanwhile: its decline isn't saved yet.
-        if (this.unrecorded.get(key)?.op === each.op) this.unrecorded.delete(key);
-      } else all = false;
+      // Recorded: the change is marked undone, or the record no longer holds it at all.
+      const change = saved.changes.find((c) => c.run === each.run && c.bot === each.botId);
+      if (change && change.undone === undefined) continue;
+      // A later Undo of the bot may have taken the key meanwhile: it isn't recorded yet.
+      if (this.unrecorded.get(key)?.op === each.op) this.unrecorded.delete(key);
+      // Its claim went with that write.
+      this.forgetHeld(each.op);
     }
-    return all;
-  }
-
-  /**
-   * Whether an Undo declined this very edit: the bot, the name and the file as it was, and the run
-   * wrote nothing of its own. A run that writes the file again is a fresh edit, even of the same name.
-   */
-  private isDeclined(
-    record: NameRecord | null,
-    stamp: GatewayStamp,
-    botId: string,
-    name: string,
-    origin: RenameOrigin,
-  ): boolean {
-    if (origin.whose !== "file") return false;
-    const same = (each: { name: string; file: string }) =>
-      each.name === name && each.file === origin.file;
-    if (record?.declined.some((each) => each.bot === botId && same(each))) return true;
-    return [...this.unrecorded.values()].some(
-      (each) => sameStore(each.stamp, stamp) && each.botId === botId && same(each),
-    );
+    return true;
   }
 
   /** Let go of a claim this device holds, and, for a rename not sent, take its entry back. */
@@ -1239,6 +1254,20 @@ export class BotNames {
       claims: record.claims.filter((each) => each.op !== opId),
     })).catch(() => "unavailable" as const);
     if (result !== "written") this.ctx.log(`could not let go of the claim on ${botId}'s name`);
+    // Let go: an Undo pressed again takes a claim of its own.
+    else this.forgetHeld(opId);
+  }
+
+  /** This device's Undo claim id, kept until that claim is let go or replaced (`heldUndos`). */
+  private holdUndo(key: string, opId: string): void {
+    this.heldUndos.delete(key);
+    this.heldUndos.set(key, opId);
+    if (this.heldUndos.size > MAX_NAME_CARDS)
+      this.heldUndos.delete(this.heldUndos.keys().next().value!);
+  }
+
+  private forgetHeld(opId: string): void {
+    for (const [key, held] of this.heldUndos) if (held === opId) this.heldUndos.delete(key);
   }
 
   /** Given up for another writer: the line here follows the record once that change lands. */
@@ -1516,7 +1545,7 @@ export class BotNames {
         const parsed = asRecord(
           JSON.parse((await this.ctx.storage.get(NAME_DECLINES_KEY)) ?? "{}"),
         );
-        for (const [key, value] of Object.entries(parsed ?? {}).slice(-MAX_NAME_CARDS))
+        for (const [key, value] of Object.entries(parsed ?? {}).slice(-MAX_LEGACY_DECLINES))
           if (key.length <= MAX_LEGACY_KEY_CHARS && typeof value === "string") {
             const name = plainName(value);
             if (name !== null) this.legacy.set(key, name);
@@ -1575,7 +1604,6 @@ export function settled(
       next = {
         ...next,
         changes: next.changes.map((each) => (each === entry ? { ...each, undone: now } : each)),
-        declined: [...next.declined, { bot: entry.bot, name: entry.to, file: entry.file, at: now }],
       };
     } else if (entry.done === undefined) {
       next = landedHere

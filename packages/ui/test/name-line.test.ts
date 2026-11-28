@@ -18,7 +18,7 @@ describe("F-552: the line after Undo", () => {
 
   it("F-552: adds the engine's warning when the Undo's record couldn't be kept on the gateway", () => {
     const warning =
-      "Clawtrate couldn't keep this on the gateway yet, so another device may rename Pip to Juniper again.";
+      "Clawtrate couldn't save this Undo to the gateway's record yet, so another device may still show the rename.";
     expect(undoneText({ from: "Pip", after: "Pip", error: warning })).toBe(
       `Back to Pip. ${warning}`,
     );

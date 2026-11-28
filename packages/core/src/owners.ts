@@ -74,6 +74,7 @@ import { MAX_STORE_LISTENERS } from "./store.ts";
 import {
   MAX_CHECKED_RUN_CHARS,
   MAX_CHECKED_RUNS,
+  MAX_LEGACY_DECLINES,
   MAX_LEGACY_KEY_CHARS,
   MAX_NAME_CARDS,
   MAX_NAME_ERROR_CHARS,
@@ -412,9 +413,9 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
     each: 6 * MAX_CHECKED_RUN_CHARS + ID + 6 * MAX_SENT_TEXT_CHARS + 6 + 2 * SHORT,
     row: "bookkeeping",
   },
-  // A bot's read under way stays registered past its file read's slot (the wait and the rename
-  // hold none), so one per listed bot.
-  "botNames.reading": { max: MAX_BOTS, each: ID, row: "bookkeeping" },
+  // The checks under way, one per bot, bounded on their own: an entry outlives its file read's
+  // slot and its bot leaving the roster.
+  "botNames.reading": { max: MAX_NAME_CARDS, each: ID, row: "bookkeeping" },
   // The name each run found in IDENTITY.md as it started: its run id, its bot and the name.
   "botNames.starts": {
     max: MAX_CHECKED_RUNS,
@@ -423,7 +424,7 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   },
   // An earlier build's "Not now" answers, as kept on this device: a gateway and bot key, a name.
   "botNames.legacy": {
-    max: MAX_NAME_CARDS,
+    max: MAX_LEGACY_DECLINES,
     each: MAX_LEGACY_KEY_CHARS + MAX_NAME_CHARS,
     row: "bookkeeping",
   },

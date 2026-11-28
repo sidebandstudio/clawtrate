@@ -21,8 +21,11 @@ import {
   MAX_RECORD_CHANGES,
   MAX_RECORD_COUNTS,
   CLAIM_SEND_MS,
+  MAX_LEGACY_DECLINES,
+  MAX_NAME_CARDS,
   NAME_DECLINES_KEY,
   NAME_RECORD_KEY,
+  nameWritten,
   namesInText,
   parseNameRecord,
   plainName,
@@ -58,7 +61,10 @@ const bot = (id: string, name: string): Bot => ({
 const READ_OWN: RunStepFacts = { toolName: "read", args: '{"path":"IDENTITY.md"}', ok: true };
 const EDIT_OWN: RunStepFacts = {
   toolName: "edit",
-  args: '{"path":"IDENTITY.md","edits":[]}',
+  args: JSON.stringify({
+    path: "IDENTITY.md",
+    edits: [{ oldText: "- **Name:** Pip", newText: "- **Name:** Juniper" }],
+  }),
   ok: true,
 };
 const step = (toolName: string, args = "{}"): RunStepFacts => ({ toolName, args, ok: true });
@@ -294,6 +300,8 @@ function gateway(options: { prefs?: "ok" | "none"; file?: string } = {}) {
     picture: [] as Array<string | null>,
     /** Every `agents.files.set` the gateway was sent. */
     fileSets: [] as string[],
+    /** Bots the gateway lists past the 32 the app keeps: only a fresh reply shows them. */
+    extra: [] as Bot[],
   };
   const request = async (method: string, raw: unknown): Promise<unknown> => {
     const params = raw as Record<string, unknown>;
@@ -403,10 +411,24 @@ function device(
     },
     refreshBots: async () => {
       listed = gw.state.bots;
+      return [...gw.state.bots, ...gw.state.extra];
     },
     readHistory: async () => options.history ?? true,
     runFacts: () => ({
-      steps: options.steps === undefined ? [EDIT_OWN] : options.steps,
+      // By default the run's own edit writes the file as it now is.
+      steps:
+        options.steps === undefined
+          ? [
+              {
+                toolName: "edit",
+                args: JSON.stringify({
+                  path: "IDENTITY.md",
+                  edits: [{ oldText: "- **Name:** Pip", newText: gw.state.file }],
+                }),
+                ok: true,
+              },
+            ]
+          : options.steps,
       steered: options.steered ?? false,
       owner: options.owner ?? true,
     }),
@@ -820,7 +842,7 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
     expect([taken, busy, evicted, none, spaced].flatMap((g) => g.state.updates)).toEqual([]);
   });
 
-  it("F-552: Undo puts back the name it named, reads it back, marks the change undone and declines that edit", async () => {
+  it("F-552: Undo puts back the name it named, reads it back and marks the change undone, with no decline entry", async () => {
     const gw = gateway();
     const me = device(gw);
     await me.engine.afterRun("pip", KEY, "run-1");
@@ -829,7 +851,8 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
     expect(me.line()).toMatchObject({ status: "undone", after: "Pip", error: null });
     const kept = gw.kept();
     expect(kept.changes[0]!.undone).toBe(NOW);
-    expect(kept.declined).toEqual([{ bot: "pip", name: "Juniper", file: FILE_TAG, at: NOW }]);
+    // A decline entry would stop nothing: none is written.
+    expect(kept.declined).toEqual([]);
     expect(kept.claims).toEqual([]);
     // Undo counts as no rename.
     expect(kept.counts).toEqual([{ bot: "pip", day: dayOf(NOW), n: 1 }]);
@@ -1012,7 +1035,7 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
     expect(me.line()).toMatchObject({ run: runTag("run-3"), whose: "person", status: "renamed" });
   });
 
-  it("F-552: an Undo whose record couldn't be kept says so, and its decline is written before this device's next rename", async () => {
+  it("F-552: an Undo whose record couldn't be kept says so, and is recorded before this device's next rename", async () => {
     const gw = gateway();
     const me = device(gw);
     await me.engine.afterRun("pip", KEY, "run-1");
@@ -1020,14 +1043,14 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
     gw.state.downAt = gw.state.sets + 2;
     await me.engine.undo("pip", runTag("run-1"), "Pip", STAMP);
     expect(me.line()).toMatchObject({ status: "undone", after: "Pip" });
-    expect(me.line()!.error).toMatch(/couldn't keep this on the gateway/);
+    expect(me.line()!.error).toMatch(/couldn't save this Undo/);
     gw.state.prefsDown = false;
     gw.state.downAt = null;
-    // The next rename here writes the decline first.
+    // The next rename here records the Undo first.
     gw.state.file = "- **Name:** Maple\n";
     await me.engine.afterRun("pip", KEY, "run-3");
     expect(gw.state.updates).toEqual(["Juniper", "Pip", "Maple"]);
-    expect(gw.kept().declined).toEqual([{ bot: "pip", name: "Juniper", file: FILE_TAG, at: NOW }]);
+    expect(gw.kept().changes.find((each) => each.run === runTag("run-1"))!.undone).toBe(NOW);
   });
 
   it("F-552: the line's forms through the engine: a read of the bot's own file first; and no write of the run's, or history unread, changes nothing", async () => {
@@ -1100,9 +1123,7 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
     landed.state.update = "lost";
     await a.engine.undo("pip", runTag("run-1"), "Pip", STAMP);
     expect(a.line()).toMatchObject({ status: "undone", after: "Pip", error: null });
-    expect(landed.kept().declined).toEqual([
-      { bot: "pip", name: "Juniper", file: FILE_TAG, at: NOW },
-    ]);
+    expect(landed.kept().changes[0]!.undone).toBe(NOW);
 
     const lost = gateway();
     const b = device(lost);
@@ -1154,7 +1175,7 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
     }
   });
 
-  it("F-552: an Undo's unsaved decline is kept and written again after a reconnect to the same gateway", async () => {
+  it("F-552: an Undo this device couldn't record is kept and written after a reconnect to the same gateway", async () => {
     const gw = gateway();
     let stamp = STAMP;
     const me = device(gw, { stamp: () => stamp });
@@ -1173,28 +1194,32 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
     gw.state.file = "- **Name:** Maple\n";
     await me.engine.afterRun("pip", KEY, "run-3");
     expect(gw.state.updates).toEqual(["Juniper", "Pip", "Maple"]);
-    expect(gw.kept().declined).toEqual([{ bot: "pip", name: "Juniper", file: FILE_TAG, at: NOW }]);
+    // Written on that gateway's record, under the new target: nothing is left pending here.
+    expect(me.engine["unrecorded"].size).toBe(0);
   });
 
-  it("F-552: unsaved declines the record has no room for stay pending; only those it kept are cleared", async () => {
+  it("F-552: an Undo this device couldn't record is written with the next rename: its change marked undone, then let go", async () => {
     const gw = gateway();
+    gw.state.record = record({
+      changes: [change({ bot: "otto", from: "Otto", to: "Maple", run: runTag("r0"), done: NOW })],
+    });
     const me = device(gw);
     const pending = me.engine["unrecorded"];
-    for (let n = 0; n < 9; n += 1)
-      pending.set(`gw-a\nbot-${n}`, {
-        stamp: STAMP,
-        botId: `bot-${n}`,
-        name: `Name ${n}`,
-        run: runTag(`r${n}`),
-        file: FILE_TAG,
-        op: runTag(`o${n}`),
-      });
+    pending.set("gw-a\notto", {
+      stamp: STAMP,
+      botId: "otto",
+      name: "Maple",
+      run: runTag("r0"),
+      file: FILE_TAG,
+      op: runTag("o0"),
+    });
     await me.engine.afterRun("pip", KEY, "run-1");
-    expect(gw.kept().declined).toHaveLength(8);
-    expect([...pending.values()].map((each) => each.botId)).toEqual(["bot-0"]);
+    expect(gw.kept().changes.find((each) => each.run === runTag("r0"))!.undone).toBe(NOW);
+    expect(gw.kept().declined).toEqual([]);
+    expect(pending.size).toBe(0);
   });
 
-  it("F-552: a decline saved by one Undo doesn't clear a later Undo's pending decline of the same bot", async () => {
+  it("F-552: one Undo recorded doesn't clear a later Undo of the same bot still waiting to be", async () => {
     const gw = gateway();
     const me = device(gw);
     const pending = me.engine["unrecorded"];
@@ -1210,7 +1235,6 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
     // A later Undo of Otto takes the key while the first decline's write is answered.
     gw.state.afterSet = () => pending.set("gw-a\notto", entry("Thistle", "b"));
     await me.engine.afterRun("pip", KEY, "run-1");
-    expect(gw.kept().declined.map((each) => each.name)).toContain("Maple");
     expect([...pending.values()].map((each) => each.name)).toEqual(["Thistle"]);
   });
 
@@ -1738,6 +1762,152 @@ describe("F-552: a bot that takes a name is renamed, with Undo", () => {
     expect(unread.kept().claims).toEqual([]);
   });
 
+  it("F-552: the owner's turn that wrote only another line of IDENTITY.md doesn't adopt a name someone else wrote meanwhile", async () => {
+    const gw = gateway();
+    // The run found Pip; another task wrote Juniper while it ran; the run edited only Creature.
+    const creature: RunStepFacts = {
+      toolName: "edit",
+      args: JSON.stringify({
+        path: "IDENTITY.md",
+        edits: [{ oldText: "- **Creature:** owl", newText: "- **Creature:** heron" }],
+      }),
+      ok: true,
+    };
+    const me = device(gw, { steps: [creature], start: "Pip" });
+    me.engine.sent(KEY, "run-1", "call yourself Juniper");
+    await me.engine.afterRun("pip", KEY, "run-1");
+    expect(gw.state.updates).toEqual([]);
+    expect(me.lines()).toEqual([]);
+  });
+
+  it("F-552: what a write puts on the Name line, by tool", () => {
+    const own = (toolName: string, args: unknown, ok = true): RunStepFacts => ({
+      toolName,
+      args: JSON.stringify(args),
+      ok,
+    });
+    const named = "- **Name:** Juniper\n";
+    expect(nameWritten([own("write", { path: "IDENTITY.md", content: named })], "Juniper")).toBe(
+      true,
+    );
+    expect(
+      nameWritten(
+        [own("edit", { path: "IDENTITY.md", oldText: "- Name: Pip", newText: "- Name: Juniper" })],
+        "Juniper",
+      ),
+    ).toBe(true);
+    const patch =
+      "*** Begin Patch\n*** Update File: IDENTITY.md\n-- Name: Pip\n+- Name: Juniper\n*** End Patch";
+    expect(nameWritten([own("apply_patch", { input: patch })], "Juniper")).toBe(true);
+    // Not this name, another file, a failed write, an unreadable argument, a read.
+    expect(nameWritten([own("write", { path: "IDENTITY.md", content: named })], "Maple")).toBe(
+      false,
+    );
+    expect(nameWritten([own("write", { path: "notes/x.md", content: named })], "Juniper")).toBe(
+      false,
+    );
+    expect(
+      nameWritten([own("write", { path: "IDENTITY.md", content: named }, false)], "Juniper"),
+    ).toBe(false);
+    expect(
+      nameWritten(
+        [{ toolName: "write", args: '{"path":"IDENTITY.md","cont', ok: true }],
+        "Juniper",
+      ),
+    ).toBe(false);
+    expect(nameWritten([own("read", { path: "IDENTITY.md" })], "Juniper")).toBe(false);
+    // A value-only edit doesn't show it changed the Name line.
+    expect(
+      nameWritten(
+        [own("edit", { path: "IDENTITY.md", oldText: "Pip", newText: "Juniper" })],
+        "Juniper",
+      ),
+    ).toBe(false);
+  });
+
+  it("F-552: all 64 of an earlier build's Not now answers carry over: the oldest of a full record still holds", async () => {
+    // The earlier build's record at its limit: Pip's Juniper first, then 63 newer answers.
+    const full: Record<string, string> = { "gw-a\npip": "Juniper" };
+    for (let n = 1; n < MAX_LEGACY_DECLINES; n += 1) full[`gw-a\nbot-${n}`] = `Name ${n}`;
+    expect(Object.keys(full)).toHaveLength(64);
+    const gw = gateway();
+    const me = device(gw);
+    await me.ctx.storage.set(NAME_DECLINES_KEY, JSON.stringify(full));
+    await me.engine.afterRun("pip", KEY, "run-1");
+    expect(gw.state.updates).toEqual([]);
+    expect(me.lines()).toEqual([]);
+  });
+
+  it("F-552: the final clash check reads every bot the gateway's reply lists, past the 32 the app keeps", async () => {
+    // The 33rd bot in the reply is already called Juniper; the app's own list doesn't show it.
+    const rename = gateway();
+    rename.state.extra = [bot("bot-33", "Juniper")];
+    const a = device(rename);
+    await a.engine.afterRun("pip", KEY, "run-1");
+    expect(rename.state.updates).toEqual([]);
+    expect(a.line()).toMatchObject({ status: "not-done", reason: "taken" });
+
+    // Undo: the 33rd bot is called Pip by the time Undo holds its claim.
+    const undo = gateway();
+    const b = device(undo);
+    await b.engine.afterRun("pip", KEY, "run-1");
+    undo.state.extra = [bot("bot-33", "Pip")];
+    await expect(b.engine.undo("pip", runTag("run-1"), "Pip", STAMP)).rejects.toThrow(
+      "Another bot is called Pip now",
+    );
+    expect(undo.state.updates).toEqual(["Juniper"]);
+    expect(undo.kept().claims).toEqual([]);
+  });
+
+  it("F-552: Undo never waits on its own claim: kept through a retry while the record can't be written, and through a refusal whose release failed", async () => {
+    // An unread Undo, pressed again while preference writes fail, then again once they work.
+    const unread = gateway();
+    const a = device(unread);
+    await a.engine.afterRun("pip", KEY, "run-1");
+    unread.state.update = "dropped";
+    const listed = a.ctx.refreshBots;
+    unread.state.onUpdate = () =>
+      (a.ctx.refreshBots = async () => {
+        throw new Error("no answer");
+      });
+    await a.engine.undo("pip", runTag("run-1"), "Pip", STAMP);
+    a.ctx.refreshBots = listed;
+    unread.state.prefsDown = true;
+    await expect(a.engine.undo("pip", runTag("run-1"), "Pip", STAMP)).rejects.toThrow(
+      "couldn't hold this Undo",
+    );
+    unread.state.prefsDown = false;
+    unread.state.update = "ok";
+    await a.engine.undo("pip", runTag("run-1"), "Pip", STAMP);
+    expect(unread.state.updates).toEqual(["Juniper", "Pip"]);
+
+    // A refusal whose release write fails: the claim stays, and the next press takes it.
+    const refused = gateway();
+    const b = device(refused);
+    await b.engine.afterRun("pip", KEY, "run-1");
+    refused.state.update = "refused";
+    refused.state.downAt = refused.state.sets + 2;
+    await expect(b.engine.undo("pip", runTag("run-1"), "Pip", STAMP)).rejects.toThrow();
+    expect(refused.kept().claims).toHaveLength(1);
+    refused.state.prefsDown = false;
+    refused.state.downAt = null;
+    refused.state.update = "ok";
+    await b.engine.undo("pip", runTag("run-1"), "Pip", STAMP);
+    expect(refused.state.updates).toEqual(["Juniper", "Pip"]);
+    expect(refused.kept().claims).toEqual([]);
+  });
+
+  it("F-552: checks under way are bounded on their own, bots that left the roster included", async () => {
+    const gw = gateway();
+    const me = device(gw);
+    // 32 checks still under way, for bots no longer listed.
+    const reading = me.engine["reading"] as Map<string, object>;
+    for (let n = 0; n < MAX_NAME_CARDS; n += 1) reading.set(`gone-${n}`, {});
+    await me.engine.afterRun("pip", KEY, "run-1");
+    expect(gw.state.reads).toBe(0);
+    expect(reading.size).toBe(MAX_NAME_CARDS);
+  });
+
   it("F-552: a claim's entry is never the one the record's room drops", () => {
     const changes = Array.from({ length: 9 }, (_, n) =>
       change({ bot: `bot-${n}`, run: runTag(`r${n}`), done: NOW }),
@@ -1905,7 +2075,10 @@ describe("F-552: through the client", () => {
     });
     /** The bot edits its file's name line in the run `id`, as the scripted model does. */
     const edit = (id: string, name: string, seq = 1) => {
-      const args = { path: "IDENTITY.md", edits: [{ oldText: "x", newText: name }] };
+      const args = {
+        path: "IDENTITY.md",
+        edits: [{ oldText: "- **Name:** New bot", newText: `- **Name:** ${name}` }],
+      };
       gw.emit(
         "agent",
         agentEvent(
