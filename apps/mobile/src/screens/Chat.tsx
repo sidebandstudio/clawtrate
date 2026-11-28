@@ -32,6 +32,7 @@ import {
 import { Pressable, ScrollView, View, type LayoutChangeEvent } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { BotFiles } from "../components/BotFiles.tsx";
+import { GatewayEvent } from "../components/GatewayEvent.tsx";
 import { Markdown } from "../components/Markdown.tsx";
 import { SentFiles } from "../components/SentFiles.tsx";
 import { EyeIcon } from "../components/icons.tsx";
@@ -55,6 +56,8 @@ function redactRow(row: ChatRow, redact: (text: string) => string): ChatRow {
     };
   if (row.kind === "files")
     return { ...row, files: row.files.map((file) => ({ ...file, name: redact(file.name) })) };
+  if (row.kind === "event" && row.eventText !== undefined)
+    return { ...row, text: redact(row.text), eventText: redact(row.eventText) };
   return { ...row, text: redact(row.text) };
 }
 
@@ -65,11 +68,15 @@ const NEAR_END = 96;
 const TASK_LINE = "task-line";
 const rowKey = (row: ChatRow) => `${row.kind}:${row.id}`;
 
+/** An event the reader opened, and whether they were following the end when they did. */
+type OpenedEvent = { key: string; toggleY: number | null; positioned: boolean; following: boolean };
+
 function RowView({
   row,
   taskKey = "",
   onScreen = false,
   files,
+  onEventDisclosureChange,
 }: {
   row: ChatRow;
   taskKey?: string;
@@ -77,6 +84,7 @@ function RowView({
   onScreen?: boolean;
   /** For a bot's files: where the history they come from was read, and whether this connection loads them. */
   files?: { drawnOn: ShownStamp; canLoad: boolean } | undefined;
+  onEventDisclosureChange?: (key: string, open: boolean, toggleY: number | null) => void;
 }) {
   const { c } = useTheme();
   switch (row.kind) {
@@ -173,14 +181,13 @@ function RowView({
       );
     case "event":
       return (
-        <Txt
-          testID="event-line"
-          size={S["text-sm"]}
-          color="text-faint"
-          style={{ textAlign: "center" }}
-        >
-          {row.text}
-        </Txt>
+        <GatewayEvent
+          line={row.text}
+          text={row.eventText}
+          onDisclosureChange={(open, toggleY) =>
+            onEventDisclosureChange?.(rowKey(row), open, toggleY)
+          }
+        />
       );
     case "running":
       return (
@@ -370,6 +377,9 @@ export function Chat({
   // A task opens at its start, its title in view; the reader follows the end
   // once they reach it, as section 18 has it.
   const following = useRef(false);
+  const openedEvent = useRef<OpenedEvent | null>(null);
+  // An event was closed: once the content shrinks, a reader left at the end follows it.
+  const closedEvent = useRef(false);
   const [atEnd, setAtEnd] = useState(false);
   const [contentHeight, setContentHeight] = useState(0);
   const [viewHeight, setViewHeight] = useState(0);
@@ -462,6 +472,44 @@ export function Chat({
     setOnScreen((was) =>
       visible.every((key) => was.has(key)) ? was : new Set([...was, ...visible]),
     );
+  };
+
+  const eventDisclosureChanged = (key: string, open: boolean, toggleY: number | null) => {
+    if (open) {
+      // Whether the end can still be followed waits for the opened height (`showOpenedEvent`).
+      openedEvent.current = { key, toggleY, positioned: false, following: following.current };
+      following.current = false;
+      returning.current = null;
+    } else {
+      if (openedEvent.current?.key === key) openedEvent.current = null;
+      closedEvent.current = true;
+    }
+  };
+
+  const showOpenedEvent = (opened: OpenedEvent) => {
+    if (openedEvent.current !== opened || opened.positioned) return;
+    opened.positioned = true;
+    const box = boxes.current.get(opened.key);
+    const { view, content } = extent.current;
+    if (!box || opened.toggleY === null || view <= PROTECTED_BAND) return;
+    const top = bodyTop.current + box.y + opened.toggleY;
+    const bottom = bodyTop.current + box.y + box.height;
+    // At the end, the button and attribution stay below the floating header.
+    const fits = content - view <= top - PROTECTED_BAND;
+    // Otherwise show as much as fits without moving the button behind the header.
+    const maxY = Math.min(content - view, top - PROTECTED_BAND);
+    const y =
+      opened.following && fits
+        ? Math.max(0, content - view)
+        : Math.max(0, Math.min(maxY, Math.max(scrollY.current, bottom - view)));
+    const end = content - (y + view) < NEAR_END;
+    if (fits && end) {
+      openedEvent.current = null;
+      following.current = true;
+    }
+    scroller.current?.scrollTo({ y, animated: false });
+    scrollY.current = y;
+    setAtEnd(end);
   };
 
   let body: ReactNode;
@@ -560,6 +608,7 @@ export function Chat({
                 taskKey={task.key}
                 onScreen={onScreen.has(rowKey(row))}
                 files={files}
+                onEventDisclosureChange={eventDisclosureChanged}
               />
             </View>
           );
@@ -569,6 +618,7 @@ export function Chat({
   }
 
   const toEnd = () => {
+    openedEvent.current = null;
     following.current = true;
     returning.current = nextReturning(returning.current, { kind: "reader-scrolled" });
     scroller.current?.scrollToEnd({ animated: true });
@@ -596,13 +646,16 @@ export function Chat({
             if (layoutMeasurement.height === 0) return;
             const end =
               contentSize.height - (contentOffset.y + layoutMeasurement.height) < NEAR_END;
-            following.current = end;
+            // A scroll event from before expansion can still report the old end.
+            if (!end && openedEvent.current?.positioned) openedEvent.current = null;
+            following.current = end && openedEvent.current === null;
             setAtEnd(end);
             scrollY.current = contentOffset.y;
             place.current = keptPlace(returning.current, place.current, laidOut(), scrollY.current);
             look();
           }}
           onScrollBeginDrag={() => {
+            openedEvent.current = null;
             returning.current = nextReturning(returning.current, { kind: "reader-scrolled" });
           }}
           onLayout={({ nativeEvent }) => {
@@ -626,6 +679,16 @@ export function Chat({
           onContentSizeChange={(contentWidth, height) => {
             setContentHeight(height);
             extent.current = { ...extent.current, content: height, contentWidth };
+            // Closing can leave the reader at the end without a scroll event to say so.
+            if (
+              closedEvent.current &&
+              openedEvent.current === null &&
+              height - (scrollY.current + extent.current.view) < NEAR_END
+            ) {
+              following.current = true;
+              setAtEnd(true);
+            }
+            closedEvent.current = false;
             returning.current = nextReturning(returning.current, {
               kind: "content-laid-out",
               width: contentWidth,
@@ -634,8 +697,10 @@ export function Chat({
             else returnToPlace();
             // The rows moved without a scroll (a message grew): once they have
             // reported, read the place again from where the view is.
-            if (returning.current === null)
+            if (returning.current === null) {
+              const opened = openedEvent.current;
               requestAnimationFrame(() => {
+                if (opened !== null) showOpenedEvent(opened);
                 place.current = keptPlace(
                   returning.current,
                   place.current,
@@ -643,6 +708,7 @@ export function Chat({
                   scrollY.current,
                 );
               });
+            }
             settle();
           }}
         >

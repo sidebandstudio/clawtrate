@@ -54,7 +54,16 @@ export type ChatRow =
       spoken: string;
       tone: "danger" | null;
     }
-  | { kind: "event"; id: string; text: string }
+  | {
+      kind: "event";
+      id: string;
+      text: string;
+      /**
+       * The text a turn the gateway started itself came with (`TranscriptItem.gatewayEvent`,
+       * OpenClaw 2026.11.10 and later), apart from the gateway's line. Absent otherwise.
+       */
+      eventText?: string;
+    }
   /** A message the engine cut or the gateway truncated, or earlier messages not loaded. */
   | { kind: "note"; id: string; text: string }
   /**
@@ -197,11 +206,11 @@ export function chatRows(
       rows.push({ kind: "stamp", id: `stamp:${item.id}`, text: stampTime(at!, now) });
     if (at !== null) previous = at;
     if (item.role === "system") {
-      const text = item.blocks
-        .map((block) => (block.kind === "text" ? block.text : ""))
-        .join(" ")
-        .trim();
-      if (text) rows.push({ kind: "event", id: item.id, text });
+      const texts = item.blocks.map((block) => (block.kind === "text" ? block.text : ""));
+      const text = (item.gatewayEvent ? (texts[0] ?? "") : texts.join(" ")).trim();
+      const eventText = item.gatewayEvent ? texts[1] : undefined;
+      if (text)
+        rows.push({ kind: "event", id: item.id, text, ...(eventText ? { eventText } : {}) });
       rows.push(...noteRow(item));
       continue;
     }

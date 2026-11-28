@@ -1,4 +1,4 @@
-import type { TranscriptItem } from "@clawtrate/core";
+import { GATEWAY_EVENT_WORDS, type TranscriptItem } from "@clawtrate/core";
 import { ChevronIcon } from "./icons.tsx";
 
 /**
@@ -18,14 +18,11 @@ export function GatewayEventLine({ item }: { item: TranscriptItem }) {
       </p>
       <details className="event-details">
         <summary className="event-line" data-side="center">
-          Text that came with it
+          {GATEWAY_EVENT_WORDS.label}
           <ChevronIcon className="chevron" />
         </summary>
         <div className="card event-body">
-          <p className="gateway-event-note">
-            Written by whatever started this turn (a command, a bot or another app), not by the
-            gateway or Clawtrate.
-          </p>
+          <p className="gateway-event-note">{GATEWAY_EVENT_WORDS.attribution}</p>
           <p className="gateway-event-text">{event}</p>
         </div>
       </details>
