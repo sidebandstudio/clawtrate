@@ -17,7 +17,9 @@ import {
   MAX_ALLOWLIST_ENTRIES,
   type AccountsState,
 } from "../src/accounts.ts";
+import { parseBridgeCommand } from "../src/bridge.ts";
 import { AccountsGateway, accountsClient } from "./accounts-fake.ts";
+import { until } from "./fake-gateway.ts";
 
 const V10 = "2026.10.6";
 const V11 = "2026.11.10";
@@ -546,7 +548,12 @@ describe("F-042: a line and its Undo act only on what they were read from (#799)
 
 describe("F-042: a gateway's line and refusals stay with it (#799)", () => {
   /** An engine on the fake gateway's own answers, to reset in the middle of a write. */
-  function engineOn(fake: AccountsGateway, during?: (method: string) => void) {
+  function engineOn(
+    fake: AccountsGateway,
+    during?: (method: string) => void,
+    gateway: () => string = () => "gateway-a",
+    now: () => number = () => Date.now(),
+  ) {
     let state: AccountsState = initialAccountsState;
     const engine: AccountsEngine = new AccountsEngine({
       request: async (method, params) => {
@@ -563,13 +570,13 @@ describe("F-042: a gateway's line and refusals stay with it (#799)", () => {
       admin: () => true,
       serverVersion: () => "2026.11.10",
       refreshBots: async () => {},
-      gateway: async () => "gateway-a",
-      gatewayNow: () => "gateway-a",
+      gateway: async () => gateway(),
+      gatewayNow: () => gateway(),
       readStamp: () => ({ gatewayId: "gateway-a", target: 1, connectedAt: 1 }),
       target: () => 1,
       createMainTask: async () => {},
-      now: () => Date.now(),
-      randomId: () => "r",
+      now,
+      randomId: () => `r${Math.random()}`,
       log: () => {},
     });
     return { engine, state: () => state };
@@ -611,5 +618,231 @@ describe("F-042: a gateway's line and refusals stay with it (#799)", () => {
     expect(defaults(fake).modelPolicy).toEqual({ allow: ["acme/dev-2", "acme/dev-1"] });
     expect(state().allowed).toBeNull();
     expect(state().modelsRefused).toEqual([]);
+  });
+
+  it("Undo on another gateway at the same address writes nothing", async () => {
+    const fake = new AccountsGateway();
+    limited(fake, ["acme/dev-2"]);
+    let gateway = "gateway-a";
+    const { engine, state } = engineOn(fake, undefined, () => gateway);
+    await engine.load();
+    await engine.allowModel("otto", DEV1);
+    expect(state().allowed).toMatchObject({ gatewayId: "gateway-a", status: "added" });
+    // The same address now answers as another gateway, and no reset came between.
+    gateway = "gateway-b";
+    const before = patches(fake).length;
+    await expect(engine.undoAllowed({ botId: "otto", id: state().allowed!.id })).rejects.toThrow(
+      "That change was made on another gateway, so nothing was undone.",
+    );
+    expect(patches(fake)).toHaveLength(before);
+    expect(defaults(fake).modelPolicy).toEqual({ allow: ["acme/dev-2", "acme/dev-1"] });
+  });
+
+  it("a read of a config the running gateway hasn't applied yet changes no refusal", async () => {
+    const fake = new AccountsGateway();
+    limited(fake, ["acme/dev-2"]);
+    const get = fake.gateway.handlers["config.get"]!;
+    let lagging = false;
+    fake.gateway.handlers["config.get"] = (params) => {
+      const answer = get(params) as Record<string, unknown>;
+      // Saved, not yet applied: the running gateway still has the revision before.
+      return lagging ? { ...answer, appliedConfigHash: `r${fake.revision - 1}` } : answer;
+    };
+    const patch = fake.gateway.handlers["config.patch"]!;
+    fake.gateway.handlers["config.patch"] = (params) => {
+      const answer = patch(params);
+      lagging = true;
+      return answer;
+    };
+    // A clock that moves on fast, so the wait for the applied revision ends at its bound.
+    let clock = 0;
+    const { engine, state } = engineOn(fake, undefined, undefined, () => (clock += 5_000));
+    await engine.load();
+    expect(state().modelsRefused).toEqual([{ botId: "otto", ...DEV1, full: false }]);
+    await engine.allowModel("otto", DEV1);
+    // The line says what the gateway took; the refusal stays until a read shows it applied.
+    expect(state().allowed).toMatchObject({ entry: "acme/dev-1", status: "added" });
+    expect(state().modelsRefused).toEqual([{ botId: "otto", ...DEV1, full: false }]);
+  });
+});
+
+describe("F-042: Allow, a model choice and a typed id add only what the person chose (#799)", () => {
+  it("Allow adds the model its button named, and nothing when the bot has moved on", async () => {
+    const fake = new AccountsGateway();
+    limited(fake, ["acme/dev-2"]);
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    // Another admin moves Otto to dev-3, which the list refuses too, before this press arrives.
+    (entries(fake).otto!.model as { primary: string }).primary = "acme/dev-3@acme:work";
+    fake.revision += 1;
+    await expect(client.allowBotModel("otto", DEV1)).rejects.toThrow(
+      "The bot's model has changed since this was shown, so nothing was changed.",
+    );
+    expect(patches(fake)).toHaveLength(0);
+    // And the refusal shown is the one true now.
+    expect(accounts().modelsRefused.find((each) => each.botId === "otto")).toEqual({
+      botId: "otto",
+      provider: "acme",
+      model: "dev-3",
+      full: false,
+    });
+    client.stop();
+  });
+
+  it("a typed pattern is refused before any gateway call, and no addition is ever a pattern", async () => {
+    const fake = new AccountsGateway();
+    limited(fake, ["acme/dev-2"]);
+    const { client } = await accountsClient({ gateway: fake });
+    const reads = fake.gateway.calls("config.get").length;
+    for (const model of ["*", "dev-*", "dev/*"])
+      await expect(client.setBotModel("otto", model, null)).rejects.toThrow("invalid model");
+    expect(fake.gateway.calls("config.get")).toHaveLength(reads);
+    expect(patches(fake)).toHaveLength(0);
+    for (const model of ["*", "dev-*"])
+      expect(() =>
+        parseBridgeCommand({
+          type: "setBotModel",
+          botId: "otto",
+          model,
+          effort: null,
+          stamp: { gatewayId: "gateway-a", target: 1 },
+        }),
+      ).toThrow("invalid model");
+    // A model in the config that would be a pattern is never written as an entry.
+    expect(
+      allowAddition(
+        cfg({ agents: { defaults: { modelPolicy: { allow: ["acme/dev-2"] } } } }),
+        "pip",
+        { provider: "acme", model: "dev-*" },
+        V11,
+      ),
+    ).toBeNull();
+    client.stop();
+  });
+
+  it("changing only the effort adds nothing to a list", async () => {
+    const fake = new AccountsGateway();
+    limited(fake, ["acme/dev-2"]);
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    await client.setBotModel("otto", "dev-1", "low");
+    expect(JSON.parse(patches(fake).at(-1)!.raw)).toEqual({
+      agents: {
+        entries: {
+          otto: {
+            model: { primary: "acme/dev-1@acme:work", fallbacks: [] },
+            thinkingDefault: "low",
+          },
+        },
+      },
+    });
+    expect(defaults(fake).modelPolicy).toEqual({ allow: ["acme/dev-2"] });
+    expect(accounts().allowed).toBeNull();
+    client.stop();
+  });
+
+  it("a model with an `@` of its own is allowed and undone by its addition's id", async () => {
+    const fake = new AccountsGateway();
+    limited(fake, ["acme/dev-2"]);
+    (entries(fake).otto!.model as { primary: string }).primary = "ollama/example@q4_k_m";
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    const shown = { provider: "ollama", model: "example@q4_k_m" };
+    const stamp = { gatewayId: "gateway-a", target: 1 };
+    // As the bridge carries each: the model as the config names it, the Undo by id.
+    expect(
+      parseBridgeCommand({ type: "allowBotModel", botId: "otto", ...shown, stamp }),
+    ).toMatchObject({ model: "example@q4_k_m" });
+    await client.allowBotModel("otto", shown);
+    expect(defaults(fake).modelPolicy).toEqual({ allow: ["acme/dev-2", "ollama/example@q4_k_m"] });
+    const undo = { type: "undoModelAllowed", ...shownOf(accounts()), stamp };
+    expect(parseBridgeCommand(undo)).toMatchObject({ id: accounts().allowed!.id });
+    await client.undoModelAllowed(shownOf(accounts()));
+    expect(defaults(fake).modelPolicy).toEqual({ allow: ["acme/dev-2"] });
+    client.stop();
+  });
+
+  it("an Undo the gateway took, with the read after it failing, shows the refusal once read again", async () => {
+    const fake = new AccountsGateway();
+    limited(fake, ["acme/dev-1"]);
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    await client.setBotModel("otto", "dev-2", null);
+    expect(accounts().modelsRefused.find((each) => each.botId === "otto")).toBeUndefined();
+    const get = fake.gateway.handlers["config.get"]!;
+    const patch = fake.gateway.handlers["config.patch"]!;
+    let failNext = false;
+    fake.gateway.handlers["config.patch"] = (params) => {
+      const answer = patch(params);
+      failNext = true;
+      return answer;
+    };
+    fake.gateway.handlers["config.get"] = (params) => {
+      if (failNext) {
+        failNext = false;
+        throw new Error("gateway request timeout for config.get");
+      }
+      return get(params);
+    };
+    await client.undoModelAllowed(shownOf(accounts()));
+    expect(accounts().allowed?.status).toBe("undone");
+    // What it refuses now comes from a read of the running gateway, made again.
+    await until(() => accounts().modelsRefused.some((each) => each.botId === "otto"));
+    expect(accounts().modelsRefused.find((each) => each.botId === "otto")).toEqual({
+      botId: "otto",
+      provider: "acme",
+      model: "dev-2",
+      full: false,
+    });
+    client.stop();
+  });
+});
+
+describe("F-042: a list read as the gateway reads it (#799)", () => {
+  const aliased = (allow: string[], primary = "openai/gpt-5.5") =>
+    cfg({
+      agents: {
+        defaults: {
+          models: { "openai/gpt-5.5": { alias: "workhorse" } },
+          modelPolicy: { allow },
+        },
+        entries: { pip: { model: { primary } } },
+      },
+    });
+
+  it("whole-segment wildcards with spaces around their segments, on both versions", () => {
+    const ref = { provider: "openrouter", model: "anthropic/example" };
+    for (const version of [V10, V11]) {
+      expect(listVerdict(["openrouter/anthropic / *"], ref, version)).toBe("allows");
+      expect(listVerdict([" OpenRouter / anthropic/*"], ref, version)).toBe("allows");
+      expect(listVerdict(["openrouter/openai/*"], ref, version)).toBe("refuses");
+    }
+  });
+
+  it("a configured alias, as a list entry and as the bot's model; a bare name it can't place, unknown", () => {
+    expect(ownModelRefusal(aliased(["workhorse"]), "pip", V11)).toBeNull();
+    expect(allowAddition(aliased(["workhorse"]), "pip", gpt, V11)).toBeNull();
+    // The bot's model given as the alias resolves to the model the list refuses.
+    expect(botModelRef(aliased(["acme/dev-1"], "workhorse"), "pip")).toEqual(gpt);
+    expect(ownModelRefusal(aliased(["acme/dev-1"], "workhorse"), "pip", V11)).toEqual({
+      ...gpt,
+      full: false,
+    });
+    // An alias entry for another model: the list is read whole, and it refuses this one.
+    expect(ownModelRefusal(aliased(["workhorse"], "acme/dev-1"), "pip", V11)).toEqual({
+      provider: "acme",
+      model: "dev-1",
+      full: false,
+    });
+    // A bare entry the config doesn't alias may be a provider's alias: nothing claimed or written.
+    expect(ownModelRefusal(aliased(["fastest"]), "pip", V11)).toBeNull();
+    expect(allowAddition(aliased(["fastest"]), "pip", gpt, V11)).toBeNull();
+  });
+
+  it("a profile suffix, short or long, on the bot's model and on an entry", () => {
+    expect(
+      ownModelRefusal(aliased(["openai/gpt-5.5"], "openai/gpt-5.5@work"), "pip", V11),
+    ).toBeNull();
+    expect(listVerdict(["openai/gpt-5.5@work"], gpt, V10)).toBe("allows");
+    // An `@` that is part of the model's own id stays.
+    expect(
+      listVerdict(["ollama/example"], { provider: "ollama", model: "example@q4_k_m" }, V11),
+    ).toBe("refuses");
   });
 });

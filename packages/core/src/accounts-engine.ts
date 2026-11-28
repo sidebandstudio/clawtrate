@@ -23,6 +23,7 @@ import {
   MAX_LOCK_CHECKS,
   MAX_SECRET_CHARS,
   MAX_SECRET_JSON_CHARS,
+  modelIdProblem,
   mergeAccounts,
   normalizeLabel,
   parseModelRef,
@@ -2134,6 +2135,7 @@ export class AccountsEngine {
   }
 
   async createBot(input: CreateBotInput, binding?: WriteBinding): Promise<CreatedBot> {
+    requireModelId(input.model);
     // The picker read already under way is answered before anything is written: a new bot's
     // writes and first task never overlap it (the gateway refuses them alongside each other).
     await this.pickerRead;
@@ -2696,6 +2698,7 @@ export class AccountsEngine {
     beforeSend?: (sent: boolean) => void,
   ): Promise<void> {
     this.requireAdmin("Changing a bot's settings");
+    requireModelId(model);
     if (account && accountProvider(account) !== provider)
       throw new Error("That account belongs to another provider.");
     this.setWrite({
@@ -2745,6 +2748,7 @@ export class AccountsEngine {
     beforeSend?: (sent: boolean) => void,
   ): Promise<void> {
     this.requireAdmin("Changing a bot's settings");
+    requireModelId(model);
     const binding = this.ctx.get().bindings.find((b) => b.botId === botId);
     if (!binding?.provider) throw new Error("Choose an account first.");
     this.setWrite({
@@ -3014,6 +3018,14 @@ export class AccountsEngine {
     if (this.slowTimer) clearTimeout(this.slowTimer);
     this.slowTimer = null;
   }
+}
+
+/**
+ * A model id the person chose, under the one rule the typed field and the bridge use
+ * (`modelIdProblem`), before anything is asked of the gateway: never a pattern (#799).
+ */
+function requireModelId(model: string): void {
+  if (modelIdProblem(model) !== null) throw new Error("invalid model");
 }
 
 /** One JSON merge patch made of two: objects merged key by key, anything else from `b`. */

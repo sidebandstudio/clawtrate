@@ -296,7 +296,7 @@ async function deleteStarted(label: string): Promise<void> {
   }
 }
 
-test("#799 B: a model chosen for the bot goes on its list and its tasks start; Undo, refused again; Allow on the card, started", async () => {
+test("F-042 #799 B: a model chosen for the bot goes on its list and its tasks start; Undo, refused again; Allow on the card, started", async () => {
   test.setTimeout(480_000);
   await deleteStarted(HAND_OFF.label);
   // Setting a bot's model, and the one press, take admin access.
