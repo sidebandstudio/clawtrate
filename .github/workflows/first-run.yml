@@ -3,6 +3,7 @@ name: Packaged first run
 on:
   pull_request:
     paths:
+      - "apps/desktop/packaging/**"
       - "apps/desktop/src/setup/**"
       - "apps/desktop/src/main/**"
       - "packages/ui/src/setup/**"
@@ -79,5 +80,6 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: packaged-first-run
+          if-no-files-found: error
           path: ${{ runner.temp }}/first-run/
           retention-days: 7
