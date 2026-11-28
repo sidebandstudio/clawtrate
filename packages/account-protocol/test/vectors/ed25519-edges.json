@@ -1,0 +1,58 @@
+[
+  {
+    "name": "an honest signature",
+    "publicKey": "ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c",
+    "message": "636c61777472617465206163636f756e74206c69737420656e7472792076310a616e20656467652063617365",
+    "signature": "33e9cf21d148192e0614eba013d1644d4c9112363a1951f57232703b73b286ab5039313212547754682f182d28074fc6558ae24a91c0fa82bbc011ba8b995b04",
+    "accept": true,
+    "openssl": true
+  },
+  {
+    "name": "S + L, a second encoding of S",
+    "publicKey": "ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c",
+    "message": "636c61777472617465206163636f756e74206c69737420656e7472792076310a616e20656467652063617365",
+    "signature": "33e9cf21d148192e0614eba013d1644d4c9112363a1951f57232703b73b286ab3d0d278f2cb789ac3ecc0fd006012edb558ae24a91c0fa82bbc011ba8b995b14",
+    "accept": false,
+    "openssl": false
+  },
+  {
+    "name": "R written as y = p, a ZIP-215-only encoding of the order-4 point",
+    "publicKey": "ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c",
+    "message": "636c61777472617465206163636f756e74206c69737420656e7472792076310a616e20656467652063617365",
+    "signature": "edffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff7fecf6385286cdb342c4965c0e7914f5526be10b1ad8f03df5cb71a102ad7bc302",
+    "accept": false,
+    "openssl": false
+  },
+  {
+    "name": "R = r*B plus a point of order 8",
+    "publicKey": "ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c",
+    "message": "636c61777472617465206163636f756e74206c69737420656e7472792076310a616e20656467652063617365",
+    "signature": "d63c01223147541df4e170763e9e2788a8bf5971f52a93c5829dbe6f5ff6bba9cb8f61a24ac591c5dbfb2905094d0ef0b419a0f9173dedce51eae3841bcb1a06",
+    "accept": false,
+    "openssl": false
+  },
+  {
+    "name": "R the point of order 8 itself",
+    "publicKey": "ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c",
+    "message": "636c61777472617465206163636f756e74206c69737420656e7472792076310a616e20656467652063617365",
+    "signature": "c7176a703d4dd84fba3c0b760d10670f2a2053fa2c39ccc64ec7fd7792ac037a24fd9dd2641bc8a08b4b4b642c5f29c433397ee9e3846ae0d43bec0e50957400",
+    "accept": false,
+    "openssl": false
+  },
+  {
+    "name": "R = r*B, crafted honestly",
+    "publicKey": "ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c",
+    "message": "636c61777472617465206163636f756e74206c69737420656e7472792076310a616e20656467652063617365",
+    "signature": "7db0dc9222f3c183457ddde4c708de8e5ea6bf3d5c4404cca14b32729a05c32a86392b866bd577554fc5b9fbd8323957e2fda8bc7f1720a8ff40422a3a305d07",
+    "accept": true,
+    "openssl": true
+  },
+  {
+    "name": "R the identity point (order 1)",
+    "publicKey": "ea4a6c63e29c520abef5507b132ec5f9954776aebebe7b92421eea691446d22c",
+    "message": "636c61777472617465206163636f756e74206c69737420656e7472792076310a616e20656467652063617365",
+    "signature": "010000000000000000000000000000000000000000000000000000000000000067504ac0c0c00bf3f4641f2abde1c6ae7fef5e44c15ffea989295838c6df830a",
+    "accept": false,
+    "openssl": null
+  }
+]

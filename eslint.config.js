@@ -62,6 +62,64 @@ export default tseslint.config(
     },
   },
   {
+    // The account protocol runs in Workers, Node, Electron and Hermes, and takes time and
+    // randomness only as arguments.
+    files: ["packages/account-protocol/src/**/*.ts"],
+    languageOptions: { globals: {} },
+    rules: {
+      "no-restricted-imports": [
+        "error",
+        {
+          patterns: [{ group: ["node:*"], message: "the account protocol runs outside Node too" }],
+        },
+      ],
+      "no-restricted-globals": [
+        "error",
+        "window",
+        "document",
+        "process",
+        "Buffer",
+        "require",
+        "crypto",
+        "performance",
+        "globalThis",
+      ],
+      "no-restricted-properties": [
+        "error",
+        { object: "Math", property: "random", message: "randomness comes in as an argument" },
+        { object: "Date", property: "now", message: "time comes in as an argument" },
+        { property: "randomSecretKey", message: "randomness comes in as an argument" },
+        { property: "keygen", message: "randomness comes in as an argument" },
+        { property: "getRandomValues", message: "randomness comes in as an argument" },
+      ],
+      "no-restricted-syntax": [
+        "error",
+        { selector: "NewExpression[callee.name='Date']", message: "time comes in as an argument" },
+      ],
+    },
+  },
+  {
+    // The account protocol's internals (its raw signers, secret accessors and HPKE) are reachable
+    // only through its index; nothing outside the package may import its `src/` files.
+    files: ["**/*.{ts,tsx,js,mjs,cjs}"],
+    ignores: ["packages/account-protocol/**"],
+    rules: {
+      "no-restricted-syntax": [
+        "error",
+        ...[
+          "ImportDeclaration",
+          "ExportAllDeclaration",
+          "ExportNamedDeclaration",
+          "ImportExpression",
+        ].map((node) => ({
+          // Any spelling of the path: "/src", "//src", "/./src".
+          selector: `${node}[source.value=/account-protocol(\\u002F+\\.?)*\\u002F+src/]`,
+          message: "import @clawtrate/account-protocol, not its src/ files",
+        })),
+      ],
+    },
+  },
+  {
     // Metro reads its config as CommonJS.
     files: ["apps/mobile/metro.config.js"],
     rules: { "@typescript-eslint/no-require-imports": "off" },
