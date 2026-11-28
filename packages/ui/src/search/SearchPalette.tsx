@@ -275,14 +275,17 @@ export function SearchPalette({
   );
   // Bots and task titles only of the bots the sidebar lists (F-562); a message found in a task of
   // a bot out of view still opens it.
-  const { bots: allBots, tasksByBot, showGatewayBot } = state;
+  const { bots: allBots, tasksByBot, showGatewayBot, untouchedGatewayBot } = state;
   const listedBotsNow = useMemo(
-    () => listedBots({ bots: allBots, tasksByBot, showGatewayBot }, kept),
-    [allBots, tasksByBot, showGatewayBot, kept],
+    () => listedBots({ bots: allBots, tasksByBot, showGatewayBot, untouchedGatewayBot }, kept),
+    [allBots, tasksByBot, showGatewayBot, untouchedGatewayBot, kept],
   );
   const tasks = useMemo(
-    () => Object.values(listedTasks({ bots: allBots, tasksByBot, showGatewayBot }, kept)).flat(),
-    [allBots, tasksByBot, showGatewayBot, kept],
+    () =>
+      Object.values(
+        listedTasks({ bots: allBots, tasksByBot, showGatewayBot, untouchedGatewayBot }, kept),
+      ).flat(),
+    [allBots, tasksByBot, showGatewayBot, untouchedGatewayBot, kept],
   );
   const botName = useCallback((id: string) => botsById.get(id)?.name ?? id, [botsById]);
 

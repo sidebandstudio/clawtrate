@@ -738,6 +738,12 @@ export function createFixtureBridge(
      * `main` is out of view beside Juniper, the Main Bot; `gatewaybot=on` shows it.
      */
     showGatewayBot?: boolean;
+    /**
+     * Whether the gateway's own bot `main` has been used (`?gatewaybot=used`). Not by default: it
+     * keeps OpenClaw's own starting files, as the development gateway's seed does, so the client's
+     * read of them says untouched (`untouchedGatewayBot`) and F-562 leaves it out.
+     */
+    ownBotUsed?: boolean;
   } = {},
 ): ClawtrateBridge & {
   setState(change: (state: ClawtrateState) => ClawtrateState): void;
@@ -888,7 +894,9 @@ export function createFixtureBridge(
     state = { ...state, connection: { ...state.connection, fullPairing: true } };
   // The host keeps the choice across every state it sets, as it keeps the target below.
   let showGatewayBot = options.showGatewayBot ?? false;
-  state = { ...state, showGatewayBot };
+  // What the client's read of `main`'s files said, kept by the host across every state set here.
+  let untouchedGatewayBot: string | null = options.ownBotUsed ? null : "main";
+  state = { ...state, showGatewayBot, untouchedGatewayBot };
   const search = options.search ?? NO_SEARCH_PARAMS;
   if (search.ids) state = { ...state, transcripts: withMessageIds(state.transcripts) };
   // The histories a dropped or failed transcript is read again from; pairing loads its own.
@@ -928,6 +936,8 @@ export function createFixtureBridge(
     target = Math.max(target, next.connection.target);
     if (next.showGatewayBot === undefined) next = { ...next, showGatewayBot };
     else showGatewayBot = next.showGatewayBot;
+    if (next.untouchedGatewayBot === undefined) next = { ...next, untouchedGatewayBot };
+    else untouchedGatewayBot = next.untouchedGatewayBot;
     state = next.connection.target === target ? next : withConnection(next, { target });
     publish();
   };

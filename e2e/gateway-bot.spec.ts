@@ -37,6 +37,7 @@ const RECORDS = join(ROOT, "tools/dev-gateway/.run/e2e");
 /** This file's own run, and the instance it starts for a gateway with only its own bot. */
 const RUN = randomBytes(4).toString("hex");
 const ALONE = `e2e-${RUN}-gwbot`;
+const USED = `e2e-${RUN}-gwused`;
 const record: RunRecord = {
   run: RUN,
   runner: { pid: process.pid, identity: "" },
@@ -396,5 +397,113 @@ test("F-562: the gateway's own bot shows when it is the only bot, and leaves onc
     await expect(rail(page).getByTestId("primary-star")).toHaveCount(0);
   } finally {
     await admin.close();
+  }
+});
+
+test("F-562: the gateway's own bot stays out while untouched, and shows once the person has used it (main-bot-onboarding.md 15.2)", async ({
+  browser,
+}) => {
+  test.setTimeout(600_000);
+  // An unseeded instance of this file's own: its own bot has never had a turn.
+  record.runner.identity = ownIdentity();
+  const runId = newRunId();
+  record.instances.push({ name: USED, runId });
+  saveRecord(RECORDS, record);
+  cli("start", "--run-id", runId, "--instance", USED, "--no-seed");
+  const mine = listInstances().find((row) => row.name === USED);
+  if (!mine?.gatewayRunning) throw new Error(`instance ${USED} is not running`);
+  for (const port of [mine.gatewayPort, mine.providerPort])
+    if (port === null || FORBIDDEN_PORTS.includes(port))
+      throw new Error(`instance ${USED} is on port ${port}, which e2e never uses`);
+
+  const admin = await adminOf(USED);
+  try {
+    const { defaultId, agents } = await admin.request<Roster>("agents.list", {});
+    expect(agents.length).toBeGreaterThan(1);
+    const own = mapAgents(await admin.request<Roster>("agents.list", {})).find(
+      (bot) => bot.id === defaultId,
+    )!;
+    const key = `agent:${defaultId}:main`;
+    const files = async () =>
+      (
+        await admin.request<{ files: Array<{ name: string; missing?: boolean }> }>(
+          "agents.files.list",
+          { agentId: defaultId },
+        )
+      ).files
+        .filter((file) => !file.missing)
+        .map((file) => file.name);
+    // A just-started gateway may answer that its session storage isn't ready yet: asked again.
+    const whenReady = async <T>(call: () => Promise<T>): Promise<T> => {
+      for (let tries = 0; ; tries += 1) {
+        try {
+          return await call();
+        } catch (error) {
+          if (tries >= 60 || !/retry after session storage is ready/.test(String(error)))
+            throw error;
+          await new Promise((resolve) => setTimeout(resolve, 1000));
+        }
+      }
+    };
+    const turn = async (message: string) => {
+      const replies = async () =>
+        (
+          await whenReady(() =>
+            admin.request<{ messages: Array<{ role: string }> }>("chat.history", {
+              sessionKey: key,
+              limit: 50,
+            }),
+          )
+        ).messages.filter((row) => row.role === "assistant").length;
+      const before = await replies();
+      await whenReady(() =>
+        admin.request("chat.send", {
+          sessionKey: key,
+          message,
+          idempotencyKey: `gwused-${STAMP}-${before}`,
+        }),
+      );
+      await expect.poll(replies, { timeout: 120_000 }).toBeGreaterThan(before);
+    };
+
+    // Before its first turn: every starting file missing, so untouched, and out of view.
+    expect(await files()).toEqual([]);
+    const page = await pairedPage(browser, USED);
+    await expect(rail(page).getByTestId("bot").first()).toBeVisible();
+    await expect(botRow(page, own.name)).toHaveCount(0);
+
+    // One message: OpenClaw writes its starting files, BOOTSTRAP.md among them. Still untouched.
+    await turn("Hello there");
+    expect(await files()).toContain("BOOTSTRAP.md");
+    await rereadBots(page);
+    await expect(rail(page).getByTestId("bot").first()).toBeVisible();
+    await expect(botRow(page, own.name)).toHaveCount(0);
+
+    // Its own files changed, and one more turn: OpenClaw deletes BOOTSTRAP.md. The person's now.
+    const user = await admin.request<{ file: { hash: string } }>("agents.files.get", {
+      agentId: defaultId,
+      name: "USER.md",
+    });
+    await admin.request("agents.files.set", {
+      agentId: defaultId,
+      name: "USER.md",
+      content: "# USER.md\n\n- Name: Sam\n- Likes short answers.\n",
+      expectedHash: user.file.hash,
+    });
+    await turn("Thanks");
+    await expect.poll(files, { timeout: 60_000 }).not.toContain("BOOTSTRAP.md");
+    await rereadBots(page);
+    await expect(botRow(page, own.name)).toBeVisible({ timeout: 30_000 });
+    // The star is the default bot's until the Main Bot takes it (F-015).
+    await expect(botRow(page, own.name).getByTestId("primary-star")).toHaveCount(1);
+  } finally {
+    await admin.close();
+    // Stopped the moment its check ends, not at the end of the file.
+    const at = record.instances.findIndex((each) => each.name === USED);
+    if (at !== -1) {
+      cli("reset", "--run-id", record.instances[at]!.runId, "--instance", USED);
+      record.instances.splice(at, 1);
+      saveRecord(RECORDS, record);
+    }
   }
 });

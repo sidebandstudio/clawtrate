@@ -263,6 +263,7 @@ describe("the iPhone app's screens", () => {
     const ownTask = task("agent:main:main", NOW - 60_000);
     const s = state({
       bots: [own, juniper],
+      untouchedGatewayBot: "main",
       tasksByBot: {
         main: [ownTask],
         "clawtrate-main-bot": [task("agent:clawtrate-main-bot:a", NOW - 120_000)],

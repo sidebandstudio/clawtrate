@@ -334,6 +334,8 @@ import {
   type GatewayNames,
 } from "./gateway-names.ts";
 import { openClawAtLeast } from "./gateway-version.ts";
+import { GatewayBotFiles } from "./gateway-bot-files.ts";
+import { markUsed } from "./used-marker.ts";
 import {
   APPROVAL_ATTEMPTS,
   APPROVAL_OUTCOME,
@@ -407,7 +409,7 @@ import {
   quietInHistory,
 } from "./quiet-end.ts";
 import { mentionRows, slashRows, type MenuRow } from "./composer-menus.ts";
-import { listedBots } from "./gateway-bot.ts";
+import { hasOwnName, listedBots } from "./gateway-bot.ts";
 import {
   CONTROL_EVENT,
   ComputerViews,
@@ -829,6 +831,8 @@ export type ClientOptions = {
   creationCheckMs?: number;
   /** First wait before a read answered as passing is asked again; `READ_AGAIN_MS` unless a test shortens it. */
   readAgainMs?: number;
+  /** How long a read of the gateway's own bot's files is waited for (`FILES_READ_TIMEOUT_MS`). */
+  filesReadTimeoutMs?: number;
   /**
    * Counts the host sets for its device. Each defaults to the bound the
    * retention arithmetic assumes and may only be lower: `trackedTasks`, the
@@ -2188,6 +2192,18 @@ export class ClawtrateClient {
    */
   /** Whether the latest hello's `features.methods` lists the voice plugin's read, or null when it listed none. */
   private voiceAdvertised: boolean | null = null;
+  /** Whether the gateway's own bot is untouched, read after every bot list (F-562). */
+  private readonly gatewayBotFiles = new GatewayBotFiles({
+    request: (method, params) => this.request(method, params),
+    generation: () => this.generation,
+    serverVersion: () => this.state.connection.serverVersion,
+    gatewayId: () => this.state.connection.gatewayId ?? null,
+    publish: (untouched) => {
+      if ((this.state.untouchedGatewayBot ?? null) === untouched) return;
+      this.store.update((state) => ({ ...state, untouchedGatewayBot: untouched }));
+    },
+    timeoutMs: () => this.options.filesReadTimeoutMs,
+  });
   private readonly computer: ComputerViews = new ComputerViews({
     request: (method, params) => this.request(method, params),
     openStream: (url) => {
@@ -7908,13 +7924,42 @@ export class ClawtrateClient {
   }
 
   /**
+   * Mark, in the person's own preferences, that they have used Clawtrate with this gateway
+   * (`used-marker.ts`). Only where this connection may write; a failure changes nothing.
+   */
+  private async markUsedHere(generation: number): Promise<void> {
+    try {
+      await markUsed(
+        {
+          request: (method, params) => this.request(method, params),
+          canWrite: () =>
+            generation === this.generation &&
+            this.state.connection.status === "connected" &&
+            this.state.connection.canWrite &&
+            !this.options.readOnly,
+        },
+        this.host.client.version,
+      );
+    } catch (error) {
+      if (generation === this.generation) this.logFailure("warn", "users.prefs.set", error);
+    }
+  }
+
+  /**
    * Publish the bot list. A whole roster also says which bots this connection no longer sees,
    * shown or not: their cached task rows go. Their unsent messages stay, since the gateway can
    * hide a bot it still has; only its answer to a delete cancels them (`dropQueuedFor`).
    */
   private applyBots(result: unknown): void {
     const shownBefore = this.state.bots;
-    this.store.update((state) => ({ ...state, bots: mapAgents(result) }));
+    const bots = mapAgents(result);
+    // Whether the gateway's own bot is untouched matters only while it could be left out: it is
+    // the gateway's own, another bot exists and it has no name of its own (`gateway-bot.ts`).
+    // Checked before the list is published, so a bot whose files are still being read is never
+    // drawn for a moment before it leaves.
+    const own = bots.find((bot) => bot.isDefault && bot.ownerless !== true);
+    this.gatewayBotFiles.check(own && bots.length > 1 && !hasOwnName(own) ? own.id : null);
+    this.store.update((state) => ({ ...state, bots }));
     this.botNames.onBots(this.state.bots);
     // Every id the gateway lists, system agents and bots past the display cap included.
     const listed = rosterIds(result);
@@ -10038,6 +10083,7 @@ export class ClawtrateClient {
   private forgetGatewayState(): void {
     this.accounts.reset();
     this.botNames.reset();
+    this.gatewayBotFiles.reset();
     this.openclawUpdates.reset();
     this.deviceApprovals.reset();
     if (this.state.checkIns) this.store.update(({ checkIns: _, ...state }) => state);
@@ -10415,6 +10461,7 @@ export class ClawtrateClient {
       : null;
     this.voiceAdvertised = listed === null ? null : listed.includes(VOICE_GET);
     this.computer.hello(listed ?? []);
+    this.gatewayBotFiles.hello(listed);
     if (!this.isSetup(this.settings?.url)) this.deviceApprovals.onHello();
     const reason =
       this.pendingResync ?? (wasConnected && !this.quietReconnect ? "reconnect" : null);
@@ -10425,6 +10472,7 @@ export class ClawtrateClient {
       .then(() => {
         if (generation !== this.generation || epoch !== this.epoch) return;
         this.accounts.onHello();
+        if (!this.isSetup(this.settings?.url)) void this.markUsedHere(generation);
         // Every connect reads the list again: runs that started or ended while away are in it.
         if (this.state.connection.status === "connected") void this.routines.load();
         this.usage.onHello();

@@ -1,6 +1,13 @@
 import type { Bot, Task } from "@clawtrate/core";
 import { describe, expect, it } from "vitest";
-import { botLabel, linkTarget, summarize, taskState, visibleTasks } from "../src/selection.ts";
+import {
+  botLabel,
+  keptWhenOpened,
+  linkTarget,
+  summarize,
+  taskState,
+  visibleTasks,
+} from "../src/selection.ts";
 
 const bot: Bot = {
   id: "otto",
@@ -154,5 +161,16 @@ describe("F-563: a link to a task", () => {
     expect(linkTarget(listed, "otto", "agent:otto:dashboard:a", null)).toBeNull();
     const given = task(hidden, 5, { title: "From the routine" });
     expect(linkTarget(listed, "otto", hidden, given)).toBe(given);
+  });
+});
+
+describe("F-562: a gateway's own bot the person opens", () => {
+  it("F-562: stays open whatever its files or the switch say later; an ordinary bot, and a selectionRequired gateway's first, have nothing to keep", () => {
+    // Opened while shown (its files read still out, or read as used): a later verdict of
+    // untouched must not close it.
+    expect(keptWhenOpened({ ...bot, id: "main", isDefault: true })).toBe(true);
+    expect(keptWhenOpened({ ...bot, id: "pip" })).toBe(false);
+    expect(keptWhenOpened({ ...bot, id: "main", isDefault: true, ownerless: true })).toBe(false);
+    expect(keptWhenOpened(undefined)).toBe(false);
   });
 });

@@ -79,6 +79,21 @@ class FakeSocket implements WebSocketLike {
       setTimeout(() => this.reply(id, reply), 0);
       return;
     }
+    // The `clawtrate.used` marker's own read (`used-marker.ts`), answered as already marked unless a
+    // test asks to see it: every connection reads it, and a write would land among the writes and
+    // held answers other tests count.
+    const keys = (frame.params as { keys?: unknown } | undefined)?.keys;
+    if (
+      this.gateway.answersUsedMarker &&
+      method === "users.prefs.get" &&
+      Array.isArray(keys) &&
+      keys.length === 1 &&
+      keys[0] === "clawtrate.used"
+    ) {
+      const payload = { status: "ok", entries: { "clawtrate.used": { version: "0.0.0" } } };
+      setTimeout(() => this.reply(id, { ok: true, payload }), 0);
+      return;
+    }
     this.gateway.requests.push({ method, params: frame.params, id });
     const handler = this.gateway.handlers[method];
     void Promise.resolve()
@@ -115,6 +130,8 @@ export class FakeGateway {
   readonly requests: Array<{ method: string; params: unknown; id?: string }> = [];
   readonly sockets: FakeSocket[] = [];
   refuseConnections = false;
+  /** Answer the `clawtrate.used` marker's read as already marked, without recording it. */
+  answersUsedMarker = true;
   handlers: Record<string, Handler> = {
     "agents.list": () => ({
       defaultId: "main",

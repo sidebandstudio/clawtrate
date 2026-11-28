@@ -223,6 +223,17 @@ export function unreadSeenOf(
  * them; a read-only connection, whose reads the gateway never hears, keeps its
  * own memory of what it read.
  */
+/**
+ * Whether opening `bot` keeps it open, and in the sidebar, while F-562 would leave it out, until
+ * another bot is opened: the gateway's own bot (one that isn't `selectionRequired`'s first), shown
+ * or not when it is opened. A verdict on its files that arrives after it was opened, or the switch
+ * turned off, never closes it (`docs/decisions.md`, "Nothing dangles"). A bot that came on screen
+ * by itself is never opened by the person, so it isn't kept.
+ */
+export function keptWhenOpened(bot: Bot | undefined): boolean {
+  return bot !== undefined && bot.isDefault && bot.ownerless !== true;
+}
+
 export function useSelection(
   state: ClawtrateState,
   gatewayOwnsUnread = false,
@@ -240,8 +251,14 @@ export function useSelection(
   const showGatewayBot = state.showGatewayBot === true;
   /** The bots the rule lists: the gateway's own bot only when shown or waiting (F-562). */
   const byRule = useMemo(
-    () => listedBots({ bots: state.bots, tasksByBot: state.tasksByBot, showGatewayBot }),
-    [state.bots, state.tasksByBot, showGatewayBot],
+    () =>
+      listedBots({
+        bots: state.bots,
+        tasksByBot: state.tasksByBot,
+        showGatewayBot,
+        untouchedGatewayBot: state.untouchedGatewayBot,
+      }),
+    [state.bots, state.tasksByBot, showGatewayBot, state.untouchedGatewayBot],
   );
   // The gateway's own bot, while out of view by the rule, is open only when the person opened it:
   // from a link or a search result, or from the rail while it waited. A bot starting to wait never
@@ -266,7 +283,8 @@ export function useSelection(
   );
   const keptHere = here(keptOpen);
   const onScreenHere = here(onScreen);
-  const shownByRule = (each: Bot) => !gatewayBotHidden(each, state.bots, showGatewayBot);
+  const shownByRule = (each: Bot) =>
+    !gatewayBotHidden(each, state.bots, showGatewayBot, state.untouchedGatewayBot);
   const chosen = state.bots.find((b) => b.id === botId);
   // On screen and still listed because it waits, though the rule now leaves it out (the switch
   // was turned off): the person's choice, kept.
@@ -281,7 +299,15 @@ export function useSelection(
   const listed =
     kept === null
       ? byRule
-      : listedBots({ bots: state.bots, tasksByBot: state.tasksByBot, showGatewayBot }, kept);
+      : listedBots(
+          {
+            bots: state.bots,
+            tasksByBot: state.tasksByBot,
+            showGatewayBot,
+            untouchedGatewayBot: state.untouchedGatewayBot,
+          },
+          kept,
+        );
   const bot =
     chosen && (kept === chosen.id || (shownByRule(chosen) && listed.includes(chosen)))
       ? chosen
@@ -296,15 +322,13 @@ export function useSelection(
   const keepIfLeftOut = useCallback(
     (id: string) => {
       const opened = state.bots.find((each) => each.id === id);
-      // Another task of the bot kept open keeps it, whatever the switch says now; only opening
-      // another bot lets it go.
+      // Another task of the bot kept open keeps it, whatever the switch or its files say now;
+      // only opening another bot lets it go.
       setKeptOpen((kept) =>
-        here(kept) === id || (opened && gatewayBotHidden(opened, state.bots, showGatewayBot))
-          ? { id, gatewayId, target }
-          : null,
+        here(kept) === id || keptWhenOpened(opened) ? { id, gatewayId, target } : null,
       );
     },
-    [state.bots, showGatewayBot, gatewayId, target, here],
+    [state.bots, gatewayId, target, here],
   );
   const { openclawUpdating, tasksByBot, transcripts, bots, connection } = state;
   const unreadSeen = useMemo(

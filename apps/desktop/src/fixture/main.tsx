@@ -125,6 +125,7 @@ const bridge = createFixtureBridge(isScene(sceneName) ? sceneName : "main", {
   deviceRead: params.get("deviceread"),
   gatewayName: params.get("gatewayName"),
   showGatewayBot: params.get("gatewaybot") === "on",
+  ownBotUsed: params.get("gatewaybot") === "used",
 });
 if (params.has("hold")) bridge.hold();
 // "Show sessions from other tools" on, for checks of what it lists (F-563, F-193).

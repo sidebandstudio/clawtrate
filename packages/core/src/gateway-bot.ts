@@ -5,20 +5,49 @@
 // a bot lands on it: channel messages, other tools' calls, scheduled runs. So while another bot
 // exists it stays out of the lists a person picks a bot from, unless "Show the gateway's own bot"
 // is on (F-562). Only what the app shows changes; on the gateway it keeps running.
+//
+// Only while it is untouched (`docs/design/main-bot-onboarding.md` section 15.2): on a gateway a
+// person brought, the gateway's own bot is often the one they have talked to for months. It is
+// left out only when the last read of its files said untouched (`gateway-bot-files.ts`,
+// `untouchedGatewayBot`) and it has no name of its own. Every doubt shows it.
 
 import type { Bot, ClawtrateState, Task } from "./types.ts";
 
 /** What decides which bots and tasks the person sees. */
 export type ListedFrom = Pick<ClawtrateState, "bots" | "tasksByBot"> & {
   showGatewayBot?: boolean | undefined;
+  /**
+   * The gateway's own bot's id when the last read of its files said untouched; absent or null
+   * when it didn't, or wasn't read: the bot is then shown.
+   */
+  untouchedGatewayBot?: string | null | undefined;
 };
+
+/** Whether the bot has a name of its own: one that isn't its id, whatever the case. */
+export function hasOwnName(bot: Bot): boolean {
+  return bot.name.trim().toLowerCase() !== bot.id.trim().toLowerCase();
+}
 
 /**
  * Whether `bot` is out of view by the rule alone, waiting aside: it is the gateway's own, another
- * bot exists, and "Show the gateway's own bot" is off.
+ * bot exists, "Show the gateway's own bot" is off, and it is untouched: its files said so
+ * (`untouched` is its id) and it has no name of its own.
  */
-export function gatewayBotHidden(bot: Bot, bots: readonly Bot[], show: boolean): boolean {
-  return !show && bot.isDefault && bot.ownerless !== true && bots.length > 1;
+export function gatewayBotHidden(
+  bot: Bot,
+  bots: readonly Bot[],
+  show: boolean,
+  untouched: string | null | undefined,
+): boolean {
+  return (
+    !show &&
+    bot.isDefault &&
+    bot.ownerless !== true &&
+    bots.length > 1 &&
+    typeof untouched === "string" &&
+    untouched === bot.id &&
+    !hasOwnName(bot)
+  );
 }
 
 /**
@@ -28,7 +57,7 @@ export function gatewayBotHidden(bot: Bot, bots: readonly Bot[], show: boolean):
 function leftOut(bot: Bot, state: ListedFrom, kept: string | null): boolean {
   return (
     bot.id !== kept &&
-    gatewayBotHidden(bot, state.bots, state.showGatewayBot === true) &&
+    gatewayBotHidden(bot, state.bots, state.showGatewayBot === true, state.untouchedGatewayBot) &&
     // Own keys only: a bot id such as "constructor" names no inherited value.
     !(Object.hasOwn(state.tasksByBot, bot.id) ? state.tasksByBot[bot.id]! : []).some(
       (task) => task.status === "waiting",
