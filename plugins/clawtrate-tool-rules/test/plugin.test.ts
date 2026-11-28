@@ -5,9 +5,10 @@
 import { createHash } from "node:crypto";
 import type * as fs from "node:fs";
 import { chmodSync, mkdirSync, readFileSync, rmSync, truncateSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import plugin, {
+  resolveUserPath,
   codexAtPath,
   codexInFolder,
   globalPluginFolders,
@@ -1617,9 +1618,10 @@ describe("where the Codex harness may answer a card (#606)", () => {
     for (const path of [relay, shelf, join(relay, "index.js")]) refuses(at(path));
     // Another plugin, or a path that is not there, holds none.
     for (const path of [other, join(h.stateDir, "srv", "gone")]) asksFor(at(path));
-    // A relative path resolves where the plugin cannot be sure, and an unreadable one may hold it.
-    refuses(at("plugins/relay"));
-    expect(codexAtPath("plugins/relay")).toBe(true);
+    // A relative path resolves against the working folder, as the gateway's does; an
+    // unreadable path may hold it.
+    expect(resolveUserPath("srv/relay", {})).toBe(resolve("srv/relay"));
+    expect(codexAtPath(relative(process.cwd(), relay))).toBe(true);
     if (process.getuid?.() !== 0) {
       const locked = join(h.stateDir, "srv", "locked");
       mkdirSync(locked, { mode: 0o000 });
@@ -1629,6 +1631,38 @@ describe("where the Codex harness may answer a card (#606)", () => {
     // An allow list that leaves it out still keeps it from loading.
     config.plugins = { load: { paths: [relay] }, allow: ["clawtrate-tool-rules"] };
     asksFor(open({ stateDir: h.stateDir, config }));
+  });
+
+  it("reads a home-relative load path against the gateway's own home (OPENCLAW_HOME), as both versions do", async () => {
+    const config: Record<string, unknown> = {};
+    const h = host({ config });
+    await h.save("main", rules);
+    const gatewayHome = join(h.stateDir, "gateway-home");
+    const osHome = join(h.stateDir, "os-home");
+    mkdirSync(join(gatewayHome, "relay"), { recursive: true });
+    mkdirSync(join(osHome, "relay"), { recursive: true });
+    writeFileSync(
+      join(gatewayHome, "relay", "openclaw.plugin.json"),
+      JSON.stringify({ id: "codex" }),
+    );
+    writeFileSync(join(osHome, "relay", "openclaw.plugin.json"), JSON.stringify({ id: "notes" }));
+    // The harness sits only under the gateway's home.
+    expect(codexAtPath("~/relay", { OPENCLAW_HOME: gatewayHome, HOME: osHome })).toBe(true);
+    expect(codexAtPath("~/relay", { HOME: osHome })).toBe(false);
+    // OPENCLAW_HOME's own ~ is read against the OS home.
+    expect(resolveUserPath("~/relay", { OPENCLAW_HOME: "~/gateway-home", HOME: h.stateDir })).toBe(
+      join(gatewayHome, "relay"),
+    );
+    expect(gatewayHome).toBe(resolveUserPath("~", { OPENCLAW_HOME: gatewayHome, HOME: osHome }));
+    // The gateway's process environment decides, as the plugin runs in that process.
+    vi.stubEnv("OPENCLAW_HOME", gatewayHome);
+    vi.stubEnv("HOME", osHome);
+    try {
+      config.plugins = { load: { paths: ["~/relay"] } };
+      refuses(open({ stateDir: h.stateDir, config }));
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 
   it("looks for a global plugin folder where both versions resolve it", () => {

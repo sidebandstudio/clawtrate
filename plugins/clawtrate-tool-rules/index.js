@@ -32,7 +32,7 @@
 import { createHash, randomBytes } from "node:crypto";
 import { readdirSync, readFileSync, realpathSync } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, isAbsolute, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { evaluate } from "./lib/evaluate.js";
 import { configuredAgents, explicitlyDenied, exposureWarnings } from "./lib/exposure.js";
 import {
@@ -416,20 +416,77 @@ export function codexHarnessMayRun(config, onDisk = false, atPath = codexInName)
   );
 }
 
+/** A home value as the gateway reads one (`normalizeHomeDirValue`). */
+const homeValue = (value) => {
+  const trimmed = typeof value === "string" ? value.trim() : "";
+  return trimmed && trimmed !== "undefined" && trimmed !== "null" ? trimmed : undefined;
+};
+
+/** The OS home as the gateway reads it (`resolveRawOsHomeDir`). */
+function rawOsHome(env) {
+  const prefix = homeValue(env.PREFIX);
+  const termux =
+    prefix &&
+    homeValue(env.ANDROID_DATA) &&
+    /(?:^|\/)com\.termux\/files\/usr\/?$/u.test(prefix.replace(/\\/gu, "/"))
+      ? resolve(prefix, "..", "home")
+      : undefined;
+  let os;
+  try {
+    os = homeValue(homedir());
+  } catch {
+    os = undefined;
+  }
+  return homeValue(env.HOME) ?? homeValue(env.USERPROFILE) ?? termux ?? os;
+}
+
+/**
+ * The home a path's `~` stands for, as OpenClaw 2026.10.6 and 2026.11.10
+ * resolve it (`resolveEffectiveHomeDir`, then `resolveRequiredHomeDir`):
+ * `OPENCLAW_HOME`, its own `~` read against the OS home, else the OS home,
+ * else the working folder.
+ */
+export function gatewayHome(env = process.env) {
+  const explicit = homeValue(env.OPENCLAW_HOME);
+  if (explicit) {
+    if (explicit === "~" || explicit.startsWith("~/") || explicit.startsWith("~\\")) {
+      const os = rawOsHome(env);
+      if (os) return resolve(explicit.replace(/^~(?=$|[\\/])/, () => os));
+    } else {
+      return resolve(explicit);
+    }
+  }
+  const os = explicit ? undefined : rawOsHome(env);
+  return resolve(os ?? process.cwd());
+}
+
+/** A configured path as the gateway resolves it (`resolveUserPath`): `~` against its home, then absolute. */
+export function resolveUserPath(input, env = process.env) {
+  const trimmed = input.trim();
+  const expanded = trimmed.startsWith("~")
+    ? trimmed.replace(/^~(?=$|[\\/])/, () => gatewayHome(env))
+    : trimmed;
+  return resolve(expanded);
+}
+
 /** Whether a load path names Codex in its own words. */
 const codexInName = (path) => /codex/i.test(path);
 
 /**
  * Whether a configured load path holds the Codex plugin: it names Codex; its
  * manifest (beside the path, or in its folder) has the id `codex`; or, a
- * folder of plugins, one of them does. A path the plugin cannot resolve as
- * the gateway does (relative), or cannot read, may hold it.
+ * folder of plugins, one of them does. The path is resolved as the gateway
+ * resolves it (`resolveUserPath`); one the plugin cannot read may hold it.
  */
-export function codexAtPath(path) {
+export function codexAtPath(path, env = process.env) {
   if (typeof path !== "string" || path.trim().length === 0) return false;
   if (codexInName(path)) return true;
-  const where = path.startsWith("~") ? join(homedir(), path.slice(1)) : path;
-  if (!isAbsolute(where)) return true;
+  let where;
+  try {
+    where = resolveUserPath(path, env);
+  } catch {
+    return true;
+  }
   for (const manifest of [
     join(where, "openclaw.plugin.json"),
     join(dirname(where), "openclaw.plugin.json"),
@@ -480,7 +537,11 @@ export function codexInFolder(folder) {
 export function globalPluginFolders(stateDir, env = process.env) {
   const override = text(env.OPENCLAW_STATE_DIR?.trim());
   const configPath = text(env.OPENCLAW_CONFIG_PATH?.trim());
-  const configDir = override ?? (configPath ? dirname(configPath) : null);
+  const configDir = override
+    ? resolveUserPath(override, env)
+    : configPath
+      ? dirname(resolveUserPath(configPath, env))
+      : null;
   return [
     ...new Set([stateDir, ...(configDir ? [configDir] : [])].map((dir) => join(dir, "extensions"))),
   ];
