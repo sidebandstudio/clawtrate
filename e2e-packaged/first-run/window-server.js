@@ -5,17 +5,21 @@ ObjC.import("CoreGraphics");
 
 // eslint-disable-next-line @typescript-eslint/no-unused-vars -- osascript calls run.
 function run() {
-  // kCGWindowListOptionOnScreenOnly, with kCGNullWindowID.
-  const raw = ObjC.deepUnwrap($.CGWindowListCopyWindowInfo(1, 0));
-  if (!Array.isArray(raw)) throw new Error("macOS returned no on-screen window list.");
-  return JSON.stringify(
-    raw.map((window) => ({
-      id: window.kCGWindowNumber,
-      pid: window.kCGWindowOwnerPID,
-      owner: window.kCGWindowOwnerName ?? null,
-      title: window.kCGWindowName ?? null,
-      layer: window.kCGWindowLayer,
-      bounds: window.kCGWindowBounds,
-    })),
-  );
+  const list = $.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly, $.kCGNullWindowID);
+  const windows = [];
+  // Core Graphics returns CF references. Cast before reading each NSDictionary.
+  const count = $.CFArrayGetCount(list);
+  for (let index = 0; index < count; index += 1) {
+    const window = ObjC.castRefToObject($.CFArrayGetValueAtIndex(list, index));
+    const value = (key) => ObjC.unwrap(window.objectForKey($(key))) ?? null;
+    windows.push({
+      id: value("kCGWindowNumber"),
+      pid: value("kCGWindowOwnerPID"),
+      owner: value("kCGWindowOwnerName"),
+      title: value("kCGWindowName"),
+      layer: value("kCGWindowLayer"),
+      bounds: ObjC.deepUnwrap(window.objectForKey($("kCGWindowBounds"))),
+    });
+  }
+  return JSON.stringify(windows);
 }
