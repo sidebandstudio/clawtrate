@@ -10,6 +10,8 @@
 //   &usage=ages                                               Pip's figure is an hour older; the routine's budget is in Tokyo
 //   &usage=routinesfail                                       the first read of the routines fails
 //   &budget=none|warn|reached|daily|invalid                   Otto's budget
+//   &budget=elsewhere                                         Otto's budget was saved in another time zone
+//   &budget=recountfailed                                     Otto's budget's recount failed; its earlier count is kept
 //   &plimit=near|reached                                      a provider's reported limit
 //   &uview=usage                                              open Otto's Usage page
 
@@ -42,7 +44,7 @@ export type UsageParams = {
     | "ages"
     | "routinesfail"
     | null;
-  budget: "none" | "warn" | "reached" | "daily" | "invalid" | null;
+  budget: "none" | "warn" | "reached" | "daily" | "invalid" | "elsewhere" | "recountfailed" | null;
   plimit: "near" | "reached" | null;
 };
 
@@ -68,7 +70,15 @@ export function usageParams(params: URLSearchParams): UsageParams {
       "ages",
       "routinesfail",
     ]),
-    budget: pick("budget", ["none", "warn", "reached", "daily", "invalid"]),
+    budget: pick("budget", [
+      "none",
+      "warn",
+      "reached",
+      "daily",
+      "invalid",
+      "elsewhere",
+      "recountfailed",
+    ]),
     plimit: pick("plimit", ["near", "reached"]),
   };
 }
@@ -157,7 +167,12 @@ export function fixtureUsage(now: number, params: UsageParams): UsageState {
       routineName: null,
       period: params.budget === "daily" ? "daily" : "weekly",
       tokens: LIMITS[params.budget ?? ""] ?? 2_500_000,
-      timeZone,
+      timeZone:
+        params.budget === "elsewhere"
+          ? timeZone === "Asia/Tokyo"
+            ? "America/New_York"
+            : "Asia/Tokyo"
+          : timeZone,
       setAt: now - 86_400_000,
     });
   budgets.push({
@@ -191,7 +206,10 @@ export function fixtureUsage(now: number, params: UsageParams): UsageState {
           asOf: at,
           counting: params.usage === "computing",
           partial: false,
-          error: null,
+          error:
+            !budget.routineId && params.budget === "recountfailed"
+              ? "usage.cost timed out after 60 seconds."
+              : null,
         },
   );
   const windows = params.plimit

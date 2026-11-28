@@ -1,8 +1,9 @@
 // A task a bot starts when the gateway's model allowlist doesn't allow the bot's own model (#799),
 // against this run's accounts instance (tools/dev-gateway/README.md), on whichever OpenClaw it
 // runs. The bot has a list of its own (`agents.entries.<bot>.modelPolicy.allow`), so no other bot
-// of the instance is touched. The interface runs on a preview host of its own and is driven as a
-// person drives it; nothing here reaches a real provider.
+// of the instance is touched. Then (#799 B) a model chosen in the bot's settings goes on that list
+// with its line and Undo, and "Allow <model>" on a refused start's card. The interface runs on a
+// preview host of its own and is driven as a person drives it; nothing here reaches a real provider.
 import { expect, type Locator, type Page } from "@playwright/test";
 import type { ChildProcess } from "node:child_process";
 import { mkdtempSync, rmSync } from "node:fs";
@@ -236,5 +237,114 @@ test("#799: on OpenClaw 2026.11.10 a task made with sessions_create is the same 
   await expect(open).toBeVisible({ timeout: 30_000 });
   await open.click();
   await expect(page.locator(".task-line")).toHaveText(CREATE_TASK.label, { timeout: 20_000 });
+  await allow(["acme/dev-2"]);
+});
+
+/** The bot's settings, in the Work pane's Settings tab. */
+async function botSettings(): Promise<Locator> {
+  await botRow().click();
+  await connected();
+  if (!(await page.getByTestId("work-panel").isVisible()))
+    await page.keyboard.press("ControlOrMeta+\\");
+  await page.getByRole("tab", { name: "Settings" }).click();
+  const settings = page.getByTestId("bot-settings");
+  await expect(settings).toBeVisible();
+  return settings;
+}
+
+/** The bot's model, chosen in its Model menu. */
+async function chooseModel(settings: Locator, model: string): Promise<void> {
+  await settings.getByTestId("model-select").click();
+  await page
+    .getByRole("menu", { name: "Model" })
+    .getByRole("menuitemradio", { name: new RegExp(`^${model}\\b`) })
+    .click();
+}
+
+/** The bot's own list as the gateway has it. */
+async function ownList(): Promise<unknown> {
+  const read = await admin.request<{ config?: Json }>("config.get", {});
+  const entries = ((read.config?.agents as Json | undefined)?.entries ?? {}) as Json;
+  return ((entries[BOT] as Json | undefined)?.modelPolicy as Json | undefined)?.allow;
+}
+
+/**
+ * The task a start made, deleted, so its label can be used again. Once its first run has ended:
+ * OpenClaw 2026.10.6 refuses to delete a session whose entry changes meanwhile ("Session … changed
+ * before deletion. Retry.", `sessions-delete-*.mjs`), as a running first turn's does; the refusal
+ * asks for a retry, so it gets a few.
+ */
+async function deleteStarted(label: string): Promise<void> {
+  type Row = Json & { key: string; status?: string };
+  const rows = async () =>
+    (
+      await admin.request<{ sessions: Row[] }>("sessions.list", { agentId: BOT, limit: 100 })
+    ).sessions.filter((each) => each.label === label);
+  await expect
+    .poll(async () => (await rows()).some((row) => row.status === "running"), { timeout: 60_000 })
+    .toBe(false);
+  for (const row of await rows()) {
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        await admin.request("sessions.delete", { key: row.key, deleteTranscript: true });
+        break;
+      } catch (error) {
+        if (attempt === 5 || !/changed before deletion/.test(String(error))) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+      }
+    }
+  }
+}
+
+test("F-042 #799 B: a model chosen for the bot goes on its list and its tasks start; Undo, refused again; Allow on the card, started", async () => {
+  test.setTimeout(480_000);
+  await deleteStarted(HAND_OFF.label);
+  // Setting a bot's model, and the one press, take admin access.
+  await hostCommand({ type: "requestAccess", tier: "admin" });
+  await approve();
+  // The bot on dev-2, which its list names: nothing to say.
+  await allow(["acme/dev-2"]);
+  const settings = await botSettings();
+  await expect(settings.getByTestId("model-select")).toBeEnabled({ timeout: 30_000 });
+  await chooseModel(settings, "dev-2");
+  await expect(settings.getByTestId("model-refused")).toHaveCount(0, { timeout: 30_000 });
+  await expect(settings.getByTestId("model-allowed")).toHaveCount(0);
+  expect(await ownList()).toEqual(["acme/dev-2"]);
+
+  // dev-1, which it doesn't: the same write puts it on the list, and the line says so.
+  await chooseModel(settings, "dev-1");
+  const line = settings.getByTestId("model-allowed");
+  await expect(line).toHaveText("Added Acme's dev-1 to the models Linnet may use. · Undo", {
+    timeout: 30_000,
+  });
+  expect(await ownList()).toEqual(["acme/dev-2", "acme/dev-1"]);
+  const composer = await newTask();
+  const started = await startCard(composer, "#hand-off", HAND_OFF.label);
+  await expect(started).toContainText("Started a task");
+  await deleteStarted(HAND_OFF.label);
+
+  // Undo: that entry alone goes, and the start is refused again with the card's plain words.
+  const again = await botSettings();
+  await again.getByRole("button", { name: /^Undo: take Acme's dev-1 out/ }).click();
+  await expect(again.getByTestId("model-refused")).toContainText(
+    "Linnet can't start tasks on Acme's dev-1: this gateway's model list doesn't include it.",
+    { timeout: 30_000 },
+  );
+  expect(await ownList()).toEqual(["acme/dev-2"]);
+  const refused = await startCard(await newTask(), "#hand-off", HAND_OFF.label);
+  await expectRefused(refused);
+
+  // The press on the card: the same entry and the same line; the start then starts.
+  await refused.getByRole("button", { name: "Allow Acme's dev-1 for Linnet's tasks" }).click();
+  await expect(refused.getByTestId("model-allowed")).toHaveText(
+    "Added Acme's dev-1 to the models Linnet may use. · Undo",
+    { timeout: 30_000 },
+  );
+  expect(await ownList()).toEqual(["acme/dev-2", "acme/dev-1"]);
+  const composer2 = page.getByTestId("composer-input");
+  await expect(await startCard(composer2, "#hand-off", HAND_OFF.label)).toContainText(
+    "Started a task",
+  );
+  await deleteStarted(HAND_OFF.label);
   await allow(["acme/dev-2"]);
 });

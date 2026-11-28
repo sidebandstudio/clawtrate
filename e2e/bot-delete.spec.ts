@@ -6,11 +6,14 @@
 // What is on disk and what the gateway lists is read from the gateway's side.
 import { expect, test, type Browser, type Page } from "@playwright/test";
 import type { ChildProcess } from "node:child_process";
+import { createHash } from "node:crypto";
 import { existsSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openInstance, openOperator } from "../tools/dev-gateway/src/cli.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
+import type { BridgeServerMessage } from "../packages/core/src/bridge.ts";
+import { findSection } from "../packages/core/src/guides.ts";
 import { devGateway, startHost, stopChild } from "./global-setup.ts";
 
 const INSTANCE = process.env.CLAWTRATE_DEV_INSTANCE!;
@@ -39,7 +42,12 @@ const admin = {
     try {
       return await session.request<T>(method, params);
     } catch (error) {
-      if (!/not connected/.test(String(error))) throw error;
+      if (
+        !(error instanceof Error) ||
+        Object.getPrototypeOf(error) !== Error.prototype ||
+        error.message !== "not connected"
+      )
+        throw error;
       await session.close().catch(() => {});
       session = await openAdmin();
       return session.request<T>(method, params);
@@ -72,22 +80,55 @@ async function ownBot(name: string, folder: string): Promise<string> {
     model: "scripted/dev-1",
   });
   made.add(created.agentId);
-  await expect.poll(() => listsBot(created.agentId), { timeout: 60_000 }).toBe(true);
+  await expect
+    .poll(() => listsBot(created.agentId), {
+      timeout: 60_000,
+      message: `the gateway lists new bot ${name}`,
+    })
+    .toBe(true);
   return created.agentId;
 }
 
-/** Write a bot's AGENTS.md through the gateway, so its workspace folder holds a file of ours. */
-async function writeAgents(botId: string, content: string): Promise<void> {
-  const { file } = await admin.request<{ file: { hash?: string; missing?: boolean } }>(
-    "agents.files.get",
-    { agentId: botId, name: "AGENTS.md" },
-  );
+/** Wait for the page to list every bot on the folder, then write below its guide. */
+async function writeAgents(botId: string, names: string[], instructions: string): Promise<string> {
+  await waitForBots(names);
+  let snapshot: { content: string; hash: string } | undefined;
+  await expect
+    .poll(
+      async () => {
+        const { file } = await admin
+          .request<{ file: { content?: string; hash?: string; missing?: boolean } }>(
+            "agents.files.get",
+            { agentId: botId, name: "AGENTS.md" },
+          )
+          .catch((error: unknown) => {
+            // A read overlapping the guide write can hit the gateway's safe file check.
+            if (error instanceof Error && error.message === 'unsafe workspace file "AGENTS.md"')
+              return { file: null };
+            throw error;
+          });
+        if (file === null) return false;
+        const { content, hash } = file;
+        if (file.missing || typeof content !== "string")
+          throw new Error(`The gateway did not return AGENTS.md for ${botId}`);
+        if (typeof hash !== "string" || hash !== createHash("sha256").update(content).digest("hex"))
+          throw new Error(`The gateway did not return a valid AGENTS.md hash for ${botId}`);
+        const section = findSection(content);
+        if (section.kind !== "ours" || !section.current) return false;
+        snapshot = { content, hash };
+        return true;
+      },
+      { timeout: 60_000, message: `Clawtrate's guide is current in AGENTS.md for ${botId}` },
+    )
+    .toBe(true);
+  if (!snapshot) throw new Error(`No current AGENTS.md snapshot for ${botId}`);
   await admin.request("agents.files.set", {
     agentId: botId,
     name: "AGENTS.md",
-    content,
-    ...(file.hash && !file.missing ? { expectedHash: file.hash } : { expectedMissing: true }),
+    content: snapshot.content + "\n\n" + instructions + "\n",
+    expectedHash: snapshot.hash,
   });
+  return snapshot.content;
 }
 
 const botRow = (name: string) =>
@@ -109,32 +150,57 @@ async function rereadBots(): Promise<void> {
           if (error) reject(error);
           else resolve();
         };
-        const timer = setTimeout(() => settle(new Error("bridge socket silent")), 10_000);
+        const timer = setTimeout(
+          () => settle(new Error("reading bots again: bridge did not reply within 10 seconds")),
+          10_000,
+        );
         socket.onmessage = (event) => {
-          const message = JSON.parse(String(event.data)) as { type: string; id?: string };
+          let message: BridgeServerMessage;
+          try {
+            message = JSON.parse(String(event.data)) as BridgeServerMessage;
+          } catch (error) {
+            settle(new Error(`reading bots again: invalid bridge message: ${error}`));
+            return;
+          }
           if (message.type === "hello")
             socket.send(
               JSON.stringify({ type: "command", id: "reread", command: { type: "retry" } }),
             );
-          else if (message.id === "reread") settle(null);
+          else if (message.type === "result" && message.id === "reread")
+            settle(
+              message.ok === true
+                ? null
+                : new Error(
+                    `reading bots again: ${message.error ?? "bridge did not confirm retry"}`,
+                  ),
+            );
         };
-        socket.onerror = () => settle(new Error("bridge socket error"));
-        socket.onclose = () => settle(new Error("bridge socket closed before the reply"));
+        socket.onerror = () => settle(new Error("reading bots again: bridge socket error"));
+        socket.onclose = () =>
+          settle(new Error("reading bots again: bridge socket closed before the reply"));
       }),
   );
 }
 
-/** Open a bot's settings and its Delete bot… dialog. */
-async function openDelete(name: string) {
+async function waitForBots(names: string[]): Promise<void> {
   await expect
     .poll(
       async () => {
-        await rereadBots().catch(() => {});
-        return botRow(name).count();
+        await rereadBots();
+        const counts = await Promise.all(names.map((name) => botRow(name).count()));
+        return names.filter((_, index) => counts[index] === 0);
       },
-      { timeout: 90_000, intervals: [1_000, 2_000, 5_000] },
+      {
+        timeout: 60_000,
+        intervals: [1_000, 2_000, 5_000],
+        message: `the page lists these bots: ${names.join(", ")}`,
+      },
     )
-    .toBeGreaterThan(0);
+    .toEqual([]);
+}
+
+/** Open a bot's settings and its Delete bot… dialog. */
+async function openDelete(name: string) {
   await botRow(name).first().click();
   if (!(await page.getByTestId("work-panel").isVisible()))
     await page.keyboard.press("ControlOrMeta+\\");
@@ -172,7 +238,9 @@ async function pairedPage(browser: Browser): Promise<Page> {
   return next;
 }
 
-test.describe.configure({ mode: "serial" });
+// F-464 allows 60 s each for two gateway list waits, the page roster, the guide, and deletion.
+// The dialog has 20 s to load, with 40 s left for setup requests and other UI actions.
+test.describe.configure({ mode: "serial", timeout: 360_000 });
 
 test.beforeAll(async ({ browser }) => {
   test.setTimeout(240_000);
@@ -211,9 +279,9 @@ test.afterAll(async () => {
 });
 
 test("F-050: a read-only connection sees what goes and why it can't delete, then asks for admin", async () => {
-  test.setTimeout(180_000);
   const name = `Fern ${STAMP}`;
   await ownBot(name, workspace("fern"));
+  await waitForBots([name]);
   const dialog = await openDelete(name);
   await expect(dialog.getByTestId("admin-bar")).toContainText(
     `Deleting ${name} needs admin access.`,
@@ -232,11 +300,10 @@ test("F-050: a read-only connection sees what goes and why it can't delete, then
 });
 
 test("F-276: deleting with the folder kept removes the bot and leaves its workspace folder", async () => {
-  test.setTimeout(180_000);
   const name = `Heron ${STAMP}`;
   const folder = workspace("heron");
   const botId = await ownBot(name, folder);
-  await writeAgents(botId, "Heron's instructions.");
+  await writeAgents(botId, [name], "Heron's instructions.");
   expect(existsSync(join(folder, "AGENTS.md"))).toBe(true);
   const dialog = await openDelete(name);
   const box = dialog.getByRole("checkbox", { name: "Also remove this bot's workspace folder" });
@@ -261,11 +328,10 @@ test("F-276: deleting with the folder kept removes the bot and leaves its worksp
 });
 
 test("F-276: deleting with the folder ticked moves the workspace folder away, as the gateway reports", async () => {
-  test.setTimeout(180_000);
   const name = `Wren ${STAMP}`;
   const folder = workspace("wren");
   const botId = await ownBot(name, folder);
-  await writeAgents(botId, "Wren's instructions.");
+  await writeAgents(botId, [name], "Wren's instructions.");
   expect(existsSync(folder)).toBe(true);
   const dialog = await openDelete(name);
   await dialog.getByRole("checkbox", { name: "Also remove this bot's workspace folder" }).check();
@@ -284,13 +350,13 @@ test("F-276: deleting with the folder ticked moves the workspace folder away, as
 });
 
 test("F-464: a workspace folder another bot uses can't be removed, and stays readable by that bot", async () => {
-  test.setTimeout(180_000);
   const name = `Ivy ${STAMP}`;
   const partner = `Moss ${STAMP}`;
   const folder = workspace("shared");
   const botId = await ownBot(name, folder);
   const partnerId = await ownBot(partner, folder);
-  await writeAgents(partnerId, "Shared instructions.");
+  const instructions = "Shared instructions.";
+  const before = await writeAgents(partnerId, [name, partner], instructions);
   const dialog = await openDelete(name);
   const box = dialog.getByRole("checkbox", { name: "Also remove this bot's workspace folder" });
   await expect(box).toBeDisabled();
@@ -303,13 +369,14 @@ test("F-464: a workspace folder another bot uses can't be removed, and stays rea
   });
   expect(await listsBot(botId)).toBe(false);
   made.delete(botId);
-  // The folder and its file are intact, and the other bot still reads them through the gateway.
+  // The folder and its file are intact, and the other bot still reads them through the gateway:
+  // the instructions written, below Clawtrate's section, unchanged.
   expect(existsSync(join(folder, "AGENTS.md"))).toBe(true);
   const { file } = await admin.request<{ file: { content?: string } }>("agents.files.get", {
     agentId: partnerId,
     name: "AGENTS.md",
   });
-  expect(file.content).toBe("Shared instructions.");
+  expect(file.content).toBe(`${before}\n\n${instructions}\n`);
   await expect(botRow(partner)).toHaveCount(1);
   await dialog.getByRole("button", { name: "Close" }).last().click();
 });

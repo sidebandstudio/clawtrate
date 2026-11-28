@@ -82,15 +82,15 @@
     claw.setAttribute("aria-label", `${claw.getAttribute("aria-label")} Press to play.`);
     claw.disabled = false;
 
-    // On the home page the Claw follows the approval demo: it celebrates an
-    // allowed request and droops at a denied one, until the demo is reset.
-    const demo = claw.closest(".demo");
-    if (demo) {
-      const poses = { pending: art.dataset.state, allowed: "done", denied: "blocked" };
+    // On the home page the Claw follows the film: it leans in while the film
+    // plays and celebrates when it ends.
+    const film = claw.closest("[data-film]");
+    if (film) {
+      const poses = { idle: art.dataset.state, playing: "waiting", ended: "done" };
       new MutationObserver(() => {
-        rest = poses[demo.dataset.state] || poses.pending;
+        rest = poses[film.dataset.state] || poses.idle;
         settle();
-      }).observe(demo, { attributes: true, attributeFilter: ["data-state"] });
+      }).observe(film, { attributes: true, attributeFilter: ["data-state"] });
     }
   });
 
