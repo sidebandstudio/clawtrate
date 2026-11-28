@@ -9,9 +9,11 @@ import {
   ClawtrateClient,
   createBridgeSession,
   fetchInboundPicture,
+  initialState,
   INBOUND_MEDIA_ROUTE,
   MAX_PICTURE_BYTES,
   toBase64,
+  type BridgeCommand,
   type ClientOptions,
   type HttpFetch,
   type SentAttachment,
@@ -360,9 +362,59 @@ describe("F-557: your picture in the iPhone chat", () => {
     const { client, load } = await iphone(fake.native);
     await until(() => client.state.connection.gatewayId === "gateway-1");
     const drawn = shownStamp(client.store.get().connection);
-    expect(await load({ ...drawn, gatewayId: "gateway-2" })).toEqual({ status: "failed" });
+    expect(await load({ ...drawn, gatewayId: "gateway-2" })).toEqual({
+      status: "failed",
+      reason: "The connection changed while this picture was read.",
+    });
     expect(fake.started).toEqual([]);
     client.stop();
+  });
+
+  it("F-557: a picture that didn't load keeps core's reason for the app's log", async () => {
+    const fake = fakeNative((url) =>
+      isTicket(url) ? { status: 503, headers: {}, parts: [] } : pictureAnswer(),
+    );
+    const { client, load } = await iphone(fake.native);
+    await until(() => client.state.connection.gatewayId === "gateway-1");
+    expect(await load()).toEqual({
+      status: "failed",
+      reason: "The gateway answered 503 for this picture.",
+    });
+    client.stop();
+  });
+
+  it("F-557: a picture whose parts didn't all arrive, or whose read threw, says so for the app's log", async () => {
+    const connection = {
+      ...initialState.connection,
+      status: "connected" as const,
+      gatewayId: "gateway-1",
+    };
+    const source = { getState: () => ({ connection }), subscribe: () => () => {} };
+    const drawnOn = shownStamp(connection);
+    const picture = { key: KEY, messageKey: "m1:user", index: 0 };
+    const cut = (async (command: BridgeCommand) => {
+      if (command.type === "readSentPicture")
+        return {
+          status: "content",
+          kind: "image",
+          mimeType: "image/png",
+          bytes: RED.length,
+          transfer: { id: "t1", chunks: 2, data: toBase64(RED.slice(0, 10)) },
+        };
+      if (command.type === "readFileChunk") throw new Error("The transfer was released.");
+      return undefined;
+    }) as Parameters<typeof loadSentPicture>[0];
+    expect(await loadSentPicture(cut, source, drawnOn, picture)).toEqual({
+      status: "failed",
+      reason: "Its parts didn't reach the screen whole.",
+    });
+    const offline = (async () => {
+      throw new Error("Not connected to the gateway.");
+    }) as Parameters<typeof loadSentPicture>[0];
+    expect(await loadSentPicture(offline, source, drawnOn, picture)).toEqual({
+      status: "failed",
+      reason: "Not connected to the gateway.",
+    });
   });
 });
 

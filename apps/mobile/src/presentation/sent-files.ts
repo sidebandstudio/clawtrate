@@ -12,7 +12,8 @@ export type SentPictureShown =
   | { status: "not-a-picture" }
   | { status: "cannot-load" }
   | { status: "gone" }
-  | { status: "failed" };
+  /** Not read this time: Try again reads it again. `reason` says why, for the app's log. */
+  | { status: "failed"; reason: string };
 
 /** The one line a picture that isn't shown carries, by why. */
 export const SENT_PICTURE_LINES = {

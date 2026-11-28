@@ -61,12 +61,12 @@ export async function loadSentPicture(
   try {
     const stamp = await screenStamp(source, drawnOn);
     const read = await send({ type: "readSentPicture", ...picture, stamp });
-    if (read.status === "failed") return { status: "failed" };
+    if (read.status === "failed") return { status: "failed", reason: read.message };
     if (read.status !== "content") return { status: read.status };
     const bytes = await collectPicture(send, read.transfer, read.bytes);
-    if (!bytes) return { status: "failed" };
+    if (!bytes) return { status: "failed", reason: "Its parts didn't reach the screen whole." };
     return { status: "shown", uri: `data:${read.mimeType};base64,${toBase64(bytes)}` };
-  } catch {
-    return { status: "failed" };
+  } catch (error) {
+    return { status: "failed", reason: error instanceof Error ? error.message : String(error) };
   }
 }
