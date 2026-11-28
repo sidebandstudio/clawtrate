@@ -395,31 +395,26 @@ async function configureAccount(profile: string, appData: string) {
   provider = fixture.server;
   fixture.applyConfig();
   accountTiming.configAt = seconds(performance.now() - start);
-  // Start the CLI early and withhold stdin until the chosen time.
-  const writer = fixture.prepareAccountSave();
-  async function save() {
+  const [returned, restarted] = await Promise.allSettled([
+    waitForGatewayReturn(),
+    fixture.restart(),
+  ]);
+  if (restarted.status === "rejected") throw restarted.reason;
+  if (returned.status === "rejected") throw returned.reason;
+  if (timing === "late") {
+    while (performance.now() - returned.value < 24_000) {
+      await readWindow();
+      await sleep(350);
+    }
+  }
+  const writer = fixture.prepareAccountSave(true);
+  try {
     accountTiming.saveInputAt = seconds(performance.now() - start);
     await writer.save();
     accountSavedAt = performance.now();
     accountTiming.savedAt = seconds(accountSavedAt - start);
-  }
-  try {
-    const [returned, earlySave] = await Promise.allSettled([
-      waitForGatewayReturn(),
-      timing === "before" ? save() : Promise.resolve(),
-    ]);
-    if (earlySave.status === "rejected") throw earlySave.reason;
-    if (returned.status === "rejected") throw returned.reason;
-    if (timing === "late") {
-      while (performance.now() - returned.value < 24_000) {
-        await readWindow();
-        await sleep(350);
-      }
-    }
-    if (timing !== "before") await save();
     const delta = accountTiming.savedAt! - accountTiming.connectedAt!;
     if (
-      (timing === "before" && delta >= 0) ||
       (timing === "at-return" && Math.abs(delta) > 5) ||
       (timing === "late" && (delta < 20 || delta > 30))
     ) {

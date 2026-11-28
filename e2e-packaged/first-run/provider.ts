@@ -59,7 +59,6 @@ export async function scriptedProvider(
       }
       const next = {
         ...current,
-        proxy: { proxyUrl: base },
         update: { ...current.update, checkOnStart: false },
         models: {
           ...current.models,
@@ -75,17 +74,37 @@ export async function scriptedProvider(
       writeFileSync(staged, JSON.stringify(next, null, 2) + "\n", { flag: "wx", mode: 0o600 });
       renameSync(staged, configFile);
       note(
-        `Advertised the scripted ${account.provider}/${MODEL_ID} model and set its loopback proxy. Kept the existing default model through the restart.`,
+        `Advertised the scripted loopback ${account.provider}/${MODEL_ID} model and kept the existing default model.`,
       );
     }
 
     // Use the same fake account as the development gateway. Its key takes
     // the gateway's normal save path, so a new bot sees the shared account.
-    function prepareAccountSave() {
+    const installed = join(appData, "openclaw", "bin", "openclaw");
+    const env = { HOME: dirname(profile), PATH: "/usr/bin:/bin:/usr/sbin:/sbin" };
+
+    function restart() {
+      const gateway = spawn(installed, ["--profile", "clawtrate", "gateway", "restart"], {
+        env,
+        stdio: "ignore",
+        timeout: 90_000,
+      });
+      return new Promise<void>((resolve, reject) => {
+        gateway.once("error", reject);
+        gateway.once("close", (status) =>
+          status === 0 ? resolve() : reject(new Error("The test gateway did not restart.")),
+        );
+      });
+    }
+
+    function prepareAccountSave(online: boolean) {
       const { args, stdin } = saveAccountCommand(account);
-      const installed = join(appData, "openclaw", "bin", "openclaw");
+      // A running gateway accepts the normal manual account route. A named
+      // profile override is only supported when its state owner is stopped.
+      const override = args.indexOf("--profile-id");
+      if (online && override !== -1) args.splice(override, 2);
       const writer = spawn(installed, ["--profile", "clawtrate", ...args], {
-        env: { HOME: dirname(profile), PATH: "/usr/bin:/bin:/usr/sbin:/sbin" },
+        env,
         stdio: ["pipe", "ignore", "ignore"],
         timeout: 180_000,
       });
@@ -104,7 +123,7 @@ export async function scriptedProvider(
           writer.stdin.end(stdin);
           await saved;
           note(
-            `Saved the synthetic ${account.id} account to the shared main store with the gateway's own account command.`,
+            `Saved the synthetic ${account.provider} account to the shared main store with the gateway's own account command.`,
           );
         },
         cancel() {
@@ -112,7 +131,7 @@ export async function scriptedProvider(
         },
       };
     }
-    return { server, applyConfig, prepareAccountSave };
+    return { server, applyConfig, prepareAccountSave, restart };
   } catch (error) {
     server.close();
     throw error;

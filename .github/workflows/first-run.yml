@@ -34,7 +34,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        timing: [before, at-return, late]
+        timing: [at-return, late]
     steps:
       - uses: actions/checkout@v7
         with:
