@@ -374,6 +374,11 @@ function useRuns(
     error: string | null;
   } | null>(null);
   const after = first.status === "ready" ? first.value : null;
+  // The history on screen now, for an answer that comes after the person moved on.
+  const shownAfter = useRef(after);
+  useEffect(() => {
+    shownAfter.current = after;
+  }, [after]);
   const current = older !== null && older.after === after ? older : null;
   const load = () => {
     const shown = current?.shown ?? after;
@@ -385,7 +390,7 @@ function useRuns(
       (page) => settle({ shown: withOlderRuns(shown, page), error: null }),
       (error: unknown) => {
         settle({ error: error instanceof Error ? error.message : String(error) });
-        announce("Couldn't load older runs.");
+        if (shownAfter.current === after) announce("Couldn't load older runs.");
       },
     );
   };

@@ -297,6 +297,36 @@ test.describe("1440", () => {
     await expect(view(page)).toContainText("By default the gateway keeps 7 days of runs");
   });
 
+  test("F-355: an older page that fails after the person left that routine is not announced", async ({
+    page,
+  }) => {
+    await open(page, "scene=main&routines=many");
+    await page.evaluate(() => {
+      const w = window as unknown as {
+        clawtrateFixture: { invoke: (command: unknown) => Promise<unknown> };
+        failOlder?: () => void;
+      };
+      const invoke = w.clawtrateFixture.invoke.bind(w.clawtrateFixture);
+      w.clawtrateFixture.invoke = (command) => {
+        const each = command as { type: string; offset?: number };
+        if (each.type === "readRoutineRuns" && (each.offset ?? 0) > 0)
+          return new Promise((_, reject) => (w.failOlder = () => reject(new Error("busy"))));
+        return invoke(command);
+      };
+    });
+    await view(page).getByTestId("routine-row").filter({ hasText: "Morning digest" }).click();
+    await view(page).getByRole("button", { name: "Load older runs" }).click();
+    await view(page).getByRole("button", { name: "Back to routines" }).click();
+    await view(page)
+      .getByTestId("routine-row")
+      .filter({ hasNotText: "Morning digest" })
+      .first()
+      .click();
+    await page.evaluate(() => (window as unknown as { failOlder: () => void }).failOlder());
+    await page.waitForTimeout(300);
+    await expect(page.getByTestId("b-announcer")).not.toHaveText("Couldn't load older runs.");
+  });
+
   test("F-355: Load older runs shows only while the gateway has another page, puts the older runs under the first 20, and a failed page keeps them with Try again", async ({
     page,
   }) => {
