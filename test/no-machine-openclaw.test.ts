@@ -77,6 +77,12 @@ const ALLOWED: { file: string; pattern: string; reason: string }[] = [
     reason: "only checks absence on a disposable GitHub-hosted Mac before the install test",
   },
   {
+    file: "e2e-packaged/first-run/check.ts",
+    pattern: "a PATH lookup of openclaw",
+    reason:
+      "checks absence before launching the app, after refusing to run outside a disposable GitHub-hosted Mac",
+  },
+  {
     file: ".github/workflows/ci.yml",
     pattern: "the global npm folder",
     reason:
