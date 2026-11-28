@@ -1196,11 +1196,29 @@ export function createFixtureBridge(
         () => {
           const at = Date.now();
           if (command.type !== "setupInstall") return loaded(at);
-          return withConnection(scene("empty", at).initial, {
+          // As a fresh install answers once its bots are read: only `main`, full control, and
+          // no account saved yet (onboarding skipped sign-in), the accounts read on this hello.
+          const installed = withConnection(scene("first-bot", at).initial, {
             scopes: [...FULL_SCOPES],
+            requestedScopes: [...FULL_SCOPES],
+            canWrite: true,
+            canAnswer: true,
+            canApprove: true,
+            canAdmin: true,
             fullPairing: true,
             serverVersion: INSTALL_OPENCLAW_VERSION,
           });
+          return {
+            ...installed,
+            accounts: {
+              ...fixtureAccounts(at, { ...accountParams, accounts: "none" }),
+              modelsStatus: "ready",
+              readOn: {
+                ...gatewayStamp(installed.connection),
+                connectedAt: installed.connection.connectedAt,
+              },
+            },
+          };
         },
         (ms, run) => deferred(run, ms),
         setupName === "found-protocol" ? "protocol" : refusedToken ? "token-refused" : "connected",
