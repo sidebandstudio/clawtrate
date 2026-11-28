@@ -1717,6 +1717,12 @@ describe("sign-ins, through the gateway's own methods", () => {
       await until(() => accounts().signIn?.result != null);
       expect(accounts().signIn).toMatchObject({ unsure: true, result: { model: null } });
       expect(JSON.stringify(accounts().signIn)).not.toContain(code);
+
+      // What was typed is forgotten once the sign-in has ended: Check again can't scrub the model,
+      // so it leaves it out.
+      await client.recheckSignIn();
+      expect(accounts().signIn).toMatchObject({ unsure: true, result: { added: [], model: null } });
+      expect(JSON.stringify(accounts().signIn)).not.toContain(code);
     } finally {
       client.stop();
     }
@@ -1726,17 +1732,17 @@ describe("sign-ins, through the gateway's own methods", () => {
     const fake = new AccountsGateway();
     const { client, accounts } = await accountsClient({ gateway: fake });
     try {
-      await client.startSignIn(CHOICES.browser, null);
-      const forBot = accounts().signIn!.forBot;
-      const entries = (fake.config.agents as { entries: Record<string, Record<string, unknown>> })
-        .entries;
-      entries[forBot] = { ...entries[forBot], model: { primary: "acme/dev-2" } };
+      // Its first step can't be read: an unsure end with nothing typed, whose model is read.
       fake.gateway.handlers["wizard.next"] = () => {
         fake.shared.push({ id: "acme:made-up", provider: "acme", type: "oauth" });
         return { done: false, step: { type: "text" } };
       };
-      await client.answerSignIn("made-up-code");
+      await client.startSignIn(CHOICES.browser, null);
       await until(() => accounts().signIn?.result != null);
+      const forBot = accounts().signIn!.forBot;
+      const entries = (fake.config.agents as { entries: Record<string, Record<string, unknown>> })
+        .entries;
+      entries[forBot] = { ...entries[forBot], model: { primary: "acme/dev-2" } };
 
       // The first press's model read is held until the second press has published.
       const get = fake.gateway.handlers["config.get"]!;

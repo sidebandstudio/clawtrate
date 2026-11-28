@@ -323,6 +323,11 @@ export class AccountsEngine {
    * before it enters the state or a log line. Forgotten when the sign-in ends.
    */
   private readonly secrets: string[] = [];
+  /**
+   * An unsure sign-in whose typed values are forgotten, and the model its read published while
+   * they were held: a later read (Check again) can't scrub, so it says only that model.
+   */
+  private scrubbedModel: { id: string; model: string | null } | null = null;
   private slowTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(ctx: AccountsContext) {
@@ -1500,8 +1505,14 @@ export class AccountsEngine {
     this.secrets.splice(0, this.secrets.length, ...left);
   }
 
-  /** The sign-in is over: nothing it was given is held any more. */
+  /**
+   * The sign-in is over: nothing it was given is held any more. An unsure one that still stands
+   * keeps the model its read published, the only one a later read may say.
+   */
   private forgetSecrets(): void {
+    const signIn = this.ctx.get().signIn;
+    if (this.secrets.length > 0 && signIn?.unsure)
+      this.scrubbedModel = { id: signIn.id, model: signIn.result?.model ?? null };
     this.secrets.length = 0;
   }
 
@@ -1882,7 +1893,7 @@ export class AccountsEngine {
       result.readFailed = true;
     }
     // Whether the account connected isn't known: what the bot's model is now is read, and said.
-    if (signIn.unsure)
+    if (signIn.unsure) {
       result.model = await ctx
         .request("config.get", {})
         .then((snapshot) => {
@@ -1890,6 +1901,10 @@ export class AccountsEngine {
           return readModelConfig(asRecord(asRecord(entries)?.[signIn.forBot])?.model).primary;
         })
         .catch(() => null);
+      // With what was typed forgotten, only the model a scrubbed read showed is said again.
+      const earlier = this.scrubbedModel?.id === id ? this.scrubbedModel : null;
+      if (earlier && result.model !== earlier.model) result.model = null;
+    }
     // A read begun since (a second Check again) is newer: this one's answer is dropped.
     if (ctx.get().signIn?.id !== id || turn !== this.signInReads) return;
     const ended = ctx.get().signIn!;
