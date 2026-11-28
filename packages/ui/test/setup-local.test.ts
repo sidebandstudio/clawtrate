@@ -23,7 +23,7 @@ const escape = (text: string) => text.replaceAll("'", "&#x27;");
 import { ConnectScreen } from "../src/ConnectScreen.tsx";
 import { gatewayProblem, thisComputerWayOn } from "../src/Settings.tsx";
 import { CONSENT_LINE } from "../src/FullControl.tsx";
-import { LOCAL_FOUND_HEADING, LOCAL_FOUND_LINE } from "../src/setup/Setup.tsx";
+import { LOCAL_FOUND_HEADING, LOCAL_FOUND_LINE, SetupFlow } from "../src/setup/Setup.tsx";
 
 const PORT = 19940;
 const local = (full = true): HostInfo => ({
@@ -469,5 +469,51 @@ describe("a reconnect refused after setup finished", () => {
     expect(back).toContain(escape(refusal));
     expect(back).toContain(">Try again</button>");
     expect(back).toContain(">Use This computer</button>");
+  });
+});
+
+describe("removing an unfinished OpenClaw setup", () => {
+  function recovery(install: NonNullable<SetupState["install"]>): string {
+    const info: HostInfo = { ...local(), setup: { ...local().setup!, install: true } };
+    return renderToStaticMarkup(
+      createElement(BridgeProvider, {
+        bridge: { info } as ClawtrateBridge,
+        children: createElement(SetupFlow, {
+          view: "here",
+          onView: () => {},
+          info,
+          connection: initialState.connection,
+          setup: {
+            ...initialSetupState,
+            phase: install.failure ? "install-failed" : "installing",
+            install,
+          },
+        }),
+      }),
+    );
+  }
+
+  it("F-505: says the unfinished setup folder went to the Trash", () => {
+    const html = recovery({ step: 0, nodeChecked: false, failure: null, profileTrashed: true });
+    expect(html).toContain("The unfinished setup folder is in the Trash.");
+  });
+
+  it("F-505: when Trash refuses the profile, explains the refusal and still offers Continue", () => {
+    const html = recovery({
+      step: 2,
+      nodeChecked: true,
+      recovery: "replace",
+      failure: {
+        kind: "trash",
+        step: -1,
+        exitCode: null,
+        classification: null,
+        retry: false,
+        cleanup: "none",
+      },
+    });
+    expect(html).toContain("Clawtrate couldn’t move the unfinished setup folder to the Trash.");
+    expect(html).toMatch(/<button[^>]*>Continue<\/button>/);
+    expect(html).not.toContain("The unfinished setup folder is in the Trash.");
   });
 });

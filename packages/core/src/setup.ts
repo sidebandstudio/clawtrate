@@ -242,7 +242,9 @@ export type InstallFailureKind =
   /** After the host's dialog, the look's file checks couldn't be made or didn't finish in time. */
   | "unchecked"
   /** The host's dialog was answered after the prepared operation's two minutes. */
-  | "expired";
+  | "expired"
+  /** The unfinished profile could not be moved to the Trash. */
+  | "trash";
 
 /**
  * What a failed attempt left: nothing made (`none`); removed and proven
@@ -282,6 +284,8 @@ export type InstallRecovery = InstallAction | "inspect";
 export type SetupInstall = {
   /** Inspect marks an incomplete attempt without enough evidence to continue or remove it. */
   recovery?: InstallRecovery;
+  /** The previous unfinished profile is in the system Trash. */
+  profileTrashed?: boolean;
   /** The step under way, from 0; 4 once every step is done. */
   step: number;
   /** The installer reported that it used the checked Node.js. */

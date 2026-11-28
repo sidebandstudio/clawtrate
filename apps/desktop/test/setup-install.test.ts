@@ -24,9 +24,10 @@ import {
   unlinkSync,
   writeFileSync,
 } from "node:fs";
+import { rename } from "node:fs/promises";
 import { createServer } from "node:http";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { basename, dirname, join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import {
   CHECKED_INSTALL_NODE,
@@ -90,6 +91,11 @@ function installer(
     accountHome: homedir(),
     env: {},
     statusWaitMs: 300,
+    trashProfile: async (profile) => {
+      const trash = join(stand.root, "Trash");
+      mkdirSync(trash, { recursive: true });
+      await rename(profile, join(trash, basename(profile)));
+    },
     sleep: (ms) => new Promise((done) => setTimeout(done, Math.min(ms, 50))),
     ...extra,
   });
@@ -526,6 +532,59 @@ describe("F-502 F-503: each failure, named, with what the attempt left", () => {
     },
   );
 
+  it.each([false, true])(
+    "F-505: Remove and start again preserves added and edited profile files (Trash unavailable: %s)",
+    async (unavailable) => {
+      const stand = await make();
+      const stop = new AbortController();
+      const interrupted = installer(stand, {
+        signal: stop.signal,
+        run: async (request, check) => {
+          const result = await runner.run(request, check);
+          if (request.args.includes("onboard")) stop.abort();
+          return result;
+        },
+      });
+      await runAll(interrupted);
+      const config = join(stand.place.stateDir, "openclaw.json");
+      const edited = readFileSync(config, "utf8") + "\n";
+      writeFileSync(config, edited);
+      writeFileSync(join(stand.place.stateDir, "my-notes.txt"), "Please keep this.");
+
+      const awake = installer(
+        stand,
+        unavailable
+          ? {
+              trashProfile: async () => {
+                throw new Error("Trash unavailable");
+              },
+            }
+          : {},
+      );
+      const pending = await awake.recovery();
+      expect(pending?.action).toBe("replace");
+      const progress: SetupInstall[] = [];
+      const outcome = await awake.run((update) => progress.push(update), "replace", pending?.id);
+      if (unavailable) {
+        expect(outcome).toMatchObject({ ok: false, failure: { kind: "trash" } });
+        expect(readFileSync(config, "utf8")).toBe(edited);
+        expect(readFileSync(join(stand.place.stateDir, "my-notes.txt"), "utf8")).toBe(
+          "Please keep this.",
+        );
+        expect(await awake.recovery()).toEqual(pending);
+        expect(await awake.run(() => {}, "continue", pending?.id)).toMatchObject({ ok: true });
+      } else {
+        expect(outcome).toMatchObject({ ok: true });
+        expect(progress).toContainEqual(expect.objectContaining({ profileTrashed: true }));
+        const saved = join(stand.root, "Trash", "Unfinished OpenClaw setup");
+        expect(readFileSync(join(saved, "openclaw.json"), "utf8")).toBe(edited);
+        expect(readFileSync(join(saved, "my-notes.txt"), "utf8")).toBe("Please keep this.");
+        expect(existsSync(join(stand.place.stateDir, "my-notes.txt"))).toBe(false);
+        expect(stand.calls().filter((line) => line.includes(" onboard "))).toHaveLength(2);
+      }
+    },
+  );
+
   it("F-505: Continue loads an existing owned service without rewriting it", async () => {
     const stand = await make();
     const interrupted = installer(stand, {
@@ -771,7 +830,7 @@ describe("F-501 F-502: nothing there before, and the narrowed retry", () => {
       const install = installer(stand);
       expect(await install.site()).toBe("exists");
       expect(await install.leftoverProgram()).toBeNull();
-      expect(await install.discard()).toBe(false);
+      expect(await install.discard()).toBe("kept");
     }
     expect(existsSync(stand.place.programDir)).toBe(true);
   });
