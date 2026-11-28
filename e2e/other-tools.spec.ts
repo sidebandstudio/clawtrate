@@ -346,7 +346,7 @@ test("F-563: an API client's session and a scheduled run stay out of a bot's tas
   // once a person continues it from another device: an operator's turn there asks.
   await setOthersShown(false);
   await expect(taskRow(api)).toHaveCount(0);
-  await expect(botRow("otto")).toHaveAccessibleName(/^otto, 0 tasks\b/i);
+  await expect(botRow("otto")).toHaveAccessibleName(/^otto(?!.*\d+ tasks?\b)/i);
   const waiting = "agent:otto:openai-user:e2e-approver";
   expect((await apiTurn("otto", "e2e-approver", "#text")).status).toBe(200);
   const before = approver!.lastSeq;
