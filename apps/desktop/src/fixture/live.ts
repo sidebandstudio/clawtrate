@@ -53,6 +53,8 @@ export const LIVE_SCENES = [
   "not-run-computer-use-repeat",
   "not-run-computer-use-off",
   "not-run-computer-use-access",
+  "not-run-computer-use-unreceipted",
+  "not-run-computer-use-unreceipted-access",
   "not-started",
   "run-turn-limit",
   "stop-failed",
@@ -834,18 +836,26 @@ export function liveScene(
     case "not-run-computer-use":
     case "not-run-computer-use-repeat":
     case "not-run-computer-use-off":
-    case "not-run-computer-use-access": {
+    case "not-run-computer-use-access":
+    case "not-run-computer-use-unreceipted":
+    case "not-run-computer-use-unreceipted-access": {
+      // `-unreceipted`: off after a disable whose receipt was lost; no Put back, a new change instead.
       const error = {
         message: "Codex Computer Use readiness failed: plugin/list timed out",
         kind: null,
       };
       const earlier = name !== "not-run-computer-use";
-      const canAdmin = name !== "not-run-computer-use-access";
+      const canAdmin =
+        name !== "not-run-computer-use-access" &&
+        name !== "not-run-computer-use-unreceipted-access";
       const first = withRun(base, now, {
         state: "failed",
         reportedStartAt: null,
         endedAt: now - 2 * SECOND,
         error,
+        ...(name.startsWith("not-run-computer-use-unreceipted")
+          ? { computerUseReadback: "already-off" as const }
+          : {}),
       });
       const state = earlier
         ? withTranscript(first, (transcript) => ({
@@ -1214,6 +1224,17 @@ export function liveCommand(
       return Promise.resolve();
     }
     case "changeNotRunComputerUse": {
+      if (command.turnOn) {
+        update((transcript) => ({
+          ...transcript,
+          runs: transcript.runs.map((each) => {
+            if (each.id !== command.runId) return each;
+            const { computerUseReadback: _readback, ...rest } = each;
+            return rest;
+          }),
+        }));
+        return Promise.resolve("on");
+      }
       const { computerUseUndo: _undo, ...state } = get();
       set(
         command.restore

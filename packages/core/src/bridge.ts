@@ -189,6 +189,8 @@ export type BridgeCommand =
       runId: string;
       restore: boolean;
       stamp: GatewayStamp;
+      /** "Turn it back on": a new write of `true` when the card has no Put back. */
+      turnOn?: boolean;
     }
   /** A new task under a bot with its first message. The viewer then has it open. */
   | { type: "createTask"; botId: string; text: string; label: string | null }
@@ -1692,6 +1694,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         runId: id(command.runId, "run id"),
         restore: flag(command.restore),
         stamp: gatewayStampOf(command.stamp),
+        ...(command.turnOn === undefined ? {} : { turnOn: flag(command.turnOn) }),
       };
     case "retryNotRun":
     case "dismissNotRun":
@@ -2562,6 +2565,7 @@ class ViewerSession implements BridgeSession {
           command.restore,
           command.stamp,
           this.open.get(command.key),
+          command.turnOn === true,
         );
       case "retryNotRun":
         client.retryNotRun(this.mine(command.key), command.runId, command.stamp);

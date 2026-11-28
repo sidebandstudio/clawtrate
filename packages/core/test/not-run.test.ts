@@ -2185,8 +2185,114 @@ describe("F-480 #988: Computer Use recovery", () => {
       await expect(change(false)).rejects.toThrow(/admin/i);
       expect(gateway.calls("config.patch")).toHaveLength(0);
       expect(gateway.calls("config.get").length).toBe(reads);
+      const turnOn = client.changeNotRunComputerUse(
+        KEY,
+        transcriptRunId(client),
+        false,
+        stampOn("gateway", client),
+        undefined,
+        true,
+      );
+      await expect(turnOn).rejects.toThrow(/admin/i);
+      expect(gateway.calls("config.patch")).toHaveLength(0);
+      expect(gateway.calls("config.get").length).toBe(reads);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("with no receipt, Turn it back on is a new write of true at a fresh read", async () => {
+    const { client, gateway, runId, change } = await recovery();
+    const write = gateway.handlers["config.patch"]!;
+    gateway.handlers["config.patch"] = (params) => {
+      const result = write(params);
+      if (gateway.calls("config.patch").length === 1) gateway.dropAll();
+      return result;
+    };
+    const turnOn = () =>
+      client.changeNotRunComputerUse(
+        KEY,
+        runId,
+        false,
+        stampOn(client.state.connection.gatewayId ?? "gateway", client),
+        undefined,
+        true,
+      );
+    try {
+      expect(await change(false)).toBe("unconfirmed");
+      const readback = () =>
+        client.state.transcripts[KEY]?.runs.find((run) => run.id === runId)?.computerUseReadback;
+      await until(() => readback() === "already-off");
+      const reads = gateway.calls("config.get").length;
+      expect(await turnOn()).toBe("on");
+      expect(gateway.calls("config.get").length).toBeGreaterThanOrEqual(reads + 2);
+      // A new change at the read's own base, not an undo of the lost write.
+      expect(gateway.calls("config.patch")).toEqual([
+        patch(false, "hash-1"),
+        patch(true, "hash-2"),
+      ]);
+      expect(client.state.computerUseUndo).toBeUndefined();
+      expect(readback()).toBeUndefined();
+      // On again: nothing more to write.
+      expect(await turnOn()).toBe("changed");
+      expect(gateway.calls("config.patch")).toHaveLength(2);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("Turn it back on is not offered beside a Put back that still holds", async () => {
+    const { client, gateway, runId, change } = await recovery();
+    try {
+      expect(await change(false)).toBe("off");
+      const turnOn = await client.changeNotRunComputerUse(
+        KEY,
+        runId,
+        false,
+        stampOn("gateway", client),
+        undefined,
+        true,
+      );
+      expect(turnOn).toBe("not-sent");
+      expect(gateway.calls("config.patch")).toEqual([patch(false, "hash-1")]);
+      expect(client.state.computerUseUndo?.runId).toBe(runId);
+    } finally {
+      client.stop();
+    }
+  });
+
+  // Today's limit, pinned so a fix has something to change: both versions' `hash` is an HMAC of
+  // the config's content, so another admin's false → true → false repeats this write's receipt.
+  it("the gateway exposes a content hash: Put back can miss an edit that restores the same config bytes", async () => {
+    const { client, gateway, change, set } = await recovery();
+    const content = (reply: unknown) =>
+      `content-${JSON.stringify((reply as { config: unknown }).config)}`;
+    const read = gateway.handlers["config.get"]!;
+    gateway.handlers["config.get"] = (params) => {
+      const reply = read(params) as Row;
+      const hash = content(reply);
+      return { ...reply, hash, configRevisionHash: hash, appliedConfigHash: hash };
+    };
+    const write = gateway.handlers["config.patch"]!;
+    gateway.handlers["config.patch"] = (params) => {
+      write(params);
+      return { ok: true, hash: content(read({})) };
+    };
+    try {
+      expect(await change(false)).toBe("off");
+      set(true);
+      set(false);
+      // Another admin's later "off" looks like this card's own: Put back writes over it.
+      expect(await change(true)).toBe("restored");
+      expect(gateway.calls("config.patch")).toHaveLength(2);
     } finally {
       client.stop();
     }
   });
 });
+
+function transcriptRunId(client: {
+  state: { transcripts: Record<string, { runs: Array<{ id: string }> } | undefined> };
+}) {
+  return client.state.transcripts[KEY]!.runs.at(-1)!.id;
+}

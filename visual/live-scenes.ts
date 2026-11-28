@@ -191,6 +191,23 @@ export const LIVE_VIEWS: Array<{
     ready: (page) => expect(page.getByRole("button", { name: "Put back" })).toBeVisible(),
   },
   {
+    scene: "not-run-computer-use-unreceipted",
+    rows: "F-480",
+    ready: (page) => expect(page.getByRole("button", { name: "Turn it back on" })).toBeVisible(),
+  },
+  {
+    scene: "not-run-computer-use-unreceipted-access",
+    rows: "F-480",
+    ready: (page) =>
+      expect(
+        page
+          .getByTestId("turn-error")
+          .getByText("A device with full control of the gateway can turn it back on.", {
+            exact: true,
+          }),
+      ).toBeVisible(),
+  },
+  {
     scene: "not-run-computer-use-access",
     rows: "F-480",
     ready: (page) =>

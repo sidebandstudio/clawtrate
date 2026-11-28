@@ -233,8 +233,10 @@ export function RunEnding({
   const [retrying, setRetrying] = useState(false);
   const [computerUseResult, setComputerUseResult] = useState<ComputerUseChange | null>(null);
   const [changingComputerUse, setChangingComputerUse] = useState(false);
-  // Whether the latest Computer Use press was Put back: its failure shows while the undo stays.
-  const [restorePressed, setRestorePressed] = useState(false);
+  // The latest Computer Use press: a failed Put back or Turn it back on says so while still off.
+  const [pressed, setPressed] = useState<"off" | "put-back" | "on" | null>(null);
+  // What this card's own presses last established; a press that failed leaves it as it was.
+  const [known, setKnown] = useState<"off" | "on" | null>(null);
   const [undoClock, setUndoClock] = useState(Date.now);
   const undoExpiresAt =
     computerUseUndo?.taskKey === taskKey && computerUseUndo.runId === run.id
@@ -251,13 +253,14 @@ export function RunEnding({
   const retryRef = useRef<HTMLButtonElement>(null);
   const recoveryRef = useRef<HTMLButtonElement>(null);
   const undoRef = useRef<HTMLButtonElement>(null);
+  const turnOnRef = useRef<HTMLButtonElement>(null);
   const repairHadFocus = useRef(false);
   useEffect(() => {
     if (!repairHadFocus.current || !computerUseResult || changingComputerUse) return;
     repairHadFocus.current = false;
     if (computerUseResult === "off" || computerUseResult === "already-off")
       (retryRef.current ?? undoRef.current)?.focus();
-    else (recoveryRef.current ?? undoRef.current ?? retryRef.current)?.focus();
+    else (recoveryRef.current ?? turnOnRef.current ?? undoRef.current ?? retryRef.current)?.focus();
   }, [computerUseResult, changingComputerUse]);
   // Dismiss and the line swap places; focus follows to what replaced it.
   const moved = useRef(false);
@@ -368,25 +371,50 @@ export function RunEnding({
       ? (run.computerUseReadback ?? computerUseResult)
       : computerUseResult;
   const computerUseOff =
-    !run.retryGatewayChanged && (undoExpiresAt !== null || readback === "already-off");
+    !run.retryGatewayChanged &&
+    (undoExpiresAt !== null ||
+      (known ?? (run.computerUseReadback === "already-off" ? "off" : null)) === "off");
   const repair = computerUse && repeated && !computerUseOff && !run.retryGatewayChanged;
-  const changeComputerUse = (restore: boolean) => {
+  // Off with no Put back left (its receipt was lost, another writer turned it off, or its week
+  // ended): a new change can turn it on again.
+  const turnBackOn = computerUse && computerUseOff && !undo;
+  const changeComputerUse = (press: "off" | "put-back" | "on") => {
     repairHadFocus.current =
-      document.activeElement === (restore ? undoRef.current : recoveryRef.current);
+      document.activeElement ===
+      (press === "put-back"
+        ? undoRef.current
+        : press === "on"
+          ? turnOnRef.current
+          : recoveryRef.current);
     setChangingComputerUse(true);
     setComputerUseResult(null);
-    setRestorePressed(restore);
+    setPressed(press);
+    const settle = (result: ComputerUseChange) => {
+      setComputerUseResult(result);
+      setKnown((was) =>
+        result === "off" || result === "already-off"
+          ? "off"
+          : result === "restored" || result === "on"
+            ? "on"
+            : result === "changed"
+              ? null
+              : was,
+      );
+    };
     void bridge
       .invoke({
         type: "changeNotRunComputerUse",
         key: taskKey,
         runId: run.id,
-        restore,
+        restore: press === "put-back",
         stamp: gatewayStamp(connection),
+        ...(press === "on" ? { turnOn: true } : {}),
       })
-      .then(setComputerUseResult, () => setComputerUseResult("not-sent"))
+      .then(settle, () => settle("not-sent"))
       .finally(() => setChangingComputerUse(false));
   };
+  // What the last press came to; a turn-off's own read-back stands in for its unconfirmed answer.
+  const said = pressed === "off" || pressed === null ? readback : computerUseResult;
   // The app's own limit and the gateway's are worded apart: each says who ended the turn.
   const title = notRun
     ? notRun.title
@@ -522,13 +550,18 @@ export function RunEnding({
           The Computer Use startup check is off on this gateway.
         </p>
       )}
+      {turnBackOn && !canAdmin && (
+        <p className="turn-error-reason">
+          A device with full control of the gateway can turn it back on.
+        </p>
+      )}
       {computerUse &&
         !run.retryGatewayChanged &&
-        (!computerUseOff || (undo && restorePressed)) &&
-        readback &&
-        COMPUTER_USE_RESULT[readback] && (
+        (!computerUseOff || (pressed === "put-back" && undo) || pressed === "on") &&
+        said &&
+        COMPUTER_USE_RESULT[said] && (
           <p className="turn-error-reason" role="status">
-            {COMPUTER_USE_RESULT[readback]}
+            {COMPUTER_USE_RESULT[said]}
           </p>
         )}
       {ending.kind === "turn-limit" && (run.omittedTools ?? 0) > 0 && (
@@ -577,7 +610,14 @@ export function RunEnding({
           The full text of this message isn't available here. To try again, send it again in full.
         </p>
       )}
-      {(resend || requestId || raw || details || ways.length > 0 || repair || undo) && (
+      {(resend ||
+        requestId ||
+        raw ||
+        details ||
+        ways.length > 0 ||
+        repair ||
+        undo ||
+        (turnBackOn && canAdmin)) && (
         <div className="turn-error-actions">
           {repair && canAdmin && (
             <button
@@ -586,7 +626,7 @@ export function RunEnding({
               className="button turn-error-recovery"
               data-size="sm"
               disabled={changingComputerUse}
-              onClick={() => changeComputerUse(false)}
+              onClick={() => changeComputerUse("off")}
             >
               Turn off Computer Use on this gateway
             </button>
@@ -659,9 +699,21 @@ export function RunEnding({
               className="button"
               data-size="sm"
               disabled={changingComputerUse}
-              onClick={() => changeComputerUse(true)}
+              onClick={() => changeComputerUse("put-back")}
             >
               Put back
+            </button>
+          )}
+          {turnBackOn && canAdmin && (
+            <button
+              ref={turnOnRef}
+              type="button"
+              className="button"
+              data-size="sm"
+              disabled={changingComputerUse}
+              onClick={() => changeComputerUse("on")}
+            >
+              Turn it back on
             </button>
           )}
           {requestId && (
@@ -711,6 +763,7 @@ export function RunEnding({
 
 const COMPUTER_USE_RESULT: Partial<Record<ComputerUseChange, string>> = {
   restored: "The previous Computer Use setting is back.",
+  on: "The Computer Use startup check is back on.",
   changed: "The gateway settings changed since this card last read them.",
   refused: "The gateway refused the Computer Use change.",
   unconfirmed: "Clawtrate couldn't confirm whether the Computer Use setting changed.",

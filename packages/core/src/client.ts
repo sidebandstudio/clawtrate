@@ -4442,13 +4442,18 @@ export class ClawtrateClient {
     this.markRetryFilesGone(key, runId);
   }
 
-  /** Change just the Computer Use setting from the card, against a read of the same gateway. */
+  /**
+   * Change just the Computer Use setting from the card, against a read of the same gateway.
+   * `turnOn` is a new change, not an undo: with no Put back left for the card (its receipt was
+   * lost, or another writer turned it off, or its week ended), it writes `true` at a fresh read.
+   */
   async changeNotRunComputerUse(
     key: string,
     runId: string,
     restore: boolean,
     stamp: GatewayStamp,
     owner?: object,
+    turnOn = false,
   ): Promise<ComputerUseChange> {
     const admin = () =>
       !this.options.readOnly && this.holds(ADMIN_SCOPE) && this.state.connection.canAdmin;
@@ -4469,6 +4474,7 @@ export class ClawtrateClient {
       )
         return "not-sent";
     } else if (
+      (turnOn && undo?.taskKey === key && undo.runId === runId && undo.expiresAt > this.now()) ||
       !run ||
       !transcript ||
       notRunCause(run.error?.message)?.kind !== "computer-use-timeout" ||
@@ -4491,12 +4497,15 @@ export class ClawtrateClient {
       };
       const before = await read(false).catch(() => null);
       if (!before) return "not-sent";
+      // The gateway exposes a content hash. Put back can miss an edit that restores the same
+      // config bytes (both versions' `hash` is an HMAC of the file's content, #910's limit too).
       if (restore && (before.value !== false || before.hash !== prior!.writtenHash)) {
         this.clearComputerUseWrite();
         return "changed";
       }
       if (!before.applied) return "not-sent";
-      if (!restore && before.value === false) {
+      if (turnOn && before.value !== false) return "changed";
+      if (!restore && !turnOn && before.value === false) {
         // This card's own disable whose read-back was lost settles against this read: Put back
         // only at its receipt's hash.
         if (
@@ -4513,23 +4522,24 @@ export class ClawtrateClient {
       }
       // Put back can outlast its window while it reads: the deadline holds when the write leaves.
       if (restore && undo!.expiresAt <= this.now()) return "not-sent";
-      const value = restore ? undo!.previous : false;
+      const value = restore ? undo!.previous : turnOn;
       sameConnection(false);
       if (!admin()) throw new AdminNeededError("Changing Computer Use");
       this.checkNotWithdrawn(owner);
-      const pending = restore
-        ? null
-        : {
-            undo: {
-              taskKey: key,
-              runId,
-              previous: before.value === true ? (true as const) : null,
-              expiresAt: this.now() + COMPUTER_USE_UNDO_MS,
-            },
-            gatewayId,
-            beforeHash: before.hash,
-            writtenHash: null as string | null,
-          };
+      const pending =
+        restore || turnOn
+          ? null
+          : {
+              undo: {
+                taskKey: key,
+                runId,
+                previous: before.value === true ? (true as const) : null,
+                expiresAt: this.now() + COMPUTER_USE_UNDO_MS,
+              },
+              gatewayId,
+              beforeHash: before.hash,
+              writtenHash: null as string | null,
+            };
       if (pending) {
         this.clearComputerUseWrite();
         this.computerUseWrite = pending;
@@ -4574,6 +4584,9 @@ export class ClawtrateClient {
         if (pending) {
           const result = this.settleComputerUseDisable(pending, after);
           if (result) return result;
+        } else if (after.applied && after.value === value && turnOn) {
+          this.computerUseTurnedOn(key, runId);
+          return "on";
         } else if (after.applied && after.value === value) {
           this.clearComputerUseWrite();
           return "restored";
@@ -4587,6 +4600,20 @@ export class ClawtrateClient {
       this.changingComputerUse = false;
       if (this.epoch !== epoch) this.recheckComputerUse();
     }
+  }
+
+  /** Turned back on: the card no longer says it is off, and an expired Put back of it goes. */
+  private computerUseTurnedOn(key: string, runId: string): void {
+    const undo = this.state.computerUseUndo;
+    if (undo?.taskKey === key && undo.runId === runId) this.clearComputerUseWrite();
+    this.updateActivity(key, (activity) => ({
+      ...activity,
+      runs: activity.runs.map((run): Run => {
+        if (run.id !== runId || !run.computerUseReadback) return run;
+        const { computerUseReadback: _, ...rest } = run;
+        return rest;
+      }),
+    }));
   }
 
   private clearComputerUseWrite(): void {

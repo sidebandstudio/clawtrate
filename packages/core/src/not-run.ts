@@ -441,8 +441,9 @@ export class NotRunFiles {
   }
 }
 
+/** `on`: a new change ("Turn it back on") read back as on; never an undo of the card's own write. */
 export type ComputerUseChange =
-  "off" | "already-off" | "restored" | "changed" | "refused" | "unconfirmed" | "not-sent";
+  "off" | "already-off" | "restored" | "on" | "changed" | "refused" | "unconfirmed" | "not-sent";
 
 export type ComputerUseUndo = {
   taskKey: string;

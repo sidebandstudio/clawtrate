@@ -2412,6 +2412,8 @@ test("F-480 #988: Put back leaves at its expiry, and a read-back after a lost re
   );
   await page.clock.setFixedTime(now + 60_000);
   await expect(putBack).toHaveCount(0);
+  // Past its week, a new change is the way back.
+  await expect(card.getByRole("button", { name: "Turn it back on" })).toBeVisible();
   // A disable whose reply was lost, read back as off: what is true, and no Put back.
   await page.evaluate(() =>
     (window as unknown as Fixture).clawtrateFixture.setState(({ computerUseUndo: _, ...state }) => {
@@ -2436,6 +2438,80 @@ test("F-480 #988: Put back leaves at its expiry, and a read-back after a lost re
   ).toBeVisible();
   await expect(card.getByRole("button", { name: /Put back|Turn off Computer Use/ })).toHaveCount(0);
   await expect(card.getByRole("button", { name: "Try again" })).toBeVisible();
+});
+
+test("F-480 #988: with no receipt, Turn it back on is a new change that turns the check on", async ({
+  page,
+}) => {
+  await open(page, "not-run-computer-use-unreceipted");
+  const card = page.locator('[data-testid="turn-error"][data-run="run-live"]');
+  await expect(
+    card.getByText("The Computer Use startup check is off on this gateway.", { exact: true }),
+  ).toBeVisible();
+  await expect(card.getByRole("button", { name: "Put back" })).toHaveCount(0);
+  await page.evaluate(() => {
+    const w = window as unknown as {
+      sent: unknown[];
+      clawtrateFixture: { invoke: (command: { type: string }) => unknown };
+    };
+    w.sent = [];
+    const invoke = w.clawtrateFixture.invoke.bind(w.clawtrateFixture);
+    w.clawtrateFixture.invoke = (command) => (w.sent.push(command), invoke(command));
+  });
+  const turnOn = card.getByRole("button", { name: "Turn it back on" });
+  await turnOn.press("Enter");
+  await expect(
+    card.getByText("The Computer Use startup check is back on.", { exact: true }),
+  ).toBeVisible();
+  const sent = await page.evaluate(() => (window as unknown as { sent: unknown[] }).sent);
+  expect(sent).toEqual([
+    expect.objectContaining({ type: "changeNotRunComputerUse", restore: false, turnOn: true }),
+  ]);
+  await expect(turnOn).toHaveCount(0);
+  const turnOff = card.getByRole("button", { name: "Turn off Computer Use on this gateway" });
+  await expect(turnOff).toBeFocused();
+});
+
+test("F-480 #988: a Turn it back on the gateway refuses leaves the card off and says so", async ({
+  page,
+}) => {
+  await open(page, "not-run-computer-use-unreceipted");
+  const card = page.locator('[data-testid="turn-error"][data-run="run-live"]');
+  await page.evaluate(() => {
+    const fixture = (
+      window as unknown as {
+        clawtrateFixture: { invoke: (command: { type: string; turnOn?: boolean }) => unknown };
+      }
+    ).clawtrateFixture;
+    const invoke = fixture.invoke.bind(fixture);
+    fixture.invoke = (command) =>
+      command.type === "changeNotRunComputerUse" && command.turnOn
+        ? Promise.resolve("refused")
+        : invoke(command);
+  });
+  const turnOn = card.getByRole("button", { name: "Turn it back on" });
+  await turnOn.click();
+  await expect(
+    card.getByText("The gateway refused the Computer Use change.", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    card.getByText("The Computer Use startup check is off on this gateway.", { exact: true }),
+  ).toBeVisible();
+  await expect(turnOn).toBeVisible();
+  await expect(card.getByRole("button", { name: /Turn off Computer Use/ })).toHaveCount(0);
+});
+
+test("F-480 #988: below admin, the card says where the check can be turned back on", async ({
+  page,
+}) => {
+  await open(page, "not-run-computer-use-unreceipted-access");
+  const card = page.locator('[data-testid="turn-error"][data-run="run-live"]');
+  await expect(
+    card.getByText("A device with full control of the gateway can turn it back on.", {
+      exact: true,
+    }),
+  ).toBeVisible();
+  await expect(card.getByRole("button", { name: /Turn it back on|Put back/ })).toHaveCount(0);
 });
 
 test("F-480 #988: a Put back the gateway refuses says so, and Put back stays", async ({ page }) => {
