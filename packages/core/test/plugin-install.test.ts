@@ -618,7 +618,7 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
       expect(g.loaded).toBe(false);
     });
 
-    it("clears the enable's in-flight mark when the gateway refused it and the retry stopped", async () => {
+    it("a fresh Turn on starts again after a busy enable's retry stopped for the owner's deny", async () => {
       // Ran on a real gateway: "already running" to the enable, the owner's deny during the wait.
       const g = at(version, "off");
       g.hooks.push({
@@ -632,12 +632,14 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
         stop: "owner-settings",
         mayBeRunning: false,
       });
-      expect(ctx.records.get(ID)).toMatchObject({ pending: null });
-      // With the deny gone, Turn on goes on and enables: the refused enable isn't a lost one.
+      expect(ctx.records.get(ID)).toMatchObject({ step: 6, pending: null });
+      // The owner writes the deny, then clears it. The current config hash can differ from the
+      // record's hash while the plugin and its grant still look the same.
       g.deny = [];
-      expect(await new PluginInstaller(ctx).turnOn(PIN)).toEqual({
-        kind: "enabled",
-      });
+      g.hash += 1;
+      expect(g.configHash).not.toBe(ctx.records.get(ID)?.configHash);
+      expect(await new PluginInstaller(ctx).turnOn(PIN)).toEqual({ kind: "enabled" });
+      expect(ctx.records.get(ID)).toBeNull();
     });
 
     it("reads every page of sessions.list before it calls the gateway idle", async () => {

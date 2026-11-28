@@ -928,8 +928,16 @@ export class PluginInstaller {
           () => drop(),
           running,
         );
-        if (resumed.kind !== "continue") return resumed.outcome;
-        return await this.steps(epoch, pin, record!, resumed.from, digest, save, drop, running);
+        if (resumed.kind === "continue")
+          return await this.steps(epoch, pin, record!, resumed.from, digest, save, drop, running);
+        if (
+          wanted === null ||
+          resumed.outcome.kind !== "stopped" ||
+          resumed.outcome.stop !== "taken-off-elsewhere"
+        )
+          return resumed.outcome;
+        // The saved attempt was superseded. Recheck step 1 for the mode the person just chose.
+        this.checkCancel();
       }
       if (wanted === null) return { kind: "stopped", stop: "lost", mayBeRunning: false };
 

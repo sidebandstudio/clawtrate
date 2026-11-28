@@ -277,6 +277,8 @@ An entry has a shape when it has exactly the shape's fields with the shape's val
 
 **What a resume can't tell, a limit of this engine.** Another device's Take it off that found nothing to write (the entry already `OFF`, no grant yet, nothing loaded: an install of this device stopped between its stage and its grant) leaves no trace on the gateway, so a later resume of this device would grant and enable; the first condition of section 14 closes it, by resuming toward on only from the person's own press. The engine gives the host the two entry points that rule needs: `settle`, which does only work toward off (a "taking off" record, an emergency turn-off, another pin's clean-up) and never sends a grant or an enable, safe at every connection; and `resume` and the modes, toward on, called only from a press.
 
+If the person presses a mode and the saved record is superseded, the engine drops that record and checks the chosen mode from step 1 on the same press. A call to `resume` alone returns the stop.
+
 A device without a record never takes over another device's attempt. When it finds an entry `OFF` or `OFF+G` it didn't write, it waits up to 60 seconds for `plugins.changed` before showing any line: the other device is probably finishing.
 
 **Stops and lost replies.** "Stop" means no further write, and a line from section 10 that says the state the last read confirmed. The gateway's own answer is kept behind an "i". A lost reply is a stop: a timeout, a closed connection, or an answer missing a field this section compares. The engine never repeats a write blindly: the next connection reads first, and resumes only by the record, as above.

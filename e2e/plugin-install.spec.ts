@@ -299,6 +299,7 @@ test("row 7e: the owner's revoked grant before the enable: never left running", 
       await ownerPatch({ plugins: { entries: { [ID]: { enabled: false, hooks: null } } } });
     }
   }).turnOn(pin);
+  expect(revoked).toBe(true);
   // Which of two safe ends depends on the gateway's timing. If it takes the enable at once, step
   // 8 finds the grant gone and turns the plugin off ("owner-settings"). If it answers "already
   // running" just after the owner's write (it often does), the read before the enable is sent
