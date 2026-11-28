@@ -35,12 +35,11 @@ export function observeMac(out: string) {
   let auditExecEvents = 0;
   let samplesTaken = 0;
   let installerDialogFromAccessibility = false;
-  // A terminal keeps eslogger's JSON lines flowing while setup is in progress.
-  const audit = spawn(
-    "/usr/bin/script",
-    ["-q", "/dev/null", "/usr/bin/sudo", "-n", "/usr/bin/eslogger", "exec"],
-    { stdio: ["pipe", "pipe", "pipe"] },
-  );
+  // eslogger excludes its own process group from the event stream.
+  const audit = spawn("/usr/bin/sudo", ["-n", "/usr/bin/eslogger", "exec"], {
+    detached: true,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
   audit.on("error", (error) => (auditError = error.message));
   audit.stderr.on("data", (chunk: Buffer) => {
     auditError = (auditError + chunk.toString()).slice(0, 1000);
@@ -62,12 +61,17 @@ export function observeMac(out: string) {
     }
   });
 
-  async function confirmAudit() {
+  async function probeAudit() {
+    auditReady = false;
     for (let i = 0; i < 20 && !auditReady && audit.exitCode === null; i += 1) {
       execFileSync("/usr/bin/true");
       await sleep(250);
     }
-    auditReadyBeforeLaunch = auditReady;
+    return auditReady;
+  }
+
+  async function confirmAudit() {
+    auditReadyBeforeLaunch = await probeAudit();
   }
 
   async function sample(
@@ -130,10 +134,14 @@ export function observeMac(out: string) {
   }
 
   async function finish() {
-    const auditComplete =
-      auditReadyBeforeLaunch && audit.exitCode === null && audit.signalCode === null;
-    audit.kill("SIGTERM");
-    audit.stdin.destroy();
+    const auditReadyAfterWalk = auditReadyBeforeLaunch && (await probeAudit());
+    if (audit.pid && audit.exitCode === null && audit.signalCode === null) {
+      await run("/usr/bin/sudo", ["-n", "/bin/kill", "-TERM", String(audit.pid)], {
+        timeout: 5000,
+      }).catch((error: unknown) => {
+        auditError = (auditError + String(error)).slice(0, 1000);
+      });
+    }
     input.close();
     audit.stdout.destroy();
     audit.stderr.destroy();
@@ -178,6 +186,7 @@ export function observeMac(out: string) {
           auditError,
           auditExecEvents,
           auditReadyBeforeLaunch,
+          auditReadyAfterWalk,
         },
         null,
         2,
@@ -188,7 +197,7 @@ export function observeMac(out: string) {
         ({ executable }) => executable === "/usr/bin/git" || executable === "/usr/bin/xcrun",
       )
         ? "called"
-        : auditComplete
+        : auditReadyAfterWalk
           ? "not-called"
           : "unverified",
       dialogShown:
