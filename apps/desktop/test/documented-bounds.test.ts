@@ -42,6 +42,7 @@ import {
 import {
   FIRST_BOT_RECONNECT_WAIT_MS,
   FIRST_BOT_REREAD_MS,
+  FIRST_BOT_REREAD_SLOW_MS,
 } from "../../../packages/ui/src/bots/words.ts";
 import {
   MAX_RESULT_CHARS,
@@ -72,6 +73,7 @@ it("F-504: the first bot's setup documents its waiting limits", () => {
   expect(lastCell("Clawtrate first-bot account check")).toBe(written(FIRST_BOT_ACCOUNT_CHECK_MS));
   expect(lastCell("First-bot setup sheet")).toBe(written(FIRST_BOT_RECONNECT_WAIT_MS));
   expect(lastCell("First-bot reconnect re-read")).toBe(written(FIRST_BOT_REREAD_MS));
+  expect(lastCell("First-bot later re-read")).toBe(written(FIRST_BOT_REREAD_SLOW_MS));
 });
 
 /** The bound at `path` beneath `bound`: field names, `item` for a list's item, `value` for a map's. */

@@ -183,6 +183,75 @@ for (const size of SIZES.filter(({ name }) => name === "1440" || name === "phone
       await expect(dialog.getByText("Uses OpenAI · Workshop.")).toBeVisible();
     });
 
+    test("F-504: the account read can land before the returned gateway names itself", async ({
+      page,
+    }) => {
+      await openFixture(page, FIRST);
+      const dialog = await providers(page);
+      await outsideAccounts(page, false, []);
+      // Back, and the account read lands while the gateway hasn't named itself on this connection.
+      const named = await page.evaluate(() => {
+        const { clawtrateFixture } = window as unknown as {
+          clawtrateFixture: { setState(change: (state: ClawtrateState) => ClawtrateState): void };
+        };
+        let id: string | null = null;
+        clawtrateFixture.setState((state) => {
+          id = state.connection.gatewayId;
+          const connectedAt = (state.connection.connectedAt ?? 0) + 1;
+          return {
+            ...state,
+            connection: {
+              ...state.connection,
+              connectedAt,
+              status: "connected",
+              canAdmin: true,
+              gatewayId: null,
+            },
+            accounts: {
+              ...state.accounts,
+              readOn: state.accounts.readOn && {
+                ...state.accounts.readOn,
+                connectedAt,
+                gatewayId: null,
+              },
+              accounts: [
+                {
+                  id: "openai:outside-0",
+                  label: "Workshop",
+                  provider: "openai",
+                  type: "api_key",
+                  status: "static",
+                  expiresAt: null,
+                  kind: "gateway",
+                  made: null,
+                  keptBy: null,
+                  logoutSupported: false,
+                },
+              ],
+            },
+          };
+        });
+        return id;
+      });
+      await expect(dialog.getByRole("heading", { name: "Make your first bot" })).toHaveCount(0);
+      // Then it names itself, and the read already made counts.
+      await page.evaluate((id) => {
+        const { clawtrateFixture } = window as unknown as {
+          clawtrateFixture: { setState(change: (state: ClawtrateState) => ClawtrateState): void };
+        };
+        clawtrateFixture.setState((state) => ({
+          ...state,
+          connection: { ...state.connection, gatewayId: id },
+          accounts: {
+            ...state.accounts,
+            readOn: state.accounts.readOn && { ...state.accounts.readOn, gatewayId: id },
+          },
+        }));
+      }, named);
+      await expect(dialog.getByRole("heading", { name: "Make your first bot" })).toBeVisible();
+      await expect(dialog.getByText("Uses OpenAI · Workshop.")).toBeVisible();
+    });
+
     test("F-504: a failed account read after a reconnect waits and reads again instead of showing the tiles", async ({
       page,
     }) => {
@@ -197,6 +266,11 @@ for (const size of SIZES.filter(({ name }) => name === "1440" || name === "phone
       const asked = await refreshes(page);
       await page.clock.fastForward(5_000);
       await expect.poll(() => refreshes(page)).toBeGreaterThan(asked);
+      // Past the reconnect wait it still asks now and then: a slower gateway is found too.
+      await page.clock.fastForward(45_000);
+      const later = await refreshes(page);
+      await page.clock.fastForward(30_000);
+      await expect.poll(() => refreshes(page)).toBeGreaterThan(later);
       await readAgain(page, ["Workshop", "Studio"]);
       const account = dialog.getByRole("combobox", { name: "Account" });
       await expect(account).toHaveValue("");

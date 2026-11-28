@@ -23,6 +23,7 @@ import {
   effortFor,
   FIRST_BOT_RECONNECT_WAIT_MS,
   FIRST_BOT_REREAD_MS,
+  FIRST_BOT_REREAD_SLOW_MS,
   firstEffort,
   firstBotModel,
   firstModel,
@@ -276,11 +277,15 @@ export function NewBot({
     canSubmitHere;
   useEffect(() => {
     if (!rereading) return;
-    const timer = setInterval(refresh, FIRST_BOT_REREAD_MS);
-    const end = setTimeout(() => clearInterval(timer), FIRST_BOT_RECONNECT_WAIT_MS);
+    // Often while the reconnect wait lasts, then now and then for as long as the tiles stay up.
+    let timer = setInterval(refresh, FIRST_BOT_REREAD_MS);
+    const slow = setTimeout(() => {
+      clearInterval(timer);
+      timer = setInterval(refresh, FIRST_BOT_REREAD_SLOW_MS);
+    }, FIRST_BOT_RECONNECT_WAIT_MS);
     return () => {
       clearInterval(timer);
-      clearTimeout(end);
+      clearTimeout(slow);
     };
     // One schedule per returned connection.
     // eslint-disable-next-line react-hooks/exhaustive-deps

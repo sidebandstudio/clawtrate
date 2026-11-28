@@ -297,9 +297,12 @@ export const FIRST_BOT_RECONNECT_WAIT_MS = 45_000;
 /**
  * After a reconnect whose account read found no usable account, or failed, first setup reads
  * again this often until the reconnect wait ends: a gateway still starting may answer its first
- * reads before it has loaded its accounts or catalogue.
+ * reads before it has loaded its accounts or catalogue, and which comes first varies.
  */
 export const FIRST_BOT_REREAD_MS = 5_000;
+
+/** After the reconnect wait, first setup still reads again this often while it shows the tiles. */
+export const FIRST_BOT_REREAD_SLOW_MS = 30_000;
 
 /** A shared, signed-in account and a model the gateway offers for its provider. */
 export function firstBotModel(accounts: AccountsState, signedIn: string | null) {
