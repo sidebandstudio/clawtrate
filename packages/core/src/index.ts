@@ -63,7 +63,7 @@ export { isStopNow } from "./stop-words.ts";
 export * from "./send-size.ts";
 export * from "./chat-link.ts";
 export * from "./composer-menus.ts";
-export { fromBase64, sha256Hex, toBase64, utf8Bytes } from "./bytes.ts";
+export { fromBase64, randomId, sha256Hex, toBase64, utf8Bytes } from "./bytes.ts";
 export { worstCase, type Bound, type Digest } from "./bounds.ts";
 export * from "./state-bounds.ts";
 export * from "./worst-case.ts";

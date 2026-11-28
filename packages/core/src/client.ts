@@ -38,7 +38,7 @@ import {
 } from "@openclaw/gateway-client/browser";
 import { isRefusedDecision } from "./approval-refusals.ts";
 import { answerKind, readAgain, READ_AGAIN_TRIES } from "./read-again.ts";
-import { fromBase64, toBase64 } from "./bytes.ts";
+import { fromBase64, randomId, toBase64 } from "./bytes.ts";
 import { goesUnmarked, markerRefusal } from "./send-marker.ts";
 import { chatSendParams, sendRefusal } from "./send-size.ts";
 import { GatewayScopeUpgrade } from "@openclaw/gateway-client/scope-upgrade";
@@ -13069,10 +13069,7 @@ export class ClawtrateClient {
   }
 
   private randomId(): string {
-    if (this.host.randomId) return this.host.randomId();
-    const cryptoApi = (globalThis as { crypto?: { randomUUID?: () => string } }).crypto;
-    if (cryptoApi?.randomUUID) return cryptoApi.randomUUID();
-    return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+    return this.host.randomId?.() ?? randomId();
   }
 
   private log(level: "debug" | "info" | "warn" | "error", message: string): void {

@@ -20,6 +20,7 @@ import {
   cannotKeep,
   CHECKIN_BOT_DELETED,
   MAX_CHECKIN_PROMPT_CHARS,
+  randomId,
   sameStamp,
   type Bot,
   type CheckInsState,
@@ -313,7 +314,7 @@ function CheckInsDialog({
   };
   const submit = () => {
     if (saving || unpublished() || waitingForBase) return;
-    const id = crypto.randomUUID();
+    const id = randomId();
     submitting.current = id;
     setPending(true);
     change({ saveId: id, refused: null });

@@ -55,6 +55,7 @@ import { SearchPalette, type SearchTarget } from "./search/SearchPalette.tsx";
 import { PlacementSavesProvider } from "./machines/RunsOn.tsx";
 import type { SettingsSection } from "./Settings.tsx";
 import { DeviceRequestPrompt, DevicesAsking } from "./DeviceApproval.tsx";
+import { PanelBoundary } from "./PanelBoundary.tsx";
 
 /**
  * Command for Try again on an open task: carries the failure text this view is retrying so the
@@ -918,58 +919,62 @@ export function Shell({
         />
         <div className="main-pane" ref={mainRef}>
           {routines ? (
-            <RoutinesView
-              state={state}
-              info={info}
-              nav={routines}
-              onNav={setRoutines}
-              onClose={closeRoutines}
-              onOpenTask={(botId, key) => {
-                selection.selectTask(botId, key, mapSessionRow({ key, agentId: botId }));
-                openDetail();
-              }}
-              narrow={onePane || (mainWidth !== null && mainWidth < 520)}
-              phone={onePane}
-            />
+            <PanelBoundary>
+              <RoutinesView
+                state={state}
+                info={info}
+                nav={routines}
+                onNav={setRoutines}
+                onClose={closeRoutines}
+                onOpenTask={(botId, key) => {
+                  selection.selectTask(botId, key, mapSessionRow({ key, agentId: botId }));
+                  openDetail();
+                }}
+                narrow={onePane || (mainWidth !== null && mainWidth < 520)}
+                phone={onePane}
+              />
+            </PanelBoundary>
           ) : (
-            <OpenTaskContext.Provider value={selection.selectTask}>
-              <WorkLinksContext.Provider value={workLinks}>
-                <Conversation
-                  task={task}
-                  bot={bot}
-                  taskCount={selection.tasks.length}
-                  discovery={state.discovery}
-                  transcript={transcript}
-                  openError={taskKey ? (refusals.get(taskKey) ?? null) : null}
-                  panelOpen={panelOpen}
-                  onTogglePanel={togglePanel}
-                  onOpenPanel={() => setPanel(true)}
-                  onBack={backToList}
-                  onReload={reload}
-                  strip={
-                    strip && (
-                      <StatusStrip
-                        strip={strip}
-                        retryAt={state.connection.retryAt}
-                        onRetry={() => void send({ type: "retry" })}
-                        onReload={reload}
-                      />
-                    )
-                  }
-                  refreshNote={refreshNoteShown(state, phase, transcript)}
-                  interactive={interactive}
-                  connection={state.connection}
-                  info={info}
-                  granted={granted}
-                  online={online}
-                  current={current}
-                  toggleRef={toggleRef}
-                  inert={drawerOpen || inert}
-                  onShowComputer={showComputer}
-                  updatingWords={updating ? updatingStripWords(updating).text : null}
-                />
-              </WorkLinksContext.Provider>
-            </OpenTaskContext.Provider>
+            <PanelBoundary>
+              <OpenTaskContext.Provider value={selection.selectTask}>
+                <WorkLinksContext.Provider value={workLinks}>
+                  <Conversation
+                    task={task}
+                    bot={bot}
+                    taskCount={selection.tasks.length}
+                    discovery={state.discovery}
+                    transcript={transcript}
+                    openError={taskKey ? (refusals.get(taskKey) ?? null) : null}
+                    panelOpen={panelOpen}
+                    onTogglePanel={togglePanel}
+                    onOpenPanel={() => setPanel(true)}
+                    onBack={backToList}
+                    onReload={reload}
+                    strip={
+                      strip && (
+                        <StatusStrip
+                          strip={strip}
+                          retryAt={state.connection.retryAt}
+                          onRetry={() => void send({ type: "retry" })}
+                          onReload={reload}
+                        />
+                      )
+                    }
+                    refreshNote={refreshNoteShown(state, phase, transcript)}
+                    interactive={interactive}
+                    connection={state.connection}
+                    info={info}
+                    granted={granted}
+                    online={online}
+                    current={current}
+                    toggleRef={toggleRef}
+                    inert={drawerOpen || inert}
+                    onShowComputer={showComputer}
+                    updatingWords={updating ? updatingStripWords(updating).text : null}
+                  />
+                </WorkLinksContext.Provider>
+              </OpenTaskContext.Provider>
+            </PanelBoundary>
           )}
           <button
             type="button"
@@ -979,41 +984,43 @@ export function Shell({
             onClick={() => setPanel(false)}
           />
           {panelOpen && !routines && (
-            <WorkPanel
-              bot={bot}
-              task={task}
-              transcript={transcript}
-              tab={workTab}
-              onTab={setWorkTab}
-              online={state.connection.status === "connected"}
-              connectedAt={state.connection.connectedAt}
-              fileRequest={fileRequest}
-              onShowInChat={showInChat}
-              onFilePath={setOpenFilePath}
-              computer={state.computer}
-              connection={state.connection}
-              interactive={interactive}
-              onShowStep={showStep}
-              onShowQuestion={showQuestion}
-              onRequestAccess={
-                info.readOnly || state.connection.fullPairing
-                  ? null
-                  : () => void send({ type: "requestAccess" }).catch(() => {})
-              }
-              onOpenMachines={() => onOpenSettings("machines")}
-              onDeleteBot={(each) =>
-                setDeleting({ id: each.id, name: each.name, isDefault: each.isDefault })
-              }
-              drawer={drawerOpen}
-              onClose={() => setPanel(false)}
-              closeRef={closeRef}
-              panelRef={panelRef}
-              accounts={state.accounts}
-              bots={state.bots}
-              tasks={bot ? (state.tasksByBot[bot.id] ?? []) : []}
-              transcripts={state.transcripts}
-              info={info}
-            />
+            <PanelBoundary>
+              <WorkPanel
+                bot={bot}
+                task={task}
+                transcript={transcript}
+                tab={workTab}
+                onTab={setWorkTab}
+                online={state.connection.status === "connected"}
+                connectedAt={state.connection.connectedAt}
+                fileRequest={fileRequest}
+                onShowInChat={showInChat}
+                onFilePath={setOpenFilePath}
+                computer={state.computer}
+                connection={state.connection}
+                interactive={interactive}
+                onShowStep={showStep}
+                onShowQuestion={showQuestion}
+                onRequestAccess={
+                  info.readOnly || state.connection.fullPairing
+                    ? null
+                    : () => void send({ type: "requestAccess" }).catch(() => {})
+                }
+                onOpenMachines={() => onOpenSettings("machines")}
+                onDeleteBot={(each) =>
+                  setDeleting({ id: each.id, name: each.name, isDefault: each.isDefault })
+                }
+                drawer={drawerOpen}
+                onClose={() => setPanel(false)}
+                closeRef={closeRef}
+                panelRef={panelRef}
+                accounts={state.accounts}
+                bots={state.bots}
+                tasks={bot ? (state.tasksByBot[bot.id] ?? []) : []}
+                transcripts={state.transcripts}
+                info={info}
+              />
+            </PanelBoundary>
           )}
         </div>
         {offerOpen && (
