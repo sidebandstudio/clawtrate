@@ -403,10 +403,62 @@ export function near(a: number[], b: number[], tolerance = 6): boolean {
   return a.every((value, i) => Math.abs(value - b[i]!) <= tolerance);
 }
 
-function simctl(...args: string[]) {
-  const result = spawnSync("xcrun", ["simctl", ...args], { encoding: "utf8" });
+/** How one `xcrun simctl` run ended. */
+export type SimctlResult = { status: number | null; stdout: string; stderr: string };
+
+// The device's unified log (`appLog`) can run past spawnSync's 1 MB default.
+const xcrunSimctl = (args: string[]): SimctlResult =>
+  spawnSync("xcrun", ["simctl", ...args], { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 });
+
+/** A run's output, or an error that names the command and holds what simctl said. */
+function simctlOutput(args: string[], result: SimctlResult): string {
   if (result.status !== 0) throw new Error(`simctl ${args.join(" ")}: ${result.stderr}`);
   return result.stdout;
+}
+
+function simctl(...args: string[]) {
+  return simctlOutput(args, xcrunSimctl(args));
+}
+
+const SIMCTL_READ_ATTEMPTS = 3;
+
+/**
+ * Whether simctl's diagnostic on stderr says CoreSimulator did not answer in
+ * time: ETIMEDOUT, `(domain=NSPOSIXErrorDomain, code=60)`. Every domain and
+ * code it names must be that one, so another error that mentions a timeout is
+ * not asked again. Only a diagnostic that names no domain or code at all falls
+ * back to the words "Operation timed out".
+ */
+function simctlTimedOut(stderr: string): boolean {
+  const rest = stderr.replace(/domain=NSPOSIXErrorDomain, code=60\b/g, "");
+  if (/\b(?:domain|code)=/.test(rest)) return false;
+  return rest !== stderr || rest.includes("Operation timed out");
+}
+
+/**
+ * A simctl command that only reads, such as `pbpaste`. On a loaded machine
+ * CoreSimulator can time out before it answers (#1039), which is no result of
+ * the app's, so the read is asked again: three times at most, a second apart,
+ * and then it fails with the last error. Any other error fails at once. Never
+ * use it for a command that changes the device: one that timed out may still
+ * have taken effect.
+ */
+export function simctlRead(
+  args: string[],
+  run: (args: string[]) => SimctlResult = xcrunSimctl,
+  pause: (ms: number) => void = sleepSync,
+): string {
+  for (let attempt = 1; ; attempt += 1) {
+    const result = run(args);
+    if (result.status === 0 || attempt === SIMCTL_READ_ATTEMPTS || !simctlTimedOut(result.stderr))
+      return simctlOutput(args, result);
+    pause(1_000);
+  }
+}
+
+/** Block for `ms`, as the synchronous simctl runs around it do. */
+function sleepSync(ms: number) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 /**
@@ -463,7 +515,9 @@ export function openSystemSettings() {
 
 /** Whether an app runs on the device now, from the system's own list of the apps it launched. */
 export function running(bundleId: string): boolean {
-  return simctl("spawn", env.device, "launchctl", "list").includes(`UIKitApplication:${bundleId}`);
+  return simctlRead(["spawn", env.device, "launchctl", "list"]).includes(
+    `UIKitApplication:${bundleId}`,
+  );
 }
 
 /** Delete the app and install it again: iOS removes its data with it, not its Keychain items. */
@@ -475,7 +529,7 @@ export function reinstall() {
 
 /** What the device's pasteboard holds. */
 export function pasteboard(): string {
-  return simctl("pbpaste", env.device);
+  return simctlRead(["pbpaste", env.device]);
 }
 
 /** The system's text size, as Settings, Accessibility, Larger Text sets it. */
@@ -518,7 +572,7 @@ export function infoPlist(key: string): string {
  * once one newer than `after` exists. iOS writes it as the app leaves the front.
  */
 export async function switcherSnapshot(after: number) {
-  const container = simctl("get_app_container", env.device, env.bundle, "data").trim();
+  const container = simctlRead(["get_app_container", env.device, env.bundle, "data"]).trim();
   const root = join(container, "Library/SplashBoard/Snapshots");
   const newest = () => {
     const found: Array<{ path: string; time: number }> = [];
@@ -1210,7 +1264,7 @@ export async function screenText(): Promise<string> {
 
 /** How many of the app's own data files hold each needle, as UTF-8 or UTF-16. */
 export function containerHits(needles: string[]): number[] {
-  const root = simctl("get_app_container", env.device, env.bundle, "data").trim();
+  const root = simctlRead(["get_app_container", env.device, env.bundle, "data"]).trim();
   const hits = needles.map(() => 0);
   const visit = (dir: string) => {
     let entries: Dirent[];
@@ -1237,7 +1291,7 @@ export function containerHits(needles: string[]): number[] {
 
 /** The folders the app's share step holds in its cache now (`src/host/share.ts`), by name. */
 export function sharedFolders(): string[] {
-  const data = simctl("get_app_container", env.device, env.bundle, "data").trim();
+  const data = simctlRead(["get_app_container", env.device, env.bundle, "data"]).trim();
   try {
     return readdirSync(join(data, "Library", "Caches", "clawtrate-share"));
   } catch {
@@ -1245,27 +1299,36 @@ export function sharedFolders(): string[] {
   }
 }
 
-/** The app's own log lines since a time, from the device's unified log. */
-export function appLog(sinceSeconds: number): string {
-  const result = spawnSync(
-    "xcrun",
+/**
+ * The app's own log lines from the last `sinceSeconds`, from the device's
+ * unified log. The start is fixed once, as a date `log show` takes, so a read
+ * that is asked again still begins where the first one did.
+ */
+export function appLog(
+  sinceSeconds: number,
+  run?: (args: string[]) => SimctlResult,
+  pause?: (ms: number) => void,
+  now: () => number = Date.now,
+): string {
+  // UTC to the whole second, rounded down so the window holds all it was asked for.
+  const from = new Date(now() - sinceSeconds * 1000).toISOString();
+  const start = `${from.slice(0, 10)} ${from.slice(11, 19)}+0000`;
+  return simctlRead(
     [
-      "simctl",
       "spawn",
       env.device,
       "log",
       "show",
-      "--last",
-      `${sinceSeconds}s`,
+      "--start",
+      start,
       "--style",
       "compact",
       "--predicate",
       'process == "Clawtrate"',
     ],
-    { encoding: "utf8", maxBuffer: 64 * 1024 * 1024 },
+    run,
+    pause,
   );
-  if (result.status !== 0) throw new Error(`log show: ${result.stderr}`);
-  return result.stdout;
 }
 
 /** One of the device's built-in displays, as CoreDevice reports it, in points. */
