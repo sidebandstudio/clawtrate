@@ -16,10 +16,12 @@ import { execFileSync } from "node:child_process";
 import {
   chmodSync,
   existsSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { createServer as createHttpServer } from "node:http";
@@ -31,6 +33,8 @@ import {
   ClawtrateClient,
   createBridgeSession,
   FULL_SCOPES,
+  GATEWAY_PROTOCOL,
+  parseBridgeCommand,
   PROOF_REFUSAL_LINES,
   type SetupLook,
 } from "@clawtrate/core";
@@ -206,13 +210,13 @@ function proofFile(dir: string, folder: string, answer: Buffer | string, once = 
  * A WebSocket server of the test's own in front of core's fake gateway: each connection it
  * accepts after the upgrade is one of the fake gateway's sockets.
  */
-async function bridged(gateway: FakeGateway) {
+async function bridged(gateway: FakeGateway, listenPort = 0) {
   // Every TCP connection the port accepts is counted, upgraded to a socket or not.
   const http = createHttpServer();
   let accepted = 0;
   http.on("connection", () => (accepted += 1));
   const server = new WebSocketServer({ server: http });
-  await new Promise<void>((done) => http.listen(0, "127.0.0.1", done));
+  await new Promise<void>((done) => http.listen(listenPort, "127.0.0.1", done));
   const port = (http.address() as AddressInfo).port;
   server.on("connection", (ws) => {
     const fake = gateway.createWebSocket(`ws://127.0.0.1:${port}`);
@@ -254,7 +258,13 @@ function silentGateway(): FakeGateway {
  */
 function localApp(
   local: LocalConnect,
-  options: { secure?: boolean; dataDir?: string; installer?: () => Installer } = {},
+  options: {
+    secure?: boolean;
+    dataDir?: string;
+    startWaitMs?: number;
+    worker?: URL;
+    installer?: () => Installer;
+  } = {},
 ) {
   const dataDir = options.dataDir ?? mkdtempSync(join(scratch, "app-"));
   const host = createNodeHost({
@@ -316,7 +326,8 @@ function localApp(
     stopPrograms: () => {},
     confirm: dialog,
     log: (line) => lines.push(line),
-    localConnect: { ...local, worker: WORKER },
+    localConnect: { ...local, worker: options.worker ?? WORKER },
+    ...(options.startWaitMs === undefined ? {} : { startWaitMs: options.startWaitMs }),
   });
   return {
     client,
@@ -598,6 +609,402 @@ describe.skipIf(!mac)(
       }
     });
 
+    it.each(["default", "clawtrate"] as const)(
+      "F-602: starts only the %s LaunchAgent on request and offers Connect with full control",
+      async (profile) => {
+        const home = newHome();
+        const port = await freePort();
+        const folder = profile === "default" ? ".openclaw" : ".openclaw-clawtrate";
+        const label = profile === "default" ? "ai.openclaw.gateway" : "ai.openclaw.clawtrate";
+        const agents = join(home, "Library", "LaunchAgents");
+        const plist = join(agents, `${label}.plist`);
+        mkdirSync(agents, { recursive: true });
+        writeFileSync(plist, "stand-in");
+        settingsFile(home, folder, tokenSettings(port, "a-gateway-token"));
+        const other = profile === "default" ? "clawtrate" : "default";
+        settingsFile(
+          home,
+          other === "default" ? ".openclaw" : ".openclaw-clawtrate",
+          tokenSettings(await freePort(), "another-gateway-token"),
+        );
+        const gateway = silentGateway();
+        let server: Awaited<ReturnType<typeof bridged>> | undefined;
+        const run = vi.fn(async ([action]: string[]) => {
+          if (action === "kickstart" && !server) return 1;
+          if (action === "bootstrap") {
+            server = await bridged(gateway, port);
+            proofFile(home, folder, provedAnswer(home, folder, port));
+          }
+          // Bootstrap can start the job even when a second kickstart is refused.
+          return action === "kickstart" ? 1 : 0;
+        });
+        const app = localApp({
+          home,
+          helper: standInHelper(home),
+          platform,
+          sandboxed: true,
+          deadlineMs: SLOW,
+          launchd: { labelAt: async () => label, run },
+        });
+        const session = createBridgeSession(app.client, { setup: app.setup });
+        try {
+          await app.client.start({ resume: false });
+          await app.setup.lookAtStart();
+          expect(app.setup.current.look).toMatchObject({
+            outcome: "stopped",
+            profile,
+            canStart: true,
+            others: [`profile ${other}`],
+          });
+          expect(run).not.toHaveBeenCalled();
+          await session.apply(parseBridgeCommand({ type: "setupStart" }));
+          const domain = `gui/${process.getuid!()}`;
+          expect(run.mock.calls.map(([args]) => args)).toEqual([
+            ["kickstart", `${domain}/${label}`],
+            ["bootstrap", domain, plist],
+            ["kickstart", `${domain}/${label}`],
+          ]);
+          expect(app.setup.current.look).toMatchObject({
+            outcome: "running",
+            profile,
+            port,
+            others: [`profile ${other}`],
+          });
+          expect(gateway.connects).toHaveLength(0);
+          await app.setup.connect();
+          await until(() => app.setup.current.phase === "done", 30_000);
+          expect(gateway.connects[0]).toMatchObject({ scopes: FULL_SCOPES });
+          expect(app.dialog).not.toHaveBeenCalled();
+        } finally {
+          session.dispose();
+          app.client.stop();
+          await server?.close();
+        }
+      },
+      SLOW,
+    );
+
+    it.each(["missing", "link", "wrong label", "changed port"] as const)(
+      "F-602: Start never asks launchd when the existing service is unsafe or the look changed (%s)",
+      async (problem) => {
+        const home = newHome();
+        const port = await freePort();
+        const label = "ai.openclaw.gateway";
+        const agents = join(home, "Library", "LaunchAgents");
+        const plist = join(agents, `${label}.plist`);
+        mkdirSync(agents, { recursive: true });
+        if (problem === "link") {
+          writeFileSync(join(home, "other.plist"), "stand-in");
+          symlinkSync(join(home, "other.plist"), plist);
+        } else if (problem !== "missing") {
+          writeFileSync(plist, "stand-in");
+        }
+        settingsFile(home, ".openclaw", tokenSettings(port, "a-gateway-token"));
+        const run = vi.fn(async () => 0);
+        const app = localApp({
+          home,
+          helper: standInHelper(home),
+          platform,
+          sandboxed: true,
+          deadlineMs: SLOW,
+          launchd: {
+            labelAt: async () => (problem === "wrong label" ? "another.job" : label),
+            run,
+          },
+        });
+        try {
+          await app.setup.look();
+          const changed = problem === "changed port";
+          expect(app.setup.current.look).toMatchObject({ outcome: "stopped", canStart: changed });
+          if (changed) {
+            const changedPort = await freePort();
+            settingsFile(home, ".openclaw", tokenSettings(changedPort, "a-gateway-token"));
+            await app.setup.start();
+            expect(app.setup.current.look?.port).toBe(changedPort);
+          } else {
+            await expect(app.setup.start()).rejects.toThrow("There is nothing to start.");
+          }
+          expect(run).not.toHaveBeenCalled();
+        } finally {
+          app.client.stop();
+        }
+      },
+      SLOW,
+    );
+
+    it.each(["refused", "unanswered", "cancelled"] as const)(
+      "F-602: a Start that is %s returns a usable stopped card",
+      async (ending) => {
+        const home = newHome();
+        const port = await freePort();
+        const label = "ai.openclaw.gateway";
+        const agents = join(home, "Library", "LaunchAgents");
+        mkdirSync(agents, { recursive: true });
+        writeFileSync(join(agents, `${label}.plist`), "stand-in");
+        settingsFile(home, ".openclaw", tokenSettings(port, "a-gateway-token"));
+        const kick = deferred<number>();
+        const run = vi.fn(async () =>
+          ending === "cancelled" ? kick.promise : ending === "refused" ? 1 : 0,
+        );
+        const local = {
+          home,
+          helper: standInHelper(home),
+          platform,
+          sandboxed: true,
+          deadlineMs: SLOW,
+          launchd: { labelAt: async () => label, run },
+        };
+        const app = localApp(local, { startWaitMs: 0 });
+        try {
+          await app.setup.look();
+          const starting = app.setup.start();
+          expect(app.setup.current.phase).toBe("starting");
+          if (ending === "cancelled") {
+            await until(() => run.mock.calls.length === 1);
+            app.setup.cancel();
+            kick.resolve(1);
+          }
+          await starting;
+          if (ending === "cancelled") {
+            expect(run).toHaveBeenCalledTimes(1);
+          } else {
+            expect(app.setup.current.failure).toMatchObject({
+              kind: "not-started",
+              reason: ending === "unanswered" ? "no-answer" : null,
+            });
+            app.setup.cancel();
+          }
+          await until(() => app.setup.current.phase === "found", 30_000);
+          expect(app.setup.current).toMatchObject({
+            phase: "found",
+            look: { outcome: "stopped", canStart: true },
+          });
+          const reopened = localApp(local, { dataDir: app.dataDir });
+          try {
+            await reopened.setup.lookAtStart();
+            expect(reopened.setup.current.look).toMatchObject({
+              outcome: "stopped",
+              canStart: true,
+            });
+          } finally {
+            reopened.client.stop();
+          }
+        } finally {
+          app.client.stop();
+        }
+      },
+      SLOW,
+    );
+
+    it.each([
+      {
+        code: "AUTH_TOKEN_MISMATCH",
+        expectedProtocol: undefined,
+        kind: "token-refused",
+        reason: null,
+      },
+      { code: "PROTOCOL_MISMATCH", expectedProtocol: 1, kind: "protocol", reason: "gateway-older" },
+      { code: "PROTOCOL_MISMATCH", expectedProtocol: 99, kind: "protocol", reason: "client-older" },
+      {
+        code: "PROTOCOL_MISMATCH",
+        expectedProtocol: GATEWAY_PROTOCOL,
+        kind: "protocol",
+        reason: null,
+      },
+    ])(
+      "F-602: a proved gateway's $code refusal becomes $kind ($reason)",
+      async ({ code, expectedProtocol, kind, reason }) => {
+        const home = newHome();
+        const gateway = silentGateway();
+        gateway.connectReply = () => ({
+          ok: false,
+          error: {
+            code: code === "AUTH_TOKEN_MISMATCH" ? "UNAUTHORIZED" : "INVALID_REQUEST",
+            message: "refused",
+            details: { code, expectedProtocol },
+          },
+        });
+        const server = await bridged(gateway);
+        settingsFile(home, ".openclaw", tokenSettings(server.port, "a-gateway-token"));
+        proofFile(home, ".openclaw", provedAnswer(home, ".openclaw", server.port));
+        const app = localApp({
+          home,
+          helper: standInHelper(home),
+          platform,
+          sandboxed: true,
+          deadlineMs: SLOW,
+        });
+        try {
+          await app.client.start({ resume: false });
+          await app.setup.look();
+          await app.setup.connect();
+          await until(() => app.setup.current.phase === "failed", 30_000);
+          expect(app.setup.current.failure).toMatchObject({ kind, reason });
+          expect(JSON.stringify(app.setup.current)).not.toContain("a-gateway-token");
+          await until(() => app.client.state.connection.gatewayUrl === null, 30_000);
+          await app.setup.look();
+          expect(app.setup.current).toMatchObject({ phase: "found", look: { outcome: "running" } });
+        } finally {
+          app.client.stop();
+          await server.close();
+        }
+      },
+      SLOW,
+    );
+
+    function pendingService() {
+      const home = newHome();
+      const label = "ai.openclaw.gateway";
+      const agents = join(home, "Library", "LaunchAgents");
+      mkdirSync(agents, { recursive: true });
+      writeFileSync(join(agents, `${label}.plist`), "stand-in");
+      const labelAt = vi.fn(async () => label);
+      const pending = deferred<number>();
+      const run = vi.fn(() => pending.promise);
+      const app = localApp({
+        home,
+        helper: standInHelper(home),
+        platform,
+        sandboxed: true,
+        deadlineMs: SLOW,
+        launchd: { labelAt, run },
+      });
+      return { home, app, pending, run, labelAt };
+    }
+
+    it(
+      "F-602: Back keeps looking until an accepted Start's gateway is listening",
+      async () => {
+        const { home, app, pending, run, labelAt } = pendingService();
+        const port = await freePort();
+        settingsFile(home, ".openclaw", tokenSettings(port, "a-gateway-token"));
+        let server: Awaited<ReturnType<typeof bridged>> | undefined;
+        try {
+          await app.setup.look();
+          const starting = app.setup.start();
+          await until(() => run.mock.calls.length === 1, 30_000);
+          app.setup.cancel();
+          expect(app.setup.current.phase).toBe("looking");
+          const observations = labelAt.mock.calls.length;
+          pending.resolve(0);
+          await until(() => labelAt.mock.calls.length > observations, 30_000);
+          // At least one look saw the port closed after launchd accepted the request.
+          await sleep(300);
+          expect(app.setup.current.phase).toBe("looking");
+          server = await bridged(silentGateway(), port);
+          proofFile(home, ".openclaw", provedAnswer(home, ".openclaw", port));
+          await starting;
+          await until(() => app.setup.current.phase === "found", 30_000);
+          expect(app.setup.current.look).toMatchObject({ outcome: "running", port });
+        } finally {
+          pending.resolve(1);
+          app.setup.reset();
+          app.client.stop();
+          await server?.close();
+        }
+      },
+      SLOW,
+    );
+
+    it(
+      "F-602: leaving and reopening while Start is pending cannot launch it twice",
+      async () => {
+        const { home, app, pending, run, labelAt } = pendingService();
+        const port = await freePort();
+        settingsFile(home, ".openclaw", tokenSettings(port, "a-gateway-token"));
+        try {
+          await app.setup.look();
+          const starting = app.setup.start();
+          await until(() => run.mock.calls.length === 1, 30_000);
+          app.setup.cancel();
+          app.setup.cancel();
+          expect(app.setup.current.phase).toBe("idle");
+          const observations = labelAt.mock.calls.length;
+          const reopening = app.setup.look();
+          expect(
+            await Promise.race([
+              reopening.then(() => "finished"),
+              sleep(300).then(() => "waiting"),
+            ]),
+          ).toBe("waiting");
+          expect(labelAt.mock.calls).toHaveLength(observations);
+          await expect(app.setup.start()).rejects.toThrow("There is nothing to start.");
+          expect(run).toHaveBeenCalledTimes(1);
+          pending.resolve(1);
+          await starting;
+          await reopening;
+          expect(app.setup.current.look).toMatchObject({ outcome: "stopped", canStart: true });
+          expect(run).toHaveBeenCalledTimes(1);
+        } finally {
+          pending.resolve(1);
+          app.setup.reset();
+          app.client.stop();
+        }
+      },
+      SLOW,
+    );
+
+    it.each(["settings", "empty", "link"] as const)(
+      "F-602: detects a named profile by its own settings file metadata (%s)",
+      async (state) => {
+        const home = newHome();
+        const profile = "Work_Lab";
+        const path = join(home, `.openclaw-${profile}`);
+        mkdirSync(path, { mode: 0o700 });
+        if (state === "settings") writeFileSync(join(path, "openclaw.json"), "never parsed");
+        if (state === "link") {
+          writeFileSync(join(home, "other.json"), "never followed");
+          symlinkSync(join(home, "other.json"), join(path, "openclaw.json"));
+        }
+        const app = localApp({
+          home,
+          helper: standInHelper(home),
+          platform,
+          sandboxed: true,
+          deadlineMs: SLOW,
+        });
+        try {
+          await app.setup.lookAtStart();
+          expect(app.setup.current).toMatchObject({ phase: "found", unasked: true });
+          const look =
+            state === "settings"
+              ? { outcome: "named-profile", profile, port: null }
+              : { outcome: "not-found", profile: null };
+          expect(app.setup.current.look).toMatchObject(look);
+          expect(readFileSync(join(home, "commands"), "utf8").trim().split("\n")).toEqual([
+            "read-private",
+            "read-private",
+          ]);
+          await expect(app.setup.connect()).rejects.toThrow("nothing to connect to");
+        } finally {
+          app.client.stop();
+        }
+      },
+      SLOW,
+    );
+
+    it(
+      "F-602: a settings worker that cannot finish still leaves a result",
+      async () => {
+        const home = newHome();
+        settingsFile(home, ".openclaw", tokenSettings(await freePort(), "a-gateway-token"));
+        const app = localApp(
+          { home, helper: standInHelper(home), platform, sandboxed: true, deadlineMs: SLOW },
+          { worker: new URL("./missing-worker.ts", import.meta.url) },
+        );
+        try {
+          await app.setup.look();
+          expect(app.setup.current.look).toMatchObject({
+            outcome: "cant-tell",
+            reason: "settings-unfinished",
+          });
+        } finally {
+          app.client.stop();
+        }
+      },
+      SLOW,
+    );
+
     it("F-602: says what the look found, and offers only a gateway it proved", async () => {
       const listening = await bridged(silentGateway());
       const stopped = await freePort();
@@ -724,7 +1131,7 @@ describe.skipIf(!mac)(
             const dialled = listening.accepted();
             await setup.lookAtStart();
             const label = JSON.stringify(entry.look);
-            expect(setup.current.phase, label).toBe("found");
+            expect(setup.current, label).toMatchObject({ phase: "found", unasked: true });
             expect(setup.current.look, label).toMatchObject(entry.look);
             expect(JSON.stringify(setup.current), label).not.toContain("a-gateway-token");
             if (entry.look.reason === "tls") {

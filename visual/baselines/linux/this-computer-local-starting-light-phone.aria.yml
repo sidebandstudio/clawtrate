@@ -1,0 +1,9 @@
+- status
+- main:
+  - button "Back"
+  - heading "Starting OpenClaw" [level=2]
+  - paragraph: Checking the gateway
+  - list "Steps":
+    - listitem "Starting OpenClaw, done": Starting OpenClaw
+    - listitem "Checking the gateway, running": Checking the gateway
+  - paragraph: Starting OpenClaw

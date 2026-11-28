@@ -44,6 +44,16 @@ export type LocalConnect = {
   deadlineMs?: number;
   /** Only the handover after an install may retry a native helper timeout. */
   retryHelperTimeout?: () => boolean;
+  /**
+   * Runs a bounded launchd request in the current account's session. A person's packaged Mac
+   * app provides it. Tests may inject a stand-in.
+   */
+  launchd?: Launchd;
+};
+
+export type Launchd = {
+  labelAt: (plist: string) => Promise<string | null>;
+  run: (args: string[]) => Promise<number>;
 };
 
 /**
@@ -56,13 +66,26 @@ export type LocalConnect = {
  */
 export function localConnectFor(
   run: Parameters<typeof mustSandbox>[0],
-  where: { home?: string | null; helper: string | null; platform: NodeJS.Platform },
+  where: {
+    home?: string | null;
+    helper: string | null;
+    platform: NodeJS.Platform;
+    launchd?: Launchd;
+  },
   accountHomeOf: () => string | null = accountHome,
 ): LocalConnect | null {
   const sandboxed = mustSandbox(run);
   const home = sandboxed ? where.home : accountHomeOf();
   if (!home || (!sandboxed && where.home != null && where.home !== home)) return null;
-  return { home, helper: where.helper, platform: where.platform, sandboxed };
+  return {
+    home,
+    helper: where.helper,
+    platform: where.platform,
+    sandboxed,
+    ...(!sandboxed && where.platform === "darwin" && where.launchd
+      ? { launchd: where.launchd }
+      : {}),
+  };
 }
 
 /**

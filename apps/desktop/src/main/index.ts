@@ -20,6 +20,7 @@ import {
   shell,
   type WebContents,
 } from "electron";
+import { execFile } from "node:child_process";
 import { chmodSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { readFile, rename, rm, stat, writeFile } from "node:fs/promises";
@@ -53,7 +54,7 @@ import { computerPlace, Installer, installSupported } from "../setup/install.ts"
 import { installTarget, PINS } from "../setup/install-pins.ts";
 import { InstallRunner } from "../setup/install-runner.ts";
 import { quitGate } from "../setup/quit.ts";
-import { localConnectFor, provedRouteFor } from "../setup/local-connect.ts";
+import { localConnectFor, provedRouteFor, type Launchd } from "../setup/local-connect.ts";
 import { ProgramRunner } from "../setup/programs.ts";
 import { resolveSetupLaunch, sandboxOpener, type Opened } from "../setup/sandbox.ts";
 import { startSyntheticGateway } from "../setup/synthetic-gateway.ts";
@@ -168,6 +169,23 @@ const KEYCHAIN_CHECK = keychainCheckName(
 );
 if (KEYCHAIN_CHECK) app.setName(KEYCHAIN_CHECK);
 
+/** Run a fixed system tool with a deadline. The caller uses only its label or exit status. */
+function launchAgentTool(program: "/usr/bin/plutil" | "/bin/launchctl", args: string[]) {
+  return new Promise<string | null>((resolve) => {
+    execFile(
+      program,
+      args,
+      { timeout: 5_000, killSignal: "SIGKILL", maxBuffer: 8192 },
+      (error, stdout) => resolve(error ? null : stdout.trim()),
+    );
+  });
+}
+
+const macLaunchd: Launchd = {
+  labelAt: (plist) => launchAgentTool("/usr/bin/plutil", ["-extract", "Label", "raw", plist]),
+  run: async (args) => ((await launchAgentTool("/bin/launchctl", args)) === null ? 1 : 0),
+};
+
 /**
  * Local connect (docs/design/setup-effortless.md §3): a person's packaged Mac app only, with its
  * Keychain, its native helper in Contents/Helpers and the account's own home. Off in every other
@@ -184,6 +202,7 @@ const LOCAL_CONNECT =
           // packaging/config.ts `LOCAL_GATEWAY_HELPER`, built and signed with the app.
           helper: join(process.resourcesPath, "..", "Helpers", "ClawtrateLocalGateway"),
           platform: process.platform,
+          launchd: macLaunchd,
         },
       )
     : null;

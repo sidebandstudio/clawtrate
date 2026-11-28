@@ -1120,7 +1120,7 @@ export const SCENARIOS: Scenario[] = [
   {
     name: "create-task",
     phrase: "start a separate task",
-    bots: "any bot, on OpenClaw 2026.11.10",
+    bots: "any bot, on OpenClaw with sessions_create",
     summary: `Starts a task of the bot's own with \`sessions_create\`, the tool OpenClaw 2026.11.10 adds for a task a person asks for, labelled "${CREATE_TASK.label}", whose first message is the bot's brief. 2026.10.6 has no such tool.`,
     steps: () => [
       tool("sessions_create", { label: CREATE_TASK.label, message: CREATE_TASK.message }),

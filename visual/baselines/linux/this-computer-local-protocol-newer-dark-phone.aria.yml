@@ -1,0 +1,14 @@
+- status
+- main:
+  - button "Back"
+  - heading "Connecting" [level=2]
+  - paragraph
+  - list "Steps":
+    - listitem "Checking it matches OpenClaw's settings, done": Checking it matches OpenClaw's settings
+    - listitem "Pairing this Mac, failed": Pairing this Mac
+    - listitem "Loading your bots, waiting": Loading your bots
+  - alert:
+    - paragraph: This gateway needs a newer version of Clawtrate.
+  - button "Look again"
+  - button "Use Advanced"
+  - paragraph: Connecting

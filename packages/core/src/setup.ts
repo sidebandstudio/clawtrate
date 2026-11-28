@@ -33,6 +33,8 @@ export type LookOutcome =
    * failed, `ProofRefusalKind`).
    */
   | "unverified"
+  /** A named profile outside this Mac's automatic pairing routes has its own settings file. */
+  | "named-profile"
   | "not-found"
   | "windows";
 
@@ -52,6 +54,8 @@ export type CantTellReason =
   | "read-only"
   /** Local connect: OpenClaw's settings file can't be used here (its form, its sign-in, its rights). */
   | "settings"
+  /** Local connect: the settings reader did not finish parsing. */
+  | "settings-unfinished"
   /** Local connect: OpenClaw's settings turn TLS on, or don't certainly leave it off; it dials `ws://` only. */
   | "tls"
   | ProofRefusalKind;
@@ -105,6 +109,8 @@ export type SetupLook = {
   /** The configured bind the status reported: `loopback` or `lan`; anything else is not reported. */
   listens: "loopback" | "lan" | null;
   service: LookService | null;
+  /** A local Mac gateway did not answer and the host can ask its LaunchAgent to start. */
+  canStart?: boolean;
   port: number | null;
   /** For `not-token`: the gateway's other sign-in. */
   authMode: "password" | "none" | "trusted-proxy" | null;
@@ -144,6 +150,15 @@ export type SetupFailureKind =
    * it started (TLS on, for one). Advanced, or a look again.
    */
   | "unanswered"
+  /**
+   * Local connect: Start OpenClaw asked its LaunchAgent to start, and nothing answered at its port
+   * in time (or launchd refused).
+   */
+  | "not-started"
+  /** Local connect: the gateway refused the token its settings file holds. */
+  | "token-refused"
+  /** The gateway refused the handshake for its protocol: it is too old, or newer, for this app. */
+  | "protocol"
   /** The connection failed in another way; the connection state says how. */
   | "other";
 
@@ -159,8 +174,7 @@ export type SetupFailure = {
   kind: SetupFailureKind;
   exitCode: number | null;
   port: number | null;
-  /** For `refused`: what was refused; for `unverified`, which fact the proof refused. */
-  reason: SetupRefusal | ProofRefusalKind | null;
+  reason: SetupRefusal | ProofRefusalKind | "no-answer" | "gateway-older" | "client-older" | null;
 };
 
 export type SetupPhase =
@@ -172,6 +186,8 @@ export type SetupPhase =
   /** The host's dialog is open. */
   | "confirming"
   | "connecting"
+  /** Local connect: Start OpenClaw asked its LaunchAgent to start, and waits for its port. */
+  | "starting"
   /** Connected through setup: the app takes over. */
   | "done"
   | "failed"
@@ -324,6 +340,10 @@ export type SetupHost = {
    * connect, this request is the consent (`SetupOffer.local`).
    */
   connect(): Promise<void>;
+  /**
+   * Ask macOS to start a stopped local gateway with its existing LaunchAgent, then look again.
+   */
+  start(): Promise<void>;
   /**
    * Ask the host to set OpenClaw up on this computer, after a look found
    * nothing, or to try again after a failed attempt. The host shows its own

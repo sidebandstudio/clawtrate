@@ -3522,7 +3522,7 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
     },
   },
   {
-    name: "a task a bot starts with sessions_create, on OpenClaw 2026.11.10 only",
+    name: "a task a bot starts with sessions_create when the gateway offers it",
     covers: ["#create-task"],
     run: async (h) => {
       const key = await h.session("pip", "create-task");

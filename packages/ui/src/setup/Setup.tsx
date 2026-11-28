@@ -27,7 +27,7 @@ import {
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import logoUrl from "../assets/logo-mark.png";
 import { useCommand } from "../bridge.tsx";
-import { CommandLine, PRODUCT_NAME, SLOGAN } from "../ConnectScreen.tsx";
+import { PRODUCT_NAME, SLOGAN } from "../ConnectScreen.tsx";
 import { FullControlConsent } from "../FullControl.tsx";
 import { InfoCard, InfoTip } from "../InfoTip.tsx";
 import { leaveLook } from "../this-computer.ts";
@@ -268,18 +268,6 @@ function ExternalLink({ children, href }: { children: ReactNode; href: string })
   );
 }
 
-function HowToUpdate() {
-  return (
-    <details className="b-disclosure s-disclosure">
-      <summary>How to update</summary>
-      <div className="b-disclosure-body">
-        <CommandLine command="openclaw update" label="Copy update command" />
-        <Hint>Run it yourself when you're ready.</Hint>
-      </div>
-    </details>
-  );
-}
-
 const SERVICE_WORDS: Record<LookService, string> = {
   launchagent: "LaunchAgent",
   "launchagent-stopped": "LaunchAgent, stopped",
@@ -358,6 +346,7 @@ function LocalConnect({
   return (
     <>
       <Lede>{LOCAL_FOUND_LINE}</Lede>
+      {look.profile && look.others.length > 0 && <Hint>Using the {look.profile} profile.</Hint>}
       {asksFull && <FullControlConsent />}
       <Actions>
         <Primary onClick={connect}>Connect</Primary>
@@ -383,14 +372,14 @@ function Others({ others, onAdvanced }: { others: string[]; onAdvanced: () => vo
 const CANT_TELL: Record<string, string> = {
   timeout: "The look didn't finish in time.",
   shape: "Clawtrate couldn't read the OpenClaw result.",
-  "no-answer": "Clawtrate couldn't read a gateway answer.",
+  "no-answer": "The gateway didn't answer in time.",
   "not-set-up": "OpenClaw didn't report a config file for this profile.",
   endpoint:
     "Clawtrate couldn't confirm where this gateway answers, so it doesn't connect to it by itself. Use Advanced.",
   "read-only":
     "This version of OpenClaw can change its own installation whenever one of its commands runs, so Clawtrate doesn't run it to look. Use Advanced with the gateway's address and token.",
-  settings:
-    "Clawtrate can't use OpenClaw's settings on this Mac to connect by itself. Use Advanced.",
+  settings: "Clawtrate couldn't read usable OpenClaw settings for this Mac.",
+  "settings-unfinished": "Clawtrate couldn't finish reading OpenClaw's settings.",
   tls: "These settings may require a secure address. Use Advanced to connect with the gateway's address.",
 };
 
@@ -408,10 +397,6 @@ function refusalWords(reason: string | null, port: number | null): string {
     : `Clawtrate couldn't verify what is listening at port ${port}.`;
 }
 
-/** Why local connect didn't offer a gateway that answered: nothing was sent to it. */
-const unverifiedWords = (look: SetupLook) =>
-  `${refusalWords(look.reason, look.port)} Clawtrate doesn't connect to it by itself. Use Advanced, or look again.`;
-
 /** The found card and actions for each result of the look (§6). */
 function LookResult({
   look,
@@ -419,6 +404,7 @@ function LookResult({
   onAdvanced,
   onAnother,
   onInstall,
+  onLookAgain: lookAgain,
   confirming,
   full,
 }: {
@@ -427,12 +413,12 @@ function LookResult({
   onAdvanced: () => void;
   onAnother: () => void;
   onInstall: () => void;
+  onLookAgain: () => void;
   confirming: boolean;
   /** This device asks for full control at a new pairing (`HostInfo.fullControl`). */
   full: boolean;
 }) {
   const send = useCommand();
-  const lookAgain = () => void send({ type: "setupLook" });
   const advanced = <Primary onClick={onAdvanced}>Use Advanced</Primary>;
   switch (look.outcome) {
     case "running":
@@ -490,7 +476,6 @@ function LookResult({
             {`OpenClaw ${look.version} isn't the version this ${PRODUCT_NAME} is tested with (${TESTED_OPENCLAW_VERSION}). Use Advanced to try connecting.`}
           </Note>
           <Actions>{advanced}</Actions>
-          <HowToUpdate />
         </Found>
       );
     case "too-old":
@@ -500,28 +485,33 @@ function LookResult({
           tone="danger"
           heading="This OpenClaw is too old for automatic setup"
         >
-          <Lede>{`OpenClaw ${look.version} is below the version this ${PRODUCT_NAME} offers for automatic setup (${OLDEST_OPENCLAW_VERSION}). Update it, then look again.`}</Lede>
+          <Lede>{`Automatic setup requires OpenClaw ${OLDEST_OPENCLAW_VERSION} or later. Clawtrate found ${look.version}.`}</Lede>
           <Actions>
             <Primary onClick={lookAgain}>Look again</Primary>
+            <Quiet onClick={onAdvanced}>Use Advanced</Quiet>
           </Actions>
-          <HowToUpdate />
         </Found>
       );
     case "unverified":
       return (
         <Found mark={<WarnIcon />} tone="warn" heading="OpenClaw settings found">
-          <Lede>{unverifiedWords(look)}</Lede>
+          <Lede>{refusalWords(look.reason, look.port)}</Lede>
           <Actions>
             {advanced}
             <Quiet onClick={lookAgain}>Look again</Quiet>
           </Actions>
         </Found>
       );
-    case "stopped":
+    case "stopped": {
+      const canStart = offer.local && look.canStart;
       return (
         <Found
           mark={<PauseIcon />}
-          heading="OpenClaw is installed but not running"
+          heading={
+            offer.local
+              ? "OpenClaw's gateway isn't running"
+              : "OpenClaw is installed but not running"
+          }
           facts={[
             // Local connect reads settings, not the program or its service.
             ...(offer.local
@@ -530,18 +520,33 @@ function LookResult({
                   ["Installed program", look.version ?? NOT_REPORTED],
                   ["Service", serviceWords(look.service)],
                 ] as Array<[string, string]>)),
+            ...(offer.local && look.profile && look.others.length > 0
+              ? ([["Profile", look.profile]] as Array<[string, string]>)
+              : []),
             ["Port", `No gateway answered on port ${look.port}`],
           ]}
         >
-          <Lede>Start OpenClaw yourself, then look again.</Lede>
+          <Lede>
+            {canStart
+              ? "OpenClaw will keep running after Clawtrate closes."
+              : "Clawtrate couldn't find a service it can start for this gateway."}
+          </Lede>
           <Actions>
-            <Primary onClick={lookAgain}>Look again</Primary>
+            {canStart ? (
+              <>
+                <Primary onClick={() => void send({ type: "setupStart" })}>Start OpenClaw</Primary>
+                <Quiet onClick={lookAgain}>Look again</Quiet>
+              </>
+            ) : (
+              <Primary onClick={lookAgain}>Look again</Primary>
+            )}
           </Actions>
           <p className="s-links">
             <SmallLink onClick={onAdvanced}>Advanced</SmallLink>
           </p>
         </Found>
       );
+    }
     case "program-missing":
       return (
         <Found
@@ -549,10 +554,7 @@ function LookResult({
           tone="warn"
           heading="OpenClaw seems to be set up here, but Clawtrate can't find its program"
         >
-          <Lede>
-            Clawtrate looked in the usual places. If you installed OpenClaw somewhere else, use
-            Advanced, or run <code>openclaw gateway status</code> here to see where it is.
-          </Lede>
+          <Lede>Clawtrate can't check this gateway without finding its OpenClaw program.</Lede>
           <p className="s-links">
             <SmallLink onClick={onAdvanced}>Advanced</SmallLink>
           </p>
@@ -597,6 +599,20 @@ function LookResult({
           <p className="s-links">
             <SmallLink onClick={onAdvanced}>Advanced</SmallLink>
           </p>
+        </Found>
+      );
+    case "named-profile":
+      return (
+        <Found
+          mark={<WarnIcon />}
+          tone="warn"
+          heading={`OpenClaw settings found for ${look.profile}`}
+        >
+          <Lede>Clawtrate needs this profile's gateway address to connect.</Lede>
+          <Actions>
+            {advanced}
+            <Quiet onClick={lookAgain}>Look again</Quiet>
+          </Actions>
         </Found>
       );
     case "not-found":
@@ -735,8 +751,7 @@ const FAILURES: Record<
   },
   unanswered: {
     lead: "",
-    text: () =>
-      "It may have just stopped, or be running on settings changed since it started, such as a secure address. Use Advanced, or look again.",
+    text: () => "It may have stopped or started with different settings.",
     next: "advanced",
     step: 1,
   },
@@ -759,9 +774,16 @@ const FAILURES: Record<
     next: "back",
     step: 1,
   },
+  "not-started": { lead: "OpenClaw didn't start.", next: "retry", step: 0 },
+  protocol: { lead: "", next: "look", step: 1 },
+  "token-refused": {
+    lead: "OpenClaw refused the token from its settings.",
+    text: () => "If you have a different token, you can enter it in Advanced.",
+    next: "advanced",
+    step: 1,
+  },
   other: {
     lead: "Clawtrate couldn't connect to the gateway.",
-    text: () => "Try again, or use Advanced.",
     next: "retry",
     step: 1,
   },
@@ -786,6 +808,7 @@ const REFUSED: Record<SetupRefusal, string> = {
   state: "its state folder or config didn't pass the run's checks.",
   pairing: "it pairs only in its pairing scenario.",
 };
+const START_STEPS = ["Starting OpenClaw", "Checking the gateway"];
 const LOOK_STEPS = ["Finding OpenClaw", "Checking its version", "Asking the gateway"];
 const LOCAL_LOOK_STEPS = ["Reading OpenClaw's settings", "Checking it matches OpenClaw's settings"];
 
@@ -797,12 +820,14 @@ export const CONNECT_ARM_MS = 500;
  */
 export const START_WAIT_MS = 3_000;
 
-/** The look's result the first screen offers by itself: this computer's gateway, matched to its profile. */
-const offeredHere = (offer: NonNullable<HostInfo["setup"]>, setup: SetupState) =>
-  offer.local === true &&
-  setup.unasked &&
-  setup.phase === "found" &&
-  setup.look?.outcome === "running";
+/** The first look can lead with either a proved gateway or the local setup card. */
+const offeredHere = (offer: NonNullable<HostInfo["setup"]>, setup: SetupState) => {
+  if (offer.local !== true || !setup.unasked || setup.phase !== "found") return null;
+  const outcome = setup.look?.outcome;
+  return outcome === "running" || outcome === "not-found" || outcome === "named-profile"
+    ? outcome
+    : null;
+};
 
 /** Setting OpenClaw up (§10): the steps, in the host's order. */
 const INSTALL_STEPS = [
@@ -1054,15 +1079,9 @@ function Installing({
 }
 
 /** A screen's identity, so that a new one takes focus and is announced. */
-function screenKey(
-  view: SetupView,
-  setup: SetupState,
-  offer: NonNullable<HostInfo["setup"]>,
-): string {
+function screenKey(view: SetupView, setup: SetupState): string {
   if (setup.phase === "install-failed" && setup.install?.recovery)
     return `install-recovery:${setup.install.recovery}`;
-  if (view === "first" && offeredHere(offer, setup)) return "first:found";
-  if (view === "first" && setup.unasked && setup.phase === "looking") return "first:waiting";
   if (view !== "here") return view;
   return `${setup.phase}:${setup.look?.outcome ?? ""}:${setup.failure?.kind ?? setup.install?.failure?.kind ?? ""}`;
 }
@@ -1075,7 +1094,7 @@ export function SetupFlow({
   info,
 }: {
   view: SetupView;
-  onView: (view: SetupView) => void;
+  onView: (view: SetupView, advancedAddress?: string) => void;
   setup: SetupState;
   connection: ConnectionState;
   info: HostInfo;
@@ -1085,12 +1104,8 @@ export function SetupFlow({
   const root = useRef<HTMLDivElement>(null);
   const [announced, setAnnounced] = useState("");
   // The host's own look at start: the first screen waits for it, with nothing to press, for at
-  // most START_WAIT_MS. Nothing that grants anything appears where another control was: once the
-  // question is on screen, a gateway found later is offered only after This computer.
-  // The first screen's wait for the host's own look at start, resolved exactly once: to the
-  // offer, when the look matched a gateway to its profile in time, or to the question, at its end or after
-  // START_WAIT_MS, whichever comes first. The timer ends with the wait, so an offer shown in
-  // time stays; and once the question is shown, no offer takes its place.
+  // most START_WAIT_MS. Once the question is on screen, the look's result can be
+  // reached through This computer. It never takes the place of the question.
   const [initial, setInitial] = useState<"waiting" | "offer" | "question">(() =>
     offer.local === true && setup.unasked && setup.phase === "looking"
       ? "waiting"
@@ -1109,14 +1124,15 @@ export function SetupFlow({
     return () => clearTimeout(timer);
   }, [initial]);
   const holding = view === "first" && initial === "waiting";
-  const offerHere = view === "first" && initial === "offer" && offeredHere(offer, setup);
+  const firstOutcome = view === "first" && initial === "offer" ? offeredHere(offer, setup) : null;
+  const firstCard = firstOutcome === "not-found" || firstOutcome === "named-profile";
   const key = holding
     ? "first:waiting"
-    : offerHere
+    : firstOutcome === "running"
       ? "first:found"
-      : view === "first" && !setup.install?.recovery
-        ? "first"
-        : screenKey(view, setup, offer);
+      : firstCard
+        ? `first:${firstOutcome}`
+        : screenKey(view, setup);
   const shown = useRef<string | null>(null);
   useEffect(() => {
     const first = shown.current === null;
@@ -1142,8 +1158,18 @@ export function SetupFlow({
     send({ type: "setupLook" }).catch(() => onView("first"));
   };
   const advanced = () => {
+    // Resetting a failed local attempt may select the earlier gateway. Take the local
+    // text field's address from the refusal, before that selection is restored.
+    const local = offer.local === true && view === "here";
+    const port = local && setup.failure?.kind === "token-refused" ? setup.failure.port : null;
+    const address =
+      port !== null && Number.isInteger(port) && port > 0 && port <= 65_535
+        ? `ws://127.0.0.1:${port}`
+        : local
+          ? ""
+          : undefined;
+    onView("advanced", address);
     if (view === "here") void send({ type: "setupReset" });
-    onView("advanced");
   };
   const another = () => {
     if (view === "here") void send({ type: "setupReset" });
@@ -1151,6 +1177,7 @@ export function SetupFlow({
   };
   // Back from a wait or a failure of Connect returns to what the look found.
   const backFromConnect = () => void send({ type: "setupCancel" });
+  const startFailed = setup.phase === "failed" && setup.failure?.kind === "not-started";
   const onKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
     if (event.key !== "Escape" || view === "first" || setup.phase === "installing") return;
     event.preventDefault();
@@ -1160,6 +1187,7 @@ export function SetupFlow({
       view === "here" &&
       (setup.phase === "connecting" ||
         setup.phase === "install-failed" ||
+        setup.phase === "starting" ||
         (setup.phase === "failed" && setup.failure?.kind !== "refused"))
     )
       backFromConnect();
@@ -1173,18 +1201,19 @@ export function SetupFlow({
     );
   } else if (holding) {
     body = <WaitingHere />;
-  } else if (view === "first") {
-    body = offerHere ? (
-      <FoundHere
-        look={setup.look!}
-        full={info.fullControl === true}
-        onConnect={() => onView("here")}
-        onAnother={another}
-        onAdvanced={advanced}
-      />
-    ) : (
-      <FirstScreen offer={offer} onThis={lookHere} onAnother={another} onAdvanced={advanced} />
-    );
+  } else if (view === "first" && !firstCard) {
+    body =
+      firstOutcome === "running" ? (
+        <FoundHere
+          look={setup.look!}
+          full={info.fullControl === true}
+          onConnect={() => onView("here")}
+          onAnother={another}
+          onAdvanced={advanced}
+        />
+      ) : (
+        <FirstScreen offer={offer} onThis={lookHere} onAnother={another} onAdvanced={advanced} />
+      );
   } else if (view === "another") {
     body = (
       <>
@@ -1223,6 +1252,36 @@ export function SetupFlow({
         )}
       </>
     );
+  } else if (setup.phase === "starting" || startFailed) {
+    const noAnswer = setup.failure?.reason === "no-answer";
+    body = (
+      <>
+        <Back onBack={backFromConnect} />
+        <Mark />
+        <Title id="setup-title">Starting OpenClaw</Title>
+        <Steps
+          steps={START_STEPS}
+          current={startFailed ? Number(noAnswer) : setup.step}
+          failed={startFailed}
+        />
+        {startFailed && (
+          <>
+            <Note
+              tone="danger"
+              lead={
+                noAnswer
+                  ? "The gateway didn't answer in time."
+                  : "macOS couldn't start the OpenClaw service."
+              }
+            />
+            <Actions>
+              <Primary onClick={() => void send({ type: "setupStart" })}>Try again</Primary>
+              <Quiet onClick={() => void send({ type: "setupLook" })}>Look again</Quiet>
+            </Actions>
+          </>
+        )}
+      </>
+    );
   } else if (setup.phase === "failed" && setup.failure?.kind === "refused") {
     body = (
       <>
@@ -1249,7 +1308,7 @@ export function SetupFlow({
       failure?.kind === "unreachable"
         ? `Nothing answered on port ${failure.port}.`
         : failure?.kind === "unanswered"
-          ? `The gateway at port ${failure.port} didn't answer as OpenClaw's settings on this Mac say it would.`
+          ? `The gateway at port ${failure.port} didn't finish connecting.`
           : failure?.kind === "unverified"
             ? refusalWords(failure.reason, failure.port)
             : (copy?.lead ?? "");
@@ -1266,7 +1325,13 @@ export function SetupFlow({
         {failure && copy && (
           <>
             <Note tone="danger" lead={lead}>
-              {copy.text?.(failure.port, failure.exitCode)}
+              {failure.kind === "protocol"
+                ? failure.reason === "gateway-older"
+                  ? "This gateway speaks an older protocol than Clawtrate supports."
+                  : failure.reason === "client-older"
+                    ? "This gateway needs a newer version of Clawtrate."
+                    : "Clawtrate needs a compatible OpenClaw version to connect."
+                : copy.text?.(failure.port, failure.exitCode)}
             </Note>
             <Actions>
               {copy.next === "retry" && (
@@ -1276,7 +1341,12 @@ export function SetupFlow({
                 <Primary onClick={() => void send({ type: "setupLook" })}>Look again</Primary>
               )}
               {copy.next === "advanced" && <Primary onClick={advanced}>Use Advanced</Primary>}
-              {(failure.kind === "unverified" || failure.kind === "unanswered") && (
+              {(failure.kind === "other" || failure.kind === "protocol") && (
+                <Quiet onClick={advanced}>Use Advanced</Quiet>
+              )}
+              {(failure.kind === "unverified" ||
+                failure.kind === "unanswered" ||
+                failure.kind === "token-refused") && (
                 <Quiet onClick={() => void send({ type: "setupLook" })}>Look again</Quiet>
               )}
               {copy.next === "back" && <Primary onClick={backFromConnect}>Back</Primary>}
@@ -1292,7 +1362,7 @@ export function SetupFlow({
     const look = setup.look!;
     body = (
       <>
-        <Back onBack={toFirst} />
+        {!firstCard && <Back onBack={toFirst} />}
         <Mark />
         <Title id="setup-title">On this computer</Title>
         <LookResult
@@ -1301,10 +1371,16 @@ export function SetupFlow({
           onAdvanced={advanced}
           onAnother={another}
           onInstall={installHere}
+          onLookAgain={lookHere}
           confirming={setup.phase === "confirming"}
           full={info.fullControl === true}
         />
-        <Others others={look.others} onAdvanced={advanced} />
+        {firstOutcome === "not-found" && !offer.install && (
+          <p className="s-links">
+            <SmallLink onClick={advanced}>Advanced</SmallLink>
+          </p>
+        )}
+        {!offer.local && <Others others={look.others} onAdvanced={advanced} />}
       </>
     );
   }
