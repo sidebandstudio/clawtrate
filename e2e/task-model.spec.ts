@@ -12,6 +12,7 @@ import { ACCOUNT_CLIENTS } from "../tools/dev-gateway/src/account-checks.ts";
 import { openInstance, openOperator } from "../tools/dev-gateway/src/cli.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
 import { CREATE_TASK, HAND_OFF } from "../tools/dev-gateway/src/scenarios.ts";
+import { shapeOf } from "../tools/dev-gateway/src/versions.ts";
 import { ACCOUNTS, test } from "./accounts-instance.ts";
 import { devGateway, listInstances, startHost, stopChild } from "./global-setup.ts";
 
@@ -223,8 +224,11 @@ test("#799: a task a bot starts on a model its list doesn't allow says why in pl
   await allow(["acme/dev-2"]);
 });
 
-test("#799: on OpenClaw 2026.11.10 a task made with sessions_create is the same card, refused and started", async () => {
-  test.skip(admin.serverVersion !== "2026.11.10", "2026.10.6 has no sessions_create");
+test("#799: a task made with sessions_create shows the task card when refused or started", async () => {
+  test.skip(
+    !shapeOf(admin.serverVersion ?? "").extraAllowedTools.includes("sessions_create"),
+    "This gateway has no sessions_create",
+  );
   test.setTimeout(300_000);
   const composer = await newTask();
   await expectRefused(await startCard(composer, "#create-task", CREATE_TASK.label));
