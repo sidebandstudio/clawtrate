@@ -19,16 +19,6 @@ import { describe, expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 
-const SITES = {
-  marker: /\bCLAWTRATE_WORK_CONTEXT\b/g,
-  chatSendParams: /\bchatSendParams\(/g,
-  workContext: /\bworkContext\s*:/g,
-  "chat.send": /\brequest\s*(?:<[^>]*>)?\(\s*["'`]chat\.send["'`]/g,
-};
-
-// Comments go by the parser's tokens, so a `//` inside a string (a URL) keeps the code after it.
-const uncommented = ts.createPrinter({ removeComments: true });
-
 const NOT_SOURCE = new Set(["node_modules", "out", "dist", "build", "coverage", "test"]);
 
 function sources(dir: string): string[] {
@@ -40,18 +30,34 @@ function sources(dir: string): string[] {
   });
 }
 
+/**
+ * The site `node` is, if any. The syntax decides, so neither a comment nor the words inside a
+ * string count.
+ */
+function site(node: ts.Node): string | undefined {
+  // The method's name wherever it is: sent straight or through a constant, as `voice.ts` sends one.
+  if (ts.isStringLiteralLike(node)) return node.text === "chat.send" ? "chat.send" : undefined;
+  if (!ts.isIdentifier(node)) return undefined;
+  if (node.text === "CLAWTRATE_WORK_CONTEXT") return "marker";
+  // The field however it is named: set, taken off, or declared.
+  if (node.text === "workContext") return "workContext";
+  const call = node.parent;
+  if (node.text === "chatSendParams" && ts.isCallExpression(call) && call.expression === node)
+    return "chatSendParams";
+  return undefined;
+}
+
 /** Every site, as `file: kind` with how many times it occurs there, in the source under `dir`. */
 function sites(dir: string): Record<string, number> {
   const found: Record<string, number> = {};
   for (const file of ["packages", "apps"].flatMap((top) => sources(join(dir, top)))) {
-    const code = uncommented.printFile(
-      ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest),
-    );
     const name = relative(dir, file).split(sep).join("/");
-    for (const [kind, pattern] of Object.entries(SITES)) {
-      const count = code.match(pattern)?.length ?? 0;
-      if (count > 0) found[`${name}: ${kind}`] = count;
-    }
+    const visit = (node: ts.Node): void => {
+      const kind = site(node);
+      if (kind) found[`${name}: ${kind}`] = (found[`${name}: ${kind}`] ?? 0) + 1;
+      ts.forEachChild(node, visit);
+    };
+    visit(ts.createSourceFile(file, readFileSync(file, "utf8"), ts.ScriptTarget.Latest, true));
   }
   return found;
 }
@@ -67,6 +73,8 @@ describe("what isn't a person's message never carries the mark", () => {
       // The mark itself, and its words as a search finds them.
       "packages/core/src/send-marker.ts: marker": 2,
       "packages/core/src/send-size.ts: chatSendParams": 1,
+      // The frame's size, measured with the method's name: it sends nothing.
+      "packages/core/src/send-size.ts: chat.send": 1,
       "packages/core/src/send-size.ts: marker": 2,
       "packages/core/src/send-size.ts: workContext": 1,
     });
@@ -103,6 +111,44 @@ describe("what isn't a person's message never carries the mark", () => {
         "packages/core/src/node/relay.ts: workContext": 1,
         "packages/core/src/url.ts: chat.send": 1,
       });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("counts a send whose method's name is passed through a constant", () => {
+    const dir = mkdtempSync(join(tmpdir(), "send-marker-sources-"));
+    try {
+      mkdirSync(join(dir, "packages/core/src"), { recursive: true });
+      mkdirSync(join(dir, "apps"));
+      writeFileSync(
+        join(dir, "packages/core/src/client.ts"),
+        [
+          'const CHAT_SEND = "chat.send";',
+          "this.request(CHAT_SEND, { workContext: CLAWTRATE_WORK_CONTEXT });",
+          "",
+        ].join("\n"),
+      );
+      expect(sites(dir)).toEqual({
+        "packages/core/src/client.ts: chat.send": 1,
+        "packages/core/src/client.ts: marker": 1,
+        "packages/core/src/client.ts: workContext": 1,
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("doesn't count a site's words inside a string", () => {
+    const dir = mkdtempSync(join(tmpdir(), "send-marker-sources-"));
+    try {
+      mkdirSync(join(dir, "packages/core/src"), { recursive: true });
+      mkdirSync(join(dir, "apps"));
+      writeFileSync(
+        join(dir, "packages/core/src/client.ts"),
+        'throw new Error("Invalid workContext: expected an object");\n',
+      );
+      expect(sites(dir)).toEqual({});
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
