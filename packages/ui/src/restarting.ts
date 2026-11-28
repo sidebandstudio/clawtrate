@@ -29,7 +29,8 @@ export function connectionHeard(
   connection: Pick<ConnectionState, "status" | "restart">,
   updatingWords: string | null,
 ): string | null {
+  if (restartingNow(connection)) return updatingWords ?? RESTARTING_LEAD;
   if (connection.status === "connected") return "Connected";
-  if (connection.status !== "reconnecting") return null;
-  return updatingWords ?? (restartingNow(connection) ? RESTARTING_LEAD : "Reconnecting");
+  if (connection.status === "reconnecting") return updatingWords ?? "Reconnecting";
+  return null;
 }

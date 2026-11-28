@@ -17,7 +17,7 @@ const STOPPING = { reason: "gateway stopping" };
 /** A config write's answer, as both versions give it, saying whether it restarts the gateway. */
 const patchAnswer = (requiresRestart: unknown) => ({
   ok: true,
-  path: "/home/sam/.openclaw/openclaw.json",
+  path: "/gateway/config/openclaw.json",
   hash: "hash-2",
   changedPaths: ["gateway.controlUi.basePath"],
   sentinel: {
@@ -47,9 +47,14 @@ describe("a restart this app asked for (#913)", () => {
     await write(client, "config.patch", { raw: "{}", baseHash: "hash-1" });
     // Answered, still connected: nothing is said yet (2026.10.6 may wait minutes for running work).
     expect(restartOf(client)).toBeNull();
+    const reconnects: Array<ClawtrateState["connection"]["restart"]> = [];
+    const unsubscribe = client.store.subscribe(({ connection }) => {
+      if (connection.status === "reconnecting") reconnects.push(connection.restart);
+    });
     gateway.refuseConnections = true;
     gateway.dropAll();
     await until(() => client.state.connection.status === "reconnecting");
+    expect(reconnects[0]).toMatchObject({ cause: "asked" });
     expect(restartOf(client)).toMatchObject({ cause: "asked" });
     const { since, until: end } = restartOf(client)!;
     expect(end - since).toBe(RESTART_WAIT_MS);
@@ -57,6 +62,8 @@ describe("a restart this app asked for (#913)", () => {
     expect(client.state.connection.status).toBe("reconnecting");
     gateway.refuseConnections = false;
     await until(() => client.state.connection.status === "connected");
+    unsubscribe();
+    expect(reconnects.every((restart) => restart?.cause === "asked")).toBe(true);
     expect(restartOf(client)).toBeNull();
     client.stop();
   });

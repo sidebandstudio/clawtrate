@@ -90,7 +90,8 @@ export class RestartWatch {
   /** A hello, a stop, or the host pointed elsewhere: no restart, and no ask, carries over. */
   end(): void {
     this.askedAt = null;
-    this.clear();
+    if (this.timer !== null) clearTimeout(this.timer);
+    this.timer = null;
   }
 
   private askHolds(): boolean {
@@ -108,11 +109,5 @@ export class RestartWatch {
       this.timer = null;
       this.ctx.publish(null);
     }, waitMs);
-  }
-
-  private clear(): void {
-    if (this.timer !== null) clearTimeout(this.timer);
-    this.timer = null;
-    if (this.ctx.current()) this.ctx.publish(null);
   }
 }

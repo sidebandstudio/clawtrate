@@ -163,13 +163,17 @@ describe("#913: the footer, Settings and what is announced", () => {
     expect(gatewayDot(gatewayState(down))).toBe("error");
   });
 
-  it("the conversation announces Restarting OpenClaw when the connection drops for one", () => {
-    expect(connectionHeard({ ...down, restart: RESTART }, null)).toBe("Restarting OpenClaw");
+  it("the conversation announces Restarting OpenClaw before the close and during reconnect", () => {
+    for (const status of ["connected", "connecting", "reconnecting"] as const) {
+      expect(connectionHeard({ ...up, status, restart: RESTART }, null)).toBe(
+        "Restarting OpenClaw",
+      );
+    }
     expect(connectionHeard(down, null)).toBe("Reconnecting");
     expect(connectionHeard({ ...down, restart: RESTART }, "Updating OpenClaw to 2026.11.10")).toBe(
       "Updating OpenClaw to 2026.11.10",
     );
-    expect(connectionHeard({ ...up, restart: RESTART }, null)).toBe("Connected");
+    expect(connectionHeard(up, null)).toBe("Connected");
   });
 });
 

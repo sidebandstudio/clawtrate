@@ -10005,6 +10005,8 @@ export class ClawtrateClient {
                   },
                 }
               : {};
+          // Publish an asked restart before any observer sees the dropped connection.
+          this.restarts.dropped();
           this.setConnection({
             status: this.everConnected ? "reconnecting" : "connecting",
             ...unanswered,
@@ -10014,7 +10016,6 @@ export class ClawtrateClient {
             canApprove: false,
             canAdmin: false,
           });
-          this.restarts.dropped();
         }
       },
       onReconnectScheduled: (delayMs) => {
@@ -10381,6 +10382,7 @@ export class ClawtrateClient {
     };
     this.setConnection({
       status: "connected",
+      ...(this.state.connection.restart ? { restart: null } : {}),
       serverVersion: this.isSetup(this.settings?.url)
         ? setupVersion(hello.server.version)
         : hello.server.version,
@@ -12593,13 +12595,17 @@ export class ClawtrateClient {
   private setConnection(patch: Partial<ConnectionState>): void {
     // The host pointed anew (Suspend, Disconnect, a fresh pairing): no name card or skipped file
     // read before counts, even on a reconnect to the same address.
-    if (patch.target !== undefined && patch.target !== this.state.connection.target) {
+    const changedTarget =
+      patch.target !== undefined && patch.target !== this.state.connection.target;
+    if (changedTarget) {
       this.botNames.reset();
       this.openclawUpdates.reset();
-      this.restarts.end();
     }
-    // A connection that stops, or waits for its owner, is said as it is: no restart is waited for.
-    if (patch.status !== undefined && !comingBack(patch.status)) this.restarts.end();
+    // A connection that stops or waits for its owner no longer expects a restart.
+    if (changedTarget || (patch.status !== undefined && !comingBack(patch.status))) {
+      this.restarts.end();
+      if (this.state.connection.restart) patch = { ...patch, restart: null };
+    }
     const scrubbed = this.scrubConnection(patch);
     this.store.update((state) => ({ ...state, connection: { ...state.connection, ...scrubbed } }));
   }
