@@ -191,6 +191,105 @@ describe("the composer's menus", () => {
   });
 });
 
+describe("library skills to add (#889)", () => {
+  const moon = {
+    kind: "your-skill-to-add",
+    name: "moon-phase",
+    description: "Use when someone asks when the tide turns at the harbour.",
+    insert: "/skill s_moon_phas_e65dd9b102714cd6a01b",
+    attach: {
+      skillId: "e65dd9b1-0271-4cd6-a01b-ca53f774a07a",
+      revision: "0123456789abcdef".repeat(4),
+    },
+  };
+  // A team skill (no owner), and another person's shared skill: both a new task would get.
+  const harbour = entry({
+    skillId: "11111111-2222-4333-8444-555555555555",
+    slug: "harbour-map",
+    name: "s_harbour_ma_111111112222433384",
+    ownerProfileId: null,
+    description: "The harbour's map.",
+  });
+  const shared = entry({
+    skillId: "66666666-7777-4888-8999-000000000000",
+    slug: "ferry-times",
+    name: "s_ferry_tim_666666667777488889",
+    ownerProfileId: "profile-kit",
+    shared: true,
+    description: "Use when someone asks for the next ferry.",
+  });
+  const toAdd = (attachable: unknown[], profileId: unknown = "gateway-owner") =>
+    library({ sessionKey: "agent:otto:tides", selections: [own], attachable }, profileId);
+
+  it("F-071: lists the person's own skills the task doesn't have after the task's, tagged to add with the entry and revision the list showed, then the team's", () => {
+    const rows = slashRows(skills, metadata, toAdd([shared, harbour, saved]), true);
+    expect(rows.slice(0, 4)).toEqual([
+      tide,
+      moon,
+      {
+        kind: "team-skill-to-add",
+        name: "ferry-times",
+        description: "Use when someone asks for the next ferry.",
+        insert: "/skill s_ferry_tim_666666667777488889",
+        attach: { skillId: "66666666-7777-4888-8999-000000000000", revision: moon.attach.revision },
+      },
+      {
+        kind: "team-skill-to-add",
+        name: "harbour-map",
+        description: "The harbour's map.",
+        insert: "/skill s_harbour_ma_111111112222433384",
+        attach: { skillId: "11111111-2222-4333-8444-555555555555", revision: moon.attach.revision },
+      },
+    ]);
+    expect(rows.slice(4).map((row) => row.kind)).toEqual(["skill", "skill", "command"]);
+  });
+
+  it("F-071: offers none on a connection that can't add one, and leaves out a skill that is off, removed, another person's own, or malformed", () => {
+    // Without write access the menu is what it was.
+    expect(slashRows(null, null, toAdd([saved]))).toEqual([tide]);
+    expect(slashRows(null, null, toAdd([saved]), false)).toEqual([tide]);
+    const left = [
+      entry({ ...saved, enabled: false }),
+      entry({ ...saved, enabled: undefined }),
+      entry({ ...saved, removed: true }),
+      // Another person's, not shared: listed only because the connection is an admin.
+      entry({ ...saved, ownerProfileId: "profile-kit", shared: false }),
+      entry({ ...saved, skillId: "not-an-id" }),
+      entry({ ...saved, revision: "abc" }),
+      entry({ ...saved, revision: undefined }),
+      entry({ ...saved, name: "two words" }),
+      null,
+      "s_text_only",
+    ];
+    expect(slashRows(null, null, toAdd(left), true)).toEqual([tide]);
+    // Whose it is comes from the gateway's owner against the answer's profile, never its words.
+    const claims = entry({ ...saved, slug: "your-skill", ownerProfileId: "profile-kit" });
+    expect(slashRows(null, null, toAdd([claims]), true)).toEqual([tide]);
+    // An answer without a profile can't tell the person's own; a team skill is still the team's.
+    expect(
+      slashRows(null, null, toAdd([saved, harbour], null), true).map((row) => row.kind),
+    ).toEqual(["team-skill", "team-skill-to-add"]);
+    for (const attachable of ["x", null, {}])
+      expect(slashRows(null, null, toAdd(attachable as unknown[]), true)).toEqual([tide]);
+  });
+
+  it("F-071: the menu read offers them only to a connection that holds operator.write and isn't pinned read-only", async () => {
+    for (const [held, readOnly, kinds] of [
+      [["operator.read", "operator.write"], false, ["your-skill", "your-skill-to-add"]],
+      [["operator.read"], false, ["your-skill"]],
+      [["operator.read", "operator.write"], true, ["your-skill"]],
+    ] as const) {
+      const { client, gateway } = await openTask({ held, client: { readOnly } });
+      gateway.handlers["skills.library.list"] = () => library(selected([own]));
+      try {
+        expect((await client.readComposerMenu(KEY, "/")).map((row) => row.kind)).toEqual(kinds);
+      } finally {
+        client.stop();
+      }
+    }
+  });
+});
+
 describe("the / menu's read", () => {
   it("F-071: reads the task's library skills with operator.read, and a refusal of them leaves the bot's skills and the commands", async () => {
     const { client, gateway } = await openTask();
@@ -199,7 +298,14 @@ describe("the / menu's read", () => {
     gateway.handlers["skills.library.list"] = () => library(selected([own]));
     const rows = await client.readComposerMenu(KEY, "/");
     expect(gateway.calls("skills.library.list")).toEqual([{ sessionKey: KEY }]);
-    expect(rows.map((row) => row.kind)).toEqual(["your-skill", "skill", "skill", "command"]);
+    // This connection may write, so the skill saved since the task started is offered (#889).
+    expect(rows.map((row) => row.kind)).toEqual([
+      "your-skill",
+      "your-skill-to-add",
+      "skill",
+      "skill",
+      "command",
+    ]);
     gateway.handlers["skills.library.list"] = () => {
       throw new Error("unknown method: skills.library.list");
     };
@@ -216,7 +322,10 @@ describe("the / menu's read", () => {
     gateway.handlers["skills.status"] = refuse;
     gateway.handlers["chat.metadata"] = refuse;
     gateway.handlers["skills.library.list"] = () => library(selected([own]));
-    expect(await client.readComposerMenu(KEY, "/")).toEqual([tide]);
+    expect(await client.readComposerMenu(KEY, "/")).toEqual([
+      tide,
+      expect.objectContaining({ kind: "your-skill-to-add", name: "moon-phase" }),
+    ]);
     gateway.handlers["skills.library.list"] = refuse;
     await expect(client.readComposerMenu(KEY, "/")).rejects.toThrow(
       "The gateway did not list them.",

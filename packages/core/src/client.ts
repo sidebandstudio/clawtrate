@@ -407,6 +407,13 @@ import {
   quietInHistory,
 } from "./quiet-end.ts";
 import { mentionRows, slashRows, type MenuRow } from "./composer-menus.ts";
+import {
+  attachLibrarySkill,
+  detachLibrarySkill,
+  type AttachOutcome,
+  type DetachOutcome,
+  type LibrarySkill,
+} from "./library-attach.ts";
 import { listedBots } from "./gateway-bot.ts";
 import {
   CONTROL_EVENT,
@@ -6392,7 +6399,79 @@ export class ClawtrateClient {
     ]);
     if (skills === null && metadata === null && library === null)
       throw new Error("The gateway did not list them.");
-    return slashRows(skills, metadata, library);
+    // A skill the task doesn't have is offered only where adding it can be asked for (#889).
+    return slashRows(skills, metadata, library, this.canChangeTaskSkills());
+  }
+
+  /**
+   * Whether this connection may add a library skill to a task (`operator.write`). A host pinned
+   * read-only never holds it: it asks for read access only, and holds no more than it asked for.
+   */
+  private canChangeTaskSkills(): boolean {
+    return this.holds(WRITE_SCOPE);
+  }
+
+  /**
+   * Add a library skill the "/" menu offered to the task, then say what the task has
+   * (`library-attach.ts`, #889). `stamp` is where the menu was read: unless that gateway and
+   * target still hold, nothing is sent; nor once `owner`, the viewer that asked, is withdrawn.
+   */
+  attachLibrarySkill(
+    key: string,
+    skill: LibrarySkill,
+    stamp: GatewayStamp,
+    owner: object | null = null,
+  ): Promise<AttachOutcome> {
+    return this.changeTaskSkills(
+      (request) => attachLibrarySkill(request, key, skill),
+      stamp,
+      owner,
+      `Adding ${skill.slug} to a task needs write access.`,
+    );
+  }
+
+  /** Undo an add this device made, while the task still has what was added (#889). */
+  detachLibrarySkill(
+    key: string,
+    skill: LibrarySkill,
+    stamp: GatewayStamp,
+    owner: object | null = null,
+  ): Promise<DetachOutcome> {
+    return this.changeTaskSkills(
+      (request) => detachLibrarySkill(request, key, skill),
+      stamp,
+      owner,
+      `Taking ${skill.slug} out of a task needs write access.`,
+    );
+  }
+
+  /** A change to a task's library skills, on the connection `stamp` names and no other. */
+  private async changeTaskSkills<T>(
+    change: (
+      request: (method: string, params: Record<string, unknown>) => Promise<unknown>,
+    ) => Promise<T>,
+    stamp: GatewayStamp,
+    owner: object | null,
+    needsWrite: string,
+  ): Promise<T> {
+    if (!this.canChangeTaskSkills()) throw new Error(needsWrite);
+    // The connection the guard checks is the one each request goes out on, as for the bots' voice.
+    const protocol = this.protocol;
+    const epoch = this.epoch;
+    const alive = () =>
+      protocol !== null &&
+      this.protocol === protocol &&
+      this.epoch === epoch &&
+      this.target === stamp.target &&
+      this.state.connection.status === "connected";
+    await this.requireSameGateway(stamp);
+    if (!alive()) throw new Error(CONNECTION_CHANGED);
+    this.checkNotWithdrawn(owner);
+    return change((method, params) => {
+      if (!alive() || (owner && this.withdrawnOwners.has(owner)))
+        return Promise.reject(new NotSentError());
+      return protocol!.request(method, params);
+    });
   }
 
   /**

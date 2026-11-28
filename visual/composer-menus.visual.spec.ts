@@ -41,16 +41,19 @@ test.describe("the composer's menus", () => {
     await page.keyboard.type("/");
     const list = page.getByRole("listbox", { name: "Skills and commands" });
     const rows = list.getByRole("option");
-    await expect(rows).toHaveCount(6);
+    await expect(rows).toHaveCount(7);
     // A library skill shows its name, not the generated command it inserts.
     await expect(rows.nth(0).locator(".composer-menu-name")).toHaveText("tide-table");
     await expect(rows.nth(0).locator(".composer-menu-tag")).toHaveText("Your skill");
     await expect(rows.nth(1).locator(".composer-menu-name")).toHaveText("ferry-times");
     await expect(rows.nth(1).locator(".composer-menu-tag")).toHaveText("Team skill");
-    await expect(rows.nth(2)).toContainText("/healthcheck");
-    await expect(rows.nth(2).locator(".composer-menu-tag")).toHaveText("Bot skill");
-    await expect(rows.nth(4)).toContainText("/status");
-    await expect(rows.nth(4).locator(".composer-menu-tag")).toHaveText("Command");
+    // Saved after the task started: offered to add (#889).
+    await expect(rows.nth(2).locator(".composer-menu-name")).toHaveText("moon-phase");
+    await expect(rows.nth(2).locator(".composer-menu-tag")).toHaveText("Add your skill");
+    await expect(rows.nth(3)).toContainText("/healthcheck");
+    await expect(rows.nth(3).locator(".composer-menu-tag")).toHaveText("Bot skill");
+    await expect(rows.nth(5)).toContainText("/status");
+    await expect(rows.nth(5).locator(".composer-menu-tag")).toHaveText("Command");
     await expect(field(page)).toHaveAttribute("aria-expanded", "true");
     await expect(field(page)).toHaveAttribute("aria-activedescendant", "composer-menu-0");
     // What follows the trigger narrows the list.
@@ -70,7 +73,8 @@ test.describe("the composer's menus", () => {
     await expect(field(page)).toHaveAttribute("aria-activedescendant", "composer-menu-1");
     await page.keyboard.press("ArrowDown");
     await page.keyboard.press("ArrowDown");
-    await expect(field(page)).toHaveAttribute("aria-activedescendant", "composer-menu-3");
+    await page.keyboard.press("ArrowDown");
+    await expect(field(page)).toHaveAttribute("aria-activedescendant", "composer-menu-4");
     await page.keyboard.press("Enter");
     await expect(page.getByRole("listbox")).toHaveCount(0);
     const chip = page.getByTestId("token-chip");
@@ -197,6 +201,132 @@ test.describe("the composer's menus", () => {
     ]);
   });
 
+  test("F-071: choosing a library skill the task doesn't have adds it to the task, then puts its chip in; the line says so, and Undo takes it out (#889)", async ({
+    page,
+  }) => {
+    await open(page);
+    await record(page);
+    await field(page).click();
+    await page.keyboard.type("/moon");
+    const row = page.getByRole("option", { name: /moon-phase/ });
+    await expect(row.locator(".composer-menu-tag")).toHaveText("Add your skill");
+    await page.keyboard.press("Enter");
+    // Added at once, without a question, and then used: the chip runs it by its command.
+    const line = page.getByTestId("library-skill-line");
+    await expect(line).toContainText("Added moon-phase to this task.");
+    const chip = page.getByTestId("token-chip");
+    await expect(chip).toHaveText(/Your skill\s*moon-phase/);
+    await expect(field(page)).toHaveValue("");
+    const commands = () =>
+      page.evaluate(() =>
+        (window as unknown as { sent: Array<{ type: string }> }).sent
+          .map((each) => each.type)
+          .filter((type) => type !== "readComposerMenu"),
+      );
+    expect(await commands()).toEqual(["attachLibrarySkill"]);
+    await page.keyboard.type("tonight");
+    await page.keyboard.press("Enter");
+    expect(await sends(page)).toMatchObject([
+      { text: "/skill s_moon_phas_e65dd9b102714cd6a01b tonight" },
+    ]);
+    // The next "/" reads the task again: it has the skill now.
+    await page.keyboard.type("/moon");
+    await expect(row.locator(".composer-menu-tag")).toHaveText("Your skill");
+    await page.keyboard.press("Escape");
+    await field(page).fill("");
+    // Undo takes it out, says so, and the next "/" offers it to add again.
+    await line.getByRole("button", { name: "Undo: Added moon-phase to this task" }).click();
+    await expect(line.getByRole("status")).toHaveText("Undone. moon-phase is out of this task.");
+    await expect(line.getByRole("button", { name: /^Undo/ })).toHaveAttribute(
+      "aria-disabled",
+      "true",
+    );
+    expect((await commands()).slice(-1)).toEqual(["detachLibrarySkill"]);
+    await field(page).click();
+    await page.keyboard.type("/moon");
+    await expect(row.locator(".composer-menu-tag")).toHaveText("Add your skill");
+    // Undo again does nothing more: a press on the spent button sends nothing.
+    await page.keyboard.press("Escape");
+    await line.getByRole("button", { name: /^Undo/ }).click({ force: true });
+    expect((await commands()).filter((type) => type === "detachLibrarySkill")).toHaveLength(1);
+  });
+
+  test("F-071: a refused add is said in plain words, and no chip goes in and nothing is offered to undo (#889)", async ({
+    page,
+  }) => {
+    await open(page);
+    await page.evaluate(() => {
+      const fixture = (
+        window as unknown as { clawtrateFixture: { invoke: (c: unknown) => Promise<unknown> } }
+      ).clawtrateFixture;
+      const invoke = fixture.invoke.bind(fixture);
+      fixture.invoke = (command: unknown) =>
+        (command as { type: string }).type === "attachLibrarySkill"
+          ? Promise.reject(
+              new Error(
+                "Couldn't add moon-phase to this task: a task can have at most 64 library skills.",
+              ),
+            )
+          : invoke(command);
+    });
+    await field(page).click();
+    await page.keyboard.type("/moon");
+    await page.keyboard.press("Enter");
+    await expect(page.getByRole("alert")).toContainText(
+      "Couldn't add moon-phase to this task: a task can have at most 64 library skills.",
+    );
+    await expect(page.getByTestId("token-chip")).toHaveCount(0);
+    await expect(page.getByTestId("library-skill-line")).toHaveCount(0);
+  });
+
+  test("F-071: Undo before the message is sent takes the added skill's chip out with it (#889)", async ({
+    page,
+  }) => {
+    await open(page);
+    await field(page).click();
+    await page.keyboard.type("/moon");
+    await page.keyboard.press("Enter");
+    const line = page.getByTestId("library-skill-line");
+    await expect(line).toContainText("Added moon-phase to this task.");
+    await expect(page.getByTestId("token-chip")).toHaveText(/Your skill\s*moon-phase/);
+    await line.getByRole("button", { name: "Undo: Added moon-phase to this task" }).click();
+    await expect(line.getByRole("status")).toHaveText("Undone. moon-phase is out of this task.");
+    // Its chip would ask for a skill the task no longer has.
+    await expect(page.getByTestId("token-chip")).toHaveCount(0);
+  });
+
+  test("F-071: a command chosen while the skill is being added keeps its place; the skill is still added (#889)", async ({
+    page,
+  }) => {
+    await open(page);
+    await page.evaluate(() => {
+      const w = window as unknown as {
+        clawtrateFixture: { invoke: (c: unknown) => Promise<unknown> };
+        releaseAttach: () => void;
+      };
+      const fixture = w.clawtrateFixture;
+      const invoke = fixture.invoke.bind(fixture);
+      const held = new Promise<void>((resolve) => (w.releaseAttach = resolve));
+      fixture.invoke = (command: unknown) =>
+        (command as { type: string }).type === "attachLibrarySkill"
+          ? held.then(() => invoke(command))
+          : invoke(command);
+    });
+    await field(page).click();
+    await page.keyboard.type("/moon");
+    await page.keyboard.press("Enter");
+    const line = page.getByTestId("library-skill-line");
+    await expect(line).toContainText("Adding moon-phase to this task…");
+    await page.keyboard.type("/stat");
+    await page.keyboard.press("Enter");
+    await expect(page.getByTestId("token-chip")).toHaveText(/\/status/);
+    await page.evaluate(() => (window as unknown as { releaseAttach: () => void }).releaseAttach());
+    await expect(line).toContainText("Added moon-phase to this task.");
+    // One skill or command goes with a message: the one chosen meanwhile stays.
+    await expect(page.getByTestId("token-chip")).toHaveCount(1);
+    await expect(page.getByTestId("token-chip")).toHaveText(/\/status/);
+  });
+
   test("F-070: typing @ lists the bots and the gateway's routines, tagged, and puts the chosen name where it was typed", async ({
     page,
   }) => {
@@ -227,9 +357,24 @@ for (const size of SIZES) {
         await open(page, theme);
         await field(page).click();
         await page.keyboard.type("/");
-        await expect(page.getByRole("option")).toHaveCount(6);
+        await expect(page.getByRole("option")).toHaveCount(7);
         await settle(page);
         await expect(page).toHaveScreenshot(`composer-menu-${theme}-${size.name}.png`);
+      });
+      test("F-071: the line that says a library skill was added to the task, with Undo", async ({
+        page,
+      }) => {
+        await open(page, theme);
+        await field(page).click();
+        await page.keyboard.type("/moon");
+        await page.keyboard.press("Enter");
+        await expect(page.getByTestId("library-skill-line")).toContainText(
+          "Added moon-phase to this task.",
+        );
+        await expect(page.getByTestId("token-chip")).toHaveText(/Your skill\s*moon-phase/);
+        await page.keyboard.type("for tonight");
+        await settle(page);
+        await expect(page).toHaveScreenshot(`composer-skill-added-${theme}-${size.name}.png`);
       });
     });
   }

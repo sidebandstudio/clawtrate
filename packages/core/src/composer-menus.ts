@@ -16,7 +16,10 @@
 // Neither `skills.status` nor `chat.metadata` lists a library skill, on
 // OpenClaw 2026.10.6 or 2026.11.10. A library skill runs only in a task that
 // has it, by its generated command name (`/skill s_tide_tabl_…`), never by its
-// slug; a task has the library's enabled skills from when it started.
+// slug; a task has the library's enabled skills from when it started. One saved
+// since is in the answer's `session.attachable`: on a connection that may
+// write, it is listed after them, tagged to be added, and choosing it adds it
+// to the task first (`library-attach.ts`).
 //
 // "@" lists the gateway's bots (`agents.list`, already in the state) and its
 // routines (`cron.list`). OpenClaw's structured `chat.send` `mentions` are
@@ -26,14 +29,34 @@ import { asRecord, type RawRecord } from "./mapping.ts";
 
 /** One row of a composer menu. */
 export type MenuRow = {
-  /** `skill` is the bot's; `your-skill` and `team-skill` are from the gateway's skill library. */
-  kind: "your-skill" | "team-skill" | "skill" | "command" | "bot" | "routine";
+  /**
+   * `skill` is the bot's; `your-skill` and `team-skill` are from the gateway's skill library, in
+   * the task; `your-skill-to-add` and `team-skill-to-add` are library skills the task doesn't have.
+   */
+  kind:
+    | "your-skill"
+    | "team-skill"
+    | "your-skill-to-add"
+    | "team-skill-to-add"
+    | "skill"
+    | "command"
+    | "bot"
+    | "routine";
   /** What the row shows: a library skill's slug, which is not what runs it. */
   name: string;
   description: string | null;
   /** The text the row puts in the message when chosen, a space after it. */
   insert: string;
+  /** A skill to add: the library entry and revision the list showed, which the task is given first. */
+  attach?: { skillId: string; revision: string };
 };
+
+/** Whether a row is a skill from the gateway's skill library, in the task or to add. */
+export const isLibraryRow = (row: Pick<MenuRow, "kind">) =>
+  row.kind === "your-skill" ||
+  row.kind === "team-skill" ||
+  row.kind === "your-skill-to-add" ||
+  row.kind === "team-skill-to-add";
 
 /** The most rows one menu answer carries, and the longest description, so it fits one frame. */
 export const MAX_MENU_ROWS = 200;
@@ -47,19 +70,27 @@ const cut = (text: string | null, max: number) =>
 const str = (value: unknown) => (typeof value === "string" && value.trim() ? value.trim() : null);
 
 /** A library skill's generated command name (`s_<slug>_<id>`): one word, as `/skill` takes it. */
-const COMMAND_NAME = /^[A-Za-z0-9_-]{1,128}$/;
+export const COMMAND_NAME = /^[A-Za-z0-9_-]{1,128}$/;
+/** A library entry's id and a revision, as `skills.library.activate` takes them. */
+export const LIBRARY_SKILL_ID = /^[a-f0-9-]{36}$/;
+export const LIBRARY_REVISION = /^[a-f0-9]{64}$/;
 
 /**
  * The task's library skills from a `skills.library.list {sessionKey}` answer. Whose a skill is
  * comes from the gateway alone: its `ownerProfileId` against the answer's own `profileId`, the
  * profile this connection acts for. A skill with no owner the answer can match is the team's.
+ *
+ * With `canAttach` (a connection that may write), the skills the task doesn't have follow
+ * (`session.attachable`): the person's own, then the team's (no owner, or shared), each enabled
+ * in the library, as a new task would get them. Another person's skill that isn't shared is
+ * left out: the gateway lists it only to an admin.
  */
-function libraryRows(libraryAnswer: unknown): MenuRow[] {
+function libraryRows(libraryAnswer: unknown, canAttach: boolean): MenuRow[] {
   const answer = asRecord(libraryAnswer);
   const self = str(answer?.profileId);
-  const selections = asRecord(answer?.session)?.selections;
+  const session = asRecord(answer?.session);
   const rows: MenuRow[] = [];
-  for (const entry of Array.isArray(selections) ? selections : []) {
+  for (const entry of Array.isArray(session?.selections) ? session.selections : []) {
     const skill = asRecord(entry);
     const command = str(skill?.name);
     if (!skill || !command || !COMMAND_NAME.test(command)) continue;
@@ -70,14 +101,42 @@ function libraryRows(libraryAnswer: unknown): MenuRow[] {
       insert: `/skill ${command}`,
     });
   }
-  return rows;
+  if (!canAttach) return rows;
+  const own: MenuRow[] = [];
+  const team: MenuRow[] = [];
+  for (const entry of Array.isArray(session?.attachable) ? session.attachable : []) {
+    const skill = asRecord(entry);
+    const command = str(skill?.name);
+    const skillId = skill?.skillId;
+    const revision = skill?.revision;
+    if (!skill || !command || !COMMAND_NAME.test(command)) continue;
+    if (typeof skillId !== "string" || !LIBRARY_SKILL_ID.test(skillId)) continue;
+    if (typeof revision !== "string" || !LIBRARY_REVISION.test(revision)) continue;
+    // A skill turned off in the library, or removed from it, isn't offered.
+    if (skill.enabled !== true || skill.removed === true) continue;
+    const owner = skill.ownerProfileId;
+    const mine = self !== null && owner === self;
+    if (!mine && owner !== null && skill.shared !== true) continue;
+    (mine ? own : team).push({
+      kind: mine ? "your-skill-to-add" : "team-skill-to-add",
+      name: cut(str(skill.slug) ?? command, MAX_NAME_CHARS)!,
+      description: cut(str(skill.description), MAX_DESCRIPTION_CHARS),
+      insert: `/skill ${command}`,
+      attach: { skillId, revision },
+    });
+  }
+  return [...rows, ...own, ...team];
 }
 
-/** The "/" menu from `skills.library.list`, `skills.status` and `chat.metadata` answers. */
+/**
+ * The "/" menu from `skills.library.list`, `skills.status` and `chat.metadata` answers.
+ * `canAttach`: this connection may add a library skill to the task (`operator.write`).
+ */
 export function slashRows(
   skillsAnswer: unknown,
   metadataAnswer: unknown,
   libraryAnswer: unknown = null,
+  canAttach = false,
 ): MenuRow[] {
   const commands = (
     Array.isArray(asRecord(metadataAnswer)?.commands) ? asRecord(metadataAnswer)!.commands : []
@@ -92,7 +151,7 @@ export function slashRows(
     const aliases = Array.isArray(command?.textAliases) ? command.textAliases : [];
     return aliases.map(str).find((each): each is string => each?.startsWith("/") === true) ?? null;
   };
-  const rows = libraryRows(libraryAnswer);
+  const rows = libraryRows(libraryAnswer, canAttach);
   // A library skill's command, should the gateway list it, is that skill's row, not a Command.
   const skillCommands = new Set(rows.map((row) => row.insert.slice("/skill ".length)));
   const skills = (
