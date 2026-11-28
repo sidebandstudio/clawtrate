@@ -1,7 +1,9 @@
 import {
+  chmodSync,
   cpSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   renameSync,
@@ -181,6 +183,26 @@ describe("the plugin opening", () => {
     // Starting again from the swapped checkout is refused outright.
     expect(() => loadPlugins({ checkout, name: "x" }, ["hello-tool"])).toThrow(
       /is not a real folder/,
+    );
+  });
+
+  it("copies a plugin with its files' own modes whatever the caller's umask is", () => {
+    // Modes set here, not taken from this checkout: one made under a strict umask has files
+    // that are already owner-only, and the copy would lose nothing.
+    const { checkout, root } = checkoutWithFixture();
+    for (const name of readdirSync(join(root, "hello-tool")))
+      chmodSync(join(root, "hello-tool", name), 0o644);
+    const [plugin] = loadPlugins({ checkout, name: "x" }, ["hello-tool"]);
+    const state = stateFolder();
+    // A shell that lets only its owner read new files: the copy must still match the checkout.
+    const before = process.umask(0o077);
+    try {
+      copyPlugin(plugin!, state, PLUGIN_RULE);
+    } finally {
+      process.umask(before);
+    }
+    expect(checkedCopy("hello-tool", plugin!.digest, state, PLUGIN_RULE).digest).toBe(
+      plugin!.digest,
     );
   });
 
