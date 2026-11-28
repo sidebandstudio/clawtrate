@@ -261,7 +261,7 @@ export function unreadSeenOf(
   for (const each of Object.values(state.tasksByBot).flat()) {
     // A skill note by itself doesn't mark a task unread (F-560), nor does an update line (F-590).
     const transcript = state.transcripts[each.key];
-    const pastNotes = seenThroughSkillNote(each, seen[each.key], transcript);
+    const pastNotes = seenThroughSkillNote(each, seen[each.key], transcript, scope);
     const through = updates
       ? seenThroughUpdateNotice(each, pastNotes, transcript, scope)
       : pastNotes;
