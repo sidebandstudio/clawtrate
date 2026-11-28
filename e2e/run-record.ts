@@ -12,6 +12,7 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -251,5 +252,38 @@ function forgetFinishedCleanUps(dir: string, identify: Identify): void {
     }
     if (isProc(runner) && processVerdict(runner.pid, runner.identity, identify).state === "dead")
       rmSync(mark, { force: true });
+  }
+}
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Removes what earlier runs left in Playwright's output folder (`results`), where each run
+ * writes its traces and failure screenshots to `<results>/<run>/`. A run that passed leaves
+ * nothing to read, so its folder goes. A run that did not pass (failed, interrupted, timed
+ * out) stays for a day, and the newest run that failed stays whatever its age, so a rerun
+ * that is stopped never takes the failure a person is reading. A run with no
+ * `.last-run.json`, still going or killed, goes once its folder is a day old.
+ */
+export function pruneRunOutputs(results: string, own: string, now = Date.now()): void {
+  if (!existsSync(results)) return;
+  const runs = readdirSync(results).flatMap((run) => {
+    if (!/^[0-9a-f]{8}$/.test(run) || run === own) return [];
+    const dir = join(results, run);
+    const last = join(dir, ".last-run.json");
+    try {
+      const { status } = JSON.parse(readFileSync(last, "utf8")) as { status?: unknown };
+      return [{ dir, status, at: statSync(last).mtimeMs }];
+    } catch {
+      // Another run starting in this checkout may have removed the folder since it was listed.
+      const stat = statSync(dir, { throwIfNoEntry: false });
+      return stat ? [{ dir, status: undefined, at: stat.mtimeMs }] : [];
+    }
+  });
+  const newestFailed = runs.filter((run) => run.status === "failed").sort((a, b) => b.at - a.at)[0];
+  for (const run of runs) {
+    const old = now - run.at > DAY_MS;
+    const goes = run.status === "passed" || (old && run !== newestFailed);
+    if (goes) rmSync(run.dir, { recursive: true, force: true });
   }
 }

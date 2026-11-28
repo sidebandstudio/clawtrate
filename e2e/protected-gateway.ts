@@ -17,17 +17,8 @@ export async function protectedGateway(gatewayPort: number) {
   const dir = mkdtempSync(join(tmpdir(), "clawtrate-protected-"));
   const key = join(dir, "key.pem");
   const cert = join(dir, "cert.pem");
-  execFileSync(
-    "openssl",
-    [
-      ...["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1"],
-      ...["-keyout", key, "-out", cert, "-subj", `/CN=${PROTECTED_HOST}`],
-      ...["-addext", `subjectAltName=DNS:${PROTECTED_HOST}`],
-    ],
-    { stdio: "ignore" },
-  );
   const sockets = new Set<Socket>();
-  const server = createServer({ key: readFileSync(key), cert: readFileSync(cert) }, (socket) => {
+  const server = createServer((socket) => {
     const upstream = connect(gatewayPort, "127.0.0.1");
     for (const each of [socket, upstream]) {
       sockets.add(each);
@@ -39,7 +30,27 @@ export async function protectedGateway(gatewayPort: number) {
     }
     socket.pipe(upstream).pipe(socket);
   });
-  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  try {
+    execFileSync(
+      "openssl",
+      [
+        ...["req", "-x509", "-newkey", "rsa:2048", "-nodes", "-days", "1"],
+        ...["-keyout", key, "-out", cert, "-subj", `/CN=${PROTECTED_HOST}`],
+        ...["-addext", `subjectAltName=DNS:${PROTECTED_HOST}`],
+      ],
+      { stdio: "ignore" },
+    );
+    server.setSecureContext({ key: readFileSync(key), cert: readFileSync(cert) });
+    await new Promise<void>((resolve, reject) => {
+      server.once("error", reject);
+      server.listen(0, "127.0.0.1", resolve);
+    });
+  } catch (error) {
+    // No close() to call yet: the caller never gets one.
+    server.close();
+    rmSync(dir, { recursive: true, force: true });
+    throw error;
+  }
   const port = (server.address() as { port: number }).port;
   const preload = join(import.meta.dirname, "protected-gateway-preload.ts");
   return {
@@ -53,8 +64,9 @@ export async function protectedGateway(gatewayPort: number) {
     },
     close: async () => {
       for (const socket of sockets) socket.destroy();
-      await new Promise<void>((resolve) => server.close(() => resolve()));
+      // Removed first: a close that never returns still leaves no folder.
       rmSync(dir, { recursive: true, force: true });
+      await new Promise<void>((resolve) => server.close(() => resolve()));
     },
   };
 }

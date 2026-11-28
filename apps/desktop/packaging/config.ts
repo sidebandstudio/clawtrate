@@ -10,6 +10,11 @@ import { execFileSync } from "node:child_process";
 import { mkdirSync } from "node:fs";
 import { join } from "node:path";
 import type { AfterPackContext, Configuration } from "electron-builder";
+import {
+  CARRIED_BUILD_DIR,
+  CARRIED_LIST_NAME,
+  CARRIED_RESOURCES_DIR,
+} from "../src/main/carried-plugins.ts";
 import { APP_ID, PRODUCT_NAME } from "../src/main/identity.ts";
 import { packageOutput } from "./output.ts";
 import { macSigningRequested, notarizeWith, type Env } from "./signing.ts";
@@ -112,15 +117,19 @@ export function builderConfig(env: Env, electronVersion: string): Configuration 
     // need no node_modules. Nothing else is shipped: not the web preview's or
     // the fixture mode's builds, and no source. resources/icon.png, generated
     // from the logo, is the window icon on Windows and Linux (the main process
-    // reads it from the archive); macOS takes its icon from the bundle.
+    // reads it from the archive); macOS takes its icon from the bundle. The list
+    // of the plugins the app carries is in the archive too; their tarballs are
+    // outside it, in the resources' plugins folder (carried-plugins.ts).
     files: [
       "package.json",
       "out/main/**",
       "out/preload/**",
       "out/renderer/**",
       "resources/icon.png",
+      `${CARRIED_BUILD_DIR}/${CARRIED_LIST_NAME}`,
       "!**/node_modules/**",
     ],
+    extraResources: [{ from: CARRIED_BUILD_DIR, to: CARRIED_RESOURCES_DIR, filter: ["*.tgz"] }],
     asar: true,
     npmRebuild: false,
     // Releasing is the owner's: nothing is uploaded and no update feed is written.

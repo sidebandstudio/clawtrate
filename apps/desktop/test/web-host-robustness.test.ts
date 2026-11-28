@@ -3,6 +3,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { connect } from "node:net";
 import { join } from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { tempDir } from "../../../test/temp-dir.ts";
 import WebSocket from "ws";
 import { MAX_COMMAND_ID_CHARS, MAX_WEB_VIEWERS } from "../src/web-host/server.ts";
 
@@ -12,7 +13,11 @@ const TOKEN = "stub-token";
 
 beforeAll(async () => {
   child = spawn(process.execPath, [join(import.meta.dirname, "fixtures/stub-host.ts")], {
-    env: { PATH: process.env.PATH, STUB_ACCESS_TOKEN: TOKEN },
+    env: {
+      PATH: process.env.PATH,
+      STUB_ACCESS_TOKEN: TOKEN,
+      STUB_STATIC_DIR: tempDir("clawtrate-stub-static-"),
+    },
     stdio: ["ignore", "pipe", "pipe"],
   });
   port = await new Promise<number>((resolve, reject) => {

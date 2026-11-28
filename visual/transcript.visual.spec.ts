@@ -5,7 +5,7 @@ import { contextFor, openFixture, OTTO_DISK, settle, SIZES } from "./fixture.ts"
 
 const WIDE = SIZES.find((size) => size.name === "1440")!;
 const PIP_WEEK = "bot=pip&task=agent:pip:week";
-const JUNIPER_EBOOKS = "bot=main&task=agent:main:ebook-apps";
+const JUNIPER_EBOOKS = "bot=clawtrate-main-bot&task=agent:clawtrate-main-bot:ebook-apps";
 
 const rect = async (locator: Locator) => (await locator.boundingBox())!;
 const style = (locator: Locator, property: string) =>

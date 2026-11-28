@@ -734,8 +734,8 @@ export function createFixtureBridge(
     /** A name given to the fixture gateway on this device (`?gatewayName=`). */
     gatewayName?: string | null;
     /**
-     * "Show the gateway's own bot" (F-562). On unless `gatewaybot=off`, so the scenes keep
-     * Juniper, the gateway's own bot, in the rail; `gatewaybot=off` shows the default.
+     * "Show the gateway's own bot" (F-562). Off, as a person starts, so the gateway's own bot
+     * `main` is out of view beside Juniper, the Main Bot; `gatewaybot=on` shows it.
      */
     showGatewayBot?: boolean;
   } = {},
@@ -887,7 +887,7 @@ export function createFixtureBridge(
   if (options.fullPairing)
     state = { ...state, connection: { ...state.connection, fullPairing: true } };
   // The host keeps the choice across every state it sets, as it keeps the target below.
-  let showGatewayBot = options.showGatewayBot ?? true;
+  let showGatewayBot = options.showGatewayBot ?? false;
   state = { ...state, showGatewayBot };
   const search = options.search ?? NO_SEARCH_PARAMS;
   if (search.ids) state = { ...state, transcripts: withMessageIds(state.transcripts) };
@@ -1018,6 +1018,12 @@ export function createFixtureBridge(
     if (command.type === "readBotGuides") {
       sent.push(command);
       return guides();
+    }
+    // A skill note's undo (F-560): the gateway's answer, for a connection with admin access.
+    if (command.type === "undoSkillChange") {
+      sent.push(command);
+      if (!state.connection.canAdmin) throw new Error("missing scope: operator.admin");
+      return { undone: true };
     }
     if (
       command.type === "listMemory" ||

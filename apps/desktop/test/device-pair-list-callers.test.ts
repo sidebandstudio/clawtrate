@@ -16,6 +16,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join, relative, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import ts from "typescript";
 import { describe, expect, it } from "vitest";
 
 const root = fileURLToPath(new URL("../../../", import.meta.url));
@@ -44,7 +45,7 @@ function senders(dir: string, tops: string[]): Record<string, number> {
   const found: Record<string, number> = {};
   for (const top of tops) {
     for (const file of sources(join(dir, top))) {
-      const count = readFileSync(file, "utf8").match(SEND)?.length ?? 0;
+      const count = named(file, readFileSync(file, "utf8"));
       if (count > 0) found[relative(dir, file).split(sep).join("/")] = count;
     }
   }
@@ -52,7 +53,21 @@ function senders(dir: string, tops: string[]): Record<string, number> {
 }
 
 /**
- * A send of the method: a `request(` call naming it, the way every engine sends a gateway
+ * The method's name as a string in `text`, wherever it is: a send passes it straight or through a
+ * variable or a constant, and either needs the string. A comment's mention isn't one.
+ */
+function named(file: string, text: string): number {
+  let count = 0;
+  const visit = (node: ts.Node): void => {
+    if (ts.isStringLiteralLike(node) && node.text === "device.pair.list") count += 1;
+    ts.forEachChild(node, visit);
+  };
+  visit(ts.createSourceFile(file, text, ts.ScriptTarget.Latest));
+  return count;
+}
+
+/**
+ * The one send in `list()`: a `request(` call naming it, the way every engine sends a gateway
  * method (`ctx.request`, `client.request`), however the call is wrapped across lines. A
  * comment's mention isn't one.
  */
@@ -83,6 +98,25 @@ describe("device.pair.list's sender", () => {
         writeFileSync(join(dir, path), send);
       }
       expect(senders(dir, ["packages", "apps"])).toEqual({ "apps/app/src/reads.ts": 1 });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("is found when the method's name is passed through a constant", () => {
+    const dir = mkdtempSync(join(tmpdir(), "pair-list-senders-"));
+    try {
+      mkdirSync(join(dir, "packages/lib/src"), { recursive: true });
+      writeFileSync(
+        join(dir, "packages/lib/src/reads.ts"),
+        [
+          "// Mentions `device.pair.list` in a comment, which sends nothing.",
+          'const METHOD = "device.pair.list";',
+          "export const read = (ctx) => ctx.request(METHOD, {});",
+          "",
+        ].join("\n"),
+      );
+      expect(senders(dir, ["packages"])).toEqual({ "packages/lib/src/reads.ts": 1 });
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }

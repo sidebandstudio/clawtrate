@@ -22,6 +22,7 @@ import { execFile } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { join } from "node:path";
 import { promisify } from "node:util";
+import { tempDir } from "./temp-dir.ts";
 
 const execFileAsync = promisify(execFile);
 
@@ -98,10 +99,16 @@ export function checkIds(checks: CheckPath[]): string[] {
 
 /** Run a runner's listing from `root`'s packages in `cwd`, outside the Vitest worker this is called from. */
 async function list(root: string, cwd: string, bin: string, args: string[]): Promise<string> {
+  // Collecting runs each file's top level and `describe` bodies but never its `afterAll`,
+  // so a folder made there would stay behind (#866). This one is removed with the caller's.
+  const tmp = tempDir("clawtrate-list-");
   const env = {
     ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith("VITEST"))),
     // A Mac runs only the macOS set of screenshot tests; the listing needs every check.
     CLAWTRATE_VISUAL_ALL_SPECS: "1",
+    TMPDIR: tmp,
+    TMP: tmp,
+    TEMP: tmp,
   };
   const { stdout } = await execFileAsync(join(root, "node_modules/.bin", bin), args, {
     cwd,
