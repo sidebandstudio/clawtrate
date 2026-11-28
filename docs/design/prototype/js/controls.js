@@ -47,7 +47,6 @@
     auditVerdict: "all",
     logOpen: p("log") || null,
     older: false,
-    newbot: p("newbot") || null,
   };
   const running = () => C.plugin === "running";
   const PLUGIN_WORDS = {
@@ -96,16 +95,19 @@
   const EXEC = [
     ["full", "Allow all", "Otto runs any command without asking, as the user of the machine it runs on."],
     ["auto", "Review first", "Commands on the machine's allowlist run; the gateway's reviewer decides the rest and asks you when unsure."],
-    ["ask", "Ask", "Otto asks you before each command that isn't on the machine's allowlist; listed commands run."],
+    ["ask", "Ask", "Otto asks on an allowlist miss. Safe bins can run without asking. OpenClaw refuses some commands outright."],
     ["deny", "Never", "Otto can't run commands."],
   ];
 
   // Each bot's own settings. value: allow | ask | never. by: default | bot (its own
   // deny list or command policy) | rule (the plugin) | gateway (the gateway's ceiling).
+  const gatewayExec = p("cmd") === "create" && p("cmdpolicy") !== "ask"
+    ? { value: "allow", mode: "full", by: "default" }
+    : { value: "never", mode: "deny", by: "default" };
   const base = () => ({
     read: { value: "allow", by: "default" },
     files: { value: "allow", by: "default" },
-    exec: { value: "never", mode: "deny", by: "bot" },
+    exec: { ...gatewayExec },
     web: { value: "allow", by: "default" },
     message: { value: "allow", by: "default" },
     tasks: { value: "allow", by: "default" },
@@ -262,14 +264,6 @@
   const failed = (title, retry) =>
     `<div class="work-empty"><span class="empty-mark">${icon("warning")}</span><h4>${title}</h4><p>The gateway did not answer.</p><div style="margin-top:10px">${button("Try again", `data-c="${retry}" data-size="sm"`)}</div></div>`;
 
-  // Clawtrate's own restrictive-first creation (section 10), shown on a bot just made.
-  function newbotNote(bot) {
-    if (!C.newbot || bot !== "pip") return "";
-    return C.newbot === "step2"
-      ? note(`<p><b>Couldn't confirm Pip's settings.</b> Clawtrate won't send to Pip until its restrictive settings are confirmed.</p><div class="b-actions">${button("Write them again", 'data-c="newbot-retry" data-size="sm"', "primary")}${button("Delete Pip…", 'data-c="newbot-delete" data-size="sm"', "quiet")}</div>`, "danger")
-      : note(`<p><b>Couldn't confirm Pip's settings.</b></p><div class="b-actions">${button("Write them again", 'data-c="newbot-retry" data-size="sm"')}</div>`, "warn");
-  }
-
   // The Tools group's first rows in the bot's settings (bot-settings.js calls this).
   CT.botsToolsRows = (id) => {
     const c = counts(id);
@@ -278,7 +272,6 @@
       openRow("Messaging other bots", esc(messagingShort(id)), `data-bs="messaging" aria-label="Messaging other bots: ${esc(messagingShort(id))}. Open."`)
     );
   };
-  CT.botsSettingsLead = (id) => newbotNote(id);
 
   // What a bot may do (section 4) --------------------------------------------------------------
 
@@ -389,7 +382,7 @@
           ? bad(`${name} runs commands on the gateway's machine as its user. A command can change the gateway's settings and the rules plugin's store, so ${name}'s plugin rules are advice until Run commands is Never there or runs elsewhere.`)
           : ok(`${name}'s commands run on media-box, not on the gateway's machine.`)) +
       `<li>${icon("file")}A rule about a file tool covers that tool, not the file.</li>` +
-      `<li data-testid="create-bot">${icon("command")}The built-in gateway and plugins tools have no Create bot action. The agents.create method requires admin. A command that invokes the gateway's CLI is governed by the effective exec policy. Clawtrate writes Ask when it creates the bot.` +
+      `<li data-testid="create-bot">${icon("command")}The built-in gateway and plugins tools have no Create bot action. The agents.create method requires admin. A command that invokes the gateway's CLI is governed by the effective exec policy. Clawtrate writes no command mode when it creates the bot. The bot inherits the gateway's command policy.` +
       (isAdmin() && !["ask", "deny"].includes(s.exec.mode) ? ` ${button("Set configured command policy to Ask", 'data-c="exec-ask" data-size="sm"')}` : "") +
       `</li></ul>`
     );
@@ -400,7 +393,7 @@
     let html = sub(`What ${name} may do`, "main", "Back to settings");
     if (C.state === "loading") return html + skeleton(`Loading what ${name} may do`);
     if (C.state === "error") return html + failed(`Couldn't load what ${name} may do`, "reload");
-    html += newbotNote(bot) + pluginLine(bot) + notEnforcedNote(bot) + glance(bot);
+    html += pluginLine(bot) + notEnforcedNote(bot) + glance(bot);
     html +=
       RULES === "fresh"
         ? `<p class="b-hint">${name} hasn't run yet, so the gateway hasn't listed its tools. These lines come from its settings.</p>`
@@ -432,7 +425,7 @@
     const mode = P[bot].exec.mode;
     html += `<h4 class="b-group">When nothing else decides</h4><dl class="facts">`;
     if (mode === "auto" || mode === "ask")
-      html += switchRow("Review commands automatically", `On: the gateway's reviewer decides commands that aren't on the machine's allowlist, and asks you when it is unsure. Off: each such command asks you. ${markWords("gateway")}.`, mode === "auto", `data-c="review"${dis}`, "Review commands automatically");
+      html += switchRow("Review commands automatically", `On: the gateway's reviewer decides commands that aren't on the machine's allowlist, and asks you when it is unsure. Off: Ask on an allowlist miss. Safe bins can run without asking. OpenClaw refuses some commands outright. ${markWords("gateway")}.`, mode === "auto", `data-c="review"${dis}`, "Review commands automatically");
     html +=
       switchRow(
         "Ask when nothing else decides",
@@ -510,8 +503,8 @@
     const s = P[bot][l.id];
     const st = lineState(bot, l.id);
     const name = esc(botName(bot));
-    const own = l.id === "exec" ? `${execWord(s.mode)}. It replaces the default for ${name}.` : s.by === "gateway" ? `Allow (no effect)` : s.by === "rule" ? "Ask (the rules plugin)" : s.value === "never" ? "Never (its deny list)" : "Allow";
-    const deflt = l.id === "exec" ? `Commands: Never <span class="c-mark">${icon("lock")}Set on the gateway</span>` : s.by === "gateway" ? `Never <span class="c-mark">${icon("lock")}Set on the gateway</span>` : "None";
+    const own = l.id === "exec" ? (s.by === "default" ? "No override. Uses the gateway's command policy." : `${execWord(s.mode)}. It replaces the default for ${name}.`) : s.by === "gateway" ? `Allow (no effect)` : s.by === "rule" ? "Ask (the rules plugin)" : s.value === "never" ? "Never (its deny list)" : "Allow";
+    const deflt = l.id === "exec" ? `Commands: ${execWord(gatewayExec.mode)} <span class="c-mark">${icon("lock")}Set on the gateway</span>` : s.by === "gateway" ? `Never <span class="c-mark">${icon("lock")}Set on the gateway</span>` : "None";
     const owner = (r) => (RULESET["*"].includes(r) ? "a rule for every bot" : `${botName(bot)}'s rule`);
     let effective;
     if (heldLines(bot).includes(l.id)) effective = `Never. Denied in ${botName(bot)}'s settings.`;
@@ -739,12 +732,12 @@
     body += `<h4 class="b-group">Each bot</h4><dl class="facts">` + app.bots.map((b) => openRow(esc(b.name), countWords(counts(b.id), b.id), `data-c="open-bot-rules" data-value="${b.id}"`)).join("") + `</dl>`;
     body +=
       `<h4 class="b-group">What a new bot starts with</h4><dl class="facts">` +
-      fact("Run commands", "Ask: each command not on the machine's allowlist asks first; listed commands run") +
-      fact("Change the gateway's settings", "Never") +
-      fact("T3 Code", "Off") +
+      fact("Run commands", "Uses the gateway's command policy") +
+      fact("Direct tool access", "Proposed deny list: gateway, plugins and openclaw") +
+      fact("T3 Code", "Proposed default: Off") +
       fact("Everything else", "As the gateway's settings for every bot") +
       `</dl>` +
-      `<p class="b-hint">Clawtrate writes a new bot restrictively first (it can't run commands or manage anything), then these. It sends nothing to the bot until the first write is read back. Until then the bot has the gateway's defaults for every bot. None of these needs the rules plugin. Kept as your preference with the gateway.</p>`;
+      `<p class="b-hint">New bot writes no command mode or tool deny list. The gateway's command policy applies from creation.</p>`;
     return { body, foot: isAdmin() ? "" : adminBar("Changing rules for every bot needs admin access.") };
   }
 
@@ -1042,12 +1035,6 @@
       }
       case "show-request":
         return announce("The request is in Otto's task 'Disk almost full on the media box'.");
-      case "newbot-retry":
-        C.newbot = null;
-        rerenderTab();
-        return announce("Saved. Pip's settings are written");
-      case "newbot-delete":
-        return announce("Deleting a bot is its own design; the prototype stops here.");
       case "part":
         C.part = value;
         return rerenderSettings();
@@ -1211,7 +1198,7 @@
   if (p("asker") === "fallback") P.otto.fallback = true;
   refresh("otto", "o1");
   // An example of the gateway's own card for a command missing the machine allowlist (section 10).
-  if (p("cmd") === "create") {
+  if (p("cmd") === "create" && p("cmdpolicy") === "ask") {
     const pip = app.bots.find((x) => x.id === "pip");
     P.pip.exec = { value: "ask", mode: "ask", by: "bot" };
     const pt = pip.tasks.find((x) => x.id === "p1");
@@ -1220,7 +1207,7 @@
       `<section class="card request" data-kind="approval" data-state="pending" data-testid="create-card" role="region" aria-label="Pip wants to run a command. Needs approval.">` +
       `<header class="request-head"><h3 class="request-title">Pip wants to run a command</h3><span class="tag" data-tone="warn">Needs approval</span></header>` +
       `<p class="request-summary"><code>openclaw agents add helper --workspace workspaces/helper</code> on the gateway's machine</p>` +
-      `<p class="request-asker">Asked by the gateway: Pip's command policy, Ask. The command isn't on the gateway machine's allowlist.</p>` +
+      `<p class="request-asker">Asked by the gateway: Pip's configured command policy, Ask. The command isn't on the gateway machine's allowlist.</p>` +
       `<p class="request-foot">Example: a command missing the machine allowlist.</p></section>`;
     refresh("pip", "p1");
   }
