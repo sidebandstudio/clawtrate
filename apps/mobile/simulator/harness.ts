@@ -22,6 +22,7 @@ import { networkInterfaces, tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { WebSocket, WebSocketServer } from "ws";
+import { INBOUND_MEDIA_ROUTE } from "@clawtrate/core";
 import { callGateway, openInstance, openOperator } from "../../../tools/dev-gateway/src/cli.ts";
 import { IOS_STREAM_HOLD_FILE, parseJsonOutput } from "../../../tools/dev-gateway/src/env.ts";
 import type { OperatorSession } from "../../../tools/dev-gateway/src/operator.ts";
@@ -870,29 +871,46 @@ export function trackAnswer(request: FrontRequest, res: ServerResponse, opened: 
   });
 }
 
+/** The methods the front's log names; any other is `other`. */
+const FRONT_METHODS = new Set(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"]);
+/** F-557's own pictures, the only ones the front's log names. */
+const FRONT_PICTURES = ["shot", "moved"] as const;
+
 /**
- * The front's requests, one line each, for a failure's message: when each came, its method and
- * path, which read it was (a picture's ticket or its bytes, by the picture's name), and its
- * answer's status and time. A query's values are never printed: they hold the ticket.
+ * A request's route by a fixed name: the media route's `ticket` or `media` (its bytes) read, or
+ * `elsewhere`, with ` for <picture>` when it read one of F-557's own.
+ */
+function frontRoute(target: string): string {
+  let url: URL;
+  try {
+    url = new URL(target, "https://front");
+  } catch {
+    return "elsewhere";
+  }
+  if (url.pathname !== INBOUND_MEDIA_ROUTE) return "elsewhere";
+  const source = url.searchParams.get("source") ?? "";
+  const picture = FRONT_PICTURES.find((name) => source.startsWith(`media://inbound/${name}---`));
+  return `${url.searchParams.get("meta") === "1" ? "ticket" : "media"}${picture ? ` for ${picture}` : ""}`;
+}
+
+/**
+ * The front's requests, one line each, for a failure's message: when each came, its method, its
+ * route by a fixed name and the F-557 picture it read (`frontRoute`), and its answer's status and
+ * time. No path or query is ever printed: they are public in CI, a query holds the ticket, and
+ * Clawtrate's outgoing media path holds a task's session key.
  */
 export function describeFrontRequests(requests: readonly FrontRequest[]): string {
   if (requests.length === 0) return "(no requests)";
   return requests
     .map((request) => {
-      const url = new URL(request.url, "https://front");
-      const source = url.searchParams.get("source");
-      const name = source?.match(/^media:\/\/inbound\/([A-Za-z0-9_-]+?)---/)?.[1] ?? null;
-      const read =
-        source === null
-          ? ""
-          : ` (${url.searchParams.get("meta") === "1" ? "ticket" : "bytes"} for ${name ?? "a picture"})`;
+      const method = FRONT_METHODS.has(request.method) ? request.method : "other";
       const answer =
         request.ended === "sent"
           ? `${request.status} in ${request.ms} ms`
           : request.ended === "closed"
             ? `${request.status === undefined ? "no answer" : `${request.status}, cut off`}: closed after ${request.ms} ms`
             : "no answer yet";
-      return `+${(request.at / 1000).toFixed(1)} s ${request.method} ${url.pathname}${read} -> ${answer}`;
+      return `+${(request.at / 1000).toFixed(1)} s ${method} ${frontRoute(request.url)} -> ${answer}`;
     })
     .join("\n");
 }

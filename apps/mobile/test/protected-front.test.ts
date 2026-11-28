@@ -9,6 +9,8 @@ import { describeFrontRequests, trackAnswer, type FrontRequest } from "../simula
 const SOURCE = "media://inbound/shot---0b1c2d3e-4f50-6172-8394-a5b6c7d8e9f0.png";
 const TICKET = ["v1", "c2NvcGU", "c2lnbmF0dXJl"].join(".");
 const ROUTE = "/__openclaw__/assistant-media";
+/** A session key in the gateway's form. Made up. */
+const SESSION = "agent:pip:check";
 const asked = (query: Record<string, string>, more: Partial<FrontRequest>): FrontRequest => ({
   method: "GET",
   url: `${ROUTE}?${new URLSearchParams(query)}`,
@@ -20,7 +22,7 @@ const asked = (query: Record<string, string>, more: Partial<FrontRequest>): Fron
 });
 
 describe("F-557: the protected front's log of a picture's read", () => {
-  it("F-557: names each request's read, status and time, and never a query's values", () => {
+  it("F-557: names each request's route, picture, status and time, and never a path or a query", () => {
     const requests = [
       asked(
         { meta: "1", source: SOURCE, sessionKey: "agent:pip:check" },
@@ -40,18 +42,54 @@ describe("F-557: the protected front's log of a picture's read", () => {
       ),
       asked({ source: SOURCE, mediaTicket: TICKET }, { at: 31_000 }),
       { ...asked({}, { at: 400, status: 404, ms: 2, ended: "sent" }), url: "/elsewhere" },
+      // A picture that isn't one of F-557's own, by a name that could be anyone's.
+      asked(
+        { meta: "1", source: "media://inbound/agent-pip-check---1a2b.png" },
+        { at: 2_500, status: 200, ms: 5, ended: "sent" },
+      ),
+      // Clawtrate's outgoing media route, whose path holds the task's session key; a path that
+      // starts as the media route's; and an address that isn't one, with a method Node allows.
+      {
+        ...asked({}, { at: 3_000, status: 404, ms: 1, ended: "sent" }),
+        url: `/api/chat/media/outgoing/${encodeURIComponent(SESSION)}/a1/full?mediaTicket=${TICKET}`,
+      },
+      {
+        ...asked({}, { at: 3_100, status: 404, ms: 1, ended: "sent" }),
+        url: `${ROUTE}/${SESSION}?source=${encodeURIComponent(SOURCE)}`,
+      },
+      {
+        ...asked({}, { at: 3_200, status: 400, ms: 1, ended: "sent" }),
+        method: "M-SEARCH",
+        url: `http://[${SESSION}/`,
+      },
     ];
     const log = describeFrontRequests(requests);
     expect(log.split("\n")).toEqual([
-      `+1.2 s GET ${ROUTE} (ticket for shot) -> 200 in 340 ms`,
-      `+1.6 s GET ${ROUTE} (bytes for shot) -> no answer: closed after 30004 ms`,
-      `+1.3 s GET ${ROUTE} (ticket for moved) -> 302 in 3 ms`,
-      `+2.0 s GET ${ROUTE} (bytes for shot) -> 200, cut off: closed after 90 ms`,
-      `+31.0 s GET ${ROUTE} (bytes for shot) -> no answer yet`,
-      "+0.4 s GET /elsewhere -> 404 in 2 ms",
+      "+1.2 s GET ticket for shot -> 200 in 340 ms",
+      "+1.6 s GET media for shot -> no answer: closed after 30004 ms",
+      "+1.3 s GET ticket for moved -> 302 in 3 ms",
+      "+2.0 s GET media for shot -> 200, cut off: closed after 90 ms",
+      "+31.0 s GET media for shot -> no answer yet",
+      "+0.4 s GET elsewhere -> 404 in 2 ms",
+      "+2.5 s GET ticket -> 200 in 5 ms",
+      "+3.0 s GET elsewhere -> 404 in 1 ms",
+      "+3.1 s GET elsewhere -> 404 in 1 ms",
+      "+3.2 s other elsewhere -> 400 in 1 ms",
     ]);
-    // The ticket, the task and the picture's full reference stay out: the log is public in CI.
-    for (const secret of [TICKET, "agent:pip", "0b1c2d3e", "mediaTicket", "sessionKey"])
+    // No path, query, ticket, task or picture reference: the log is public in CI.
+    for (const secret of [
+      TICKET,
+      "agent",
+      "pip",
+      "check",
+      "0b1c2d3e",
+      "mediaTicket",
+      "sessionKey",
+      "/",
+      "?",
+      "%",
+      "__openclaw__",
+    ])
       expect(log).not.toContain(secret);
     expect(describeFrontRequests([])).toBe("(no requests)");
   });
