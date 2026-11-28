@@ -184,9 +184,9 @@ describe("the wait for a restart (#913)", () => {
   });
 
   it("covers a gateway silent for over a minute while it closes its skill watchers, its closed port and one reconnect gap", () => {
-    // Measured on OpenClaw 2026.10.6 on macOS (#914): the watcher step up to 104 s with the event
-    // loop blocked, the port closed up to 16 s, and the client's longest reconnect gap 30 s.
-    expect(RESTART_WAIT_MS).toBeGreaterThanOrEqual(104_000 + 16_000 + 30_000);
+    // Measured on development gateways on macOS: the watcher step up to 104 s with the event loop
+    // blocked (2026.10.6, #914), the port closed up to 17 s, the client's longest reconnect gap 30 s.
+    expect(RESTART_WAIT_MS).toBeGreaterThanOrEqual(104_000 + 17_000 + 30_000);
   });
 
   it("holds through a gateway that answers nothing after its announcement, then closes late, until it is back", async () => {

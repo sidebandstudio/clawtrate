@@ -30,7 +30,7 @@ export type ConnectionRestart = {
  * its skill watchers, with its event loop blocked; `docs/decisions.md`, "A restarting gateway",
  * has the measurements behind it. One bound.
  */
-export const RESTART_WAIT_MS = 150_000;
+export const RESTART_WAIT_MS = 180_000;
 
 /**
  * How long after a write that restarts the gateway its drop is still that restart: OpenClaw

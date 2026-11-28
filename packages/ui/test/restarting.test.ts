@@ -21,7 +21,7 @@ import { gatewayDot, gatewayState } from "../src/Settings.tsx";
 import { stripFor } from "../src/StatusStrip.tsx";
 
 const NOW = 1_800_000_000_000;
-const RESTART = { cause: "announced" as const, since: NOW, until: NOW + 150_000 };
+const RESTART = { cause: "announced" as const, since: NOW, until: NOW + 180_000 };
 const up: ConnectionState = {
   ...initialState.connection,
   status: "connected",
