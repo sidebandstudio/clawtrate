@@ -1,0 +1,88 @@
+name: Packaged first run
+
+on:
+  pull_request:
+    paths:
+      - "apps/desktop/packaging/**"
+      - "apps/desktop/src/setup/**"
+      - "apps/desktop/src/main/**"
+      - "packages/ui/src/setup/**"
+      - "packages/ui/src/**/FirstBot*"
+      - "packages/ui/src/Shell.tsx"
+      - "packages/ui/src/bots/NewBot.tsx"
+      - "e2e-packaged/first-run/**"
+      - "test/first-run.test.ts"
+      - ".github/workflows/first-run.yml"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Published Clawtrate version, without the leading v
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: first-run-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  first-run:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 26
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Build the pull request app
+        if: github.event_name == 'pull_request'
+        run: |
+          pnpm package:mac
+          app="$PWD/apps/desktop/dist/mac-arm64/Clawtrate.app"
+          helper_source=$(node e2e-packaged/first-run/add-local-gateway-helper.ts "$app")
+          echo "APP=$app" >> "$GITHUB_ENV"
+          echo "FIRST_RUN_HELPER_SOURCE=$helper_source" >> "$GITHUB_ENV"
+      - name: Get the published app
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          case "$VERSION" in *[!0-9A-Za-z.-]* | '' | [!0-9]*) exit 1 ;; esac
+          dir="$RUNNER_TEMP/first-run-release"
+          mkdir -p "$dir"
+          curl -fsSL -o "$dir/Clawtrate.zip" \
+            "https://github.com/sidebandstudio/clawtrate/releases/download/v$VERSION/Clawtrate-$VERSION-mac-arm64.zip"
+          ditto -x -k "$dir/Clawtrate.zip" "$dir"
+          test ! -e /Applications/Clawtrate.app
+          ditto "$dir/Clawtrate.app" /Applications/Clawtrate.app
+          codesign --verify --deep --strict /Applications/Clawtrate.app
+          spctl --assess --type execute /Applications/Clawtrate.app
+          echo "APP=/Applications/Clawtrate.app" >> "$GITHUB_ENV"
+      - name: Make a disposable keychain the default
+        run: |
+          path="$RUNNER_TEMP/first-run.keychain-db"
+          password="$(openssl rand -hex 24)"
+          security create-keychain -p "$password" "$path"
+          security set-keychain-settings -lut 3600 "$path"
+          security unlock-keychain -p "$password" "$path"
+          # The runner keychain paths are unquoted, one per line.
+          # shellcheck disable=SC2046
+          security list-keychains -d user -s "$path" $(security list-keychains -d user | tr -d '"')
+          security default-keychain -d user -s "$path"
+      - name: Drive the packaged app
+        run: node e2e-packaged/first-run/check.ts "$APP" "$RUNNER_TEMP/first-run"
+      - name: Upload the result and screenshots
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: packaged-first-run
+          if-no-files-found: error
+          path: ${{ runner.temp }}/first-run/
+          retention-days: 7
