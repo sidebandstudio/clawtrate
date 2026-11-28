@@ -167,6 +167,13 @@ export function Shell({
   const routinesOpen = routines !== null;
   // A conversation that failed to draw shows none of the task: nothing is read while it does.
   const [conversationFailed, setConversationFailed] = useState(false);
+  // Set as the boundary catches, before this render's effects run: a read the same render
+  // schedules sees it too.
+  const conversationFailedRef = useRef(false);
+  const onConversationFailed = useCallback((failed: boolean) => {
+    conversationFailedRef.current = failed;
+    setConversationFailed(failed);
+  }, []);
   const conversationVisible = routines === null && !conversationFailed;
   const selection = useSelection(state, interactive, conversationVisible);
   const { bot, task } = selection;
@@ -457,7 +464,7 @@ export function Shell({
   useEffect(() => {
     // Covered by Routines, it is not open: coming back opens it again.
     if (!conversationVisible) openedKey.current = null;
-    if (!taskKey || !connectedNow || !conversationVisible) return;
+    if (!taskKey || !connectedNow || !conversationVisible || conversationFailedRef.current) return;
     if (openedKey.current !== taskKey) {
       openedKey.current = taskKey;
       readTask(taskKey, true);
@@ -942,7 +949,7 @@ export function Shell({
           ) : (
             <PanelBoundary
               key="conversation"
-              onFailed={setConversationFailed}
+              onFailed={onConversationFailed}
               {...(onePane ? { back: { label: "Back to tasks", onClick: backToList } } : {})}
             >
               <OpenTaskContext.Provider value={selection.selectTask}>

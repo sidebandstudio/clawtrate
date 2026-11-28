@@ -198,3 +198,45 @@ test("on a phone, a failed panel keeps a way back", async ({ page }) => {
   await expect(failed).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Routines", exact: true })).toBeVisible();
 });
+
+test("a failed conversation's Try again that fails again, or a reply that comes with the failure, marks nothing read", async ({
+  page,
+}) => {
+  const KEY = "agent:otto:disk-space";
+  const reads = () =>
+    page.evaluate(
+      (key) =>
+        (
+          window as unknown as {
+            clawtrateFixture: { sent: Array<{ type: string; key?: string }> };
+          }
+        ).clawtrateFixture.sent.filter((each) => each.type === "markTask" && each.key === key)
+          .length,
+      KEY,
+    );
+  const change = (body: string) =>
+    page.evaluate((source) => {
+      const fixture = (
+        window as unknown as {
+          clawtrateFixture: { setState: (f: (s: ClawtrateState) => ClawtrateState) => void };
+        }
+      ).clawtrateFixture;
+      fixture.setState(new Function("state", source) as (s: ClawtrateState) => ClawtrateState);
+    }, body);
+  const broken = `const t = state.transcripts["${KEY}"]; state = { ...state, transcripts: { ...state.transcripts, "${KEY}": { ...t, runs: null } } };`;
+  const unread = `state = { ...state, tasksByBot: { ...state.tasksByBot, otto: state.tasksByBot.otto.map((task) => task.key === "${KEY}" ? { ...task, unread: true, unreadMarker: null } : task) } };`;
+  await openFixture(page, `scene=main&${OTTO_DISK}&panel=closed`, "light");
+  await expect(page.getByTestId("transcript")).toBeVisible();
+  const before = await reads();
+  // A reply that marks the task unread in the same change that breaks the conversation.
+  await change(`${broken} ${unread} return state;`);
+  const failed = page.getByTestId("panel-failed");
+  await expect(failed).toBeVisible();
+  await page.waitForTimeout(300);
+  expect(await reads()).toBe(before);
+  // Try again while it is still broken: it fails again, and still nothing is read.
+  await failed.getByRole("button", { name: "Try again" }).click();
+  await expect(failed).toBeVisible();
+  await page.waitForTimeout(300);
+  expect(await reads()).toBe(before);
+});

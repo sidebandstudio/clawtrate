@@ -30,6 +30,8 @@ export class PanelBoundary extends Component<Props, { failed: boolean }> {
 
   override componentDidUpdate(_: Props, before: { failed: boolean }): void {
     if (!before.failed && this.state.failed && this.props.rootRef) this.tryAgain.current?.focus();
+    // Said only once the panel has drawn again: a Try again that fails again never got here.
+    if (before.failed && !this.state.failed) this.props.onFailed?.(false);
   }
 
   override componentWillUnmount(): void {
@@ -53,10 +55,7 @@ export class PanelBoundary extends Component<Props, { failed: boolean }> {
               type="button"
               className="button"
               ref={this.tryAgain}
-              onClick={() => {
-                this.setState({ failed: false });
-                this.props.onFailed?.(false);
-              }}
+              onClick={() => this.setState({ failed: false })}
             >
               Try again
             </button>
