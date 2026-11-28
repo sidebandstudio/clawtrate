@@ -130,6 +130,22 @@ test.describe("behaviour", () => {
     await expect(page.getByTestId("setup")).toHaveCount(0);
     expect(await sent(page)).toContain("setupInstall");
     expect(await sent(page)).not.toContain("setupConnect");
+    // Full control: what the six scopes allow is allowed in the app.
+    const connection = await page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            clawtrateFixture: { getState(): { connection: Record<string, unknown> } };
+          }
+        ).clawtrateFixture.getState().connection,
+    );
+    expect(connection).toMatchObject({
+      canWrite: true,
+      canAnswer: true,
+      canApprove: true,
+      canAdmin: true,
+      fullPairing: true,
+    });
   });
 
   test("F-505: the recovery panel offers the recorded setup actions", async ({ page }) => {

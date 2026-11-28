@@ -1166,6 +1166,10 @@ export function createFixtureBridge(
           if (command.type !== "setupInstall") return loaded(at);
           return withConnection(scene("empty", at).initial, {
             scopes: [...FULL_SCOPES],
+            canWrite: true,
+            canAnswer: true,
+            canApprove: true,
+            canAdmin: true,
             fullPairing: true,
             serverVersion: INSTALL_OPENCLAW_VERSION,
           });
