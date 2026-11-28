@@ -37,7 +37,7 @@ async function offerAttach(page: Page): Promise<void> {
       const each = command as { type: string; trigger?: string };
       if (each.type === "attachLibrarySkill")
         return { command: "s_moon_phas_e65dd9b102714cd6a01b" };
-      if (each.type === "detachLibrarySkill") return undefined;
+      if (each.type === "detachLibrarySkill") return { detached: true };
       const answer = await invoke(command);
       if (each.type !== "readComposerMenu" || each.trigger !== "/") return answer;
       const rows = [...(answer as unknown[])];

@@ -325,7 +325,7 @@ describe("attaching a library skill", () => {
       ],
       ["chat.send", expect.objectContaining({ message: `/skill ${saved.name} for tonight` })],
     ]);
-    await client.detachLibrarySkill(KEY, saved.skillId);
+    expect(await client.detachLibrarySkill(KEY, saved.skillId)).toEqual({ detached: true });
     expect(gateway.calls("skills.library.activate").at(-1)).toEqual({
       sessionKey: KEY,
       action: "detach",
@@ -334,8 +334,32 @@ describe("attaching a library skill", () => {
     // An answer that doesn't list the skill establishes no attach.
     gateway.handlers["skills.library.activate"] = () => ({ sessionKey: KEY, selections: [] });
     await expect(client.attachLibrarySkill(KEY, saved.skillId, saved.revision)).rejects.toThrow(
-      "The gateway didn't say the skill is attached to this task.",
+      "The gateway's answer doesn't list the skill on this task.",
     );
+    client.stop();
+  });
+
+  it("F-071 #848: an attach or detach whose answer is lost is unconfirmed, and a refusal is said in the gateway's words", async () => {
+    const { client, gateway } = await openTask();
+    gateway.handlers["skills.library.activate"] = () => {
+      throw new Error("skill revision is stale");
+    };
+    await expect(client.attachLibrarySkill(KEY, saved.skillId, saved.revision)).rejects.toThrow(
+      "skill revision is stale",
+    );
+    // The request goes, and the connection drops before its answer: nothing says it failed.
+    const held = deferred<unknown>();
+    gateway.handlers["skills.library.activate"] = () => held.promise;
+    const attach = client.attachLibrarySkill(KEY, saved.skillId, saved.revision);
+    await until(() => gateway.calls("skills.library.activate").length === 2);
+    gateway.dropAll();
+    expect(await attach).toEqual({ command: null });
+    await until(() => client.state.connection.status === "connected");
+    gateway.handlers["skills.library.activate"] = () => held.promise;
+    const detach = client.detachLibrarySkill(KEY, saved.skillId);
+    await until(() => gateway.calls("skills.library.activate").length === 3);
+    gateway.dropAll();
+    expect(await detach).toEqual({ detached: false });
     client.stop();
   });
 

@@ -604,8 +604,10 @@ type BridgeResultStart<C extends BridgeCommand> = C extends { type: "readBotDele
       : C extends { type: "undoSkillChange" }
         ? { undone: boolean }
         : C extends { type: "attachLibrarySkill" }
-          ? { command: string }
-          : BridgeResultRest<C>;
+          ? { command: string | null }
+          : C extends { type: "detachLibrarySkill" }
+            ? { detached: boolean }
+            : BridgeResultRest<C>;
 
 type BridgeResultRest<C extends BridgeCommand> = C extends { type: "sendMessage" }
   ? { messageId: string }

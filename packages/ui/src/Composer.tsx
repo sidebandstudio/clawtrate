@@ -564,6 +564,16 @@ export function Composer({
   const attach = (row: MenuRow, { skillId, revision }: NonNullable<MenuRow["attach"]>) => {
     void bridge.invoke({ type: "attachLibrarySkill", key: taskKey, skillId, revision }).then(
       ({ command }) => {
+        // The answer was lost: the next "/" reads whether the task has it.
+        if (command === null) {
+          setTokens((current) => current.filter((token) => token !== row));
+          setMenuRows(null);
+          onNotice({
+            title: `Clawtrate couldn't confirm ${row.name} was attached to this task.`,
+            reason: "Choose it from / again to see whether the task has it.",
+          });
+          return;
+        }
         const insert = `/skill ${command}`;
         const ready: MenuRow = {
           kind: row.kind,
@@ -592,7 +602,16 @@ export function Composer({
       setAttached((current) => (current?.skillId === skillId ? { ...current, phase } : current));
     settle("busy");
     void bridge.invoke({ type: "detachLibrarySkill", key: taskKey, skillId }).then(
-      () => {
+      ({ detached }) => {
+        if (!detached) {
+          settle("ready");
+          setMenuRows(null);
+          onNotice({
+            title: `Clawtrate couldn't confirm ${attached.name} was detached.`,
+            reason: "Press Undo again to make sure.",
+          });
+          return;
+        }
         settle("done");
         // A chip still waiting to send it would run nothing now.
         setTokens((current) => current.filter((token) => token.insert !== insert));
