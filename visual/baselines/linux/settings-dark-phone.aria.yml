@@ -5,6 +5,7 @@
     - button "Close settings"
     - button "Gateway"
     - button "Accounts"
+    - button "OpenClaw"
     - button "Conversation"
     - button "Usage"
     - button "Machines"
