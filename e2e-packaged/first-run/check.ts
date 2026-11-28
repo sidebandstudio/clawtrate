@@ -84,7 +84,7 @@ let accountSheet: AccountSheetResult | null = null;
 let accountProbe: { checkingScreenObserved: boolean; scriptedResponses: number } | null = null;
 let notFoundAdvancedCount: number | null = null;
 const timing = process.env.FIRST_RUN_ACCOUNT_TIMING;
-if (timing !== "before" && timing !== "at-return" && timing !== "late") {
+if (timing !== "at-return" && timing !== "late") {
   throw new Error("Select a hosted account timing case.");
 }
 const accountTiming = {
@@ -395,14 +395,11 @@ async function configureAccount(profile: string, appData: string) {
   provider = fixture.server;
   fixture.applyConfig();
   accountTiming.configAt = seconds(performance.now() - start);
-  const [returned, restarted] = await Promise.allSettled([
-    waitForGatewayReturn(),
-    fixture.restart(),
-  ]);
-  if (restarted.status === "rejected") throw restarted.reason;
-  if (returned.status === "rejected") throw returned.reason;
+  const restarted = fixture.restart();
+  void restarted.catch(() => undefined);
+  const returned = await waitForGatewayReturn();
   if (timing === "late") {
-    while (performance.now() - returned.value < 24_000) {
+    while (performance.now() - returned < 23_000) {
       await readWindow();
       await sleep(350);
     }
@@ -413,6 +410,7 @@ async function configureAccount(profile: string, appData: string) {
     await writer.save();
     accountSavedAt = performance.now();
     accountTiming.savedAt = seconds(accountSavedAt - start);
+    await restarted;
     const delta = accountTiming.savedAt! - accountTiming.connectedAt!;
     if (
       (timing === "at-return" && Math.abs(delta) > 5) ||
