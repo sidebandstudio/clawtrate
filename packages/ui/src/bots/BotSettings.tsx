@@ -292,7 +292,7 @@ export function BotSettings({
   }
   if (request && request.seq !== requestShown && request.botId === bot.id) {
     setRequestShown(request.seq);
-    setView(request.part === "account" ? "account" : "main");
+    setView(request.part === "model" ? "main" : request.part);
     setError(null);
     setPick(null);
   }
@@ -644,7 +644,7 @@ export function BotSettings({
                 >
                   <BackIcon />
                 </button>
-                <h3 tabIndex={-1} data-bs-focus="">
+                <h3 tabIndex={-1} data-bs-focus="" data-bs-connect="">
                   {page.title}
                 </h3>
               </div>

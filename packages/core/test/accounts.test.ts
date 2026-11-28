@@ -101,9 +101,22 @@ describe("the Model menu's lists", () => {
     expect(accounts().accounts.map((a) => a.id)).toContain("acme:work");
     expect(accounts().bindings.length).toBeGreaterThan(0);
     expect(accounts().models).toEqual([]);
+    expect(accounts().modelsStatus).toBe("loading");
     held.resolve();
     await loading;
     expect(accounts().models.map((m) => m.id)).toEqual(["dev-1", "dev-2", "dev-1"]);
+    expect(accounts().modelsStatus).toBe("ready");
+    client.stop();
+  });
+
+  it("F-504: a failed model list has an error state after the accounts read back", async () => {
+    const gateway = new AccountsGateway();
+    gateway.pickerCatalog = () => {
+      throw new GatewayError({ code: "UNAVAILABLE", message: "No catalogue" });
+    };
+    const { client, accounts } = await accountsClient({ gateway });
+    expect(accounts().status).toBe("ready");
+    expect(accounts().modelsStatus).toBe("error");
     client.stop();
   });
 
@@ -253,6 +266,27 @@ describe("the Model menu's lists", () => {
   }
   const nothingPublished = (state: AccountsState) =>
     expect([state.accounts, state.models, state.modelsCut]).toEqual([[], [], []]);
+
+  it.each([
+    ["models.authLogin", "The gateway didn’t confirm that the sign-in started."],
+    ["wizard.next", "The gateway didn’t confirm that the sign-in finished."],
+  ])(
+    "F-504: a lost answer to %s is uncertain and checks the accounts again",
+    async (method, words) => {
+      const fake = new AccountsGateway();
+      fake.gateway.handlers[method] = () => {
+        throw new Error("gateway request timed out");
+      };
+      const { engine, state } = engineOn(fake);
+      await engine.load();
+      await engine.startSignIn(CHOICES.device, null);
+      expect(state().signIn).toMatchObject({
+        stage: "ended",
+        error: words,
+        result: { added: [], readFailed: false },
+      });
+    },
+  );
 
   it("F-478: an account read answered after a gateway switch publishes nothing, and its preferences never reach the next gateway", async () => {
     const fake = new AccountsGateway();
@@ -487,6 +521,26 @@ describe("the accounts as each bot sees them", () => {
     expect(accounts().mainShared).toBe(false);
     client.stop();
   });
+
+  it.each([false, true])(
+    "F-504: only canonical main shares its accounts (custom=%s)",
+    async (custom) => {
+      const fake = new AccountsGateway();
+      fake.bots = [{ id: "main", name: "Main" }];
+      fake.own.main = fake.shared;
+      fake.shared = [];
+      if (custom) {
+        const agents = fake.config.agents as { entries: Record<string, unknown> };
+        agents.entries.main = { agentDir: "/fixture/another-agent" };
+      }
+      const { client, accounts } = await accountsClient({ gateway: fake });
+      expect(accounts().mainShared).toBe(!custom);
+      expect(accounts().accounts.find((a) => a.id === "acme:work")?.keptBy).toBe(
+        custom ? "main" : null,
+      );
+      client.stop();
+    },
+  );
 
   it("an unrefreshed view that lists shared accounts as saved is never read", () => {
     // What the gateway's prepared view can say (row 33). The engine never asks for it.
@@ -1579,6 +1633,22 @@ describe("how an account was made", () => {
 });
 
 describe("sign-ins, through the gateway's own methods", () => {
+  it("F-504: a sign-in on the gateway's only canonical main is shared", async () => {
+    const fake = new AccountsGateway();
+    fake.bots = [{ id: "main", name: "Main" }];
+    fake.shared = [];
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    await client.startSignIn(CHOICES.device, null);
+    fake.answerDevice();
+    await until(() => accounts().signIn?.stage === "connected");
+    expect(accounts().signIn?.result).toMatchObject({
+      added: ["acme:travel"],
+      landed: "shared",
+      keptBy: null,
+    });
+    client.stop();
+  });
+
   it("a link and a code: starting, waiting with the code and the link, connected, and where it landed", async () => {
     const fake = new AccountsGateway();
     fake.orders.otto = { acme: ["acme:work"] };

@@ -1355,6 +1355,7 @@ export const ACCOUNTS: Bound = object<AccountsState>()({
   methods: list(MAX_SIGNIN_METHODS, signInMethod),
   keyProviders: list(MAX_KEY_PROVIDERS, keyProvider),
   models: list(MAX_CATALOG_MODELS, catalogModel),
+  modelsStatus: ENUM,
   modelsCut: list(MAX_KEY_PROVIDERS, pickerCut),
   modelAllowlist,
   bindings: list(MAX_BOTS, binding),

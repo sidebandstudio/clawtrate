@@ -5,7 +5,7 @@
 
 import { useSyncExternalStore } from "react";
 
-export type BotSettingsPart = "model" | "account";
+export type BotSettingsPart = "model" | "account" | "connect";
 export type BotSettingsRequest = { botId: string; part: BotSettingsPart; seq: number };
 
 let request: BotSettingsRequest | null = null;
@@ -37,6 +37,10 @@ export function settlement(
 ): { focus: string | null } | null {
   if (request.botId !== botId) return null;
   const usable = (selector: string) => (control(selector) === "usable" ? selector : null);
+  if (request.part === "connect") {
+    const focus = usable("[data-bs-connect]");
+    return focus ? { focus } : null;
+  }
   const focus =
     request.part === "account"
       ? (usable("[data-bs='change']") ?? usable("[data-bs-focus]"))

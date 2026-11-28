@@ -295,12 +295,13 @@ export const CODING_AGENT_SCRIPT = fileURLToPath(new URL("./coding-agent-mcp.ts"
  * which asks a person about every command it has no approved rule for. Only
  * the messaging pair may message each other.
  */
-function botEntries(stateDir: string, browserBots: readonly string[] | null) {
+function botEntries(stateDir: string, browserBots: readonly string[] | null, onlyMain = false) {
   const entries: Record<
     string,
     { workspace: string; tools: Record<string, unknown>; subagents?: { allowAgents: string[] } }
   > = {};
   for (const bot of SEED_BOTS) {
+    if (onlyMain && bot.id !== "main") continue;
     const partner = messagingPartner(bot.id);
     entries[bot.id] = {
       // Where `agents add` used to put them: the built-in bot in workspace/, the others in workspaces/<id>.
@@ -425,6 +426,8 @@ export function browserConfig(
 export type StartOptions = {
   /** The scripted provider accounts (accounts.ts); named instances only. */
   accounts?: boolean;
+  /** Only the gateway's own bot, with scripted sign-in available and no saved credentials. */
+  firstBot?: boolean;
   /**
    * Leave `gateway.nodes.pairing.autoApproveLocal` unset, at the gateway's own
    * default, instead of false; named instances only. For research into what
@@ -474,7 +477,8 @@ export function devConfig(
   chromium?: string,
 ) {
   const form = shapeOf(options.openclaw ?? OPENCLAW_VERSION);
-  const accounts = options.accounts ? accountsConfig(ports.providerPort, stateDir) : null;
+  const accounts =
+    options.accounts || options.firstBot ? accountsConfig(ports.providerPort, stateDir) : null;
   const owner = plugins.find((plugin) => plugin.botBrowsers);
   const browsers = owner?.botBrowsers
     ? browserConfig(
@@ -515,7 +519,7 @@ export function devConfig(
         [PROVIDER_ID]: {
           baseUrl: `http://127.0.0.1:${ports.providerPort}/v1`,
           api: "openai-completions",
-          apiKey: "scripted-dev-provider",
+          ...(options.firstBot ? {} : { apiKey: "scripted-dev-provider" }),
           models: [
             {
               id: MODEL_ID,
@@ -543,7 +547,7 @@ export function devConfig(
       },
     },
     // Each scripted account's label; the credentials are in the account stores.
-    ...(accounts ? { auth: accounts.auth } : {}),
+    ...(accounts ? { auth: options.firstBot ? { profiles: {} } : accounts.auth } : {}),
     ...(accounts ? { logging: accounts.logging } : {}),
     agents: {
       defaults: {
@@ -557,7 +561,7 @@ export function devConfig(
       // The bots are declared here so their tool policy is part of the checked
       // config from the first start. Several bots need explicit ownership.
       ownership: "explicit",
-      entries: botEntries(stateDir, owner?.botBrowsers?.bots ?? null),
+      entries: botEntries(stateDir, owner?.botBrowsers?.bots ?? null, options.firstBot),
     },
     tools: {
       // Offer tools directly instead of behind tool_search/tool_call wrappers,
@@ -789,7 +793,7 @@ export function devConfigContract(
   ) as unknown as Record<string, Record<string, unknown>>;
   // With accounts, the gateway itself writes profile entries (labels, sign-ins,
   // the CLI's saves): scripted accounts only, each of a closed shape.
-  if (options.accounts) {
+  if (options.accounts || options.firstBot) {
     (contract as Record<string, unknown>).auth = authContract();
     // A provider's list may grow by its later model (`LATER_MODELS`), as a check writes it.
     const providers = contract.models!.providers as Record<string, Record<string, unknown>>;
@@ -802,7 +806,9 @@ export function devConfigContract(
   const entries = (contract.agents!.entries as Record<string, Record<string, unknown>>) ?? {};
   for (const bot of SEED_BOTS) {
     // `agents set-identity` during the seed.
-    entries[bot.id]!.identity = optional({
+    const entry = entries[bot.id];
+    if (!entry) continue;
+    entry.identity = optional({
       name: bot.name,
       ...(bot.emoji === undefined ? {} : { emoji: bot.emoji }),
       ...(bot.theme === undefined ? {} : { theme: bot.theme }),
@@ -881,6 +887,7 @@ export function recordedStartOptions(inst: { runDir: string }): StartOptions {
     Object.keys(recorded).some(
       (key) =>
         key !== "accounts" &&
+        key !== "firstBot" &&
         key !== "defaultLocalPairing" &&
         key !== "renewTimeoutMs" &&
         key !== "images" &&
@@ -890,6 +897,7 @@ export function recordedStartOptions(inst: { runDir: string }): StartOptions {
         key !== "openclaw",
     ) ||
     !["boolean", "undefined"].includes(typeof (recorded as StartOptions).accounts) ||
+    !["boolean", "undefined"].includes(typeof (recorded as StartOptions).firstBot) ||
     !["boolean", "undefined"].includes(typeof (recorded as StartOptions).defaultLocalPairing) ||
     !["boolean", "undefined"].includes(typeof (recorded as StartOptions).images) ||
     !["boolean", "undefined"].includes(typeof (recorded as StartOptions).messageTool) ||
@@ -958,7 +966,7 @@ function writeFreshConfig(
   if (validation.status !== 0) {
     throw new Error(`generated config is invalid:\n${validation.stdout}${validation.stderr}`);
   }
-  if (options.accounts) {
+  if (options.accounts && !options.firstBot) {
     // Each account saved the way the gateway's own command line saves one,
     // its made-up credential on stdin; the config must still keep the contract.
     for (const account of SCRIPTED_ACCOUNTS) {
@@ -1178,7 +1186,11 @@ export async function execPolicyProblems(inst: DevInstance): Promise<string[]> {
   const scopes = snapshot.effectivePolicy?.scopes ?? [];
   if (scopes.length === 0) return ["the gateway reported no exec policy scopes"];
   const problems = scopes.flatMap((scope) => execScopeProblem(scope) ?? []);
-  if (!scopes.some((scope) => scope.agentId === SHELL_BOT)) {
+  if (recordedStartOptions(inst).firstBot) {
+    if (scopes.some((scope) => scope.agentId && scope.agentId !== "main")) {
+      problems.push("a first-bot fixture must have only the gateway's own bot");
+    }
+  } else if (!scopes.some((scope) => scope.agentId === SHELL_BOT)) {
     problems.push(`the gateway reported no exec policy for ${SHELL_BOT}`);
   }
   return problems;
@@ -1336,6 +1348,7 @@ export async function start(
     runId?: string;
     plugins?: string[];
     accounts?: boolean;
+    firstBot?: boolean;
     defaultLocalPairing?: boolean;
     /** A paired machine: the gateway's own node host (`scripted-node.ts`); named instances only. */
     node?: boolean;
@@ -1357,7 +1370,7 @@ export async function start(
   }
   const runId = options.runId ?? newRunId();
   if (!RUN_ID_PATTERN.test(runId)) throw new Error("--run-id must be 48 lowercase hex digits");
-  if (options.accounts && inst.name === null) {
+  if ((options.accounts || options.firstBot) && inst.name === null) {
     throw new Error("the default instance never has scripted accounts; use --instance <name>");
   }
   if (options.defaultLocalPairing && inst.name === null) {
@@ -1380,7 +1393,8 @@ export async function start(
     );
   }
   const startOptions: StartOptions = {
-    ...(options.accounts ? { accounts: true } : {}),
+    ...(options.accounts || options.firstBot ? { accounts: true } : {}),
+    ...(options.firstBot ? { firstBot: true } : {}),
     ...(options.defaultLocalPairing ? { defaultLocalPairing: true } : {}),
     ...(options.renewTimeoutMs !== undefined ? { renewTimeoutMs: options.renewTimeoutMs } : {}),
     ...(options.images ? { images: true } : {}),
@@ -1392,7 +1406,7 @@ export async function start(
   // plugin, or whose addition breaks the rule for plugins.
   const plugins = loadPlugins(inst, options.plugins ?? []);
   const signIns = plugins.filter((plugin) => plugin.providers.length > 0);
-  if (signIns.length > 0 && !options.accounts) {
+  if (signIns.length > 0 && !startOptions.accounts) {
     throw new Error(
       `plugin ${signIns[0]!.name} declares sign-ins for the scripted account providers; start with --with-accounts`,
     );
@@ -1558,11 +1572,13 @@ export async function start(
     }
     // Pip's workspace holds a picture and a git checkout for the Work pane's Files tab,
     // seeded or not: the scenario check reads the picture on an unseeded instance.
-    const filesWorkspace = join(inst.stateDir, "workspaces", FILES_BOT);
-    assertInside(filesWorkspace, inst.stateDir);
-    seedWorkspaceFiles(filesWorkspace);
-    // Unseeded starts are for checks that need a running gateway, not its data.
-    if (options.seed !== false) await seed(inst);
+    if (!options.firstBot) {
+      const filesWorkspace = join(inst.stateDir, "workspaces", FILES_BOT);
+      assertInside(filesWorkspace, inst.stateDir);
+      seedWorkspaceFiles(filesWorkspace);
+      // Unseeded starts are for checks that need a running gateway, not its data.
+      if (options.seed !== false) await seed(inst);
+    }
   });
 }
 
@@ -3313,7 +3329,7 @@ export async function lockOrder(
 
 const USAGE =
   "usage: pnpm dev-gateway setup   (OpenClaw 2026.10.6 for this tool; start does it when needed)\n" +
-  "       pnpm dev-gateway <start|up|seed|routines|approve [requestId]|status|stop|reset> [--instance <name>] [--no-seed] [--run-id <id>] [--with-accounts] [--default-local-pairing] [--with-node] [--with-images] [--with-message-tool] [--with-http-api] [--with-skill-review] [--with-plugin <plugin>]... [--renew-timeout-ms <ms>]\n" +
+  "       pnpm dev-gateway <start|up|seed|routines|approve [requestId]|status|stop|reset> [--instance <name>] [--no-seed] [--first-bot] [--run-id <id>] [--with-accounts] [--default-local-pairing] [--with-node] [--with-images] [--with-message-tool] [--with-http-api] [--with-skill-review] [--with-plugin <plugin>]... [--renew-timeout-ms <ms>]\n" +
   "       pnpm dev-gateway lock --instance <name> --agent <bot> --provider <provider> <profileId>\n" +
   "       pnpm dev-gateway unlock --instance <name> --agent <bot> --provider <provider>\n" +
   "       pnpm dev-gateway <list [--json]|prune>   (every instance on this machine)";
@@ -3325,6 +3341,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
       instance: { type: "string" },
       json: { type: "boolean", default: false },
       "no-seed": { type: "boolean", default: false },
+      "first-bot": { type: "boolean", default: false },
       "run-id": { type: "string" },
       "with-plugin": { type: "string", multiple: true },
       "with-accounts": { type: "boolean", default: false },
@@ -3382,6 +3399,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
   }
   for (const option of [
     "default-local-pairing",
+    "first-bot",
     "with-images",
     "with-message-tool",
     "with-http-api",
@@ -3408,6 +3426,7 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
         ...(runId ? { runId } : {}),
         plugins: values["with-plugin"] ?? [],
         accounts: values["with-accounts"],
+        firstBot: values["first-bot"],
         defaultLocalPairing: values["default-local-pairing"],
         node: values["with-node"],
         images: values["with-images"],
@@ -3419,6 +3438,8 @@ export async function main(argv: string[], env: NodeJS.ProcessEnv = process.env)
     case "stop":
       return stop(inst);
     case "seed":
+      if (recordedStartOptions(inst).firstBot)
+        throw new Error("A first-bot instance stays unseeded.");
       return seed(inst);
     case "routines": {
       const ids = await addScriptedRoutines(async (method, params) =>

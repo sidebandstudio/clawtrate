@@ -937,11 +937,13 @@ export function Conversation({
   granted,
   onShowComputer,
   updatingWords = null,
+  onFirstBot,
 }: {
   task: Task | null;
   bot: Bot | undefined;
   taskCount: number;
   discovery: DiscoveryState;
+  onFirstBot?: (() => void) | null;
   transcript: Transcript | undefined;
   /** Why the host refused to open this task, while this view doesn't hold it. */
   openError: string | null;
@@ -1155,7 +1157,15 @@ export function Conversation({
       transcript.runs.some((run) => run.state !== "queued" && run.state !== "cancelled"));
 
   let body: ReactNode;
-  if (!bot) {
+  if (onFirstBot && !task) {
+    body = (
+      <EmptyState title="Set up your first bot" body={null}>
+        <button type="button" className="button" data-variant="primary" onClick={onFirstBot}>
+          Get started
+        </button>
+      </EmptyState>
+    );
+  } else if (!bot) {
     body =
       discovery.status === "loading" ? (
         <EmptyState title="Loading" body="Loading this gateway's bots." busy />

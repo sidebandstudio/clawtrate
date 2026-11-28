@@ -572,6 +572,8 @@ export type AccountsState = {
   methods: SignInMethod[];
   keyProviders: KeyProvider[];
   models: CatalogModel[];
+  /** The model list is read after the accounts. First bot setup waits for both reads. */
+  modelsStatus?: "loading" | "ready" | "error";
   /** Providers whose picker rows were cut at `MAX_CATALOG_MODELS`, with how many it listed. */
   modelsCut: PickerCut[];
   /** The config's model list as every bot's menu can say it (`readModelAllowlist`), or null. */
@@ -813,6 +815,7 @@ const madeOf = (record: KindRecord | undefined): GatewayAccount["made"] =>
 export function mergeAccounts(
   views: Map<string, BotView>,
   kinds: ReadonlyMap<string, KindRecord>,
+  onlySharedMain = false,
 ): GatewayAccount[] {
   const seen = new Map<string, { profile: ViewProfile; shared: boolean; owners: Set<string> }>();
   for (const [botId, view] of views) {
@@ -822,7 +825,7 @@ export function mergeAccounts(
       if (!entry.profile.label && profile.label)
         entry.profile = { ...entry.profile, label: profile.label };
       if (profile.source === "saved") entry.owners.add(botId);
-      else entry.shared = true;
+      if (profile.source !== "saved" || (onlySharedMain && botId === "main")) entry.shared = true;
       seen.set(profile.id, entry);
     }
   }

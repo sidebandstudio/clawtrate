@@ -76,6 +76,7 @@ export function useConnect({
   onDone,
   onLeave,
   startWith,
+  skipLabel = false,
 }: {
   from: "create" | "settings";
   draftName: string | null;
@@ -92,6 +93,8 @@ export function useConnect({
   onLeave: () => void;
   /** "Sign in again": start this method at once. */
   startWith?: string;
+  /** First setup goes straight to the bot once the account reads back. */
+  skipLabel?: boolean;
 }): ConnectView {
   const bridge = useBridge();
   const admin = connection.canAdmin;
@@ -107,7 +110,7 @@ export function useConnect({
   const [where, setWhereState] = useState<Where>(() => {
     if (startWith && connection.canAdmin) return { view: "flow", method: startWith };
     if (signIn && isSignInActive(signIn)) return { view: "flow", method: signIn.method };
-    const kept = keptLabel(accounts);
+    const kept = skipLabel ? null : keptLabel(accounts);
     return kept ? { view: "label", ...kept } : { view: "methods" };
   });
   // The label step is kept while it is open; leaving it any other way than closing lets it go.
@@ -159,6 +162,11 @@ export function useConnect({
       else if (stage === "refreshed") setWhere({ view: "same", provider: signIn.provider });
     }
   }
+  useEffect(() => {
+    if (skipLabel && where.view === "label") finish(where.account);
+    // Finish a particular sign-in once, even if the parent rerenders with the same label step.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [skipLabel, where]);
   useEffect(() => {
     if (!signIn) return;
     if (stage === "connected" && result)
@@ -1056,7 +1064,8 @@ export function useConnect({
     body = (
       <>
         <Result tone="warn" mark="warning" title="The sign-in ended">
-          The connection to the gateway dropped, and a sign-in ends with its connection.
+          {current.error ??
+            "The connection to the gateway dropped, and a sign-in ends with its connection."}
         </Result>
         {reread(current)}
       </>

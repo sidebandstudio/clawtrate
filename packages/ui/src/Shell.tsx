@@ -260,7 +260,20 @@ export function Shell({
     null,
   );
   // New bot, from the "+" menu and ⌘N, where the connection may write (bots.md section 3).
-  const [newBot, setNewBot] = useState(false);
+  const [newBot, setNewBot] = useState<"first" | "regular" | null>(null);
+  const onlyBot = state.bots[0];
+  const firstBotSetup =
+    interactive &&
+    state.connection.status === "connected" &&
+    state.connection.canAdmin &&
+    state.discovery.status === "ready" &&
+    !state.discovery.partial &&
+    (state.bots.length === 0 ||
+      (state.bots.length === 1 &&
+        onlyBot?.id === "main" &&
+        onlyBot.isDefault &&
+        !onlyBot.ownerless &&
+        (state.tasksByBot.main?.length ?? 0) === 0));
   // Delete bot…: the bot as it was when chosen, so the result stays after it leaves the rail.
   const [deleting, setDeleting] = useState<{ id: string; name: string; isDefault: boolean } | null>(
     null,
@@ -269,8 +282,11 @@ export function Shell({
   // Every dialog the shell opens itself, a waiting device's sheet included: none opens over
   // another, by a shortcut or by itself.
   const shellDialogOpen =
-    offerOpen || shortcuts || searchOpen || newBot || deletingOpen || deviceSheetOpen;
-  const openNewBot = useCallback(() => setNewBot(true), []);
+    offerOpen || shortcuts || searchOpen || newBot !== null || deletingOpen || deviceSheetOpen;
+  const openNewBot = useCallback(
+    () => setNewBot(firstBotSetup ? "first" : "regular"),
+    [firstBotSetup],
+  );
   const mac = isMac();
   useEffect(() => {
     if (inert || shellDialogOpen) return;
@@ -299,12 +315,12 @@ export function Shell({
         event.key.toLowerCase() === "n"
       ) {
         event.preventDefault();
-        setNewBot(true);
+        openNewBot();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [interactive, inert, shellDialogOpen]);
+  }, [interactive, inert, shellDialogOpen, openNewBot]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key === "/") {
@@ -967,6 +983,7 @@ export function Shell({
                   inert={drawerOpen || inert}
                   onShowComputer={showComputer}
                   updatingWords={updating ? updatingStripWords(updating).text : null}
+                  onFirstBot={firstBotSetup ? openNewBot : null}
                 />
               </WorkLinksContext.Provider>
             </OpenTaskContext.Provider>
@@ -1045,11 +1062,12 @@ export function Shell({
             bots={state.bots}
             connection={state.connection}
             info={info}
-            onClose={() => setNewBot(false)}
+            first={newBot === "first"}
+            onClose={() => setNewBot(null)}
             onCreated={(id) => {
-              setNewBot(false);
+              setNewBot(null);
               selection.selectBot(id);
-              openDetail();
+              openDetail({ composer: true });
               requestAnimationFrame(() =>
                 document.querySelector<HTMLElement>(".composer-input")?.focus(),
               );

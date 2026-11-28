@@ -57,6 +57,18 @@ const ACCOUNTS = { accounts: true } as const;
 const withAccounts = () => devConfig("token", PORTS, STATE, [], ACCOUNTS);
 const problems = (config: unknown) => sandboxProblems(config, PORTS, STATE, [], ACCOUNTS);
 
+it("F-504: first-bot setup starts with only main and no saved or configured credential", () => {
+  const options = { firstBot: true };
+  const config = devConfig("token", PORTS, STATE, [], options);
+  expect(Object.keys(config.agents.entries)).toEqual(["main"]);
+  expect(config.auth).toEqual({ profiles: {} });
+  expect(config.models.providers).toHaveProperty("acme");
+  expect(Object.values(config.models.providers).every((provider) => !("apiKey" in provider))).toBe(
+    true,
+  );
+  expect(sandboxProblems(config, PORTS, STATE, [], options)).toEqual([]);
+});
+
 describe("scripted accounts", () => {
   it("name their account in a made-up credential, and only theirs", () => {
     const key = credentialFor("api_key", "acme", "work");

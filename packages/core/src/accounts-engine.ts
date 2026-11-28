@@ -317,7 +317,12 @@ export class AccountsEngine {
         now.connectedAt === readOn.connectedAt
       );
     };
-    ctx.update((a) => ({ ...a, status: a.status === "ready" ? "ready" : "loading", error: null }));
+    ctx.update((a) => ({
+      ...a,
+      status: a.status === "ready" ? "ready" : "loading",
+      modelsStatus: "loading",
+      error: null,
+    }));
     // Where these reads stand among the engine's reads (`nextSeq`), and when they began.
     const seq = this.nextSeq();
     const startedAt = ctx.now();
@@ -426,10 +431,14 @@ export class AccountsEngine {
       this.pickerRead = picker;
       const answer = await picker;
       if (this.pickerRead === picker) this.pickerRead = null;
-      if (answer === null || resets !== this.resets) return;
+      if (!current()) return;
+      if (!Array.isArray(asRecord(answer)?.models)) {
+        ctx.update((a) => ({ ...a, modelsStatus: "error" }));
+        return;
+      }
       const models = readCatalog(answer);
       const modelsCut = readPickerCuts(answer);
-      ctx.update((a) => ({ ...a, models, modelsCut }));
+      ctx.update((a) => ({ ...a, models, modelsCut, modelsStatus: "ready" }));
     } catch (error) {
       // A failure of a read for another gateway is not this one's to show.
       if (resets !== this.resets) return;
@@ -756,8 +765,10 @@ export class AccountsEngine {
     const entries = asRecord(agents.entries) ?? {};
     const defaults = asRecord(agents.defaults) ?? {};
     const defaultModel = readModelConfig(defaults.model).primary;
-    const accounts = mergeAccounts(views, this.kinds);
     const main = asRecord(entries.main);
+    const mainShared = views.has("main") && (main === null || typeof main.agentDir !== "string");
+    // With only canonical main, a saved credential is already in the store a new bot inherits.
+    const accounts = mergeAccounts(views, this.kinds, mainShared && views.size === 1);
     const anyView = views.get("main") ?? [...views.values()][0];
     const bindings = [...views.keys()].map((botId) => {
       const before = previous.bindings.find((each) => each.botId === botId);
@@ -785,7 +796,7 @@ export class AccountsEngine {
       labels: this.ctx.admin(),
       defaultModel,
       // A `main` listed on the gateway, with no folder of its own configured (row 33).
-      mainShared: views.has("main") && (main === null || typeof main.agentDir !== "string"),
+      mainShared,
       accounts,
       methods: readMethods(anyView?.capabilities ?? []),
       keyProviders: readKeyProviders(anyView),
@@ -1304,6 +1315,15 @@ export class AccountsEngine {
         agentId: signIn.forBot,
       });
     } catch (error) {
+      if (!isRefusal(error)) {
+        this.setSignIn(signIn.id, {
+          stage: "ended",
+          error: ctx.connected() ? "The gateway didn’t confirm that the sign-in started." : null,
+        });
+        if (ctx.connected()) await this.afterSignIn(signIn.id, before);
+        else this.forgetSecrets();
+        return;
+      }
       const message = this.scrub(errorText(error));
       this.setSignIn(signIn.id, { stage: isBusy(message) ? "busy" : "failed", error: message });
       this.forgetSecrets();
@@ -1428,6 +1448,14 @@ export class AccountsEngine {
           this.setSignIn(id, { stage: "ended", step: null, error: null });
           this.forgetSecrets();
           return;
+        }
+        if (!isRefusal(error)) {
+          this.setSignIn(id, {
+            stage: "ended",
+            step: null,
+            error: "The gateway didn’t confirm that the sign-in finished.",
+          });
+          return await this.afterSignIn(id, before);
         }
         const message = this.scrub(errorText(error));
         this.setSignIn(id, { stage: endingOf("error", message), step: null, error: message });
@@ -1654,7 +1682,8 @@ export class AccountsEngine {
       const first = result.added.length === 1 ? result.added[0] : undefined;
       if (first) {
         const shared =
-          second?.profiles.some((p) => p.id === first && p.source !== "saved") ?? false;
+          second?.profiles.some((p) => p.id === first && p.source !== "saved") ??
+          (signIn.forBot === "main" && !signIn.keptOnly && ctx.get().mainShared);
         result.landed = shared ? "shared" : "kept";
         result.keptBy = shared ? null : signIn.forBot;
         if (signIn.stage === "checking" || signIn.stage === "unconfirmed")
