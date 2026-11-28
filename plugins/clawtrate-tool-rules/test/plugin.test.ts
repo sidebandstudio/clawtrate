@@ -1183,6 +1183,33 @@ describe("a run another bot's message started or reached (#606)", () => {
     asks(h, "run-next");
   });
 
+  it("a steered run seen again after the plugin let go of its note stays the bot's; a run a person's later message names asks", async () => {
+    let clock = 1_800_000_000_000;
+    const h = host({ now: () => clock });
+    await h.save("pip", [{ action: "ask", tools: ["read"] }]);
+    personRun(h, "run-busy");
+    // Past MEMORY_LIMIT other tasks' runs: the busy run's note, when it was noted, its
+    // person's message and the task's latest run are all let go.
+    for (let i = 0; i <= MEMORY_LIMIT; i += 1) personRun(h, `run-o${i}`, `agent:pip:o${i}`);
+    const { origins } = h.handle.shared;
+    expect(origins.notedLost).toBe(true);
+    expect([origins.runs.has("run-busy"), origins.current.has(PIP)]).toEqual([false, false]);
+    h.write(PIP, fromMarlow("run-s"));
+    h.sent(MARLOW, {
+      status: "accepted",
+      runId: "run-s",
+      sessionKey: PIP,
+      targetDisposition: "steered",
+    });
+    clock += MARK_EXPIRY_MS + 1;
+    // The busy run's next model call: to the plugin a run first seen, and it may be that one.
+    h.modelCall("run-busy", PIP);
+    refusedFor(h, "run-busy");
+    // A person writes after the steer, and the run it names starts: it asks.
+    personRun(h, "run-later");
+    asks(h, "run-later");
+  });
+
   it("a run that matches its own mark also uses up a mark kept only for the next run", async () => {
     const h = host();
     await h.save("pip", [{ action: "ask", tools: ["read"] }]);

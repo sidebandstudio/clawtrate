@@ -136,10 +136,11 @@ function sharedState(dir, options) {
        * bots' messages a send's result placed before they were written ("steered" or
        * "ended"), by task and run; `forgotten` the runs and tasks whose bot's mark was let
        * go past a bound, which count as a bot's; `people` the runs a person's message
-       * names; `steeredTasks` the tasks a bot's message was steered into, `{ bot, at }`, whose
+       * names, with when it was written on `clock`; `steeredTasks` the tasks a bot's message was steered into, `{ bot, at }`, whose
        * runs noted before `at` are the bot's until the task's next run starts; `notedAt` when
-       * each run was noted, on `clock`; `lostTrack` whether a bot's mark was let go with
-       * nowhere left to keep it.
+       * each run was noted, on `clock`; `notedLost` whether one of those was let go past the
+       * bound, after which a run first seen may be one noted before; `lostTrack` whether a
+       * bot's mark was let go with nowhere left to keep it.
        */
       origins: {
         sessions: new Map(),
@@ -153,6 +154,7 @@ function sharedState(dir, options) {
         people: new Map(),
         steeredTasks: new Map(),
         notedAt: new Map(),
+        notedLost: false,
         lostTrack: false,
       },
       /**
@@ -824,6 +826,10 @@ export function createToolRules(api, options = {}) {
     origins.lostTrack = true;
     logger.warn?.(`${PLUGIN_ID}: ${LOST_TRACK_LINE}`);
   };
+  /** When a run was noted, let go past the bound: a run first seen may be one noted before. */
+  const notedLetGo = () => {
+    origins.notedLost = true;
+  };
   /** Keep a bot's mark among the forgotten; past their bound, the oldest is lost. */
   const keepForgotten = (key, mark) =>
     remember(
@@ -943,7 +949,8 @@ export function createToolRules(api, options = {}) {
           named &&
           (source === undefined || (fromRun !== undefined && origins.people.has(fromRun)))
         ) {
-          remember(origins.people, named, true);
+          // When it was written, on `clock`: after a steer, it names a run started since.
+          remember(origins.people, named, origins.clock);
         }
         return undefined;
       }
@@ -1015,14 +1022,26 @@ export function createToolRules(api, options = {}) {
     // A run first seen now: a task runs one run at a time, so the runs going when a bot's
     // message was steered in have ended.
     const known = origins.notedAt.has(runId);
+    const steered = known ? undefined : origins.steeredTasks.get(sessionKey);
     if (!known) origins.steeredTasks.delete(sessionKey);
     remember(origins.current, sessionKey, runId);
     stamp(sessionKey, "noted");
-    if (!known) remember(origins.notedAt, runId, origins.clock);
+    if (!known) remember(origins.notedAt, runId, origins.clock, { letGo: notedLetGo });
     // An expired mark's run goes among the forgotten first; a bot's run let go stays there.
     waitingIn(sessionKey);
     if (forgotten.has(runId)) return;
-    const origin = originAtStart(sessionKey, runId);
+    let origin = originAtStart(sessionKey, runId);
+    // Once the plugin let go of when runs were noted, a run it does not hold may be the one
+    // the steer went into, seen again: it stays the bot's, unless a person's message written
+    // after the steer names it.
+    if (
+      steered &&
+      origins.notedLost &&
+      !origin?.bot &&
+      !(origins.people.get(runId) > steered.at)
+    ) {
+      origin = { bot: steered.bot };
+    }
     // A run that starts as a bot's is no person's, though a person's message named it.
     if (origin) origins.people.delete(runId);
     remember(origins.runs, runId, origin, MARKS);
