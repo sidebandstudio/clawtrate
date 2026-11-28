@@ -165,7 +165,9 @@ export function Shell({
 
   const [routines, setRoutines] = useState<RoutinesNav | null>(null);
   const routinesOpen = routines !== null;
-  const conversationVisible = routines === null;
+  // A conversation that failed to draw shows none of the task: nothing is read while it does.
+  const [conversationFailed, setConversationFailed] = useState(false);
+  const conversationVisible = routines === null && !conversationFailed;
   const selection = useSelection(state, interactive, conversationVisible);
   const { bot, task } = selection;
   const [panelOpen, setPanelOpen] = useState(() => readPreference("panel") === "open");
@@ -919,7 +921,7 @@ export function Shell({
         />
         <div className="main-pane" ref={mainRef}>
           {routines ? (
-            <PanelBoundary>
+            <PanelBoundary key="routines">
               <RoutinesView
                 state={state}
                 info={info}
@@ -935,7 +937,7 @@ export function Shell({
               />
             </PanelBoundary>
           ) : (
-            <PanelBoundary>
+            <PanelBoundary key="conversation" onFailed={setConversationFailed}>
               <OpenTaskContext.Provider value={selection.selectTask}>
                 <WorkLinksContext.Provider value={workLinks}>
                   <Conversation
@@ -984,7 +986,7 @@ export function Shell({
             onClick={() => setPanel(false)}
           />
           {panelOpen && !routines && (
-            <PanelBoundary>
+            <PanelBoundary key="work" className="work-panel">
               <WorkPanel
                 bot={bot}
                 task={task}

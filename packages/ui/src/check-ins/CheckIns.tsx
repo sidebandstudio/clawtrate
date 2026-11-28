@@ -31,6 +31,7 @@ import {
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { useBridge } from "../bridge.tsx";
 import { Avatar } from "../Avatar.tsx";
+import { Deferred } from "../PanelBoundary.tsx";
 import { CheckIcon, CloseIcon } from "../icons.tsx";
 import { Dialog } from "../bots/Dialog.tsx";
 import { AdminBar, GrantedBar, Note, Select, useGranted } from "../bots/parts.tsx";
@@ -149,64 +150,68 @@ export function useCheckInsSection({
           </Note>
         )}
         <div className="ci-list" data-testid="check-ins">
-          {bots.map((bot) => {
-            if (!checkIns.readBotIds?.includes(bot.id)) return null;
-            const job = jobOf(bot.id);
-            const next =
-              job?.enabled && checkIns.scheduler !== false && job.nextRunAtMs !== null
-                ? `Next scheduled attempt ${clock(job.nextRunAtMs)}`
-                : null;
-            return (
-              <section
-                key={bot.id}
-                className="ci-block"
-                aria-labelledby={`ci-${bot.id}`}
-                data-testid="check-in"
-                data-bot={bot.id}
-              >
-                <div className="ci-head">
-                  <Avatar bot={bot} className="ci-avatar" />
-                  <h4 id={`ci-${bot.id}`}>{bot.name}</h4>
-                  {!asRoutines && <span className="ci-summary">{summary(job)}</span>}
-                  {admin && !asRoutines && (
-                    <button
-                      type="button"
-                      className="button"
-                      data-size="sm"
-                      aria-label={`Change ${bot.name}'s check-ins`}
-                      disabled={checkIns.stamp?.gatewayId == null}
-                      onClick={() => edit(bot)}
-                    >
-                      Change
-                    </button>
-                  )}
-                </div>
-                {asRoutines ? (
-                  <p data-testid="check-in-text">
-                    {AS_ROUTINES}
-                    {openRoutines && (
-                      <>
-                        {" "}
+          <Deferred
+            render={() =>
+              bots.map((bot) => {
+                if (!checkIns.readBotIds?.includes(bot.id)) return null;
+                const job = jobOf(bot.id);
+                const next =
+                  job?.enabled && checkIns.scheduler !== false && job.nextRunAtMs !== null
+                    ? `Next scheduled attempt ${clock(job.nextRunAtMs)}`
+                    : null;
+                return (
+                  <section
+                    key={bot.id}
+                    className="ci-block"
+                    aria-labelledby={`ci-${bot.id}`}
+                    data-testid="check-in"
+                    data-bot={bot.id}
+                  >
+                    <div className="ci-head">
+                      <Avatar bot={bot} className="ci-avatar" />
+                      <h4 id={`ci-${bot.id}`}>{bot.name}</h4>
+                      {!asRoutines && <span className="ci-summary">{summary(job)}</span>}
+                      {admin && !asRoutines && (
                         <button
                           type="button"
-                          className="link-button"
-                          data-testid="check-in-routines"
-                          onClick={() => openRoutines(bot.id)}
+                          className="button"
+                          data-size="sm"
+                          aria-label={`Change ${bot.name}'s check-ins`}
+                          disabled={checkIns.stamp?.gatewayId == null}
+                          onClick={() => edit(bot)}
                         >
-                          {bot.name}'s routines
+                          Change
                         </button>
-                      </>
+                      )}
+                    </div>
+                    {asRoutines ? (
+                      <p data-testid="check-in-text">
+                        {AS_ROUTINES}
+                        {openRoutines && (
+                          <>
+                            {" "}
+                            <button
+                              type="button"
+                              className="link-button"
+                              data-testid="check-in-routines"
+                              onClick={() => openRoutines(bot.id)}
+                            >
+                              {bot.name}'s routines
+                            </button>
+                          </>
+                        )}
+                      </p>
+                    ) : (
+                      <p data-testid="check-in-text">
+                        {sentence(bot.name, job, checkIns.settings, checkIns.defaults)}
+                      </p>
                     )}
-                  </p>
-                ) : (
-                  <p data-testid="check-in-text">
-                    {sentence(bot.name, job, checkIns.settings, checkIns.defaults)}
-                  </p>
-                )}
-                {next && <p className="ci-faint">{next}</p>}
-              </section>
-            );
-          })}
+                    {next && <p className="ci-faint">{next}</p>}
+                  </section>
+                );
+              })
+            }
+          />
         </div>
       </>
     );

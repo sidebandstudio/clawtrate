@@ -1215,7 +1215,8 @@ export function Settings({
   );
 
   let content: ReactNode;
-  if (section === "accounts" && accountsSection.connect) content = accountsSection.connect;
+  if (section === "accounts" && accountsSection.connect)
+    content = <PanelBoundary key="accounts-connect">{accountsSection.connect}</PanelBoundary>;
   else {
     const view =
       section === "accounts" && accountsSection.view
