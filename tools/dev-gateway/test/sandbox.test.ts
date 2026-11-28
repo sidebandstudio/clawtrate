@@ -1,10 +1,14 @@
+import { spawnSync } from "node:child_process";
 import {
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   readdirSync,
+  readFileSync,
   readlinkSync,
   realpathSync,
   rmSync,
+  statSync,
   symlinkSync,
   writeFileSync,
 } from "node:fs";
@@ -18,20 +22,27 @@ import {
   checkTurnOutcome,
   devConfig,
   expectedFinalText,
+  main,
   sandboxProblems,
 } from "../src/cli.ts";
 import {
+  AGENT_STAND_INS_DIR,
+  agentStandInsDir,
   gatewayPath,
   nodeLinkDir,
   openclawEnv,
   PASSTHROUGH_ENV,
   providerEnv,
   STAND_INS_ENV,
-  SYSTEM_PATH,
 } from "../src/env.ts";
 import { SEED_BOTS } from "../src/seed-data.ts";
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
+
+/** The system's folders, written out rather than taken from the constant under test. */
+const SYSTEM = "/usr/bin:/bin:/usr/sbin:/sbin";
+/** The folder of agent stand-ins the tool makes, written out the same way. */
+const AGENT_STAND_INS = join(import.meta.dirname, "../.run/path/agent-tools");
 
 describe("development gateway config", () => {
   const config = devConfig("test-token");
@@ -157,7 +168,13 @@ describe("development gateway config", () => {
   });
 
   it("denies exec globally and lets only the shell bot ask before each command", () => {
-    expect(config.tools.exec).toEqual({ mode: "deny" });
+    // #933: a command run on the gateway finds the agent stand-ins before the login shell's PATH.
+    expect(config.tools.exec).toEqual({
+      mode: "deny",
+      pathPrepend: [join(import.meta.dirname, "../.run/path/agent-tools")],
+    });
+    refused("tools.exec.pathPrepend", [], /^tools\.exec\.pathPrepend/);
+    refused("tools.exec.pathPrepend", undefined, /^tools\.exec\.pathPrepend/);
     const entries = config.agents.entries as Record<string, { tools: Record<string, unknown> }>;
     expect(entries.otto!.tools.exec).toEqual({ mode: "ask" });
     for (const id of ["main", "clawtrate-main-bot", "marlow", "pip"])
@@ -295,9 +312,11 @@ describe("child process environment", () => {
       "OPENCLAW_STATE_DIR",
       "OPENCLAW_CONFIG_PATH",
       "OPENCLAW_GATEWAY_PORT",
+      "OPENCLAW_PATH_BOOTSTRAPPED",
       "NO_COLOR",
     ]);
     expect(Object.keys(env).filter((key) => !allowed.has(key))).toEqual([]);
+    expect(env.OPENCLAW_PATH_BOOTSTRAPPED).toBe("1");
     expect(env.OPENCLAW_PROFILE).toBe("dev");
     expect(env.OPENCLAW_STATE_DIR).toMatch(/\.openclaw-dev$/);
     expect(env.OPENCLAW_CONFIG_PATH).toMatch(/\.openclaw-dev\/openclaw\.json$/);
@@ -325,7 +344,7 @@ describe("child process environment", () => {
   });
 
   it("gives the scripted provider nothing beyond the allowlist", () => {
-    expect(providerEnv(shell)).toEqual({ PATH: SYSTEM_PATH.join(":"), LANG: "en_US.UTF-8" });
+    expect(providerEnv(shell)).toEqual({ PATH: SYSTEM, LANG: "en_US.UTF-8" });
   });
 });
 
@@ -334,32 +353,85 @@ describe("a gateway's PATH (#933)", () => {
   afterEach(() => {
     for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
   });
-  const temp = () => {
-    const dir = mkdtempSync(join(tmpdir(), "clawtrate-path-"));
+  const made = (parent: string, prefix: string) => {
+    mkdirSync(parent, { recursive: true });
+    const dir = mkdtempSync(join(parent, prefix));
     dirs.push(dir);
     return dir;
   };
+  const temp = () => made(tmpdir(), "clawtrate-path-");
   const shell = { PATH: "/opt/agent-tools/bin:/usr/local/bin:/usr/bin", LANG: "C" };
 
-  it("is the system's folders and the gateway's Node, never the caller's PATH", () => {
-    expect(openclawEnv(shell).PATH).toBe(SYSTEM_PATH.join(":"));
-    expect(providerEnv(shell).PATH).toBe(SYSTEM_PATH.join(":"));
+  it("is the agent stand-ins, the gateway's Node and the system's folders, never the caller's PATH", () => {
+    expect(openclawEnv(shell).PATH).toBe(SYSTEM);
+    expect(providerEnv(shell).PATH).toBe(SYSTEM);
     const instance = { name: "alpha", stateDir: "/h/.x", gatewayPort: 19240 };
     expect(openclawEnv(shell, instance, "/tool/.run/path/abc").PATH).toBe(
-      ["/tool/.run/path/abc", ...SYSTEM_PATH].join(":"),
+      `/tool/.run/path/abc:${SYSTEM}`,
     );
-    expect(openclawEnv({ LANG: "C" }).PATH).toBe(SYSTEM_PATH.join(":"));
+    expect(openclawEnv(shell, instance, "/n", "/tool/.run/path/agent-tools").PATH).toBe(
+      `/tool/.run/path/agent-tools:/n:${SYSTEM}`,
+    );
+    expect(openclawEnv({ LANG: "C" }).PATH).toBe(SYSTEM);
+  });
+
+  it("tells OpenClaw its PATH is set, whatever the caller's shell says", () => {
+    expect(openclawEnv(shell).OPENCLAW_PATH_BOOTSTRAPPED).toBe("1");
+    expect(
+      openclawEnv({ ...shell, OPENCLAW_PATH_BOOTSTRAPPED: "0" }).OPENCLAW_PATH_BOOTSTRAPPED,
+    ).toBe("1");
+    expect(providerEnv(shell).OPENCLAW_PATH_BOOTSTRAPPED).toBeUndefined();
   });
 
   it("puts a test's stand-ins first, only from a folder inside the temporary folder", () => {
     const standIns = temp();
-    expect(gatewayPath({ ...shell, [STAND_INS_ENV]: standIns }, "/n")).toBe(
-      [realpathSync(standIns), "/n", ...SYSTEM_PATH].join(":"),
+    expect(gatewayPath({ ...shell, [STAND_INS_ENV]: standIns }, "/n", "/a")).toBe(
+      `${realpathSync(standIns)}:/a:/n:${SYSTEM}`,
     );
-    expect(() => gatewayPath({ [STAND_INS_ENV]: "/usr/local/bin" })).toThrow(
-      /must name a folder inside/,
-    );
+    // The scripted provider never gets them.
+    expect(providerEnv({ ...shell, [STAND_INS_ENV]: standIns }).PATH).toBe(SYSTEM);
+    // A folder the test makes outside the temporary folder, so it exists wherever this runs.
+    const outside = made(join(import.meta.dirname, "../.run"), "outside-");
+    expect(() => gatewayPath({ [STAND_INS_ENV]: outside })).toThrow(/must name a folder inside/);
     expect(() => gatewayPath({ [STAND_INS_ENV]: tmpdir() })).toThrow(/must name a folder inside/);
+  });
+
+  it("makes a stand-in for each agent tool, each failing at once and printing nothing", () => {
+    const root = join(temp(), "agent-tools");
+    expect(agentStandInsDir(root)).toBe(root);
+    expect(readdirSync(root).sort()).toEqual([
+      "agent",
+      "claude",
+      "codex",
+      "copilot",
+      "cursor-agent",
+      "droid",
+      "gemini",
+      "grok",
+      "kimi",
+      "kiro-cli",
+      "opencode",
+      "qwen",
+    ]);
+    for (const name of readdirSync(root)) {
+      expect(readFileSync(join(root, name), "utf8")).toBe("#!/bin/sh\nexit 1\n");
+      const run = spawnSync(join(root, name), ["auth", "status", "--json"], { encoding: "utf8" });
+      expect([run.status, run.stdout, run.stderr], name).toEqual([1, "", ""]);
+    }
+  });
+
+  it("puts a changed or missing stand-in back, and leaves nothing else beside them", () => {
+    const root = join(temp(), "agent-tools");
+    agentStandInsDir(root);
+    writeFileSync(join(root, "claude"), "#!/bin/sh\necho signed in\n");
+    chmodSync(join(root, "codex"), 0o644);
+    rmSync(join(root, "gemini"));
+    agentStandInsDir(root);
+    for (const name of ["claude", "codex", "gemini"]) {
+      expect(readFileSync(join(root, name), "utf8")).toBe("#!/bin/sh\nexit 1\n");
+      expect(statSync(join(root, name)).mode & 0o111, name).toBe(0o111);
+    }
+    expect(readdirSync(root)).toHaveLength(12);
   });
 
   it("gives the gateway its Node through a folder that holds nothing else", () => {
@@ -401,6 +473,19 @@ describe("a gateway's PATH (#933)", () => {
     mkdirSync(split);
     expect(() => gatewayPath({ [STAND_INS_ENV]: split })).toThrow(/has a colon/);
     expect(() => gatewayPath({}, "/tool/.run/path:/opt/agent-tools/bin")).toThrow(/has a colon/);
+    expect(() => gatewayPath({}, null, "/tool/.run:/opt/agent-tools/bin")).toThrow(/has a colon/);
+  });
+
+  it("refuses to start on Windows before reading any argument", async () => {
+    await expect(main(["status"], {}, "win32")).rejects.toThrow(
+      "The development gateway runs on macOS and Linux only, not on Windows.",
+    );
+    await expect(main(["--no-such-flag"], {}, "win32")).rejects.toThrow(/not on Windows/);
+  });
+
+  it("is what the seeded config puts first for a command run on the gateway", () => {
+    expect(devConfig("t").tools.exec.pathPrepend).toEqual([AGENT_STAND_INS]);
+    expect(AGENT_STAND_INS_DIR).toBe(AGENT_STAND_INS);
   });
 });
 

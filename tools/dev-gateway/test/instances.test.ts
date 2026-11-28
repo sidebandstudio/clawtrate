@@ -7,7 +7,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 
 import { join } from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { devConfig, list, prune, reset, sandboxProblems, start, stop } from "../src/cli.ts";
-import { guardArgs, OpenclawRunner, openclawEnv, providerEnv, SYSTEM_PATH } from "../src/env.ts";
+import { guardArgs, OpenclawRunner, openclawEnv, providerEnv } from "../src/env.ts";
 import {
   INSTANCE_ENV,
   instanceFromStateDirName,
@@ -259,6 +259,22 @@ describe("per-instance folders, markers and the spawn boundary", () => {
     expect(call!.env.OPENCLAW_PROFILE).toBe("clawtrate-dev-alpha");
     expect(call!.env.OPENCLAW_STATE_DIR).toBe(stateDir);
     expect(call!.env.OPENCLAW_GATEWAY_PORT).toBe("19240");
+    // #933: OpenClaw adds nothing to this PATH, and an agent tool found by name is a stand-in.
+    expect(call!.env.OPENCLAW_PATH_BOOTSTRAPPED).toBe("1");
+    const [standIns, nodeDir, ...system] = call!.env.PATH!.split(":");
+    expect(standIns).toBe(join(import.meta.dirname, "../.run/path/agent-tools"));
+    expect(nodeDir).toMatch(/\/tools\/dev-gateway\/\.run\/path\/[0-9a-f]{12}$/);
+    expect(system).toEqual(["/usr/bin", "/bin", "/usr/sbin", "/sbin"]);
+    expect(readdirSync(standIns!)).toContain("claude");
+  });
+
+  it("refuses to run on Windows before anything else", () => {
+    const options = { stateDir: "/h/.openclaw-dev", runFile: "/r/state.json" };
+    expect(() => new OpenclawRunner({ ...options, platform: "win32" })).toThrow(
+      "The development gateway runs on macOS and Linux only, not on Windows.",
+    );
+    for (const platform of ["darwin", "linux"] as const)
+      expect(() => new OpenclawRunner({ ...options, platform })).not.toThrow();
   });
 
   it("never lets a caller pick the profile", () => {
@@ -285,12 +301,13 @@ describe("per-instance folders, markers and the spawn boundary", () => {
         "OPENCLAW_STATE_DIR",
         "OPENCLAW_CONFIG_PATH",
         "OPENCLAW_GATEWAY_PORT",
+        "OPENCLAW_PATH_BOOTSTRAPPED",
         "NO_COLOR",
       ].sort(),
     );
     expect(env.OPENCLAW_PROFILE).toBe("clawtrate-dev-alpha");
     expect(providerEnv(shell, 19250)).toEqual({
-      PATH: SYSTEM_PATH.join(":"),
+      PATH: "/usr/bin:/bin:/usr/sbin:/sbin",
       SCRIPTED_PROVIDER_PORT: "19250",
     });
   });

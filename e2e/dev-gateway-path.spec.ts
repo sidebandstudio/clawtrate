@@ -1,19 +1,28 @@
-// #933: a development gateway gets a PATH the tool builds itself, so OpenClaw never finds an agent
-// tool of the person running it. OpenClaw asks such a tool for its sign-in when it refreshes its
-// model list (`claude auth status --json` for Claude Code); docs/development/dev-gateway.md lists
-// what each version looks for. Here a stand-in of each name, first on the caller's PATH, records
-// being run: starting the gateway, seeding it and refreshing its model list run none of them.
+// #933: a development gateway never runs an agent tool of the person running it. OpenClaw asks
+// such a tool for its sign-in when it refreshes its model list (`claude auth status --json` for
+// Claude Code), and at start it adds the folders people install tools into (`~/.local/bin`,
+// `~/.npm-global/bin`, pnpm's, bun's and yarn's) to the end of its PATH unless told its PATH is
+// set; docs/development/dev-gateway.md lists what each version looks for and where. Here a
+// tripwire of each agent tool's name records being run, first on the caller's PATH and in each of
+// those folders under a home folder the test gives the tool: starting the gateway, seeding it and
+// refreshing its model list run none of them.
 //
 // Its own instance, started in beforeAll and reset in afterAll, recorded first in a run record of
 // its own, so a worker killed outright is cleaned up by the next `pnpm e2e`.
 import { expect, test } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { openInstance } from "../tools/dev-gateway/src/cli.ts";
-import { STAND_INS_ENV } from "../tools/dev-gateway/src/env.ts";
 import { newRunId, ownIdentity } from "../tools/dev-gateway/src/state-guard.ts";
 import { listInstances, resetInstance } from "./global-setup.ts";
 import { cleanUp, saveRecord, TEMP_PREFIX, type RunRecord } from "./run-record.ts";
@@ -29,14 +38,33 @@ const record: RunRecord = {
   dirs: [],
 };
 const INSTANCE = `e2e-${record.run}-path`;
-/** Every agent tool OpenClaw names, and the ones a developer's computer commonly has. */
-const TOOLS = ["claude", "codex", "gemini", "copilot", "opencode"];
+/** The agent tools OpenClaw runs by name, and those of the coding-agent harnesses it can start. */
+const TOOLS = [
+  ...["agent", "claude", "codex", "copilot", "cursor-agent", "droid", "gemini", "grok"],
+  ...["kimi", "kiro-cli", "opencode", "qwen"],
+];
+/**
+ * The folders under the home that OpenClaw 2026.10.6 and 2026.11.10 add to a gateway's PATH
+ * (`ensureOpenClawCliOnPath`), and where Claude Code's resolver looks when `claude` is on no PATH.
+ */
+const HOME_BIN_DIRS = [
+  ".local/bin",
+  ".npm-global/bin",
+  ".local/share/pnpm",
+  ".local/share/pnpm/bin",
+  ".bun/bin",
+  ".yarn/bin",
+  "Library/pnpm",
+  "Library/pnpm/bin",
+  "Library/Application Support/Claude/claude-code/9.9.9/claude.app/Contents/MacOS",
+];
 
-let standIns = "";
+let home = "";
 let ran = "";
 let callerPath = "";
+let savedHome: string | undefined;
 
-/** What the stand-ins recorded: one line per run, the program's name and its arguments. */
+/** What the tripwires recorded: one line per run, the program and its arguments. */
 const runs = () => (existsSync(ran) ? readFileSync(ran, "utf8").trim() : "");
 
 test.describe.configure({ mode: "serial" });
@@ -46,20 +74,26 @@ test.beforeAll(async () => {
   record.runner.identity = ownIdentity();
   const runId = newRunId();
   record.instances.push({ name: INSTANCE, runId });
-  standIns = mkdtempSync(join(tmpdir(), TEMP_PREFIX));
-  record.dirs.push(standIns);
+  // The home folder the tool runs with, and so the gateway: its state goes there too.
+  home = mkdtempSync(join(tmpdir(), TEMP_PREFIX));
+  record.dirs.push(home);
   saveRecord(RECORDS, record);
-  ran = join(standIns, "ran.txt");
-  for (const tool of TOOLS) {
-    const file = join(standIns, tool);
-    writeFileSync(file, `#!/bin/sh\nprintf '%s %s\\n' "$0" "$*" >> '${ran}'\nexit 1\n`);
-    chmodSync(file, 0o755);
+  ran = join(home, "ran.txt");
+  const tripwire = `#!/bin/sh\nprintf '%s %s\\n' "$0" "$*" >> '${ran}'\nexit 1\n`;
+  for (const dir of ["caller-bin", ...HOME_BIN_DIRS]) {
+    mkdirSync(join(home, dir), { recursive: true });
+    for (const tool of TOOLS) {
+      writeFileSync(join(home, dir, tool), tripwire);
+      chmodSync(join(home, dir, tool), 0o755);
+    }
   }
-  // The caller's PATH, with the stand-ins first: where a developer's own tools would be.
-  callerPath = `${standIns}:${process.env.PATH ?? ""}`;
+  // The caller's PATH, with tripwires first: where a developer's own tools would be.
+  callerPath = `${join(home, "caller-bin")}:${process.env.PATH ?? ""}`;
+  savedHome = process.env.HOME;
+  // This process's own calls to the tool (listing, resetting, the runner below) use it too.
+  process.env.HOME = home;
   const env: NodeJS.ProcessEnv = { ...process.env, PATH: callerPath };
   delete env.CLAWTRATE_DEV_INSTANCE;
-  delete env[STAND_INS_ENV];
   // Started and seeded, as every development gateway is.
   process.stdout.write(
     execFileSync(process.execPath, [CLI, "start", "--run-id", runId, "--instance", INSTANCE], {
@@ -69,16 +103,26 @@ test.beforeAll(async () => {
       stdio: ["ignore", "pipe", "inherit"],
     }),
   );
-  if (!listInstances().find((row) => row.name === INSTANCE)?.gatewayRunning)
-    throw new Error(`instance ${INSTANCE} is not running`);
+  const row = listInstances().find((entry) => entry.name === INSTANCE);
+  if (!row?.gatewayRunning) throw new Error(`instance ${INSTANCE} is not running`);
+  if (!row.stateDir.startsWith(`${home}/`))
+    throw new Error(`instance ${INSTANCE} is not in the test's home: ${row.stateDir}`);
 });
 
 test.afterAll(async () => {
   test.setTimeout(180_000);
-  expect(cleanUp(RECORDS, record, resetInstance)).toEqual([]);
+  try {
+    // Stopped and removed before its home goes with the run's folders.
+    const { runId } = record.instances[0]!;
+    resetInstance(INSTANCE, runId);
+    expect(cleanUp(RECORDS, record, resetInstance)).toEqual([]);
+  } finally {
+    if (savedHome === undefined) delete process.env.HOME;
+    else process.env.HOME = savedHome;
+  }
 });
 
-test("#933: starting, seeding and refreshing the model list run no agent tool on the caller's PATH", async () => {
+test("#933: starting, seeding and refreshing the model list run no agent tool of the person's", async () => {
   test.setTimeout(240_000);
   expect(runs()).toBe("");
   // The refreshes a gateway does when Clawtrate reads accounts and models, asked with the caller's
