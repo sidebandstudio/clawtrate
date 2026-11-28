@@ -394,7 +394,7 @@ test("F-493: Advanced is the address-and-token form, and it still connects", asy
   await close(launched);
 });
 
-test("a gateway that is stopped is installed but not running, with nothing listening on its port", async () => {
+test("F-602: a gateway that is stopped is installed but not running, with nothing listening on its port", async () => {
   devGateway(SETUP, "stop");
   const launched = await launch();
   await thisComputer(launched.page).click();
@@ -405,6 +405,40 @@ test("a gateway that is stopped is installed but not running, with nothing liste
   await expect(facts.nth(0)).toHaveText("Installed program2026.10.6");
   await expect(facts.nth(1)).toHaveText("ServiceNo matching service reported");
   await expect(facts.nth(2)).toHaveText(/^PortNo gateway answered on port 19\d\d\d$/);
+  await expect(
+    launched.page.getByText("Clawtrate couldn't find a service it can start for this gateway."),
+  ).toBeVisible();
+  await expect(launched.page.getByRole("button", { name: "Look again" })).toBeVisible();
+  await expect(launched.page.getByRole("button", { name: "Start OpenClaw" })).toHaveCount(0);
   await expect(launched.page.getByRole("button", { name: "Connect" })).toHaveCount(0);
+  await close(launched);
+});
+
+test("F-501: a sandboxed app gets no installer: no install is offered, and the install command is refused before anything runs", async () => {
+  const launched = await launch({ scenario: "not-found" });
+  const { page } = launched;
+  await thisComputer(page).click();
+  await expect(
+    page.getByRole("heading", { name: "Clawtrate didn't find OpenClaw here" }),
+  ).toBeVisible({
+    timeout: 60_000,
+  });
+  await expect(page.getByRole("button", { name: "Set up OpenClaw here" })).toHaveCount(0);
+  // The page asks anyway, through the host's own bridge: refused, with no dialog and nothing run.
+  const answer = await page.evaluate(() =>
+    (
+      window as unknown as {
+        clawtrateHost: { send: (command: { type: string }) => Promise<unknown> };
+      }
+    ).clawtrateHost
+      .send({ type: "setupInstall" })
+      .then(
+        () => "ran",
+        (error: unknown) => (error instanceof Error ? error.message : String(error)),
+      ),
+  );
+  expect(answer).toMatch(/doesn't set OpenClaw up/);
+  expect(await asked(launched.app)).toEqual([]);
+  expect(launched.log()).not.toContain("[install]");
   await close(launched);
 });

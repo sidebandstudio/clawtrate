@@ -242,6 +242,8 @@ What `modelPolicy.allow: ["acme/dev-1"]` limits, on a named development instance
 
 Run again on both versions with two models named, `["acme/dev-1", "globex/dev-1"]`, every row came out the same; the picker, for `main` and `otto`, and a refresh of `acme` listed only the named models, and `view: "all"` listed all four.
 
+2026.11.11 was not run on a development gateway. Its published package resolves the list with the same code as 2026.11.10's: `dist/model-policy-allowlist-migration-BDJYmlL9.mjs` is byte for byte the same file in both, and `model-selection-shared` (`-PDwe2GYm.mjs` in 2026.11.10, `-B7lRttOt.mjs` in 2026.11.11) differs only in the hashed names of the files it imports. `resolveConfiguredModelPolicyAllow`, `computeModelPolicyAllowlist`, `materializeModelPolicyAllowlist`, `parseModelPolicyWildcardRef`, `splitTrailingAuthProfile` and `buildAllowedModelSet` are identical, so the table's 2026.11.10 column holds for it.
+
 The first 2026.11.10 runs needed `agents.defaults.heartbeat` left out of the development config and its own migrations of `tools.deny` and `meta` allowed, by hand; the prefix run was made with the tool itself, which runs 2026.11.10 since #614. The start log has one "remote model catalog refresh failed; next check in 6 hours" (the instance's proxy refuses the download); refreshes added no such line. A model added to a declared provider's list in the config (the development instance's `acme/dev-3`, `pnpm scenarios`) is listed by the next refresh.
 
 What a real provider's discovery reports, and the hosted list adding a model, cannot be shown with the scripted providers.

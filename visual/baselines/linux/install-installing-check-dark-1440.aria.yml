@@ -1,0 +1,10 @@
+- status
+- main:
+  - heading "Setting up OpenClaw" [level=2]
+  - paragraph: Start and check
+  - list "Steps":
+    - listitem "Download and check OpenClaw 2026.11.10, done": Download and check OpenClaw 2026.11.10
+    - listitem "Install Node.js and OpenClaw, done": Install Node.js and OpenClaw Node.js 24.22.1, checked
+    - listitem "Set up the gateway, done": Set up the gateway
+    - listitem "Start and check, running": Start and check
+  - paragraph: Setting up OpenClaw

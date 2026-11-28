@@ -72,6 +72,11 @@ export function matches(file: string, text: string): string[] {
 /** Deliberate uses, by file and pattern, each with why it cannot reach a person's install. */
 const ALLOWED: { file: string; pattern: string; reason: string }[] = [
   {
+    file: ".github/workflows/setup-install.yml",
+    pattern: "the default state folder",
+    reason: "only checks absence on a disposable GitHub-hosted Mac before the install test",
+  },
+  {
     file: ".github/workflows/ci.yml",
     pattern: "the global npm folder",
     reason:

@@ -108,7 +108,13 @@ export function App({
   const [mismatch, setMismatch] = useState<ConnectionError | null>(null);
   const { status, error } = state.connection;
   if (error?.code === "PROTOCOL_MISMATCH" && mismatch !== error) setMismatch(error);
-  else if (mismatch && (status === "connected" || status === "idle" || status === "pairing")) {
+  else if (
+    mismatch &&
+    (status === "connected" ||
+      status === "idle" ||
+      status === "pairing" ||
+      status === "disconnected")
+  ) {
     setMismatch(null);
   }
   // A look on this computer staged from a refused reconnect (`this-computer.ts`): the connection

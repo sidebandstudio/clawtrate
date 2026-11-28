@@ -15,8 +15,8 @@
 
 import { spawn } from "node:child_process";
 import { constants, lstatSync, realpathSync } from "node:fs";
-import { lstat, open, type FileHandle } from "node:fs/promises";
-import { isAbsolute, normalize, resolve } from "node:path";
+import { lstat, open, opendir, type FileHandle } from "node:fs/promises";
+import { isAbsolute, join, normalize, resolve } from "node:path";
 import { Worker } from "node:worker_threads";
 import {
   REFUSALS,
@@ -123,6 +123,7 @@ export type ReaderOptions = {
   /** The parse worker's module (settings-parse.ts, or its bundled copy). */
   worker: URL;
   deadlineMs?: number;
+  retryHelperTimeout?: () => boolean;
 };
 
 const refused = (why: (typeof UNSAFE_WHY)[number]): Refusal => ({
@@ -230,6 +231,65 @@ export async function readLocalSettings(
   return results;
 }
 
+/** The CLI's profile-name rule and the canonical suffix it uses for a named profile. */
+const NAMED_PROFILE_FOLDER = /^\.openclaw-([a-z0-9][a-z0-9_-]{0,63})$/i;
+const PROFILE_SCAN_LIMIT = 2_048;
+
+/** Detect other profiles by metadata only. Never read their settings or probe their ports. */
+export async function findOtherLocalProfile(
+  options: Pick<ReaderOptions, "home" | "sandboxed">,
+): Promise<{ profile: string | null; complete: boolean }> {
+  const { home, sandboxed } = options;
+  const incomplete = { profile: null, complete: false };
+  const checked = guardHome(home, sandboxed);
+  const held = await holdHome(home, checked);
+  if (!("handle" in held)) return incomplete;
+  try {
+    const homeIdentity = await held.handle.stat({ bigint: true });
+    const dir = await opendir(home);
+    try {
+      const currentHome = await lstat(home, { bigint: true });
+      if (!currentHome.isDirectory() || !sameFolder(homeIdentity, currentHome)) return incomplete;
+      for (let index = 0; index < PROFILE_SCAN_LIMIT; index += 1) {
+        const entry = await dir.read();
+        if (!entry) return { profile: null, complete: true };
+        const name = NAMED_PROFILE_FOLDER.exec(entry.name)?.[1];
+        if (
+          !name ||
+          name.toLowerCase() === "default" ||
+          name === "clawtrate" ||
+          !entry.isDirectory()
+        )
+          continue;
+
+        const path = join(home, entry.name);
+        const folder = await lstat(path);
+        if (
+          !folder.isDirectory() ||
+          folder.uid !== process.geteuid?.() ||
+          (folder.mode & 0o022) !== 0
+        )
+          continue;
+        const settings = await lstat(join(path, SETTINGS_FILE)).catch(
+          (error: NodeJS.ErrnoException) => {
+            if (error.code === "ENOENT" || error.code === "ENOTDIR") return null;
+            throw error;
+          },
+        );
+        if (settings?.isFile() && settings.uid === folder.uid)
+          return { profile: name, complete: true };
+      }
+      return incomplete;
+    } finally {
+      await dir.close();
+    }
+  } catch {
+    return incomplete;
+  } finally {
+    await held.handle.close();
+  }
+}
+
 async function readProfile(
   options: ReaderOptions,
   profile: SettingsProfile,
@@ -269,6 +329,7 @@ export async function openSettingsFile(options: {
   helper: string | null;
   sandboxed: boolean;
   deadlineMs?: number;
+  retryHelperTimeout?: () => boolean;
 }): Promise<Opened> {
   const { home, folder, file, platform } = options;
   // No local proof on any other system: nothing is looked up, resolved or opened there.
@@ -288,6 +349,7 @@ export async function openSettingsFile(options: {
           // ordinary home rule.
           [checked ? "read-private" : "read", folder, file],
           options.deadlineMs,
+          options.retryHelperTimeout,
         )
       : await readThroughProc(held.handle, folder, file);
   } finally {
@@ -345,8 +407,16 @@ async function readWithHelper(
   home: FileHandle,
   args: string[],
   deadlineMs = READ_DEADLINE_MS,
+  retryHelperTimeout?: () => boolean,
 ): Promise<Opened> {
-  const output = await runHelper(helper, home, args, HELPER_OUTPUT_LIMIT, deadlineMs);
+  const output = await runHelper(
+    helper,
+    home,
+    args,
+    HELPER_OUTPUT_LIMIT,
+    deadlineMs,
+    retryHelperTimeout,
+  );
   if (!output) return refused("helper");
   try {
     return helperAnswer(output);
@@ -360,19 +430,37 @@ async function readWithHelper(
  * no input: its whole output, or null for a missing helper, a timeout, a
  * failed exit, or more than `limit` bytes.
  */
-export function runHelper(
+export async function runHelper(
   helper: string,
   home: FileHandle,
   args: string[],
   limit: number,
   deadlineMs = READ_DEADLINE_MS,
+  retryTimeout?: () => boolean,
 ): Promise<Buffer | null> {
-  return new Promise<Buffer | null>((done) => {
+  for (;;) {
+    const output = await runHelperOnce(helper, home, args, limit, deadlineMs);
+    if (output !== HELPER_TIMEOUT) return output;
+    if (!retryTimeout?.()) return null;
+  }
+}
+
+const HELPER_TIMEOUT = Symbol("helper timeout");
+type HelperOutput = Buffer | null | typeof HELPER_TIMEOUT;
+
+function runHelperOnce(
+  helper: string,
+  home: FileHandle,
+  args: string[],
+  limit: number,
+  deadlineMs: number,
+): Promise<HelperOutput> {
+  return new Promise<HelperOutput>((done) => {
     const chunks: Buffer[] = [];
     let size = 0;
     let settled = false;
     let child: ReturnType<typeof spawn>;
-    const settle = (result: Buffer | null) => {
+    const settle = (result: HelperOutput) => {
       if (settled) return;
       settled = true;
       clearTimeout(timer);
@@ -382,7 +470,7 @@ export function runHelper(
       done(result);
     };
     // Its own deadline: a descendant holding the pipe open can't delay the answer.
-    const timer = setTimeout(() => settle(null), deadlineMs);
+    const timer = setTimeout(() => settle(HELPER_TIMEOUT), deadlineMs);
     try {
       child = spawn(helper, args, {
         env: { PATH: "/usr/bin:/bin" },

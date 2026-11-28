@@ -12,6 +12,12 @@
 // the consent: Connect reads the gateway's token afresh, dials each socket
 // itself and checks it the same way, and pairs asking for full control where
 // this device may hold it.
+//
+// Setting OpenClaw up (docs/design/setup.md §10) is offered with local connect only, after a
+// look found nothing: one press, the host's own dialog, the install's steps (install.ts), and
+// then the local look again. When that look proves the `clawtrate` gateway the install just
+// set up, on its port, Connect follows by itself: the person's press and the dialog were the
+// consent, and nothing else is asked.
 
 import {
   GatewayChangedError,
@@ -22,24 +28,39 @@ import {
   PROOF_REFUSAL_LINES,
   type ClawtrateClient,
   type ClawtrateState,
+  type InstallAction,
+  type InstallRecovery,
   type SetupFailure,
   type SetupHost,
   type SetupState,
 } from "@clawtrate/core";
 import { proveFor, provedSockets, routeOf, type LocalConnect } from "./local-connect.ts";
-import { lookLocally, readToken, type LocalFound } from "./local-look.ts";
+import {
+  lookLocally,
+  readToken,
+  startLocally,
+  type LocalFound,
+  type LocalReport,
+} from "./local-look.ts";
 import { refusalKind, type ProveRefusal } from "./local-prove.ts";
-import { boundedFileIdentity, LIMITS, lookHere, type FoundGateway } from "./look.ts";
+import { anythingHere, boundedFileIdentity, LIMITS, lookHere, type FoundGateway } from "./look.ts";
 import { parseAuthMode, parseSetupCode, parseStatus } from "./parse.ts";
 import type { ProgramResult } from "./programs.ts";
 import type { Opened } from "./sandbox.ts";
+import type { InstallOutcome, Installer } from "./install.ts";
 import type { HeldToken } from "./settings-reader.ts";
 import { guardPort, programPath, SetupRefusedError } from "./world.ts";
 
 /** A prepared operation expires after this long and can't be repeated (§2). */
 export const OPERATION_LIFETIME_MS = 2 * 60_000;
+/** Two extra invocations at the helper's existing deadline, shared by the install handover. */
+const INSTALL_HELPER_RETRIES = 2;
+type InstallProofRetries = { remaining: number };
 /** After this long, the look says it is still looking (§4). */
 export const SLOW_LOOK_MS = 8_000;
+/** How long Start OpenClaw waits for its gateway to answer, looking again every `START_POLL_MS`. */
+export const START_WAIT_MS = 30_000;
+export const START_POLL_MS = 1_000;
 const QR_LIMIT = { timeoutMs: 20_000, maxBytes: 16 * 1024 };
 
 /** A program that ran to its end, in time and within its limit, and exited 0. */
@@ -49,6 +70,12 @@ const succeeded = (result: ProgramResult) =>
 /** The connection a setup attempt opened, by its address. */
 /** Setup's connection: its attempt, its address and the client's selection that made it. */
 type Owned = { attempt: number; url: string; selection: number };
+
+type PendingStart = {
+  profile: string;
+  port: number;
+  request: Promise<{ accepted: boolean; until: number }>;
+};
 
 /** What the host's own dialog shows: its words, nothing the page wrote. */
 export type Confirmation = { message: string; detail: string; confirm: string };
@@ -77,7 +104,48 @@ export type SetupControllerOptions = {
    * person's packaged Mac app turns it on (`localConnectFor`).
    */
   localConnect?: LocalConnect & { worker: URL };
+  /**
+   * A new installer for each attempt to set OpenClaw up (`install.ts`), or null where this
+   * host doesn't set OpenClaw up: every development or automated run, a host without local
+   * connect, and the web preview. Ignored without `localConnect`: the gateway an install
+   * sets up is connected to through local connect alone.
+   */
+  installer?: (() => Installer) | null;
+  /** How long Start OpenClaw waits for its gateway: `START_WAIT_MS` unless a test shortens it. */
+  startWaitMs?: number;
 };
+
+/** The host's dialog before setting OpenClaw up (§2, §10): the one question it asks. */
+export const INSTALL_CONFIRMATION: Confirmation = {
+  message: "Set up OpenClaw on this computer?",
+  detail:
+    "Clawtrate downloads and sets up OpenClaw for your account only. It connects this Mac with full control.",
+  confirm: "Set Up OpenClaw",
+};
+
+const RECOVERY_CONFIRMATION: Record<InstallAction, Confirmation> = {
+  continue: {
+    message: "Continue setting up OpenClaw?",
+    detail:
+      "Clawtrate uses the gateway profile it already set up, finishes setting up its service, and connects this Mac with full control.",
+    confirm: "Continue",
+  },
+  replace: {
+    message: "Remove this setup attempt and start again?",
+    detail:
+      "Clawtrate moves this attempt’s gateway profile and program folder to the Trash. It will check new OpenClaw and Node.js downloads. npm also downloads packages Clawtrate hasn't verified. They can run with your account's permissions. Clawtrate connects this Mac with full control.",
+    confirm: "Remove and Start Again",
+  },
+};
+
+function recoveryAllows(recovery: InstallRecovery | undefined, action: InstallAction): boolean {
+  return action === "continue"
+    ? recovery === "continue" || recovery === "replace" || recovery === "staged"
+    : recovery === "replace" || recovery === "staged" || recovery === "finish";
+}
+
+/** Said when a look, a Connect or a second install is asked for while one is under way. */
+const BUSY = "OpenClaw is being set up. Wait until it finishes.";
 
 /**
  * The dialog's words (§2, "The host's confirmation"). Connect asks for read
@@ -121,6 +189,7 @@ export class SetupController implements SetupHost {
   private found: FoundGateway | null = null;
   /** With local connect: what its look found. */
   private localFound: LocalFound | null = null;
+  private pendingStart: PendingStart | null = null;
   /** The next look is the host's own, at start (`lookAtStart`). */
   private unasked = false;
   /** The connection this setup attempt opened, by attempt and address: the only one Back closes. */
@@ -130,6 +199,15 @@ export class SetupController implements SetupHost {
   private slowTimer: ReturnType<typeof setTimeout> | null = null;
   private watching: (() => void) | null = null;
   private readonly now: () => number;
+  /**
+   * Held by setting OpenClaw up from its dialog to the look that follows: no other look,
+   * Connect or second install starts meanwhile (§10).
+   */
+  private busy = false;
+  /** Set when the app quits: nothing new starts, a dialog's answer included. */
+  private closed = false;
+  /** Setting OpenClaw up, from its dialog to the look that follows, while it runs. */
+  private operation: Promise<void> | null = null;
 
   constructor(options: SetupControllerOptions) {
     this.options = options;
@@ -188,6 +266,12 @@ export class SetupController implements SetupHost {
   }
 
   async look(): Promise<void> {
+    if (this.closed) return;
+    if (this.busy) throw new Error(BUSY);
+    return this.lookNow();
+  }
+
+  private async lookNow(proofRetries?: InstallProofRetries): Promise<void> {
     this.stopWatching();
     // Another look: the earlier one's programs end before this one asks anything.
     this.options.stopPrograms();
@@ -196,7 +280,8 @@ export class SetupController implements SetupHost {
     this.localFound = null;
     this.clearSlow();
     const local = this.options.localConnect;
-    if (local) return this.lookLocally(local, attempt);
+    if (local)
+      return this.lookLocally(this.installProofRetries(local, attempt, proofRetries), attempt);
     let opened: Opened;
     try {
       opened = await this.open();
@@ -277,9 +362,55 @@ export class SetupController implements SetupHost {
    * the first screen (`SetupState.unasked`).
    */
   async lookAtStart(): Promise<void> {
-    if (!this.options.localConnect || this.state.phase !== "idle") return;
+    if (!this.options.localConnect || this.state.phase !== "idle" || this.busy) return;
     this.unasked = true;
     await this.look();
+  }
+
+  /**
+   * For the app's quit: nothing more starts, whatever answer or step comes next, and this
+   * resolves once setting OpenClaw up and the look that follows it have ended. The caller
+   * aborts the install's downloads and ends its programs.
+   */
+  close(): Promise<void> {
+    this.closed = true;
+    this.attempt += 1;
+    this.clearSlow();
+    this.stopWatching();
+    return this.operation ?? Promise.resolve();
+  }
+
+  private installProofRetries(
+    local: LocalConnect & { worker: URL },
+    attempt: number,
+    retries?: InstallProofRetries,
+  ): LocalConnect & { worker: URL } {
+    if (!retries) return local;
+    return {
+      ...local,
+      retryHelperTimeout: () => {
+        const { phase } = this.state;
+        if (
+          this.closed ||
+          this.attempt !== attempt ||
+          retries.remaining <= 0 ||
+          (phase !== "looking" && phase !== "connecting")
+        )
+          return false;
+        retries.remaining -= 1;
+        return true;
+      },
+    };
+  }
+
+  /** The installer this host offers, or null: with local connect only. */
+  private get installer(): (() => Installer) | null {
+    return this.options.installer ?? null;
+  }
+
+  /** Whether an install is under way: from its dialog's answer to the look that follows. */
+  private get installing(): boolean {
+    return this.state.phase === "installing" || (this.busy && this.state.phase !== "confirming");
   }
 
   /**
@@ -290,9 +421,12 @@ export class SetupController implements SetupHost {
     const unasked = this.unasked;
     this.unasked = false;
     this.publish({ ...initialSetupState, phase: "looking", unasked });
-    let report;
-    try {
-      report = await lookLocally(
+    this.slowTimer = setTimeout(() => {
+      if (attempt === this.attempt && this.state.phase === "looking")
+        this.publish({ ...this.state, slow: true });
+    }, SLOW_LOOK_MS);
+    const scan = () =>
+      lookLocally(
         local,
         local.worker,
         (step) => {
@@ -301,31 +435,210 @@ export class SetupController implements SetupHost {
         },
         () => attempt !== this.attempt,
       );
+    let report;
+    const pending = this.pendingStart;
+    try {
+      report = pending ? (await this.lookAfterStart(pending, attempt, scan))?.report : await scan();
     } catch (error) {
       if (attempt === this.attempt) this.refused(error);
       return;
+    } finally {
+      if (attempt === this.attempt) {
+        if (this.pendingStart === pending) this.pendingStart = null;
+        this.clearSlow();
+      }
     }
     if (attempt !== this.attempt || !report) return;
+    await this.foundLocally(report, attempt, unasked);
+  }
+
+  /** What a local look found, on its card, with what this device can already do there. */
+  private async foundLocally(report: LocalReport, attempt: number, unasked: boolean) {
     this.localFound = report.found;
     const access = report.found
       ? await this.options.client.deviceAccess(report.found.url).catch(() => "new" as const)
       : null;
+    let look = access ? { ...report.look, access } : report.look;
+    if (look.outcome === "not-found" && this.installer) {
+      const leftover = await this.leftoverProgram();
+      const signs = await this.installSite(leftover);
+      if (signs === "something") look = { ...look, outcome: "program-missing" };
+      else if (signs !== "nothing") look = { ...look, outcome: "cant-tell", reason: "shape" };
+      else if (leftover) look = { ...look, leftover: true };
+    }
+    const recovery = await this.installRecovery();
     if (attempt !== this.attempt) return;
-    this.publish({
-      ...initialSetupState,
-      phase: "found",
-      unasked,
-      look: access ? { ...report.look, access } : report.look,
-    });
+    if (
+      recovery &&
+      (look.outcome !== "running" ||
+        look.profile === "clawtrate" ||
+        recovery.location === "staging")
+    ) {
+      this.publish({
+        ...initialSetupState,
+        phase: "install-failed",
+        look,
+        install: {
+          step: recovery.action === "inspect" ? 0 : 2,
+          nodeChecked: recovery.action !== "inspect",
+          failure: null,
+          recovery: recovery.action,
+          ...(recovery.location ? { recoveryLocation: recovery.location } : {}),
+        },
+      });
+      return;
+    }
+    this.publish({ ...initialSetupState, phase: "found", unasked, look });
+  }
+
+  /** The install preflight reads paths only. A newly found program is never run. */
+  private async installSite(leftover: string | null): ReturnType<typeof anythingHere> {
+    try {
+      const opened = await this.open();
+      return await anythingHere(opened.world, leftover);
+    } catch {
+      return "unreadable";
+    }
+  }
+
+  private installRecovery(make = this.installer) {
+    return (
+      make?.()
+        .recovery?.()
+        .catch(() => null) ?? Promise.resolve(null)
+    );
+  }
+
+  /** The program of a proven early leftover of Clawtrate's own, or null. */
+  private async leftoverProgram(): Promise<string | null> {
+    const make = this.installer;
+    if (!make) return null;
+    return make()
+      .leftoverProgram()
+      .catch(() => null);
+  }
+
+  /** Start the stopped Mac gateway the person chose, then offer the proved gateway to Connect. */
+  async start(): Promise<void> {
+    if (this.busy) throw new Error(BUSY);
+    const local = this.options.localConnect;
+    const { phase, look, failure } = this.state;
+    if (
+      !local ||
+      this.pendingStart ||
+      look?.port == null ||
+      !(phase === "found" || (phase === "failed" && failure?.kind === "not-started")) ||
+      look?.outcome !== "stopped" ||
+      !look.canStart ||
+      (look.profile !== "default" && look.profile !== "clawtrate")
+    )
+      throw new Error("There is nothing to start. Look again.");
+
+    const attempt = (this.attempt += 1);
+    const current = () => attempt === this.attempt;
+    const scan = () => lookLocally(local, local.worker, undefined, () => !current());
+    this.publish({ ...initialSetupState, phase: "starting", look });
+    // The state can change between the offer and the press. Recheck before asking launchd.
+    try {
+      const before = await scan();
+      if (!current() || !before) return;
+      if (
+        before.look.outcome !== "stopped" ||
+        !before.look.canStart ||
+        before.look.profile !== look.profile ||
+        before.look.port !== look.port
+      )
+        return this.foundLocally(before, attempt, false);
+
+      const pending = {
+        profile: look.profile,
+        port: look.port,
+        request: startLocally(local, look.profile, current)
+          .catch(() => false)
+          .then((accepted) => ({
+            accepted,
+            until: this.now() + (this.options.startWaitMs ?? START_WAIT_MS),
+          })),
+      };
+      this.pendingStart = pending;
+      const checked = await this.lookAfterStart(pending, attempt, scan, () => {
+        this.publish({ ...this.state, step: 1 });
+      }).finally(() => {
+        if (current() && this.pendingStart === pending) this.pendingStart = null;
+      });
+      if (!current() || !checked) return;
+      const { accepted: started, report } = checked;
+      if (!this.sameStoppedGateway(report, pending))
+        return this.foundLocally(report, attempt, false);
+      this.log(
+        started
+          ? "Started OpenClaw, but its gateway didn't answer."
+          : "macOS didn't start OpenClaw.",
+      );
+      this.fail({ kind: "not-started", port: look.port, reason: started ? "no-answer" : null });
+    } catch (error) {
+      if (current()) this.refused(error);
+    }
+  }
+
+  private sameStoppedGateway(report: LocalReport, pending: PendingStart): boolean {
+    const { look } = report;
+    return (
+      look.outcome === "stopped" &&
+      look.canStart === true &&
+      look.profile === pending.profile &&
+      look.port === pending.port
+    );
+  }
+
+  /** A look after Back shares the launch and its readiness deadline. Leaving cancels this look. */
+  private async lookAfterStart(
+    pending: PendingStart,
+    attempt: number,
+    scan: () => Promise<LocalReport | null>,
+    onAccepted?: () => void,
+  ) {
+    const { accepted, until } = await pending.request;
+    if (attempt !== this.attempt) return null;
+    if (accepted) onAccepted?.();
+    while (attempt === this.attempt) {
+      const report = await scan();
+      if (!report || attempt !== this.attempt) return null;
+      if (
+        !accepted ||
+        report.look.outcome === "running" ||
+        report.look.profile !== pending.profile ||
+        report.look.port !== pending.port ||
+        this.now() >= until
+      )
+        return { report, accepted };
+      await new Promise((done) => setTimeout(done, Math.min(START_POLL_MS, until - this.now())));
+    }
+    return null;
   }
 
   cancel(): void {
     const phase = this.state.phase;
+    // Cancelling an install isn't offered in this version (§10): it runs to its end, and the
+    // look after it too. Only its dialog can be left.
+    if (this.installing) return;
+    if (phase === "install-failed") {
+      // What a failed attempt left is looked at again before anything else is offered.
+      void this.lookNow();
+      return;
+    }
     this.attempt += 1;
     this.clearSlow();
     this.options.stopPrograms();
     if (phase === "looking") {
       this.publish(initialSetupState);
+      return;
+    }
+    if (
+      phase === "starting" ||
+      (phase === "failed" && this.state.failure?.kind === "not-started")
+    ) {
+      void this.look();
       return;
     }
     if (phase === "confirming") {
@@ -350,6 +663,7 @@ export class SetupController implements SetupHost {
   }
 
   reset(): void {
+    if (this.installing) return;
     this.attempt += 1;
     this.clearSlow();
     this.stopWatching();
@@ -406,7 +720,177 @@ export class SetupController implements SetupHost {
     if (status !== "idle" && status !== "connected") await this.options.client.disconnect();
   }
 
+  /**
+   * Sets OpenClaw up on this computer (§10), offered after a look found nothing, or after an
+   * attempt that failed before onboarding and was removed. Nothing is downloaded or run until
+   * the host's dialog says yes; the prepared operation expires as Connect's does. When every
+   * step is done the look runs again, and when it proves the gateway just set up, Connect
+   * follows by itself.
+   */
+  async install(action?: InstallAction): Promise<void> {
+    if (this.busy) throw new Error(BUSY);
+    const { phase, look, install } = this.state;
+    const retry = phase === "install-failed" && install?.failure?.retry === true;
+    const recovery = phase === "install-failed" ? install?.recovery : undefined;
+    if (
+      action
+        ? !recoveryAllows(recovery, action)
+        : !retry && !(phase === "found" && look?.outcome === "not-found")
+    )
+      throw new Error("There is nothing to set up here. Look again.");
+    const make = this.options.installer;
+    const confirm = this.options.confirm;
+    const local = this.options.localConnect;
+    if (!make || !confirm || !local) throw new Error("This host doesn't set OpenClaw up.");
+    if (this.closed) return;
+    this.busy = true;
+    const proofRetries = { remaining: INSTALL_HELPER_RETRIES };
+    const operation = this.installHeld(make, confirm, proofRetries, action);
+    this.operation = operation.then(
+      () => {},
+      () => {},
+    );
+    let connectNow: boolean;
+    try {
+      connectNow = await operation;
+    } finally {
+      this.busy = false;
+      this.operation = null;
+    }
+    // The gateway just set up, proved: the press and the dialog were the consent (§10).
+    if (connectNow && !this.closed) await this.connectLocally(local, proofRetries);
+  }
+
+  /** The install from its dialog to the look that follows; true when Connect may follow. */
+  private async installHeld(
+    make: () => Installer,
+    confirm: (confirmation: Confirmation) => Promise<boolean>,
+    proofRetries: InstallProofRetries,
+    action?: InstallAction,
+  ): Promise<boolean> {
+    const { look } = this.state;
+    const attempt = (this.attempt += 1);
+    const at = this.now();
+    const before = this.state;
+    this.publish({ ...this.state, phase: "confirming", failure: null, unasked: false });
+    const pending = action ? await this.installRecovery(make) : null;
+    if (attempt !== this.attempt) return false;
+    if (action && (!pending?.id || !recoveryAllows(pending.action, action))) {
+      await this.lookNow();
+      return false;
+    }
+    let yes: boolean;
+    try {
+      yes = await confirm(action ? RECOVERY_CONFIRMATION[action] : INSTALL_CONFIRMATION);
+    } catch {
+      yes = false;
+    }
+    if (attempt !== this.attempt) return false;
+    if (!yes) {
+      // Nothing was downloaded or run.
+      this.publish(before);
+      return false;
+    }
+    const start = { step: 0, nodeChecked: false, failure: null };
+    const stoppedBefore = (kind: "expired" | "changed" | "unchecked") =>
+      this.publish({
+        ...initialSetupState,
+        look,
+        phase: "install-failed",
+        install: {
+          ...start,
+          failure: {
+            kind,
+            step: -1,
+            exitCode: null,
+            classification: null,
+            retry: false,
+            cleanup: "none",
+          },
+        },
+      });
+    if (this.now() - at > OPERATION_LIFETIME_MS) {
+      stoppedBefore("expired");
+      return false;
+    }
+    const again = action ? "nothing" : await this.installSite(await this.leftoverProgram());
+    if (attempt !== this.attempt) return false;
+    if (again === "unreadable" || again === "timeout") {
+      this.log("the file checks couldn't be made again after the dialog");
+      stoppedBefore("unchecked");
+      return false;
+    }
+    if (again === "something") {
+      this.log("a sign of OpenClaw appeared after the look");
+      stoppedBefore("changed");
+      return false;
+    }
+    // The look can take its time: the consent's two minutes hold after it too.
+    if (this.now() - at > OPERATION_LIFETIME_MS) {
+      stoppedBefore("expired");
+      return false;
+    }
+    this.publish({ ...initialSetupState, look, phase: "installing", install: start });
+    let outcome: InstallOutcome;
+    try {
+      outcome = await make().run(
+        (progress) => {
+          if (attempt === this.attempt) this.publish({ ...this.state, install: progress });
+        },
+        action,
+        pending?.id,
+      );
+    } catch (error) {
+      this.log(
+        error instanceof Error && error.name === "InstallRefusedError"
+          ? error.message
+          : "setting OpenClaw up stopped",
+      );
+      outcome = {
+        ok: false,
+        failure: {
+          kind: "installer",
+          step: this.state.install?.step ?? 0,
+          exitCode: null,
+          classification: null,
+          retry: false,
+          cleanup: "unproven",
+        },
+      };
+    }
+    if (attempt !== this.attempt) return false;
+    if (!outcome.ok) {
+      this.log(`setting OpenClaw up failed: ${outcome.failure.kind}`);
+      const recovery = outcome.failure.retry ? null : await this.installRecovery(make);
+      if (attempt !== this.attempt) return false;
+      this.publish({
+        ...this.state,
+        phase: "install-failed",
+        install: {
+          ...(this.state.install ?? start),
+          failure: outcome.failure,
+          ...(recovery?.action === "inspect" ? { step: 0, nodeChecked: false } : {}),
+          ...(recovery ? { recovery: recovery.action } : {}),
+          ...(recovery?.location ? { recoveryLocation: recovery.location } : {}),
+        },
+      });
+      return false;
+    }
+    // The look finds what was set up; Connect follows only for that gateway, on its port.
+    await this.lookNow(proofRetries);
+    const found = this.localFound;
+    return (
+      !this.closed &&
+      this.state.phase === "found" &&
+      this.state.look?.outcome === "running" &&
+      found?.profile === "clawtrate" &&
+      found.port === outcome.port
+    );
+  }
+
   async connect(): Promise<void> {
+    if (this.closed) return;
+    if (this.busy) throw new Error(BUSY);
     const local = this.options.localConnect;
     if (local) return this.connectLocally(local);
     const found = this.found;
@@ -602,7 +1086,10 @@ export class SetupController implements SetupHost {
    * folder and that folder's identity as its route (`routeOf`), never as a typed
    * address.
    */
-  private async connectLocally(local: LocalConnect & { worker: URL }): Promise<void> {
+  private async connectLocally(
+    local: LocalConnect & { worker: URL },
+    proofRetries?: InstallProofRetries,
+  ): Promise<void> {
     const found = this.localFound;
     const phase = this.state.phase;
     if (
@@ -619,10 +1106,11 @@ export class SetupController implements SetupHost {
     const at = this.now();
     const current = () => attempt === this.attempt;
     const consent = () => current() && this.now() - at <= OPERATION_LIFETIME_MS;
+    const scoped = this.installProofRetries(local, attempt, proofRetries);
     this.publish({ ...this.state, phase: "connecting", step: 0, failure: null, unasked: false });
     let token: HeldToken | null = null;
     try {
-      token = await readToken(local, local.worker, found);
+      token = await readToken(scoped, scoped.worker, found);
       if (!current()) return;
       if (!token) return this.fail({ kind: "changed" });
       // The earlier gateway isn't let go: the client replaces it only once this device is
@@ -639,7 +1127,7 @@ export class SetupController implements SetupHost {
         void this.closeOwned();
         this.fail({ kind: "unverified", port: found.port, reason: refusalKind(why) });
       };
-      const proveOne = proveFor(local, found, found.port, unverified);
+      const proveOne = proveFor(scoped, found, found.port, unverified);
       const prove = async (localPort: number, live: () => boolean = () => true) => {
         const proved = await proveOne(localPort, live);
         if (proved && live()) latest = null;
@@ -828,6 +1316,18 @@ export class SetupController implements SetupHost {
         } else if (this.state.step !== 2) this.publish({ ...this.state, step: 2 });
         return;
       }
+      if (
+        local &&
+        this.owned?.attempt === attempt &&
+        this.state.phase === "connecting" &&
+        connection.error?.code === "AUTH_TOKEN_MISMATCH"
+      ) {
+        // Retry would send the same settings token. A new look reads the settings afresh.
+        this.stopWatching();
+        void this.closeOwned();
+        this.fail({ kind: "token-refused", port });
+        return;
+      }
       // Local connect's first socket ended before the gateway answered (`UNREACHABLE`): what the
       // settings file says isn't how the gateway there listens now (it stopped, or runs on
       // settings changed since it started, TLS for one). Not retried for ever behind
@@ -854,6 +1354,19 @@ export class SetupController implements SetupHost {
         if (code === SETUP_PAIRING_GONE) return this.pairingGone();
         // One appeared before the code went: back to the card, for consent to reuse it.
         if (code === SETUP_PAIRING_APPEARED) return this.pairingAppeared();
+        if (local && code === "PROTOCOL_MISMATCH") {
+          void this.closeOwned();
+          const protocol = connection.error?.protocol;
+          const gateway = protocol?.gateway;
+          const reason =
+            gateway == null || !protocol || gateway === protocol.client
+              ? null
+              : gateway < protocol.client
+                ? "gateway-older"
+                : "client-older";
+          this.fail({ kind: "protocol", port, reason });
+          return;
+        }
         this.fail({
           kind:
             code === "SETUP_GRANT_REFUSED"

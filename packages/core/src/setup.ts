@@ -33,6 +33,8 @@ export type LookOutcome =
    * failed, `ProofRefusalKind`).
    */
   | "unverified"
+  /** A named profile outside this Mac's automatic pairing routes has its own settings file. */
+  | "named-profile"
   | "not-found"
   | "windows";
 
@@ -52,6 +54,8 @@ export type CantTellReason =
   | "read-only"
   /** Local connect: OpenClaw's settings file can't be used here (its form, its sign-in, its rights). */
   | "settings"
+  /** Local connect: the settings reader did not finish parsing. */
+  | "settings-unfinished"
   /** Local connect: OpenClaw's settings turn TLS on, or don't certainly leave it off; it dials `ws://` only. */
   | "tls"
   | ProofRefusalKind;
@@ -105,6 +109,8 @@ export type SetupLook = {
   /** The configured bind the status reported: `loopback` or `lan`; anything else is not reported. */
   listens: "loopback" | "lan" | null;
   service: LookService | null;
+  /** A local Mac gateway did not answer and the host can ask its LaunchAgent to start. */
+  canStart?: boolean;
   port: number | null;
   /** For `not-token`: the gateway's other sign-in. */
   authMode: "password" | "none" | "trusted-proxy" | null;
@@ -112,6 +118,8 @@ export type SetupLook = {
   access: "new" | "paired" | null;
   /** Other OpenClaw services and profiles the look saw, named and never used. */
   others: string[];
+  /** An earlier setup attempt of Clawtrate's that never reached onboarding is there, and setting up removes it first. */
+  leftover?: boolean;
 };
 
 /** Where Connect, or the look, failed (§7), each in fixed copy. */
@@ -142,6 +150,15 @@ export type SetupFailureKind =
    * it started (TLS on, for one). Advanced, or a look again.
    */
   | "unanswered"
+  /**
+   * Local connect: Start OpenClaw asked its LaunchAgent to start, and nothing answered at its port
+   * in time (or launchd refused).
+   */
+  | "not-started"
+  /** Local connect: the gateway refused the token its settings file holds. */
+  | "token-refused"
+  /** The gateway refused the handshake for its protocol: it is too old, or newer, for this app. */
+  | "protocol"
   /** The connection failed in another way; the connection state says how. */
   | "other";
 
@@ -157,8 +174,7 @@ export type SetupFailure = {
   kind: SetupFailureKind;
   exitCode: number | null;
   port: number | null;
-  /** For `refused`: what was refused; for `unverified`, which fact the proof refused. */
-  reason: SetupRefusal | ProofRefusalKind | null;
+  reason: SetupRefusal | ProofRefusalKind | "no-answer" | "gateway-older" | "client-older" | null;
 };
 
 export type SetupPhase =
@@ -170,9 +186,117 @@ export type SetupPhase =
   /** The host's dialog is open. */
   | "confirming"
   | "connecting"
+  /** Local connect: Start OpenClaw asked its LaunchAgent to start, and waits for its port. */
+  | "starting"
   /** Connected through setup: the app takes over. */
   | "done"
-  | "failed";
+  | "failed"
+  /** Setting OpenClaw up on this computer (§10): the steps run. */
+  | "installing"
+  /** A step of setting OpenClaw up failed, or the install couldn't start. */
+  | "install-failed";
+
+/** The pinned OpenClaw release used by the desktop installer. */
+export const INSTALL_OPENCLAW_VERSION = "2026.11.10";
+
+/** The pinned Node.js that setup installs beside OpenClaw. */
+export const INSTALL_NODE_VERSION = "24.22.1";
+
+/**
+ * Why setting OpenClaw up failed (§10), each in fixed copy.
+ */
+export type InstallFailureKind =
+  /** A `clawtrate` folder, service or install record was there already. */
+  | "exists"
+  /** Clawtrate couldn't write a file of the install's (permission or space). */
+  | "write"
+  /** Linux: this session's systemd user manager can't be reached. */
+  | "user-service"
+  /** A download failed in transport, or answered other than 200. */
+  | "download"
+  /** A download ended before all its bytes arrived. */
+  | "download-short"
+  /** The disk ran out of space while a download was saved. */
+  | "download-space"
+  | "fingerprint"
+  /** A checked download couldn't be unpacked. */
+  | "unpack"
+  /** The checked installer isn't the one this build was made for. */
+  | "installer-changed"
+  /** The installer stopped before it reported completion. */
+  | "installer"
+  /** The installed program couldn't be found, or isn't the checked one. */
+  | "no-program"
+  | "node-not-checked"
+  | "onboard"
+  /** Clawtrate couldn't confirm OpenClaw installed the profile's user service. */
+  | "service"
+  /**
+   * A `clawtrate` service definition that doesn't run this install appeared
+   * between the last check and OpenClaw's service install; it is left as it is.
+   */
+  | "service-appeared"
+  | "not-answering"
+  /** The facts changed between the look and the host's dialog, or before onboarding. */
+  | "changed"
+  /** After the host's dialog, the look's file checks couldn't be made or didn't finish in time. */
+  | "unchecked"
+  /** The host's dialog was answered after the prepared operation's two minutes. */
+  | "expired"
+  /** The unfinished profile could not be moved to the Trash. */
+  | "trash"
+  /** A saved setup could not be restored to its original folders. */
+  | "restore";
+
+/**
+ * What a failed attempt left: nothing made (`none`); removed and proven
+ * removed (`removed`); a cleanup that couldn't be proven (`unproven`); or files
+ * intentionally kept after onboarding (`kept`).
+ */
+export type InstallCleanup = "none" | "removed" | "unproven" | "kept";
+
+/** Onboarding's failure class, as its JSON names it, or the service it couldn't install. */
+export type OnboardClassification =
+  | "auth-mismatch"
+  | "module-missing"
+  | "service-missing"
+  | "service-stopped"
+  | "startup-blocked"
+  | "not-listening"
+  | "systemd-user-unavailable";
+
+export type InstallFailure = {
+  kind: InstallFailureKind;
+  /** The step that failed, from 0; -1 when the install stopped before its first step. */
+  step: number;
+  exitCode: number | null;
+  classification: OnboardClassification | null;
+  /**
+   * Whether Try again can start a new installation immediately. The host
+   * confirmed the previous attempt’s files were removed.
+   */
+  retry: boolean;
+  cleanup: InstallCleanup;
+};
+
+/** Where setting OpenClaw up stands (§10). */
+export type InstallAction = "continue" | "replace";
+export type InstallRecovery = InstallAction | "inspect" | "staged" | "finish";
+export type InstallLocation = "profile" | "program" | "record" | "service" | "staging";
+
+export type SetupInstall = {
+  /** Inspect marks an incomplete attempt without enough evidence to continue or remove it. */
+  recovery?: InstallRecovery;
+  /** The previous unfinished setup folders are in the system Trash. */
+  foldersTrashed?: boolean;
+  /** A location containing files from an earlier setup. */
+  recoveryLocation?: InstallLocation;
+  /** The step under way, from 0; 4 once every step is done. */
+  step: number;
+  /** The installer reported that it used the checked Node.js. */
+  nodeChecked: boolean;
+  failure: InstallFailure | null;
+};
 
 export type SetupState = {
   phase: SetupPhase;
@@ -187,6 +311,8 @@ export type SetupState = {
   unasked: boolean;
   look: SetupLook | null;
   failure: SetupFailure | null;
+  /** Setting OpenClaw up, while it runs or after it failed; absent otherwise. */
+  install?: SetupInstall | null;
 };
 
 export const initialSetupState: SetupState = {
@@ -214,6 +340,17 @@ export type SetupHost = {
    * connect, this request is the consent (`SetupOffer.local`).
    */
   connect(): Promise<void>;
+  /**
+   * Ask macOS to start a stopped local gateway with its existing LaunchAgent, then look again.
+   */
+  start(): Promise<void>;
+  /**
+   * Ask the host to set OpenClaw up on this computer, after a look found
+   * nothing, or to try again after a failed attempt. The host shows its own
+   * dialog and downloads and runs nothing unless that dialog's answer is yes;
+   * once the gateway answers, the host connects to it by itself.
+   */
+  install(action?: InstallAction): Promise<void>;
   /** Back to the first screen. */
   reset(): void;
 };
@@ -222,6 +359,13 @@ export type SetupHost = {
  * Whether the screens of setup are offered, and which: `look` runs on the
  * host's computer, `pair` needs a native dialog of the host's. `local`: the
  * host proves this computer's gateway itself (local connect), so Connect is
- * the consent and no dialog follows it.
+ * the consent and no dialog follows it. `install`: the host may set OpenClaw up here.
  */
-export type SetupOffer = { look: boolean; pair: boolean; platform: string; local?: boolean };
+export type SetupOffer = {
+  look: boolean;
+  pair: boolean;
+  platform: string;
+  local?: boolean;
+  /** A person's packaged app that may set OpenClaw up on this computer (§10). */
+  install?: boolean;
+};
