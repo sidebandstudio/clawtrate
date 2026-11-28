@@ -1110,6 +1110,31 @@ it("a shipped host reaches the reader only through local connect: its look, its 
   ]);
 });
 
+/** A platform's own `@openclaw/fs-safe-<suffix>` as 0.25.0 names it, Windows's for its MSVC build. */
+const ownModule = (os: string, arch: string, glibc: boolean) =>
+  `${os}-${arch}${os === "linux" ? (glibc ? "-gnu" : "-musl") : os === "win32" ? "-msvc" : ""}`;
+
+// Each platform 0.25.0 publishes a module for (its `optionalDependencies`) is looked for by the
+// name 2026.10.6's table pins. It publishes none for Windows on Arm, and no table pins one;
+// 2026.11.10's pins only macOS, where the proof runs.
+it("looks for each platform's own module by the name it is published and pinned under", () => {
+  expect(PINNED_FS_SAFE["2026.10.6"]).toBe("0.25.0");
+  const looked = [
+    ownModule("darwin", "arm64", false),
+    ownModule("darwin", "x64", false),
+    ownModule("linux", "arm64", true),
+    ownModule("linux", "arm64", false),
+    ownModule("linux", "x64", true),
+    ownModule("linux", "x64", false),
+    ownModule("win32", "x64", false),
+  ];
+  // As sets: the table's order is not part of the pin.
+  expect(looked.sort()).toEqual(Object.keys(OPENCLAW_PINS["2026.10.6"]!).sort());
+  expect(Object.keys(OPENCLAW_PINS["2026.11.10"]!).sort()).toEqual(["darwin-arm64", "darwin-x64"]);
+  for (const pins of Object.values(OPENCLAW_PINS))
+    expect(Object.keys(pins)).not.toContain(ownModule("win32", "arm64", false));
+});
+
 // CI installs the pinned OpenClaw from npm and names its folder: it must be a version local
 // connect proves, carry this platform's own module, and every module it carries must match its
 // version's pin.
@@ -1123,14 +1148,11 @@ it.skipIf(!process.env.CLAWTRATE_PINNED_OPENCLAW)(
     expect(Object.keys(OPENCLAW_PINS)).toContain(openclaw);
     const scope = join(root, "node_modules/@openclaw");
     const found = readdirSync(scope).filter((name) => /^fs-safe-.+/.test(name));
-    const libc =
-      platform !== "linux"
-        ? ""
-        : (process.report.getReport() as { header?: { glibcVersionRuntime?: string } }).header
-              ?.glibcVersionRuntime
-          ? "-gnu"
-          : "-musl";
-    expect(found).toContain(`fs-safe-${platform}-${process.arch}${libc}`);
+    const glibc =
+      platform === "linux" &&
+      !!(process.report.getReport() as { header?: { glibcVersionRuntime?: string } }).header
+        ?.glibcVersionRuntime;
+    expect(found).toContain(`fs-safe-${ownModule(platform, process.arch, glibc)}`);
     for (const name of found) {
       expect(version(join(scope, name)), name).toBe(PINNED_FS_SAFE[openclaw]);
       const file = readFileSync(join(scope, name, "fs-safe-native.node"));
