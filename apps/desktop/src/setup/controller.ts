@@ -67,6 +67,12 @@ const succeeded = (result: ProgramResult) =>
 /** Setup's connection: its attempt, its address and the client's selection that made it. */
 type Owned = { attempt: number; url: string; selection: number };
 
+type PendingStart = {
+  profile: string;
+  port: number;
+  request: Promise<{ accepted: boolean; until: number }>;
+};
+
 /** What the host's own dialog shows: its words, nothing the page wrote. */
 export type Confirmation = { message: string; detail: string; confirm: string };
 
@@ -173,7 +179,7 @@ export class SetupController implements SetupHost {
   private found: FoundGateway | null = null;
   /** With local connect: what its look found. */
   private localFound: LocalFound | null = null;
-  private pendingStart: Promise<boolean> | null = null;
+  private pendingStart: PendingStart | null = null;
   /** The next look is the host's own, at start (`lookAtStart`). */
   private unasked = false;
   /** The connection this setup attempt opened, by attempt and address: the only one Back closes. */
@@ -385,9 +391,8 @@ export class SetupController implements SetupHost {
       if (attempt === this.attempt && this.state.phase === "looking")
         this.publish({ ...this.state, slow: true });
     }, SLOW_LOOK_MS);
-    let report;
-    try {
-      report = await lookLocally(
+    const scan = () =>
+      lookLocally(
         local,
         local.worker,
         (step) => {
@@ -396,11 +401,18 @@ export class SetupController implements SetupHost {
         },
         () => attempt !== this.attempt,
       );
+    let report;
+    const pending = this.pendingStart;
+    try {
+      report = pending ? (await this.lookAfterStart(pending, attempt, scan))?.report : await scan();
     } catch (error) {
       if (attempt === this.attempt) this.refused(error);
       return;
     } finally {
-      if (attempt === this.attempt) this.clearSlow();
+      if (attempt === this.attempt) {
+        if (this.pendingStart === pending) this.pendingStart = null;
+        this.clearSlow();
+      }
     }
     if (attempt !== this.attempt || !report) return;
     await this.foundLocally(report, attempt, unasked);
@@ -470,6 +482,8 @@ export class SetupController implements SetupHost {
     const { phase, look, failure } = this.state;
     if (
       !local ||
+      this.pendingStart ||
+      look?.port == null ||
       !(phase === "found" || (phase === "failed" && failure?.kind === "not-started")) ||
       look?.outcome !== "stopped" ||
       !look.canStart ||
@@ -493,32 +507,26 @@ export class SetupController implements SetupHost {
       )
         return this.foundLocally(before, attempt, false);
 
-      const request = startLocally(local, look.profile, current).catch(() => false);
-      this.pendingStart = request;
-      const started = await request;
-      if (this.pendingStart === request) this.pendingStart = null;
-      if (!current()) return;
-      if (started) {
+      const pending = {
+        profile: look.profile,
+        port: look.port,
+        request: startLocally(local, look.profile, current)
+          .catch(() => false)
+          .then((accepted) => ({
+            accepted,
+            until: this.now() + (this.options.startWaitMs ?? START_WAIT_MS),
+          })),
+      };
+      this.pendingStart = pending;
+      const checked = await this.lookAfterStart(pending, attempt, scan, () => {
         this.publish({ ...this.state, step: 1 });
-        const until = this.now() + (this.options.startWaitMs ?? START_WAIT_MS);
-        for (;;) {
-          const report = await scan();
-          if (!current() || !report) return;
-          if (
-            report.look.profile !== look.profile ||
-            report.look.port !== look.port ||
-            report.look.outcome === "running" ||
-            (report.look.outcome === "stopped" && !report.look.canStart)
-          )
-            return this.foundLocally(report, attempt, false);
-          if (this.now() >= until) {
-            if (report.look.outcome !== "stopped") return this.foundLocally(report, attempt, false);
-            break;
-          }
-          await new Promise((done) => setTimeout(done, START_POLL_MS));
-          if (!current()) return;
-        }
-      }
+      }).finally(() => {
+        if (current() && this.pendingStart === pending) this.pendingStart = null;
+      });
+      if (!current() || !checked) return;
+      const { accepted: started, report } = checked;
+      if (!this.sameStoppedGateway(report, pending))
+        return this.foundLocally(report, attempt, false);
       this.log(
         started
           ? "Started OpenClaw, but its gateway didn't answer."
@@ -528,6 +536,42 @@ export class SetupController implements SetupHost {
     } catch (error) {
       if (current()) this.refused(error);
     }
+  }
+
+  private sameStoppedGateway(report: LocalReport, pending: PendingStart): boolean {
+    const { look } = report;
+    return (
+      look.outcome === "stopped" &&
+      look.canStart === true &&
+      look.profile === pending.profile &&
+      look.port === pending.port
+    );
+  }
+
+  /** A look after Back shares the launch and its readiness deadline. Leaving cancels this look. */
+  private async lookAfterStart(
+    pending: PendingStart,
+    attempt: number,
+    scan: () => Promise<LocalReport | null>,
+    onAccepted?: () => void,
+  ) {
+    const { accepted, until } = await pending.request;
+    if (attempt !== this.attempt) return null;
+    if (accepted) onAccepted?.();
+    while (attempt === this.attempt) {
+      const report = await scan();
+      if (!report || attempt !== this.attempt) return null;
+      if (
+        !accepted ||
+        report.look.outcome === "running" ||
+        report.look.profile !== pending.profile ||
+        report.look.port !== pending.port ||
+        this.now() >= until
+      )
+        return { report, accepted };
+      await new Promise((done) => setTimeout(done, Math.min(START_POLL_MS, until - this.now())));
+    }
+    return null;
   }
 
   cancel(): void {
@@ -551,15 +595,7 @@ export class SetupController implements SetupHost {
       phase === "starting" ||
       (phase === "failed" && this.state.failure?.kind === "not-started")
     ) {
-      const attempt = this.attempt;
-      const refresh = () => {
-        if (attempt === this.attempt) void this.look();
-      };
-      const pending = this.pendingStart;
-      if (pending) {
-        this.publish({ ...initialSetupState, phase: "looking" });
-        void pending.then(refresh);
-      } else refresh();
+      void this.look();
       return;
     }
     if (phase === "confirming") {

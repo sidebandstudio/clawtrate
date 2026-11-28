@@ -838,26 +838,32 @@ describe.skipIf(!mac)(
       SLOW,
     );
 
+    function pendingService() {
+      const home = newHome();
+      const label = "ai.openclaw.gateway";
+      const agents = join(home, "Library", "LaunchAgents");
+      mkdirSync(agents, { recursive: true });
+      writeFileSync(join(agents, `${label}.plist`), "stand-in");
+      const labelAt = vi.fn(async () => label);
+      const pending = deferred<number>();
+      const run = vi.fn(() => pending.promise);
+      const app = localApp({
+        home,
+        helper: standInHelper(home),
+        platform,
+        sandboxed: true,
+        deadlineMs: SLOW,
+        launchd: { labelAt, run },
+      });
+      return { home, app, pending, run, labelAt };
+    }
+
     it(
-      "F-602: Back during Start waits for macOS and looks for the gateway again",
+      "F-602: Back keeps looking until an accepted Start's gateway is listening",
       async () => {
-        const home = newHome();
+        const { home, app, pending, run, labelAt } = pendingService();
         const port = await freePort();
-        const label = "ai.openclaw.gateway";
-        const agents = join(home, "Library", "LaunchAgents");
-        mkdirSync(agents, { recursive: true });
-        writeFileSync(join(agents, `${label}.plist`), "stand-in");
         settingsFile(home, ".openclaw", tokenSettings(port, "a-gateway-token"));
-        const pending = deferred<number>();
-        const run = vi.fn(() => pending.promise);
-        const app = localApp({
-          home,
-          helper: standInHelper(home),
-          platform,
-          sandboxed: true,
-          deadlineMs: SLOW,
-          launchd: { labelAt: async () => label, run },
-        });
         let server: Awaited<ReturnType<typeof bridged>> | undefined;
         try {
           await app.setup.look();
@@ -865,16 +871,60 @@ describe.skipIf(!mac)(
           await until(() => run.mock.calls.length === 1, 30_000);
           app.setup.cancel();
           expect(app.setup.current.phase).toBe("looking");
+          const observations = labelAt.mock.calls.length;
+          pending.resolve(0);
+          await until(() => labelAt.mock.calls.length > observations, 30_000);
+          // At least one look saw the port closed after launchd accepted the request.
+          await sleep(300);
+          expect(app.setup.current.phase).toBe("looking");
           server = await bridged(silentGateway(), port);
           proofFile(home, ".openclaw", provedAnswer(home, ".openclaw", port));
-          pending.resolve(0);
           await starting;
           await until(() => app.setup.current.phase === "found", 30_000);
           expect(app.setup.current.look).toMatchObject({ outcome: "running", port });
         } finally {
           pending.resolve(1);
+          app.setup.reset();
           app.client.stop();
           await server?.close();
+        }
+      },
+      SLOW,
+    );
+
+    it(
+      "F-602: leaving and reopening while Start is pending cannot launch it twice",
+      async () => {
+        const { home, app, pending, run, labelAt } = pendingService();
+        const port = await freePort();
+        settingsFile(home, ".openclaw", tokenSettings(port, "a-gateway-token"));
+        try {
+          await app.setup.look();
+          const starting = app.setup.start();
+          await until(() => run.mock.calls.length === 1, 30_000);
+          app.setup.cancel();
+          app.setup.cancel();
+          expect(app.setup.current.phase).toBe("idle");
+          const observations = labelAt.mock.calls.length;
+          const reopening = app.setup.look();
+          expect(
+            await Promise.race([
+              reopening.then(() => "finished"),
+              sleep(300).then(() => "waiting"),
+            ]),
+          ).toBe("waiting");
+          expect(labelAt.mock.calls).toHaveLength(observations);
+          await expect(app.setup.start()).rejects.toThrow("There is nothing to start.");
+          expect(run).toHaveBeenCalledTimes(1);
+          pending.resolve(1);
+          await starting;
+          await reopening;
+          expect(app.setup.current.look).toMatchObject({ outcome: "stopped", canStart: true });
+          expect(run).toHaveBeenCalledTimes(1);
+        } finally {
+          pending.resolve(1);
+          app.setup.reset();
+          app.client.stop();
         }
       },
       SLOW,
