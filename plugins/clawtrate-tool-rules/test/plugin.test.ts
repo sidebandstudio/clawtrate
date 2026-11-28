@@ -15,6 +15,7 @@ import plugin, {
   APPROVAL_TIMEOUT_MS,
   CHANGED_ARGUMENTS_REASON,
   DESCRIPTION_MAX,
+  LOST_RULES_REASON,
   LOST_TRACK_LINE,
   MARK_EXPIRY_MS,
   MEMORY_LIMIT,
@@ -233,7 +234,7 @@ describe("a lost policy is not an empty one", () => {
   });
 
   for (const [what, spoil, reason] of LOST) {
-    it(`${what}, with no copy read in this process: every call but ask_user asks, saying the rules could not be read`, async () => {
+    it(`${what}, with no copy read in this process: every call but ask_user is refused without a card, saying the rules could not be read`, async () => {
       const h0 = host();
       mkdirSync(join(h0.stateDir, "clawtrate-tool-rules"), { recursive: true });
       spoil(rulesFile(h0.stateDir));
@@ -244,12 +245,10 @@ describe("a lost policy is not an empty one", () => {
           ["web_search", { query: "x" }],
           ["exec", { command: "ls" }],
         ] as const) {
-          const approval = h.before("otto", tool, params)?.requireApproval;
-          expect(approval?.title, tool).toBe(`${tool}: Clawtrate's rules could not be read`);
-          expect(approval?.description).toMatch(
-            /could not read its rules, so it asks before every tool call/,
-          );
-          expect(approval?.allowedDecisions).toEqual(["allow-once", "deny"]);
+          expect(h.before("otto", tool, params), tool).toEqual({
+            block: true,
+            blockReason: LOST_RULES_REASON,
+          });
         }
         expect(h.before("otto", "ask_user", { questions: [] })).toBeUndefined();
         const [record] = (await h.call("decisions.list")).payload!.records as Record<
@@ -262,12 +261,12 @@ describe("a lost policy is not an empty one", () => {
           unknown
         >[];
         expect(records[1]).toMatchObject({
-          decision: "ask",
+          decision: "block",
           rules: "lost",
           source: { kind: "rules-lost" },
         });
         expect(h.warnings.join("\n")).toMatch(reason);
-        expect(h.warnings.join("\n")).toMatch(/every tool call but ask_user is asked about/);
+        expect(h.warnings.join("\n")).toMatch(/every tool call but ask_user is refused/);
         const got = await h.call("get");
         expect(got.error).toMatchObject({
           code: "UNAVAILABLE",
@@ -278,6 +277,32 @@ describe("a lost policy is not an empty one", () => {
       }
     });
   }
+
+  it("with no copy, a saved Never is never offered a card, and restoring the file ends the refusal at the next call", async () => {
+    const h0 = host();
+    await h0.save("otto", [
+      { action: "never", tools: ["write"] },
+      { action: "ask", tools: ["read"] },
+    ]);
+    const good = readFileSync(rulesFile(h0.stateDir));
+    writeFileSync(rulesFile(h0.stateDir), "{ broken");
+    // A fresh process: no copy was read.
+    const h = open({ stateDir: h0.stateDir });
+    for (const [tool, params] of [
+      ["write", { path: "a" }],
+      ["read", { path: "a" }],
+      ["web_search", { query: "x" }],
+    ] as const) {
+      const result = h.before("otto", tool, params);
+      expect(result?.requireApproval, tool).toBeUndefined();
+      expect(result?.blockReason).toBe(LOST_RULES_REASON);
+    }
+    // The file is read again at each call: the rules apply at once once it is whole.
+    writeFileSync(rulesFile(h0.stateDir), good);
+    expect(h.before("otto", "write", { path: "a" })?.blockReason).toMatch(/^Blocked by/);
+    expect(h.before("otto", "read", { path: "a" })?.requireApproval).toBeDefined();
+    expect(h.before("otto", "web_search", { query: "x" })).toBeUndefined();
+  });
 
   it("with a copy read earlier, goes on enforcing it, says so, and never overwrites the file", async () => {
     const h = host();
@@ -612,7 +637,7 @@ describe("a run another bot's message started or reached (#606)", () => {
     expect([record?.decision, record?.answer]).toEqual(["ask", "cancelled"]);
   });
 
-  it("refuses the fallback's ask and the lost rules' ask the same way, and still blocks a Never as a Never", async () => {
+  it("refuses the fallback's ask the same way, the lost rules' call without a card, and still blocks a Never as a Never", async () => {
     const h = host();
     await h.save("pip", [{ action: "never", tools: ["write"] }], true);
     h.write(PIP, fromMarlow("run-b"));
@@ -626,9 +651,7 @@ describe("a run another bot's message started or reached (#606)", () => {
     const lost = open({ stateDir: h.stateDir });
     lost.write(PIP, fromMarlow("run-l"));
     lost.modelCall("run-l", PIP);
-    expect(read(lost, "run-l")?.blockReason).toMatch(
-      /its rules could not be read, so it asks before every call, and this run was started by a message from bot marlow/,
-    );
+    expect(read(lost, "run-l")?.blockReason).toBe(LOST_RULES_REASON);
   });
 
   it("asks in a person's run once the bot's message has started its own run", async () => {
@@ -1800,7 +1823,7 @@ describe("status says whether rules are being enforced", () => {
     const h = open({ stateDir: h0.stateDir });
     expect((await h.call("status")).payload).toMatchObject({
       rules: { state: "lost", reason: "the rules file is not JSON", keptCopyReadAt: null },
-      enforcing: "ask-every-call",
+      enforcing: "refuse-every-call",
       matches: null,
     });
     const without = host({ on: false, trusted: false });
@@ -1854,7 +1877,7 @@ describe("who can see a card's text", () => {
     });
   }
 
-  it("leaves the target out of the fallback's card and the lost-rules card too", async () => {
+  it("leaves the target out of the fallback's card, and shows none while the rules are lost", async () => {
     const h = host({ config: FORWARDING });
     await h.save("*", [], true);
     const fallback = h.before("otto", "read", { path: "notes/x.md" })!.requireApproval!;
@@ -1863,8 +1886,9 @@ describe("who can see a card's text", () => {
     );
     writeFileSync(rulesFile(h.stateDir), "{ broken");
     const h2 = open({ stateDir: h.stateDir, config: FORWARDING });
-    const lost = h2.before("otto", "read", { path: "notes/x.md" })!.requireApproval!;
-    expect(lost.description).not.toContain("notes/x.md");
+    const lost = h2.before("otto", "read", { path: "notes/x.md" });
+    expect(lost?.requireApproval).toBeUndefined();
+    expect(lost?.blockReason).toBe(LOST_RULES_REASON);
   });
 
   it("follows a setting that forces either", async () => {

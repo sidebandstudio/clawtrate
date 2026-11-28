@@ -72,6 +72,8 @@ const VERSION = "1.0.0";
 /** What the gateway answers for a call whose approval it could not take (OpenClaw 2026.10.6). */
 const GATEWAY_UNAVAILABLE = "Plugin approval required (gateway unavailable)";
 const DENIED = "Denied by user. The tool call did not run.";
+/** The plugin's refusal of every call while its rules are lost and no copy was read. */
+const LOST_RULES_REFUSAL = "its rules could not be read and no copy was read before";
 /** The plugin's refusal of an Ask in a run another bot's message started. */
 const BOT_RUN_REFUSAL = "Refused by Clawtrate's rules plugin without asking anyone:";
 /** The plugin's refusal of a call whose tool the gateway's settings came to deny while its card waited. */
@@ -681,7 +683,7 @@ const FORWARD_NOWHERE = { approvals: { plugin: { enabled: true, mode: "targets",
 export const RULES_CHECKS: RulesCheck[] = [
   {
     // First, while this gateway process has never read a rules file.
-    name: "rules lost with no copy read: every call but ask_user asks, saying the rules could not be read, and status says so",
+    name: "rules lost with no copy read: every call but ask_user is refused with no card, saying the rules could not be read, and status says so",
     covers: ["#read", "#ask"],
     async run(ctx, world) {
       const before = await statusOf(ctx);
@@ -699,7 +701,7 @@ export const RULES_CHECKS: RulesCheck[] = [
           [status.rules, status.enforcing, status.matches],
           [
             { state: "lost", reason: "the rules file is not JSON", keptCopyReadAt: null },
-            "ask-every-call",
+            "refuse-every-call",
             null,
           ],
           "status with the rules lost",
@@ -712,15 +714,17 @@ export const RULES_CHECKS: RulesCheck[] = [
         const key = await task(ctx, world, BOT, "lost");
         const since = marks(ctx);
         const runId = await start(ctx, key, "#read");
-        const card = await cardFor(ctx, runId, since.interactive);
-        same(card.request.title, "read: Clawtrate's rules could not be read", "the card's title");
-        same(card.request.allowedDecisions, ["allow-once", "deny"], "the card's decisions");
-        await resolve(ctx, card.id, "deny");
-        await finish(ctx, runId);
+        // A saved Never may cover the call, and no card could say so: refused, asking no one.
+        const read = (await finish(ctx, runId)).calls[0];
+        expect(
+          read?.isError && read.text.includes(LOST_RULES_REFUSAL),
+          `the read with the rules lost: ${show(read)}`,
+        );
+        same(cardsSeen(ctx, since, runId), [], "who received a card with the rules lost");
         const [record] = await decisionsOf(ctx, { runId });
         same(
           [record?.rules, record?.decision, record?.source],
-          ["lost", "ask", { kind: "rules-lost" }],
+          ["lost", "block", { kind: "rules-lost" }],
           "the lost-rules decision record",
         );
         const question = marks(ctx);

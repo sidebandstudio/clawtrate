@@ -201,7 +201,7 @@ function stateLine(view) {
   if (view.kind === "lost" && view.kept) {
     return `Rules unavailable: ${view.problem}. Enforcing the copy read at ${new Date(view.kept.readAt).toISOString()}.`;
   }
-  return `Rules unavailable: ${view.problem}. No copy was read in this process, so every tool call but ask_user is asked about.`;
+  return `Rules unavailable: ${view.problem}. No copy was read in this process, so every tool call but ask_user is refused.`;
 }
 
 /** What the rules match, for `status`: tools by name, and the scopes that ask for every tool. */
@@ -285,17 +285,13 @@ export function approvalText(result, tool, target, redacted = false) {
   return { title, description };
 }
 
-/** The card while the rules are lost and no copy was read: every call is asked about. */
-export function lostRulesText(tool, target, redacted = false) {
-  const call = redacted ? `${tool}.${REDACTED_TAIL}` : `${tool}${targetWords(target)}.`;
-  return {
-    title: clip(`${tool}: Clawtrate's rules could not be read`, TITLE_MAX),
-    description: clip(
-      `Clawtrate's rules plugin could not read its rules, so it asks before every tool call until they can be read. The call: ${call}`,
-      DESCRIPTION_MAX,
-    ),
-  };
-}
+/**
+ * The refusal while the rules are lost and no copy was read in this process:
+ * a saved Never may cover the call, and no card can say so, so every call but
+ * `ask_user` is refused until the file can be read again.
+ */
+export const LOST_RULES_REASON =
+  "Refused by Clawtrate's rules plugin without asking anyone: its rules could not be read and no copy was read before, so a saved Never may cover this call. Every call but ask_user is refused until the rules can be read again. The call did not run.";
 
 /** The reason a Never gives, naming the rule; the call's own result carries it. */
 export function blockReason(result) {
@@ -306,8 +302,6 @@ export function blockReason(result) {
 /** What asked, in words for a refusal: the rule, the fallback, or the lost rules. */
 function askerWords(result) {
   const { source, rule } = result;
-  if (source.kind === "rules-lost")
-    return "its rules could not be read, so it asks before every call";
   if (source.kind === "fallback") {
     return `"Ask when nothing else decides" is on for ${source.scope === EVERY_BOT ? "every bot" : source.scope}`;
   }
@@ -987,11 +981,13 @@ export function createToolRules(api, options = {}) {
     }
     const redacted = cardDetails(cardSetting, config).mode === "redacted";
     const target = readTarget(tool, event?.params, workspaceOf(agentId));
-    const lost = view.enforced === null;
-    // Lost, with no copy: nothing a person forbade may run unasked.
-    const result = lost
-      ? { decision: "ask", source: { kind: "rules-lost" } }
-      : evaluate(view.enforced, { agentId, tool, target });
+    // Lost, with no copy: a saved Never may cover the call, so it is refused without a card
+    // (the file is read again at each call, so restoring it ends this at once).
+    if (view.enforced === null) {
+      log.add({ ...base, rules, decision: "block", source: { kind: "rules-lost" } });
+      return { block: true, blockReason: LOST_RULES_REASON };
+    }
+    const result = evaluate(view.enforced, { agentId, tool, target });
     const id = log.add({ ...base, rules, decision: result.decision, source: result.source });
     if (result.decision === "block") return { block: true, blockReason: blockReason(result) };
     if (result.decision !== "ask") return undefined;
@@ -1017,9 +1013,7 @@ export function createToolRules(api, options = {}) {
     decided.asked = true;
     return {
       requireApproval: {
-        ...(lost
-          ? lostRulesText(tool, target, redacted)
-          : approvalText(result, tool, target, redacted)),
+        ...approvalText(result, tool, target, redacted),
         severity: "warning",
         timeoutMs: APPROVAL_TIMEOUT_MS,
         allowedDecisions: [...ALLOWED_DECISIONS],
@@ -1064,14 +1058,16 @@ export function createToolRules(api, options = {}) {
       log.add({ ...base, rules, decision: "block", source: { kind: "arguments-changed" } });
       return { block: true, blockReason: CHANGED_ARGUMENTS_REASON };
     }
-    const result =
-      view.enforced === null
-        ? { decision: "ask", source: { kind: "rules-lost" } }
-        : evaluate(view.enforced, {
-            agentId,
-            tool,
-            target: readTarget(tool, event?.params, workspaceOf(agentId)),
-          });
+    // Lost while the card waited, with no copy: the rules the answer was for cannot be read.
+    if (view.enforced === null) {
+      log.add({ ...base, rules, decision: "block", source: { kind: "rules-lost" } });
+      return { block: true, blockReason: LOST_RULES_REASON };
+    }
+    const result = evaluate(view.enforced, {
+      agentId,
+      tool,
+      target: readTarget(tool, event?.params, workspaceOf(agentId)),
+    });
     if (result.decision === "none" || result.decision === "allow") return undefined;
     if (result.decision === "ask" && sameSource(result.source, shown.source)) return undefined;
     log.add({ ...base, rules, decision: "block", source: result.source });
@@ -1173,7 +1169,7 @@ export function createToolRules(api, options = {}) {
             ? "rules"
             : view.kept
               ? "kept-copy"
-              : "ask-every-call",
+              : "refuse-every-call",
       hook: {
         registered,
         // When the hook last saw a call; it says nothing about the rules.
