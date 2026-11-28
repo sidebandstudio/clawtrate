@@ -15,6 +15,7 @@ import { AccountsEngine } from "../src/accounts-engine.ts";
 import {
   initialAccountsState,
   MAX_ALLOWLIST_ENTRIES,
+  MAX_MODEL_ID_CHARS,
   type AccountsState,
 } from "../src/accounts.ts";
 import { parseBridgeCommand } from "../src/bridge.ts";
@@ -55,7 +56,6 @@ describe("F-042: which list a chosen model goes on (#799)", () => {
       replacePaths: ["agents.entries.pip.modelPolicy.allow"],
       entry: "openai/gpt-5.5",
       place: "bot",
-      digest: expect.stringMatching(/^[0-9a-f]{64}$/),
     });
   });
 
@@ -74,18 +74,24 @@ describe("F-042: which list a chosen model goes on (#799)", () => {
     expect(added.place).toBe("gateway");
   });
 
-  it("else, on a config never migrated, the old models map, by one key", () => {
+  it("never the old models map of a config never migrated: the refusal says why instead", () => {
+    // Every write migrates that map from the config before it, unless one of its keys fails the
+    // gateway's own check: a key added there may never take effect, so none is.
     const config = {
       hash: "h",
-      config: { agents: { defaults: { models: { "acme/dev-1": { alias: "dev" } } } } },
+      config: {
+        agents: {
+          defaults: {
+            model: { primary: "openai/gpt-5.5" },
+            models: { "acme/dev-1": { alias: "dev" } },
+          },
+        },
+      },
     };
-    expect(allowAddition(config, "pip", gpt, V10)).toEqual({
-      patch: { agents: { defaults: { models: { "openai/gpt-5.5": {} } } } },
-      replacePaths: [],
-      entry: "openai/gpt-5.5",
-      place: "models",
-      digest: expect.stringMatching(/^[0-9a-f]{64}$/),
-    });
+    for (const version of [V10, V11]) {
+      expect(allowAddition(config, "pip", gpt, version)).toBe("layout");
+      expect(ownModelRefusal(config, "pip", version)).toEqual({ ...gpt, why: "layout" });
+    }
   });
 
   it("never a list where none limits the bot: none, an empty one, or a migrated config's map", () => {
@@ -164,17 +170,17 @@ function merged(base: unknown, patch: unknown): unknown {
   }
   return out;
 }
-/** The config after an addition, and the addition: what its Undo is held to. */
+/** The config after an addition, and the addition: what its Undo takes out. */
 function addTo(config: { hash: string; config: Record<string, unknown> }, ref = gpt) {
   const addition = allowAddition(config, "pip", ref, V11) as AllowAddition;
   const after = {
     hash: "h2",
     config: merged(config.config, addition.patch) as Record<string, unknown>,
   };
-  return { after, undo: { entry: addition.entry, place: addition.place, digest: addition.digest } };
+  return { after, undo: { entry: addition.entry, place: addition.place } };
 }
 
-describe("F-042: Undo takes out that one entry, only while its list is as it left it (#799)", () => {
+describe("F-042: Undo takes out that one entry, from the list it went on (#799)", () => {
   it("the entry, and nothing else, from the list it went on", () => {
     const { after, undo } = addTo(
       cfg({ agents: { defaults: { modelPolicy: { allow: ["acme/dev-1", "acme/dev-2"] } } } }),
@@ -185,21 +191,15 @@ describe("F-042: Undo takes out that one entry, only while its list is as it lef
     });
   });
 
-  it("nothing when it is gone, changed, moved, or the last entry, and says which", () => {
-    const { after, undo } = addTo(
+  it("nothing from a config that doesn't hold it so, and never a list's last entry", () => {
+    const { undo } = addTo(
       cfg({ agents: { defaults: { modelPolicy: { allow: ["acme/dev-1"] } } } }),
     );
     const list = (allow: unknown[], extra: Record<string, unknown> = {}) =>
       cfg({ agents: { defaults: { modelPolicy: { allow } }, ...extra } });
-    // Someone took it out since.
-    expect(allowRemoval(list(["acme/dev-1"]), "pip", undo)).toBe("gone");
-    // Someone added another model since: the list isn't as it left it.
-    expect(allowRemoval(list(["acme/dev-1", "openai/gpt-5.5", "acme/dev-3"]), "pip", undo)).toBe(
-      "changed",
-    );
-    // Someone took it out and put it back since, elsewhere in the list: not this addition's.
-    expect(allowRemoval(list(["openai/gpt-5.5", "acme/dev-1"]), "pip", undo)).toBe("changed");
-    // The bot has a list of its own now, holding it too: never that list, nor the gateway's.
+    // Not there.
+    expect(allowRemoval(list(["acme/dev-1"]), "pip", undo)).toBeNull();
+    // On a list that no longer decides: the bot has one of its own.
     expect(
       allowRemoval(
         list(["acme/dev-1", "openai/gpt-5.5"], {
@@ -208,43 +208,9 @@ describe("F-042: Undo takes out that one entry, only while its list is as it lef
         "pip",
         undo,
       ),
-    ).toBe("moved");
-    expect(allowRemoval(after, "pip", undo)).not.toBeTypeOf("string");
-    // Another list decides now and the entry is already gone from its own: still `moved`, which
-    // says only that its list no longer decides; and with no list deciding at all.
-    expect(
-      allowRemoval(
-        list(["acme/dev-1"], { entries: { pip: { modelPolicy: { allow: ["acme/dev-3"] } } } }),
-        "pip",
-        undo,
-      ),
-    ).toBe("moved");
-    expect(allowRemoval(cfg({}), "pip", undo)).toBe("moved");
-    // An addition goes only on a list with an entry already, and Undo needs the list as it left
-    // it, so taking it out never empties a list; the guard stays for a list read otherwise.
-    const emptied = { ...undo, digest: "" };
-    expect(allowRemoval(list(["openai/gpt-5.5"]), "pip", emptied)).toBe("changed");
-  });
-
-  it("the old models map of a config never migrated: its key, and never its last one", () => {
-    const old = (models: Record<string, unknown>) => ({
-      hash: "h",
-      config: { agents: { defaults: { models } } },
-    });
-    const { after, undo } = addTo(old({ "acme/dev-1": {} }));
-    expect(undo.place).toBe("models");
-    expect(allowRemoval(after, "pip", undo)).toEqual({
-      patch: { agents: { defaults: { models: { "openai/gpt-5.5": null } } } },
-      replacePaths: [],
-    });
-    // The config migrated it to the default list since: another list, so nothing.
-    expect(
-      allowRemoval(
-        cfg({ agents: { defaults: { modelPolicy: { allow: ["acme/dev-1", "openai/gpt-5.5"] } } } }),
-        "pip",
-        undo,
-      ),
-    ).toBe("moved");
+    ).toBeNull();
+    // Its only entry: taking it out would allow every model.
+    expect(allowRemoval(list(["openai/gpt-5.5"]), "pip", undo)).toBeNull();
   });
 });
 
@@ -265,7 +231,7 @@ describe("F-042: a bot whose own model its list refuses (#799)", () => {
     expect(botModelRef(config, "pip")).toEqual(gpt);
     expect(botModelRef(config, "fern")).toEqual(gpt);
     expect(botModelRef(config, "wren")).toEqual({ provider: "ollama", model: "example@q4_k_m" });
-    expect(ownModelRefusal(config, "pip", V11)).toEqual({ ...gpt, full: false });
+    expect(ownModelRefusal(config, "pip", V11)).toEqual({ ...gpt, why: null });
     expect(ownModelRefusal(config, "otto", V11)).toBeNull();
     expect(withoutProfile("openai/gpt-5.5@work")).toBe("openai/gpt-5.5");
     expect(withoutProfile("ollama/example@q4_k_m@home")).toBe("ollama/example@q4_k_m");
@@ -319,7 +285,7 @@ describe("F-042: setting a bot's model puts it on the list that limits the bot (
     expect(accounts().allowed?.status).toBe("undone");
     // Refused again: the bot's own model is off the list.
     expect(accounts().modelsRefused).toEqual([
-      { botId: "otto", provider: "acme", model: "dev-2", full: false },
+      { botId: "otto", provider: "acme", model: "dev-2", why: null },
     ]);
     client.stop();
   });
@@ -335,7 +301,7 @@ describe("F-042: setting a bot's model puts it on the list that limits the bot (
     const before = patches(fake).length;
     await client.undoModelAllowed(shownOf(accounts()));
     expect(patches(fake)).toHaveLength(before);
-    expect(accounts().allowed).toMatchObject({ status: "kept", error: "changed" });
+    expect(accounts().allowed).toMatchObject({ status: "changed" });
     expect(defaults(fake).modelPolicy).toEqual({
       allow: ["acme/dev-1", "acme/dev-2", "acme/dev-3"],
     });
@@ -389,7 +355,7 @@ describe("F-042: setting a bot's model puts it on the list that limits the bot (
     const before = patches(fake).length;
     await client.undoModelAllowed(shownOf(accounts()));
     expect(patches(fake)).toHaveLength(before);
-    expect(accounts().allowed?.status).toBe("kept");
+    expect(accounts().allowed?.status).toBe("changed");
     client.stop();
   });
 
@@ -419,9 +385,9 @@ describe("F-042 F-587: Allow <model>, for a bot whose own model its list refuses
     const { client, accounts } = await accountsClient({ gateway: fake });
     expect(accounts().modelsRefused).toEqual([
       // The default bot runs on the gateway's default model, off the list too.
-      { botId: "main", provider: "acme", model: "dev-1", full: false },
-      { botId: "otto", provider: "acme", model: "dev-1", full: false },
-      { botId: "pip", provider: "acme", model: "dev-1", full: false },
+      { botId: "main", provider: "acme", model: "dev-1", why: null },
+      { botId: "otto", provider: "acme", model: "dev-1", why: null },
+      { botId: "pip", provider: "acme", model: "dev-1", why: null },
     ]);
     await client.allowBotModel("otto", DEV1);
     expect(JSON.parse(patches(fake).at(-1)!.raw)).toEqual({
@@ -470,18 +436,18 @@ describe("F-042: a line and its Undo act only on what they were read from (#799)
     });
   });
 
-  it("Undo after the bot got a list of its own writes nothing, and says another list decides now", async () => {
+  it("Undo after the bot got a list of its own writes nothing, and says the settings changed", async () => {
     const fake = new AccountsGateway();
     limited(fake, ["acme/dev-1"]);
     const { client, accounts } = await accountsClient({ gateway: fake });
     await client.setBotModel("otto", "dev-2", null);
-    expect(accounts().allowed).toMatchObject({ list: "gateway", entry: "acme/dev-2" });
+    expect(accounts().allowed).toMatchObject({ scope: "gateway", entry: "acme/dev-2" });
     entries(fake).otto!.modelPolicy = { allow: ["acme/dev-2", "acme/dev-3"] };
     fake.revision += 1;
     const before = patches(fake).length;
     await client.undoModelAllowed(shownOf(accounts()));
     expect(patches(fake)).toHaveLength(before);
-    expect(accounts().allowed).toMatchObject({ status: "kept", error: "moved" });
+    expect(accounts().allowed).toMatchObject({ status: "changed" });
     expect(defaults(fake).modelPolicy).toEqual({ allow: ["acme/dev-1", "acme/dev-2"] });
     expect(entries(fake).otto!.modelPolicy).toEqual({ allow: ["acme/dev-2", "acme/dev-3"] });
     client.stop();
@@ -511,7 +477,7 @@ describe("F-042: a line and its Undo act only on what they were read from (#799)
     client.stop();
   });
 
-  it("a read that fails after the gateway took the write keeps the line and its Undo", async () => {
+  it("a read that fails after the gateway took the write keeps the line, and a read again gives its Undo", async () => {
     const fake = new AccountsGateway();
     limited(fake, ["acme/dev-1"]);
     const { client, accounts } = await accountsClient({ gateway: fake });
@@ -528,17 +494,23 @@ describe("F-042: a line and its Undo act only on what they were read from (#799)
       return get(params);
     };
     await expect(client.setBotModel("otto", "dev-2", null)).rejects.toThrow(/config\.get/);
-    // The gateway took it: the line says so, and Undo takes it out again.
+    // The gateway took it: the line says so, with no revision to hold an Undo to yet.
     expect(defaults(fake).modelPolicy).toEqual({ allow: ["acme/dev-1", "acme/dev-2"] });
-    expect(accounts().allowed).toMatchObject({ entry: "acme/dev-2", status: "added" });
+    expect(accounts().allowed).toMatchObject({
+      entry: "acme/dev-2",
+      status: "added",
+      revision: null,
+    });
     fake.gateway.handlers["config.get"] = get;
+    // The accounts are read again by themselves: that read's revision is the one Undo is held to.
+    await until(() => accounts().allowed?.revision === `h${fake.revision}`);
     await client.undoModelAllowed(shownOf(accounts()));
     expect(defaults(fake).modelPolicy).toEqual({ allow: ["acme/dev-1"] });
     expect(accounts().allowed?.status).toBe("undone");
     client.stop();
   });
 
-  it("saving the same model again after a failed read keeps the line and its Undo", async () => {
+  it("saving the same model again after a failed read keeps the line, and ends its Undo", async () => {
     const fake = new AccountsGateway();
     limited(fake, ["acme/dev-1"]);
     const { client, accounts } = await accountsClient({ gateway: fake });
@@ -559,13 +531,18 @@ describe("F-042: a line and its Undo act only on what they were read from (#799)
     };
     await expect(client.setBotModel("otto", "dev-2", null)).rejects.toThrow(/config\.get/);
     const first = shownOf(accounts());
+    await until(() => accounts().allowed?.revision !== null);
     // The person saves again: the entry is there already, so nothing is added; the line stays.
     fake.gateway.handlers["config.patch"] = patch;
     await client.setBotModel("otto", "dev-2", "low");
     expect(defaults(fake).modelPolicy).toEqual({ allow: ["acme/dev-1", "acme/dev-2"] });
     expect(shownOf(accounts())).toEqual(first);
+    // That save changed the config since the addition: its Undo writes nothing now.
+    const before = patches(fake).length;
     await client.undoModelAllowed(first);
-    expect(defaults(fake).modelPolicy).toEqual({ allow: ["acme/dev-1"] });
+    expect(patches(fake)).toHaveLength(before);
+    expect(accounts().allowed?.status).toBe("changed");
+    expect(defaults(fake).modelPolicy).toEqual({ allow: ["acme/dev-1", "acme/dev-2"] });
     // Another model saved afterwards, which adds nothing, ends the line.
     await client.setBotModel("otto", "dev-1", null);
     expect(accounts().allowed).toBeNull();
@@ -590,49 +567,49 @@ describe("F-042: a line and its Undo act only on what they were read from (#799)
   });
 });
 
-describe("F-042: a gateway's line and refusals stay with it (#799)", () => {
-  /** An engine on the fake gateway's own answers, to reset in the middle of a write. */
-  function engineOn(
-    fake: AccountsGateway,
-    during?: (method: string) => void,
-    gateway: () => string = () => "gateway-a",
-    now: () => number = () => Date.now(),
-  ) {
-    let state: AccountsState = initialAccountsState;
-    const engine: AccountsEngine = new AccountsEngine({
-      request: async (method, params) => {
-        during?.(method);
-        return fake.gateway.handlers[method]!(params);
-      },
-      readAgain: (read) => read(),
-      get: () => state,
-      update: (change) => {
-        state = change(state);
-      },
-      bots: () => [{ id: "otto", name: "Otto", isDefault: true, avatarUrl: null }],
-      connected: () => true,
-      admin: () => true,
-      serverVersion: () => "2026.11.10",
-      refreshBots: async () => {},
-      gateway: async () => gateway(),
-      gatewayNow: () => gateway(),
-      readStamp: () => ({ gatewayId: "gateway-a", target: 1, connectedAt: 1 }),
-      target: () => 1,
-      createMainTask: async () => {},
-      now,
-      randomId: () => `r${Math.random()}`,
-      log: () => {},
-    });
-    return { engine, state: () => state };
-  }
+/** An engine on the fake gateway's own answers, to reset in the middle of a write. */
+function engineOn(
+  fake: AccountsGateway,
+  during?: (method: string) => void,
+  gateway: () => string = () => "gateway-a",
+  now: () => number = () => Date.now(),
+) {
+  let state: AccountsState = initialAccountsState;
+  const engine: AccountsEngine = new AccountsEngine({
+    request: async (method, params) => {
+      during?.(method);
+      return fake.gateway.handlers[method]!(params);
+    },
+    readAgain: (read) => read(),
+    get: () => state,
+    update: (change) => {
+      state = change(state);
+    },
+    bots: () => [{ id: "otto", name: "Otto", isDefault: true, avatarUrl: null }],
+    connected: () => true,
+    admin: () => true,
+    serverVersion: () => "2026.11.10",
+    refreshBots: async () => {},
+    gateway: async () => gateway(),
+    gatewayNow: () => gateway(),
+    readStamp: () => ({ gatewayId: "gateway-a", target: 1, connectedAt: 1 }),
+    target: () => 1,
+    createMainTask: async () => {},
+    now,
+    randomId: () => `r${Math.random()}`,
+    log: () => {},
+  });
+  return { engine, state: () => state };
+}
 
+describe("F-042: a gateway's line and refusals stay with it (#799)", () => {
   it("a connection to another gateway clears the line and the refusals", async () => {
     const fake = new AccountsGateway();
     limited(fake, ["acme/dev-2", "acme/dev-3"]);
     const { engine, state } = engineOn(fake);
     // The accounts read first: Otto's own model is refused, so there is a refusal to clear.
     await engine.load();
-    expect(state().modelsRefused).toEqual([{ botId: "otto", ...DEV1, full: false }]);
+    expect(state().modelsRefused).toEqual([{ botId: "otto", ...DEV1, why: null }]);
     await engine.allowModel("otto", DEV1);
     expect(state().allowed).toMatchObject({ botId: "otto", status: "added" });
     // Otto moved to a model the list refuses, read again: a line and a refusal both stand.
@@ -640,7 +617,7 @@ describe("F-042: a gateway's line and refusals stay with it (#799)", () => {
     fake.revision += 1;
     await engine.load();
     expect(state().modelsRefused).toEqual([
-      { botId: "otto", provider: "acme", model: "dev-4", full: false },
+      { botId: "otto", provider: "acme", model: "dev-4", why: null },
     ]);
     engine.reset();
     expect(state().allowed).toBeNull();
@@ -712,7 +689,7 @@ describe("F-042: a gateway's line and refusals stay with it (#799)", () => {
     // Once it runs the removal, the next read shows the refusal.
     lagging = false;
     await engine.load();
-    expect(state().modelsRefused).toEqual([{ botId: "otto", ...DEV1, full: false }]);
+    expect(state().modelsRefused).toEqual([{ botId: "otto", ...DEV1, why: null }]);
   });
 
   it("a read of a config the running gateway hasn't applied yet changes no refusal", async () => {
@@ -735,11 +712,11 @@ describe("F-042: a gateway's line and refusals stay with it (#799)", () => {
     let clock = 0;
     const { engine, state } = engineOn(fake, undefined, undefined, () => (clock += 5_000));
     await engine.load();
-    expect(state().modelsRefused).toEqual([{ botId: "otto", ...DEV1, full: false }]);
+    expect(state().modelsRefused).toEqual([{ botId: "otto", ...DEV1, why: null }]);
     await engine.allowModel("otto", DEV1);
     // The line says what the gateway took; the refusal stays until a read shows it applied.
     expect(state().allowed).toMatchObject({ entry: "acme/dev-1", status: "added" });
-    expect(state().modelsRefused).toEqual([{ botId: "otto", ...DEV1, full: false }]);
+    expect(state().modelsRefused).toEqual([{ botId: "otto", ...DEV1, why: null }]);
   });
 });
 
@@ -760,7 +737,7 @@ describe("F-042: Allow, a model choice and a typed id add only what the person c
       botId: "otto",
       provider: "acme",
       model: "dev-3",
-      full: false,
+      why: null,
     });
     client.stop();
   });
@@ -865,7 +842,7 @@ describe("F-042: Allow, a model choice and a typed id add only what the person c
       botId: "otto",
       provider: "acme",
       model: "dev-2",
-      full: false,
+      why: null,
     });
     client.stop();
   });
@@ -899,13 +876,13 @@ describe("F-042: a list read as the gateway reads it (#799)", () => {
     expect(botModelRef(aliased(["acme/dev-1"], "workhorse"), "pip")).toEqual(gpt);
     expect(ownModelRefusal(aliased(["acme/dev-1"], "workhorse"), "pip", V11)).toEqual({
       ...gpt,
-      full: false,
+      why: null,
     });
     // An alias entry for another model: the list is read whole, and it refuses this one.
     expect(ownModelRefusal(aliased(["workhorse"], "acme/dev-1"), "pip", V11)).toEqual({
       provider: "acme",
       model: "dev-1",
-      full: false,
+      why: null,
     });
     // A bare entry the config doesn't alias may be a provider's alias: nothing claimed or written.
     expect(ownModelRefusal(aliased(["fastest"]), "pip", V11)).toBeNull();
@@ -921,5 +898,436 @@ describe("F-042: a list read as the gateway reads it (#799)", () => {
     expect(
       listVerdict(["ollama/example"], { provider: "ollama", model: "example@q4_k_m" }, V11),
     ).toBe("refuses");
+  });
+});
+
+// The confirming read of #910, and the automated review on its head: each case, one test.
+describe("F-042: aliases, as each version resolves them (#799)", () => {
+  const OWN = (models: Record<string, unknown>, primary: string, extra = {}) =>
+    cfg({
+      agents: {
+        defaults: { modelPolicy: { allow: ["acme/dev-1"] }, ...extra },
+        entries: { pip: { model: { primary }, models } },
+      },
+    });
+
+  it("an alias qualified by its model's provider, as an entry and as the bot's model", () => {
+    const config = (allow: string[], primary: string) =>
+      cfg({
+        agents: {
+          defaults: {
+            models: { "openai/gpt-5.5": { alias: "workhorse" } },
+            modelPolicy: { allow },
+          },
+          entries: { pip: { model: { primary } } },
+        },
+      });
+    // `openai/workhorse` on the list allows the model it names: no refusal, no Allow.
+    expect(ownModelRefusal(config(["openai/workhorse"], "openai/gpt-5.5"), "pip", V11)).toBeNull();
+    expect(
+      allowAddition(config(["openai/workhorse"], "openai/gpt-5.5"), "pip", gpt, V10),
+    ).toBeNull();
+    // As the bot's model, profile and all: the model it names is what the list refuses.
+    expect(botModelRef(config(["acme/dev-1"], "OpenAI/workhorse@work"), "pip")).toEqual(gpt);
+    expect(ownModelRefusal(config(["acme/dev-1"], "openai/workhorse"), "pip", V10)).toEqual({
+      ...gpt,
+      why: null,
+    });
+    // Qualified by another provider, it names nothing of that alias: read as written.
+    expect(botModelRef(config(["acme/dev-1"], "acme/workhorse"), "pip")).toEqual({
+      provider: "acme",
+      model: "workhorse",
+    });
+  });
+
+  it("the bot's own aliases, for its model, and for its own list only", () => {
+    // Its own map names its model.
+    expect(botModelRef(OWN({ "acme/dev-9": { alias: "mine" } }, "mine"), "pip")).toEqual({
+      provider: "acme",
+      model: "dev-9",
+    });
+    expect(ownModelRefusal(OWN({ "acme/dev-9": { alias: "mine" } }, "mine"), "pip", V11)).toEqual({
+      provider: "acme",
+      model: "dev-9",
+      why: null,
+    });
+    const mine = { "openai/gpt-5.5": { alias: "mine" } };
+    // Its own list reads its own aliases: `openai/mine` there is gpt-5.5.
+    const own = cfg({
+      agents: {
+        entries: {
+          pip: {
+            model: { primary: "openai/gpt-5.5" },
+            models: mine,
+            modelPolicy: { allow: ["openai/mine"] },
+          },
+        },
+      },
+    });
+    expect(ownModelRefusal(own, "pip", V11)).toBeNull();
+    // The gateway's list doesn't: there it names a model called `mine`.
+    expect(
+      ownModelRefusal(
+        OWN(mine, "openai/gpt-5.5", { modelPolicy: { allow: ["openai/mine"] } }),
+        "pip",
+        V11,
+      ),
+    ).toEqual({ ...gpt, why: null });
+  });
+
+  it("the last row for a model wins, and an empty alias takes it away", () => {
+    const two = {
+      "openai/gpt-5.4": { alias: "workhorse" },
+      "openai/gpt-5.5": { alias: "workhorse" },
+    };
+    const config = (own: Record<string, unknown>) =>
+      cfg({
+        agents: {
+          defaults: { models: two, modelPolicy: { allow: ["acme/dev-1"] } },
+          entries: { pip: { model: { primary: "workhorse" }, models: own } },
+        },
+      });
+    expect(botModelRef(config({}), "pip")).toEqual(gpt);
+    expect(botModelRef(config({ "openai/gpt-5.5": { alias: "" } }), "pip")).toEqual({
+      provider: "openai",
+      model: "gpt-5.4",
+    });
+  });
+
+  it("an exact row of a configured provider passes over aliases; one the app can't place is unknown", () => {
+    const config = (
+      extra: Record<string, unknown>,
+      primary = "openai/gpt-5.5",
+      allow = ["openai/workhorse"],
+    ) =>
+      cfg({
+        ...extra,
+        agents: {
+          defaults: {
+            models: { "openai/gpt-5.5": { alias: "workhorse" } },
+            modelPolicy: { allow },
+          },
+          entries: { pip: { model: { primary } } },
+        },
+      });
+    // `openai/workhorse` is OpenAI's own row here: it names that model, not gpt-5.5.
+    const rows = { models: { providers: { OpenAI: { models: [{ id: "workhorse" }] } } } };
+    expect(ownModelRefusal(config(rows), "pip", V11)).toEqual({ ...gpt, why: null });
+    // A row keyed by a bare name, or an alias with a `/` of its own: the app can't tell.
+    const bare = cfg({
+      agents: {
+        defaults: {
+          models: { "gpt-5.5": { alias: "workhorse" } },
+          modelPolicy: { allow: ["acme/dev-1"] },
+        },
+        entries: { pip: { model: { primary: "openai/workhorse" } } },
+      },
+    });
+    expect(botModelRef(bare, "pip")).toBeNull();
+    expect(ownModelRefusal(bare, "pip", V11)).toBeNull();
+    const slashed = cfg({
+      agents: {
+        defaults: {
+          models: { "openai/gpt-5.5": { alias: "team/fast" } },
+          modelPolicy: { allow: ["acme/dev-1"] },
+        },
+        entries: { pip: { model: { primary: "team/fast" } } },
+      },
+    });
+    expect(botModelRef(slashed, "pip")).toBeNull();
+  });
+
+  it("Allow never writes an entry the gateway reads as another model", () => {
+    // `openai/gpt-6` is an alias of gpt-7 here, so no exact entry names gpt-6.
+    const config = cfg({
+      agents: {
+        defaults: {
+          models: { "openai/gpt-7": { alias: "gpt-6" } },
+          modelPolicy: { allow: ["acme/dev-1"] },
+        },
+        entries: { pip: { model: { primary: "openai/gpt-6" } } },
+      },
+    });
+    expect(botModelRef(config, "pip")).toEqual({ provider: "openai", model: "gpt-7" });
+    const six = { provider: "openai", model: "gpt-6" };
+    expect(allowAddition(config, "pip", six, V11)).toBeNull();
+  });
+
+  it("on 2026.11.10 a prefix matches the model it names whole, too", () => {
+    const ref = { provider: "acme", model: "dev-2" };
+    expect(listVerdict(["acme/dev-2*"], ref, V11)).toBe("allows");
+    expect(listVerdict(["acme/dev-*"], ref, V11)).toBe("allows");
+    // 2026.10.6 reads neither as a wildcard.
+    expect(listVerdict(["acme/dev-2*"], ref, V10)).toBe("refuses");
+  });
+
+  it("Allow names the model an alias resolved to, and writes nothing once the alias names another", async () => {
+    const fake = new AccountsGateway();
+    limited(fake, ["acme/dev-2"]);
+    defaults(fake).models = { "acme/dev-1": { alias: "workhorse" } };
+    (entries(fake).otto!.model as { primary: string }).primary = "acme/workhorse@acme:work";
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    const shown = accounts().modelsRefused.find((each) => each.botId === "otto")!;
+    expect(shown).toEqual({ botId: "otto", ...DEV1, why: null });
+    // With Settings open, another admin points the alias at another model.
+    defaults(fake).models = { "acme/dev-3": { alias: "workhorse" } };
+    fake.revision += 1;
+    await expect(
+      client.allowBotModel("otto", { provider: shown.provider, model: shown.model }),
+    ).rejects.toThrow("The bot's model has changed since this was shown, so nothing was changed.");
+    expect(patches(fake)).toHaveLength(0);
+    // For the model it names now, the entry is that model, never the alias.
+    await client.allowBotModel("otto", { provider: "acme", model: "dev-3" });
+    expect(defaults(fake).modelPolicy).toEqual({ allow: ["acme/dev-2", "acme/dev-3"] });
+    client.stop();
+  });
+});
+
+describe("F-042: Effort, Undo's revision and the old layout (#799)", () => {
+  const stamp = { gatewayId: "gateway-a", target: 1 };
+
+  it("Effort writes the effort alone, for the model it was drawn for, and nothing once that moved", async () => {
+    const fake = new AccountsGateway();
+    limited(fake, ["acme/dev-2"]);
+    const { client } = await accountsClient({ gateway: fake });
+    await client.setBotEffort("otto", DEV1, "high");
+    expect(JSON.parse(patches(fake).at(-1)!.raw)).toEqual({
+      agents: { entries: { otto: { thinkingDefault: "high" } } },
+    });
+    // Another viewer saves dev-2 before this viewer's Effort press arrives.
+    (entries(fake).otto!.model as { primary: string }).primary = "acme/dev-2@acme:work";
+    fake.revision += 1;
+    const before = patches(fake).length;
+    await expect(client.setBotEffort("otto", DEV1, "low")).rejects.toThrow(
+      "The bot's model has changed since this was shown, so nothing was changed.",
+    );
+    expect(patches(fake)).toHaveLength(before);
+    expect(defaults(fake).modelPolicy).toEqual({ allow: ["acme/dev-2"] });
+    expect(
+      parseBridgeCommand({ type: "setBotEffort", botId: "otto", ...DEV1, effort: "high", stamp }),
+    ).toEqual({ type: "setBotEffort", botId: "otto", ...DEV1, effort: "high", stamp });
+    client.stop();
+  });
+
+  it("Undo is bound to the revision after its addition: an identical entry put back by another hand is theirs", async () => {
+    const fake = new AccountsGateway();
+    limited(fake, ["acme/dev-1"]);
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    await client.setBotModel("otto", "dev-2", null);
+    expect(accounts().allowed).toMatchObject({ status: "added", revision: `h${fake.revision}` });
+    // Another admin takes it out and puts it back in the same place: the list reads the same.
+    limited(fake, ["acme/dev-1"]);
+    fake.revision += 1;
+    limited(fake, ["acme/dev-1", "acme/dev-2"]);
+    fake.revision += 1;
+    const before = patches(fake).length;
+    await client.undoModelAllowed(shownOf(accounts()));
+    expect(patches(fake)).toHaveLength(before);
+    expect(accounts().allowed?.status).toBe("changed");
+    expect(defaults(fake).modelPolicy).toEqual({ allow: ["acme/dev-1", "acme/dev-2"] });
+    client.stop();
+  });
+
+  it("a read after the config changed ends Undo before it is pressed; the move case too", async () => {
+    const fake = new AccountsGateway();
+    limited(fake, ["acme/dev-1"]);
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    await client.setBotModel("otto", "dev-2", null);
+    // An admin gives Otto a list of its own and takes the entry off the gateway's, in one edit.
+    entries(fake).otto!.modelPolicy = { allow: ["acme/dev-2"] };
+    defaults(fake).modelPolicy = { allow: ["acme/dev-1"] };
+    fake.revision += 1;
+    await client.refreshAccounts();
+    expect(accounts().allowed?.status).toBe("changed");
+    client.stop();
+  });
+
+  it("the old models layout: the refusal says why, Allow writes nothing, a model choice saves the model alone", async () => {
+    const fake = new AccountsGateway();
+    defaults(fake).models = { "acme/dev-2": {} };
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    expect(accounts().modelsRefused.find((each) => each.botId === "otto")).toEqual({
+      botId: "otto",
+      ...DEV1,
+      why: "layout",
+    });
+    await expect(client.allowBotModel("otto", DEV1)).rejects.toThrow(
+      "This gateway's model list is set up in a way Clawtrate doesn't change, so it wasn't changed.",
+    );
+    expect(patches(fake)).toHaveLength(0);
+    await client.setBotModel("otto", "dev-3", null);
+    expect(JSON.parse(patches(fake).at(-1)!.raw).agents.defaults).toBeUndefined();
+    expect(accounts().allowed).toBeNull();
+    client.stop();
+  });
+
+  it("a configured id past what the bridge carries: refused, with no Allow, by the one rule both use", () => {
+    const long = "x".repeat(MAX_MODEL_ID_CHARS + 1);
+    const config = (model: string) =>
+      cfg({
+        agents: {
+          defaults: { modelPolicy: { allow: ["acme/dev-1"] } },
+          entries: { pip: { model: { primary: `acme/${model}` } } },
+        },
+      });
+    expect(ownModelRefusal(config(long), "pip", V11)).toEqual({
+      provider: "acme",
+      model: long,
+      why: "long",
+    });
+    expect(allowAddition(config(long), "pip", { provider: "acme", model: long }, V11)).toBe("long");
+    const press = (model: string) =>
+      parseBridgeCommand({ type: "allowBotModel", botId: "pip", provider: "acme", model, stamp });
+    expect(() => press(long)).toThrow("invalid model");
+    const fits = "x".repeat(MAX_MODEL_ID_CHARS);
+    expect(ownModelRefusal(config(fits), "pip", V11)).toEqual({
+      provider: "acme",
+      model: fits,
+      why: null,
+    });
+    expect(press(fits)).toMatchObject({ model: fits });
+  });
+});
+
+describe("F-042: lost replies, read again, and the gateway the refusals are from (#799)", () => {
+  it("a patch whose reply is lost: not confirmed, then made, with Undo, once a read shows its entry", async () => {
+    const fake = new AccountsGateway();
+    limited(fake, ["acme/dev-2"]);
+    const patch = fake.gateway.handlers["config.patch"]!;
+    fake.gateway.handlers["config.patch"] = (params) => {
+      patch(params);
+      throw new Error("gateway request timeout for config.patch");
+    };
+    const { engine, state } = engineOn(fake);
+    await engine.load();
+    // Held while it isn't known: the line says so, and offers no Undo.
+    const get = fake.gateway.handlers["config.get"]!;
+    let hold: (() => void) | null = null;
+    fake.gateway.handlers["config.get"] = (params) => {
+      if (state().allowed?.status !== "unconfirmed" || hold) return get(params);
+      return new Promise((resolve) => (hold = () => resolve(get(params))));
+    };
+    await engine.allowModel("otto", DEV1);
+    expect(state().allowed).toMatchObject({ entry: "acme/dev-1", status: "unconfirmed" });
+    await until(() => hold !== null);
+    hold!();
+    await until(() => state().allowed?.status === "added");
+    expect(state().allowed?.revision).toBe(`h${fake.revision}`);
+    fake.gateway.handlers["config.patch"] = patch;
+    await engine.undoAllowed({ botId: "otto", id: state().allowed!.id });
+    expect(defaults(fake).modelPolicy).toEqual({ allow: ["acme/dev-2"] });
+  });
+
+  it("a patch whose reply is lost and that wasn't made: the record goes, and the refusal stays", async () => {
+    const fake = new AccountsGateway();
+    limited(fake, ["acme/dev-2"]);
+    fake.gateway.handlers["config.patch"] = () => {
+      throw new Error("gateway request timeout for config.patch");
+    };
+    const { engine, state } = engineOn(fake);
+    await engine.load();
+    await engine.allowModel("otto", DEV1);
+    await until(() => state().allowed === null);
+    expect(state().modelsRefused).toEqual([{ botId: "otto", ...DEV1, why: null }]);
+  });
+
+  it("an Undo whose reads after it fail a few times is read again until one lands", async () => {
+    const fake = new AccountsGateway();
+    limited(fake, ["acme/dev-1"]);
+    const { engine, state } = engineOn(fake);
+    await engine.load();
+    await engine.allowModel("otto", { provider: "acme", model: "dev-1" }).catch(() => {});
+    // Otto's own model is allowed already: give it one that is refused, allowed by its press.
+    (entries(fake).otto!.model as { primary: string }).primary = "acme/dev-2@acme:work";
+    fake.revision += 1;
+    await engine.load();
+    await engine.allowModel("otto", { provider: "acme", model: "dev-2" });
+    expect(state().allowed?.status).toBe("added");
+    const get = fake.gateway.handlers["config.get"]!;
+    const patch = fake.gateway.handlers["config.patch"]!;
+    let failing = 0;
+    fake.gateway.handlers["config.patch"] = (params) => {
+      const answer = patch(params);
+      // The read after it, and the first read again, fail.
+      failing = 2;
+      return answer;
+    };
+    fake.gateway.handlers["config.get"] = (params) => {
+      if (failing > 0) {
+        failing -= 1;
+        throw new Error("gateway request timeout for config.get");
+      }
+      return get(params);
+    };
+    await engine.undoAllowed({ botId: "otto", id: state().allowed!.id });
+    expect(state().allowed?.status).toBe("undone");
+    await until(() => state().modelsRefused.length > 0, 6000);
+    expect(state().modelsRefused).toEqual([
+      { botId: "otto", provider: "acme", model: "dev-2", why: null },
+    ]);
+  });
+
+  it("an accounts read that began before Allow landed doesn't bring its refusal back", async () => {
+    const fake = new AccountsGateway();
+    limited(fake, ["acme/dev-2"]);
+    const { engine, state } = engineOn(fake);
+    await engine.load();
+    expect(state().modelsRefused).toEqual([{ botId: "otto", ...DEV1, why: null }]);
+    // A read whose config is answered now, and whose other answers come after the press.
+    const get = fake.gateway.handlers["config.get"]!;
+    const views = fake.gateway.handlers["models.authStatus"]!;
+    let release: (() => void) | null = null;
+    let first = true;
+    fake.gateway.handlers["models.authStatus"] = (params) => {
+      if (!first) return views(params);
+      first = false;
+      return new Promise((resolve) => (release = () => resolve(views(params))));
+    };
+    const reading = engine.load();
+    await until(() => release !== null);
+    fake.gateway.handlers["config.get"] = get;
+    await engine.allowModel("otto", DEV1);
+    expect(state().modelsRefused).toEqual([]);
+    release!();
+    await reading;
+    expect(state().modelsRefused).toEqual([]);
+  });
+
+  it("an ordinary read of a config the running gateway hasn't applied keeps the refusals", async () => {
+    const fake = new AccountsGateway();
+    limited(fake, ["acme/dev-2"]);
+    const { engine, state } = engineOn(fake);
+    await engine.load();
+    // Someone saved Otto's model onto the list; the running gateway hasn't applied it yet.
+    limited(fake, ["acme/dev-2", "acme/dev-1"]);
+    fake.revision += 1;
+    const get = fake.gateway.handlers["config.get"]!;
+    fake.gateway.handlers["config.get"] = (params) => ({
+      ...(get(params) as Record<string, unknown>),
+      appliedConfigHash: `r${fake.revision - 1}`,
+    });
+    await engine.load();
+    expect(state().modelsRefused).toEqual([{ botId: "otto", ...DEV1, why: null }]);
+    fake.gateway.handlers["config.get"] = get;
+    await engine.load();
+    expect(state().modelsRefused).toEqual([]);
+  });
+
+  it("another gateway's refusals go once the connection names a new one", async () => {
+    const fake = new AccountsGateway();
+    limited(fake, ["acme/dev-2"]);
+    const { engine, state } = engineOn(fake);
+    await engine.load();
+    expect(state().modelsRefused).toHaveLength(1);
+    // The same gateway naming itself again keeps them.
+    engine.onGateway("gateway-a");
+    expect(state().modelsRefused).toHaveLength(1);
+    limited(fake, ["acme/dev-1"]);
+    fake.config.agents = { ...(fake.config.agents as object) };
+    fake.gateway.handlers["config.get"] = () => {
+      throw new Error("gateway request timeout for config.get");
+    };
+    engine.onGateway("gateway-b");
+    expect(state().modelsRefused).toEqual([]);
   });
 });

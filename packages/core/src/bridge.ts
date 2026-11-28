@@ -18,12 +18,8 @@ import type { CheckoutDiff, FileRead, TaskFileList, WorkspacePage } from "./file
 import type { ChatPictureRead, SentPictureRead } from "./pictures.ts";
 import type { ChatFileRead } from "./chat-files.ts";
 import { MAX_BOT_NAME_CHARS } from "./bot-names.ts";
-import {
-  MAX_MODEL_ID_CHARS,
-  modelIdProblem,
-  type ModelList,
-  type ModelRefresh,
-} from "./accounts.ts";
+import { modelIdProblem, type ModelList, type ModelRefresh } from "./accounts.ts";
+import { allowRefProblem } from "./model-allow.ts";
 import { parseInput, type ComputerFrame, type ComputerInput } from "./computer.ts";
 import type { MachineFacts } from "./machine.ts";
 import { FULL_SCOPES } from "./scopes.ts";
@@ -407,6 +403,18 @@ export type BridgeCommand =
       stamp: GatewayStamp;
     }
   | { type: "removeBotFallbacks"; botId: string; stamp: GatewayStamp }
+  /**
+   * The Effort menu (#799): the bot's effort alone, for the model the menu was drawn for, which
+   * the host checks is still the bot's.
+   */
+  | {
+      type: "setBotEffort";
+      botId: string;
+      provider: string;
+      model: string;
+      effort: string;
+      stamp: GatewayStamp;
+    }
   /**
    * "Allow <model>" (#799): the model the button names, `provider` and `model` as the refusal
    * read them, onto the model list that refuses it, while the bot still runs on it.
@@ -921,16 +929,10 @@ function modelId(value: unknown): string {
 
 /**
  * A model as a gateway's config names it, which may hold what a typed id can't (an `@` of its own,
- * as `example@q4_k_m`): bounded, with no space, control character or `*`.
+ * as `example@q4_k_m`), under the one rule its refusal is read by (`allowRefProblem`, #799).
  */
-function configuredModel(value: unknown): string {
-  if (
-    typeof value !== "string" ||
-    value.length === 0 ||
-    value.length > MAX_MODEL_ID_CHARS ||
-    /[\s*]/.test(value) ||
-    [...value].some((char) => char.charCodeAt(0) < 0x20 || char.charCodeAt(0) === 0x7f)
-  )
+function configuredModel(provider: string, value: unknown): string {
+  if (typeof value !== "string" || allowRefProblem({ provider, model: value }) !== null)
     throw new Error("invalid model");
   return value;
 }
@@ -1401,13 +1403,24 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         botId: botId(command.botId),
         stamp: gatewayStampOf(command.stamp),
       };
-    case "allowBotModel":
+    case "allowBotModel": {
+      const provider = providerId(command.provider);
       return {
         type: "allowBotModel",
         botId: botId(command.botId),
-        provider: providerId(command.provider),
+        provider,
         // As the gateway's config names it: a quantization suffix (`@q4_k_m`) may be its own.
-        model: configuredModel(command.model),
+        model: configuredModel(provider, command.model),
+        stamp: gatewayStampOf(command.stamp),
+      };
+    }
+    case "setBotEffort":
+      return {
+        type: "setBotEffort",
+        botId: botId(command.botId),
+        provider: providerId(command.provider),
+        model: modelId(command.model),
+        effort: id(command.effort, "effort"),
         stamp: gatewayStampOf(command.stamp),
       };
     case "undoModelAllowed":
@@ -2409,6 +2422,13 @@ class ViewerSession implements BridgeSession {
         return client.setBotModel(command.botId, command.model, command.effort, command.stamp);
       case "removeBotFallbacks":
         return client.removeBotFallbacks(command.botId, command.stamp);
+      case "setBotEffort":
+        return client.setBotEffort(
+          command.botId,
+          { provider: command.provider, model: command.model },
+          command.effort,
+          command.stamp,
+        );
       case "allowBotModel":
         return client.allowBotModel(
           command.botId,

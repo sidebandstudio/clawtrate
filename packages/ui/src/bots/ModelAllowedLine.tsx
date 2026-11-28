@@ -25,19 +25,12 @@ export function allowedWords(allowed: NonNullable<AccountsState["allowed"]>, bot
   switch (allowed.status) {
     case "undone":
       return `Took ${model} out of ${list} again.`;
-    case "kept":
-      // Undo wrote nothing, and says exactly why.
-      switch (allowed.error) {
-        case "last":
-          return `Kept ${model} on ${list}: it's the only one left there, and taking it out would allow every model.`;
-        case "moved":
-          // Whether it is still on that list isn't read: only that the list no longer decides.
-          return `The list that received ${model} no longer decides ${botName}'s models, so nothing was changed.`;
-        case "changed":
-          return `Kept ${model} on ${list}: the list has changed since it was added, so nothing was changed.`;
-        default:
-          return `${model} is no longer on ${list}, so nothing was changed.`;
-      }
+    case "unconfirmed":
+      // The write's answer didn't come: whether it was made is read again, never assumed.
+      return `It isn't confirmed yet whether ${model} was added to ${list}.`;
+    case "changed":
+      // Only that the configuration changed is known, not how: Undo is no longer offered.
+      return `Added ${model} to ${list}. The gateway's settings have changed since, so it can't be undone here.`;
     case "failed":
       return `Couldn't take ${model} out of ${list}: ${allowed.error ?? "the gateway refused."}`;
     default:
@@ -45,15 +38,24 @@ export function allowedWords(allowed: NonNullable<AccountsState["allowed"]>, bot
   }
 }
 
-/** The states in which the line offers Undo: not once the gateway has taken the entry out. */
+/**
+ * The states in which the line offers Undo: not once the gateway has taken the entry out, and only
+ * with the revision the addition left, which Undo is held to.
+ */
 const UNDOABLE = new Set(["added", "undoing", "failed"]);
+const undoable = (allowed: NonNullable<AccountsState["allowed"]>) =>
+  UNDOABLE.has(allowed.status) && allowed.revision !== null;
 
 /** Why a bot's tasks can't start on its own model, in one sentence. */
 export const refusedWords = (refused: RefusedBotModel, botName: string) =>
   `${botName} can't start tasks on ${modelWords(refused)}: this gateway's model list doesn't include it.`;
 
-/** Why Clawtrate offers no Allow there: the list is past what it writes back whole. */
-export const FULL_LIST_WORDS = "The list is too long for Clawtrate to change.";
+/** Why Clawtrate offers no Allow for a refusal (`RefusedBotModel.why`), in one plain line. */
+export const NO_ALLOW_WORDS = {
+  full: "The list is too long for Clawtrate to change.",
+  long: "The model's id is longer than Clawtrate carries.",
+  layout: "This gateway's model list is set up in a way Clawtrate doesn't change.",
+} as const;
 
 /**
  * The line for one bot. `reason: false` leaves out the refused sentence where the place it stands
@@ -119,13 +121,13 @@ export function ModelAllowedLine({
     refused && (reason || admin) ? (
       <p className="b-hint" data-testid="model-refused">
         {reason && refusedWords(refused, botName)}
-        {admin && refused.full && (
+        {admin && refused.why !== null && (
           <>
             {reason && " "}
-            {FULL_LIST_WORDS}
+            {NO_ALLOW_WORDS[refused.why]}
           </>
         )}
-        {admin && !refused.full && (
+        {admin && refused.why === null && (
           <>
             {reason && " "}
             <button
@@ -150,7 +152,7 @@ export function ModelAllowedLine({
       <p className="b-hint" role="status" data-testid="model-allowed">
         {allowedWords(allowed, botName)}
         {/* Offered until the gateway shows the entry gone: after a failed Undo too. */}
-        {admin && UNDOABLE.has(allowed.status) && (
+        {admin && undoable(allowed) && (
           <>
             {" · "}
             <button

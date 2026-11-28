@@ -594,7 +594,7 @@ export function fixtureAccounts(now: number, params: AccountParams): AccountsSta
     const binding = locked.bindings.find((b) => b.botId === botId);
     const ref = { provider: binding?.provider ?? "openai", model: binding?.model ?? "gpt-5.5" };
     return params.modellist === "refused"
-      ? { ...locked, modelsRefused: [{ botId, ...ref, full: false }] }
+      ? { ...locked, modelsRefused: [{ botId, ...ref, why: null }] }
       : { ...locked, allowed: allowedLine(botId, ref, now) };
   }
   // The picker arrives after the accounts, when the page calls releasePicker().
@@ -619,8 +619,7 @@ function allowedLine(
     ...ref,
     entry,
     scope: "gateway",
-    list: "gateway",
-    digest: "0".repeat(64),
+    revision: "0".repeat(64),
     status: "added",
     error: null,
     at,
@@ -1677,6 +1676,21 @@ export function accountCommand(
       }
       return Promise.resolve();
     }
+    case "setBotEffort": {
+      // As the engine does: only for the model the menu was drawn for, and only the effort.
+      const binding = accounts().bindings.find((b) => b.botId === command.botId);
+      if (binding?.provider !== command.provider || binding.model !== command.model)
+        return Promise.reject(
+          new Error("The bot's model has changed since this was shown, so nothing was changed."),
+        );
+      put((a) => ({
+        ...a,
+        bindings: a.bindings.map((b) =>
+          b.botId === command.botId ? { ...b, effort: command.effort } : b,
+        ),
+      }));
+      return Promise.resolve();
+    }
     case "allowBotModel": {
       const refused = accounts().modelsRefused.find((each) => each.botId === command.botId);
       // As the engine does: only for the model the button named.
@@ -1711,7 +1725,7 @@ export function accountCommand(
           ...a,
           modelsRefused: [
             ...a.modelsRefused.filter((each) => each.botId !== allowed.botId),
-            { botId: allowed.botId, provider: allowed.provider, model: allowed.model, full: false },
+            { botId: allowed.botId, provider: allowed.provider, model: allowed.model, why: null },
           ],
           allowed: { ...allowed, status: "undone", at: Date.now() },
         }));

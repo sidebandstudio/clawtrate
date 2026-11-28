@@ -1349,7 +1349,7 @@ const refusedBotModel = object<RefusedBotModel>()({
   botId: ID,
   provider: ID,
   model: ID,
-  full: FLAG,
+  why: ENUM,
 });
 const modelAllowed = object<ModelAllowed>()({
   id: ID,
@@ -1359,8 +1359,7 @@ const modelAllowed = object<ModelAllowed>()({
   model: ID,
   entry: ID,
   scope: ENUM,
-  list: ENUM,
-  digest: ID,
+  revision: ID,
   status: ENUM,
   error: text(MAX_MESSAGE_LINE_CHARS),
   at: NUMBER,

@@ -1,10 +1,17 @@
 // A bot's model and the model list that limits it (#799), in Otto's settings: the line after
 // Clawtrate put Otto's model on the list, with Undo, and the line for a bot whose own model the
 // list refuses, with "Allow gpt-5.5" for a connection with admin access. Every name is invented.
-import { test } from "@playwright/test";
+import { test, type Page } from "@playwright/test";
 import { contextFor, expect, openFixture, OTTO_DISK, settle, SIZES, THEMES } from "./fixture.ts";
 
 const SETTINGS = `scene=main&${OTTO_DISK}&panel=open&tab=settings&access=admin&lock=bound`;
+
+const sent = (page: Page) =>
+  page.evaluate(() =>
+    (
+      window as unknown as { clawtrateFixture: { sent: Array<Record<string, unknown>> } }
+    ).clawtrateFixture.sent.map((each) => ({ ...each })),
+  );
 
 const SCENES = [
   { name: "model-allowed-line", query: `${SETTINGS}&modellist=added` },
@@ -74,6 +81,27 @@ test.describe("the model list's line", () => {
     await expect(page.getByTestId("bot-settings").getByTestId("model-allowed")).toHaveText(
       "Added OpenAI's gpt-5.5 to the models this gateway allows. · Undo Couldn't undo it: The gateway this screen showed is no longer connected.",
     );
+  });
+
+  test("F-042 #799: Effort sends the effort alone, for the model the menu was drawn for", async ({
+    page,
+  }) => {
+    await openFixture(page, SETTINGS);
+    const effort = page.getByTestId("bot-settings").getByTestId("effort-select");
+    await effort.click();
+    await page.getByRole("menuitemradio", { name: "High" }).click();
+    await expect
+      .poll(async () => (await sent(page)).filter((each) => each.type === "setBotEffort"))
+      .toEqual([
+        expect.objectContaining({
+          botId: "otto",
+          provider: "openai",
+          model: "gpt-5.5",
+          effort: "high",
+        }),
+      ]);
+    // Never as a model choice, which the host would read as one to put on a list.
+    expect((await sent(page)).filter((each) => each.type === "setBotModel")).toEqual([]);
   });
 
   test("F-042 #799: without admin access, the reason and no button", async ({ page }) => {

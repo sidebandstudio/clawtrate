@@ -602,14 +602,18 @@ export type RefusedBotModel = {
   botId: string;
   provider: string;
   model: string;
-  /** The list is past the entries Clawtrate writes back whole: it can't offer to change it. */
-  full: boolean;
+  /**
+   * Why Clawtrate offers no Allow for it, or null when it does: `full`, the list is past the
+   * entries it writes back whole; `long`, the model id is past what it carries; `layout`, the
+   * list is the old `agents.defaults.models` of a config never migrated, which it doesn't change.
+   */
+  why: "full" | "long" | "layout" | null;
 };
 
 /**
  * A model Clawtrate put on the model list that governs a bot (#799), in the same write as the
  * model itself or by "Allow <model>": the line that says so, and its Undo, which takes that one
- * entry out again while it is still there.
+ * entry out again while the config is as the addition left it.
  */
 export type ModelAllowed = {
   /** This addition's own id: an Undo sent for another addition, even of the same entry, does nothing. */
@@ -621,22 +625,22 @@ export type ModelAllowed = {
   model: string;
   /** The exact entry written, `<provider>/<model>`. */
   entry: string;
-  /** `bot`: the bot's own list; `gateway`: the gateway's default list (or its old model map). */
+  /** The list it went on, which Undo takes it out of: the bot's own, or the gateway's default. */
   scope: "bot" | "gateway";
   /**
-   * The very list the entry went on: the bot's own, the gateway's default, or the old
-   * `agents.defaults.models` of a config never migrated. Undo takes it out of that list only.
+   * The config revision (`config.get`'s `hash`) read right after the addition, and what its Undo
+   * is held to: once the config has changed since, by anyone, Undo is no longer offered. Null
+   * until a read shows the addition made.
    */
-  list: "bot" | "gateway" | "models";
-  /** The list as this addition left it, as a digest: Undo needs to find it unchanged. */
-  digest: string;
+  revision: string | null;
   /**
-   * `added`: written. `undoing`: Undo under way. `undone`: taken out. `kept`: Undo wrote nothing,
-   * `error` saying why: `moved` (another list now governs the bot), `gone` (its list no longer
-   * holds the entry), `changed` (its list changed since, so the entry may be someone else's) or
-   * `last` (its only entry). `failed`: Undo's write failed, with `error`; Undo stays offered.
+   * `unconfirmed`: sent, and the gateway's answer, or the read after it, didn't come, so whether it
+   * was made isn't known yet; a read that shows the entry there, where it wasn't, makes it `added`.
+   * `added`: made. `undoing`: Undo under way. `undone`: taken out. `changed`: the config has changed
+   * since the addition, so Undo isn't offered. `failed`: Undo's write failed, with `error`; Undo
+   * stays offered.
    */
-  status: "added" | "undoing" | "undone" | "kept" | "failed";
+  status: "unconfirmed" | "added" | "undoing" | "undone" | "changed" | "failed";
   error: string | null;
   at: number;
 };

@@ -7412,6 +7412,21 @@ export class ClawtrateClient {
   }
 
   /**
+   * The Effort menu (#799): the bot's effort alone, for the model the menu was drawn for
+   * (`shown`), and nothing if the bot's model has moved. With `stamp`, as for `changeBotAccount`.
+   */
+  async setBotEffort(
+    botId: string,
+    shown: { provider: string; model: string },
+    effort: string,
+    stamp?: GatewayStamp,
+  ): Promise<void> {
+    if (stamp === undefined) return this.accounts.setEffort(botId, shown, effort);
+    await this.requireSameGateway(stamp);
+    return this.accounts.setEffort(botId, shown, effort, this.sameConnection(stamp));
+  }
+
+  /**
    * "Allow <model>" (#799): the model the button names (`shown`) onto the model list that refuses
    * it, while the bot still runs on it. With `stamp`, as for `changeBotAccount`.
    */

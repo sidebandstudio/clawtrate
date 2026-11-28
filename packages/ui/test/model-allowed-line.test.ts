@@ -20,8 +20,7 @@ const added: ModelAllowed = {
   model: "gpt-5.5",
   entry: "openai/gpt-5.5",
   scope: "gateway",
-  list: "gateway",
-  digest: "d",
+  revision: "h2",
   status: "added",
   error: null,
   at: 0,
@@ -31,7 +30,7 @@ const REFUSED: RefusedBotModel = {
   botId: "pip",
   provider: "openai",
   model: "gpt-5.5",
-  full: false,
+  why: null,
 };
 
 describe("F-042 F-587: the model list's line (#799)", () => {
@@ -45,17 +44,13 @@ describe("F-042 F-587: the model list's line (#799)", () => {
     expect(allowedWords({ ...added, status: "undone" }, "Pip")).toBe(
       "Took OpenAI's gpt-5.5 out of the models this gateway allows again.",
     );
-    expect(allowedWords({ ...added, status: "kept", error: "gone" }, "Pip")).toBe(
-      "OpenAI's gpt-5.5 is no longer on the models this gateway allows, so nothing was changed.",
+    // The config changed since, by anyone: only that is said, and nothing about the list.
+    expect(allowedWords({ ...added, status: "changed" }, "Pip")).toBe(
+      "Added OpenAI's gpt-5.5 to the models this gateway allows. The gateway's settings have changed since, so it can't be undone here.",
     );
-    expect(allowedWords({ ...added, status: "kept", error: "moved" }, "Pip")).toBe(
-      "The list that received OpenAI's gpt-5.5 no longer decides Pip's models, so nothing was changed.",
-    );
-    expect(allowedWords({ ...added, status: "kept", error: "changed" }, "Pip")).toBe(
-      "Kept OpenAI's gpt-5.5 on the models this gateway allows: the list has changed since it was added, so nothing was changed.",
-    );
-    expect(allowedWords({ ...added, status: "kept", error: "last" }, "Pip")).toBe(
-      "Kept OpenAI's gpt-5.5 on the models this gateway allows: it's the only one left there, and taking it out would allow every model.",
+    // Its answer didn't come: never "nothing changed".
+    expect(allowedWords({ ...added, status: "unconfirmed", revision: null }, "Pip")).toBe(
+      "It isn't confirmed yet whether OpenAI's gpt-5.5 was added to the models this gateway allows.",
     );
     expect(allowedWords({ ...added, status: "failed", error: "config changed" }, "Pip")).toBe(
       "Couldn't take OpenAI's gpt-5.5 out of the models this gateway allows: config changed",
@@ -63,7 +58,7 @@ describe("F-042 F-587: the model list's line (#799)", () => {
   });
 
   it("says why a bot's tasks can't start on its own model", () => {
-    expect(refusedWords({ ...REFUSED, full: false }, "Pip")).toBe(
+    expect(refusedWords(REFUSED, "Pip")).toBe(
       "Pip can't start tasks on OpenAI's gpt-5.5: this gateway's model list doesn't include it.",
     );
   });
@@ -108,18 +103,24 @@ describe("F-042 #799: the line's Undo", () => {
     expect(words(drawn(added, true, [now]))).toBe(
       "Pip can't start tasks on OpenAI's gpt-6: this gateway's model list doesn't include it. Allow gpt-6 Added OpenAI's gpt-5.5 to the models this gateway allows. · Undo",
     );
-    // Undo kept it, and the bot's model is refused: the refusal shows too.
-    expect(words(drawn({ ...added, status: "kept", error: "moved" }, true, [REFUSED]))).toContain(
+    // The settings changed since, and the bot's model is refused: the refusal shows too.
+    expect(words(drawn({ ...added, status: "changed" }, true, [REFUSED]))).toContain(
       "Pip can't start tasks on OpenAI's gpt-5.5",
     );
   });
 
-  it("a list too long for Clawtrate to change offers no Allow, and says why", () => {
-    const markup = drawn(null, true, [{ ...REFUSED, full: true }]);
-    expect(words(markup)).toBe(
-      "Pip can't start tasks on OpenAI's gpt-5.5: this gateway's model list doesn't include it. The list is too long for Clawtrate to change.",
-    );
-    expect(markup).not.toContain("<button");
+  it("a list Clawtrate doesn't change offers no Allow, and says why in one line", () => {
+    const reason =
+      "Pip can't start tasks on OpenAI's gpt-5.5: this gateway's model list doesn't include it.";
+    for (const [why, said] of [
+      ["full", "The list is too long for Clawtrate to change."],
+      ["long", "The model's id is longer than Clawtrate carries."],
+      ["layout", "This gateway's model list is set up in a way Clawtrate doesn't change."],
+    ] as const) {
+      const markup = drawn(null, true, [{ ...REFUSED, why }]);
+      expect(words(markup)).toBe(`${reason} ${said}`);
+      expect(markup).not.toContain("<button");
+    }
   });
 
   it("an addition made on another gateway is neither drawn nor offered", () => {
@@ -132,8 +133,10 @@ describe("F-042 #799: the line's Undo", () => {
       expect(drawn({ ...added, status, error: status === "failed" ? "timeout" : null })).toContain(
         ">Undo</button>",
       );
-    for (const status of ["undone", "kept"] as const)
+    for (const status of ["undone", "changed", "unconfirmed"] as const)
       expect(drawn({ ...added, status })).not.toContain(">Undo</button>");
+    // Not before a read has given it the revision it is held to.
+    expect(drawn({ ...added, revision: null })).not.toContain(">Undo</button>");
     // Never below admin access.
     expect(drawn(added, false)).not.toContain(">Undo</button>");
   });

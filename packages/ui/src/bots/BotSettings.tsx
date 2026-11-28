@@ -529,6 +529,25 @@ export function BotSettings({
         );
       }
     };
+    // The effort alone, for the model this menu was drawn for: the host writes nothing if the
+    // bot's model has moved since (#799).
+    const saveEffort = async (drawn: { provider: string; model: string }, nextEffort: string) => {
+      setError(null);
+      try {
+        await bridge.invoke({
+          type: "setBotEffort",
+          botId: bot.id,
+          ...drawn,
+          effort: nextEffort,
+          stamp: await screenStamp(bridge, shownOn),
+        });
+        announce("Effort saved");
+      } catch (failure) {
+        setError(
+          `Couldn't save the effort: ${failure instanceof Error ? failure.message : String(failure)}`,
+        );
+      }
+    };
     return (
       <div ref={rootRef} className="b-tab" data-testid="bot-settings">
         <h3 className="b-tabgroup">Model</h3>
@@ -587,7 +606,7 @@ export function BotSettings({
                   }
                   void saveModel(next, effort);
                 }}
-                onEffort={(effort) => void saveModel(model, effort)}
+                onEffort={(effort) => void saveEffort({ provider, model }, effort)}
               />
             </div>
             <p className="b-hint" id="b-model-line">
