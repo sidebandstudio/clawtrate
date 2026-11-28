@@ -506,7 +506,9 @@ export function openSystemSettings() {
 
 /** Whether an app runs on the device now, from the system's own list of the apps it launched. */
 export function running(bundleId: string): boolean {
-  return simctl("spawn", env.device, "launchctl", "list").includes(`UIKitApplication:${bundleId}`);
+  return simctlRead(["spawn", env.device, "launchctl", "list"]).includes(
+    `UIKitApplication:${bundleId}`,
+  );
 }
 
 /** Delete the app and install it again: iOS removes its data with it, not its Keychain items. */
@@ -561,7 +563,7 @@ export function infoPlist(key: string): string {
  * once one newer than `after` exists. iOS writes it as the app leaves the front.
  */
 export async function switcherSnapshot(after: number) {
-  const container = simctl("get_app_container", env.device, env.bundle, "data").trim();
+  const container = simctlRead(["get_app_container", env.device, env.bundle, "data"]).trim();
   const root = join(container, "Library/SplashBoard/Snapshots");
   const newest = () => {
     const found: Array<{ path: string; time: number }> = [];
@@ -1253,7 +1255,7 @@ export async function screenText(): Promise<string> {
 
 /** How many of the app's own data files hold each needle, as UTF-8 or UTF-16. */
 export function containerHits(needles: string[]): number[] {
-  const root = simctl("get_app_container", env.device, env.bundle, "data").trim();
+  const root = simctlRead(["get_app_container", env.device, env.bundle, "data"]).trim();
   const hits = needles.map(() => 0);
   const visit = (dir: string) => {
     let entries: Dirent[];
@@ -1280,7 +1282,7 @@ export function containerHits(needles: string[]): number[] {
 
 /** The folders the app's share step holds in its cache now (`src/host/share.ts`), by name. */
 export function sharedFolders(): string[] {
-  const data = simctl("get_app_container", env.device, env.bundle, "data").trim();
+  const data = simctlRead(["get_app_container", env.device, env.bundle, "data"]).trim();
   try {
     return readdirSync(join(data, "Library", "Caches", "clawtrate-share"));
   } catch {
