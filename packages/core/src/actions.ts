@@ -11,6 +11,7 @@
 // `action-words.ts`.
 
 import { T3_CODE_TOOLS } from "./cards.ts";
+import { mcpAppOf } from "./mapping.ts";
 import {
   FORMS,
   LABELS,
@@ -641,6 +642,8 @@ export function withPayload(call: ActionCall, ctx: ReadingContext = {}): ActionC
     value && kindOf(call, ctx).kind === "computer" ? { result: value } : value,
   );
   if (!parsed) return call;
+  // Only the gateway's details mark an MCP App, never what the tool wrote.
+  delete parsed.mcpApp;
   return { ...call, details: { ...parsed, ...(call.details ?? {}) } };
 }
 
@@ -2635,6 +2638,8 @@ export function projectDetails(details: unknown): Rec | null {
     kept.diffStat = diffStat(d);
     kept.diff = d.diff.slice(0, 600);
   }
+  const app = mcpAppOf(d);
+  if (app) kept.mcpApp = app;
   if (Array.isArray(d.results))
     kept.results = d.results.map((r) => {
       const each = rec(r);
@@ -2879,6 +2884,8 @@ export function readableOf(given: ActionCall, ctx: ReadingContext = EMPTY_CTX): 
       // The gateway's own English title for the call, shown as sent (8.3, point 5).
       if (kind === "tool") add(LABELS.gatewayCallsIt, call.gatewayTitle);
   }
+  const app = rec(d.mcpApp);
+  if (app) label = LABELS.appFrom(str(app.serverName));
   const received = result || (open ? (call.partial ?? "") : (call.text ?? ""));
   const text =
     ctx.quiet && kind === "command" && call.name !== "code_execution"

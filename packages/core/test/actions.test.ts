@@ -1933,3 +1933,26 @@ describe("one account of what a run draws against what the gateway reported (7.7
     );
   });
 });
+
+describe("F-615 an MCP App result's card", () => {
+  const app = { serverName: "coder", toolName: "show_board", viewId: "mcp-app-1" };
+  const identity = { mcpServer: "coder", mcpTool: "show_board" };
+
+  it('labels the result "An app from <server>" and keeps its text', () => {
+    const view = readableOf(
+      call(
+        "coder__show_board",
+        {},
+        { text: '{"threads":0}', details: { ...identity, mcpApp: app } },
+      ),
+    );
+    expect(view.block).toMatchObject({ label: "An app from coder", text: '{"threads":0}' });
+    expect(view.rows).toContainEqual({ label: "Server", value: "coder" });
+  });
+
+  it("never takes the mark from what the tool wrote, on a card that reads its text", () => {
+    const text = JSON.stringify({ mcpAppPreview: { mcpApp: app } });
+    const view = readableOf(call("show_board", {}, { text }));
+    expect(view.block?.label).toBe("Result");
+  });
+});

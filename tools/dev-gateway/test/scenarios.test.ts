@@ -379,7 +379,14 @@ describe("the stand-in coding agent", () => {
     const tools = await agent.handle({ id: 1, method: "tools/list" });
     expect(
       ((tools!.result as { tools: { name: string }[] }).tools ?? []).map((t) => t.name),
-    ).toEqual(["send_message", "run_checks", "slow_task", "long_output", "received_notifications"]);
+    ).toEqual([
+      "send_message",
+      "run_checks",
+      "slow_task",
+      "long_output",
+      "received_notifications",
+      "show_board",
+    ]);
     const sent = await agent.handle({
       id: 2,
       method: "tools/call",

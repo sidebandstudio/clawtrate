@@ -274,7 +274,7 @@ export const MAX_ATTEMPT_ERROR_COUNT = 5;
 export const MAX_HISTORY_ITEMS = 200;
 /** As many as the page holds: a run of many actions keeps every block the page can, in one item. */
 /** The facts a history block keeps of its result's details (`ToolResult.facts`). */
-export const MAX_TOOL_FACTS_CHARS = 160;
+export const MAX_TOOL_FACTS_CHARS = 512;
 export const MAX_BLOCKS_PER_ITEM = 300;
 export const MAX_HISTORY_BLOCKS = 300;
 /** Pictures a bot's turn hands over, and across a task's history page (`ChatPicture`). */
@@ -630,7 +630,7 @@ export const APPROVAL: Bound = flagged<ApprovalCard>()({
 const toolResult = object<ToolResult>()({
   isError: FLAG,
   text: text(MAX_ITEM_TOOL_CHARS),
-  // Five small facts: an exit code, three flags and two line counts.
+  // An exit code, three flags, two line counts and an MCP App's server, tool and view (`mcpAppOf`).
   facts: json(MAX_TOOL_FACTS_CHARS),
   clipped: FLAG,
 });

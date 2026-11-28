@@ -12,6 +12,9 @@ import {
   type EngineContext,
   type TaskActivity,
 } from "../src/runs.ts";
+import { projectDetails } from "../src/actions.ts";
+import { mapHistory, MAX_MCP_APP_NAME_CHARS } from "../src/mapping.ts";
+import { MAX_TOOL_FACTS_CHARS } from "../src/state-bounds.ts";
 
 const KEY = "agent:otto:task";
 let raw: RawTable;
@@ -327,5 +330,89 @@ describe("bounded display text", () => {
       executionSettled: true,
     });
     expect(activity.runs[0]!.error!.message.length).toBeLessThanOrEqual(MAX_STEP_TEXT);
+  });
+});
+
+describe("F-615 a result the gateway marks as an MCP App", () => {
+  const app = (more: Record<string, unknown> = {}) => ({
+    viewId: "mcp-app-1",
+    serverName: "coder",
+    toolName: "show_board",
+    uiResourceUri: "ui://coder/board",
+    toolCallId: "call_1",
+    originSessionKey: KEY,
+    ...more,
+  });
+  const details = (mcpApp = app()) => ({
+    mcpServer: "coder",
+    mcpTool: "show_board",
+    mcpAppPreview: { kind: "canvas", view: { id: mcpApp.viewId }, mcpApp },
+  });
+  const kept = { serverName: "coder", toolName: "show_board", viewId: "mcp-app-1" };
+
+  it("keeps the app's server, tool and view from the live stream", () => {
+    let activity = agent(emptyActivity, "tool", {
+      phase: "start",
+      name: "coder__show_board",
+      toolCallId: "call_1",
+      args: {},
+    });
+    activity = agent(activity, "tool", {
+      phase: "result",
+      name: "coder__show_board",
+      toolCallId: "call_1",
+      result: { content: [{ type: "text", text: '{"threads":0}' }], details: details() },
+    });
+    expect(activity.runs[0]!.steps[0]!.details?.mcpApp).toEqual(kept);
+  });
+
+  it("keeps the same from history, on the step and on the history block", () => {
+    const rows = [
+      {
+        role: "user",
+        content: "show the coding board",
+        __openclaw: { id: "u1", seq: 1, runId: "r" },
+      },
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_1", name: "coder__show_board", arguments: {} }],
+        __openclaw: { id: "a1", seq: 2, runId: "r" },
+      },
+      {
+        role: "toolResult",
+        toolCallId: "call_1",
+        toolName: "coder__show_board",
+        content: [{ type: "text", text: '{"threads":0}' }],
+        details: details(),
+        __openclaw: { id: "t1", seq: 3, runId: "r" },
+      },
+    ];
+    const runs = runsFromHistory(rows, null, ctx());
+    expect(runs[0]!.steps.find((step) => step.kind === "tool")?.details?.mcpApp).toEqual(kept);
+    const block = mapHistory(rows)
+      .flatMap((item) => item.blocks)
+      .find((each) => each.kind === "tool-call");
+    expect(block?.kind === "tool-call" && block.result?.facts?.mcpApp).toEqual(kept);
+  });
+
+  it("cuts the names to their bound and leaves out a view id past its own", () => {
+    const long = app({
+      serverName: "s".repeat(500),
+      toolName: "t".repeat(500),
+      viewId: "v".repeat(200),
+    });
+    const fromHistory = mapHistory([
+      { role: "assistant", content: [{ type: "toolCall", id: "c", name: "x", arguments: {} }] },
+      { role: "toolResult", toolCallId: "c", content: "{}", details: details(long) },
+    ])[0]!.blocks[0]!;
+    const facts = fromHistory.kind === "tool-call" ? fromHistory.result?.facts : null;
+    const step = projectDetails(details(long));
+    for (const each of [facts, step]) {
+      expect(each?.mcpApp).toEqual({
+        serverName: "s".repeat(MAX_MCP_APP_NAME_CHARS - 2),
+        toolName: "t".repeat(MAX_MCP_APP_NAME_CHARS - 2),
+      });
+    }
+    expect(JSON.stringify(facts).length).toBeLessThanOrEqual(MAX_TOOL_FACTS_CHARS);
   });
 });

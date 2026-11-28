@@ -23,6 +23,7 @@ import {
 import type { TSchema } from "typebox";
 import { Value } from "typebox/value";
 import {
+  BOARD_URI,
   CODING_AGENT_SERVER,
   SEND_MESSAGE_TEXT,
   THREAD_URL_BASE,
@@ -2666,6 +2667,55 @@ export const SCENARIO_CHECKS: ScenarioCheck[] = [
       );
       view.expectCalls([sendMessageCall("#mcp", "Add a dark mode toggle to the settings page.")]);
       view.expectEnd("final", `The coding agent picked it up: ${String(structured.url)}`);
+    },
+  },
+  {
+    name: "an MCP App call: its result names the app, live and in history",
+    covers: ["#mcp-app"],
+    run: async (h) => {
+      const view = await h.run("plain", await h.session("main", "mcp-app"), "#mcp-app");
+      const name = `${CODING_AGENT_SERVER}__show_board`;
+      let viewId: unknown;
+      view.expectCalls([
+        {
+          name,
+          args: {},
+          isError: false,
+          content: (texts, where) =>
+            expect(
+              texts.some((t) => t.includes('"threads"')),
+              `${where}: ${texts.join(" | ")}`,
+            ),
+          details: (details: JsonRecord | undefined, where: string) => {
+            const app = rec(rec(details?.mcpAppPreview).mcpApp);
+            same(
+              [
+                details?.mcpServer,
+                details?.mcpTool,
+                app.serverName,
+                app.toolName,
+                app.uiResourceUri,
+              ],
+              [CODING_AGENT_SERVER, "show_board", CODING_AGENT_SERVER, "show_board", BOARD_URI],
+              `${where}: the app`,
+            );
+            viewId = app.viewId;
+            expect(typeof viewId === "string" && viewId !== "", `${where}: the app's view id`);
+          },
+          title: "Coder Show Board",
+        },
+      ]);
+      const history = await h
+        .op("plain")
+        .request<{ messages: JsonRecord[] }>("chat.history", { sessionKey: view.sessionKey });
+      const row = history.messages.find((m) => m.role === "toolResult");
+      const kept = rec(rec(rec(row?.details).mcpAppPreview).mcpApp);
+      same(
+        [kept.serverName, kept.toolName, kept.viewId],
+        [CODING_AGENT_SERVER, "show_board", viewId],
+        "history's app",
+      );
+      view.expectEnd("final", "Here is the coding board.");
     },
   },
   {
