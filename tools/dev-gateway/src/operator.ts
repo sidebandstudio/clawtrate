@@ -7,7 +7,9 @@
 // requires pairing even on loopback (`autoApproveLocal: false`), so the first
 // connect is refused with PAIRING_REQUIRED; `approvePairing` approves exactly
 // that request id, through the tool's guarded runner, and the client's own
-// retry then connects with the scopes asked for.
+// retry then connects with the scopes asked for. An approve call that gave up
+// waiting on the gateway doesn't say whether it approved: the next connect does.
+// Only ids the gateway gives this client's own connects are approved.
 
 import {
   randomUUID,
@@ -29,12 +31,64 @@ export type OperatorOptions = {
   caps: string[];
   /** Shown in the gateway's device list. Starts with "Clawtrate" like every client of ours. */
   displayName: string;
-  /** Approve one pairing request id on this instance. */
-  approvePairing: (requestId: string) => Promise<void>;
+  /**
+   * Approve one pairing request id on this instance, the CLI given `timeoutMs` for each of its
+   * gateway calls. `retry` says an earlier call for this request gave up. A refusal throws.
+   */
+  approvePairing: (
+    requestId: string,
+    call: { timeoutMs: number; retry: boolean },
+  ) => Promise<Approval>;
   timeoutMs?: number;
   /** Each request's limit when it names none (60 s by default). */
   requestTimeoutMs?: number;
+  /** The time the connect's limit and its pauses are measured in; the real one by default. */
+  clock?: Clock;
 };
+
+/** A clock, a sleep and a timer that can be cancelled, handed in so the tests drive time. */
+export type Clock = {
+  now: () => number;
+  sleep: (ms: number) => Promise<void>;
+  /** Runs `fire` after `ms`; the function it returns cancels it. */
+  after: (ms: number, fire: () => void) => () => void;
+};
+export const realClock: Clock = {
+  now: () => Date.now(),
+  sleep: (ms) => new Promise((resolve) => setTimeout(resolve, ms)),
+  after: (ms, fire) => {
+    const timer = setTimeout(fire, ms);
+    return () => clearTimeout(timer);
+  },
+};
+
+/** OpenClaw's CLI's own limit on a gateway call. */
+export const CLI_DEFAULT_MS = 10_000;
+/** The longest one approve call's gateway calls each wait. */
+export const APPROVE_CALL_MAX_MS = 60_000;
+/** An approve call given less than this is not made again: there is no time left for it. */
+export const APPROVE_RETRY_MIN_MS = 3_000;
+/** The time allowed for the CLI's own start-up, which its `--timeout` doesn't count. */
+export const CLI_START_MS = 3_000;
+
+/**
+ * What an approve call did. Not approved, with what it printed, when OpenClaw's CLI gave up waiting
+ * on the gateway, which doesn't say whether the gateway approved (#907).
+ */
+export type Approval = { approved: true } | { approved: false; output: string };
+
+/** The pause after an approve call that gave up, so a CLI that fails at once doesn't spin. */
+export const GIVE_UP_PAUSE_MS = 1_000;
+
+/** An approval that never settled: how long it waited, how many calls it made, and the last one's words. */
+export function unsettledApproval(
+  what: string,
+  waitedMs: number,
+  calls: number,
+  output: string,
+): string {
+  return `${what}: not settled after ${Math.round(waitedMs / 1000)} s and ${calls} approve call${calls === 1 ? "" : "s"}; the last printed:\n${output.trim()}`;
+}
 
 type JsonRecord = Record<string, unknown>;
 const asRecord = (value: unknown): JsonRecord =>
@@ -83,6 +137,12 @@ export class OperatorSession {
    * Connect, approving this device's own pairing request, and resolve once
    * hello is received. The client stops retrying after PAIRING_REQUIRED, so
    * once the request is approved a new client connects with the same key.
+   * After an approve call that gave up, and a short pause, that connect says
+   * whether the gateway approved. A connect refused again names the request to
+   * approve: the same id while it is pending (the gateway refreshes a device's
+   * request while its key, role and scopes are the same), or a new one once that
+   * one is gone, raised by this client's own key all the same. All within the
+   * connect's limit.
    */
   static async open(options: OperatorOptions): Promise<OperatorSession> {
     const identity = newDeviceIdentity();
@@ -90,8 +150,24 @@ export class OperatorSession {
     const session = new OperatorSession();
     session.deviceId = identity.deviceId;
     if (options.requestTimeoutMs !== undefined) session.requestTimeoutMs = options.requestTimeoutMs;
-    const deadline = Date.now() + (options.timeoutMs ?? 60_000);
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+    const clock = options.clock ?? realClock;
+    const started = clock.now();
+    const deadline = started + (options.timeoutMs ?? 60_000);
+    let approvals = 0;
+    /** The request whose last approve call gave up, and what it printed. */
+    let unsettled: { requestId: string; output: string } | null = null;
+    /** The approve calls that gave up since the last one that approved. */
+    let gaveUp = 0;
+    const notSettled = () =>
+      unsettled
+        ? unsettledApproval(
+            `${options.displayName}'s pairing request ${unsettled.requestId}`,
+            clock.now() - started,
+            gaveUp,
+            unsettled.output,
+          )
+        : "";
+    for (;;) {
       const outcome = await new Promise<
         { ok: true } | { ok: false; pairing?: string; error: Error }
       >((resolve) => {
@@ -99,12 +175,11 @@ export class OperatorSession {
         const settle = (value: { ok: true } | { ok: false; pairing?: string; error: Error }) => {
           if (settled) return;
           settled = true;
-          clearTimeout(timer);
+          cancelTimer();
           resolve(value);
         };
-        const timer = setTimeout(
-          () => settle({ ok: false, error: new Error("no hello before the time limit") }),
-          Math.max(1_000, deadline - Date.now()),
+        const cancelTimer = clock.after(Math.max(1_000, deadline - clock.now()), () =>
+          settle({ ok: false, error: new Error("no hello before the time limit") }),
         );
         let pairing: string | undefined;
         const client: GatewayClient = new GatewayClient({
@@ -183,10 +258,41 @@ export class OperatorSession {
         client.start();
       });
       if (outcome.ok) return session;
-      if (!outcome.pairing) throw new Error(`${options.displayName}: ${outcome.error.message}`);
-      await options.approvePairing(outcome.pairing);
+      if (!outcome.pairing) {
+        throw new Error(
+          [`${options.displayName}: ${outcome.error.message}`, notSettled()]
+            .filter(Boolean)
+            .join("\n"),
+        );
+      }
+      // A new id is a new request of this client's own, so its first call is not a retry.
+      const retry = unsettled !== null && outcome.pairing === unsettled.requestId;
+      // The CLI makes two gateway calls for one approve, a list and the approve, each given the
+      // whole limit: a call gets half of what is left after the CLI's start-up, so it ends inside
+      // the connect's limit. After a give-up, too little left ends the connect; a first call has
+      // the CLI's own 10 s at least.
+      const callMs = Math.min(
+        APPROVE_CALL_MAX_MS,
+        Math.floor((deadline - clock.now() - CLI_START_MS) / 2),
+      );
+      if (unsettled && callMs < APPROVE_RETRY_MIN_MS) throw new Error(notSettled());
+      const result = await options.approvePairing(outcome.pairing, {
+        timeoutMs: unsettled ? callMs : Math.max(CLI_DEFAULT_MS, callMs),
+        retry,
+      });
+      if (result.approved) {
+        unsettled = null;
+        gaveUp = 0;
+        approvals += 1;
+        if (approvals === 3) {
+          throw new Error(`${options.displayName}: still not paired after approving its request`);
+        }
+      } else {
+        unsettled = { requestId: outcome.pairing, output: result.output };
+        gaveUp += 1;
+        await clock.sleep(GIVE_UP_PAUSE_MS);
+      }
     }
-    throw new Error(`${options.displayName}: still not paired after approving its request`);
   }
 
   private record(event: string, payload: unknown): void {

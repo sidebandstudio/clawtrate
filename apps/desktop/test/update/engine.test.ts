@@ -72,8 +72,11 @@ describe("the update engine against a local feed", () => {
       path,
     });
     expect(readFileSync(path).equals(file.body)).toBe(true);
-    expect(statSync(path).mode & 0o777).toBe(0o600);
-    expect(statSync(join(dir.path, "updates")).mode & 0o777).toBe(0o700);
+    // Windows stat modes don't show ACLs, so only POSIX hosts check the owner-only modes.
+    if (process.platform !== "win32") {
+      expect(statSync(path).mode & 0o777).toBe(0o600);
+      expect(statSync(join(dir.path, "updates")).mode & 0o777).toBe(0o700);
+    }
     expect(readdirSync(join(dir.path, "updates"))).toEqual(["Clawtrate-0.2.0-mac-arm64.zip"]);
 
     const kinds = states.map((state) => state.kind);

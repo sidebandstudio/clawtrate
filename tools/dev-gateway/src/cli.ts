@@ -92,6 +92,7 @@ import {
   providerEnv,
   type Gated,
   type InstancePaths,
+  type RunResult,
 } from "./env.ts";
 import {
   BROWSER_PORT_OFFSET,
@@ -161,7 +162,15 @@ import {
   type PluginRule,
 } from "./dev-plugins.ts";
 import { SEED_ANSWER_MS, SEED_CAPS, SEED_SCOPES, seedExample, verifyExample } from "./examples.ts";
-import { OperatorSession } from "./operator.ts";
+import {
+  CLI_DEFAULT_MS,
+  GIVE_UP_PAUSE_MS,
+  OperatorSession,
+  realClock,
+  unsettledApproval,
+  type Approval,
+  type Clock,
+} from "./operator.ts";
 import type { PluginOutcome } from "../../../packages/core/src/plugin-install.ts";
 import {
   MESSAGING_PAIR,
@@ -593,6 +602,8 @@ export function devConfig(
         ...(browsers ? ["browser"] : []),
         ...(options.images ? ["image_generate"] : []),
         ...(options.messageTool ? ["message"] : []),
+        // A tool only the running version has that a scenario uses (versions.ts).
+        ...form.extraAllowedTools,
         // 2026.11.10 adds skill_library beside skill_workshop itself (skillLibraryToolSplit).
         ...(options.skillReview ? form.skillReviewTools : []),
       ],
@@ -1334,7 +1345,7 @@ async function startScriptedNode(
     async () => (device = nodeDeviceRequest(await json(["devices", "list"]))) !== null,
     120_000,
   );
-  await must(inst, ["devices", "approve", device!.requestId]);
+  await mustApprove(inst, "devices", device!.requestId, device!.deviceId);
   let request: string | null = null;
   await waitFor(
     `${SCRIPTED_NODE_NAME}'s command approval request`,
@@ -1342,7 +1353,7 @@ async function startScriptedNode(
       (request = nodeCommandRequest(await json(["nodes", "pending"]), device!.deviceId)) !== null,
     120_000,
   );
-  await must(inst, ["nodes", "approve", request!]);
+  await mustApprove(inst, "nodes", request!, device!.deviceId);
 }
 
 const RUN_ID_PATTERN = /^[0-9a-f]{48}$/;
@@ -2083,14 +2094,194 @@ export async function status(
   if (connection) log(`url         ${connection.url}`);
 }
 
+/** A failed OpenClaw command, named with its profile, and what it printed. */
+const failure = (inst: DevInstance, args: string[], result: RunResult) =>
+  new Error(
+    `openclaw ${profileArgs(inst.name).join(" ")} ${args.join(" ")} failed:\n${result.stdout}${result.stderr}`,
+  );
+
 async function must(inst: DevInstance, args: string[]): Promise<string> {
   const result = await inst.runner.run(args);
-  if (result.status !== 0) {
-    throw new Error(
-      `openclaw ${profileArgs(inst.name).join(" ")} ${args.join(" ")} failed:\n${result.stdout}${result.stderr}`,
-    );
-  }
+  if (result.status !== 0) throw failure(inst, args, result);
   return result.stdout;
+}
+
+/**
+ * OpenClaw's CLI gave up on the gateway: it timed out, lost the connection, or never finished
+ * connecting. Its words don't say whether the gateway carried the request out (#907). Both pinned
+ * versions end such a failure with "OpenClaw took too long to respond.", "Lost the connection to
+ * OpenClaw." or "Couldn't connect to OpenClaw."; `devices list` and `gateway call` print a
+ * `gateway_transport_error` instead, and the nodes commands a `cli_error` that says "gateway
+ * timeout after <ms>ms" before the same line. A connection the gateway refuses, such as a token
+ * mismatch, prints none of these.
+ */
+export function cliGaveUp(output: string): boolean {
+  return (
+    /OpenClaw took too long to respond|Lost the connection to OpenClaw|Couldn't connect to OpenClaw|gateway timeout after \d+ ?ms/.test(
+      output,
+    ) || isTransportFailure(output)
+  );
+}
+
+/** The CLI's answer for a request id that isn't pending: unknown, or approved already. */
+export function noPendingRequest(output: string): boolean {
+  return /No pending device request matches|Unknown node pairing requestId/.test(output);
+}
+
+/**
+ * One `openclaw <devices|nodes> approve <requestId>`, given `timeoutMs` for each of the two
+ * gateway calls it makes (a pairing list, then the approve). Not approved, with what it printed,
+ * when the CLI gave up on the gateway. On a `retry`, any failure is not approved, and the caller's
+ * next look decides: the call that gave up may have approved the request ("not pending"), and when
+ * the CLI's own pairing list times out it swallows that and sends the approve without the scopes
+ * the request asks for, which the gateway refuses (2026.10.6 prints only "The CLI command
+ * failed."). A real refusal, such as a token the gateway rejects, fails that look. A first call
+ * for an id `listed` just before is not approved, too, when it says the request isn't pending.
+ * Any other failure of a first call is a refusal and throws with the CLI's output, as do the
+ * guard's refusal and a missing program, which the runner throws before OpenClaw runs.
+ */
+export async function approveCall(
+  inst: DevInstance,
+  kind: "devices" | "nodes",
+  requestId: string,
+  timeoutMs: number,
+  retry: boolean,
+  listed = false,
+): Promise<Approval> {
+  const args = [kind, "approve", requestId, "--timeout", String(Math.round(timeoutMs))];
+  const result = await inst.runner.run(args);
+  if (result.status === 0) return { approved: true };
+  const output = `${result.stdout}${result.stderr}`;
+  if (retry || cliGaveUp(output) || (listed && noPendingRequest(output))) {
+    return { approved: false, output: failure(inst, args, result).message };
+  }
+  throw failure(inst, args, result);
+}
+
+/**
+ * Where request `requestId` stands, read with the CLI given `timeoutMs`: still pending, approved
+ * at or after `since` (a paired row for `id`, the device or node it is for, whose `approvedAtMs`
+ * is that late), or gone. Devices come from `devices list`. Nodes come from the gateway's
+ * `node.pair.list`, whose paired rows are nodes whose commands were approved; `nodes list` also
+ * merges in every node whose device is paired.
+ */
+async function pairingState(
+  inst: DevInstance,
+  kind: "devices" | "nodes",
+  requestId: string,
+  id: string | undefined,
+  timeoutMs: number,
+  since: number,
+): Promise<"pending" | "approved" | "gone"> {
+  type Row = Record<string, unknown>;
+  const ms = String(Math.round(timeoutMs));
+  const args =
+    kind === "devices"
+      ? ["devices", "list", "--json", "--timeout", ms]
+      : ["gateway", "call", "node.pair.list", "--params", "{}", "--json", "--timeout", ms];
+  const list = parseJsonOutput<{ pending?: Row[]; paired?: Row[] }>(await must(inst, args));
+  if ((list.pending ?? []).some((row) => row.requestId === requestId)) return "pending";
+  const key = kind === "devices" ? "deviceId" : "nodeId";
+  const approvedNow = (row: Row) =>
+    id !== undefined &&
+    row[key] === id &&
+    typeof row.approvedAtMs === "number" &&
+    row.approvedAtMs >= since;
+  return (list.paired ?? []).some(approvedNow) ? "approved" : "gone";
+}
+
+/**
+ * How one approval by id may take its time. The first approve call gives each of its two gateway
+ * calls `firstApproveMs`, later ones `approveMs`, and each look `lookMs`; `startMs` is allowed for
+ * the CLI's own start-up. After the first approve call, and the look after it, which always run,
+ * a call starts only when it and the look it may need after it fit before the deadline.
+ */
+export type ApproveLimits = {
+  limitMs: number;
+  firstApproveMs: number;
+  approveMs: number;
+  lookMs: number;
+  startMs: number;
+};
+
+/** The paired machine's approvals in `start`: 180 s, half a minute for each gateway call. */
+export const NODE_APPROVAL: ApproveLimits = {
+  limitMs: SEED_ANSWER_MS,
+  firstApproveMs: 30_000,
+  approveMs: 30_000,
+  lookMs: CLI_DEFAULT_MS,
+  startMs: 5_000,
+};
+
+/** How an approval by id ended: approved, or not, and why. A refusal throws. */
+export type Settled = { approved: true } | { approved: false; why: string };
+
+/**
+ * Approve one pending request by id, for device or node `id`, read from a list just before. The
+ * first approve call always runs. After a call that gave up it looks whether the gateway approved
+ * (that first look always runs, too), and approves again, after a pause, only while the same
+ * request is still pending; a look that gives up is made again after a pause. Calls after the first
+ * two start only when they fit before `deadline` (see `ApproveLimits`). The id came from a list, so
+ * a call saying the request isn't pending is looked at too: an earlier call may have approved it.
+ */
+export async function approveById(
+  inst: DevInstance,
+  kind: "devices" | "nodes",
+  requestId: string,
+  id: string | undefined,
+  options: { limits?: ApproveLimits; deadline?: number; clock?: Clock } = {},
+): Promise<Settled> {
+  const limits = options.limits ?? NODE_APPROVAL;
+  const clock = options.clock ?? realClock;
+  const started = clock.now();
+  const deadline = options.deadline ?? started + limits.limitMs;
+  const left = () => deadline - clock.now();
+  const lookTakes = limits.lookMs + limits.startMs;
+  const approveTakes = 2 * limits.approveMs + limits.startMs;
+  const what = `${kind} request ${requestId}`;
+  let calls = 0;
+  let output = "";
+  const unsettled = (more = ""): Settled => ({
+    approved: false,
+    why: `${unsettledApproval(what, clock.now() - started, calls, output)}${more}`,
+  });
+  let result = await approveCall(inst, kind, requestId, limits.firstApproveMs, false, true);
+  for (;;) {
+    if (result.approved) return result;
+    calls += 1;
+    output = result.output;
+    let state: "pending" | "approved" | "gone" | null = null;
+    for (let looks = 0; state === null; looks += 1) {
+      if (looks > 0) {
+        if (left() < GIVE_UP_PAUSE_MS + lookTakes) return unsettled();
+        await clock.sleep(GIVE_UP_PAUSE_MS);
+      }
+      try {
+        state = await pairingState(inst, kind, requestId, id, limits.lookMs, started);
+      } catch (error) {
+        if (!cliGaveUp(String(error))) throw error;
+      }
+    }
+    if (state === "approved") return { approved: true };
+    if (state === "gone") {
+      return unsettled("\nThe request is no longer pending and was not approved.");
+    }
+    if (left() < GIVE_UP_PAUSE_MS + approveTakes + lookTakes) return unsettled();
+    await clock.sleep(GIVE_UP_PAUSE_MS);
+    result = await approveCall(inst, kind, requestId, limits.approveMs, true);
+  }
+}
+
+/** `approveById` with the paired machine's limits, where anything but approved stops `start`. */
+export async function mustApprove(
+  inst: DevInstance,
+  kind: "devices" | "nodes",
+  requestId: string,
+  id: string,
+  clock?: Clock,
+): Promise<void> {
+  const settled = await approveById(inst, kind, requestId, id, clock ? { clock } : {});
+  if (!settled.approved) throw new Error(settled.why);
 }
 
 /** A fixture RPC can take longer than the CLI's default on a loaded test runner. */
@@ -2727,6 +2918,7 @@ export async function openOperator(
   scopes: string[],
   caps: string[],
   timeoutMs?: number,
+  clock?: Clock,
 ): Promise<OperatorSession> {
   const connection = readDevConnection(inst.connectionFile);
   if (!connection) throw new Error(`${label(inst)} has no connection file; start it first`);
@@ -2736,10 +2928,10 @@ export async function openOperator(
     scopes,
     caps,
     displayName,
-    approvePairing: async (requestId) => {
-      await must(inst, ["devices", "approve", requestId]);
-    },
+    approvePairing: (requestId, call) =>
+      approveCall(inst, "devices", requestId, call.timeoutMs, call.retry),
     ...(timeoutMs === undefined ? {} : { timeoutMs, requestTimeoutMs: timeoutMs }),
+    ...(clock ? { clock } : {}),
   });
 }
 
@@ -2779,24 +2971,100 @@ async function seedScenarioExamples(
   }
 }
 
-type PendingDevice = { requestId: string; clientId?: string; displayName?: string };
+type PendingDevice = {
+  requestId: string;
+  deviceId?: string;
+  clientId?: string;
+  displayName?: string;
+};
 
-export async function approve(inst: DevInstance, requestId?: string): Promise<string[]> {
-  const listed = parseJsonOutput<{ pending?: PendingDevice[] }>(
-    await must(inst, ["devices", "list", "--json"]),
-  );
+/**
+ * The `approve` command's limits (#907). The first list and the first approve call get the CLI's
+ * own 10 s, as a single try always had; the command's clock starts when that list returns. Then,
+ * within 50 s, a look after a call that gave up, and a second approve call and its look, each
+ * gateway call given 4 s, with 3 s allowed for each CLI start-up and a 1 s pause before each retry.
+ * Each approve call is two gateway calls, so with one request pending the worst run is the first
+ * list (10 s and start-up) and 49 s after it: about 63 s with a 3 s start-up, inside an
+ * end-to-end test's 90 s. The 50 s bound only the tries after a request's first: every pending
+ * request has its first approve call and the look after it, as a single try always had, so each
+ * further one adds up to 30 s (about 93 s for two, 123 s for three).
+ */
+export const APPROVE_COMMAND: ApproveLimits = {
+  limitMs: 50_000,
+  firstApproveMs: CLI_DEFAULT_MS,
+  approveMs: 4_000,
+  lookMs: 4_000,
+  startMs: 3_000,
+};
+
+/**
+ * Approve pending Clawtrate requests, or the one `requestId` names, in one run, and print
+ * `Approved …` for each that is approved, also one approved by a call the CLI gave up on. Nothing
+ * pending is not a failure. A request that is not approved when its time is up fails the command,
+ * with what was tried, for how long, and the last output; so does a refusal, after the other
+ * requests have had their turn. Returns the ids approved.
+ */
+export async function approve(
+  inst: DevInstance,
+  requestId?: string,
+  options: { limits?: ApproveLimits; clock?: Clock; log?: (line: string) => void } = {},
+): Promise<string[]> {
+  const log = options.log ?? console.log;
+  const limits = options.limits ?? APPROVE_COMMAND;
+  const clock = options.clock ?? realClock;
+  let deadline: number | null = null;
+  let listed: { pending?: PendingDevice[] } | null = null;
+  const lookTakes = limits.lookMs + limits.startMs;
+  for (let lists = 0; listed === null; lists += 1) {
+    try {
+      // The first list has the CLI's own limit; one made again has a look's.
+      const args = ["devices", "list", "--json"];
+      if (lists > 0) args.push("--timeout", String(limits.lookMs));
+      listed = parseJsonOutput<{ pending?: PendingDevice[] }>(await must(inst, args));
+    } catch (error) {
+      if (!cliGaveUp(String(error))) throw error;
+      deadline ??= clock.now() + limits.limitMs;
+      // Again only when it, the first approve call and the look after it still fit.
+      const firstTakes = 2 * limits.firstApproveMs + limits.startMs;
+      if (deadline - clock.now() < GIVE_UP_PAUSE_MS + lookTakes + firstTakes + lookTakes) {
+        throw new Error(
+          `Could not list the pending requests in ${lists + 1} tries.\n${error instanceof Error ? error.message : String(error)}`,
+          { cause: error },
+        );
+      }
+      await clock.sleep(GIVE_UP_PAUSE_MS);
+    }
+  }
+  deadline ??= clock.now() + limits.limitMs;
   const pending = (listed.pending ?? []).filter((request) =>
     requestId ? request.requestId === requestId : request.displayName?.startsWith("Clawtrate"),
   );
   if (pending.length === 0) {
-    console.log(requestId ? `No pending request ${requestId}` : "No pending Clawtrate requests");
+    log(requestId ? `No pending request ${requestId}` : "No pending Clawtrate requests");
     return [];
   }
+  const approved: string[] = [];
+  const failures: string[] = [];
   for (const request of pending) {
-    await must(inst, ["devices", "approve", request.requestId]);
-    console.log(`Approved ${request.displayName ?? "device"} (${request.requestId})`);
+    const name = `${request.displayName ?? "device"} (${request.requestId})`;
+    try {
+      const settled = await approveById(inst, "devices", request.requestId, request.deviceId, {
+        limits,
+        deadline,
+        clock,
+      });
+      if (settled.approved) {
+        log(`Approved ${name}`);
+        approved.push(request.requestId);
+      } else {
+        failures.push(`Not approved: ${name}\n${settled.why}`);
+      }
+    } catch (error) {
+      failures.push(error instanceof Error ? error.message : String(error));
+    }
   }
-  return pending.map((request) => request.requestId);
+  if (failures.length > 0) throw new Error(failures.join("\n"));
+  return approved;
 }
 
 export type ListedInstance = {

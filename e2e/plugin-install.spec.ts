@@ -29,9 +29,9 @@ import {
   readRecord,
 } from "../apps/desktop/packaging/carried-plugins.ts";
 import { PluginInstaller, type PluginRecord } from "../packages/core/src/plugin-install.ts";
-import { openInstance, readDevConnection } from "../tools/dev-gateway/src/cli.ts";
+import { openInstance, openOperator } from "../tools/dev-gateway/src/cli.ts";
 import { operatorContext, recordMap } from "../tools/dev-gateway/src/install-plugin.ts";
-import { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
+import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
 import { newRunId, ownIdentity } from "../tools/dev-gateway/src/state-guard.ts";
 import { devGateway, FORBIDDEN_PORTS, listInstances, resetInstance } from "./global-setup.ts";
 import { cleanUp, recordPath, saveRecord, TEMP_PREFIX, type RunRecord } from "./run-record.ts";
@@ -63,20 +63,7 @@ const records = new Map<string, PluginRecord | null>();
  * loaded machine, as approving its request starts the gateway's own command line.
  */
 async function operator(displayName: string): Promise<OperatorSession> {
-  const inst = openInstance(INSTANCE);
-  const connection = readDevConnection(inst.connectionFile)!;
-  return OperatorSession.open({
-    url: connection.url,
-    token: connection.token,
-    scopes: SCOPES,
-    caps: [],
-    displayName,
-    timeoutMs: 240_000,
-    approvePairing: async (requestId) => {
-      const result = await inst.runner.run(["devices", "approve", requestId]);
-      if (result.status !== 0) throw new Error(`approving ${requestId} failed: ${result.stderr}`);
-    },
-  });
+  return openOperator(openInstance(INSTANCE), displayName, SCOPES, [], 240_000);
 }
 
 /** The engine on this device's connection; `before` runs before each request it sends. */

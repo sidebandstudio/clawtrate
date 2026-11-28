@@ -277,7 +277,7 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   creationWaiters: { max: MAX_CREATIONS, each: ID, row: "bookkeeping" },
   "creationWaiters.*": { max: MAX_ACCESS_WAITERS, each: 0, row: null },
   checkingSlots: { max: MAX_CREATIONS, each: ID, row: "bookkeeping" },
-  accessWaiters: { max: MAX_ACCESS_WAITERS, each: SHORT, row: "bookkeeping" },
+  accessWaiters: { max: MAX_ACCESS_WAITERS, each: ID + SHORT, row: "bookkeeping" },
   // The scopes a device-access request keeps: those of the admin tier the connection held.
   heldBase: { max: ADMIN_SCOPES.length, each: SHORT, row: "bookkeeping" },
   // The names given to gateways on this device (`gateway-names.ts`): an address and a name each.
