@@ -445,6 +445,11 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Check the settings reader and the local proof on Windows
         run: pnpm exec vitest run apps/desktop/test/settings-reader.test.ts apps/desktop/test/local-connect.test.ts -t "reads nothing on Windows|in a production run|on Windows the proof refuses"
+      # Both whole files, each case listed with its outcome, so one that is skipped shows as skipped.
+      # The Windows-only case runs the read's script in Windows PowerShell with a stand-in Add-Type
+      # that fails: nothing reads the real taskbar or the machine's processes.
+      - name: Check the taskbar overlay read and its diagnostics on Windows
+        run: pnpm exec vitest run ./test/windows.test.ts ./test/packaged-overlay-diagnostics.test.ts --reporter=verbose
       # Electron's install script is declined (pnpm-workspace.yaml); requiring the package fetches its binary.
       - run: node -e "require('electron')"
         working-directory: apps/desktop

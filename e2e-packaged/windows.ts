@@ -42,10 +42,11 @@ export function mainWindowTitle(pid: number): string {
  * ("3 unread"), and is empty while there is no overlay. The button is found by
  * its application id, which the packaged app sets to its bundle id, compared
  * without regard to case.
- * Returns null if no taskbar has a button with that id, and undefined if the
- * read failed or took longer than 5 seconds: a synchronous read blocks the
- * event loop, so one that hangs would outlast any poll around it. Each read
- * is appended to `reads`, for the failure's report.
+ * Returns null only if the search finished and no taskbar has a button with
+ * that id, and undefined if the read failed, took longer than 5 seconds or
+ * printed neither answer: a synchronous read blocks the event loop, so one
+ * that hangs would outlast any poll around it. Each read is appended to
+ * `reads`, for the failure's report.
  */
 export function taskbarOverlayDescription(
   appId: string,
@@ -54,39 +55,65 @@ export function taskbarOverlayDescription(
   const at = new Date().toISOString();
   const started = Date.now();
   try {
-    const value = readOverlay(appId);
-    reads.push({ at, ms: Date.now() - started, value });
+    const out = readOverlay(appId);
+    const value =
+      out === ABSENT ? null : out.startsWith(FOUND) ? out.slice(FOUND.length) : undefined;
+    reads.push(
+      value === undefined
+        ? { at, ms: Date.now() - started, error: out ? "unexpected output" : "no output" }
+        : { at, ms: Date.now() - started, value },
+    );
     return value;
   } catch (error) {
-    const code = (error as { code?: string }).code;
-    reads.push({
-      at,
-      ms: Date.now() - started,
-      error: code === "ETIMEDOUT" ? "timed out" : String(error),
-    });
+    reads.push({ at, ms: Date.now() - started, error: readFailure(error) });
     return undefined;
   }
+}
+
+/**
+ * A failed read by its exit status, signal or system error code alone, never
+ * its message: that holds the whole script, and PowerShell's complaint.
+ */
+function readFailure(error: unknown): string {
+  const { status, signal, code } = error as { status?: unknown; signal?: unknown; code?: unknown };
+  if (code === "ETIMEDOUT") return "timed out";
+  if (typeof status === "number") return `failed with exit ${status}`;
+  const name = [signal, code].find(
+    (each): each is string => typeof each === "string" && /^[A-Z][A-Z0-9_]*$/.test(each),
+  );
+  return name ? `failed with ${name}` : "failed";
 }
 
 export type OverlayRead = { at: string; ms: number } & (
   { value: string | null } | { error: string }
 );
 
-function readOverlay(appId: string): string | null {
-  const out = powershell(
+const FOUND = "found:";
+const ABSENT = "absent";
+
+/**
+ * The read's output: "found:" and the help text, or "absent" once every
+ * taskbar has been searched. Any error ends the script with a nonzero exit:
+ * without the preference, `-Command` prints it, runs the next statement and
+ * exits 0, so a failed search would read as one that found nothing.
+ */
+function readOverlay(appId: string): string {
+  return powershell(
     `
+$ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName UIAutomationClient, UIAutomationTypes
 $ae = [Windows.Automation.AutomationElement]
 $want = 'Appid: ' + $env:CLAWTRATE_CHECK_APP_ID
+$found = $null
 foreach ($bar in $ae::RootElement.FindAll([Windows.Automation.TreeScope]::Children, [Windows.Automation.Condition]::TrueCondition)) {
   if ($bar.Current.ClassName -notin 'Shell_TrayWnd', 'Shell_SecondaryTrayWnd') { continue }
   $button = $bar.FindFirst([Windows.Automation.TreeScope]::Descendants, (New-Object Windows.Automation.PropertyCondition($ae::AutomationIdProperty, $want, [Windows.Automation.PropertyConditionFlags]::IgnoreCase)))
-  if ($button) { 'found:' + $button.Current.HelpText; break }
-}`,
+  if ($button) { $found = '${FOUND}' + $button.Current.HelpText; break }
+}
+if ($null -ne $found) { $found } else { '${ABSENT}' }`,
     { CLAWTRATE_CHECK_APP_ID: appId },
     5_000,
   ).trim();
-  return out.startsWith("found:") ? out.slice("found:".length) : null;
 }
 
 /**
