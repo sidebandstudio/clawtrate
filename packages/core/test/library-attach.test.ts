@@ -246,6 +246,25 @@ describe("adding a library skill to an open task (#889)", () => {
     }
   });
 
+  it("F-071: the attach isn't sent once the host's target has moved on while the list was read", async () => {
+    const listing = deferred<unknown>();
+    const { client, gateway, stamp } = await open((gateway) => {
+      gateway.handlers["skills.library.list"] = () => listing.promise;
+      gateway.handlers["skills.library.activate"] = () => activated([pin()]);
+    });
+    try {
+      const adding = client.attachLibrarySkill(KEY, moon, stamp);
+      await until(() => gateway.calls("skills.library.list").length === 1);
+      // As a new device token in a hello does, on the same live connection (client.ts).
+      (client as unknown as { target: number }).target += 1;
+      listing.resolve(listed({ selections: [], attachable: [entry()] }));
+      await expect(adding).rejects.toThrow("The connection changed, so moon-phase wasn't added.");
+      expect(activations(gateway)).toEqual([]);
+    } finally {
+      client.stop();
+    }
+  });
+
   it("F-071: a viewer's add goes nowhere once the viewer has gone", async () => {
     const listing = deferred<unknown>();
     const { client, gateway, stamp } = await open((gateway) => {

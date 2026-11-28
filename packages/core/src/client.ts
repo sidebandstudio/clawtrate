@@ -6384,9 +6384,12 @@ export class ClawtrateClient {
     return slashRows(skills, metadata, library, this.canChangeTaskSkills());
   }
 
-  /** Whether this connection may add a library skill to a task (`operator.write`, not pinned read-only). */
+  /**
+   * Whether this connection may add a library skill to a task (`operator.write`). A host pinned
+   * read-only never holds it: it asks for read access only, and holds no more than it asked for.
+   */
   private canChangeTaskSkills(): boolean {
-    return !this.options.readOnly && this.holds(WRITE_SCOPE);
+    return this.holds(WRITE_SCOPE);
   }
 
   /**
