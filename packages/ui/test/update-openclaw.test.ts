@@ -505,6 +505,53 @@ describe("F-591: while OpenClaw updates, the strip and the footer say so", () =>
   });
 });
 
+describe("F-614: while the gateway restarts, the strip and the footer say so", () => {
+  const down = { ...connection, status: "reconnecting" as const, retryAt: Date.now() + 1_000 };
+  const state = (
+    restart: ConnectionState["restart"],
+    patch: Partial<OpenClawUpdateState> | null = null,
+    conn: ConnectionState = down,
+  ) =>
+    ({
+      ...initialState,
+      connection: { ...conn, restart },
+      ...(patch ? { openclawUpdating: updating(patch) } : {}),
+    }) as ClawtrateState;
+  const strip = (s: ClawtrateState) => stripFor(s, "dropped", null);
+  const footer = (s: ClawtrateState) => presenceWords(s.connection, false, updatingHere(s));
+
+  it("F-614: announced by the gateway: restarting and saved messages, no countdown and no Retry; past the wait, that it hasn't come back, what to check, and Retry", () => {
+    const restarting = state("restarting");
+    expect(strip(restarting)).toEqual({
+      tone: "warn",
+      text: "Restarting OpenClaw",
+      short: "Restarting OpenClaw",
+      more: "showing saved messages",
+      action: null,
+      countdown: false,
+    });
+    expect(footer(restarting)).toBe("Restarting OpenClaw…");
+    const late = state("late");
+    expect(strip(late)).toEqual({
+      tone: "danger",
+      text: "OpenClaw hasn't come back from its restart",
+      short: "OpenClaw not back yet",
+      more: "check that OpenClaw is running",
+      action: "retry",
+      countdown: false,
+    });
+    expect(footer(late)).toBe("Not back from its restart");
+  });
+
+  it("F-614: while OpenClaw updates, the update's words are said; connected again, or with nothing announced, as before", () => {
+    const both = state("restarting", { run: run({ phase: "restarting" }) });
+    expect(strip(both)?.text).toBe("Updating OpenClaw to 2026.11.6");
+    expect(footer(both)).toBe("Updating OpenClaw…");
+    expect(updatingHere(state("restarting", null, connection))).toBeNull();
+    expect(strip(state(null))).toMatchObject({ text: "Reconnecting", countdown: true });
+  });
+});
+
 describe("F-591: the update card shows the steps as a bar", () => {
   const card = (patch: Partial<UpdateRunView>, conn: ConnectionState = connection) =>
     part({ connection: conn, openclawUpdating: updating({ run: run(patch) }) });

@@ -142,11 +142,15 @@ export function stepWords(run: UpdateRunView): string {
 /**
  * An update the engine follows on the gateway on screen while the connection is down and coming
  * back by itself: a run it follows that is running, or past the times its steps name ("late",
- * "away"), or a press whose answer it is waiting to hear about ("held"). Null otherwise: any
- * other lost connection, another gateway, or nothing the engine knows. Never guessed from a
- * version or from the gateway being away.
+ * "away"), or a press whose answer it is waiting to hear about ("held"). Otherwise a restart the
+ * gateway said it was making, within its wait ("restarting") or past it ("not-back"). Null
+ * otherwise: any other lost connection, another gateway, or nothing the engine or the gateway
+ * said. Never guessed from a version or from the gateway being away.
  */
-export type UpdatingHere = { stage: "updating" | "held" | "late" | "away"; to: string | null };
+export type UpdatingHere = {
+  stage: "updating" | "held" | "late" | "away" | "restarting" | "not-back";
+  to: string | null;
+};
 
 export function updatingHere(
   state: Pick<ClawtrateState, "connection" | "openclawUpdating">,
@@ -154,15 +158,17 @@ export function updatingHere(
   const { connection } = state;
   if (connection.status !== "reconnecting" && connection.status !== "connecting") return null;
   const gatewayId = connection.gatewayId;
-  if (gatewayId === null) return null;
   const updating = state.openclawUpdating;
   const run = updating?.run;
-  if (run?.gatewayId === gatewayId) {
+  if (gatewayId !== null && run?.gatewayId === gatewayId) {
     if (run.outcome === "running") return { stage: "updating", to: run.to };
     if (run.outcome === "late" || run.outcome === "away") return { stage: run.outcome, to: run.to };
   }
-  if (updating?.looking && updating.held?.gatewayId === gatewayId)
+  if (gatewayId !== null && updating?.looking && updating.held?.gatewayId === gatewayId)
     return { stage: "held", to: updating.held.to };
+  // The notice came on this connection, so it is this gateway's: a switch clears it.
+  if (connection.restart === "restarting") return { stage: "restarting", to: null };
+  if (connection.restart === "late") return { stage: "not-back", to: null };
   return null;
 }
 
@@ -175,6 +181,8 @@ export function updatingStripWords(updating: UpdatingHere): {
   text: string;
   short: string;
   retry: boolean;
+  /** What to do, in place of "showing saved messages". */
+  more?: string;
 } {
   const to = updating.to ? ` to ${updating.to}` : "";
   switch (updating.stage) {
@@ -198,6 +206,15 @@ export function updatingStripWords(updating: UpdatingHere): {
         short: "Gateway not back from the update",
         retry: true,
       };
+    case "restarting":
+      return { text: "Restarting OpenClaw", short: "Restarting OpenClaw", retry: false };
+    case "not-back":
+      return {
+        text: "OpenClaw hasn't come back from its restart",
+        short: "OpenClaw not back yet",
+        retry: true,
+        more: "check that OpenClaw is running",
+      };
   }
 }
 
@@ -212,6 +229,10 @@ export function updatingPresence(updating: UpdatingHere): string {
       return "Update taking longer than usual";
     case "away":
       return "Not back from the update";
+    case "restarting":
+      return "Restarting OpenClaw…";
+    case "not-back":
+      return "Not back from its restart";
   }
 }
 

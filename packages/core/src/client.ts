@@ -753,6 +753,11 @@ export const MAX_STREAMS_PER_TASK = 2;
 /** Spawn links kept (`spawnedBy`), newest. */
 export const MAX_SPAWN_LINKS = 200;
 const PAIRING_RETRY_MS = 3000;
+/**
+ * How long after the gateway says it is restarting the app says so, before it says OpenClaw hasn't
+ * come back (`docs/decisions.md`, "A gateway that says it is restarting").
+ */
+export const RESTART_WAIT_MS = 2 * 60_000;
 
 const SETTINGS_KEY = "connection";
 
@@ -2096,6 +2101,8 @@ export class ClawtrateClient {
   });
   /** When the connected gateway process started (its hello's `snapshot.uptimeMs`), or null. */
   private gatewayStartedAt: number | null = null;
+  /** Ends the wait after the gateway's latest restart notice (`RESTART_WAIT_MS`). */
+  private restartTimer: ReturnType<typeof setTimeout> | undefined;
   /** Usage reports, warning budgets and providers' limits (`usage-engine.ts`); its state is `usage`. */
   private readonly usage = new UsageEngine({
     request: (method, params) => this.request(method, params),
@@ -9920,12 +9927,15 @@ export class ClawtrateClient {
         // forgotten, unless the gateway is waiting for its owner to approve this device.
         const setup = this.tokenGate?.generation === generation;
         if (setup && this.state.connection.status !== "pairing") this.setupCode = null;
+        // While the gateway restarts, every attempt waits the first delay: it is back within
+        // seconds, and the doubling would keep the app away up to half a minute longer.
+        const delayMs =
+          context.connectFailure?.reconnectDelayMs ??
+          (this.state.connection.restart === "restarting" ? reconnect.initialMs : undefined);
         return {
           retry: !(setup && this.setupCode === null),
           notify: true,
-          ...(context.connectFailure?.reconnectDelayMs !== undefined
-            ? { reconnectDelayMs: context.connectFailure.reconnectDelayMs }
-            : {}),
+          ...(delayMs !== undefined ? { reconnectDelayMs: delayMs } : {}),
         };
       },
       onClose: () => {
@@ -10109,6 +10119,7 @@ export class ClawtrateClient {
     this.streams.clear();
     if (this.refreshTimer) clearTimeout(this.refreshTimer);
     this.refreshTimer = null;
+    clearTimeout(this.restartTimer);
     for (const timer of this.historyTimers.values()) clearTimeout(timer);
     this.historyTimers.clear();
     for (const timer of this.turnTimers.values()) clearTimeout(timer);
@@ -10380,6 +10391,7 @@ export class ClawtrateClient {
       error: null,
       retryAt: null,
       connectedAt: this.now(),
+      restart: null,
       paired: true,
       sendLimits: this.sendLimits(),
     });
@@ -11646,6 +11658,17 @@ export class ClawtrateClient {
         return;
       case "update.run.changed":
         if (!this.isSetup(this.settings?.url)) this.openclawUpdates.onRunChanged(event.payload);
+        return;
+      case "shutdown":
+        // Only a restart names `restartExpectedMs`: a stop, a supervisor's included, doesn't.
+        if (typeof asRecord(event.payload)?.restartExpectedMs === "number") {
+          clearTimeout(this.restartTimer);
+          this.setConnection({ restart: "restarting" });
+          this.restartTimer = setTimeout(() => {
+            if (generation === this.generation && this.state.connection.restart === "restarting")
+              this.setConnection({ restart: "late" });
+          }, RESTART_WAIT_MS);
+        }
         return;
       case "sessions.changed":
         this.handleSessionsChanged(event.payload, generation);

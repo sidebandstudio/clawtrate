@@ -147,6 +147,15 @@ test("#592: the gateway restarted with the app connected: the app recovers by it
       strips.some((text) => /Couldn't load/.test(text)),
       strips.join(" | "),
     ).toBe(false);
+    // The gateway said it was restarting, so the strip said that, not "Reconnecting" (#913).
+    expect(
+      strips.some((text) => text.includes("Restarting OpenClaw")),
+      strips.join(" | "),
+    ).toBe(true);
+    expect(
+      strips.some((text) => text.includes("Reconnecting")),
+      strips.join(" | "),
+    ).toBe(false);
     const input = page.getByTestId("composer-input");
     await expect(input).not.toHaveAttribute("placeholder", /Offline/);
     await expect(page.getByText(/Offline\. Messages send|Reconnecting\. Last seen/)).toHaveCount(0);
