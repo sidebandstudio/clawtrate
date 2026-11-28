@@ -7,6 +7,7 @@ import {
   emptyActivity,
   enforceState,
   initialState,
+  isTerminal,
   mapHistory,
   RawTable,
   readingContextOf,
@@ -23,6 +24,7 @@ import { describe, expect, it, vi } from "vitest";
 import { ActionScope, ItemFeed, RunFeed } from "../src/actions/feed.tsx";
 import { BridgeProvider } from "../src/bridge.tsx";
 import { CardScope } from "../src/cards/TranscriptCards.tsx";
+import { heldByEngine } from "../src/Conversation.tsx";
 import { RunReply } from "../src/LiveTurn.tsx";
 
 // "Show commands" and "Show thinking" read the device's storage, which a markup render has none
@@ -69,8 +71,8 @@ function transcriptOf(
   return enforceState({ ...initialState, transcripts: { [KEY]: transcript } }).transcripts[KEY]!;
 }
 
-/** The conversation's drawing of the run's history rows and of the run itself. */
-function draw(transcript: Transcript): string {
+/** The conversation's drawing of the run's history rows and, while it draws it live, of the run. */
+function draw(transcript: Transcript, live = true): string {
   const run = transcript.runs[0]!;
   // Whenever history gives up a block as the reply's row, the live reply shows those words: no
   // words leave the screen (#872). Checked here by the words, which the app never compares.
@@ -86,17 +88,18 @@ function draw(transcript: Transcript): string {
   const scope = createElement(ActionScope, {
     taskKey: KEY,
     transcript,
-    engineRuns: [run],
+    engineRuns: live ? [run] : [],
     lost: false,
     readOnly: true,
     ctx: readingContextOf(transcript),
     children: [
       ...transcript.items.map((item) => createElement(ItemFeed, { key: item.id, itemId: item.id })),
-      createElement(RunFeed, {
-        key: "run",
-        runId: RUN,
-        reply: (each: Run) => createElement(RunReply, { run: each }),
-      }),
+      live &&
+        createElement(RunFeed, {
+          key: "run",
+          runId: RUN,
+          reply: (each: Run) => createElement(RunReply, { run: each }),
+        }),
     ],
   });
   return renderToStaticMarkup(
@@ -594,5 +597,100 @@ describe("#872: a reply history already holds is drawn once while its run goes o
     );
     expect(count(html, note)).toBe(1);
     expect(html).toContain('data-testid="live-turn"');
+  });
+});
+
+// At the run's end the conversation stops drawing the run live, and history's read that holds the
+// reply's row lands 1 to 150 ms later on both versions (#912). The live reply stays until then.
+describe("#912: a reply stays on screen from the run's end until history's row of it is drawn", () => {
+  const user = {
+    role: "user",
+    content: "Look for my old notes.",
+    __openclaw: { id: "u1", seq: 1 },
+  };
+  const row = (id: string, seq: number, content: unknown[]) => ({
+    role: "assistant",
+    content,
+    __openclaw: { id, seq, runId: RUN },
+  });
+  const text = (value: string) => ({ type: "text", text: value });
+  const toolCall = (id: string) => ({ type: "toolCall", id, name: "ls", arguments: { path: "." } });
+  const end: Array<[string, Record<string, unknown>]> = [["lifecycle", { phase: "end" }]];
+  const keyed = (transcript: Transcript): Transcript => ({
+    ...transcript,
+    runs: transcript.runs.map((run) => ({
+      ...run,
+      anchorItemId: transcript.items[0]!.id,
+      anchorKeyed: true as const,
+    })),
+  });
+  /** As the conversation draws it: live while the run goes on, or while the engine holds it. */
+  const shown = (transcript: Transcript) => {
+    const run = transcript.runs[0]!;
+    return draw(transcript, !isTerminal(run.state) || heldByEngine(run, transcript));
+  };
+
+  it("a plain answer is drawn in every state from its last text to the read that holds its row", () => {
+    const answer = "Your notes are in the drawer.";
+    const events = [...start, ...said("m:0", answer)];
+    const states = [
+      keyed(transcriptOf(events, [user])),
+      keyed(transcriptOf([...events, ...end], [user])),
+      keyed(transcriptOf([...events, ...end], [user, row("a1", 2, [text(answer)])])),
+    ];
+    expect(states.map((each) => each.runs[0]!.state)).toEqual([
+      "running",
+      "completed",
+      "completed",
+    ]);
+    expect(states.map((each) => count(shown(each), answer))).toEqual([1, 1, 1]);
+    // History's row draws it once the read lands, and the run is no longer drawn live.
+    expect(shown(states[2]!)).not.toContain('data-testid="live-turn"');
+  });
+
+  it("F-551's answer after a failed call is drawn in every state, the call's row read before the answer's", () => {
+    const answer = "No notes turned up, sorry.";
+    const events = [...start, ...said("m:1", "Looking."), ...call("c1"), ...said("m:2", answer)];
+    const callRow = row("a1", 2, [text("Looking."), toolCall("c1")]);
+    const states = [
+      transcriptOf(events, [user]),
+      transcriptOf([...events, ...end], [user]),
+      transcriptOf([...events, ...end], [user, callRow]),
+      transcriptOf([...events, ...end], [user, callRow, row("a2", 4, [text(answer)])]),
+    ].map(keyed);
+    expect(states.map((each) => count(shown(each), answer))).toEqual([1, 1, 1, 1]);
+    expect(shown(states[3]!)).not.toContain('data-testid="live-turn"');
+  });
+
+  it("a row the tie refuses at the reply's place ends the wait: drawn from history alone, never twice", () => {
+    const placeholder = {
+      role: "assistant",
+      content: [text("[chat.history omitted: message too large]")],
+      __openclaw: { id: "a2", seq: 4, runId: RUN, truncated: true, reason: "oversized" },
+    };
+    const html = shown(
+      keyed(
+        transcriptOf(
+          [...start, ...call("c1"), ...said("m:1", "A very long answer."), ...end],
+          [user, row("a1", 2, [toolCall("c1")]), placeholder],
+        ),
+      ),
+    );
+    expect(count(html, "[chat.history omitted: message too large]")).toBe(1);
+    expect(html).not.toContain('data-testid="live-turn"');
+  });
+
+  it("after a read that subscribes again, the reply is off screen from the run's end until its row is read", () => {
+    // Nothing ties the reply to a place in history, so nothing says when the row is there.
+    // Pinned, so that changing it is deliberate.
+    const reply = "Both logs are clean.";
+    const before = keyed(
+      transcriptOf(
+        [...start, ...call("c1"), ...said("m:1", reply), ...end],
+        [user, row("a1", 2, [toolCall("c1")])],
+      ),
+    );
+    expect(count(shown(before), reply)).toBe(1);
+    expect(count(shown({ ...before, runs: before.runs.map(unfollowed) }), reply)).toBe(0);
   });
 });

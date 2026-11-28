@@ -2887,15 +2887,47 @@ test("F-528 F-529 F-530: by default a real run shows no card: the status line na
   await expect(run.locator(".run-actions")).toContainText("Read 5 files · 6 reads");
 });
 
+/** F-551's run, and the reply the scripted model ends it with. */
+const NOTES_RUN = "Look for my old notes. #think #tool-fail";
+const NOTES_REPLY = "That file does not exist, so the step failed. I will carry on without it.";
+
+/**
+ * Watches the page from now on, at every change: whether the status line has shown, and each
+ * count of bubbles that say `text` whole, as it changes. A moment between two polls is not missed.
+ */
+async function watchConversation(page: Page, text: string) {
+  type Seen = { status: boolean; counts: number[] };
+  await page.evaluate((text) => {
+    const seen: Seen = { status: false, counts: [] };
+    (window as unknown as { conversationSeen: Seen }).conversationSeen = seen;
+    const look = () => {
+      if (document.querySelector('[data-testid="status-line"]')) seen.status = true;
+      const count = [...document.querySelectorAll(".transcript .bubble")].filter(
+        (bubble) => bubble.textContent?.trim() === text,
+      ).length;
+      if (seen.counts.at(-1) !== count) seen.counts.push(count);
+    };
+    look();
+    new MutationObserver(look).observe(document.body, {
+      subtree: true,
+      childList: true,
+      characterData: true,
+    });
+  }, text);
+  return () =>
+    page.evaluate(() => (window as unknown as { conversationSeen: Seen }).conversationSeen);
+}
+
 test("F-551: by default a real run shows no thinking and no failed action, which its run line counts, the same after a reload; Show thinking in Settings → Advanced brings the thinking back", async ({
   page,
 }) => {
   await openShell(page);
   const { title } = await ownTaskOf(page, "pip", "Pip", "Think, then look for notes");
-  await composer(page).fill("Look for my old notes. #think #tool-fail");
+  const reply = NOTES_REPLY;
+  const seen = await watchConversation(page, reply);
+  await composer(page).fill(NOTES_RUN);
   await page.keyboard.press("Enter");
   const transcript = page.getByTestId("transcript");
-  const reply = "That file does not exist, so the step failed. I will carry on without it.";
   // The run is its words and one line: no reasoning, and the failed action is in the line.
   const quiet = async () => {
     await expect(transcript.getByText(reply, { exact: true })).toBeVisible({ timeout: 30_000 });
@@ -2910,6 +2942,9 @@ test("F-551: by default a real run shows no thinking and no failed action, which
       run.locator('.run-actions details.card.action[data-status="failed"]'),
     ).toBeVisible();
   };
+  // The run has started before its status line is waited out: a look right after Enter comes
+  // before the line is drawn (#912).
+  await expect.poll(async () => (await seen()).status, { timeout: 30_000 }).toBe(true);
   await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 30_000 });
   await quiet();
   // From the gateway's history, the same.
@@ -2927,6 +2962,25 @@ test("F-551: by default a real run shows no thinking and no failed action, which
   await expect(toggle).toHaveAttribute("aria-checked", "true");
   await page.keyboard.press("Escape");
   await expect(transcript.locator("details.thought").first()).toBeVisible();
+});
+
+test("F-095: a real run's reply stays on screen from its last words until history's row of it is drawn", async ({
+  page,
+}) => {
+  // At the run's end the conversation draws the reply from history's row instead of the run.
+  // History is read 1 to 150 ms after the end; the run's reply stays drawn until then (#912).
+  await openShell(page);
+  await ownTaskOf(page, "pip", "Pip", "Keep the answer in view");
+  const seen = await watchConversation(page, NOTES_REPLY);
+  await composer(page).fill(NOTES_RUN);
+  await page.keyboard.press("Enter");
+  await expect.poll(async () => (await seen()).status, { timeout: 30_000 }).toBe(true);
+  await expect(page.getByTestId("status-line")).toHaveCount(0, { timeout: 30_000 });
+  // History's row draws it now, not the run.
+  await expect(page.getByTestId("live-turn")).toHaveCount(0, { timeout: 15_000 });
+  await expect(page.getByText(NOTES_REPLY, { exact: true })).toHaveCount(1);
+  // Whole once, and never off screen or doubled after.
+  expect((await seen()).counts).toEqual([0, 1]);
 });
 
 /** The action cards' and folds' lines in a transcript, in order. */

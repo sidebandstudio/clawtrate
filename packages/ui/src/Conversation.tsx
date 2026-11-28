@@ -14,6 +14,7 @@ import {
   isTerminal,
   lastSaidItem,
   LIVE_UPDATES_NOT_STARTED,
+  replyAwaited,
   updateNoticeLine,
   updateNoticeScope,
 } from "@clawtrate/core";
@@ -648,10 +649,14 @@ type LiveParts = {
   onReview: () => void;
 };
 
-/** A terminal run's reply is shown from the engine only until history holds its message. */
-function heldByEngine(run: Run, transcript: Transcript): boolean {
+/**
+ * A terminal run's reply is shown from the engine only until history holds its message, and its
+ * reply's row where that row's place is known (`replyAwaited`).
+ */
+export function heldByEngine(run: Run, transcript: Transcript): boolean {
   return (
-    run.messageId !== null && transcript.outbox.some((message) => message.id === run.messageId)
+    (run.messageId !== null && transcript.outbox.some((message) => message.id === run.messageId)) ||
+    replyAwaited(run, transcript.items)
   );
 }
 
