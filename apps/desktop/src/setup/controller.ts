@@ -520,6 +520,7 @@ export class SetupController implements SetupHost {
 
   /** Start the stopped Mac gateway the person chose, then offer the proved gateway to Connect. */
   async start(): Promise<void> {
+    if (this.closed) return;
     if (this.busy) throw new Error(BUSY);
     const local = this.options.localConnect;
     const { phase, look, failure } = this.state;
@@ -624,7 +625,7 @@ export class SetupController implements SetupHost {
     if (this.installing) return;
     if (phase === "install-failed") {
       // What a failed attempt left is looked at again before anything else is offered.
-      void this.lookNow();
+      if (!this.closed) void this.lookNow();
       return;
     }
     this.attempt += 1;

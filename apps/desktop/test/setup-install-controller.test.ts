@@ -426,6 +426,7 @@ describe("F-502 F-505: the steps, then the look of the gateway just set up", () 
     // The dialog is open when the app quits.
     await until(() => fake.dialogs.length === 1, "the dialog opens");
     const closing = fake.setup.close();
+    const scans = vi.mocked(lookLocally).mock.calls.length;
     answer(true);
     await installing;
     await closing;
@@ -433,6 +434,8 @@ describe("F-502 F-505: the steps, then the look of the gateway just set up", () 
     const asked = fake.asked.length;
     await fake.setup.look();
     expect(fake.asked.length).toBe(asked);
+    // The local path asks through lookLocally, not a program: that count is the one that matters.
+    expect(vi.mocked(lookLocally).mock.calls.length).toBe(scans);
   });
 
   it("F-502: closed while an install runs, the quit waits for it, and no look follows it", async () => {
@@ -442,6 +445,7 @@ describe("F-502 F-505: the steps, then the look of the gateway just set up", () 
     const installing = fake.setup.install();
     await until(() => fake.runs === 1, "the installer starts");
     expect(fake.setup.current.phase).toBe("installing");
+    const scans = vi.mocked(lookLocally).mock.calls.length;
     let closed = false;
     const closing = fake.setup.close().then(() => (closed = true));
     await new Promise((done) => setImmediate(done));
@@ -452,6 +456,31 @@ describe("F-502 F-505: the steps, then the look of the gateway just set up", () 
     await closing;
     expect(closed).toBe(true);
     expect(fake.asked.length).toBe(asked);
+    expect(vi.mocked(lookLocally).mock.calls.length).toBe(scans);
+    await fake.setup.look();
+    expect(vi.mocked(lookLocally).mock.calls.length).toBe(scans);
+  });
+
+  it("F-502: closed for the app's quit, Back from a failed install and Start look at nothing", async () => {
+    const failure = {
+      kind: "onboard" as const,
+      step: 2,
+      exitCode: 1,
+      classification: null,
+      retry: false,
+      cleanup: "kept" as const,
+    };
+    const fake = harness({ outcome: { ok: false, failure } });
+    await notFound(fake);
+    await fake.setup.install();
+    expect(fake.setup.current.phase).toBe("install-failed");
+    await fake.setup.close();
+    const scans = vi.mocked(lookLocally).mock.calls.length;
+    fake.setup.cancel();
+    await expect(fake.setup.start()).resolves.toBeUndefined();
+    await new Promise((done) => setTimeout(done, 50));
+    expect(vi.mocked(lookLocally).mock.calls.length).toBe(scans);
+    expect(fake.setup.current.phase).toBe("install-failed");
   });
 
   it("F-502: while an install runs, a look, Connect, a second install, Back and the first screen are refused or do nothing, and the install's own look still follows", async () => {
