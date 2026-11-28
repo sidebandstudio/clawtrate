@@ -305,7 +305,10 @@ export function Composer({
   // A file the limits admit is on its way to the host until the host holds it.
   const pending = (file: Attached) => !file.info && refusalOf(file) === null;
   const uploading = files.some(pending);
-  const attaching = tokens.some((token) => token.attach);
+  // A chip waits while its skill is on its way onto the task, or off it again (Undo).
+  const attaching = tokens.some(
+    (token) => token.attach || (attached?.phase === "busy" && token.insert === attached.insert),
+  );
   const hasContent = text.trim().length > 0 || files.length > 0 || tokens.length > 0;
   const canSend = hasContent && !refused && !uploading && !attaching;
   const refusalReason = refused ? (whole ?? "Remove the files that are too large to send.") : null;
@@ -519,9 +522,9 @@ export function Composer({
     const opening = !picker || picker.trigger !== trigger;
     if (!picker || picker.trigger !== trigger || picker.start !== start) setActive(0);
     setPicker({ trigger, query: found[3]!, start });
-    // Read when the trigger changes, and again when a menu opens over a list that failed. Only
-    // the latest read's answer is shown.
-    if (menuRows?.trigger !== trigger || (opening && menuRows.error !== null)) {
+    // Read each time a menu opens, so a skill saved meanwhile is listed, and when the trigger
+    // changes. Only the latest read's answer is shown.
+    if (opening || menuRows?.trigger !== trigger) {
       const asked = ++menuRead.current;
       setMenuRows({ trigger, rows: null, error: null });
       void bridge.invoke({ type: "readComposerMenu", key: taskKey, trigger }).then(
@@ -603,12 +606,14 @@ export function Composer({
     settle("busy");
     void bridge.invoke({ type: "detachLibrarySkill", key: taskKey, skillId }).then(
       ({ detached }) => {
+        // Whether the task still has it isn't known, so a chip not yet sent can't be trusted.
         if (!detached) {
           settle("ready");
+          setTokens((current) => current.filter((token) => token.insert !== insert));
           setMenuRows(null);
           onNotice({
             title: `Clawtrate couldn't confirm ${attached.name} was detached.`,
-            reason: "Press Undo again to make sure.",
+            reason: "Press Undo to try again, or choose it from / to see whether the task has it.",
           });
           return;
         }

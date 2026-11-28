@@ -6,6 +6,8 @@ import {
   mentionRows,
   slashRows,
 } from "../src/composer-menus.ts";
+import { createBridgeSession } from "../src/bridge.ts";
+import { INTERACTIVE_SCOPES } from "../src/scopes.ts";
 import { KEY, openTask, URL_B } from "./client-harness.ts";
 import { deferred, until } from "./fake-gateway.ts";
 
@@ -360,6 +362,35 @@ describe("attaching a library skill", () => {
     await until(() => gateway.calls("skills.library.activate").length === 3);
     gateway.dropAll();
     expect(await detach).toEqual({ detached: false });
+    client.stop();
+  });
+
+  it("F-071: closing the task withdraws an attach still waiting for write access, though another view keeps it open", async () => {
+    const { client, gateway } = await openTask({ held: ["operator.read"] });
+    const wait = deferred<unknown>();
+    gateway.handlers["device.scopes.requestUpgrade"] = () => ({ requestId: "up-1" });
+    gateway.handlers["device.scopes.waitUpgrade"] = () => wait.promise;
+    gateway.handlers["skills.library.activate"] = () => ({ sessionKey: KEY, selections: [] });
+    const first = createBridgeSession(client);
+    const second = createBridgeSession(client);
+    await first.apply({ type: "openSession", key: KEY });
+    await second.apply({ type: "openSession", key: KEY });
+    const attach = first.apply({
+      type: "attachLibrarySkill",
+      key: KEY,
+      skillId: saved.skillId,
+      revision: saved.revision,
+    });
+    await until(() => client.state.connection.upgrade.status === "pending");
+    await first.apply({ type: "closeSession", key: KEY });
+    wait.resolve({
+      status: "approved",
+      requestId: "up-1",
+      deviceToken: "rotated",
+      scopes: INTERACTIVE_SCOPES,
+    });
+    await expect(attach).rejects.toThrow("The request was withdrawn.");
+    expect(gateway.calls("skills.library.activate")).toEqual([]);
     client.stop();
   });
 

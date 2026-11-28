@@ -260,6 +260,62 @@ test.describe("the composer's menus", () => {
     await expect(line).toHaveCount(0);
   });
 
+  test("F-071: / reads the list again each time it opens, so a skill saved meanwhile is listed", async ({
+    page,
+  }) => {
+    await open(page);
+    await record(page);
+    await field(page).click();
+    await page.keyboard.type("/");
+    await expect(page.getByRole("option").first()).toBeVisible();
+    await expect(page.getByRole("option", { name: /moon-phase/ })).toHaveCount(0);
+    await page.keyboard.press("Backspace");
+    await expect(page.getByRole("option")).toHaveCount(0);
+    // The person saves moon-phase elsewhere while this composer stays open.
+    await offerAttach(page);
+    await page.keyboard.type("/");
+    await expect(page.getByRole("option", { name: /moon-phase/ })).toBeVisible();
+    expect((await sent(page)).filter((type) => type === "readComposerMenu")).toHaveLength(2);
+  });
+
+  test("F-071: a chip waits while Undo takes its skill off, and goes when Undo can't be confirmed", async ({
+    page,
+  }) => {
+    await open(page);
+    await offerAttach(page);
+    await record(page);
+    await page.evaluate(() => {
+      const w = window as unknown as {
+        clawtrateFixture: { invoke: (command: unknown) => Promise<unknown> };
+        detached?: (answer: unknown) => void;
+      };
+      const invoke = w.clawtrateFixture.invoke.bind(w.clawtrateFixture);
+      w.clawtrateFixture.invoke = (command) =>
+        (command as { type: string }).type === "detachLibrarySkill"
+          ? new Promise((resolve) => (w.detached = resolve))
+          : invoke(command);
+    });
+    await field(page).click();
+    await page.keyboard.type("/moon");
+    await page.keyboard.press("Enter");
+    const line = page.getByTestId("skill-attached");
+    await expect(line).toHaveText(/Attached moon-phase to this task\./);
+    await line.getByRole("button", { name: "Undo: attached moon-phase to this task" }).click();
+    await field(page).click();
+    await page.keyboard.type("for tonight");
+    await page.keyboard.press("Enter");
+    expect(await sends(page)).toEqual([]);
+    // The detach's answer was lost: whether the task still has the skill isn't known.
+    await page.evaluate(() =>
+      (window as unknown as { detached: (answer: unknown) => void }).detached({ detached: false }),
+    );
+    await expect(page.getByTestId("token-chip")).toHaveCount(0);
+    await expect(
+      page.getByText("Clawtrate couldn't confirm moon-phase was detached."),
+    ).toBeVisible();
+    expect(await sends(page)).toEqual([]);
+  });
+
   test("F-070: typing @ lists the bots and the gateway's routines, tagged, and puts the chosen name where it was typed", async ({
     page,
   }) => {

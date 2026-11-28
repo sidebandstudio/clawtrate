@@ -2498,15 +2498,20 @@ class ViewerSession implements BridgeSession {
         return client.setShowGatewayBot(command.on);
       case "readComposerMenu":
         return client.readComposerMenu(this.mine(command.key), command.trigger);
-      case "attachLibrarySkill":
+      // Asked for this opening of the task: closing it withdraws one still waiting for access.
+      case "attachLibrarySkill": {
+        const key = this.mine(command.key);
         return client.attachLibrarySkill(
-          this.mine(command.key),
+          key,
           command.skillId,
           command.revision,
-          owner,
+          this.open.get(key) ?? owner,
         );
-      case "detachLibrarySkill":
-        return client.detachLibrarySkill(this.mine(command.key), command.skillId, owner);
+      }
+      case "detachLibrarySkill": {
+        const key = this.mine(command.key);
+        return client.detachLibrarySkill(key, command.skillId, this.open.get(key) ?? owner);
+      }
       case "setReaction":
         return client.setReaction(
           this.mine(command.key),
