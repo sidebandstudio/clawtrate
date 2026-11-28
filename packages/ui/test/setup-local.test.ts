@@ -555,5 +555,8 @@ describe("removing an unfinished OpenClaw setup", () => {
     expect(html).toContain("Clawtrate couldn’t move the unfinished setup folders to the Trash.");
     expect(html).toMatch(/<button[^>]*>Continue<\/button>/);
     expect(html).not.toContain("The unfinished setup folders are in the Trash.");
+    // The saved attempt's steps stay as it left them, beside its checked Node.js.
+    expect(html).toContain('aria-label="Install Node.js and OpenClaw, done"');
+    expect(html).toContain('aria-label="Set up the gateway, waiting"');
   });
 });

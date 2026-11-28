@@ -967,7 +967,9 @@ function Installing({
   const send = useCommand();
   const install = setup.install ?? { step: 0, nodeChecked: false, failure: null };
   const failure = setup.phase === "install-failed" ? install.failure : null;
-  const current = failure ? failure.step : install.step;
+  // A refusal before any step leaves a saved attempt's steps as that attempt left them.
+  const stepped = !!failure && (failure.step >= 0 || !install.recovery);
+  const current = stepped ? failure!.step : install.step;
   const details = [null, install.nodeChecked ? `Node.js ${INSTALL_NODE_VERSION}, checked` : null];
   let lead = "";
   if (failure && failure.step < 0) lead = BEFORE[failure.kind] ?? "Setup couldn't start.";
@@ -1002,7 +1004,7 @@ function Installing({
         <Steps
           steps={INSTALL_STEPS}
           current={current}
-          failed={!!failure}
+          failed={stepped}
           paused={!!install.recovery}
           details={details}
         />
