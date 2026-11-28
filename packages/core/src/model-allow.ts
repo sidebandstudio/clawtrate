@@ -395,6 +395,15 @@ export function holdsAddition(
   return now?.place === addition.place && now.raw.includes(addition.entry);
 }
 
+/** Whether the entry is still on its original list, even if that list no longer governs. */
+export function listHasEntry(
+  config: Raw,
+  botId: string,
+  addition: { entry: string; place: "bot" | "gateway" },
+): boolean {
+  return listAt(config, botId, addition.place)?.raw.includes(addition.entry) ?? false;
+}
+
 /**
  * Taking an addition out again: its last copy of the entry out of the list it went on, from the
  * config revision the addition left (`ModelAllowed.revision`), which the caller holds it to. Null

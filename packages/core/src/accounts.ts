@@ -638,7 +638,7 @@ export type ModelAllowed = {
    * was made isn't known yet; a read that shows the entry there, where it wasn't, makes it `added`.
    * `added`: made. `undoing`: Undo under way. `undone`: taken out. `changed`: the config has changed
    * since the addition, so Undo isn't offered. `failed`: Undo's write failed, with `error`; Undo
-   * stays offered. `not-added`: one `unconfirmed` that a read showed was never made.
+   * stays offered. `not-added`: a read after an unconfirmed write found its entry missing.
    */
   status: "unconfirmed" | "added" | "undoing" | "undone" | "changed" | "failed" | "not-added";
   error: string | null;

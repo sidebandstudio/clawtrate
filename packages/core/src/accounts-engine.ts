@@ -87,6 +87,7 @@ import {
   allowRemoval,
   botModelRef,
   holdsAddition,
+  listHasEntry,
   ownModelRefusal,
   type AllowAddition,
   type AllowRef,
@@ -3085,10 +3086,14 @@ export class AccountsEngine {
           : a,
       );
     };
+    const current = () =>
+      this.resets === resets &&
+      this.ctx.gatewayNow() === allowed.gatewayId &&
+      this.ctx.get().allowed?.id === allowed.id;
+    const { ctx, check } = this.checked(beforeSend);
     settle("undoing");
     const outcome = { taken: false, changed: false, unsure: false };
     try {
-      const { ctx, check } = this.checked(beforeSend);
       const { config, applied } = await this.patchFrom(
         (read) => {
           // Checked again once read: the addition shown is still the record, and the config is
@@ -3124,18 +3129,17 @@ export class AccountsEngine {
         if (this.resets === resets) this.rereadSoon(resets);
         return;
       }
-      // Its answer didn't come: the config is read back, never the removal sent again. Gone
-      // from its list, it was taken out; there still, or not read, Undo stays offered.
+      // Read back the original list on the same gateway without resending the patch.
       if (outcome.unsure) {
-        const back = await this.readBack();
-        if (this.resets !== resets) return;
-        if (
-          back &&
-          !holdsAddition(back, allowed.botId, { entry: allowed.entry, place: allowed.scope })
-        ) {
-          settle("undone");
-          this.refusedAfter(back, appliedConfig(back));
-          if (!appliedConfig(back)) this.rereadSoon(resets);
+        const back = await this.readBack(ctx, revision, current);
+        if (!current()) return;
+        if (back) {
+          const present = listHasEntry(back, allowed.botId, {
+            entry: allowed.entry,
+            place: allowed.scope,
+          });
+          settle(present ? "changed" : "undone");
+          this.refusedAfter(back, true);
           return;
         }
       }
@@ -3144,12 +3148,24 @@ export class AccountsEngine {
     }
   }
 
-  /** The config read again after a write whose answer didn't come: a few tries, a second apart. */
-  private async readBack(): Promise<RawRecord | null> {
+  /** After a lost Undo reply, look for a new, applied revision on the same gateway. */
+  private async readBack(
+    ctx: AccountsContext,
+    revision: string,
+    current: () => boolean,
+  ): Promise<RawRecord | null> {
     for (let tries = 0; tries < REREADS; tries += 1) {
       if (tries > 0) await new Promise<void>((resolve) => setTimeout(() => resolve(), REREAD_MS));
-      const read = await this.ctx.request("config.get", {}).then(asRecord, () => null);
-      if (read) return read;
+      if (!current()) break;
+      const read = await ctx.request("config.get", {}).then(asRecord, () => null);
+      if (
+        read &&
+        asRecord(read.config) &&
+        typeof read.hash === "string" &&
+        read.hash !== revision &&
+        appliedConfig(read)
+      )
+        return read;
     }
     return null;
   }
@@ -3258,8 +3274,8 @@ function requireModelId(model: string): void {
  * An addition's record after an accounts read of the config (#799), on the gateway it was made on.
  * One not confirmed, or made with no revision read after it, counts as made once a read shows its
  * entry on its list (the read the write was based on didn't have it: `allowAddition` adds only an
- * entry that list refuses), bound to that read's revision; one not confirmed and not there was
- * never made, and goes. A made one whose config has changed since, by anyone, is `changed`: Undo
+ * entry that list refuses), bound to that read's revision. If a read finds the entry missing,
+ * the outcome stays visible. A made one whose config has changed since is `changed`: Undo
  * is no longer offered.
  */
 function settledAllowed(
@@ -3267,20 +3283,27 @@ function settledAllowed(
   config: RawRecord | null,
   gatewayId: string | null,
 ): ModelAllowed | null {
-  if (!allowed || !config || allowed.gatewayId === null || allowed.gatewayId !== gatewayId)
+  if (
+    !allowed ||
+    !config ||
+    !asRecord(config.config) ||
+    allowed.gatewayId === null ||
+    allowed.gatewayId !== gatewayId
+  )
     return allowed;
   const hash = typeof config.hash === "string" ? config.hash : null;
-  const there = holdsAddition(config, allowed.botId, {
-    entry: allowed.entry,
-    place: allowed.scope,
-  });
   if (
     allowed.status === "unconfirmed" ||
     (allowed.status === "added" && allowed.revision === null)
   ) {
-    if (there && hash !== null) return { ...allowed, status: "added", revision: hash };
-    // Not there: one whose answer didn't come was never made, and says so.
-    return { ...allowed, status: allowed.status === "unconfirmed" ? "not-added" : "changed" };
+    const addition = { entry: allowed.entry, place: allowed.scope };
+    if (holdsAddition(config, allowed.botId, addition))
+      return hash === null ? allowed : { ...allowed, status: "added", revision: hash };
+    if (allowed.status === "unconfirmed") {
+      if (!appliedConfig(config) || listHasEntry(config, allowed.botId, addition)) return allowed;
+      return { ...allowed, status: "not-added" };
+    }
+    return { ...allowed, status: "changed" };
   }
   if ((allowed.status === "added" || allowed.status === "failed") && hash !== allowed.revision)
     return { ...allowed, status: "changed" };

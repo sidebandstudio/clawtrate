@@ -1257,7 +1257,7 @@ describe("F-042: lost replies, read again, and the gateway the refusals are from
     expect(state().modelsRefused).toEqual([{ botId: "otto", ...DEV1, why: null }]);
   });
 
-  it("an Undo whose reply is lost is read back: taken out, it says so, and the refusal is back", async () => {
+  it("an Undo whose reply is lost waits for the applied removal without sending it again", async () => {
     const fake = new AccountsGateway();
     limited(fake, ["acme/dev-2"]);
     const { engine, state } = engineOn(fake);
@@ -1265,18 +1265,44 @@ describe("F-042: lost replies, read again, and the gateway the refusals are from
     await engine.allowModel("otto", DEV1);
     expect(state().allowed?.status).toBe("added");
     const patch = fake.gateway.handlers["config.patch"]!;
+    const get = fake.gateway.handlers["config.get"]!;
     let sent = 0;
+    let recovered = 0;
     fake.gateway.handlers["config.patch"] = (params) => {
       sent += 1;
       patch(params);
       throw new Error("gateway request timeout for config.patch");
     };
+    fake.gateway.handlers["config.get"] = (params) => {
+      const answer = get(params) as Record<string, unknown>;
+      if (!sent) return answer;
+      expect(state().allowed?.status).toBe("undoing");
+      expect(state().modelsRefused).toEqual([]);
+      recovered += 1;
+      return recovered === 1 ? { ...answer, appliedConfigHash: `r${fake.revision - 1}` } : answer;
+    };
     await engine.undoAllowed({ botId: "otto", id: state().allowed!.id });
     expect(state().allowed?.status).toBe("undone");
     expect(defaults(fake).modelPolicy).toEqual({ allow: ["acme/dev-2"] });
     expect(state().modelsRefused).toEqual([{ botId: "otto", ...DEV1, why: null }]);
-    // Read back, never sent again.
     expect(sent).toBe(1);
+    expect(recovered).toBe(2);
+  });
+
+  it("a lost Undo reply shows changed if the original list still contains the entry", async () => {
+    const fake = new AccountsGateway();
+    limited(fake, ["acme/dev-2"]);
+    const { engine, state } = engineOn(fake);
+    await engine.load();
+    await engine.allowModel("otto", DEV1);
+    fake.gateway.handlers["config.patch"] = () => {
+      entries(fake).otto!.modelPolicy = { allow: ["acme/dev-2"] };
+      fake.revision += 1;
+      throw new Error("gateway request timeout for config.patch");
+    };
+    await engine.undoAllowed({ botId: "otto", id: state().allowed!.id });
+    expect(state().allowed?.status).toBe("changed");
+    expect(defaults(fake).modelPolicy).toEqual({ allow: ["acme/dev-2", "acme/dev-1"] });
   });
 
   it("an alias row past the rows the app reads leaves the list unknown: no refusal, no Allow", () => {
