@@ -1764,6 +1764,28 @@ describe("sign-ins, through the gateway's own methods", () => {
     }
   });
 
+  it("Check again compares with the accounts the answer was sent against", async () => {
+    const fake = new AccountsGateway();
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    try {
+      await client.startSignIn(CHOICES.browser, null);
+      // While the sign-in waits for its code, an account appears and the page reads it.
+      fake.shared.push({ id: "acme:meanwhile", provider: "acme", type: "oauth" });
+      await client.refreshAccounts();
+      expect(accounts().accounts.some((a) => a.id === "acme:meanwhile")).toBe(true);
+      fake.gateway.handlers["wizard.next"] = () => ({ done: false, step: { type: "text" } });
+      await client.answerSignIn("made-up-code");
+      await until(() => accounts().signIn?.result != null);
+      expect(accounts().signIn).toMatchObject({ unsure: true, result: { added: [] } });
+
+      // Nothing changed on the gateway: Check again finds nothing new either.
+      await client.recheckSignIn();
+      expect(accounts().signIn).toMatchObject({ unsure: true, result: { added: [] } });
+    } finally {
+      client.stop();
+    }
+  });
+
   it("a sign-in the gateway refused is not unsure, and its read after it has no model", async () => {
     const fake = new AccountsGateway();
     fake.nextEnding = { outcome: "refuse" };

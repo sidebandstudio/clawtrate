@@ -1685,7 +1685,7 @@ export class AccountsEngine {
     this.holdSecret(value);
     // The accounts as they are now are this answer's baseline, for its read and for Check again.
     const before = this.accountsOf(signIn.provider);
-    this.setSignIn(signIn.id, { stage: "checking" });
+    this.setSignIn(signIn.id, { stage: "checking", known: before });
     await this.paused((pause) => this.follow(signIn.id, { stepId, value }, null, before, pause));
   }
 
