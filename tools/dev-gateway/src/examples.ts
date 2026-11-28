@@ -4,6 +4,7 @@
 // the approval with `exec.approval.resolve`, then checks the run's outcome and
 // the session's durable history.
 
+import { CODING_AGENT_SERVER, CODING_AGENT_START_MS } from "./coding-agent-mcp.ts";
 import { TERMINAL_CHAT_STATES, type GatewayEvent, type OperatorSession } from "./operator.ts";
 import {
   resolveRound,
@@ -215,11 +216,29 @@ async function history(op: OperatorSession, sessionKey: string): Promise<History
   return out.messages ?? [];
 }
 
+/** The tools the model's latest request in a task offered, as the scripted model saw them. */
+export type OfferedTools = (sessionKey: string) => Promise<string[] | null>;
+
+/**
+ * The coding agent's tools an example calls that the model's latest request did not offer
+ * (#1036): the gateway offers them only once the task's `coder` server has started. None when the
+ * scripted model saw no request in the task.
+ */
+export function unofferedCoderTools(
+  example: ScenarioExample,
+  offered: readonly string[] | null,
+): string[] {
+  if (offered === null) return [];
+  const coder = `${CODING_AGENT_SERVER}__`;
+  return example.toolCalls.filter((name) => name.startsWith(coder) && !offered.includes(name));
+}
+
 /** Play one example as the user and verify it. Throws with what went wrong. */
 export async function seedExample(
   op: OperatorSession,
   example: ScenarioExample,
   log: (line: string) => void,
+  offeredTools?: OfferedTools,
 ): Promise<void> {
   const key = sessionKeyFor(example.botId, example.slug);
   const where = `${example.botId} / ${example.label}`;
@@ -285,6 +304,17 @@ export async function seedExample(
   const end = await within("end of the run", op.terminal(runId, SEED_RUN_MS));
   if (end.state !== "final") {
     throw new Error(`${where}: run ended ${String(end.state)} (${String(end.errorMessage ?? "")})`);
+  }
+  if (offeredTools) {
+    // Named before the history is compared: without the tools, every scripted step differs.
+    const missing = unofferedCoderTools(example, await offeredTools(key));
+    if (missing.length > 0) {
+      throw new Error(
+        `${where}: the ${CODING_AGENT_SERVER} tools were not offered within ${seconds(CODING_AGENT_START_MS)} s: ` +
+          `the model's request had no ${missing.join(", ")}, so the gateway's "${CODING_AGENT_SERVER}" server ` +
+          `did not start in the time it is given (its [bundle-mcp] lines in the gateway's log say why)`,
+      );
+    }
   }
   if (example.recipientSession) {
     const toolEvent = (phase: string) =>

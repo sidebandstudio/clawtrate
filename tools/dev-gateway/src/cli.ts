@@ -125,7 +125,7 @@ import {
   type InstanceEntry,
   type InstancePorts,
 } from "./registry.ts";
-import { CODING_AGENT_SERVER } from "./coding-agent-mcp.ts";
+import { CODING_AGENT_SERVER, CODING_AGENT_START_MS } from "./coding-agent-mcp.ts";
 import { CODING_AGENT_IDLE_MS, childrenReport, readProcessTable } from "./children.ts";
 import { IMAGE_API_KEY, IMAGE_MODEL_REF, IMAGE_PROVIDER_ID } from "./scripted-images.ts";
 import { contractProblems, matching, optional, type Contract } from "./contract.ts";
@@ -153,7 +153,15 @@ import {
   type DevPlugin,
   type PluginRule,
 } from "./dev-plugins.ts";
-import { SEED_ANSWER_MS, SEED_CAPS, SEED_SCOPES, seedExample, verifyExample } from "./examples.ts";
+import {
+  SEED_ANSWER_MS,
+  SEED_CAPS,
+  SEED_SCOPES,
+  seedExample,
+  verifyExample,
+  type OfferedTools,
+} from "./examples.ts";
+import { OFFERED_TOOLS_PATH } from "./fake-provider.ts";
 import {
   CLI_DEFAULT_MS,
   GIVE_UP_PAUSE_MS,
@@ -619,6 +627,8 @@ export function devConfig(
           command: process.execPath,
           args: [CODING_AGENT_SCRIPT],
           cwd: stateDir,
+          // OpenClaw's 30 s to start ran out on a loaded runner (#1036).
+          connectionTimeoutMs: CODING_AGENT_START_MS,
         },
       },
     },
@@ -2832,6 +2842,12 @@ async function seedScenarioExamples(
   // On a loaded hosted runner this connect took about 40 s of its 60, most of it the approval's
   // CLI call; on a loaded Mac one `sessions.patch` took the gateway 55 s (#883).
   const op = await openOperator(inst, SEED_CLIENT, SEED_SCOPES, SEED_CAPS, SEED_ANSWER_MS);
+  // The scripted model records the tools each task's latest request offered.
+  const { providerPort } = instancePorts(inst);
+  const offeredTools: OfferedTools = async (session) => {
+    const url = `http://127.0.0.1:${providerPort}${OFFERED_TOOLS_PATH}?session=${encodeURIComponent(session)}`;
+    return ((await (await fetch(url)).json()) as { tools: string[] | null }).tools;
+  };
   try {
     for (const example of SCENARIO_EXAMPLES) {
       const key = sessionKeyFor(example.botId, example.slug);
@@ -2842,7 +2858,7 @@ async function seedScenarioExamples(
         continue;
       }
       console.log(`  ${bot}: ${example.label}`);
-      await seedExample(op, example, console.log);
+      await seedExample(op, example, console.log, offeredTools);
     }
   } finally {
     await op.close();
