@@ -30,6 +30,11 @@ describe("a bot's summary of all its tasks", () => {
   it("is empty for a bot with no tasks", () => {
     expect(summarize([], {}, null)).toEqual({ latest: null, unread: false, state: null });
     expect(botLabel(bot, 0, summarize([], {}, null))).toBe("Otto, 0 tasks");
+    // #790: the row has no words for it, so its name says its tasks are still being read.
+    expect(botLabel(bot, 0, summarize([], {}, null), { loading: true })).toBe(
+      "Otto, loading tasks",
+    );
+    expect(botLabel(bot, 1, summarize([], {}, null), { loading: true })).toBe("Otto, 1 task");
   });
 
   it("keeps preview, unread and run state independent", () => {

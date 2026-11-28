@@ -1,16 +1,14 @@
 // How a released build of version 2 reads and keeps the section, as `packages/core/src/guides.ts`
 // had it at 01179ace9 (the last build before #795): its own parser and its own by-itself rule,
-// copied unchanged but for `export`s and names, so a test can run that build's passes and this
-// build's on one file (guides.test.ts, "two builds don't take turns"). Its records and history
+// copied unchanged but for `export`s and names, and its text, which is read from the released
+// section (guides-published.ts) since the guides have changed, so a test can run that build's
+// passes and this build's on one file (guides.test.ts, "two builds don't take turns"). Its records and history
 // decide only whether a missing section is added, so they are left out: a section it never knew.
 
 import { sha256Hex, utf8Bytes } from "../src/bytes.ts";
-import { VOICE_GUIDE, WHERE_GUIDE } from "../src/guide-text.ts";
+import { innerOf } from "./guides-published.ts";
 
 const GUIDES_VERSION = 2;
-const GUIDES_NOTICE =
-  "<!-- Added by Clawtrate, which keeps it current. Turn it off in Clawtrate: Settings, Conversation. -->";
-const GUIDES_TEXT = `${VOICE_GUIDE}\n\n${WHERE_GUIDE}`;
 const END = "<!-- clawtrate:guides end -->";
 const BEGIN_LINE = /^<!-- clawtrate:guides begin v(\d{1,6}) sha256=([a-f0-9]{64}) -->\r?\n/m;
 const END_LINE = /^<!-- clawtrate:guides end -->[ \t]*(?:\r?\n|$)/m;
@@ -19,8 +17,11 @@ const ANY_MARKER = /^<!-- clawtrate:guides\b[^\n]*(?:\n|$)/gm;
 
 const hash = (text: string) => sha256Hex(utf8Bytes(text));
 
-/** Between the markers: the notice, then the guides. Its SHA-256 is in the first marker. */
-const INNER = `${GUIDES_NOTICE}\n${GUIDES_TEXT}\n`;
+/**
+ * Between the markers: the notice, then the guides, as version 2 wrote them (the released text,
+ * not this build's guides, which have changed since). Its SHA-256 is in the first marker.
+ */
+const INNER = innerOf(2);
 /** The whole section, as Clawtrate writes it, ending with a line break. */
 const GUIDES_SECTION = `<!-- clawtrate:guides begin v${GUIDES_VERSION} sha256=${hash(INNER)} -->\n${INNER}${END}\n`;
 const MAX_CHANGED_SECTION_CHARS = 16_384;

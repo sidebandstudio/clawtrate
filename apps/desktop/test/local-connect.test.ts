@@ -34,18 +34,52 @@ afterEach(() => {
   for (const server of servers.splice(0)) server.close();
 });
 
-/** A plain listener that counts every byte it is sent, and the peers' ports. */
-async function counting(): Promise<{ port: number; bytes: () => number; peers: number[] }> {
+/**
+ * A plain listener that counts every byte it is sent, and the peers' ports. `first` is what
+ * happened first on its connections: a byte arrived, or one closed. `close` stops it accepting,
+ * ends every connection it accepted, and settles once the listener and all of them are closed;
+ * the `afterEach` above calls it too.
+ */
+async function counting(): Promise<{
+  port: number;
+  bytes: () => number;
+  peers: number[];
+  first: Promise<"data" | "closed">;
+  close: () => Promise<void>;
+}> {
   let bytes = 0;
+  let closed: Promise<void> | null = null;
   const peers: number[] = [];
+  const accepted = new Set<Socket>();
+  const first = deferred<"data" | "closed">();
   const server: Server = createServer((socket: Socket) => {
+    accepted.add(socket);
     peers.push(socket.remotePort!);
-    socket.on("data", (data) => (bytes += data.length));
+    socket.on("data", (data) => {
+      bytes += data.length;
+      first.resolve("data");
+    });
+    socket.once("close", () => {
+      accepted.delete(socket);
+      first.resolve("closed");
+    });
     socket.on("error", () => {});
   });
   await new Promise<void>((done) => server.listen(0, "127.0.0.1", done));
-  servers.push(server);
-  return { port: (server.address() as { port: number }).port, bytes: () => bytes, peers };
+  // The server's own close waits for every connection it accepted to end.
+  const close = () =>
+    (closed ??= new Promise<void>((done) => {
+      server.close(() => done());
+      for (const socket of accepted) socket.destroy();
+    }));
+  servers.push({ close: () => void close() });
+  return {
+    port: (server.address() as { port: number }).port,
+    bytes: () => bytes,
+    peers,
+    first: first.promise,
+    close,
+  };
 }
 
 /** A WebSocket server that records each connection's peer port. */
@@ -295,6 +329,37 @@ describe("local connect's connector", () => {
       "ws://127.0.0.1",
     ])
       expect(routes(url, ".openclaw@1:1"), url).toBeNull();
+  });
+
+  it("on Windows the proof refuses before it looks at a home or a helper, and the socket carries no byte", async () => {
+    const listener = await counting();
+    // A folder of the test's own with no home and no helper in it: looking at either would
+    // refuse with another word.
+    const owned = mkdtempSync(join(tmpdir(), "clawtrate-connect-"));
+    let opened: Promise<"open" | "error"> | undefined;
+    try {
+      const refusals: string[] = [];
+      const local = { home: join(owned, "home"), helper: join(owned, "helper") };
+      const url = `ws://127.0.0.1:${listener.port}`;
+      const route = provedRouteFor({ ...local, platform: "win32", sandboxed: true }, (why) =>
+        refusals.push(why),
+      )(url, ".openclaw@1:1")!;
+      opened = attempt(route.createSocket, url);
+      // The one connection closes before a byte arrives: every byte it carried is counted.
+      expect(await listener.first).toBe("closed");
+      expect(listener.bytes()).toBe(0);
+      expect(listener.peers).toHaveLength(1);
+      expect(refusals).toEqual(["platform"]);
+      expect(await opened).toBe("error");
+      // The check just before the frame that carries a credential refuses as well.
+      expect(await route.verify(new AbortController().signal)).toBe(false);
+      expect(route.refusal?.()).toBe(PROOF_REFUSAL_LINES[refusalKind("platform")](listener.port));
+    } finally {
+      // Also when a check above fails while a connection is still open: ending the listener's
+      // connections lets the attempt settle, and the test ends after both have.
+      await Promise.all([listener.close(), opened]);
+      rmSync(owned, { recursive: true, force: true });
+    }
   });
 
   it("proves a setup socket last for its attempt alone: a Back during the proof sends nothing", async () => {

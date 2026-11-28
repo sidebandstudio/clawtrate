@@ -1156,6 +1156,16 @@ export function containerHits(needles: string[]): number[] {
   return hits;
 }
 
+/** The folders the app's share step holds in its cache now (`src/host/share.ts`), by name. */
+export function sharedFolders(): string[] {
+  const data = simctl("get_app_container", env.device, env.bundle, "data").trim();
+  try {
+    return readdirSync(join(data, "Library", "Caches", "clawtrate-share"));
+  } catch {
+    return [];
+  }
+}
+
 /** The app's own log lines since a time, from the device's unified log. */
 export function appLog(sinceSeconds: number): string {
   const result = spawnSync(
