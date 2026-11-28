@@ -759,12 +759,14 @@ describe("F-115: the share step", () => {
   it("F-115: a sweep tried again later, while another file is being shared, still spares that file", async () => {
     const fake = fakeSystem();
     const { share, sweep } = createSharing(fake.system);
+    // The share starts first, so its own sweep has nothing to take.
+    const sharing = share("a.pdf", BYTES, here());
+    await until(() => fake.opened("folder-1"));
+    // Then a sweep fails on what an earlier run left: only its delayed retry can delete it.
     fake.leftOver("stale");
     fake.failNextRemove();
     sweep();
     expect(fake.folders.has("stale")).toBe(true);
-    const sharing = share("a.pdf", BYTES, here());
-    await until(() => fake.opened("folder-1"));
     fake.runLater();
     expect(fake.folders.has("stale")).toBe(false);
     expect(fake.folders.has("folder-1")).toBe(true);
@@ -843,10 +845,28 @@ describe("F-115: the share step", () => {
   });
 
   it("F-115: a row gone while its file was written opens no sheet, and the file is deleted", async () => {
-    const { system, log } = fakeSystem(saved);
-    expect(await createSharing(system).share("a.pdf", BYTES, away())).toBe("dismissed");
-    expect(log.some((line) => line.startsWith("sheet"))).toBe(false);
-    expect(log.at(-1)).toBe("remove folder-1");
+    const fake = fakeSystem(saved);
+    const viewer = createViewer();
+    let asked = 0;
+    const system: ShareSystem = {
+      ...fake.system,
+      // The person goes Back once the write has begun.
+      write: async (folder, name, bytes) => {
+        const uri = fake.system.write(folder, name, bytes);
+        viewer.leave();
+        return uri;
+      },
+      sheet: (id, uri) => {
+        asked += 1;
+        return fake.system.sheet(id, uri);
+      },
+    };
+    expect(await createSharing(system).share("a.pdf", BYTES, viewer)).toBe("dismissed");
+    // Stopped by the share step itself, after the write: the native side is never asked.
+    expect(asked).toBe(0);
+    expect(fake.log).not.toContain("cancel folder-1");
+    expect(fake.log.at(-1)).toBe("remove folder-1");
+    expect(fake.folders.size).toBe(0);
   });
 
   it("F-115: a row gone between the check and the native present is cancelled there: nothing is presented and the file is deleted", async () => {

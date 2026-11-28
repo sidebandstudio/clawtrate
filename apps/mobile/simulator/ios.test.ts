@@ -2182,7 +2182,9 @@ describe("the iOS app", () => {
     }
   });
 
-  it("F-115: on iPhone, a file a bot attaches shows under its message with a document icon, its name and size, and Save opens the share sheet for it at once, from a file of the app's own that is gone once the sheet closes", async () => {
+  it("F-115: on iPhone, a file a bot attaches shows under its message with a document icon, its name and size, and Save opens the share sheet for it at once, from a file of the app's own that is gone once the sheet closes", async ({
+    annotate,
+  }) => {
     // The scripted bot writes a two-page PDF and a text note and hands both over (`#attach`).
     const own = await gatewayTask("pip", "File check");
     let front: Awaited<ReturnType<typeof protectedFront>> | null = null;
@@ -2247,7 +2249,9 @@ describe("the iOS app", () => {
       await steps("file-sheet", [
         tap(save),
         waitFor("Save to Files", 60_000),
-        see("reviews-draft"),
+        // The header's name and size are iOS's own caption, filled in after the sheet is up:
+        // waited for, as the size below is, never assumed at once.
+        waitFor("reviews-draft", 20_000),
         // While the sheet is open the row says nothing: no failure, no outcome yet.
         notSee({ id: "bot-file-note" }),
         // iOS reads the size from the file once it has the sheet up: given a moment, never
@@ -2293,14 +2297,33 @@ describe("the iOS app", () => {
       expect(more).toEqual([]);
       expect(again).toBeDefined();
       expect(again).not.toBe(folder);
-      await steps("file-save-to-files-cancelled", [
-        tap("Save to Files"),
-        // On the Simulator iOS can end Save to Files without a picker; where one shows, it is
-        // cancelled, and a sheet left up to choose again is closed with a tap outside it.
+      // On the Simulator iOS can end Save to Files without a picker; where one shows, it is
+      // cancelled, and a sheet left up to choose again is closed with a tap outside it.
+      const choose = "Choose Save to Files";
+      const cancelPicker = "Cancel the Save to Files picker";
+      const saving = await steps("file-save-to-files-cancelled", [
+        { tapOn: { text: "Save to Files", label: choose } },
         { extendedWaitUntil: { visible: "Cancel", timeout: 15_000, optional: true } },
-        { runFlow: { when: { visible: "Cancel" }, commands: [tap("Cancel")] } },
+        {
+          runFlow: {
+            when: { visible: "Cancel" },
+            commands: [{ tapOn: { text: "Cancel", label: cancelPicker } }],
+          },
+        },
         { runFlow: { when: { visible: "Save to Files" }, commands: [tapOutside] } },
       ]);
+      // Which of the two this run tested, said in the run's report (a notice on CI). It is read
+      // from the flow that taps, whose output names each command that ran, so a picker that
+      // shows late is still told right. Every assertion below holds whichever it was.
+      const ran = (label: string) => saving.includes(`${label}... COMPLETED`);
+      await annotate(
+        !ran(choose)
+          ? "Maestro's output didn't say which path Save to Files took"
+          : ran(cancelPicker)
+            ? "the picker was shown and cancelled"
+            : "Save to Files ended without a picker",
+        ran(choose) ? "notice" : "warning",
+      );
       await steps("file-save-to-files-closed", [
         waitGone("Save to Files", 30_000),
         see(save),
