@@ -682,7 +682,7 @@ Settings shows: "A newer Bot voice plugin comes with this Clawtrate · Update". 
 - **The packaged app's own path:** that a gateway reads a tarball inside a signed `Clawtrate.app` (and a translocated one), and a Windows install's `resources` folder. The runs used a folder laid out the same way, on macOS.
 - **A gateway running as another account, in a container, or in WSL** on the same computer: its error for an unreadable or missing path was not seen. Step 0 keeps the `npm-pack` route off such a gateway.
 - **The manifest fix:** the exact form OpenClaw's manifest accepts for the voice plugin's hook. Step 1 of section 14 checks it with `plugins.inspect` on both versions.
-- **Whether `runtime.sourceDigests` is stable** across the versions a pin covers. It was the same on 2026.10.6 and 2026.11.10 for the same package; a newer OpenClaw may compute it differently, which is why the pin records it per version.
+- **Whether `runtime.sourceDigests` is stable** across the versions a pin covers. It was the same on 2026.10.6 and 2026.11.10 for the same package, and on 2026.11.11 for the app's packing of voice 0.1.0; a newer OpenClaw may compute it differently, which is why the pin records it per version.
 - **`terminal.upload` on 2026.11.10:** run on 2026.10.6 only; the same method and words are in its rpc page.
 - **What disposing MCP runtimes does to an MCP call in flight.**
 - **Two devices' `config.patch` on one base hash** (section 3.5, row 6). `config.patch` takes `baseHash`, which the engine relies on to refuse the second. The run's two writes changed nothing, so the refusal wasn't seen.
