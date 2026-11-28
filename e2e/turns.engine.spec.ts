@@ -22,6 +22,7 @@ import {
   readDevConnection,
 } from "../tools/dev-gateway/src/cli.ts";
 import type { OperatorSession } from "../tools/dev-gateway/src/operator.ts";
+import { scriptedFinalText } from "../tools/dev-gateway/src/scenario-check.ts";
 
 const INSTANCE = process.env.CLAWTRATE_DEV_INSTANCE!;
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -255,28 +256,42 @@ test("F-088: text the bot writes beside an action is beside that action from the
 });
 
 /**
- * Each state in which a run still draws its reply and history already holds that reply's row:
- * the row is found here by its words, which the app never compares, and each such state records
- * whether the engine ties the reply to it (`replyRow`): null when it does, the rows otherwise.
+ * Each state, once `count()` is called, in which the run `runId()` still draws `reply` and
+ * history already holds a row with those words: the rows found here by the words, which the app
+ * never compares, and the row the engine ties the reply to (`replyRow`), or null. `wrong()` is
+ * every such state but those with one such row, the one tied.
  */
-function heldReplies(client: ClawtrateClient, key: () => string) {
-  const held: Array<string | null> = [];
+function heldReplies(
+  client: ClawtrateClient,
+  key: () => string,
+  runId: () => string,
+  reply: string,
+) {
+  const samples: Array<{ rows: string[]; tied: string | null }> = [];
+  let counting = false;
   const stop = client.store.subscribe((state) => {
+    if (!counting) return;
     const transcript = state.transcripts[key()];
-    for (const run of transcript?.runs ?? []) {
-      const reply = run.text.trim();
-      if (run.state !== "running" || !reply || textPlaced(run)) continue;
-      const rows = transcript!.items.flatMap((item) =>
-        item.blocks.flatMap((block, i) =>
-          block.kind === "text" && block.text.trim() === reply ? [`${item.id}#${i}`] : [],
-        ),
-      );
-      if (rows.length === 0) continue;
-      const tied = replyRow(run, transcript!.items);
-      held.push(tied && rows.includes(`${tied.itemId}#${tied.block}`) ? null : rows.join());
-    }
+    const run = transcript?.runs.find((each) => each.id === runId());
+    if (!run || run.state !== "running" || run.text.trim() !== reply.trim() || textPlaced(run))
+      return;
+    const rows = transcript!.items.flatMap((item) =>
+      item.blocks.flatMap((block, i) =>
+        block.kind === "text" && block.text.trim() === reply.trim() ? [`${item.id}#${i}`] : [],
+      ),
+    );
+    if (rows.length === 0) return;
+    const tied = replyRow(run, transcript!.items);
+    samples.push({ rows, tied: tied ? `${tied.itemId}#${tied.block}` : null });
   });
-  return { held, stop };
+  return {
+    samples,
+    stop,
+    count: () => {
+      counting = true;
+    },
+    wrong: () => samples.filter(({ rows, tied }) => rows.length !== 1 || tied !== rows[0]),
+  };
 }
 
 test("#872: while a run still draws its reply, history's row of that reply is known as the reply's", async () => {
@@ -285,29 +300,56 @@ test("#872: while a run still draws its reply, history's row of that reply is kn
   // moment of 30 to 60 ms on 2026.10.6, often over before a read can land on 2026.11.10 and later,
   // where the row is announced and history read through the task's session actor. So the check
   // holds that moment open. The scripted model holds each reply in the task before its end until
-  // the check lets it end, and a steer the gateway keeps for the answer's end makes the run ask
-  // the model once more: that reply stays held, with the answer's row written, while history is
-  // read.
+  // the check lets it end, and a steer the run has taken in makes it ask the model once more at
+  // the answer's end: that reply stays held, with the answer's row written, while history is read.
   const { client, close } = await engine("reply drawn once check");
+  // The scripted model thinks, writes beside a call that fails, and answers in a message of its
+  // own: F-551's run.
+  const answer = scriptedFinalText("#think #tool-fail");
   let key = "";
-  const { held, stop } = heldReplies(client, () => key);
+  let id = "";
+  const replies = heldReplies(
+    client,
+    () => key,
+    () => id,
+    answer,
+  );
   const hold = replyHolds();
   try {
     key = await openNewTask(client, "reply-once");
     await hold.post(key, "hold");
-    // The scripted model thinks, writes beside a call that fails, and answers in a message of its
-    // own: F-551's run.
-    const id = client.sendMessage(key, "Look for my old notes. #think #tool-fail");
+    id = client.sendMessage(key, "Look for my old notes. #think #tool-fail");
     await hold.reached(key, 1);
     await hold.post(key, "next");
     // The answer has streamed and waits before its end: its row is not written yet.
     await hold.reached(key, 2);
     await expect
-      .poll(() => runs(client, key).find((run) => run.id === id)?.text ?? "")
-      .toContain("That file does not exist");
+      .poll(() =>
+        runs(client, key)
+          .find((run) => run.id === id)
+          ?.text.trim(),
+      )
+      .toBe(answer.trim());
+    const after = op.lastSeq;
     const steer = client.sendMessage(key, "Then run the slow tool. #slow-tool 1");
-    // In the gateway's keeping for this task: its receipt waits, and it is not a turn queued behind
-    // the run (`queued`), which runs on its own once the run has ended.
+    // The answer ends only once the run has taken the steer in. 2026.11.10 and later say so in
+    // `sessions.changed` (`steerTakenEvent`).
+    const form = instanceForm(openInstance(INSTANCE));
+    if (form.steerTakenEvent)
+      await op.waitFor(
+        "the run took the steer in",
+        (e) => {
+          const p = e.payload as { sessionKey?: string; reason?: string };
+          return (
+            e.event === "sessions.changed" &&
+            p.sessionKey === key &&
+            p.reason === "agent.input.steering"
+          );
+        },
+        30_000,
+        after,
+      );
+    // Kept for the answer's run, not queued behind it as a turn of its own (`queued`).
     await expect
       .poll(
         async () => {
@@ -317,13 +359,14 @@ test("#872: while a run still draws its reply, history's row of that reply is kn
           const receipt = history.inputReceipts?.find((each) => each.runId === steer);
           return receipt ? `${receipt.state}${receipt.queued ? " queued" : ""}` : "none";
         },
-        { message: "the run took the steer in", timeout: 30_000 },
+        { message: "the gateway kept the steer for the answer's run", timeout: 30_000 },
       )
       .toBe("pending");
-    // The receipt is written when the steer is sent; the gateway then hands it to the active run,
-    // which drains it at the answer's end. No read or event tells when that hand-over is done, so
-    // the answer stays held well past it (a few hundred ms at most, on a loaded machine).
-    await sleep(3_000);
+    // 2026.10.6 tells no client when the run has taken a steer in. Its answer to the send, and the
+    // receipt, can come while the gateway still holds the steer, to hand it to the run later; an
+    // answer that ended first leaves the steer to run on its own. So the answer stays held well
+    // past that hand-over, which takes a few hundred ms at most on a loaded machine.
+    if (!form.steerTakenEvent) await sleep(3_000);
     await hold.post(key, "next");
     // The answer's message ends and its row is written; the steer joins the run at that end, and
     // the model's next reply (reasoning and a call, no text) waits before its end. Until the check
@@ -333,22 +376,29 @@ test("#872: while a run still draws its reply, history's row of that reply is kn
       runs(client, key).find((run) => run.id === id)?.state,
       "the steer joined the answer's run",
     ).toBe("running");
+    // Only states of history read from here on: the read this check asks for, and later ones.
+    replies.count();
     client.reloadSession(key);
     await expect
-      .poll(() => held.length, {
+      .poll(() => replies.samples.length, {
         message: "history held the answer's row while the run still drew it",
         timeout: 30_000,
       })
       .toBeGreaterThan(0);
-    expect(held.filter((row) => row !== null)).toEqual([]);
+    // While the next reply is held, history holds the answer once, and that row is the reply's.
+    expect(replies.wrong()).toEqual([]);
     await hold.post(key, "release");
     await expect
       .poll(() => runs(client, key).find((run) => run.id === id)?.state, { timeout: 60_000 })
       .toBe("completed");
     await expect.poll(() => gatewayIdle(op, key), { timeout: 15_000 }).toBe(true);
+    // And so in every state after, until the run ended.
+    expect(replies.wrong()).toEqual([]);
   } finally {
-    if (key) await hold.post(key, "release");
-    stop();
+    replies.stop();
+    // Lifted however the check ended, and never in place of its own failure; the scripted model
+    // also ends a hold no check lets go. The client closes either way.
+    if (key) await hold.post(key, "release").catch(() => {});
     await close();
   }
 });
@@ -356,13 +406,20 @@ test("#872: while a run still draws its reply, history's row of that reply is kn
 test("#872 #738: an answer a steer kept going is known by its row while the steered message's tool runs", async () => {
   const { client, close } = await engine("answer before a steer check");
   let key = "";
-  const { held, stop } = heldReplies(client, () => key);
+  let id = "";
+  const replies = heldReplies(
+    client,
+    () => key,
+    () => id,
+    scriptedFinalText("#slow 3"),
+  );
+  replies.count();
   try {
     key = await openNewTask(client, "steered-answer");
     // A text-only answer streamed slowly; a steer joins after it, and the model's next message is
     // reasoning and a slow call with no text. All the while the answer is the run's reply, and
     // history holds its row.
-    const id = client.sendMessage(key, "Answer slowly. #slow 3");
+    id = client.sendMessage(key, "Answer slowly. #slow 3");
     await expect
       .poll(() => runs(client, key)[0]?.text ?? "", { timeout: 60_000 })
       .toContain("part 1");
@@ -377,10 +434,10 @@ test("#872 #738: an answer a steer kept going is known by its row while the stee
     const joined = runs(client, key)
       .find((run) => run.id === id)!
       .steps.some((step) => step.kind === "tool");
-    if (joined) expect(held.length).toBeGreaterThan(0);
-    expect(held.filter((row) => row !== null)).toEqual([]);
+    if (joined) expect(replies.samples.length).toBeGreaterThan(0);
+    expect(replies.wrong()).toEqual([]);
   } finally {
-    stop();
+    replies.stop();
     await close();
   }
 });

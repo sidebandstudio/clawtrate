@@ -76,6 +76,12 @@ export type Shape = {
   queuedFinalMessage: boolean;
   /** The gateway runs a queued turn under an id of its own, which it names beside the send's. */
   queuedTurnOwnId: boolean;
+  /**
+   * The gateway tells a task's subscribers when its active run has taken a steer in, to join at
+   * the run's next boundary: `sessions.changed` with reason `agent.input.steering`. 2026.10.6
+   * tells no client; its answer to the steer's `chat.send` can come before the run has it.
+   */
+  steerTakenEvent: boolean;
   /** A task's row reports a context figure (`totalTokens`) while its first run is still going. */
   contextWhileRunning: boolean;
   /** A picture image_generate made arrives in a turn of the gateway's own, with its text. */
@@ -143,6 +149,7 @@ const SHAPE_2026_11_10: Omit<Shape, "version"> = {
   preambleItems: false,
   queuedFinalMessage: false,
   queuedTurnOwnId: false,
+  steerTakenEvent: true,
   contextWhileRunning: true,
   reportsPersonsRun: true,
   reportsFollowUpRun: false,
@@ -182,6 +189,7 @@ const SHAPES: Record<OpenclawVersion, Shape> = {
     preambleItems: true,
     queuedFinalMessage: true,
     queuedTurnOwnId: true,
+    steerTakenEvent: false,
     contextWhileRunning: false,
     reportsPersonsRun: false,
     reportsFollowUpRun: true,

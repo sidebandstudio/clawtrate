@@ -60,6 +60,8 @@ export type FakeProviderOptions = {
   streamHoldFile?: string;
   /** The instance was started with `--with-skill-review`: answer the gateway's skill reviews. */
   skillReview?: boolean;
+  /** How long a held reply waits for its check (`ReplyHolds`); five minutes unless set. */
+  replyHoldLimitMs?: number;
 };
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -69,8 +71,11 @@ export const HOLD_PATH = "/scripted/hold";
 /** How long a held reply waits for its check before it fails, so a check that died frees its task. */
 const HOLD_LIMIT_MS = 5 * 60_000;
 
-/** One reply waiting at its end: whether it must still wait, and its leaving. */
-type HeldReply = { waiting: () => boolean; leave: () => void };
+/**
+ * One reply waiting at its end: whether it must still wait, until when (`limit`), its leaving,
+ * and the end of its task's hold when no check let it go in time (`expire`).
+ */
+type HeldReply = { waiting: () => boolean; limit: number; leave: () => void; expire: () => void };
 
 /**
  * Holds a check puts on a task's replies, so it can act while the gateway waits on the model.
@@ -83,6 +88,12 @@ export class ReplyHolds {
     string,
     { reached: number; waiting: Set<number>; freed: Set<number> }
   >();
+
+  private readonly limitMs: number;
+
+  constructor(limitMs = HOLD_LIMIT_MS) {
+    this.limitMs = limitMs;
+  }
 
   hold(session: string): void {
     if (!this.holds.has(session))
@@ -124,9 +135,15 @@ export class ReplyHolds {
     hold.waiting.add(ticket);
     return {
       waiting: () => this.holds.get(session) === hold && !hold.freed.has(ticket),
+      limit: Date.now() + this.limitMs,
       leave: () => {
         hold.waiting.delete(ticket);
         hold.freed.delete(ticket);
+      },
+      // The check that held the task is gone: the task's later replies are not held again, and
+      // those still waiting end.
+      expire: () => {
+        if (this.holds.get(session) === hold) this.holds.delete(session);
       },
     };
   }
@@ -241,10 +258,10 @@ async function streamSteps(
   const reply = atEnd?.();
   if (reply) {
     try {
-      const limit = Date.now() + HOLD_LIMIT_MS;
       let beat = Date.now();
       while (!res.destroyed && reply.waiting()) {
-        if (Date.now() >= limit) {
+        if (Date.now() >= reply.limit) {
+          reply.expire();
           res.destroy(new Error("No check let the held reply end"));
           return;
         }
@@ -358,7 +375,7 @@ export function startFakeProvider(options: FakeProviderOptions) {
   const delayMs = options.chunkDelayMs ?? 8;
   // Which account each request came from, failures per account, and the
   // scripted sign-ins (scripted-accounts.ts).
-  const holds = new ReplyHolds();
+  const holds = new ReplyHolds(options.replyHoldLimitMs);
   const accounts = new ScriptedAccounts({
     baseUrl: () => {
       const address = server.address();
@@ -420,7 +437,10 @@ export function startFakeProvider(options: FakeProviderOptions) {
         }
         let body: { session?: unknown; action?: unknown } = {};
         try {
-          body = JSON.parse(await readBody(req)) as typeof body;
+          const parsed: unknown = JSON.parse(await readBody(req));
+          // Only an object names a task: `null`, a number or a list is a request without one.
+          if (parsed && typeof parsed === "object" && !Array.isArray(parsed))
+            body = parsed as typeof body;
         } catch {
           // answered below as a request without a task
         }

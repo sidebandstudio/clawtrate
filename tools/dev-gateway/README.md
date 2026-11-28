@@ -108,7 +108,7 @@ curl -s -X POST $P/scripted/hold -d '{"session":"agent:otto:<task>","action":"ne
 curl -s -X POST $P/scripted/hold -d '{"session":"agent:otto:<task>","action":"release"}'
 ```
 
-While the task is held, each reply streamed in it sends all its steps and then waits before its end. The gateway has the message's text and calls by then, but writes the message's row and runs its calls only at the end. `reached` counts the replies that got there since `hold`, and `waiting` those still waiting. `next` lets the oldest waiting reply end (409 when none waits), and `release` lets every one end and stops holding. A reply that waits five minutes fails, so a check that died frees the task. `e2e/turns.engine.spec.ts` uses it for #872: a steer sent while the answer waits joins at its end, and the model's next reply then waits with the answer's row written while the run still draws it.
+While the task is held, each reply streamed in it sends all its steps and then waits before its end. The gateway has the message's text and calls by then, but writes the message's row and runs its calls only at the end. `reached` counts the replies that got there since `hold`, and `waiting` those still waiting. `next` lets the oldest waiting reply end (409 when none waits), and `release` lets every one end and stops holding. A reply that waits five minutes fails and ends the task's hold, so a check that died frees the task and its later replies aren't held. A body that isn't an object with a `session` is answered 400. `e2e/turns.engine.spec.ts` uses it for #872: a steer sent while the answer waits joins at its end, and the model's next reply then waits with the answer's row written while the run still draws it.
 
 ## Scripted sign-ins
 
