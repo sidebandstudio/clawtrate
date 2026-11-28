@@ -654,12 +654,25 @@ describe.each(VERSIONS)("on OpenClaw %s", (version) => {
       expect(offsets).toContain(1);
     });
 
-    it("keeps saying it may be running when a resume after a lost Update step 2 can't read", async () => {
+    it("keeps the warning after a lost Update disable when resume lacks admin or cannot read", async () => {
       const g = at(version, "older-on");
       g.hooks.push({ method: "config.get", nth: 1, lose: "before" });
-      const ctx = withRecord(g, record({ mode: "update", step: 1, pending: 2 }));
-      const outcome = await new PluginInstaller(ctx).resume(PIN);
-      expect(outcome).toMatchObject({ stop: "lost", mayBeRunning: true });
+      let admin = false;
+      const pending = record({ mode: "update", step: 1, pending: 2 });
+      const ctx = withRecord(g, pending, { admin: () => admin });
+      expect(await new PluginInstaller(ctx).resume(PIN)).toMatchObject({
+        stop: "no-admin",
+        mayBeRunning: true,
+      });
+      expect(g.calls).toEqual([]);
+      expect(ctx.records.get(ID)).toEqual(pending);
+
+      admin = true;
+      expect(await new PluginInstaller(ctx).resume(PIN)).toMatchObject({
+        stop: "lost",
+        mayBeRunning: true,
+      });
+      expect(ctx.records.get(ID)).toEqual(pending);
     });
 
     it("keeps a turning-off record until a read shows the plugin off", async () => {
