@@ -87,6 +87,9 @@ export const MAX_SECRET_CHARS = 8_192;
 export const MAX_SECRET_JSON_CHARS = 6 * MAX_SECRET_CHARS + 2;
 /** How long "Still creating" waits before it shows (bots.md section 3). */
 export const SLOW_CREATE_MS = 4_000;
+/** The gateway can spend 20 seconds on the completion. The client gives the check 25. */
+export const FIRST_BOT_PROBE_MS = 20_000;
+export const FIRST_BOT_ACCOUNT_CHECK_MS = 25_000;
 /** Preference keys Clawtrate keeps on the gateway, per person. */
 export const KIND_PREF_PREFIX = "clawtrate.account-kind.";
 export const INTENT_PREF_PREFIX = "clawtrate.bot-account.";
@@ -492,7 +495,8 @@ export type SignInState = {
  * fallback list and effort (`fallbacks`), the gateway's bot list showing it
  * (`listed`), its first task.
  */
-export type MissingStep = "identity" | "preference" | "fallbacks" | "listed" | "task";
+export type MissingStep =
+  "identity" | "preference" | "fallbacks" | "listed" | "task" | "account-model";
 
 export type BotCreationState = {
   name: string;
@@ -504,6 +508,9 @@ export type BotCreationState = {
   slow: boolean;
   botId: string | null;
   error: string | null;
+  accountCheck?: "checking" | "unusable" | "unchecked";
+  /** The last account checked for the first bot. */
+  accountChecked?: string;
   /** What a partial creation lacks, each finished by the bot's id. */
   missing: MissingStep[];
   /**
@@ -571,12 +578,16 @@ export type AccountsState = {
   labels: boolean;
   /** `agents.defaults.model.primary`. */
   defaultModel: string | null;
-  /** A sign-in for `main` lands in the shared store: there is a `main` with no folder of its own. */
+  /** A sign-in for `main` lands in the gateway's standard shared store. */
   mainShared: boolean;
   accounts: GatewayAccount[];
   methods: SignInMethod[];
   keyProviders: KeyProvider[];
   models: CatalogModel[];
+  /** The model list is read after the accounts. First bot setup waits for both reads. */
+  modelsStatus?: "loading" | "ready" | "error";
+  /** One candidate per account provider, chosen before the ordinary picker is capped. */
+  firstBotModels?: { provider: string; model: string }[];
   /** Providers whose picker rows were cut at `MAX_CATALOG_MODELS`, with how many it listed. */
   modelsCut: PickerCut[];
   /** The config's model list as every bot's menu can say it (`readModelAllowlist`), or null. */
@@ -876,6 +887,7 @@ const madeOf = (record: KindRecord | undefined): GatewayAccount["made"] =>
 export function mergeAccounts(
   views: Map<string, BotView>,
   kinds: ReadonlyMap<string, KindRecord>,
+  sharedStoreBot: string | null = null,
 ): GatewayAccount[] {
   const seen = new Map<string, { profile: ViewProfile; shared: boolean; owners: Set<string> }>();
   for (const [botId, view] of views) {
@@ -885,7 +897,7 @@ export function mergeAccounts(
       if (!entry.profile.label && profile.label)
         entry.profile = { ...entry.profile, label: profile.label };
       if (profile.source === "saved") entry.owners.add(botId);
-      else entry.shared = true;
+      if (profile.source !== "saved" || botId === sharedStoreBot) entry.shared = true;
       seen.set(profile.id, entry);
     }
   }
@@ -966,6 +978,63 @@ export function readKeyProviders(view: BotView | undefined): KeyProvider[] {
 
 export function readCatalog(answer: unknown): CatalogModel[] {
   return modelRows(answer).slice(0, MAX_CATALOG_MODELS);
+}
+
+function availableModel(rows: CatalogModel[], provider: string, preferred: string | null) {
+  const matching = rows.filter((row) => row.provider === provider && row.available);
+  return matching.find((row) => row.id === preferred) ?? matching[0] ?? null;
+}
+
+export function readFirstBotModels(
+  answer: unknown,
+  accounts: readonly GatewayAccount[],
+  defaultModel: string | null,
+) {
+  const rows = modelRows(answer);
+  const preferred = parseModelRef(defaultModel);
+  const providers = new Set(accounts.map((account) => account.provider));
+  return Array.from(providers)
+    .slice(0, MAX_ACCOUNTS)
+    .flatMap((provider) => {
+      const selected = availableModel(
+        rows,
+        provider,
+        preferred?.provider === provider ? preferred.model : null,
+      );
+      return selected ? [{ provider, model: selected.id }] : [];
+    });
+}
+
+/** Only the catalogue read for this exact shared account can confirm its model. */
+export function modelForAccount(answer: unknown, ref: ModelRef): CatalogModel | null {
+  const selection = asRecord(asRecord(answer)?.accountSelection);
+  if (!ref.account || selection?.kind !== "shared" || selection.authProfileId !== ref.account)
+    return null;
+  return availableModel(modelRows(answer), ref.provider, ref.model);
+}
+
+/** The gateway's per-profile result is authoritative. Its model is the final part of the label. */
+export function readAccountProbe(answer: unknown, ref: ModelRef) {
+  const reply = asRecord(answer);
+  const results = Array.isArray(reply?.results) ? reply.results : [];
+  const own = results.map(asRecord).filter((result) => result?.profileId === ref.account);
+  if (!ref.account || reply?.provider !== ref.provider || own.length !== 1)
+    return { status: "unchecked" } as const;
+  const row = own[0]!;
+  if (row.status === "no_model" || row.status === "auth" || row.status === "billing")
+    return { status: "unusable" } as const;
+  if (reply.status !== "ok" || row.status !== "ok" || typeof row.label !== "string")
+    return { status: "unchecked" } as const;
+  const separator = row.label.lastIndexOf(" · ");
+  if (!row.label.startsWith("Profile ") || separator < 0) return { status: "unchecked" } as const;
+  const tested = parseModelRef(row.label.slice(separator + 3));
+  if (tested?.provider !== ref.provider || tested.account !== null)
+    return { status: "unchecked" } as const;
+  return { status: "usable", model: tested.model } as const;
+}
+
+export function catalogModel(answer: unknown, provider: string, id: string): CatalogModel | null {
+  return modelRows(answer).find((row) => row.provider === provider && row.id === id) ?? null;
 }
 
 /** The providers whose picker rows `readCatalog` cut, with how many the gateway listed. */

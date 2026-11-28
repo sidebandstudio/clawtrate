@@ -13,7 +13,9 @@ pnpm dev-gateway start --instance acct --with-accounts --with-plugin clawtrate-d
 pnpm dev-gateway reset --instance acct     # when you are done
 ```
 
-`--with-accounts` is for named instances only; the default instance refuses it. `--with-plugin clawtrate-dev-signin` adds the scripted sign-ins and needs `--with-accounts`. Add `--no-seed` to skip the sample conversations.
+`--with-accounts` is for named instances only; the default instance refuses it. `--with-plugin clawtrate-dev-signin` adds the scripted sign-ins and needs `--with-accounts` or `--first-bot`. Add `--no-seed` to skip the sample conversations.
+
+Use `--first-bot` in place of `--with-accounts` to test setup on a gateway with only its own bot. The tool runs noninteractive onboarding with `--auth-choice skip`, then starts the gateway with the usual development restrictions. The fixture has no saved accounts, test key for the default model or sample conversations. With the sign-in plugin, sign in to Acme through Clawtrate before sending a message.
 
 ### What the instance contains
 

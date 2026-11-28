@@ -1,0 +1,30 @@
+- status
+- region "Conversation":
+  - button "Back to bots"
+  - button "main, no task selected. Show details.": main
+  - button "Show work panel"
+  - heading "Set up your first bot" [level=1]
+  - button "Get started"
+  - status
+- dialog "Sign in to ChatGPT":
+  - banner:
+    - button "Back to sign-in methods"
+    - heading "Sign in to ChatGPT" [level=2]
+    - button "Close"
+  - list:
+    - listitem:
+      - paragraph: Open OpenAI's sign-in page.
+      - link "Open OpenAI's page":
+        - /url: https://sign-in.example/device
+      - paragraph: sign-in.example
+    - listitem:
+      - paragraph: Enter this code there, and approve.
+      - group "Code QK4F 7PZD":
+        - code: QK4F-7PZD
+        - button "Copy code"
+  - status: Waiting for OpenAI. The code works for 15 minutes.
+  - paragraph: Keep this open until it finishes. Closing Clawtrate or losing the connection to the gateway ends the sign-in.
+  - contentinfo:
+    - button "Cancel"
+  - status
+- status

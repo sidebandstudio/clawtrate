@@ -24,7 +24,7 @@ import { AdminBar, CodeBlock, Note, Result, Wait } from "./parts.tsx";
 import { AccountTitle } from "./AccountChoices.tsx";
 import { ProviderLogo } from "./logos/ProviderLogo.tsx";
 import { FIRST_TILES, providerTiles, type ProviderTile } from "./provider-tiles.ts";
-import { accountName, flowWords, providerName } from "./words.ts";
+import { accountName, flowWords, providerName, recoveredSignInAccount } from "./words.ts";
 
 /** A label step left before Done, kept until the app quits so it comes back (section 6). */
 const LABEL_KEPT = "connect-label";
@@ -76,6 +76,9 @@ export function useConnect({
   onDone,
   onLeave,
   startWith,
+  skipLabel = false,
+  waitingForGateway = false,
+  onRetryGateway,
 }: {
   from: "create" | "settings";
   draftName: string | null;
@@ -92,6 +95,11 @@ export function useConnect({
   onLeave: () => void;
   /** "Sign in again": start this method at once. */
   startWith?: string;
+  /** First setup goes straight to the bot once the account reads back. */
+  skipLabel?: boolean;
+  /** First setup keeps the same sign-in open while its gateway reconnects. */
+  waitingForGateway?: boolean;
+  onRetryGateway?: () => void;
 }): ConnectView {
   const bridge = useBridge();
   const admin = connection.canAdmin;
@@ -106,8 +114,9 @@ export function useConnect({
   const signIn = accounts.signIn;
   const [where, setWhereState] = useState<Where>(() => {
     if (startWith && connection.canAdmin) return { view: "flow", method: startWith };
-    if (signIn && isSignInActive(signIn)) return { view: "flow", method: signIn.method };
-    const kept = keptLabel(accounts);
+    if (signIn && (isSignInActive(signIn) || (skipLabel && signIn.stage === "ended")))
+      return { view: "flow", method: signIn.method };
+    const kept = skipLabel ? null : keptLabel(accounts);
     return kept ? { view: "label", ...kept } : { view: "methods" };
   });
   // The label step is kept while it is open; leaving it any other way than closing lets it go.
@@ -159,6 +168,14 @@ export function useConnect({
       else if (stage === "refreshed") setWhere({ view: "same", provider: signIn.provider });
     }
   }
+  const recovered = where.view === "flow" ? recoveredSignInAccount(signIn, where.method) : null;
+  useEffect(() => {
+    if (!skipLabel || waitingForGateway) return;
+    if (where.view === "label") finish(where.account);
+    else if (recovered) finish(recovered);
+    // Finish a particular sign-in once, even if the parent rerenders with the same label step.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [skipLabel, waitingForGateway, where, recovered]);
   useEffect(() => {
     if (!signIn) return;
     if (stage === "connected" && result)
@@ -186,7 +203,9 @@ export function useConnect({
     await begin(id);
   };
   // A new view or stage moves focus on purpose: to its field, or else to its title.
-  const shownView = `${where.view}:${where.view === "flow" ? (stage ?? "") : ""}`;
+  const shownView = waitingForGateway
+    ? "reconnecting"
+    : `${where.view}:${where.view === "flow" ? (stage ?? "") : ""}`;
   useEffect(() => {
     requestAnimationFrame(() => {
       const dialogs = document.querySelectorAll<HTMLElement>("dialog[open]");
@@ -241,6 +260,26 @@ export function useConnect({
 
   // --- Choosing how -------------------------------------------------------------
   const tiles = providerTiles(accounts.methods, accounts.accounts);
+
+  if (waitingForGateway) {
+    return {
+      title: "Connect an account",
+      backLabel: "Close",
+      body: (
+        <Wait>
+          {onRetryGateway
+            ? "Your gateway hasn’t reconnected. Try again to finish setup."
+            : "Waiting for your gateway to reconnect. Clawtrate will check your account when it returns."}
+        </Wait>
+      ),
+      foot: onRetryGateway ? (
+        <button type="button" className="button" onClick={onRetryGateway}>
+          Try again
+        </button>
+      ) : null,
+      onBack: onLeave,
+    };
+  }
 
   // --- A provider's methods -------------------------------------------------------
   if (where.view === "provider") {
@@ -361,7 +400,7 @@ export function useConnect({
     };
     const body = (
       <>
-        {!accounts.mainShared && (
+        {!accounts.mainShared && !skipLabel && (
           <Note testId="kept-note">
             <p>
               This gateway keeps this sign-in for {targetName} only. Other bots
@@ -1056,7 +1095,8 @@ export function useConnect({
     body = (
       <>
         <Result tone="warn" mark="warning" title="The sign-in ended">
-          The connection to the gateway dropped, and a sign-in ends with its connection.
+          {current.error ??
+            "The connection to the gateway dropped, and a sign-in ends with its connection."}
         </Result>
         {reread(current)}
       </>

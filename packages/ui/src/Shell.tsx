@@ -46,6 +46,7 @@ import { isWorkTab, WorkPanel, type WorkTab } from "./WorkPanel.tsx";
 import { setUsageOpener } from "./usage/navigation.ts";
 import { setBotSettingsOpener } from "./bots/settings-request.ts";
 import { NewBot } from "./bots/NewBot.tsx";
+import { firstBotModel } from "./bots/words.ts";
 import { FullControlOffer } from "./FullControl.tsx";
 import { DeleteBot } from "./bots/DeleteBot.tsx";
 import "./bots/bots.css";
@@ -260,7 +261,32 @@ export function Shell({
     null,
   );
   // New bot, from the "+" menu and ⌘N, where the connection may write (bots.md section 3).
-  const [newBot, setNewBot] = useState(false);
+  const [newBot, setNewBot] = useState<"first" | "regular" | null>(null);
+  const [firstPromptedTarget, setFirstPromptedTarget] = useState<number | null>(null);
+  const focusCreatedComposer = useRef<{ botId: string; target: number } | null>(null);
+  const [firstConversation, setFirstConversation] = useState<{
+    botId: string;
+    target: number;
+  } | null>(null);
+  const {
+    target: firstTarget,
+    connectedAt: firstHello,
+    gatewayId: firstGateway,
+  } = state.connection;
+  const onlyBot = state.bots[0];
+  const firstBotSetup =
+    interactive &&
+    state.connection.status === "connected" &&
+    state.connection.canAdmin &&
+    firstGateway !== null &&
+    state.discovery.status === "ready" &&
+    !state.discovery.partial &&
+    (state.bots.length === 0 ||
+      (state.bots.length === 1 &&
+        onlyBot?.id === "main" &&
+        onlyBot.isDefault &&
+        !onlyBot.ownerless &&
+        (state.tasksByBot.main?.length ?? 0) === 0));
   // Delete bot…: the bot as it was when chosen, so the result stays after it leaves the rail.
   const [deleting, setDeleting] = useState<{ id: string; name: string; isDefault: boolean } | null>(
     null,
@@ -269,8 +295,38 @@ export function Shell({
   // Every dialog the shell opens itself, a waiting device's sheet included: none opens over
   // another, by a shortcut or by itself.
   const shellDialogOpen =
-    offerOpen || shortcuts || searchOpen || newBot || deletingOpen || deviceSheetOpen;
-  const openNewBot = useCallback(() => setNewBot(true), []);
+    offerOpen || shortcuts || searchOpen || newBot !== null || deletingOpen || deviceSheetOpen;
+  useEffect(() => {
+    if (firstBotSetup && firstGateway !== null)
+      void send({ type: "refreshAccounts" }).catch(() => {});
+  }, [firstBotSetup, firstTarget, firstHello, firstGateway, send]);
+  const accountRead = state.accounts.readOn;
+  if (
+    firstBotSetup &&
+    firstGateway !== null &&
+    firstPromptedTarget !== firstTarget &&
+    !shellDialogOpen &&
+    !inert &&
+    !drawerOpen &&
+    !routinesOpen &&
+    state.connection.fullOffer !== "offer" &&
+    state.accounts.status === "ready" &&
+    state.accounts.modelsStatus === "ready" &&
+    accountRead?.gatewayId === firstGateway &&
+    accountRead.target === firstTarget &&
+    accountRead.connectedAt === firstHello &&
+    !firstBotModel(state.accounts, null)
+  ) {
+    setFirstPromptedTarget(firstTarget);
+    setNewBot("first");
+  }
+  const finishingFirstBot =
+    firstPromptedTarget === firstTarget &&
+    (state.accounts.creation?.status === "partial" || state.accounts.creation?.uncertain === true);
+  const openNewBot = useCallback(() => {
+    if (firstBotSetup) setFirstPromptedTarget(firstTarget);
+    setNewBot(firstBotSetup || finishingFirstBot ? "first" : "regular");
+  }, [firstBotSetup, finishingFirstBot, firstTarget]);
   const mac = isMac();
   useEffect(() => {
     if (inert || shellDialogOpen) return;
@@ -299,12 +355,12 @@ export function Shell({
         event.key.toLowerCase() === "n"
       ) {
         event.preventDefault();
-        setNewBot(true);
+        openNewBot();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [interactive, inert, shellDialogOpen]);
+  }, [interactive, inert, shellDialogOpen, openNewBot]);
   useEffect(() => {
     const onKey = (event: KeyboardEvent) => {
       if ((event.metaKey || event.ctrlKey) && event.key === "/") {
@@ -368,6 +424,24 @@ export function Shell({
   // Only the latest open of a task decides its refusal: a late answer to an earlier
   // one says nothing about now.
   const taskKey = task?.key ?? null;
+  useEffect(() => {
+    const wanted = focusCreatedComposer.current;
+    if (
+      newBot ||
+      !wanted ||
+      !taskKey ||
+      !interactive ||
+      wanted.botId !== bot?.id ||
+      wanted.target !== firstTarget
+    )
+      return;
+    const frame = requestAnimationFrame(() => {
+      const composer = mainRef.current?.querySelector<HTMLElement>(".composer-input");
+      composer?.focus();
+      if (composer && document.activeElement === composer) focusCreatedComposer.current = null;
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [newBot, taskKey, bot?.id, interactive, firstTarget, view]);
   const [refusals, setRefusals] = useState<ReadonlyMap<string, string>>(() => new Map());
   const opens = useRef({ count: 0, latest: new Map<string, number>() });
   const setRefusal = useCallback((key: string, error: string | null) => {
@@ -967,6 +1041,11 @@ export function Shell({
                   inert={drawerOpen || inert}
                   onShowComputer={showComputer}
                   updatingWords={updating ? updatingStripWords(updating).text : null}
+                  onFirstBot={firstBotSetup ? openNewBot : null}
+                  firstConversation={
+                    firstConversation?.botId === bot?.id &&
+                    firstConversation?.target === firstTarget
+                  }
                 />
               </WorkLinksContext.Provider>
             </OpenTaskContext.Provider>
@@ -1045,14 +1124,15 @@ export function Shell({
             bots={state.bots}
             connection={state.connection}
             info={info}
-            onClose={() => setNewBot(false)}
-            onCreated={(id) => {
-              setNewBot(false);
-              selection.selectBot(id);
-              openDetail();
-              requestAnimationFrame(() =>
-                document.querySelector<HTMLElement>(".composer-input")?.focus(),
-              );
+            first={newBot === "first"}
+            onClose={() => setNewBot(null)}
+            onCreated={(id, key) => {
+              if (newBot === "first") setFirstConversation({ botId: id, target: firstTarget });
+              focusCreatedComposer.current = { botId: id, target: firstTarget };
+              setNewBot(null);
+              if (key) selection.selectTask(id, key);
+              else selection.selectBot(id);
+              openDetail({ composer: true });
             }}
           />
         )}

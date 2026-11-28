@@ -1,0 +1,37 @@
+- banner: Clawtrate
+- status
+- navigation "Bots":
+  - button "Routines"
+  - 'button "Sort bots: Recent activity"'
+  - button "Search"
+  - button "New"
+  - list:
+    - listitem:
+      - button "main, 0 tasks, primary bot": main
+  - status
+  - button "New gateway, connected. Open the gateway menu."
+  - button "Settings"
+- region "Conversation":
+  - button "main, no task selected. Show details.": main
+  - button "Show work panel"
+  - heading "Set up your first bot" [level=1]
+  - button "Get started"
+  - status
+- dialog "Connect an account":
+  - banner:
+    - heading "Connect an account" [level=2]
+    - button "Close"
+  - paragraph: Sign in with a subscription you already pay for. Your gateway does the sign-in and keeps it; Clawtrate never sees your password and never keeps the sign-in.
+  - list "Providers":
+    - listitem:
+      - button "OpenAI"
+    - listitem:
+      - button "GitHub Copilot"
+    - listitem:
+      - button "xAI"
+    - listitem:
+      - button "OpenRouter Billed per token"
+  - button "Show more"
+  - group: Use an API key instead
+  - status
+- status

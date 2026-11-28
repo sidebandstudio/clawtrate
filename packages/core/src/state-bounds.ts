@@ -1323,7 +1323,9 @@ const botCreation = object<BotCreationState>()({
   slow: FLAG,
   botId: ID,
   error: text(MAX_MESSAGE_LINE_CHARS),
-  missing: list(5, ENUM),
+  accountCheck: ENUM,
+  accountChecked: ID,
+  missing: list(6, ENUM),
   uncertain: FLAG,
 });
 const accountWrite = object<AccountWrite>()({
@@ -1378,6 +1380,14 @@ export const ACCOUNTS: Bound = object<AccountsState>()({
   methods: list(MAX_SIGNIN_METHODS, signInMethod),
   keyProviders: list(MAX_KEY_PROVIDERS, keyProvider),
   models: list(MAX_CATALOG_MODELS, catalogModel),
+  modelsStatus: ENUM,
+  firstBotModels: list(
+    MAX_ACCOUNTS,
+    object<{ provider: string; model: string }>()({
+      provider: ID,
+      model: ID,
+    }),
+  ),
   modelsCut: list(MAX_KEY_PROVIDERS, pickerCut),
   modelAllowlist,
   bindings: list(MAX_BOTS, binding),

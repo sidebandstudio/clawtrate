@@ -7365,9 +7365,9 @@ export class ClawtrateClient {
    * Finish a bot whose creation is partial, by its id: what is missing, never a second bot. With
    * `stamp`, as for `createBot`, nothing is sent unless it is still the gateway connected.
    */
-  async finishBot(botId: string, stamp?: GatewayStamp): Promise<CreatedBot> {
-    if (stamp === undefined) return this.accounts.finishBot(botId);
-    return this.accounts.finishBot(botId, await this.requireSameGateway(stamp));
+  async finishBot(botId: string, stamp?: GatewayStamp, account?: string): Promise<CreatedBot> {
+    if (stamp === undefined) return this.accounts.finishBot(botId, undefined, account);
+    return this.accounts.finishBot(botId, await this.requireSameGateway(stamp), account);
   }
 
   dismissBotCreation(): void {
