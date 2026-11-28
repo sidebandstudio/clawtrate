@@ -1978,6 +1978,7 @@ export class ClawtrateClient {
       })),
     connected: () => this.state.connection.status === "connected",
     admin: () => this.holds(ADMIN_SCOPE) && this.state.connection.scopes.includes(ADMIN_SCOPE),
+    serverVersion: () => this.state.connection.serverVersion,
     refreshBots: () => this.refreshBots(),
     gateway: () => this.readGatewayIdentity(),
     gatewayNow: () => this.state.connection.gatewayId,
@@ -7423,6 +7424,48 @@ export class ClawtrateClient {
     if (stamp === undefined) return this.accounts.setModel(botId, model, effort);
     await this.requireSameGateway(stamp);
     return this.accounts.setModel(botId, model, effort, this.sameConnection(stamp));
+  }
+
+  /**
+   * The Effort menu (#799): the bot's effort alone, for the model the menu was drawn for
+   * (`shown`), and nothing if the bot's model has moved. With `stamp`, as for `changeBotAccount`.
+   */
+  async setBotEffort(
+    botId: string,
+    shown: { provider: string; model: string },
+    effort: string,
+    stamp?: GatewayStamp,
+  ): Promise<void> {
+    if (stamp === undefined) return this.accounts.setEffort(botId, shown, effort);
+    await this.requireSameGateway(stamp);
+    return this.accounts.setEffort(botId, shown, effort, this.sameConnection(stamp));
+  }
+
+  /**
+   * "Allow <model>" (#799): the model the button names (`shown`) onto the model list that refuses
+   * it, while the bot still runs on it. With `stamp`, as for `changeBotAccount`.
+   */
+  async allowBotModel(
+    botId: string,
+    shown: { provider: string; model: string },
+    stamp?: GatewayStamp,
+  ): Promise<void> {
+    if (stamp === undefined) return this.accounts.allowModel(botId, shown);
+    await this.requireSameGateway(stamp);
+    return this.accounts.allowModel(botId, shown, this.sameConnection(stamp));
+  }
+
+  /**
+   * Undo of "Added <model> to …" (#799): that one entry out again, for the addition the screen
+   * shows (`shown`: its bot and its id). With `stamp`, as above.
+   */
+  async undoModelAllowed(
+    shown: { botId: string; id: string },
+    stamp?: GatewayStamp,
+  ): Promise<void> {
+    if (stamp === undefined) return this.accounts.undoAllowed(shown);
+    await this.requireSameGateway(stamp);
+    return this.accounts.undoAllowed(shown, this.sameConnection(stamp));
   }
 
   /** With `stamp`, as for `changeBotAccount`. */
