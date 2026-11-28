@@ -72,6 +72,12 @@ export function matches(file: string, text: string): string[] {
 /** Deliberate uses, by file and pattern, each with why it cannot reach a person's install. */
 const ALLOWED: { file: string; pattern: string; reason: string }[] = [
   {
+    file: "e2e-packaged/first-run/check.ts",
+    pattern: "a PATH lookup of openclaw",
+    reason:
+      "checks absence before launching the app, after refusing to run outside a disposable GitHub-hosted Mac",
+  },
+  {
     file: ".github/workflows/ci.yml",
     pattern: "the global npm folder",
     reason:
