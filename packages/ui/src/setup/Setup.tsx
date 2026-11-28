@@ -905,6 +905,8 @@ const CLEANUP: Record<InstallFailure["cleanup"], string> = {
   unproven:
     " Check the clawtrate profile and Clawtrate’s app data. Some setup files may still be there.",
   kept: " Clawtrate kept the gateway files in the clawtrate profile and its app data.",
+  running:
+    " A program this step started is still running, so Clawtrate left this attempt’s files where they are.",
 };
 
 /** A failure before the first step: its own lead, and no step drawn as failed. */

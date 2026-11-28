@@ -208,7 +208,7 @@ export class InstallRunner {
         }
         if (stop === "stop") {
           stopped = true;
-          void end();
+          void end().then(stopFailed);
         }
       };
       const finish = (failed: boolean) => {
@@ -232,9 +232,30 @@ export class InstallRunner {
           }),
         );
       };
+      /**
+       * A stop that couldn't end the group (its leader survived SIGKILL) settles the step now, as
+       * still running: no exit may ever come. The group stays tracked until it is gone, and a late
+       * exit changes nothing.
+       */
+      const stopFailed = (gone: boolean) => {
+        if (gone || settled) return;
+        settled = true;
+        clearTimeout(timer);
+        child.stdout?.destroy();
+        child.stderr?.destroy();
+        resolve({
+          exitCode: null,
+          stdout: tooLarge ? "" : kept.join("\n"),
+          timedOut,
+          tooLarge,
+          stopped,
+          failed: false,
+          lingering: true,
+        });
+      };
       const timer = setTimeout(() => {
         timedOut = true;
-        void end();
+        void end().then(stopFailed);
       }, request.timeoutMs);
       child.stdout!.setEncoding("utf8");
       child.stdout!.on("data", (chunk: string) => {
@@ -242,7 +263,7 @@ export class InstallRunner {
         if (size > request.maxBytes) {
           if (!tooLarge) {
             tooLarge = true;
-            void end();
+            void end().then(stopFailed);
           }
           return;
         }

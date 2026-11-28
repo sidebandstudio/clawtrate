@@ -253,7 +253,8 @@ export type InstallFailureKind =
  * removed (`removed`); a cleanup that couldn't be proven (`unproven`); or files
  * intentionally kept after onboarding (`kept`).
  */
-export type InstallCleanup = "none" | "removed" | "unproven" | "kept";
+/** `running`: a program the step started couldn't be ended, so nothing of the attempt was removed. */
+export type InstallCleanup = "none" | "removed" | "unproven" | "kept" | "running";
 
 /** Onboarding's failure class, as its JSON names it, or the service it couldn't install. */
 export type OnboardClassification =

@@ -1957,7 +1957,7 @@ export class Installer {
     ) => {
       // A program that may still write there: nothing of the attempt is removed under it.
       const removed = !this.lingering && (await this.discard(id));
-      const cleanup: InstallCleanup = removed ? "removed" : "unproven";
+      const cleanup: InstallCleanup = this.lingering ? "running" : removed ? "removed" : "unproven";
       return stopped(kind, step, {
         ...extra,
         cleanup,

@@ -9,7 +9,7 @@
 // says what it would catch.
 
 import type { SetupInstall } from "@clawtrate/core";
-import { spawnSync } from "node:child_process";
+import { spawn as nodeSpawn, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
 import {
@@ -1720,6 +1720,41 @@ describe("F-502 F-503: the CodeRabbit round's cases", () => {
     expect(result.lingering).toBe(true);
   }, 20_000);
 
+  it("F-502: a step whose leader survives being stopped still settles, as still running", async () => {
+    const stand = await make();
+    // The leader is the test's own sleep; its exit and close never reach the runner, as with a
+    // leader the kernel can't end. The signals go to that sleep's own group alone.
+    const deaf = ((program: string, args: string[], options: object) => {
+      const child = nodeSpawn(program, args, options);
+      const once = child.once.bind(child);
+      child.once = ((event: string, listener: (...args: unknown[]) => void) =>
+        event === "exit" || event === "close" ? child : once(event, listener)) as typeof child.once;
+      return child;
+    }) as unknown as typeof nodeSpawn;
+    const own = new InstallRunner({
+      spawn: deaf,
+      alive: () => true,
+      graceMs: 100,
+      killWaitMs: 200,
+    });
+    const result = await Promise.race([
+      own.run(
+        {
+          program: "/bin/sleep",
+          args: ["30"],
+          env: { PATH: "/usr/bin:/bin" },
+          cwd: stand.root,
+          timeoutMs: 200,
+          maxBytes: 1024,
+        },
+        () => {},
+      ),
+      new Promise<"unsettled">((done) => setTimeout(() => done("unsettled"), 4_000)),
+    ]);
+    expect(result).toMatchObject({ timedOut: true, lingering: true, exitCode: null });
+    expect(own.running()).toHaveLength(1);
+  }, 20_000);
+
   it("F-502: an attempt one of whose programs may still be running keeps its files: the cleanup is unproven", async () => {
     const stand = await make({ scenario: "installer-fails" });
     const { outcome } = await runAll(
@@ -1733,7 +1768,7 @@ describe("F-502 F-503: the CodeRabbit round's cases", () => {
     );
     expect(outcome).toMatchObject({
       ok: false,
-      failure: { kind: "installer", retry: false, cleanup: "unproven" },
+      failure: { kind: "installer", retry: false, cleanup: "running" },
     });
     expect(existsSync(stand.place.programDir)).toBe(true);
   });
@@ -1751,7 +1786,7 @@ describe("F-502 F-503: the CodeRabbit round's cases", () => {
     );
     expect(outcome).toMatchObject({
       ok: false,
-      failure: { kind: "installer", step: 1, retry: false, cleanup: "unproven" },
+      failure: { kind: "installer", step: 1, retry: false, cleanup: "running" },
     });
     expect(stand.calls().some((line) => line.includes("onboard"))).toBe(false);
     expect(existsSync(stand.place.stateDir)).toBe(false);
