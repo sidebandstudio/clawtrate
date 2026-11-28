@@ -391,7 +391,15 @@ describe("#686: a not-run line sits only under the message its run is known to h
       kind: "retained",
       runId: run.id,
     });
-    const dropped: Run = { ...run, retryFiles: "gone" };
+    const dropped: Run = {
+      ...run,
+      retryFiles: "gone",
+      error: {
+        message: "The session is being moved to another machine.",
+        kind: null,
+        beforeReply: true,
+      },
+    };
     expect(retryPlan(dropped, transcript)).toEqual({ kind: "files-gone" });
     const html = renderToStaticMarkup(
       createElement(BridgeProvider, {
@@ -408,6 +416,8 @@ describe("#686: a not-run line sits only under the message its run is known to h
       "This device can no longer resend the files. To try again, attach them to a new message.",
     );
     expect(html).not.toContain(">Try again</button>");
+    expect(html).not.toContain("Try again, or choose another model");
+    expect(html).toContain("Choose another model for this bot.");
   });
 
   it("words alone go again only when the message is known to have had no files", () => {

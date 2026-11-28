@@ -454,8 +454,12 @@ export function RunEnding({
       : ending.kind === "gateway-timeout"
         ? `${bot.name}'s turn reached the gateway's time limit`
         : failedTurnTitle(bot.name, earlier);
+  const retry = retryPlan(run, transcript);
+  // What Try again sends, when there is one.
+  const resend =
+    retry?.kind === "again" || retry?.kind === "retained" || retry?.kind === "text" ? retry : null;
   const reason = notRun
-    ? repeated && cause?.kind === "other"
+    ? cause?.kind === "other" && (repeated || !resend)
       ? "Choose another model for this bot."
       : notRun.reason
     : ending.kind === "turn-limit"
@@ -481,10 +485,6 @@ export function RunEnding({
   // A stop at the turn limit stops the other bots' runs it started too, as Stop does (F-296).
   const also =
     ending.kind === "turn-limit" ? stoppedWithLines(run, (key) => botOfSession(bots, key)) : [];
-  const retry = retryPlan(run, transcript);
-  // What Try again sends, when there is one.
-  const resend =
-    retry?.kind === "again" || retry?.kind === "retained" || retry?.kind === "text" ? retry : null;
   const ways = notRun?.ways ?? [];
   const tryFirst = !repeated && (cause?.kind === "other" || cause?.kind === "computer-use-timeout");
   const wayButton = (way: (typeof ways)[number]) => (

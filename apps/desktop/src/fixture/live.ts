@@ -839,34 +839,35 @@ export function liveScene(
       };
       const earlier = name !== "not-run-computer-use";
       const canAdmin = name !== "not-run-computer-use-access";
-      const state = withRun(
-        base,
-        now,
-        {
-          state: "failed",
-          reportedStartAt: null,
-          endedAt: now - 2 * SECOND,
-          error,
-        },
-        earlier
-          ? {
-              runs: [
-                newRun(
-                  "run-prior",
-                  {
-                    state: "failed",
-                    origin: "local",
-                    error,
-                    messageId: "msg-prior",
-                    endedAt: now - 64 * SECOND,
-                  },
-                  now - 70 * SECOND,
-                ),
-              ],
-              outbox: [message("msg-prior", "Can you check the disk?", now - 70 * SECOND)],
-            }
-          : {},
-      );
+      const first = withRun(base, now, {
+        state: "failed",
+        reportedStartAt: null,
+        endedAt: now - 2 * SECOND,
+        error,
+      });
+      const state = earlier
+        ? withTranscript(first, (transcript) => ({
+            ...transcript,
+            runs: [
+              newRun(
+                "run-prior",
+                {
+                  state: "failed",
+                  origin: "local",
+                  error,
+                  messageId: "msg-prior",
+                  endedAt: now - 64 * SECOND,
+                },
+                now - 70 * SECOND,
+              ),
+              ...transcript.runs,
+            ],
+            outbox: [
+              message("msg-prior", "Can you check the disk?", now - 70 * SECOND),
+              ...transcript.outbox,
+            ],
+          }))
+        : first;
       return {
         initial: {
           ...state,
