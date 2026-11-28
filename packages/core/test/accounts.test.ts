@@ -234,6 +234,7 @@ describe("the Model menu's lists", () => {
       ],
       connected: options.connected ?? (() => true),
       admin: () => true,
+      offers: () => false,
       refreshBots: () => Promise.resolve(),
       gateway: () => Promise.resolve("gateway-a"),
       gatewayNow: () => "gateway-a",
@@ -307,6 +308,45 @@ describe("the Model menu's lists", () => {
     // Not left loading, and nothing the gateway said is shown.
     expect(state()).toMatchObject({ status: "error", error: ACCOUNTS_READ_CUT_OFF });
     expect(JSON.stringify(state())).not.toContain("clawtrate-dev-key");
+  });
+
+  it("F-592: a load cut off after one bot's reading was shown leaves that reading, not a failure", async () => {
+    const fake = new AccountsGateway();
+    let connected = true;
+    const { engine, state } = engineOn(fake, { connected: () => connected });
+    await engine.load();
+    const status = fake.gateway.handlers["models.authStatus"]!;
+    const held = deferred<void>();
+    fake.gateway.handlers["models.authStatus"] = async (params) => {
+      if ((params as { agentId: string }).agentId !== "main") return status(params);
+      await held.promise;
+      throw new Error("connection closed");
+    };
+    const otto = () => state().bindings.find((b) => b.botId === "otto")!.evidence;
+    const first = otto().readSeq ?? 0;
+    const loading = engine.load();
+    await until(() => (otto().readSeq ?? 0) > first);
+    connected = false;
+    held.resolve();
+    await loading;
+    const main = state().bindings.find((b) => b.botId === "main")!.evidence;
+    expect(main).toMatchObject({ status: "failed", error: ACCOUNTS_READ_CUT_OFF });
+    expect(otto()).toMatchObject({ error: null, attemptSeq: otto().readSeq });
+    expect(otto().status).not.toBe("failed");
+  });
+
+  it("F-592: a first load that a bot's read fails publishes no bot's reading before the accounts are read", async () => {
+    const fake = new AccountsGateway();
+    const { engine, state } = engineOn(fake);
+    const status = fake.gateway.handlers["models.authStatus"]!;
+    fake.gateway.handlers["models.authStatus"] = async (params) => {
+      if ((params as { agentId: string }).agentId === "main") throw new Error("not now");
+      return status(params);
+    };
+    // Otto's reading isn't shown without its gateway's accounts: Clear order and Unlock aren't
+    // offered from it, so no press can be stamped as a gateway that answers later.
+    await engine.load().catch(() => {});
+    expect(state().bindings.find((b) => b.botId === "otto")).toBeUndefined();
   });
 
   it("F-478: the default bot's model list answered after a gateway switch publishes nothing", async () => {
@@ -553,6 +593,31 @@ describe("a bot's account: bound, locked, and the gateway choosing", () => {
     }
     // The account Otto keeps is listed, as Otto's: Pip's binding does not make it Pip's.
     expect(accounts().accounts.find((a) => a.id === "acme:studio")?.keptBy).toBe("otto");
+    client.stop();
+  });
+
+  it("a bot's own provider listed 70th, past the read's cap, keeps its account", async () => {
+    const fake = new AccountsGateway();
+    const status = fake.status.bind(fake);
+    const fillers = Array.from({ length: 69 }, (_, i) => ({
+      provider: `filler${i}`,
+      profiles: [{ profileId: `filler${i}:a`, type: "api_key", source: "inherited" }],
+    }));
+    fake.status = (agentId) => {
+      const answer = status(agentId) as { providers: Array<{ provider: string }> };
+      const acme = answer.providers.filter((each) => each.provider === "acme");
+      return { ...answer, providers: [...fillers, ...acme] };
+    };
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    for (const read of ["the first read", "a check of the lock"]) {
+      const pip = binding(accounts(), "pip");
+      expect({ read, missing: pip.accountMissing, word: accountWord(pip) }).toEqual({
+        read,
+        missing: false,
+        word: "bound",
+      });
+      await client.checkLock("pip");
+    }
     client.stop();
   });
 
@@ -1731,6 +1796,20 @@ describe("sign-ins, through the gateway's own methods", () => {
     // Letting it go would hide a sign-in that may still be running on the gateway.
     expect(await client.dismissSignIn()).toEqual({ dismissed: false });
     expect(accounts().signIn?.stage).toBe("waiting");
+    client.stop();
+  });
+
+  it("a dismissal that names another sign-in leaves the one under way: only the sign-in it means is let go", async () => {
+    const { client, fake, accounts } = await accountsClient();
+    await client.startSignIn(CHOICES.device, null);
+    const current = accounts().signIn!;
+    const cancels = fake.gateway.calls("wizard.cancel").length;
+    expect(await client.dismissSignIn("clawtrate-an-earlier-one")).toEqual({ dismissed: false });
+    expect(accounts().signIn).toMatchObject({ id: current.id, stage: current.stage });
+    expect(fake.gateway.calls("wizard.cancel").length).toBe(cancels);
+    // Named by its own id, it is let go as before.
+    expect(await client.dismissSignIn(current.id)).toEqual({ dismissed: true });
+    expect(accounts().signIn).toBeNull();
     client.stop();
   });
 

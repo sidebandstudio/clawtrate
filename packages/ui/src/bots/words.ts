@@ -209,6 +209,8 @@ export function flowWords(flow: SignInFlow): string {
       return "Your company's GitHub address, then a code";
     case "key":
       return "Type a key, which goes to your gateway";
+    case "token":
+      return "Your Claude plan, with a token from Claude Code";
   }
 }
 

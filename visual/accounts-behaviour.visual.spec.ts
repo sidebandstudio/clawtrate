@@ -393,7 +393,7 @@ test("F-474: Connect an account is a grid of providers, each named, reached by k
   // The six most used first, each named by its provider; one the gateway has an account of says so.
   await expect(grid.getByRole("button")).toHaveText([
     /^OpenAI\s*Connected$/,
-    /^Claude\s*Connected\s·\sAPI key\s·\sBilled per token$/,
+    /^Claude\s*Connected$/,
     /^GitHub Copilot\s*Connected$/,
     /^xAI\s*Connected$/,
     /^OpenRouter\s*Billed per token$/,
@@ -432,7 +432,8 @@ test("F-474: Connect an account is a grid of providers, each named, reached by k
 test("F-474: Claude's tile, second, says it takes an API key billed per token, and opens the key's fields for Anthropic", async ({
   page,
 }) => {
-  await openFixture(page, ADMIN, "light");
+  // A gateway without the setup sign-in: the key alone.
+  await openFixture(page, `${ADMIN}&plan=0`, "light");
   await page.keyboard.press("ControlOrMeta+n");
   await page.getByRole("button", { name: "Next" }).click();
   await page.getByRole("button", { name: "Connect another account" }).click();
@@ -2265,6 +2266,193 @@ test("F-474: a key the gateway refused is tried again where a key is typed, for 
   await expect(page.getByTestId("api-key")).toBeFocused();
   await expect(page.getByTestId("api-key")).toHaveValue("");
   expect((await sent(page)).filter((each) => each.type === "startSignIn")).toEqual([]);
+  // The key form lets go of the sign-in it replaces, by that sign-in's own id, and of no other.
+  const dismissed = (await sent(page)).filter((each) => each.type === "dismissSignIn");
+  expect(dismissed.at(-1)).toMatchObject({ signInId: expect.stringMatching(/\S/) });
+});
+
+test("#932: a key typed for one provider is never sent as another's: the field empties when the provider changes", async ({
+  page,
+}) => {
+  await openFixture(page, `${ADMIN}&plan=0`, "light");
+  await connectFromNewBot(page);
+  await newBot(page).getByText("Use an API key instead").click();
+  const field = page.getByTestId("api-key");
+  const provider = newBot(page).getByRole("combobox", { name: "Provider" });
+  await expect(provider).toHaveValue("openai");
+  // By the form's own provider list.
+  await field.fill("made-up-key-for-a-check");
+  await provider.selectOption("xai");
+  await expect(field).toHaveValue("");
+  // By the Claude tile, which chooses Anthropic.
+  await provider.selectOption("openai");
+  await field.fill("made-up-key-for-a-check");
+  await newBot(page).getByRole("list", { name: "Providers" }).getByRole("button").nth(1).click();
+  await expect(provider).toHaveValue("anthropic");
+  await expect(field).toHaveValue("");
+  await newBot(page).getByRole("button", { name: "Save key" }).click();
+  await expect(newBot(page).getByText("Enter a key.")).toBeVisible();
+  const sentNow = await sent(page);
+  expect(sentNow.filter((each) => each.type === "saveApiKey")).toEqual([]);
+  // The tile opens the key form without letting go of any sign-in.
+  expect(sentNow.filter((each) => each.type === "dismissSignIn")).toEqual([]);
+});
+
+test("#932: a key typed for one provider is never sent as another's, through Claude's ways and Back", async ({
+  page,
+}) => {
+  await openFixture(page, ADMIN, "light");
+  await connectFromNewBot(page);
+  await newBot(page).getByText("Use an API key instead").click();
+  const provider = newBot(page).getByRole("combobox", { name: "Provider" });
+  await expect(provider).toHaveValue("openai");
+  await page.getByTestId("api-key").fill("made-up-key-for-a-check");
+  const claude = newBot(page).getByRole("list", { name: "Providers" }).getByRole("button").nth(1);
+  // Claude's ways, then Back: the key's field is empty again, still for OpenAI.
+  await claude.click();
+  await newBot(page).getByRole("button", { name: "Back to providers" }).click();
+  await expect(provider).toHaveValue("openai");
+  await expect(page.getByTestId("api-key")).toHaveValue("");
+  // Claude's ways, then its key: Anthropic, and the field empty.
+  await page.getByTestId("api-key").fill("made-up-key-for-a-check");
+  await claude.click();
+  await newBot(page)
+    .getByRole("button", { name: /^API key/ })
+    .click();
+  await expect(provider).toHaveValue("anthropic");
+  await expect(page.getByTestId("api-key")).toHaveValue("");
+  await newBot(page).getByRole("button", { name: "Save key" }).click();
+  await expect(newBot(page).getByText("Enter a key.")).toBeVisible();
+  expect((await sent(page)).filter((each) => each.type === "saveApiKey")).toEqual([]);
+});
+
+test("#932: Claude's plan by a setup token: its ways, the plain step, a refusal, the model line and Put back", async ({
+  page,
+}) => {
+  await openFixture(page, ADMIN, "light");
+  await connectFromNewBot(page);
+  await newBot(page).getByRole("list", { name: "Providers" }).getByRole("button").nth(1).click();
+  await expect(page.getByRole("heading", { name: "Claude", level: 2 })).toBeVisible();
+  // The plan first, then the key.
+  const ways = newBot(page).getByRole("list", { name: "Ways to sign in to Claude" });
+  await expect(ways.getByRole("button")).toHaveText([
+    /^Paste a setup token\s*Your Claude plan, with a token from Claude Code/,
+    /^API key\s*Billed per token/,
+  ]);
+  await ways.getByRole("button", { name: /^Paste a setup token/ }).click();
+  await expect(
+    page.getByRole("heading", { name: "Connect your Claude plan", level: 2 }),
+  ).toBeVisible();
+  await expect(
+    newBot(page).getByText(
+      "In a terminal on a computer where Claude Code is signed in, run claude setup-token. Paste what it prints here.",
+    ),
+  ).toBeVisible();
+  await expect(
+    newBot(page).getByText(
+      "It goes to this gateway, to connect your Claude plan. Clawtrate doesn't keep it.",
+    ),
+  ).toBeVisible();
+  const field = page.getByTestId("paste");
+  await expect(field).toHaveAttribute("type", "password");
+  expect((await sent(page)).find((each) => each.type === "startSignIn")).toMatchObject({
+    methodId: "anthropic/setup-token",
+  });
+  // Something that isn't a token: refused in Clawtrate's own words, on the same step.
+  await field.fill("not-a-token");
+  await newBot(page).getByRole("button", { name: "Continue" }).click();
+  await expect(
+    newBot(page).getByText("That isn't a setup token. Paste the whole line it printed."),
+  ).toBeVisible();
+  await expect(field).toHaveValue("");
+  // A token of the made-up kind the fixture takes: connected, and what changed on the bot said.
+  await field.fill("made-up-setup-token-for-a-check");
+  await newBot(page).getByRole("button", { name: "Continue" }).click();
+  await expect(page.getByRole("heading", { name: "Connected to Anthropic" })).toBeVisible();
+  const line = page.getByTestId("model-change");
+  await expect(line).toContainText(/now uses claude-sonnet-5-5\./);
+  await line.getByRole("button", { name: /^Put back / }).click();
+  await expect(line).toContainText(/ again\.\s*$/);
+  expect((await sent(page)).find((each) => each.type === "putBackModel")).toMatchObject({
+    after: "anthropic/claude-sonnet-5-5@anthropic:setup-fixture",
+  });
+  // The token was sent once and is nowhere on the page.
+  const answers = (await sent(page)).filter((each) => each.type === "answerSignIn");
+  expect(answers).toHaveLength(2);
+  expect(await page.content()).not.toContain("made-up-setup-token-for-a-check");
+});
+
+test("#932: the plan's setup sign-in is ended by Cancel, and its key way opens Anthropic's key", async ({
+  page,
+}) => {
+  await openFixture(page, ADMIN, "light");
+  await connectFromNewBot(page);
+  const claude = newBot(page).getByRole("list", { name: "Providers" }).getByRole("button").nth(1);
+  await claude.click();
+  await newBot(page)
+    .getByRole("button", { name: /^Paste a setup token/ })
+    .click();
+  await expect(page.getByTestId("paste")).toBeVisible();
+  await newBot(page).getByRole("button", { name: "Cancel" }).click();
+  await expect
+    .poll(async () => (await sent(page)).some((each) => each.type === "cancelSignIn"))
+    .toBe(true);
+  // The key, second: Anthropic's key fields, empty.
+  await newBot(page).getByRole("button", { name: "Back to sign-in methods" }).click();
+  await newBot(page)
+    .getByRole("button", { name: /^API key/ })
+    .click();
+  await expect(newBot(page).getByRole("combobox", { name: "Provider" })).toHaveValue("anthropic");
+  await expect(page.getByTestId("api-key")).toHaveValue("");
+});
+
+test("#932: closing Connect on the plan's step ends the setup sign-in", async ({ page }) => {
+  await openFixture(page, ADMIN, "light");
+  await connectFromNewBot(page);
+  await newBot(page).getByRole("list", { name: "Providers" }).getByRole("button").nth(1).click();
+  await newBot(page)
+    .getByRole("button", { name: /^Paste a setup token/ })
+    .click();
+  await expect(page.getByTestId("paste")).toBeVisible();
+  expect((await sent(page)).filter((each) => each.type === "cancelSignIn")).toEqual([]);
+  await page.keyboard.press("Escape");
+  await expect(newBot(page)).toBeHidden();
+  await expect
+    .poll(async () => (await sent(page)).some((each) => each.type === "cancelSignIn"))
+    .toBe(true);
+});
+
+test("#932: without admin access, the plan's way says it needs full control and the key way stays", async ({
+  page,
+}) => {
+  await openFixture(page, ADMIN, "light");
+  await connectFromNewBot(page);
+  // The Connect entry points require admin. Lose that grant while the dialog is open.
+  await page.evaluate(() => {
+    (
+      window as unknown as {
+        clawtrateFixture: { setState(change: (state: ClawtrateState) => ClawtrateState): void };
+      }
+    ).clawtrateFixture.setState((state) => ({
+      ...state,
+      connection: {
+        ...state.connection,
+        canAdmin: false,
+        scopes: state.connection.scopes.filter((scope) => scope !== "operator.admin"),
+      },
+    }));
+  });
+  await expect(newBot(page).getByTestId("admin-bar")).toBeVisible();
+  await newBot(page).getByRole("list", { name: "Providers" }).getByRole("button").nth(1).click();
+  const ways = newBot(page).getByRole("list", { name: "Ways to sign in to Claude" });
+  await expect(ways.getByRole("button", { name: /^Paste a setup token/ })).toHaveAttribute(
+    "aria-disabled",
+    "true",
+  );
+  await expect(ways.getByRole("button", { name: /^Paste a setup token/ })).toContainText(
+    "Your Claude plan · needs full control",
+  );
+  await expect(ways.getByRole("button", { name: /^API key/ })).toBeVisible();
 });
 
 test.describe("phone, a key", () => {

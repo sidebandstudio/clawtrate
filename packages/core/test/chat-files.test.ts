@@ -11,14 +11,14 @@ import { toBase64 } from "../src/bytes.ts";
 import { utf8Length } from "../src/encoding.ts";
 import { isTooLargeToSave, MAX_CHAT_FILE_BYTES } from "../src/chat-files.ts";
 import { ClawtrateClient, CONNECTION_CHANGED, FILE_FROM_ANOTHER_GATEWAY } from "../src/client.ts";
-import { parseBridgeCommand } from "../src/bridge.ts";
+import { createBridgeSession, parseBridgeCommand } from "../src/bridge.ts";
 import type { HttpFetch, HttpResponseLike } from "../src/host.ts";
 import { cleanFileName, mapHistory, MAX_FILE_NAME_BYTES } from "../src/mapping.ts";
 import { READ_SCOPES } from "../src/scopes.ts";
 import { enforceState } from "../src/state-bounds.ts";
 import type { Transcript } from "../src/types.ts";
 import { FAST, grantingGateway, KEY, URL_A } from "./client-harness.ts";
-import { deferred, memoryStorage, testHost, tokenKey, until } from "./fake-gateway.ts";
+import { deferred, memoryStorage, sleep, testHost, tokenKey, until } from "./fake-gateway.ts";
 
 const PDF = "artifact_managed_media_470797d5-f45d-444a-901d-21a6bd2c2f96";
 const NOTES = "artifact_managed_media_dcdee85c-5f62-4293-9cc5-68c53084eba3";
@@ -511,6 +511,47 @@ describe("F-115: a file a bot attaches, read", () => {
     identity.resolve({ deviceId: "gateway-a" });
     await expect(reading).rejects.toThrow();
     expect(gateway.calls("artifacts.download")).toHaveLength(4);
+    client.stop();
+  });
+
+  it("F-115: a read still waiting its turn is withdrawn when its viewer closes the task, and one for a task still open runs", async () => {
+    let release: () => void = () => {};
+    const held = new Promise<void>((resolve) => (release = resolve));
+    const { client, gateway } = await open(async () => {
+      await held;
+      return response(200, {}, BYTES);
+    });
+    // Four reads hold the file reads' places, so both viewers' reads wait for one.
+    const busy = Array.from({ length: 4 }, () => client.readChatFile(KEY, PDF));
+    await until(() => gateway.calls("artifacts.download").length === 4);
+    const stamp = { gatewayId: "gateway-a", target: client.state.connection.target };
+    // The staying viewer's channel is narrow, so its file comes in parts.
+    const leaving = createBridgeSession(client);
+    const staying = createBridgeSession(client, { maxResultChars: 1 });
+    await leaving.apply({ type: "openSession", key: KEY });
+    await staying.apply({ type: "openSession", key: KEY });
+    const left = leaving.apply({ type: "readChatFile", key: KEY, artifactId: PDF, stamp });
+    const kept = staying.apply({ type: "readChatFile", key: KEY, artifactId: PDF, stamp });
+    // The wait for a place polls every 100 ms and keeps no queue to look at: past one poll, both
+    // reads have passed their gateway check and are waiting, while the four still hold the places.
+    await sleep(150);
+    expect(gateway.calls("artifacts.download")).toHaveLength(4);
+    await leaving.apply({ type: "closeSession", key: KEY });
+    release();
+    await Promise.all(busy);
+    await expect(left).rejects.toThrow("The request was withdrawn.");
+    const read = await kept;
+    expect(read).toMatchObject({ status: "content", bytes: BYTES.length });
+    expect(gateway.calls("artifacts.download")).toHaveLength(5);
+    // Its parts are read through its viewer, and closing the task lets go of the rest.
+    const transfer = (read as { transfer: { id: string } }).transfer;
+    expect(await staying.apply({ type: "readFileChunk", id: transfer.id, index: 1 })).toEqual({
+      data: expect.any(String),
+    });
+    const transfers = (client as unknown as { fileTransfers: { size: number } }).fileTransfers;
+    expect(transfers.size).toBe(1);
+    await staying.apply({ type: "closeSession", key: KEY });
+    expect(transfers.size).toBe(0);
     client.stop();
   });
 

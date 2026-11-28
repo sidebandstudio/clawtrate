@@ -196,6 +196,8 @@ const ALLOWED: Record<string, string> = {
     "one history read; the run ids that read established, at most 40 messages' runs, dropped when it returns",
   "packages/core/src/client.ts:readRecipientRuns>activeBefore":
     "one history read; the run ids active before it was asked, at most the named ids', dropped when it returns",
+  "packages/core/src/client.ts:resumeUpgrade>granted":
+    "one hello; the gateways named by the access waiters it grants, at most `MAX_ACCESS_WAITERS`, dropped once its identity answers",
   "packages/core/src/client.ts:botDeleteContext>listedUnder":
     "one delete; the bot each listed task is under as the delete is sent, at most `MAX_LISTED_TASKS`, dropped with the context",
   "packages/core/src/client.ts:readRecipientRuns>inferred":

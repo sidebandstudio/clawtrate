@@ -23,9 +23,26 @@ vi.mock(import("node:child_process"), async (original) => {
   vi.spyOn(cp, "spawn");
   return cp;
 });
+// The download folder's watch is a stand-in. On macOS a real one is an FSEvents stream, and
+// closing it blocks until the system's fseventsd answers, which on a busy Mac took seconds
+// per close and most of the file's time (#677). No test here waits for a watch event: each
+// finds a changed file by reading it again. A test can still emit "error" on the stand-in.
 vi.mock(import("node:fs"), async (original) => {
   const fs = { ...(await original()) };
-  vi.spyOn(fs, "watch");
+  const { EventEmitter } = await import("node:events");
+  vi.spyOn(fs, "watch").mockImplementation(() => {
+    let closed = false;
+    const watcher = Object.assign(new EventEmitter(), {
+      close() {
+        if (closed) return;
+        closed = true;
+        process.nextTick(() => watcher.emit("close"));
+      },
+      ref: () => watcher,
+      unref: () => watcher,
+    });
+    return watcher as unknown as ReturnType<typeof fs.watch>;
+  });
   return fs;
 });
 

@@ -450,6 +450,28 @@ describe("F-488 every kind of 8.1 has its words, its kind and its outcome", () =
     expect(state(open)).toBe("Call started");
     expect(words(call("agents_wait", { ids: ["a", "b"] }))).toBe("Wait for 2 helpers");
   });
+  it("18b sessions_create (OpenClaw 2026.11.10): Started on its task key, Failed on the gateway's error", () => {
+    const made = call(
+      "sessions_create",
+      { label: "Plan the picnic", message: "Plan a picnic by the lake for Saturday." },
+      { details: { sessionKey: "agent:pip:dashboard:37152fea" } },
+    );
+    expect(line(made)).toMatchObject({ outcome: "started", leaves: true });
+    expect(words(made)).toBe("Started a helper: Plan the picnic");
+    expect(line(made).detail).toBe('"Plan a picnic by the lake for Saturday."');
+    const refused = call(
+      "sessions_create",
+      { label: "Plan the picnic", message: "x" },
+      {
+        details: {
+          status: "error",
+          tool: "sessions_create",
+          error: "model not allowed: scripted/dev-1",
+        },
+      },
+    );
+    expect(line(refused).outcome).toBe("failed");
+  });
   it("19 ask_user: on the read tier the action card, Done only when answered", () => {
     const c = call(
       "ask_user",

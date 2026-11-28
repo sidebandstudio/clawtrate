@@ -5,6 +5,7 @@
 
 import {
   providerName,
+  SETUP_TOKEN_METHOD,
   type GatewayAccount,
   type KeyProvider,
   type SignInMethod,
@@ -19,7 +20,7 @@ type Known = {
   providers: readonly string[];
   /** Its methods by id, the usual one first, each with a short plain name. */
   methods: ReadonlyArray<{ id: string; name: string }>;
-  /** With no sign-in the gateway can start, the tile still shows when the gateway takes its key. */
+  /** The tile also offers the gateway's key for it, and shows for the key alone. */
   byKey?: true;
 };
 
@@ -40,13 +41,13 @@ export const KNOWN_PROVIDERS: readonly Known[] = [
     ],
   },
   {
-    // OpenClaw 2026.10.6 and 2026.11.10 offer no sign-in an app can start for Anthropic: their
-    // Claude plan sign-ins need a command on the gateway's machine. They take an Anthropic key.
+    // A Claude plan through the gateway's setup sign-in, with a setup token pasted in (#932), and
+    // an Anthropic key, billed per token, beside it.
     key: "claude",
     name: "Claude",
     logo: "claude",
     providers: ["anthropic"],
-    methods: [],
+    methods: [{ id: SETUP_TOKEN_METHOD, name: "Paste a setup token" }],
     byKey: true,
   },
   {
@@ -108,7 +109,7 @@ export type ProviderTile = {
   connected: boolean;
   /** Every method of it saves a key billed per token (OpenRouter's), or it takes a key. */
   perToken: boolean;
-  /** The tile has no sign-in and takes this provider's key, in the API key path. */
+  /** The tile also takes this provider's key, in the API key path: alone, when it has no sign-in. */
   keyProvider: string | null;
 };
 
@@ -157,7 +158,9 @@ export function providerTiles(
         .map((m) => ({ method: m, name: entry.methods[rank(m)]?.name ?? m.label })),
       connected,
       perToken: own.every((m) => m.group === "token"),
-      keyProvider: null,
+      keyProvider: entry.byKey
+        ? (keyProviders.find((each) => entry.providers.includes(each.provider))?.provider ?? null)
+        : null,
     });
   }
   const others: ProviderTile[] = [];

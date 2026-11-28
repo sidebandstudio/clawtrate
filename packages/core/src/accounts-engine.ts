@@ -49,6 +49,9 @@ import {
   readKeyProviders,
   readMethods,
   readModelConfig,
+  MAX_SIGNIN_METHODS,
+  SETUP_AUTH_START,
+  setupTokenMethods,
   readStep,
   SIGNIN_WAIT_MS,
   MAX_SIGNIN_SECRETS,
@@ -108,6 +111,8 @@ export type AccountsContext = {
   connected(): boolean;
   /** The connection holds `operator.admin`. */
   admin(): boolean;
+  /** The latest hello's `features.methods` lists `method`; false when it lists none. */
+  offers(method: string): boolean;
   /** Read the bot list again (`agents.list`). */
   refreshBots(): Promise<void>;
   /** The connected gateway's identity (`gateway.identity.get`), or null when it names none. */
@@ -195,6 +200,10 @@ export type CreateBotInput = {
 const MODELS_GATEWAY_CHANGED = "The gateway changed while its models were looked for.";
 
 const errorText = (error: unknown) => (error instanceof Error ? error.message : String(error));
+const entryOf = (config: RawRecord | null, botId: string) =>
+  asRecord(asRecord(asRecord(asRecord(config?.config)?.agents)?.entries)?.[botId]);
+const providerOf = (entry: RawRecord | null) =>
+  parseModelRef(readModelConfig(entry?.model).primary)?.provider ?? null;
 
 /** The longest picture New bot sends. */
 export const MAX_CREATE_AVATAR_CHARS = MAX_PICTURE_CHARS;
@@ -259,6 +268,11 @@ export class AccountsEngine {
   } | null = null;
   /** Aborts the sign-in's waiting request when it is cancelled or the connection goes. */
   private signInAbort: AbortController | null = null;
+  /**
+   * The bot's own model when the setup sign-in under way started, by that sign-in's id, and the
+   * gateway it was started on: only that gateway's session is ended and its saved token removed.
+   */
+  private modelBefore: { id: string; model: string | null; gateway: string | null } | null = null;
   /**
    * What the person typed into the sign-in under way (a key, a pasted code or
    * address), in the forms the gateway may echo it, held only while that
@@ -332,20 +346,40 @@ export class AccountsEngine {
           failure ??= { error };
           return null;
         });
+      const configRead = settle(
+        ctx
+          .readAgain(() => ctx.request("config.get", {}), current)
+          .then(asRecord, (error) => {
+            configFailed = true;
+            throw error;
+          }),
+      );
+      // Each bot's reading is shown as it arrives, whatever becomes of the others': a press on the
+      // bot is held back only by a read of its own still out or failed.
+      const arrived = async (botId: string, view: BotView, own: number) => {
+        const config = await configRead;
+        if (config === null || resets !== this.resets) return;
+        const entry = asRecord(asRecord(asRecord(config.config)?.agents)?.entries)?.[botId];
+        const gateway = answeredBy(readOn, ctx.readStamp());
+        ctx.update((a) =>
+          settleClear(
+            this.patchBinding(a, botId, (b) =>
+              b.evidence.attemptSeq !== null && b.evidence.attemptSeq > own
+                ? b
+                : this.binding(botId, asRecord(entry), view, b, startedAt, own, gateway),
+            ),
+          ),
+        );
+      };
       const [config, views, prefs] = await Promise.all([
-        settle(
-          ctx
-            .readAgain(() => ctx.request("config.get", {}), current)
-            .then(asRecord, (error) => {
-              configFailed = true;
-              throw error;
-            }),
-        ),
+        configRead,
         settle(
           this.readViews(
             bots.map((bot) => bot.id),
             failed,
             sent,
+            configRead,
+            arrived,
           ),
         ),
         ctx.request("users.prefs.get", {}).then(asRecord, () => null),
@@ -631,14 +665,17 @@ export class AccountsEngine {
   }
 
   /**
-   * Every bot's view, in chunks; each bot whose read fails or is unavailable goes in `failed`. Each
-   * chunk takes its number as it is sent, and stamps its bots with it (`sent`): a later chunk goes
-   * out after the earlier ones settle, maybe after a press's read before its send.
+   * Every bot's view, in chunks; each one read goes to `arrived` as it answers, and each bot whose
+   * read fails or is unavailable goes in `failed`. Each chunk takes its number as it is sent, and
+   * stamps its bots with it (`sent`): a later chunk goes out after the earlier ones settle, maybe
+   * after a press's read before its send.
    */
   private async readViews(
     botIds: string[],
     failed: BotReadFailure[] = [],
     sent: Map<string, number> = new Map(),
+    config: Promise<RawRecord | null>,
+    arrived: (botId: string, view: BotView, seq: number) => Promise<void>,
   ): Promise<Map<string, BotView>> {
     const views = new Map<string, BotView>();
     // A few bots at a time. Sharing is decided only from refreshed answers (row 33).
@@ -648,7 +685,16 @@ export class AccountsEngine {
       // is still out when a Refresh that waits for the read asks (#565); no later chunk starts.
       const { seq, out } = this.statusRead(this.ctx, chunk, () =>
         Promise.allSettled(
-          chunk.map((agentId) => this.ctx.request("models.authStatus", { agentId, refresh: true })),
+          chunk.map((agentId) =>
+            this.ctx
+              .request("models.authStatus", { agentId, refresh: true })
+              .then(async (answer) => {
+                // The bot's own provider first, so its account stays within the caps (#823).
+                const view = readBotView(answer, providerOf(entryOf(await config, agentId)));
+                if (!view.unavailable) await arrived(agentId, view, seq);
+                return view;
+              }),
+          ),
         ),
       );
       for (const botId of chunk) sent.set(botId, seq);
@@ -660,7 +706,7 @@ export class AccountsEngine {
         let view: BotView;
         try {
           if (each.status === "rejected") throw each.reason;
-          view = readBotView(each.value);
+          view = each.value;
         } catch (error) {
           failed.push({ botId, seq, status: "failed", error: this.scrub(errorText(error)) });
           first ??= error;
@@ -751,7 +797,10 @@ export class AccountsEngine {
       // A `main` listed on the gateway, with no folder of its own configured (row 33).
       mainShared: views.has("main") && (main === null || typeof main.agentDir !== "string"),
       accounts,
-      methods: readMethods(anyView?.capabilities ?? []),
+      methods: [
+        ...readMethods(anyView?.capabilities ?? []),
+        ...setupTokenMethods(anyView?.capabilities ?? [], this.ctx.offers(SETUP_AUTH_START)),
+      ].slice(0, MAX_SIGNIN_METHODS),
       keyProviders: readKeyProviders(anyView),
       models: catalog,
       modelAllowlist: readModelAllowlist(config),
@@ -845,7 +894,8 @@ export class AccountsEngine {
   ): void {
     ctx.update((a) =>
       this.patchBinding(a, botId, (b) =>
-        b.evidence.attemptSeq !== null && b.evidence.attemptSeq > seq
+        // At its own number: this read was shown as it arrived, before the rest of its load failed.
+        b.evidence.attemptSeq !== null && b.evidence.attemptSeq >= seq
           ? b
           : { ...b, evidence: { ...b.evidence, status, error, attemptSeq: seq } },
       ),
@@ -919,7 +969,7 @@ export class AccountsEngine {
     try {
       let answer: unknown;
       [answer, config] = await out;
-      view = readBotView(answer);
+      view = readBotView(answer, providerOf(entryOf(config, botId)));
     } catch (error) {
       this.readFailed(ctx, botId, seq, "failed", this.scrub(errorText(error)));
       throw error;
@@ -928,7 +978,7 @@ export class AccountsEngine {
       this.readFailed(ctx, botId, seq, "unavailable", view.unavailable);
       return null;
     }
-    const entry = asRecord(asRecord(asRecord(asRecord(config?.config)?.agents)?.entries)?.[botId]);
+    const entry = entryOf(config, botId);
     const gateway = answeredBy(on, ctx.readStamp());
     let applied = false;
     ctx.update((a) => {
@@ -1067,9 +1117,9 @@ export class AccountsEngine {
       return;
     }
     // Any read of the bot sent after this one (a load, Check now, a sign-in's read): only once the
-    // newest of them has been applied here as a reading may the press go on. Still out, failed, or
-    // dropped with the rest of its load, it confirmed nothing, so nothing is sent: what this rests
-    // on is when each read was sent, never whether a failure was recorded.
+    // newest of them has been applied here as a reading may the press go on. Still out or failed,
+    // it confirmed nothing, so nothing is sent: what this rests on is when each read was sent,
+    // never whether a failure was recorded.
     const started = latest?.evidence.startedSeq ?? null;
     if (started !== null && started > firstSeq && latest!.evidence.readSeq !== started) {
       publish({ status: "unsent", error: unconfirmedOrder(kind) });
@@ -1260,12 +1310,26 @@ export class AccountsEngine {
     this.forgetSecrets();
     if (key !== null) this.holdSecret(key);
     ctx.update((a) => ({ ...a, signIn: { ...signIn, known: before } }));
+    // The setup sign-in sets the bot's model as it connects (#932): what it was, to say and put back.
+    if (signIn.flow === "token")
+      this.modelBefore = {
+        id: signIn.id,
+        model: ctx.get().bindings.find((b) => b.botId === signIn.forBot)?.primary ?? null,
+        gateway: ctx.gatewayNow(),
+      };
     try {
-      await ctx.request("models.authLogin", {
-        sessionId: signIn.id,
-        authChoice: signIn.method,
-        agentId: signIn.forBot,
-      });
+      if (signIn.flow === "token")
+        await ctx.request(SETUP_AUTH_START, {
+          sessionId: signIn.id,
+          authChoice: "setup-token",
+          agentId: signIn.forBot,
+        });
+      else
+        await ctx.request("models.authLogin", {
+          sessionId: signIn.id,
+          authChoice: signIn.method,
+          agentId: signIn.forBot,
+        });
     } catch (error) {
       const message = this.scrub(errorText(error));
       this.setSignIn(signIn.id, { stage: isBusy(message) ? "busy" : "failed", error: message });
@@ -1403,7 +1467,11 @@ export class AccountsEngine {
       if (next?.done === true) {
         const status = typeof next.status === "string" ? next.status : null;
         const error = typeof next.error === "string" ? this.scrub(next.error) : null;
-        const stage = endingOf(status, error);
+        // A plan's setup sign-in that ends unconnected has its saved token removed after it (#932):
+        // never "saved, not confirmed".
+        const ending = endingOf(status, error);
+        const stage =
+          ending === "unconfirmed" && ctx.get().signIn?.flow === "token" ? "failed" : ending;
         this.setSignIn(id, {
           stage: stage === "connected" ? "checking" : stage,
           step: null,
@@ -1438,9 +1506,18 @@ export class AccountsEngine {
           this.setSignIn(id, { stage: "checking", step: { ...step } });
           continue;
         }
-        this.setSignIn(id, { stage: "entering", step });
+        // A step asked again after an answer it refused: said so, in Clawtrate's own words.
+        const refused = typeof next?.error === "string" ? this.scrub(next.error) : null;
+        this.setSignIn(id, { stage: "entering", step, error: refused });
         pause();
         return;
+      }
+      // The setup sign-in asks, once its check has passed, whether the plan takes over from the
+      // bot's Anthropic connection (#932). The person chose the plan for this bot, so it does; the
+      // model change is said after it, with Put back.
+      if (step.type === "confirm" && ctx.get().signIn?.flow === "token") {
+        pending = { stepId: step.id, value: true };
+        continue;
       }
       // A choice Clawtrate does not offer: end it rather than guess.
       await ctx.request("wizard.cancel", { sessionId: id }).catch(() => undefined);
@@ -1557,10 +1634,12 @@ export class AccountsEngine {
 
   /**
    * Forget a sign-in that has ended. One still under way is cancelled first,
-   * and kept when the gateway did not confirm the cancel.
+   * and kept when the gateway did not confirm the cancel. With `id`, only that
+   * sign-in: another one, started since, is left as it is.
    */
-  async dismissSignIn(): Promise<{ dismissed: boolean }> {
+  async dismissSignIn(id?: string): Promise<{ dismissed: boolean }> {
     const signIn = this.ctx.get().signIn;
+    if (id !== undefined && signIn?.id !== id) return { dismissed: false };
     if (signIn && isActive(signIn) && !(await this.cancelSignIn()).cancelled)
       return { dismissed: false };
     this.forgetSecrets();
@@ -1583,6 +1662,7 @@ export class AccountsEngine {
       keptBy: null,
       readFailed: false,
       locks: [],
+      modelChange: null,
     };
     try {
       const other = ctx.bots().find((bot) => bot.id !== signIn.forBot)?.id ?? null;
@@ -1595,7 +1675,7 @@ export class AccountsEngine {
       const read = (agentId: string, asked: Promise<unknown>) =>
         asked
           .then((answer) => {
-            const view = readBotView(answer);
+            const view = readBotView(answer, signIn.provider);
             if (view.unavailable)
               this.readFailed(ctx, agentId, seq, "unavailable", view.unavailable);
             return view;
@@ -1640,13 +1720,134 @@ export class AccountsEngine {
             : result.added.length === 1
               ? "connected"
               : "refreshed";
-    this.setSignIn(id, { result, stage, saving: false, cancelling: false });
     // The accounts read again while what it was given is still held: its errors are scrubbed too.
     try {
+      if (ended.flow === "token" && stage !== "connected") {
+        const removed = await this.dropSetupLeftovers(id, ended.forBot, result.added);
+        result.added = result.added.filter((profile) => !removed.includes(profile));
+        if (result.added.length === 0) {
+          result.landed = null;
+          result.keptBy = null;
+        }
+      }
+      this.setSignIn(id, { result, stage, saving: false, cancelling: false });
       await this.load();
+      if (ended.flow === "token" && stage === "connected") this.noteModelChange(id);
     } finally {
+      if (this.modelBefore?.id === id) this.modelBefore = null;
       if (ctx.get().signIn?.id === id) this.forgetSecrets();
     }
+  }
+
+  /**
+   * A setup sign-in that did not connect may leave its saved token behind, inactive (OpenClaw
+   * saves it before checking it). Removed again, so nothing of it stays on the gateway.
+   */
+  private async dropSetupLeftovers(id: string, botId: string, added: string[]): Promise<string[]> {
+    if (!this.onSetupGateway(id)) return [];
+    const candidates = added.filter((profile) => profile.startsWith("anthropic:setup-"));
+    if (candidates.length === 0) return [];
+
+    const { ctx } = this;
+    const stamp = ctx.readStamp();
+    try {
+      // A lost answer can follow a successful activation. The gateway declares the active
+      // profile in config and pins it on the bot. Never remove either kind of reference.
+      const snapshot = asRecord(await ctx.request("config.get", {}));
+      const config = asRecord(snapshot?.config);
+      const now = ctx.readStamp();
+      if (
+        !config ||
+        !this.onSetupGateway(id) ||
+        !sameStamp(stamp, now) ||
+        stamp.connectedAt !== now.connectedAt ||
+        ctx.get().signIn?.id !== id
+      )
+        return [];
+      const profiles = asRecord(asRecord(config.auth)?.profiles) ?? {};
+      const entries = asRecord(asRecord(config.agents)?.entries);
+      const primary = readModelConfig(asRecord(entries?.[botId])?.model).primary;
+      const account = parseModelRef(primary)?.account;
+      const inactive = candidates.filter(
+        (profile) => !Object.hasOwn(profiles, profile) && profile !== account,
+      );
+      if (inactive.length === 0) return [];
+      await ctx.request("models.authLogout", {
+        provider: "anthropic",
+        profileIds: inactive,
+        agentId: botId,
+      });
+      return inactive;
+    } catch (error) {
+      this.log(`a setup sign-in's saved token was not removed: ${errorText(error)}`);
+      return [];
+    }
+  }
+
+  /** The connection is to the gateway the setup sign-in `id` was started on. */
+  private onSetupGateway(id: string): boolean {
+    const started = this.modelBefore;
+    return (
+      started?.id === id && started.gateway !== null && started.gateway === this.ctx.gatewayNow()
+    );
+  }
+
+  /** The bot's own model, as read after the sign-in, beside what it was before it. */
+  private noteModelChange(id: string): void {
+    const signIn = this.ctx.get().signIn;
+    if (signIn?.id !== id || !signIn.result || this.modelBefore?.id !== id) return;
+    const before = this.modelBefore.model;
+    const after = this.ctx.get().bindings.find((b) => b.botId === signIn.forBot)?.primary ?? null;
+    if (after === before) return;
+    this.setSignIn(id, { result: { ...signIn.result, modelChange: { before, after } } });
+  }
+
+  /**
+   * Put back the bot's model a setup sign-in changed: only while the bot still has the model the
+   * sign-in gave it (docs/design/gateway-settings.md); a later change is left as it is.
+   */
+  async putBackModel(
+    botId: string,
+    before: string | null,
+    after: string | null,
+    beforeSend: (sent: boolean) => void,
+  ): Promise<void> {
+    this.requireAdmin("Changing a bot's settings");
+    const { ctx, check } = this.checked(beforeSend);
+    const signInId = ctx.get().signIn?.id;
+    await this.patch(
+      (config) => {
+        if (!config?.hash || typeof config.hash !== "string")
+          throw new Error("The gateway didn't confirm the config revision.");
+        const entries = asRecord(asRecord(asRecord(config.config)?.agents)?.entries);
+        const entry = asRecord(entries?.[botId]);
+        if (!entry || readModelConfig(entry.model).primary !== after)
+          throw new Error("The bot's model has changed since, so it was left as it is.");
+        // Keep the bot's own fallbacks when restoring its primary.
+        const onlyPrimary = Object.keys(asRecord(entry.model) ?? {}).every(
+          (key) => key === "primary",
+        );
+        return {
+          agents: {
+            entries: {
+              [botId]: { model: before === null && onlyPrimary ? null : { primary: before } },
+            },
+          },
+        };
+      },
+      [],
+      ctx,
+    );
+    await this.load();
+    check();
+    const signIn = this.ctx.get().signIn;
+    if (
+      signIn?.id === signInId &&
+      signIn?.forBot === botId &&
+      signIn.result?.modelChange?.before === before &&
+      signIn.result.modelChange.after === after
+    )
+      this.setSignIn(signIn.id, { result: { ...signIn.result, modelChange: null } });
   }
 
   /** Every bot bound to an account of `provider`: was it locked, and is it still? */
@@ -1827,17 +2028,18 @@ export class AccountsEngine {
 
   /**
    * One merge patch of the gateway's config (`config.patch`, admin), then the
-   * gateway applying it: `config.get` reports the new revision as applied.
+   * gateway applying it: `config.get` reports the new revision as applied. A patch derived from
+   * the snapshot is sent with that same snapshot's hash.
    */
   private async patch(
-    patch: RawRecord,
+    patch: RawRecord | ((before: RawRecord | null) => RawRecord),
     replacePaths: string[] = [],
     ctx: AccountsContext = this.ctx,
   ): Promise<void> {
     const before = asRecord(await ctx.request("config.get", {}));
     const baseHash = typeof before?.hash === "string" ? before.hash : undefined;
     await ctx.request("config.patch", {
-      raw: JSON.stringify(patch),
+      raw: JSON.stringify(typeof patch === "function" ? patch(before) : patch),
       ...(baseHash ? { baseHash } : {}),
       ...(replacePaths.length > 0 ? { replacePaths } : {}),
     });
@@ -2742,7 +2944,16 @@ export class AccountsEngine {
     }
     const ended = this.ctx.get().signIn;
     if (ended?.stage === "ended" && ended.result === null) {
-      void this.afterSignIn(ended.id, ended.known);
+      // The gateway's setup session isn't bound to a connection (#932): it is ended here, then
+      // what it may have saved is removed; never on another gateway answering at the address.
+      const cancelled =
+        ended.flow === "token" && this.onSetupGateway(ended.id)
+          ? this.ctx
+              .request("wizard.cancel", { sessionId: ended.id })
+              .then(() => undefined)
+              .catch(() => undefined)
+          : Promise.resolve();
+      void cancelled.then(() => this.afterSignIn(ended.id, ended.known));
     } else if (this.ctx.get().status !== "idle") {
       // Only once a screen has asked: the accounts are read for the screens that show them.
       void this.load();

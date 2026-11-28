@@ -71,9 +71,10 @@ describe("F-037: changing a bot's picture", () => {
     await expect(
       unnamed.client.setBotPicture("otto", PICTURE, stampOn(null, unnamed.client)),
     ).rejects.toThrow("hasn't said which gateway it is");
+    // Named none is told apart from named another: what this gateway is isn't known (#782).
     await expect(
       unnamed.client.setBotPicture("otto", PICTURE, stampOn("gateway-a", unnamed.client)),
-    ).rejects.toThrow("made for another gateway");
+    ).rejects.toThrow("couldn't confirm which gateway this is");
     expect(fake.gateway.calls("agents.update")).toEqual([]);
     unnamed.client.stop();
   });

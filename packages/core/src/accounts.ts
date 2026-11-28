@@ -138,7 +138,11 @@ export type GatewayAccount = {
 };
 
 /** What the person does in a sign-in, predicted from the method; the steps decide. */
-export type SignInFlow = "code" | "paste" | "host" | "domain" | "key";
+/**
+ * `token`: a Claude plan's setup token, pasted into the steps screen and sent to the gateway's
+ * setup sign-in (`openclaw.setup.auth.start`, #932).
+ */
+export type SignInFlow = "code" | "paste" | "host" | "domain" | "key" | "token";
 
 export type SignInMethod = {
   /** The `authChoice` to pass: `<pluginId>/<choiceId>`. */
@@ -449,6 +453,11 @@ export type SignInResult = {
   /** The read after the sign-in failed. */
   readFailed: boolean;
   locks: LockCheck[];
+  /**
+   * The bot's own model before and after, when the sign-in changed it: the gateway's setup
+   * sign-in sets the bot's model as it connects the account (#932). Put back writes `before`.
+   */
+  modelChange: { before: string | null; after: string | null } | null;
 };
 
 export type SignInState = {
@@ -699,8 +708,9 @@ export type ViewProfile = {
 export type BotView = {
   profiles: ViewProfile[];
   /**
-   * The providers the answer lists, within `MAX_ACCOUNTS`. A provider not here was not read: its
-   * missing order says nothing, so it is never taken as "no order".
+   * The providers the answer lists, within `MAX_ACCOUNTS`, the bot's own provider always among
+   * them. A provider not here was not read: its missing order says nothing, so it is never taken
+   * as "no order".
    */
   providers: string[];
   orders: Record<string, StoredOrder>;
@@ -729,9 +739,10 @@ export const NO_ACCOUNT_STATUS = "The gateway's answer carried no account status
 /**
  * One bot's `models.authStatus` answer. An answer that says it is unavailable is read as such;
  * one with no record or no `providers` list throws `NO_ACCOUNT_STATUS`, so it is never read as a
- * bot with no accounts and no order.
+ * bot with no accounts and no order. `current` is the provider the read is for, always kept: the
+ * bot's own model's, or the one a sign-in just added to.
  */
-export function readBotView(answer: unknown): BotView {
+export function readBotView(answer: unknown, current: string | null = null): BotView {
   const unavailable = unavailableReason(answer);
   const record = asRecord(answer) ?? {};
   if (unavailable === null && !Array.isArray(record.providers)) throw new Error(NO_ACCOUNT_STATUS);
@@ -739,7 +750,10 @@ export function readBotView(answer: unknown): BotView {
   const orders: Record<string, StoredOrder> = {};
   const keyed = new Set<string>();
   const listed = new Set<string>();
-  const providers = Array.isArray(record.providers) ? record.providers : [];
+  const all = Array.isArray(record.providers) ? record.providers : [];
+  // Read first, so the caps never cut it off and its account never reads as missing (#716).
+  const mine = (raw: unknown) => current !== null && str(asRecord(raw)?.provider) === current;
+  const providers = [...all.filter(mine), ...all.filter((raw) => !mine(raw))];
   for (const raw of providers.slice(0, MAX_ACCOUNTS)) {
     const provider = asRecord(raw);
     const id = str(provider?.provider);
@@ -846,6 +860,32 @@ const KNOWN_FLOWS: Record<string, SignInFlow> = {
   "openai/openai-token-sharing": "host",
   "github-copilot/github-copilot-enterprise": "domain",
 };
+
+/** A Claude plan's setup token: the gateway's setup sign-in for Anthropic's `setup-token` choice. */
+export const SETUP_TOKEN_METHOD = "anthropic/setup-token";
+/** The setup method that starts it, `operator.admin` on OpenClaw 2026.10.6 and 2026.11.10. */
+export const SETUP_AUTH_START = "openclaw.setup.auth.start";
+
+/**
+ * The setup-token sign-in, when the gateway lists Anthropic and offers its setup sign-in in the
+ * hello's methods: `models.authStatus` lists no sign-in for it (#900), but the setup method takes
+ * the `setup-token` choice on both versions.
+ */
+export function setupTokenMethods(capabilities: RawRecord[], offersSetup: boolean): SignInMethod[] {
+  if (!offersSetup || !capabilities.some((each) => str(each.provider) === "anthropic")) return [];
+  return [
+    {
+      id: SETUP_TOKEN_METHOD,
+      provider: "anthropic",
+      providerLabel: "Anthropic",
+      label: "Claude plan setup token",
+      hint: null,
+      kind: "secret",
+      flow: "token",
+      group: "subscription",
+    },
+  ];
+}
 
 /** The sign-ins the gateway can start, from `providerCapabilities[].loginOptions[]`. */
 export function readMethods(capabilities: RawRecord[]): SignInMethod[] {

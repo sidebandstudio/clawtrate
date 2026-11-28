@@ -653,18 +653,43 @@ test("F-474 F-475: an API key typed into the key path reaches the gateway once a
   await page.keyboard.press("Escape");
 });
 
-test("F-474: Claude's tile is second, says the gateway takes an Anthropic key, and opens that key's fields", async () => {
-  // Both OpenClaw versions offer no sign-in an app can start for Anthropic, only its key. The key
-  // isn't saved here: an Anthropic key on the gateway would reach out to the real provider.
+test("#932: Claude's tile is second and offers the plan's setup token, then the key; Cancel ends the setup sign-in and leaves nothing", async () => {
+  // The gateway's setup sign-in, `openclaw.setup.auth.start`, is in its hello on both versions.
+  // Only up to the step that asks for the token: a token isn't sent, since the gateway would then
+  // check it with the real provider.
   const settings = await connectFromSettings();
   await settings.getByRole("button", { name: "Connect an account" }).first().click();
   const tiles = settings.getByRole("list", { name: "Providers" }).getByRole("button");
   await expect(tiles.nth(0)).toHaveText(/^OpenAI/);
-  await expect(tiles.nth(1)).toHaveText(/^Claude\s*API key\s·\sBilled per token$/);
+  await expect(tiles.nth(1)).toHaveText(/^Claude/);
   await tiles.nth(1).click();
-  await expect(settings.locator("details.b-disclosure")).toHaveAttribute("open", "");
+  const ways = settings.getByRole("list", { name: "Ways to sign in to Claude" });
+  await expect(ways.getByRole("button")).toHaveText([/^Paste a setup token/, /^API key/]);
+  await ways.getByRole("button", { name: /^Paste a setup token/ }).click();
+  // The gateway's own step for the token, behind Clawtrate's words and a masked field.
+  await expect(settings.getByTestId("paste")).toBeVisible({ timeout: 20_000 });
+  await expect(settings.getByTestId("paste")).toHaveAttribute("type", "password");
+  await expect(
+    settings.getByText(/run claude setup-token\. Paste what it prints here\./),
+  ).toBeVisible();
+  await settings.getByRole("button", { name: "Cancel" }).click();
+  await expect(settings.getByRole("heading", { name: "Sign-in cancelled" })).toBeVisible({
+    timeout: 20_000,
+  });
+  // The session ended on the gateway: another setup is admitted at once, and ended again.
+  await admin.request("openclaw.setup.auth.start", {
+    sessionId: "e2e-after-cancel",
+    authChoice: "setup-token",
+    agentId: "main",
+  });
+  await admin.request("wizard.cancel", { sessionId: "e2e-after-cancel" });
+  // Nothing of it stays: no Anthropic sign-in saved, and the gateway's setup is free again.
+  expect((await view("main", "anthropic"))?.profiles ?? []).toEqual([]);
+  // The key, second: Anthropic's key fields, empty. The key isn't saved here either.
+  await settings.getByRole("button", { name: "Back to sign-in methods" }).click();
+  await ways.getByRole("button", { name: /^API key/ }).click();
   await expect(settings.getByRole("combobox", { name: "Provider" })).toHaveValue("anthropic");
-  await expect(settings.getByTestId("api-key")).toBeFocused();
+  await expect(settings.getByTestId("api-key")).toHaveValue("");
   await page.keyboard.press("Escape");
 });
 

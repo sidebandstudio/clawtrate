@@ -3,7 +3,14 @@
 // `models.authStatus` `providerCapabilities[].loginOptions[]` (read from a development gateway of
 // each, without its scripted plugin's provider), and what happens to one the app doesn't know.
 
-import { providerName, readKeyProviders, readMethods, type GatewayAccount } from "@clawtrate/core";
+import {
+  providerName,
+  readKeyProviders,
+  readMethods,
+  SETUP_TOKEN_METHOD,
+  setupTokenMethods,
+  type GatewayAccount,
+} from "@clawtrate/core";
 import { describe, expect, it } from "vitest";
 import { FIRST_TILES, KNOWN_PROVIDERS, providerTiles } from "../src/bots/provider-tiles.ts";
 
@@ -396,7 +403,7 @@ describe("Claude", () => {
     expect(shape(OPENCLAW_2026_10_6).map((tile) => tile.name)).not.toContain("Claude");
   });
 
-  it("leads to a sign-in the gateway offers for it, not to a key", () => {
+  it("lists a sign-in the gateway offers for it first, and keeps the key beside it", () => {
     const tiles = tilesOf([
       {
         ...ANTHROPIC,
@@ -411,9 +418,31 @@ describe("Claude", () => {
       },
     ]);
     expect(tiles).toHaveLength(1);
-    expect(tiles[0]!.keyProvider).toBeNull();
-    expect(tiles[0]!.perToken).toBe(false);
     expect(tiles[0]!.methods.map((m) => m.method.id)).toEqual(["anthropic/claude-plan"]);
+    expect(tiles[0]!.keyProvider).toBe("anthropic");
+    expect(tiles[0]!.perToken).toBe(false);
+  });
+
+  it("on both versions, with the gateway's setup sign-in, offers the plan's setup token first, then the key (#932)", () => {
+    for (const version of [OPENCLAW_2026_10_6, OPENCLAW_2026_11_10]) {
+      const capabilities = [...version, ANTHROPIC] as Record<string, unknown>[];
+      const methods = [...readMethods(capabilities), ...setupTokenMethods(capabilities, true)];
+      const claude = providerTiles(methods, [], keysOf(capabilities)).find(
+        (tile) => tile.key === "claude",
+      )!;
+      expect(claude.methods.map(({ method, name }) => `${name} (${method.id})`)).toEqual([
+        `Paste a setup token (${SETUP_TOKEN_METHOD})`,
+      ]);
+      expect(claude.keyProvider).toBe("anthropic");
+      expect(claude.perToken).toBe(false);
+      // Without the setup method in the hello, the key alone, as before.
+      const keyOnly = providerTiles(
+        [...readMethods(capabilities), ...setupTokenMethods(capabilities, false)],
+        [],
+        keysOf(capabilities),
+      ).find((tile) => tile.key === "claude")!;
+      expect(keyOnly.methods).toEqual([]);
+    }
   });
 
   it("is the only tile that a key alone brings: another provider's key stays in the API key path", () => {

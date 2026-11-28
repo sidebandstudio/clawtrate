@@ -764,6 +764,7 @@ describe("F-588: Refresh, the engine alone", () => {
       bots: () => [{ id: "main", name: "main", isDefault: true, avatarUrl: null }],
       connected: () => true,
       admin: () => true,
+      offers: () => false,
       refreshBots: () => Promise.resolve(),
       gateway: () => Promise.resolve("gateway-a"),
       gatewayNow: () => "gateway-a",

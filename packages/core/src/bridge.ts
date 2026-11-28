@@ -359,7 +359,8 @@ export type BridgeCommand =
   /** The code or address pasted back, or a company address. Sent once and kept nowhere. */
   | { type: "answerSignIn"; value: string }
   | { type: "cancelSignIn" }
-  | { type: "dismissSignIn" }
+  /** With `signInId`, only that sign-in is let go. */
+  | { type: "dismissSignIn"; signInId?: string }
   /** Read again where a finished sign-in's account landed, after that read failed. */
   | { type: "recheckSignIn" }
   | { type: "chooseSignInAccount"; profileId: string }
@@ -402,6 +403,17 @@ export type BridgeCommand =
       stamp: GatewayStamp;
     }
   | { type: "removeBotFallbacks"; botId: string; stamp: GatewayStamp }
+  /**
+   * Put back the model a setup sign-in gave a bot (#932): `before` again, only while the bot still
+   * has `after`.
+   */
+  | {
+      type: "putBackModel";
+      botId: string;
+      before: string | null;
+      after: string | null;
+      stamp: GatewayStamp;
+    }
   /**
    * Unlock, or Clear a kept order, after its confirmation (#660): `account` is the one account
    * the order named on screen, and nothing is sent unless it still does, on the gateway `stamp`
@@ -1348,9 +1360,12 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
       };
     case "readGatewayHooks":
       return { type: "readGatewayHooks" };
+    case "dismissSignIn":
+      return command.signInId === undefined
+        ? { type: "dismissSignIn" }
+        : { type: "dismissSignIn", signInId: id(command.signInId, "sign-in") };
     case "refreshAccounts":
     case "cancelSignIn":
-    case "dismissSignIn":
     case "recheckSignIn":
     case "dismissBotCreation":
       return { type: command.type };
@@ -1490,6 +1505,14 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
           command.effort === null || command.effort === undefined
             ? null
             : id(command.effort, "effort"),
+        stamp: gatewayStampOf(command.stamp),
+      };
+    case "putBackModel":
+      return {
+        type: "putBackModel",
+        botId: botId(command.botId),
+        before: command.before === null ? null : id(command.before, "model"),
+        after: command.after === null ? null : id(command.after, "model"),
         stamp: gatewayStampOf(command.stamp),
       };
     case "disconnect":
@@ -2146,12 +2169,22 @@ class ViewerSession implements BridgeSession {
     return key;
   }
 
-  /** File reads answer this viewer: its transfers are its own, sized to its channel. */
-  private fileOptions(): { owner: object; maxChars?: number } {
+  /**
+   * File reads answer this viewer: its transfers are its own, sized to its channel. A read for
+   * an open task's conversation answers that task's opening, so closing it withdraws the read.
+   */
+  private fileOptions(key?: string): { owner: object; maxChars?: number } {
     return {
-      owner: this.owner,
+      owner: (key !== undefined && this.open.get(key)) || this.owner,
       ...(this.policy.maxResultChars !== undefined ? { maxChars: this.policy.maxResultChars } : {}),
     };
+  }
+
+  /** Who holds a transfer: the opening of the task it was read for, or this viewer. */
+  private holder(id: string): object {
+    return (
+      [...this.open.values()].find((opening) => this.client.holdsFile(id, opening)) ?? this.owner
+    );
   }
 
   private checkRoom(): void {
@@ -2312,7 +2345,7 @@ class ViewerSession implements BridgeSession {
       case "cancelSignIn":
         return client.cancelSignIn();
       case "dismissSignIn":
-        return client.dismissSignIn();
+        return client.dismissSignIn(command.signInId);
       case "recheckSignIn":
         return client.recheckSignIn();
       case "chooseSignInAccount":
@@ -2352,6 +2385,8 @@ class ViewerSession implements BridgeSession {
         return client.setBotModel(command.botId, command.model, command.effort, command.stamp);
       case "removeBotFallbacks":
         return client.removeBotFallbacks(command.botId, command.stamp);
+      case "putBackModel":
+        return client.putBackModel(command.botId, command.before, command.after, command.stamp);
       case "clearBotOrder":
         return client.clearBotOrder(
           command.press,
@@ -2523,13 +2558,13 @@ class ViewerSession implements BridgeSession {
         return client.readChatPicture(
           this.mine(command.key),
           command.artifactId,
-          this.fileOptions(),
+          this.fileOptions(command.key),
         );
       case "readChatFile":
         return client.readChatFile(
           this.mine(command.key),
           command.artifactId,
-          this.fileOptions(),
+          this.fileOptions(command.key),
           command.stamp,
         );
       case "readSentPicture":
@@ -2537,7 +2572,7 @@ class ViewerSession implements BridgeSession {
           this.mine(command.key),
           command.messageKey,
           command.index,
-          this.fileOptions(),
+          this.fileOptions(command.key),
           command.stamp,
         );
       case "listMemory":
@@ -2568,9 +2603,9 @@ class ViewerSession implements BridgeSession {
           this.fileOptions(),
         );
       case "readFileChunk":
-        return client.readFileChunk(command.id, command.index, owner);
+        return client.readFileChunk(command.id, command.index, this.holder(command.id));
       case "releaseFile":
-        return client.releaseFile(command.id, owner);
+        return client.releaseFile(command.id, this.holder(command.id));
       case "newTask":
         return { key: await client.newTask(command.botId, { label: command.label, owner }) };
       case "newMainTask":
