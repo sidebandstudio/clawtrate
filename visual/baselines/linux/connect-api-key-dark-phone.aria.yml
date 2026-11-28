@@ -78,7 +78,7 @@
     - listitem:
       - button "OpenAI Connected"
     - listitem:
-      - button "Claude Connected"
+      - button "Claude Connected · API key · Billed per token"
     - listitem:
       - button "GitHub Copilot Connected"
     - listitem:
