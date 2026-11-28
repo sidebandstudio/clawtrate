@@ -367,9 +367,6 @@ function refusalWords(reason: string | null, port: number | null): string {
     : `Clawtrate couldn't verify what is listening at port ${port}.`;
 }
 
-/** Why local connect didn't offer a gateway that answered: nothing was sent to it. */
-const unverifiedWords = (look: SetupLook) => refusalWords(look.reason, look.port);
-
 /** The found card and actions for each result of the look (§6). */
 function LookResult({
   look,
@@ -456,7 +453,7 @@ function LookResult({
           tone="danger"
           heading="This OpenClaw is too old for automatic setup"
         >
-          <Lede>{`Automatic setup requires OpenClaw ${OLDEST_OPENCLAW_VERSION} or later. This Mac has ${look.version}.`}</Lede>
+          <Lede>{`Automatic setup requires OpenClaw ${OLDEST_OPENCLAW_VERSION} or later. Clawtrate found ${look.version}.`}</Lede>
           <Actions>
             <Primary onClick={lookAgain}>Look again</Primary>
             <Quiet onClick={onAdvanced}>Use Advanced</Quiet>
@@ -466,7 +463,7 @@ function LookResult({
     case "unverified":
       return (
         <Found mark={<WarnIcon />} tone="warn" heading="OpenClaw settings found">
-          <Lede>{unverifiedWords(look)}</Lede>
+          <Lede>{refusalWords(look.reason, look.port)}</Lede>
           <Actions>
             {advanced}
             <Quiet onClick={lookAgain}>Look again</Quiet>
@@ -683,7 +680,7 @@ const FAILURES: Record<
     step: 1,
   },
   "not-started": { lead: "OpenClaw didn't start.", next: "retry", step: 0 },
-  protocol: { lead: "This gateway speaks a different protocol.", next: "look", step: 1 },
+  protocol: { lead: "", next: "look", step: 1 },
   "token-refused": {
     lead: "OpenClaw refused the token from its settings.",
     text: () => "If you have a different token, you can enter it in Advanced.",
