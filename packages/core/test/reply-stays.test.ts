@@ -160,7 +160,7 @@ describe("#912: a run a live frame ended keeps its reply drawn until history hol
     await until(() => run()?.awaitsRows === undefined);
     gateway.emit("chat", chat(4, "final"));
     gateway.emit("agent", lifecycle(5, "end"));
-    await new Promise((resolve) => setTimeout(resolve, 50));
+    await new Promise<void>((resolve) => setTimeout(resolve, 50));
     expect(run()!.state).toBe("completed");
     expect(run()!.awaitsRows).toBeUndefined();
     client.stop();
