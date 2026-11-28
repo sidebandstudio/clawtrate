@@ -381,6 +381,7 @@ export type BridgeCommand =
       provider: string;
       model: string;
       effort: string | null;
+      verifyAccountModel?: boolean;
       /** Where New bot was read (`GatewayStamp`); nothing is created anywhere else. */
       stamp: GatewayStamp;
     }
@@ -1455,6 +1456,7 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
             : profileId(command.account),
         provider: providerId(command.provider),
         model: modelId(command.model),
+        ...(command.verifyAccountModel === true ? { verifyAccountModel: true } : {}),
         effort:
           command.effort === null || command.effort === undefined
             ? null
@@ -2355,6 +2357,7 @@ class ViewerSession implements BridgeSession {
             provider: command.provider,
             model: command.model,
             effort: command.effort,
+            ...(command.verifyAccountModel ? { verifyAccountModel: true } : {}),
           },
           command.stamp,
         );

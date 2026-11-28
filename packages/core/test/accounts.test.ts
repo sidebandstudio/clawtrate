@@ -101,9 +101,22 @@ describe("the Model menu's lists", () => {
     expect(accounts().accounts.map((a) => a.id)).toContain("acme:work");
     expect(accounts().bindings.length).toBeGreaterThan(0);
     expect(accounts().models).toEqual([]);
+    expect(accounts().modelsStatus).toBe("loading");
     held.resolve();
     await loading;
     expect(accounts().models.map((m) => m.id)).toEqual(["dev-1", "dev-2", "dev-1"]);
+    expect(accounts().modelsStatus).toBe("ready");
+    client.stop();
+  });
+
+  it("F-504: a failed model list has an error state after the accounts read back", async () => {
+    const gateway = new AccountsGateway();
+    gateway.pickerCatalog = () => {
+      throw new GatewayError({ code: "UNAVAILABLE", message: "No catalogue" });
+    };
+    const { client, accounts } = await accountsClient({ gateway });
+    expect(accounts().status).toBe("ready");
+    expect(accounts().modelsStatus).toBe("error");
     client.stop();
   });
 
@@ -155,6 +168,23 @@ describe("the Model menu's lists", () => {
     await until(() => accounts().models.length > 0);
     expect(accounts().models).toHaveLength(MAX_CATALOG_MODELS);
     expect(accounts().modelsCut).toEqual([{ provider: "globex", total: 40 }]);
+    client.stop();
+  });
+
+  it("F-504: setup finds an account provider's model beyond the ordinary picker bound", async () => {
+    const fake = new AccountsGateway();
+    fake.pickerCatalog = () => ({
+      models: [
+        ...Array.from({ length: MAX_CATALOG_MODELS }, (_, i) => ({
+          id: `m-${i}`,
+          provider: "another-provider",
+        })),
+        { id: "late", provider: "acme" },
+      ],
+    });
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    expect(accounts().models.some((model) => model.provider === "acme")).toBe(false);
+    expect(accounts().firstBotModels).toContainEqual({ provider: "acme", model: "late" });
     client.stop();
   });
 
@@ -253,6 +283,49 @@ describe("the Model menu's lists", () => {
   }
   const nothingPublished = (state: AccountsState) =>
     expect([state.accounts, state.models, state.modelsCut]).toEqual([[], [], []]);
+
+  it("F-504: after a reconnect, an interrupted sign-in rechecks an earlier failed account read", async () => {
+    const fake = new AccountsGateway();
+    const status = fake.gateway.handlers["models.authStatus"]!;
+    const { engine, state } = engineOn(fake);
+    await engine.load();
+    await engine.startSignIn(CHOICES.device, null);
+    engine.onClose();
+    fake.gateway.handlers["models.authStatus"] = () => {
+      throw new Error("The gateway did not answer the account read");
+    };
+    engine.onHello();
+    await until(() => state().signIn?.result?.readFailed === true && state().status === "error");
+    fake.gateway.handlers["models.authStatus"] = status;
+    fake.shared.push({ id: "acme:recovered", provider: "acme", type: "oauth" });
+    engine.onHello();
+    await until(() => state().signIn?.result?.added.includes("acme:recovered") === true);
+    expect(state().signIn).toMatchObject({
+      stage: "ended",
+      result: { added: ["acme:recovered"], landed: "shared", readFailed: false },
+    });
+  });
+
+  it.each([
+    ["models.authLogin", "The gateway didn’t confirm that the sign-in started."],
+    ["wizard.next", "The gateway didn’t confirm that the sign-in finished."],
+  ])(
+    "F-504: a lost answer to %s is uncertain and checks the accounts again",
+    async (method, words) => {
+      const fake = new AccountsGateway();
+      fake.gateway.handlers[method] = () => {
+        throw new Error("gateway request timed out");
+      };
+      const { engine, state } = engineOn(fake);
+      await engine.load();
+      await engine.startSignIn(CHOICES.device, null);
+      expect(state().signIn).toMatchObject({
+        stage: "ended",
+        error: words,
+        result: { added: [], readFailed: false },
+      });
+    },
+  );
 
   it("F-478: an account read answered after a gateway switch publishes nothing, and its preferences never reach the next gateway", async () => {
     const fake = new AccountsGateway();
@@ -429,6 +502,24 @@ describe("the Model menu's lists", () => {
 });
 
 describe("the accounts as each bot sees them", () => {
+  it("F-504: with no listed bots, setup reads the gateway's accounts and models without inventing a bot id", async () => {
+    const fake = new AccountsGateway();
+    fake.bots = [];
+    fake.own.main = fake.shared;
+    fake.shared = [];
+    fake.gateway.handlers["models.authStatus"] = (params) => {
+      expect(params).toEqual({ refresh: true });
+      return fake.status("main");
+    };
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    expect(fake.gateway.calls("models.authStatus")).toEqual([{ refresh: true }]);
+    expect(fake.gateway.calls("models.list")).toEqual([{}]);
+    expect(accounts().accounts.find((account) => account.id === "acme:work")?.keptBy).toBeNull();
+    expect(accounts().firstBotModels).toContainEqual({ provider: "acme", model: "dev-1" });
+    expect(accounts().bindings).toEqual([]);
+    client.stop();
+  });
+
   it("reads every bot's refreshed view, and tells shared accounts from those one bot keeps", async () => {
     const { client, fake, accounts } = await accountsClient();
     const views = fake.gateway.calls("models.authStatus") as Array<{
@@ -485,6 +576,32 @@ describe("the accounts as each bot sees them", () => {
     expect(accounts().accounts.find((a) => a.id === "acme:studio")?.keptBy).toBe("otto");
     // No `main` bot: a sign-in cannot be shared, and that is known before it starts.
     expect(accounts().mainShared).toBe(false);
+    client.stop();
+  });
+
+  it.each([
+    { dir: null, shared: true },
+    { dir: "/fixture/profile/agents/main/agent", shared: true },
+    { dir: "/fixture/another-profile/agents/main/agent", shared: false },
+  ])("F-504: only canonical main shares its accounts (directory=$dir)", async ({ dir, shared }) => {
+    const fake = new AccountsGateway();
+    fake.bots = [{ id: "main", name: "Main" }];
+    fake.own.main = fake.shared;
+    fake.shared = [];
+    if (dir) {
+      const agents = fake.config.agents as { entries: Record<string, unknown> };
+      agents.entries.main = { agentDir: dir };
+    }
+    const getConfig = fake.gateway.handlers["config.get"]!;
+    fake.gateway.handlers["config.get"] = async (params) => ({
+      ...((await getConfig(params)) as object),
+      path: "/fixture/profile/openclaw.json",
+    });
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    expect(accounts().mainShared).toBe(shared);
+    expect(accounts().accounts.find((a) => a.id === "acme:work")?.keptBy).toBe(
+      shared ? null : "main",
+    );
     client.stop();
   });
 
@@ -1046,6 +1163,45 @@ describe("a bot left half-made", () => {
     client.stop();
   });
 
+  it.each([true, false])(
+    "F-504: the first bot uses only the catalogue projected for its selected account (%s)",
+    async (projected) => {
+      const { client, fake } = await accountsClient();
+      const list = fake.gateway.handlers["models.list"]!;
+      fake.gateway.handlers["sessions.patch"] = () => ({ ok: true });
+      fake.gateway.handlers["models.list"] = (params) => {
+        if (!(params as { sessionKey?: string }).sessionKey) return list(params);
+        expect(params).toEqual({ sessionKey: "agent:viral:main", provider: "acme" });
+        expect(fake.gateway.calls("sessions.patch").at(-1)).toEqual({
+          key: "agent:viral:main",
+          model: "acme/dev-1@acme:work",
+        });
+        return {
+          accountSelection: projected
+            ? { kind: "shared", authProfileId: "acme:work" }
+            : { kind: "automatic" },
+          models: [
+            { id: "dev-1", provider: "acme", available: false },
+            { id: "dev-2", provider: "acme", available: true },
+          ],
+        };
+      };
+      const made = await client.createBot({ ...input, verifyAccountModel: true });
+      expect(made.missing).toEqual(projected ? [] : ["account-model"]);
+      const created = (fake.config.agents as { entries: Record<string, { model: unknown }> })
+        .entries.viral!;
+      expect(created.model).toEqual({
+        primary: projected ? "acme/dev-2@acme:work" : "acme/dev-1@acme:work",
+        fallbacks: [],
+      });
+      expect(fake.gateway.calls("sessions.patch").at(-1)).toEqual({
+        key: "agent:viral:main",
+        model: null,
+      });
+      client.stop();
+    },
+  );
+
   it("a bot list that can't be read after the write is no proof it was created: partial until a read shows it", async () => {
     const { client, fake, accounts } = await accountsClient();
     const list = fake.gateway.handlers["agents.list"]!;
@@ -1216,6 +1372,11 @@ describe("a bot left half-made", () => {
         throw new GatewayError({ code: "UNAVAILABLE", message: "create answer unavailable" });
       };
       await expect(viewer.apply(command)).rejects.toThrow("create answer unavailable");
+      client.dismissBotCreation();
+      await expect(viewer.apply({ ...command, name: "Juniper" })).rejects.toThrow(
+        "Check whether Viral was created before making another bot.",
+      );
+      expect(fake.gateway.calls("agents.create")).toHaveLength(1);
       fake.bots.push({ id: "viral", name: "Viral" });
       fake.seedWorkspace("viral");
       fake.seedWorkspace("viral");
@@ -1579,6 +1740,22 @@ describe("how an account was made", () => {
 });
 
 describe("sign-ins, through the gateway's own methods", () => {
+  it("F-504: a sign-in on the gateway's only canonical main is shared", async () => {
+    const fake = new AccountsGateway();
+    fake.bots = [{ id: "main", name: "Main" }];
+    fake.shared = [];
+    const { client, accounts } = await accountsClient({ gateway: fake });
+    await client.startSignIn(CHOICES.device, null);
+    fake.answerDevice();
+    await until(() => accounts().signIn?.stage === "connected");
+    expect(accounts().signIn?.result).toMatchObject({
+      added: ["acme:travel"],
+      landed: "shared",
+      keptBy: null,
+    });
+    client.stop();
+  });
+
   it("a link and a code: starting, waiting with the code and the link, connected, and where it landed", async () => {
     const fake = new AccountsGateway();
     fake.orders.otto = { acme: ["acme:work"] };

@@ -294,7 +294,7 @@ export function RunEnding({
 }) {
   const bridge = useBridge();
   const announce = useAnnounce();
-  const bots = useClawtrateState().bots;
+  const { bots, connection } = useClawtrateState();
   const [dismissed, setDismissed] = useState(false);
   const [retryError, setRetryError] = useState<string | null>(null);
   const [rawOpen, setRawOpen] = useState(false);
@@ -394,6 +394,11 @@ export function RunEnding({
     ending.kind === "not-run" || ending.kind === "not-started"
       ? notRunWords(ending, bot.name, earlier)
       : null;
+  const connectAccount =
+    connection.canAdmin &&
+    connection.status === "connected" &&
+    ending.kind === "not-run" &&
+    (ending.cause?.kind === "no-account" || ending.cause?.kind === "account-missing");
   // The app's own limit and the gateway's are worded apart: each says who ended the turn.
   const title = notRun
     ? notRun.title
@@ -514,8 +519,18 @@ export function RunEnding({
           The full text of this message isn't available here. To try again, send it again in full.
         </p>
       )}
-      {(resend || requestId || raw || (notRun?.ways.length ?? 0) > 0) && (
+      {(resend || requestId || raw || connectAccount || (notRun?.ways.length ?? 0) > 0) && (
         <div className="turn-error-actions">
+          {connectAccount && (
+            <button
+              type="button"
+              className="button"
+              data-size="sm"
+              onClick={() => requestBotSettings(bot.id, "connect")}
+            >
+              Connect an account
+            </button>
+          )}
           {notRun?.ways.map((way) => (
             <button
               key={way}

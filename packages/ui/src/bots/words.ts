@@ -15,6 +15,7 @@ import {
   type GatewayAccount,
   type HostInfo,
   type SignInFlow,
+  type SignInState,
 } from "@clawtrate/core";
 
 export { providerName };
@@ -274,19 +275,62 @@ export function modelsOf(accounts: AccountsState, provider: string) {
  * The model chosen at first for a provider: the gateway's default model when
  * it belongs to that provider, else the provider's first model (section 4).
  */
-export function firstModel(accounts: AccountsState, provider: string): string | null {
+export function firstModel(
+  accounts: AccountsState,
+  provider: string,
+  availableOnly = false,
+): string | null {
+  const models = modelsOf(accounts, provider);
   const own = defaultRef(accounts);
   if (
     own &&
     own.provider === provider &&
-    modelsOf(accounts, provider).some((m) => m.id === own.model)
+    models.some((m) => m.id === own.model && (!availableOnly || m.available))
   )
     return own.model;
-  return (
-    modelsOf(accounts, provider).find((m) => m.available)?.id ??
-    modelsOf(accounts, provider)[0]?.id ??
-    null
+  return models.find((m) => m.available)?.id ?? (availableOnly ? null : (models[0]?.id ?? null));
+}
+
+/** A shared, signed-in account and a model the gateway offers for its provider. */
+export function firstBotModel(accounts: AccountsState, signedIn: string | null) {
+  const named = signedIn ?? defaultAccount(accounts);
+  const eligible = accounts.accounts.filter(
+    (account) =>
+      account.keptBy === null &&
+      (account.status === "ok" ||
+        account.status === "static" ||
+        account.status === "expiring" ||
+        (account.status === "expired" && account.type === "oauth")),
   );
+  const withModel = (account: GatewayAccount | undefined) => {
+    if (!account) return null;
+    const model = accounts.firstBotModels
+      ? (accounts.firstBotModels.find((row) => row.provider === account.provider)?.model ?? null)
+      : firstModel(accounts, account.provider, true);
+    return model ? { account, model } : null;
+  };
+  const preferred = withModel(eligible.find((account) => account.id === named));
+  if (preferred || signedIn) return preferred;
+  for (const account of eligible) {
+    const choice = withModel(account);
+    if (choice) return choice;
+  }
+  return null;
+}
+
+/** The refreshed read after an interruption can still confirm a single new shared account. */
+export function recoveredSignInAccount(
+  signIn: Pick<SignInState, "stage" | "method" | "result"> | null,
+  method: string,
+): string | null {
+  const result = signIn?.result;
+  return signIn?.stage === "ended" &&
+    signIn.method === method &&
+    result?.landed === "shared" &&
+    !result.readFailed &&
+    result.added.length === 1
+    ? result.added[0]!
+    : null;
 }
 
 /**
