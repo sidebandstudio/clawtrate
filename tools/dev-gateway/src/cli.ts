@@ -503,6 +503,8 @@ export function devConfig(
     },
     discovery: { mdns: { mode: "off" } },
     update: { checkOnStart: false },
+    // No skill-folder watcher: on macOS, closing it held each restart 15 s to minutes (#914).
+    skills: { load: { watch: false } },
     // Everything the gateway itself fetches from beyond loopback (the plugin
     // catalog and its feed, plugin downloads, a remote tool server) goes
     // through this proxy, the instance's own scripted model, which refuses it
