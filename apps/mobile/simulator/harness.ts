@@ -402,10 +402,54 @@ export function near(a: number[], b: number[], tolerance = 6): boolean {
   return a.every((value, i) => Math.abs(value - b[i]!) <= tolerance);
 }
 
-function simctl(...args: string[]) {
-  const result = spawnSync("xcrun", ["simctl", ...args], { encoding: "utf8" });
+/** How one `xcrun simctl` run ended. */
+export type SimctlResult = { status: number | null; stdout: string; stderr: string };
+
+const xcrunSimctl = (args: string[]): SimctlResult =>
+  spawnSync("xcrun", ["simctl", ...args], { encoding: "utf8" });
+
+/** A run's output, or an error that names the command and holds what simctl said. */
+function simctlOutput(args: string[], result: SimctlResult): string {
   if (result.status !== 0) throw new Error(`simctl ${args.join(" ")}: ${result.stderr}`);
   return result.stdout;
+}
+
+function simctl(...args: string[]) {
+  return simctlOutput(args, xcrunSimctl(args));
+}
+
+/** CoreSimulator's reply when it did not answer in time: ETIMEDOUT, code 60. */
+const SIMCTL_TIMED_OUT = /domain=NSPOSIXErrorDomain, code=60\b|Operation timed out/;
+const SIMCTL_READ_ATTEMPTS = 3;
+
+/**
+ * A simctl command that only reads, such as `pbpaste`. On a loaded machine
+ * CoreSimulator can time out before it answers (#1039), which is no result of
+ * the app's, so the read is asked again: three times at most, a second apart,
+ * and then it fails with the last error. Any other error fails at once. Never
+ * use it for a command that changes the device: one that timed out may still
+ * have taken effect.
+ */
+export function simctlRead(
+  args: string[],
+  run: (args: string[]) => SimctlResult = xcrunSimctl,
+  pause: (ms: number) => void = sleepSync,
+): string {
+  for (let attempt = 1; ; attempt += 1) {
+    const result = run(args);
+    if (
+      result.status === 0 ||
+      attempt === SIMCTL_READ_ATTEMPTS ||
+      !SIMCTL_TIMED_OUT.test(`${result.stdout}${result.stderr}`)
+    )
+      return simctlOutput(args, result);
+    pause(1_000);
+  }
+}
+
+/** Block for `ms`, as the synchronous simctl runs around it do. */
+function sleepSync(ms: number) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
 
 /**
@@ -474,7 +518,7 @@ export function reinstall() {
 
 /** What the device's pasteboard holds. */
 export function pasteboard(): string {
-  return simctl("pbpaste", env.device);
+  return simctlRead(["pbpaste", env.device]);
 }
 
 /** The system's text size, as Settings, Accessibility, Larger Text sets it. */
