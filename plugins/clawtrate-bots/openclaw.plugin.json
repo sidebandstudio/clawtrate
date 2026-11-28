@@ -1,10 +1,15 @@
 {
   "id": "clawtrate-bots",
   "name": "Clawtrate bots",
-  "description": "Keeps bots' and agents' proposed changes to bots for a person to decide.",
+  "description": "Clawtrate's tools for bots: where a run came from and what a bot can do in Clawtrate; and bots' and agents' proposed changes for a person to decide.",
   "categories": ["developer-tools"],
-  "activation": { "onStartup": true },
-  "contracts": { "gatewayMethodDispatch": ["authenticated-request"] },
+  "activation": {
+    "onStartup": true
+  },
+  "contracts": {
+    "gatewayMethodDispatch": ["authenticated-request"],
+    "tools": ["clawtrate_here", "clawtrate_tasks", "clawtrate_bots"]
+  },
   "configSchema": {
     "type": "object",
     "additionalProperties": false,
@@ -17,8 +22,15 @@
           "additionalProperties": false,
           "required": ["id", "createdAt"],
           "properties": {
-            "id": { "type": "string", "minLength": 1, "maxLength": 200 },
-            "createdAt": { "type": "integer", "minimum": 0 }
+            "id": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 200
+            },
+            "createdAt": {
+              "type": "integer",
+              "minimum": 0
+            }
           }
         }
       }
