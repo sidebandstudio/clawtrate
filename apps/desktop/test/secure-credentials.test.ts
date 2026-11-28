@@ -1052,6 +1052,24 @@ describe("this device's credentials in secure storage", () => {
     }
   });
 
+  it("the move's only check is a read-back in its own process: a key that doesn't outlive it leaves no usable copy", async () => {
+    // Why a box whose key may not outlive the process gets no move yet (docs/decisions.md,
+    // "Windows keeps its files until a move is proved across processes").
+    const { dir, pem } = legacyFolder();
+    const moved = open(dir, fakeBox().box);
+    expect((await moved.signer.loadIdentity()).deviceId).toBe(await deviceIdOf(pem));
+    expect(await moved.secure()).toBe(true);
+    expect(readdirSync(dir).sort()).toEqual([CREDENTIALS_FILE, STATE_FILE].sort());
+    expectNowhere(dir, SECRETS);
+    // The next process's box has another key: the record is all that is left, and it stays shut.
+    const next = open(
+      dir,
+      fakeBox({ decrypt: () => Promise.reject(new Error("another key")) }).box,
+    );
+    await expect(next.signer.loadIdentity()).rejects.toThrow(SecureStorageUnavailableError);
+    await expect(next.storage.get(TOKEN_KEY)).rejects.toThrow(SecureStorageUnavailableError);
+  });
+
   it("an earlier build's settings that can't be read stop with fixed words, quoting nothing from the file", async () => {
     for (const contents of [
       `{"connection": "${SHARED}", broken`,
