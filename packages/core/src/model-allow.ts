@@ -90,20 +90,18 @@ export type AllowAddition = {
 
 /**
  * The addition that makes `ref` allowed for `botId`, read from the same `config.get` answer the
- * write is held to; null when no list limits the bot, the list already allows it, or the list is
- * past what Clawtrate writes back whole.
+ * write is held to; null when no list limits the bot or the list already allows it; `"full"`
+ * when the list refuses it but is past what Clawtrate writes back whole, so nothing is written.
  */
 export function allowAddition(
   config: Raw | null,
   botId: string,
   ref: AllowRef,
   serverVersion: string | null,
-): AllowAddition | null {
+): AllowAddition | "full" | null {
   const list = governing(config, botId);
-  // An empty list limits nothing: never one created, never one filled.
-  if (!list || list.keys.length === 0) return null;
-  if (listAllows(list.keys, ref, serverVersion)) return null;
-  if (list.raw.length >= MAX_ALLOWLIST_ENTRIES) return null;
+  if (!list || !listRefuses(list, ref, serverVersion)) return null;
+  if (list.raw.length >= MAX_ALLOWLIST_ENTRIES) return "full";
   const entry = allowEntry(ref);
   if (list.place === "models")
     return {
@@ -124,18 +122,26 @@ export function allowAddition(
   };
 }
 
+/** Whether a list limits the bot and doesn't allow the model: whatever Clawtrate could write. */
+function listRefuses(list: Governing, ref: AllowRef, serverVersion: string | null): boolean {
+  // An empty list limits nothing: never one created, never one filled.
+  return list.keys.length > 0 && !listAllows(list.keys, ref, serverVersion);
+}
+
 /**
- * Taking the entry out again: the patch, or why not. `gone` when the list that governs the bot
- * no longer holds it (someone changed it since, or it moved); `last` when it is the list's only
- * entry left, since taking it out would lift the limit instead of narrowing it.
+ * Taking the entry out again, from `place`, the list it went on, and only from it: the patch, or
+ * why not. `gone` when that list no longer governs the bot or no longer holds the entry (someone
+ * changed it since, or another list now governs the bot); `last` when it is the list's only entry
+ * left, since taking it out would lift the limit instead of narrowing it.
  */
 export function allowRemoval(
   config: Raw | null,
   botId: string,
   entry: string,
+  place: AllowListPlace,
 ): { patch: Raw; replacePaths: string[] } | "gone" | "last" {
   const list = governing(config, botId);
-  if (!list) return "gone";
+  if (!list || list.place !== place) return "gone";
   if (list.place === "models") {
     if (!list.raw.includes(entry)) return "gone";
     if (list.keys.filter((key) => key !== entry).length === 0) return "last";
@@ -181,5 +187,7 @@ export function ownModelRefused(
   serverVersion: string | null,
 ): AllowRef | null {
   const ref = botModelRef(config, botId);
-  return ref && allowAddition(config, botId, ref, serverVersion) ? ref : null;
+  const list = governing(config, botId);
+  // Read from the list alone, whatever Clawtrate could write to it.
+  return ref && list && listRefuses(list, ref, serverVersion) ? ref : null;
 }

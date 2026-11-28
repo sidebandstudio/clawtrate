@@ -19,6 +19,7 @@ import {
   type KindRecord,
   labelProblem,
   MAX_ACCOUNTS,
+  MAX_ALLOWLIST_ENTRIES,
   MAX_LOCK_CHECKS,
   MAX_SECRET_CHARS,
   MAX_SECRET_JSON_CHARS,
@@ -80,7 +81,13 @@ import {
   GatewayProtocolRequestTimeoutError,
 } from "@openclaw/gateway-client/browser";
 import { isKeepablePicture, MAX_PICTURE_CHARS } from "./avatar.ts";
-import { allowAddition, allowRemoval, botModelRef, ownModelRefused } from "./model-allow.ts";
+import {
+  allowAddition,
+  allowRemoval,
+  botModelRef,
+  ownModelRefused,
+  type AllowListPlace,
+} from "./model-allow.ts";
 import { cleanLine } from "./gateway-names.ts";
 import { asRecord, type RawRecord } from "./mapping.ts";
 import { sameStamp, type GatewayStamp, type ReadStamp } from "./types.ts";
@@ -1856,10 +1863,13 @@ export class AccountsEngine {
    * A merge patch made from the config it is held to: `build` reads the same `config.get` answer
    * whose hash the patch carries, so what it adds was read in the config it changes; null sends
    * nothing. Returns what `build` made and the last config read: after the write, the applied one.
+   * `onSent` runs as soon as the gateway has taken the patch, before the reads that confirm it, so
+   * what the gateway took is kept even when a read after it fails.
    */
   private async patchFrom<T extends { patch: RawRecord; replacePaths: string[] }>(
     build: (config: RawRecord | null) => T | null,
     ctx: AccountsContext = this.ctx,
+    onSent?: (sent: T) => void,
   ): Promise<{ sent: T | null; config: RawRecord | null }> {
     const before = asRecord(await ctx.request("config.get", {}));
     const sent = build(before);
@@ -1870,6 +1880,7 @@ export class AccountsEngine {
       ...(baseHash ? { baseHash } : {}),
       ...(sent.replacePaths.length > 0 ? { replacePaths: sent.replacePaths } : {}),
     });
+    onSent?.(sent);
     // A gateway that reports no revisions has nothing to wait for.
     if (before?.configRevisionHash === undefined) return { sent, config: null };
     const started = ctx.now();
@@ -2584,22 +2595,31 @@ export class AccountsEngine {
     const model = { agents: { entries: { [botId]: entry } } };
     const paths = [`agents.entries.${botId}.model.fallbacks`];
     const version = ctx.serverVersion?.() ?? null;
+    // What this write publishes is its gateway's only while no reset has come since it began.
+    const resets = this.resets;
     try {
       // The model goes on the list that limits the bot in the same write (#799), so a task the
       // bot starts on it isn't refused; and with it nothing is written if the model is refused.
-      const { sent, config } = await this.patchFrom((read) => {
-        const added = allowAddition(read, botId, ref, version);
-        return added
-          ? {
-              patch: mergePatch(model, added.patch),
-              replacePaths: [...paths, ...added.replacePaths],
-              added,
-            }
-          : { patch: model, replacePaths: paths, added: null };
-      }, ctx);
+      // A list at the most Clawtrate writes back gets nothing: the bot's settings then say why.
+      const { config } = await this.patchFrom(
+        (read) => {
+          const added = allowAddition(read, botId, ref, version);
+          return added && added !== "full"
+            ? {
+                patch: mergePatch(model, added.patch),
+                replacePaths: [...paths, ...added.replacePaths],
+                added,
+              }
+            : { patch: model, replacePaths: paths, added: null };
+        },
+        ctx,
+        // Kept once the gateway took it, before the reads that confirm it.
+        (sent) => {
+          if (this.resets === resets) this.allowedBy(botId, ref, sent.added);
+        },
+      );
       if (owns()) this.unwritten.delete(botId);
-      this.allowedBy(botId, ref, sent?.added ?? null);
-      this.refusedAfter(config);
+      if (this.resets === resets) this.refusedAfter(config);
     } catch (error) {
       if (!creating) throw error;
       // The bot exists; its Account page offers the write again (bots.md section 3).
@@ -2748,7 +2768,7 @@ export class AccountsEngine {
   private allowedBy(
     botId: string,
     ref: { provider: string; model: string },
-    added: { entry: string; place: string } | null,
+    added: { entry: string; place: AllowListPlace } | null,
   ): void {
     this.ctx.update((a) => {
       if (!added) return a.allowed?.botId === botId ? { ...a, allowed: null } : a;
@@ -2758,6 +2778,7 @@ export class AccountsEngine {
         model: ref.model,
         entry: added.entry,
         scope: added.place === "bot" ? "bot" : "gateway",
+        list: added.place,
         status: "added",
         error: null,
         at: this.ctx.now(),
@@ -2775,42 +2796,84 @@ export class AccountsEngine {
     this.requireAdmin("Changing a bot's settings");
     const { ctx, check } = this.checked(beforeSend);
     const version = ctx.serverVersion?.() ?? null;
-    const read: { ref: { provider: string; model: string } | null } = { ref: null };
-    const { sent, config } = await this.patchFrom((config) => {
-      read.ref = botModelRef(config, botId);
-      return read.ref ? allowAddition(config, botId, read.ref, version) : null;
-    }, ctx);
+    const resets = this.resets;
+    const read: { ref: { provider: string; model: string } | null; full: boolean } = {
+      ref: null,
+      full: false,
+    };
+    const { config } = await this.patchFrom(
+      (config) => {
+        read.ref = botModelRef(config, botId);
+        const added = read.ref ? allowAddition(config, botId, read.ref, version) : null;
+        if (added !== "full") return added;
+        read.full = true;
+        return null;
+      },
+      ctx,
+      // Kept once the gateway took it, before the reads that confirm it, for this gateway only.
+      (sent) => {
+        if (this.resets === resets && read.ref) this.allowedBy(botId, read.ref, sent);
+      },
+    );
     check();
-    if (sent && read.ref) this.allowedBy(botId, read.ref, sent);
-    this.refusedAfter(config);
+    if (this.resets === resets) this.refusedAfter(config);
+    if (read.full)
+      throw new Error(
+        `This gateway's model list has ${MAX_ALLOWLIST_ENTRIES} entries or more, more than Clawtrate writes back, so it wasn't changed.`,
+      );
   }
 
   /**
-   * Undo of the line: the one entry Clawtrate added, taken out of the list that governs the bot
-   * while it is still there, held to the config's hash. Nothing else is written: not the bot's
-   * earlier model, and not an entry left as the list's last, which would lift the limit.
+   * Undo of the line: the one entry Clawtrate added, taken out of the very list it went on
+   * (`ModelAllowed.list`), while that list still governs the bot and holds it, held to the
+   * config's hash. Only for the line the screen shows (`expected`): a newer change, or another
+   * bot's, writes nothing. Nothing else is written: not the bot's earlier model, and not an entry
+   * left as the list's last, which would lift the limit.
    */
-  async undoAllowed(beforeSend?: (sent: boolean) => void): Promise<void> {
+  async undoAllowed(
+    expected: { botId: string; entry: string },
+    beforeSend?: (sent: boolean) => void,
+  ): Promise<void> {
     this.requireAdmin("Changing a bot's settings");
     const allowed = this.ctx.get().allowed;
-    if (!allowed || allowed.status === "undoing" || allowed.status === "undone") return;
-    const settle = (status: ModelAllowed["status"], error: string | null = null) =>
+    if (!allowed || allowed.botId !== expected.botId || allowed.entry !== expected.entry)
+      throw new Error("That change is no longer the latest one here, so nothing was undone.");
+    if (allowed.status === "undoing" || allowed.status === "undone") return;
+    const resets = this.resets;
+    const settle = (status: ModelAllowed["status"], error: string | null = null) => {
+      if (this.resets !== resets) return;
       this.ctx.update((a) =>
         a.allowed?.entry === allowed.entry && a.allowed.botId === allowed.botId
           ? { ...a, allowed: { ...a.allowed, status, error, at: this.ctx.now() } }
           : a,
       );
+    };
     settle("undoing");
+    const outcome: { taken: boolean; kept: "gone" | "last" | null } = { taken: false, kept: null };
     try {
       const { ctx, check } = this.checked(beforeSend);
-      const { sent, config } = await this.patchFrom((read) => {
-        const removal = allowRemoval(read, allowed.botId, allowed.entry);
-        return typeof removal === "string" ? null : removal;
-      }, ctx);
+      const { config } = await this.patchFrom(
+        (read) => {
+          const removal = allowRemoval(read, allowed.botId, allowed.entry, allowed.list);
+          if (typeof removal !== "string") return removal;
+          outcome.kept = removal;
+          return null;
+        },
+        ctx,
+        () => {
+          outcome.taken = true;
+          settle("undone");
+        },
+      );
       check();
-      settle(sent ? "undone" : "kept");
-      this.refusedAfter(config);
+      if (!outcome.taken) settle("kept", outcome.kept);
+      if (this.resets === resets) this.refusedAfter(config);
     } catch (error) {
+      // The gateway took it and a read after it failed: it is out, as the gateway answered.
+      if (outcome.taken) {
+        this.log(`undo of ${allowed.entry} for ${allowed.botId}: the read after it failed`);
+        return;
+      }
       settle("failed", this.scrub(errorText(error)));
       throw error;
     }
@@ -2889,6 +2952,9 @@ export class AccountsEngine {
     this.resets += 1;
     // An Unlock's line is about the gateway it was pressed for.
     if (this.ctx.get().clear) this.ctx.update((a) => ({ ...a, clear: null }));
+    // A model list's line and its refusals are the gateway's they were read from (#799).
+    if (this.ctx.get().allowed || this.ctx.get().modelsRefused.length > 0)
+      this.ctx.update((a) => ({ ...a, allowed: null, modelsRefused: [] }));
     this.clearing = null;
     this.creating = null;
     this.creationGateway = null;
@@ -2904,10 +2970,6 @@ export class AccountsEngine {
   }
 }
 
-/**
- * The gateway a read was answered by: the identity its connection named, when the read ended on
- * the connection it began on; null when that identity wasn't known, or the connection changed.
- */
 /** One JSON merge patch made of two: objects merged key by key, anything else from `b`. */
 function mergePatch(a: RawRecord, b: RawRecord): RawRecord {
   const out: RawRecord = { ...a };
@@ -2922,6 +2984,10 @@ function mergePatch(a: RawRecord, b: RawRecord): RawRecord {
   return out;
 }
 
+/**
+ * The gateway a read was answered by: the identity its connection named, when the read ended on
+ * the connection it began on; null when that identity wasn't known, or the connection changed.
+ */
 function answeredBy(began: ReadStamp, ended: ReadStamp): string | null {
   if (ended.target !== began.target || ended.connectedAt !== began.connectedAt) return null;
   if (began.gatewayId !== null && ended.gatewayId !== began.gatewayId) return null;

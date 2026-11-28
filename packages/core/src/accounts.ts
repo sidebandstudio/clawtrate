@@ -609,8 +609,14 @@ export type ModelAllowed = {
   /** `bot`: the bot's own list; `gateway`: the gateway's default list (or its old model map). */
   scope: "bot" | "gateway";
   /**
-   * `added`: written. `undoing`: Undo under way. `undone`: taken out. `kept`: Undo found it gone
-   * or the list's last entry, and wrote nothing. `failed`: Undo's write failed, with `error`.
+   * The very list the entry went on: the bot's own, the gateway's default, or the old
+   * `agents.defaults.models` of a config never migrated. Undo takes it out of that list only.
+   */
+  list: "bot" | "gateway" | "models";
+  /**
+   * `added`: written. `undoing`: Undo under way. `undone`: taken out. `kept`: Undo wrote nothing,
+   * `error` saying why: `gone` (that list no longer holds it, or no longer governs the bot) or
+   * `last` (its only entry). `failed`: Undo's write failed, with `error`; Undo stays offered.
    */
   status: "added" | "undoing" | "undone" | "kept" | "failed";
   error: string | null;

@@ -404,8 +404,11 @@ export type BridgeCommand =
   | { type: "removeBotFallbacks"; botId: string; stamp: GatewayStamp }
   /** "Allow <model>" (#799): the bot's own model onto the model list that refuses it. */
   | { type: "allowBotModel"; botId: string; stamp: GatewayStamp }
-  /** Undo of the line that says a model was added to a bot's model list (#799). */
-  | { type: "undoModelAllowed"; stamp: GatewayStamp }
+  /**
+   * Undo of the line that says a model was added to a bot's model list (#799), for the line shown:
+   * its bot and its entry, `<provider>/<model>`.
+   */
+  | { type: "undoModelAllowed"; botId: string; entry: string; stamp: GatewayStamp }
   /**
    * Unlock, or Clear a kept order, after its confirmation (#660): `account` is the one account
    * the order named on screen, and nothing is sent unless it still does, on the gateway `stamp`
@@ -908,6 +911,14 @@ function modelId(value: unknown): string {
   return value;
 }
 
+/** A model list's entry, `<provider>/<model>`: a provider id and a model id, as written. */
+function modelEntry(value: unknown): string {
+  const slash = typeof value === "string" ? value.indexOf("/") : -1;
+  if (slash <= 0) throw new Error("invalid model entry");
+  const entry = value as string;
+  return `${providerId(entry.slice(0, slash))}/${modelId(entry.slice(slash + 1))}`;
+}
+
 function id(value: unknown, what: string): string {
   if (
     typeof value !== "string" ||
@@ -1381,7 +1392,12 @@ export function parseBridgeCommand(value: unknown): BridgeCommand {
         stamp: gatewayStampOf(command.stamp),
       };
     case "undoModelAllowed":
-      return { type: "undoModelAllowed", stamp: gatewayStampOf(command.stamp) };
+      return {
+        type: "undoModelAllowed",
+        botId: botId(command.botId),
+        entry: modelEntry(command.entry),
+        stamp: gatewayStampOf(command.stamp),
+      };
     case "clearBotOrder":
       return {
         type: "clearBotOrder",
@@ -2367,7 +2383,10 @@ class ViewerSession implements BridgeSession {
       case "allowBotModel":
         return client.allowBotModel(command.botId, command.stamp);
       case "undoModelAllowed":
-        return client.undoModelAllowed(command.stamp);
+        return client.undoModelAllowed(
+          { botId: command.botId, entry: command.entry },
+          command.stamp,
+        );
       case "clearBotOrder":
         return client.clearBotOrder(
           command.press,

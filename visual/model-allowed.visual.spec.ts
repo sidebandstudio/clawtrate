@@ -54,6 +54,28 @@ test.describe("the model list's line", () => {
     await expect(settings.getByTestId("model-allowed")).toHaveCount(0);
   });
 
+  test("F-042 #799: a failed Undo says so and stays offered; one the host refused says why", async ({
+    page,
+  }) => {
+    await openFixture(page, `${SETTINGS}&modellist=added&undo=failed`);
+    const line = page.getByTestId("bot-settings").getByTestId("model-allowed");
+    const undo = line.getByRole("button", { name: /^Undo: take OpenAI's gpt-5\.5 out/ });
+    await undo.click();
+    await expect(line).toHaveText(
+      "Couldn't take OpenAI's gpt-5.5 out of the models this gateway allows: gateway request timeout for config.patch · Undo",
+    );
+    await expect(undo).toBeEnabled();
+    await openFixture(page, `${SETTINGS}&modellist=added&undo=refused`);
+    await page
+      .getByTestId("bot-settings")
+      .getByTestId("model-allowed")
+      .getByRole("button", { name: /^Undo/ })
+      .click();
+    await expect(page.getByTestId("bot-settings").getByTestId("model-allowed")).toHaveText(
+      "Added OpenAI's gpt-5.5 to the models this gateway allows. · Undo Couldn't undo it: The gateway this screen showed is no longer connected.",
+    );
+  });
+
   test("F-042 #799: without admin access, the reason and no button", async ({ page }) => {
     await openFixture(
       page,

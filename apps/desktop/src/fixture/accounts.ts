@@ -123,6 +123,8 @@ export type AccountParams = {
    * own model; `added`, Clawtrate has just added it, with Undo.
    */
   modellist: "refused" | "added" | null;
+  /** How Undo of that line ends: refused by the host before any write, or its write failed. */
+  undo: "refused" | "failed" | null;
 };
 
 export function accountParams(params: URLSearchParams): AccountParams {
@@ -171,6 +173,10 @@ export function accountParams(params: URLSearchParams): AccountParams {
       params.get("modellist") === "refused" || params.get("modellist") === "added"
         ? (params.get("modellist") as "refused" | "added")
         : null,
+    undo:
+      params.get("undo") === "refused" || params.get("undo") === "failed"
+        ? (params.get("undo") as "refused" | "failed")
+        : null,
     openclawRun: isUpdateRunScene(params.get("openclawRun"))
       ? (params.get("openclawRun") as UpdateRunScene)
       : null,
@@ -208,6 +214,7 @@ export const NO_ACCOUNT_PARAMS: AccountParams = {
   version: null,
   clear: null,
   modellist: null,
+  undo: null,
 };
 
 /** The fixture's endings of an Unlock or Clear that keep the order, with the words each carries. */
@@ -603,7 +610,16 @@ function allowedLine(
   at: number,
 ): AccountsState["allowed"] {
   const entry = `${ref.provider}/${ref.model}`;
-  return { botId, ...ref, entry, scope: "gateway", status: "added", error: null, at };
+  return {
+    botId,
+    ...ref,
+    entry,
+    scope: "gateway",
+    list: "gateway",
+    status: "added",
+    error: null,
+    at,
+  };
 }
 
 /**
@@ -1668,7 +1684,19 @@ export function accountCommand(
     }
     case "undoModelAllowed": {
       const allowed = accounts().allowed;
-      if (allowed?.status === "added")
+      // As the engine does: only for the line the screen shows.
+      if (allowed?.botId !== command.botId || allowed.entry !== command.entry)
+        return Promise.reject(
+          new Error("That change is no longer the latest one here, so nothing was undone."),
+        );
+      if (params.undo === "refused")
+        return Promise.reject(new Error("The gateway this screen showed is no longer connected."));
+      if (params.undo === "failed") {
+        const error = "gateway request timeout for config.patch";
+        put((a) => ({ ...a, allowed: { ...allowed, status: "failed", error, at: Date.now() } }));
+        return Promise.reject(new Error(error));
+      }
+      if (allowed.status === "added" || allowed.status === "failed")
         put((a) => ({
           ...a,
           modelsRefused: [

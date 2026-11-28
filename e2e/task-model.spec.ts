@@ -268,14 +268,32 @@ async function ownList(): Promise<unknown> {
   return ((entries[BOT] as Json | undefined)?.modelPolicy as Json | undefined)?.allow;
 }
 
-/** The task a start made, deleted, so its label can be used again. */
+/**
+ * The task a start made, deleted, so its label can be used again. Once its first run has ended:
+ * OpenClaw 2026.10.6 refuses to delete a session whose entry changes meanwhile ("Session … changed
+ * before deletion. Retry.", `sessions-delete-*.mjs`), as a running first turn's does; the refusal
+ * asks for a retry, so it gets a few.
+ */
 async function deleteStarted(label: string): Promise<void> {
-  const listed = await admin.request<{ sessions: Json[] }>("sessions.list", {
-    agentId: BOT,
-    limit: 100,
-  });
-  for (const row of listed.sessions.filter((each) => each.label === label))
-    await admin.request("sessions.delete", { key: row.key, deleteTranscript: true });
+  type Row = Json & { key: string; status?: string };
+  const rows = async () =>
+    (
+      await admin.request<{ sessions: Row[] }>("sessions.list", { agentId: BOT, limit: 100 })
+    ).sessions.filter((each) => each.label === label);
+  await expect
+    .poll(async () => (await rows()).some((row) => row.status === "running"), { timeout: 60_000 })
+    .toBe(false);
+  for (const row of await rows()) {
+    for (let attempt = 1; ; attempt += 1) {
+      try {
+        await admin.request("sessions.delete", { key: row.key, deleteTranscript: true });
+        break;
+      } catch (error) {
+        if (attempt === 5 || !/changed before deletion/.test(String(error))) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+      }
+    }
+  }
 }
 
 test("#799 B: a model chosen for the bot goes on its list and its tasks start; Undo, refused again; Allow on the card, started", async () => {

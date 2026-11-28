@@ -7289,11 +7289,17 @@ export class ClawtrateClient {
     return this.accounts.allowModel(botId, this.sameConnection(stamp));
   }
 
-  /** Undo of "Added <model> to …" (#799): that one entry out again. With `stamp`, as above. */
-  async undoModelAllowed(stamp?: GatewayStamp): Promise<void> {
-    if (stamp === undefined) return this.accounts.undoAllowed();
+  /**
+   * Undo of "Added <model> to …" (#799): that one entry out again, for the line the screen shows
+   * (`shown`, its bot and entry). With `stamp`, as above.
+   */
+  async undoModelAllowed(
+    shown: { botId: string; entry: string },
+    stamp?: GatewayStamp,
+  ): Promise<void> {
+    if (stamp === undefined) return this.accounts.undoAllowed(shown);
     await this.requireSameGateway(stamp);
-    return this.accounts.undoAllowed(this.sameConnection(stamp));
+    return this.accounts.undoAllowed(shown, this.sameConnection(stamp));
   }
 
   /** With `stamp`, as for `changeBotAccount`. */

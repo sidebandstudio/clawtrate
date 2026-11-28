@@ -1348,6 +1348,7 @@ const modelAllowed = object<ModelAllowed>()({
   model: ID,
   entry: ID,
   scope: ENUM,
+  list: ENUM,
   status: ENUM,
   error: text(MAX_MESSAGE_LINE_CHARS),
   at: NUMBER,

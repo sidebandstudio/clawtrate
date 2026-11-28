@@ -26,13 +26,19 @@ export function allowedWords(allowed: NonNullable<AccountsState["allowed"]>, bot
     case "undone":
       return `Took ${model} out of ${list} again.`;
     case "kept":
-      return `${model} wasn't taken out: ${list} changed since.`;
+      // Undo wrote nothing, and says why.
+      return allowed.error === "last"
+        ? `Kept ${model} on ${list}: it's the only one left there, and taking it out would allow every model.`
+        : `${model} is no longer on ${list}, so nothing was changed.`;
     case "failed":
       return `Couldn't take ${model} out of ${list}: ${allowed.error ?? "the gateway refused."}`;
     default:
       return `Added ${model} to ${list}.`;
   }
 }
+
+/** The states in which the line offers Undo: not once the gateway has taken the entry out. */
+const UNDOABLE = new Set(["added", "undoing", "failed"]);
 
 /** Why a bot's tasks can't start on its own model, in one sentence. */
 export const refusedWords = (refused: RefusedBotModel, botName: string) =>
@@ -71,10 +77,11 @@ export function ModelAllowedLine({
     setFailed(null);
     try {
       const stamp = await screenStamp(bridge, shownStamp(connection));
+      // Undo is for the line shown: its bot and its entry, which the engine checks before writing.
       await bridge.invoke(
         command === "allowBotModel"
           ? { type: "allowBotModel", botId, stamp }
-          : { type: "undoModelAllowed", stamp },
+          : { type: "undoModelAllowed", botId, entry: allowed!.entry, stamp },
       );
     } catch (error) {
       setFailed(error instanceof Error ? error.message : String(error));
@@ -88,7 +95,8 @@ export function ModelAllowedLine({
     return (
       <p className="b-hint" role="status" data-testid="model-allowed">
         {allowedWords(allowed, botName)}
-        {admin && (allowed.status === "added" || allowed.status === "undoing") && (
+        {/* Offered until the gateway shows the entry gone: after a failed Undo too. */}
+        {admin && UNDOABLE.has(allowed.status) && (
           <>
             {" · "}
             <button
@@ -101,6 +109,10 @@ export function ModelAllowedLine({
               Undo
             </button>
           </>
+        )}
+        {/* A press the host refused before any write; a failed write says so in the line itself. */}
+        {failed && allowed.status !== "failed" && (
+          <span className="b-error"> Couldn't undo it: {failed}</span>
         )}
       </p>
     );
