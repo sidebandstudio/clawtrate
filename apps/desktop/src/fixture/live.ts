@@ -1205,11 +1205,13 @@ export function liveCommand(
             : undefined;
       if (!original) return Promise.resolve();
       const id = notRunRetryKey(command.key, run.id);
-      if (transcript.outbox.some((each) => each.id === id)) return Promise.resolve();
+      // A retry cancelled before it left gives way to a new one under the same key.
+      if (transcript.outbox.some((each) => each.id === id && each.status !== "cancelled"))
+        return Promise.resolve();
       update((current) => ({
         ...current,
         outbox: [
-          ...current.outbox,
+          ...current.outbox.filter((each) => each.id !== id),
           message(id, original.text, now, {
             runId: id,
             attachments: original.attachments,
@@ -1217,7 +1219,7 @@ export function liveCommand(
           }),
         ],
         runs: [
-          ...current.runs,
+          ...current.runs.filter((each) => each.id !== id),
           newRun(id, { state: "running", origin: "local", bound: true, messageId: id }, now),
         ],
       }));
@@ -1225,6 +1227,9 @@ export function liveCommand(
     }
     case "changeNotRunComputerUse": {
       if (command.turnOn) {
+        // As the host: a Put back of this card's that is past its week goes with it.
+        const { computerUseUndo: undo, ...rest } = get();
+        if (undo?.taskKey === command.key && undo.runId === command.runId) set(rest);
         update((transcript) => ({
           ...transcript,
           runs: transcript.runs.map((each) => {

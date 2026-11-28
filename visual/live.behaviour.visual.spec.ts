@@ -2359,6 +2359,9 @@ test("F-480 #988: Try again comes back once its queued retry is cancelled", asyn
     }),
   );
   await expect(again).toBeEnabled();
+  // Pressed again, a new attempt starts under the same key.
+  await again.click();
+  await expect(again).toBeDisabled();
 });
 
 test("F-480 #988: the card says its retry and setting belong to the previous gateway", async ({
@@ -2494,6 +2497,81 @@ test("F-480 #988: with no receipt, Turn it back on is a new change that turns th
   await expect(turnOn).toHaveCount(0);
   const turnOff = card.getByRole("button", { name: "Turn off Computer Use on this gateway" });
   await expect(turnOff).toBeFocused();
+});
+
+test("F-480 #988: after Put back's week, Turn it back on turns the check on and the card says so", async ({
+  page,
+}) => {
+  await open(page, "not-run-computer-use-off");
+  const card = page.locator('[data-testid="turn-error"][data-run="run-live"]');
+  await expect(card.getByRole("button", { name: "Put back" })).toBeVisible();
+  type Fixture = {
+    clawtrateFixture: { setState: (update: (state: ClawtrateState) => ClawtrateState) => void };
+  };
+  const now = await page.evaluate(() => Date.now());
+  await page.evaluate(
+    (expiresAt) =>
+      (window as unknown as Fixture).clawtrateFixture.setState((state) => ({
+        ...state,
+        computerUseUndo: { ...state.computerUseUndo!, expiresAt },
+      })),
+    now + 1500,
+  );
+  await page.clock.setFixedTime(now + 60_000);
+  const turnOn = card.getByRole("button", { name: "Turn it back on" });
+  await turnOn.click();
+  await expect(
+    card.getByText("The Computer Use startup check is back on.", { exact: true }),
+  ).toBeVisible();
+  await expect(
+    card.getByText("The Computer Use startup check is off on this gateway.", { exact: true }),
+  ).toHaveCount(0);
+  await expect(turnOn).toHaveCount(0);
+});
+
+test("F-480 #988: a message held when its gateway was replaced says why on its row", async ({
+  page,
+}) => {
+  await open(page, "not-run-other");
+  await page.evaluate(() =>
+    (
+      window as unknown as {
+        clawtrateFixture: { setState: (update: (state: ClawtrateState) => ClawtrateState) => void };
+      }
+    ).clawtrateFixture.setState((state) => {
+      const key = "agent:otto:disk-space";
+      const transcript = state.transcripts[key]!;
+      return {
+        ...state,
+        transcripts: {
+          ...state.transcripts,
+          [key]: {
+            ...transcript,
+            outbox: [
+              ...transcript.outbox,
+              {
+                id: "msg-held-for-gateway",
+                text: "Read the attached notes.",
+                mode: "queue" as const,
+                status: "not-sent" as const,
+                runId: null,
+                messageSeq: null,
+                leftAt: null,
+                createdAt: Date.now(),
+                error:
+                  "It was written for another gateway and its files aren't kept. To send it here, attach them to a new message.",
+                attachments: [{ fileName: "notes.txt", mimeType: "text/plain", sizeBytes: 5 }],
+              },
+            ],
+          },
+        },
+      };
+    }),
+  );
+  const row = page.getByTestId("shelf-row").filter({ hasText: "Read the attached notes." });
+  await expect(row).toContainText(
+    "Not sent It was written for another gateway and its files aren't kept. To send it here, attach them to a new message.",
+  );
 });
 
 test("F-480 #988: a Turn it back on the gateway refuses leaves the card off and says so", async ({

@@ -241,6 +241,7 @@ import {
   TIMEOUTS_IN_A_ROW,
   markStopAsked,
   markWithdrawn,
+  notLeft,
   MAX_RAW_ENTRY_CHARS,
   runErrorRawId,
   markTurnLimit,
@@ -490,6 +491,14 @@ export const CONNECTION_CHANGED =
   "The connection changed since this screen was read, so nothing was sent. Look again, then try again.";
 /** Why a write stamped with one gateway's identity is not sent to another (`requireSameGateway`). */
 const ANOTHER_GATEWAY = "This change was made for another gateway, so nothing was sent.";
+/** A not-run retry the gateway withdrew from a turn: its one key is spent there. */
+const RETRY_WITHDRAWN =
+  "The gateway withdrew this retry and won't take it again. Send the message as a new one.";
+/** A queued message whose files went when its gateway was replaced at the same address. */
+const QUEUED_FOR_ANOTHER_GATEWAY =
+  "It was written for another gateway and its files aren't kept. To send it here, attach them to a new message.";
+/** A message that declares files this device no longer holds never goes without them. */
+const FILES_NOT_HELD = "Its files are no longer held; attach them again.";
 const UNNAMED_GATEWAY = "The gateway hasn't said which gateway it is, so nothing was sent.";
 /** The identity read failed or named none: a retry may read it, unlike another gateway's. */
 const IDENTITY_UNREAD =
@@ -1836,6 +1845,11 @@ export class ClawtrateClient {
       bot: string | null;
       files: OutgoingAttachment[];
       bytes: number;
+      /**
+       * With no gateway yet: the connection (`epoch`) it was sent on, whose identity, once read,
+       * becomes its gateway. Never a later connection's.
+       */
+      epoch?: number;
       /** Its task was deleted on this connection: history that holds it keeps none of its pictures. */
       taskDeleted?: true;
     }
@@ -3960,6 +3974,7 @@ export class ClawtrateClient {
         bot: this.taskBot(key),
         files: attachments,
         bytes,
+        ...(this.state.connection.gatewayId ? {} : { epoch: this.epoch }),
       });
       this.attachmentBytes += bytes;
       // Pictures kept only to be shown give way to files still to go out, read-back ones first.
@@ -4219,7 +4234,9 @@ export class ClawtrateClient {
     // The gateway keeps a withdrawn steer's id as aborted and answers a send under it with that
     // abort: it goes again under a new key, in its place on the shelf, with its files.
     if (message.steer === "withdrawn") {
-      if (message.retryGatewayId) return;
+      // A retry goes under its message's one key, which the gateway keeps as aborted: it can't
+      // go again under that key, and another would let two devices send it twice.
+      if (message.retryGatewayId) throw new Error(RETRY_WITHDRAWN);
       const id = this.randomId();
       // The message a task waits to be named from goes under its new key.
       const naming = this.taskNames.get(key);
@@ -4413,6 +4430,8 @@ export class ClawtrateClient {
       this.retryMessage(key, id);
       return id;
     }
+    // Removing a cancelled row notifies listeners; one of them may have retried meanwhile.
+    if (this.outgoing(key, id)) return id;
     if (notRunRetryRecorded(this.state.transcripts[key] ?? transcript, id)) return id;
 
     const plan = retryPlan(run, transcript);
@@ -4509,7 +4528,12 @@ export class ClawtrateClient {
         return "changed";
       }
       if (!before.applied) return "not-sent";
-      if (turnOn && before.value !== false) return "changed";
+      // Already turned on elsewhere: nothing to write, and the card's "off" read-back goes. Only
+      // `true` is on; an unset value falls back to the plugin's environment, so it isn't claimed.
+      if (turnOn && before.value !== false) {
+        this.computerUseTurnedOn(key, runId);
+        return before.value === true ? "on" : "changed";
+      }
       if (!restore && !turnOn && before.value === false) {
         // This card's own disable whose read-back was lost settles against this read: Put back
         // only at its receipt's hash.
@@ -4546,7 +4570,11 @@ export class ClawtrateClient {
               writtenHash: null as string | null,
             };
       if (pending) {
+        // Clearing another card's Put back notifies listeners, which may close this opening.
         this.clearComputerUseWrite();
+        sameConnection(false);
+        if (!admin()) throw new AdminNeededError("Changing Computer Use");
+        this.checkNotWithdrawn(owner);
         this.computerUseWrite = pending;
       }
       try {
@@ -5121,6 +5149,14 @@ export class ClawtrateClient {
       message = this.outgoing(key, messageId);
       if (!message || !waiting()) return;
     }
+    const files = this.attachmentContent.get(messageId);
+    // Files this device no longer holds (their gateway was replaced) are never left out of a send.
+    if (message.attachments.length > 0 && !files) {
+      this.failDelivery(key, messageId, new Error(FILES_NOT_HELD), false);
+      return;
+    }
+    // Unbound files go out on this connection: its identity, once read, is theirs.
+    if (files && !files.gatewayId) files.epoch = this.epoch;
 
     // A pending question holds every send, whatever run it was meant for and whether or not
     // a run is still shown as active: the question's own state is the guard.
@@ -10885,6 +10921,11 @@ export class ClawtrateClient {
     if (this.bindRouteIdentity(id, current) === "changed") return;
     if (this.notRunGatewayId && this.notRunGatewayId !== id) this.clearNotRunForGatewayChange();
     this.notRunGatewayId = id;
+    for (const kept of this.attachmentContent.values())
+      if (!kept.gatewayId && kept.epoch === this.epoch) {
+        kept.gatewayId = id;
+        delete kept.epoch;
+      }
     this.accounts.onGateway(id);
     // Clearing another gateway's creation can notify a host that stops the connection.
     if (current() && this.state.connection.gatewayId !== id) this.setConnection({ gatewayId: id });
@@ -10905,9 +10946,37 @@ export class ClawtrateClient {
     const undo = this.computerUseWrite?.undo;
     this.computerUseWrite = null;
     const transcripts = { ...this.state.transcripts };
-    for (const [key, transcript] of Object.entries(transcripts)) {
+    // Files sent on this connection before its identity was read are this gateway's own.
+    const sentHere = (id: string | null | undefined) => {
+      const kept = id ? this.attachmentContent.get(id) : undefined;
+      return kept !== undefined && !kept.gatewayId && kept.epoch === this.epoch;
+    };
+    for (const [key, before] of Object.entries(transcripts)) {
+      // A message still waiting here whose files go with the old gateway waits too, never sent
+      // without them; it says why. (Other waiting messages and a gateway's identity: #1026.)
+      let transcript = before;
+      for (const message of before.outbox) {
+        if (!notLeft(message) || !this.attachmentContent.has(message.id) || sentHere(message.id))
+          continue;
+        this.dropAttachments(message.id);
+        transcript = {
+          ...transcript,
+          ...updateMessage(cancelQueuedRun(transcript, message.id, this.now()), message.id, {
+            status: "not-sent",
+            runId: null,
+            error: QUEUED_FOR_ANOTHER_GATEWAY,
+          }),
+        };
+      }
       const runs = transcript.runs.map((run): Run => {
-        if (startSeen(run) || run.ranInHistory) return run;
+        // A cancelled run (a parked message's own among them) is no not-run card to mark.
+        if (
+          startSeen(run) ||
+          run.ranInHistory ||
+          run.state === "cancelled" ||
+          sentHere(run.messageId)
+        )
+          return run;
         const hadFiles =
           run.retryFiles !== undefined || this.attachmentContent.has(run.messageId ?? "");
         if (run.messageId) this.dropAttachments(run.messageId);

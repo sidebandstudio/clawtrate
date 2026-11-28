@@ -1767,6 +1767,157 @@ describe("F-480 #988: recovering a message that never ran", () => {
     }
   });
 
+  it("a retry asked again while its cancelled row is removed is queued once", async () => {
+    const gateway = gatewayWith([{ key: KEY, agentId: "otto", updatedAt: T0 }]);
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway" });
+    const original = "failed-original";
+    gateway.handlers["chat.history"] = () => ({
+      messages: [userRow(original, "Read the notes."), beforeReplyRow(original)],
+      hasMore: false,
+    });
+    gateway.handlers["chat.abort"] = () => new Promise(() => {});
+    const { client, transcript } = await openTask({ gateway });
+    let unsubscribe = () => {};
+    try {
+      gateway.emit("agent", agentEvent("run-busy", 1, "lifecycle", { phase: "start" }));
+      await until(() => transcript().runs.some((run) => run.id === "run-busy"));
+      void client.stopRun(KEY, "run-busy");
+      await until(() => transcript().runs.some((run) => run.state === "stopping"));
+      const id = client.retryNotRun(KEY, original);
+      client.cancelQueued(KEY, id);
+      // A window that presses Try again as soon as it sees the cancelled row go.
+      let pressed = false;
+      unsubscribe = client.store.subscribe((state) => {
+        const outbox = state.transcripts[KEY]?.outbox ?? [];
+        if (pressed || outbox.some((message) => message.id === id)) return;
+        pressed = true;
+        client.retryNotRun(KEY, original);
+      });
+      expect(client.retryNotRun(KEY, original)).toBe(id);
+      expect(pressed).toBe(true);
+      expect(transcript().outbox.filter((message) => message.id === id)).toHaveLength(1);
+    } finally {
+      unsubscribe();
+      client.stop();
+    }
+  });
+
+  it("a retry the gateway withdrew from a turn says why Try again can't send it", async () => {
+    const gateway = gatewayWith([{ key: KEY, agentId: "otto", updatedAt: T0 }]);
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: "gateway" });
+    const original = "failed-original";
+    gateway.handlers["chat.history"] = () => ({
+      messages: [userRow(original, "Read the notes."), beforeReplyRow(original)],
+      hasMore: false,
+    });
+    const { client, transcript } = await openTask({ gateway });
+    try {
+      // A turn is running: the retry goes into it, and its Stop withdraws the retry.
+      gateway.emit("agent", agentEvent("run-busy", 1, "lifecycle", { phase: "start" }));
+      await until(() => transcript().runs.some((run) => run.id === "run-busy"));
+      gateway.handlers["chat.send"] = () => new Promise(() => {});
+      gateway.handlers["chat.abort"] = (params) => ({
+        aborted: true,
+        runIds: [(params as { runId: string }).runId],
+      });
+      const id = client.retryNotRun(KEY, original);
+      await until(() => gateway.calls("chat.send").length === 1);
+      void client.stopRun(KEY, "run-busy");
+      await until(
+        () => transcript().outbox.find((message) => message.id === id)?.steer === "withdrawn",
+      );
+      expect(() => client.retryNotRun(KEY, original)).toThrow(
+        "The gateway withdrew this retry and won't take it again.",
+      );
+      expect(gateway.calls("chat.send")).toHaveLength(1);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("a queued message whose files went with a replaced gateway waits, says why, and never goes without them", async () => {
+    const gateway = gatewayWith([{ key: KEY, agentId: "otto", updatedAt: T0 }]);
+    let gatewayId = "first-gateway";
+    gateway.handlers["gateway.identity.get"] = () => ({ deviceId: gatewayId });
+    gateway.handlers["chat.abort"] = () => new Promise(() => {});
+    const { client, transcript } = await openTask({ gateway });
+    try {
+      // A run that is stopping: what is sent now waits its turn.
+      gateway.emit("agent", agentEvent("run-busy", 1, "lifecycle", { phase: "start" }));
+      await until(() => transcript().runs.some((run) => run.id === "run-busy"));
+      void client.stopRun(KEY, "run-busy");
+      await until(() => transcript().runs.some((run) => run.state === "stopping"));
+      const id = client.sendMessage(KEY, "Read this after.", {
+        mode: "queue",
+        attachments: [
+          { type: "file", fileName: "a.txt", mimeType: "text/plain", content: "Zmlyc3Q=" },
+        ],
+      });
+      expect(transcript().outbox.find((message) => message.id === id)?.status).toBe("queued");
+      gatewayId = "second-gateway";
+      gateway.dropAll();
+      await until(() => client.state.connection.gatewayId === gatewayId);
+      expect(transcript().outbox.find((message) => message.id === id)).toMatchObject({
+        status: "not-sent",
+        error:
+          "It was written for another gateway and its files aren't kept. To send it here, attach them to a new message.",
+      });
+      // Sending it anyway never sends its words without its files.
+      client.retryMessage(KEY, id);
+      await until(
+        () => transcript().outbox.find((message) => message.id === id)?.status === "failed",
+      );
+      expect(transcript().outbox.find((message) => message.id === id)?.error).toBe(
+        "Its files are no longer held; attach them again.",
+      );
+      expect(
+        gateway.calls("chat.send").filter((send) => (send as Row).idempotencyKey === id),
+      ).toHaveLength(0);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("files sent before the gateway's identity is read belong to that connection's gateway", async () => {
+    const gateway = gatewayWith([{ key: KEY, agentId: "otto", updatedAt: T0 - 60_000 }]);
+    let identify: (() => void) | null = null;
+    const { client, transcript } = await openTask({ gateway });
+    try {
+      // The next connection's identity is read late.
+      gateway.handlers["gateway.identity.get"] = () =>
+        new Promise((resolve) => {
+          identify = () => resolve({ deviceId: "gateway" });
+        });
+      gateway.dropAll();
+      await until(() => client.state.connection.status === "connected" && identify !== null);
+      expect(client.state.connection.gatewayId).toBeNull();
+      const id = client.sendMessage(KEY, "Read this.", {
+        attachments: [
+          { type: "file", fileName: "a.txt", mimeType: "text/plain", content: "Zmlyc3Q=" },
+        ],
+      });
+      await until(() => transcript().runs.find((run) => run.id === id)?.bound === true);
+      gateway.emit("chat", {
+        runId: id,
+        sessionKey: KEY,
+        seq: 1,
+        state: "error",
+        errorMessage: "Backend unavailable.",
+      });
+      await until(() => transcript().runs.find((run) => run.id === id)?.state === "failed");
+      identify!();
+      await until(() => client.state.connection.gatewayId === "gateway");
+      const next = client.retryNotRun(KEY, id);
+      await until(() => gateway.calls("chat.send").length === 2);
+      const [first, second] = gateway.calls("chat.send") as Array<{ attachments: unknown[] }>;
+      expect(next).not.toBe(id);
+      expect(second?.attachments).toEqual(first?.attachments);
+      expect(second?.attachments).toHaveLength(1);
+    } finally {
+      client.stop();
+    }
+  });
+
   it("scrubs the device credential from a live failure before keeping Details or its payload", async () => {
     const gateway = gatewayWith([{ key: KEY, agentId: "otto", updatedAt: T0 }]);
     const secret = 'make-believe-"device"-credential';
@@ -1872,6 +2023,15 @@ describe("F-480 #988: Computer Use recovery", () => {
     const started = lifecycle(chat, { providerStarted: true });
     expect(neverRan(started.runs[0]!)).toBe(false);
     expect(started.runs[0]!.error?.message).toBe("Request ended.");
+    // An exhausted fallback is as definitive as a settled run, whichever order they come in.
+    const exhausted = lifecycle(chat, {
+      executionSettled: undefined,
+      fallbackExhaustedFailure: true,
+    });
+    expect(exhausted.runs[0]!.error?.message).toBe(reason);
+    // A failed attempt the gateway may still go on from changes nothing.
+    const attempt = lifecycle(chat, { executionSettled: undefined });
+    expect(attempt.runs[0]!.error?.message).toBe("Request ended.");
   });
 
   const patch = (value: boolean | null, baseHash: string) => ({
@@ -2234,8 +2394,73 @@ describe("F-480 #988: Computer Use recovery", () => {
       expect(client.state.computerUseUndo).toBeUndefined();
       expect(readback()).toBeUndefined();
       // On again: nothing more to write.
-      expect(await turnOn()).toBe("changed");
+      expect(await turnOn()).toBe("on");
       expect(gateway.calls("config.patch")).toHaveLength(2);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("Turn it back on after another device turned the check on says it is on, and writes nothing", async () => {
+    const { client, gateway, runId, change, set } = await recovery();
+    const write = gateway.handlers["config.patch"]!;
+    gateway.handlers["config.patch"] = (params) => {
+      const result = write(params);
+      if (gateway.calls("config.patch").length === 1) gateway.dropAll();
+      return result;
+    };
+    const readback = () =>
+      client.state.transcripts[KEY]?.runs.find((run) => run.id === runId)?.computerUseReadback;
+    try {
+      expect(await change(false)).toBe("unconfirmed");
+      await until(() => readback() === "already-off");
+      // Another device turns it on again.
+      set(true);
+      const turnOn = await client.changeNotRunComputerUse(
+        KEY,
+        runId,
+        false,
+        stampOn(client.state.connection.gatewayId ?? "gateway", client),
+        undefined,
+        true,
+      );
+      expect(turnOn).toBe("on");
+      expect(readback()).toBeUndefined();
+      expect(gateway.calls("config.patch")).toEqual([patch(false, "hash-1")]);
+    } finally {
+      client.stop();
+    }
+  });
+
+  it("a disable stops when clearing another card's Put back closes the opening that asked", async () => {
+    const { client, gateway, change, set } = await recovery();
+    const transcript = () => client.state.transcripts[KEY]!;
+    try {
+      expect(await change(false)).toBe("off");
+      set(true);
+      // A third timeout, so a newer card can turn it off again.
+      const id = client.sendMessage(KEY, "Check the log again.");
+      await until(() => transcript().runs.some((run) => run.id === id && run.bound));
+      gateway.emit("chat", {
+        runId: id,
+        sessionKey: KEY,
+        seq: 1,
+        state: "error",
+        errorMessage: reason,
+      });
+      await until(() => transcript().runs.some((run) => run.id === id && run.state === "failed"));
+      const owner = {};
+      const unsubscribe = client.store.subscribe((state) => {
+        if (!state.computerUseUndo) client.withdraw(owner);
+      });
+      try {
+        await expect(
+          client.changeNotRunComputerUse(KEY, id, false, stampOn("gateway", client), owner),
+        ).rejects.toThrow();
+      } finally {
+        unsubscribe();
+      }
+      expect(gateway.calls("config.patch")).toEqual([patch(false, "hash-1")]);
     } finally {
       client.stop();
     }

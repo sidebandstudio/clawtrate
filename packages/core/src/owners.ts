@@ -291,7 +291,8 @@ export const CLIENT_OWNERS: Record<string, Owner> = {
   // Files of outgoing messages: their content is `outboxFiles`; these are the names kept beside it.
   attachmentContent: {
     max: T * MAX_OUTBOX,
-    each: 4 * ID + MAX_ATTACHMENTS_PER_MESSAGE * 3 * MAX_FILE_NAME_CHARS,
+    // Its ids and, until its gateway is known, the connection it was sent on.
+    each: 4 * ID + N + MAX_ATTACHMENTS_PER_MESSAGE * 3 * MAX_FILE_NAME_CHARS,
     row: "outboxFiles",
   },
   "attachmentContent.*.files": {

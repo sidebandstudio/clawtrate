@@ -2544,7 +2544,8 @@ export function applyAgentEvent(
       );
       return {
         activity:
-          stream === "lifecycle" && data.phase === "error" && data.executionSettled === true
+          // The same terminal test as either order: a settled or exhausted-fallback error.
+          stream === "lifecycle" && data.phase === "error" && isDefinitiveLifecycleError(data)
             ? withComputerUseReason(
                 observed,
                 findRun(observed, existing.id) ?? existing,
@@ -4229,7 +4230,8 @@ export const UNCONFIRMED_ERROR =
   "The gateway accepted this message, but its history does not show it. It may not have been delivered.";
 
 /** Whether a message is unsent work this client still holds: its frame has not left. */
-function notLeft(message: OutgoingMessage): boolean {
+/** A message that hasn't left this device: queued, held, or sending before it went. */
+export function notLeft(message: OutgoingMessage): boolean {
   if (message.status === "queued" || message.status === "held") return true;
   return (
     (message.status === "sending" || message.status === "awaiting-access") &&
