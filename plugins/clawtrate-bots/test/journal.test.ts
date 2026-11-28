@@ -122,7 +122,19 @@ describe("on OpenClaw 2026.10.6", () => {
       new Set([
         ...["effects", "journal", "monotonic", "now", "store", "sweepIntervalMs", "versions"],
         // lib/runs.js and lib/hooks.js: the run origins' stand-ins for the host (test/hooks.test.ts).
-        ...["config", "describeHolds", "sessions", "slots", "version"],
+        ...[
+          "afterToolCall",
+          "config",
+          "describeHolds",
+          "ended",
+          "notes",
+          "notesOf",
+          "sawCheckInNotes",
+          "sessions",
+          "slots",
+          "version",
+          "workspaces",
+        ],
       ]),
     );
   });

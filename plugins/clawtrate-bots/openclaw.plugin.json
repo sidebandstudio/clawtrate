@@ -1,7 +1,7 @@
 {
   "id": "clawtrate-bots",
   "name": "Clawtrate bots",
-  "description": "Clawtrate's tools for bots: where a run came from and what a bot can do in Clawtrate; and bots' and agents' proposed changes for a person to decide.",
+  "description": "Clawtrate's tools for bots: where a run came from, what a bot can do in Clawtrate, and holds on the tools a bot already has; and bots' and agents' proposed changes for a person to decide.",
   "categories": ["developer-tools"],
   "activation": {
     "onStartup": true

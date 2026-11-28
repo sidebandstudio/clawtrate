@@ -1,5 +1,5 @@
 // The bots checks: the clawtrate-bots plugin's run origins, "read from
-// outside" and read tools on a real development gateway, asserted from
+// outside", read tools and holds on a real development gateway, asserted from
 // the gateway's answers and the plugin's own `clawtrate-bots.runs.get`.
 // `pnpm scenarios` runs them on an instance of their own started with
 // `--with-plugin clawtrate-bots`; on its own:
@@ -11,10 +11,16 @@
 // read-only one. Bots act through the scripted model's directives; a routine
 // runs with `cron.run`; the command line is `openclaw agent` under the
 // instance's own profile.
+//
+// The development gateway has no chat app. "The owner in a chat app" is
+// played by the command line with `--channel`: see OWNER_STAND_IN.
 
 import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import type { GatewayEvent, OperatorSession } from "./operator.ts";
+import { homedir } from "node:os";
+import { join, relative } from "node:path";
+import { HAND_OFF_PARTNER, INSTRUCTION_LINE, KEPT_ROUTINE } from "./scenarios.ts";
 import { SEED_BOTS } from "./seed-data.ts";
 
 type JsonRecord = Record<string, unknown>;
@@ -41,8 +47,13 @@ export type BotsContext = {
   clients: Record<BotsClient, OperatorSession>;
   /** `openclaw <args>` under the instance's own profile. */
   cli: (args: string[]) => Promise<{ status: number | null; stdout: string; stderr: string }>;
+  /** The instance's state folder, which holds the bots' workspaces. */
+  stateDir: string;
   log?: (line: string) => void;
 };
+
+/** What the plugin answers a refused call with (plugins/clawtrate-bots, lib/holds.js). */
+const NOT_DONE = "Not done:";
 
 type World = { stamp: string; counter: number; jobs: Set<string> };
 
@@ -223,11 +234,13 @@ async function routines(ctx: BotsContext): Promise<JsonRecord[]> {
   const listed = rec(await ctx.clients.admin.request("cron.list", { includeDisabled: true }));
   return Array.isArray(listed.jobs) ? (listed.jobs as JsonRecord[]) : [];
 }
+const kept = async (ctx: BotsContext) =>
+  (await routines(ctx)).filter((j) => j.name === KEPT_ROUTINE.name);
 
 /** Removes every routine this run of the checks made. */
 async function clearRoutines(ctx: BotsContext, world: World): Promise<void> {
   for (const job of await routines(ctx)) {
-    if (world.jobs.has(String(job.id)))
+    if (job.name === KEPT_ROUTINE.name || world.jobs.has(String(job.id)))
       await ctx.clients.admin.request("cron.remove", { id: job.id }).catch(() => {});
   }
 }
@@ -270,6 +283,35 @@ async function routineFinished(ctx: BotsContext, id: string): Promise<JsonRecord
   }
 }
 
+/** A routine's runs once `count` of them have finished; the latest. */
+async function routineFinishedAgain(
+  ctx: BotsContext,
+  id: string,
+  count: number,
+): Promise<JsonRecord> {
+  const deadline = Date.now() + 90_000;
+  for (;;) {
+    const runs = rec(
+      await ctx.clients.admin.request("cron.runs", { id, limit: 10 }).catch(() => ({})),
+    );
+    const entries = (
+      Array.isArray(runs.entries) ? runs.entries : Array.isArray(runs.runs) ? runs.runs : []
+    ) as JsonRecord[];
+    const done = entries.filter(
+      (e) => e.status === "ok" || e.status === "error" || e.action === "finished",
+    );
+    if (done.length >= count) return done.sort((a, b) => Number(b.ts ?? 0) - Number(a.ts ?? 0))[0]!;
+    expect(Date.now() < deadline, `routine ${id} did not finish ${count} runs within 90 seconds`);
+    await sleep(1000);
+  }
+}
+
+/** The bot's own file, as the gateway reads it. */
+async function fileOf(ctx: BotsContext, bot: string, name: string): Promise<string> {
+  const got = rec(await ctx.clients.admin.request("agents.files.get", { agentId: bot, name }));
+  return String(rec(got.file).content ?? got.content ?? "");
+}
+
 const lines = (text: string) => text.split("\n")[0] ?? "";
 
 export type BotsCheck = {
@@ -278,6 +320,10 @@ export type BotsCheck = {
   covers: string[];
   run(ctx: BotsContext, world: World): Promise<void>;
 };
+
+/** What `openclaw agent --channel` stands in for, and what that leaves unproven (the README says it too). */
+export const OWNER_STAND_IN =
+  "the gateway's command line with --channel discord: the run's channel is a chat app's name and the gateway counts its sender as its owner, as for a message from someone on commands.ownerAllowFrom";
 
 export const BOTS_CHECKS: BotsCheck[] = [
   {
@@ -520,6 +566,472 @@ export const BOTS_CHECKS: BotsCheck[] = [
       );
     },
   },
+  {
+    name: "held: a new routine from a typed run is stored turned off",
+    covers: ["#keep-routine"],
+    async run(ctx, world) {
+      const t = await turn(ctx, await task(ctx, world, "pip", "routine"), "#keep-routine");
+      const jobs = await kept(ctx);
+      expect(
+        jobs.length === 1 && jobs[0]!.enabled === false,
+        `routines: ${show(jobs)}; reply: ${lines(t.reply)}`,
+      );
+      await clearRoutines(ctx, world);
+    },
+  },
+  {
+    name: "held: after reading a web page, a new routine isn't made",
+    covers: [],
+    async run(ctx, world) {
+      const t = await turn(
+        ctx,
+        await task(ctx, world, "pip", "routine-read"),
+        "#search #keep-routine",
+      );
+      expect((await kept(ctx)).length === 0, "a routine was made");
+      expect(
+        t.calls.some((c) => c.name === "automations" && c.text.includes(NOT_DONE)),
+        `calls: ${show(t.calls)}`,
+      );
+    },
+  },
+  {
+    name: "held: another bot's message can't set up a routine",
+    covers: ["#message-keep-routine"],
+    async run(ctx, world) {
+      await turn(ctx, await task(ctx, world, "pip", "routine-bot"), "#message-keep-routine");
+      expect((await kept(ctx)).length === 0, "Marlow made a routine from Pip's message");
+    },
+  },
+  {
+    name: "held: a typed run can't change or delete an existing routine",
+    covers: ["#move-routine", "#remove-routine"],
+    async run(ctx, world) {
+      // The scheduler lists a bot only the routines its own session made: it sets one up
+      // first (stored turned off), and asks again in the same conversation.
+      const key = await task(ctx, world, "pip", "routine-change");
+      await turn(ctx, key, "#keep-routine");
+      try {
+        expect((await kept(ctx)).length === 1, "no routine to change");
+        const moved = await turn(ctx, key, "#move-routine");
+        expect(
+          moved.calls.some((c) => c.name === "automations" && c.text.includes(NOT_DONE)),
+          `calls: ${show(moved.calls)}`,
+        );
+        expect(rec((await kept(ctx))[0]?.schedule).expr === "0 8 * * *", "the routine was moved");
+        const removed = await turn(ctx, key, "#remove-routine");
+        expect(
+          removed.calls.some((c) => c.name === "automations" && c.text.includes(NOT_DONE)),
+          `calls: ${show(removed.calls)}`,
+        );
+        expect((await kept(ctx)).length === 1, "the routine was deleted");
+      } finally {
+        await clearRoutines(ctx, world);
+      }
+    },
+  },
+  {
+    name: "a routine's own run ends that same routine, journaled; its run can't delete another",
+    covers: ["#end-routine"],
+    async run(ctx, world) {
+      const own = await routineRun(ctx, world, "#end-routine");
+      await routineFinished(ctx, own);
+      const deadline = Date.now() + 30_000;
+      while ((await routines(ctx)).some((j) => j.id === own) && Date.now() < deadline)
+        await sleep(500);
+      expect(!(await routines(ctx)).some((j) => j.id === own), "the routine didn't end itself");
+      const ended = rec(
+        await ctx.clients.reader.request("clawtrate-bots.routines.ended", { jobId: own }),
+      );
+      expect(rec(rec(ended.entry).definition).id === own, `no journal entry: ${show(ended)}`);
+      // Another routine's run naming it: the plugin refuses before the gateway's own rule.
+      const target = String(
+        rec(
+          await ctx.clients.admin.request("cron.add", {
+            name: KEPT_ROUTINE.name,
+            agentId: "pip",
+            schedule: { kind: "cron", expr: "0 8 * * *" },
+            sessionTarget: "isolated",
+            payload: { kind: "agentTurn", message: KEPT_ROUTINE.message },
+            delivery: { mode: "none" },
+          }),
+        ).id,
+      );
+      try {
+        const other = await routineRun(ctx, world, `#end-routine ${target}`);
+        const done = await routineFinished(ctx, other);
+        expect(
+          String(done.summary ?? "").includes(NOT_DONE),
+          `the other routine's run: ${show(done)}`,
+        );
+        expect((await kept(ctx)).length === 1, "a routine's run deleted another routine");
+      } finally {
+        await clearRoutines(ctx, world);
+      }
+    },
+  },
+  {
+    name: "held: a typed run can't change its instructions, but takes a name in IDENTITY.md as its own",
+    covers: ["#change-instructions", "#take-name"],
+    async run(ctx, world) {
+      const before = await fileOf(ctx, "pip", "AGENTS.md");
+      const t = await turn(
+        ctx,
+        await task(ctx, world, "pip", "instructions"),
+        "#change-instructions",
+      );
+      expect(
+        t.calls.some((c) => c.name === "edit" && c.text.includes(NOT_DONE)),
+        `calls: ${show(t.calls)}`,
+      );
+      expect(
+        (await fileOf(ctx, "pip", "AGENTS.md")) === before && !before.includes(INSTRUCTION_LINE),
+        "AGENTS.md changed",
+      );
+      const identity = await fileOf(ctx, "pip", "IDENTITY.md");
+      await turn(ctx, await task(ctx, world, "pip", "name"), "#take-name Juniper");
+      const renamed = await fileOf(ctx, "pip", "IDENTITY.md");
+      expect(renamed.includes("Juniper"), "IDENTITY.md wasn't changed");
+      await ctx.clients.admin.request("agents.files.set", {
+        agentId: "pip",
+        name: "IDENTITY.md",
+        content: identity,
+      });
+    },
+  },
+  {
+    name: "held: a message to a bot within reach goes from a typed run that read nothing, and not after reading",
+    covers: ["#message"],
+    async run(ctx, world) {
+      const read = await turn(ctx, await task(ctx, world, "pip", "send-read"), "#search #message");
+      expect(
+        read.calls.some((c) => c.name === "sessions_send" && c.text.includes(NOT_DONE)),
+        `calls: ${show(read.calls)}`,
+      );
+      const sent = await turn(ctx, await task(ctx, world, "pip", "send"), "#message");
+      expect(
+        sent.calls.some((c) => c.name === "sessions_send" && c.ok && !c.text.includes(NOT_DONE)),
+        `calls: ${show(sent.calls)}`,
+      );
+    },
+  },
+  {
+    name: "held: a hand-off isn't made after reading a name a bot may have chosen, and is with clawtrate_bots find",
+    covers: ["#list-bots", "#find-partner", "#hand-off-to-partner"],
+    async run(ctx, world) {
+      const listed = await turn(
+        ctx,
+        await task(ctx, world, "pip", "handoff-list"),
+        "#list-bots #hand-off-to-partner",
+      );
+      expect(
+        rec((await runOf(ctx, listed.runId)).readOutside).source === "names",
+        "the list didn't mark the run",
+      );
+      expect(
+        listed.calls.some((c) => c.name === "sessions_spawn" && c.text.includes(NOT_DONE)),
+        `calls: ${show(listed.calls)}`,
+      );
+      const found = await turn(
+        ctx,
+        await task(ctx, world, "pip", "handoff-find"),
+        "#find-partner #hand-off-to-partner",
+      );
+      expect((await runOf(ctx, found.runId)).readOutside === null, "find marked the run");
+      expect(
+        found.calls.some(
+          (c) => c.name === "sessions_spawn" && c.text.includes(HAND_OFF_PARTNER.label),
+        ),
+        `calls: ${show(found.calls)}`,
+      );
+    },
+  },
+  {
+    name: "fix round D1: after reading a page, a hand-off or message naming the other bot in snake_case, or by session key beside its own agentId, isn't made",
+    covers: ["#hand-off-snake", "#message-snake"],
+    async run(ctx, world) {
+      const spawn = await turn(
+        ctx,
+        await task(ctx, world, "pip", "snake-spawn"),
+        "#search #hand-off-snake",
+      );
+      expect(
+        spawn.calls.some((c) => c.name === "sessions_spawn" && c.text.includes(NOT_DONE)),
+        `the hand-off: ${show(spawn.calls.filter((c) => c.name === "sessions_spawn").map((c) => c.text.slice(0, 120)))}`,
+      );
+      const sent = await turn(
+        ctx,
+        await task(ctx, world, "pip", "snake-send"),
+        "#search #message-snake",
+      );
+      const sends = sent.calls.filter((c) => c.name === "sessions_send");
+      expect(
+        sends.length === 3 && sends.every((c) => c.text.includes(NOT_DONE)),
+        `the messages: ${show(sends.map((c) => c.text.slice(0, 90)))}`,
+      );
+    },
+  },
+  {
+    name: "fix round D2: a typed run can't change its AGENTS.md through a ~/, file://, @, .. or lower-case path",
+    covers: ["#edit-path"],
+    async run(ctx, world) {
+      const file = join(ctx.stateDir, "workspaces", "pip", "AGENTS.md");
+      const before = await fileOf(ctx, "pip", "AGENTS.md");
+      try {
+        const dir = join(ctx.stateDir, "workspaces", "pip");
+        for (const path of [
+          `~/${relative(homedir(), file)}`,
+          `file://${file}`,
+          `@${file}`,
+          `${dir}/notes/../AGENTS.md`,
+          // The development machine's own filesystem doesn't tell case apart.
+          ...(process.platform === "darwin" || process.platform === "win32"
+            ? [join(dir, "agents.md")]
+            : []),
+        ]) {
+          const t = await turn(ctx, await task(ctx, world, "pip", "path"), `#edit-path ${path}`);
+          expect(
+            t.calls.some((c) => c.name === "edit" && c.text.includes(NOT_DONE)),
+            `${path}: calls: ${show(t.calls)}`,
+          );
+          expect(
+            !(await fileOf(ctx, "pip", "AGENTS.md")).includes(INSTRUCTION_LINE),
+            `${path}: AGENTS.md changed`,
+          );
+        }
+      } finally {
+        if ((await fileOf(ctx, "pip", "AGENTS.md")) !== before)
+          await ctx.clients.admin.request("agents.files.set", {
+            agentId: "pip",
+            name: "AGENTS.md",
+            content: before,
+          });
+      }
+    },
+  },
+  {
+    name: "fix round D3: after reading a page, the bot's own hidden task can't hand off to another bot",
+    covers: ["#hand-off-hidden-hand-off", "#hand-off-onward"],
+    async run(ctx, world) {
+      const t = await turn(
+        ctx,
+        await task(ctx, world, "pip", "onward"),
+        "#search #hand-off-hidden-hand-off",
+      );
+      const spawned = t.calls.find((c) => c.name === "sessions_spawn");
+      const child = /"childSessionKey":\s*"([^"]+)"/.exec(spawned?.text ?? "")?.[1];
+      expect(child, `no task started: ${show(t.calls)}`);
+      const said = await toolAnswer(ctx, child, "sessions_spawn");
+      expect(said.includes(NOT_DONE), `the hidden task's hand-off: ${said.slice(0, 300)}`);
+      const run = rec(
+        await ctx.clients.reader.request("clawtrate-bots.runs.get", { sessionKey: child }),
+      );
+      expect(
+        run.kind === "task" && rec(run.readOutside).source === "web",
+        `the task's run: ${show(run)}`,
+      );
+    },
+  },
+  {
+    name: "fix round D4: a routine stored turned off isn't started by the bot's own run call",
+    covers: ["#run-routine"],
+    async run(ctx, world) {
+      const key = await task(ctx, world, "pip", "run");
+      await turn(ctx, key, "#keep-routine");
+      try {
+        const jobs = await kept(ctx);
+        expect(jobs.length === 1 && jobs[0]!.enabled === false, `routines: ${show(jobs)}`);
+        const ran = await turn(ctx, key, "#run-routine");
+        expect(
+          ran.calls.some((c) => c.name === "automations" && c.text.includes(NOT_DONE)),
+          `calls: ${show(ran.calls)}`,
+        );
+        const runs = rec(
+          await ctx.clients.admin.request("cron.runs", { id: jobs[0]!.id, limit: 5 }),
+        );
+        const entries = (Array.isArray(runs.entries) ? runs.entries : []) as JsonRecord[];
+        expect(entries.length === 0, `the routine ran: ${show(entries)}`);
+      } finally {
+        await clearRoutines(ctx, world);
+      }
+    },
+  },
+  {
+    name: "fix round 2 D4: whether a routine may run now is what the gateway last reported, both ways, from a fresh run that read nothing",
+    covers: ["#keep-routine-on", "#run-routine-id"],
+    async run(ctx, world) {
+      const admin = ctx.clients.admin;
+      const runs = async (id: string) => {
+        const got = rec(await admin.request("cron.runs", { id, limit: 5 }).catch(() => ({})));
+        return (Array.isArray(got.entries) ? got.entries : []) as JsonRecord[];
+      };
+      // The scheduler shows a bot only the routines its own session made: a fresh run there.
+      const runNow = async (id: string, key: string) =>
+        (await turn(ctx, key, `#run-routine-id ${id}`)).calls.find((c) => c.name === "automations");
+      try {
+        // On, in the plugin's own copy (the owner's request in a chat app); an operator turns it off.
+        const ownerKey = await task(ctx, world, "pip", "owner-on");
+        const out = await ctx.cli([
+          "agent",
+          "--agent",
+          "pip",
+          "--session-key",
+          ownerKey,
+          "--channel",
+          "discord",
+          "--message",
+          "#keep-routine-on",
+          "--json",
+        ]);
+        expect(out.status === 0, `openclaw agent failed: ${out.stderr.slice(0, 300)}`);
+        const on = (await kept(ctx))[0];
+        expect(on && on.enabled !== false, `the owner's routine: ${show(await kept(ctx))}`);
+        await admin.request("cron.update", { id: on!.id, patch: { enabled: false } });
+        const refused = await runNow(String(on!.id), ownerKey);
+        expect(refused?.text.includes(NOT_DONE), `run after it was turned off: ${show(refused)}`);
+        expect(
+          (await runs(String(on!.id))).length === 0,
+          "the routine ran after it was turned off",
+        );
+        await clearRoutines(ctx, world);
+        // Off, in the plugin's own copy (stored turned off); an operator turns it on.
+        const typedKey = await task(ctx, world, "pip", "stored-off");
+        await turn(ctx, typedKey, "#keep-routine");
+        const off = (await kept(ctx))[0];
+        expect(off && off.enabled === false, `the stored-off routine: ${show(await kept(ctx))}`);
+        await admin.request("cron.update", { id: off!.id, patch: { enabled: true } });
+        const ran = await runNow(String(off!.id), typedKey);
+        expect(
+          ran && ran.ok && !ran.text.includes(NOT_DONE),
+          `run after it was turned on: ${show(ran)}`,
+        );
+      } finally {
+        await clearRoutines(ctx, world);
+      }
+    },
+  },
+  {
+    name: "fix round 2 D8: on 2026.11.10 a routine writes its own notes, is journaled, and doesn't replace a person's",
+    covers: ["#notes-set"],
+    async run(ctx, world) {
+      if (ctx.clients.admin.serverVersion === "2026.10.6") return; // no routine notes there
+      const own = await routineRun(ctx, world, "#notes-set first notes");
+      const said = String(rec(await routineFinished(ctx, own)).summary ?? "");
+      expect(!said.includes(NOT_DONE), `its first notes: ${said}`);
+      const read = async () =>
+        rec(await ctx.clients.admin.request("cron.scratch.get", { id: own }));
+      const scratch = async () => rec((await read()).scratch);
+      expect((await scratch()).content === "first notes", `the notes: ${show(await scratch())}`);
+      const again = async (count: number) => {
+        await ctx.clients.admin.request("cron.run", { id: own, mode: "force" });
+        return String(rec(await routineFinishedAgain(ctx, own, count)).summary ?? "");
+      };
+      // Its own notes, at the revision its write made: it may replace them.
+      const second = await again(2);
+      expect(!second.includes(NOT_DONE), `over its own notes: ${second}`);
+      const personWrites = async (content: string) =>
+        ctx.clients.admin.request("cron.scratch.set", {
+          id: own,
+          content,
+          expectedRevision: (await read()).currentRevision,
+        });
+      // A person's notes: not replaced by the routine's run.
+      await personWrites("my own list");
+      const third = await again(3);
+      expect(third.includes(NOT_DONE), `over a person's notes: ${third}`);
+      expect((await scratch()).content === "my own list", `the notes: ${show(await scratch())}`);
+      // The person puts the routine's text back: a revision the bot didn't write is the person's.
+      await personWrites("first notes");
+      const restored = (await read()).currentRevision;
+      const fourth = await again(4);
+      expect(fourth.includes(NOT_DONE), `over the person's restored notes: ${fourth}`);
+      expect(
+        (await read()).currentRevision === restored,
+        `the notes moved on: ${show(await read())}`,
+      );
+    },
+  },
+  {
+    name: "fix round 2: create_goal and next_check schedule no more work after reading something from outside",
+    covers: ["#goal", "#rearm"],
+    async run(ctx, world) {
+      // A file read is outside content on both versions, and a routine's run has the file tools.
+      const job = await routineRun(ctx, world, "#read #rearm");
+      const said = String(rec(await routineFinished(ctx, job)).summary ?? "");
+      // 2026.11.10 offers next_check only to a paced job or a one-shot continuation:
+      // to this routine it isn't offered at all, and the call fails before any hook.
+      if (!/Validation failed for tool "automations"/.test(said))
+        expect(said.includes(NOT_DONE), `next_check after reading: ${said}`);
+      const goal = await turn(ctx, await task(ctx, world, "pip", "goal"), "#search #goal");
+      const made = goal.calls.find((c) => c.name === "create_goal");
+      // 2026.10.6 doesn't offer create_goal to a development gateway's bots.
+      if (/Tool create_goal not found/.test(made?.text ?? "")) return;
+      expect(made?.text.includes(NOT_DONE), `create_goal after reading: ${show(made)}`);
+    },
+  },
+  {
+    name: "fix round D8: a routine's remove naming another routine as job_id and itself as id is refused, and journals nothing",
+    covers: ["#end-routine-mixed"],
+    async run(ctx, world) {
+      const target = String(
+        rec(
+          await ctx.clients.admin.request("cron.add", {
+            name: KEPT_ROUTINE.name,
+            agentId: "pip",
+            schedule: { kind: "cron", expr: "0 8 * * *" },
+            sessionTarget: "isolated",
+            payload: { kind: "agentTurn", message: KEPT_ROUTINE.message },
+            delivery: { mode: "none" },
+          }),
+        ).id,
+      );
+      try {
+        const own = await routineRun(ctx, world, `#end-routine-mixed ${target}`);
+        const done = await routineFinished(ctx, own);
+        // The plugin refuses it itself, before the gateway's own rule for a routine's run.
+        expect(
+          String(done.summary ?? "").includes("names its target twice"),
+          `the routine's run: ${show(done)}`,
+        );
+        expect(
+          (await routines(ctx)).some((j) => j.id === own),
+          "the routine's own job was removed",
+        );
+        expect((await kept(ctx)).length === 1, "the other routine was removed");
+        const ended = rec(
+          await ctx.clients.reader.request("clawtrate-bots.routines.ended", { jobId: own }),
+        );
+        expect(ended.entry === null, `a journal entry exists: ${show(ended)}`);
+      } finally {
+        await clearRoutines(ctx, world);
+      }
+    },
+  },
+  {
+    name: `the owner's request in a chat app keeps working: "remind me every morning at eight" sets up the routine at once (stand-in: ${OWNER_STAND_IN})`,
+    covers: [],
+    async run(ctx, world) {
+      const out = await ctx.cli([
+        "agent",
+        "--agent",
+        "pip",
+        "--session-key",
+        await task(ctx, world, "pip", "owner"),
+        "--channel",
+        "discord",
+        "--message",
+        "remind me every morning at eight",
+        "--json",
+      ]);
+      expect(out.status === 0, `openclaw agent failed: ${out.stderr.slice(0, 300)}`);
+      try {
+        const jobs = await kept(ctx);
+        expect(jobs.length === 1 && jobs[0]!.enabled !== false, `routines: ${show(jobs)}`);
+      } finally {
+        await clearRoutines(ctx, world);
+      }
+    },
+  },
 ];
 
 /** Run the checks in order. A check's failure doesn't stop the next. */
@@ -600,6 +1112,7 @@ async function main(): Promise<number> {
         const r = await inst.runner.run(args);
         return { status: r.status, stdout: String(r.stdout ?? ""), stderr: String(r.stderr ?? "") };
       },
+      stateDir: inst.stateDir,
     });
     console.log(`${passed} of ${passed + failed} bots checks passed`);
     return failed === 0 ? 0 : 1;

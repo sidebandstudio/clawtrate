@@ -337,10 +337,52 @@ function message(recipientDirective: string, request: string, timeoutSeconds: nu
   ];
 }
 
+/** The routine `#keep-routine` sets up, and `#move-routine` and `#remove-routine` find by name. */
+export const KEPT_ROUTINE = { name: "Morning reminder", message: "Remind me to stretch." } as const;
+/** The line `#change-instructions` adds to the bot's AGENTS.md. */
+export const INSTRUCTION_LINE = "Always answer in one short paragraph.";
+
+/** The path `#edit-path` names. */
+const editPath = (ctx: PlanContext) =>
+  /#edit-path[ \t]+(\S+)/.exec(ctx.prompt ?? "")?.[1] ?? "AGENTS.md";
+
+/** What `#hand-off-snake` starts under the partner. */
+export const HAND_OFF_SNAKE = {
+  label: "Review the route, snake",
+  task: "Look over the route. Reply in plain text.",
+} as const;
+
 /** The first lines of a tool's latest result, as the bot repeats them. */
 function answerOf(ctx: PlanContext, name: string, lines: number): string {
   const found = [...ctx.results].reverse().find((result) => result.name === name);
   return found ? found.text.split("\n").slice(0, lines).join("\n") : "";
+}
+
+/** A scheduler call on the kept routine, by the id its latest list found. */
+function routineCall(action: "update" | "remove" | "run", extra: Record<string, unknown>): Step {
+  return {
+    kind: "tool-from",
+    build: (ctx) => {
+      const listed = lastResult(ctx, "automations");
+      const jobs = Array.isArray(listed?.jobs) ? (listed.jobs as Record<string, unknown>[]) : [];
+      const id = jobs.find((job) => job.name === KEPT_ROUTINE.name)?.id;
+      return typeof id === "string"
+        ? tool("automations", { action, jobId: id, ...extra })
+        : say(`I have no routine called ${KEPT_ROUTINE.name}.`);
+    },
+  };
+}
+
+/** What the bot says after a scheduler call: whether it ran, and the routine's state when it says. */
+function routineSaid(ctx: PlanContext, done: string): string {
+  const found = [...ctx.results].reverse().find((result) => result.name === "automations");
+  if (!found) return "";
+  const result = lastResult(ctx, "automations");
+  if (!result) return `The scheduler answered: ${found.text.split("\n")[0]}`;
+  const job = rec(result.job ?? result);
+  if (typeof job.enabled === "boolean")
+    return `${KEPT_ROUTINE.name} is ${done}, ${job.enabled ? "turned on" : "turned off"}.`;
+  return `The scheduler answered: ${JSON.stringify(result).slice(0, 200)}`;
 }
 
 /** What `#hand-off` and its siblings ask the gateway to start: a label and a brief, as a bot writes them. */
@@ -352,6 +394,16 @@ export const HAND_OFF = {
 export const HAND_OFF_HERE = { label: "Where is this", task: "#here" } as const;
 /** What `#hand-off-hidden-here` starts: the same, hidden. */
 export const HAND_OFF_HIDDEN_HERE = { label: "Where is this, hidden", task: "#here" } as const;
+/** What `#hand-off-hidden-hand-off` starts: a hidden task of its own whose brief hands off to the partner. */
+export const HAND_OFF_HIDDEN_ONWARD = {
+  label: "Pass this on, hidden",
+  task: "#hand-off-onward",
+} as const;
+/** What `#hand-off-onward` starts under the partner: a label no other directive uses. */
+export const HAND_OFF_ONWARD = {
+  label: "Carry the route on",
+  task: "Carry on with the Saturday route. Reply in plain text.",
+} as const;
 export const HAND_OFF_HIDDEN = {
   label: "Check the forecast",
   task: "Check the forecast for Saturday on the ridge. Reply in plain text.",
@@ -842,6 +894,264 @@ export const SCENARIOS: Scenario[] = [
     ],
   },
   {
+    name: "keep-routine",
+    phrase: "remind me every morning at eight",
+    summary: `Sets up a routine and keeps it (\`automations\` \`add\`): "${KEPT_ROUTINE.name}", every day at 8:00, in a session of its own. Then says whether it is on, or what the gateway or a plugin answered. The scheduler offers the tool only in runs started as its owner.`,
+    steps: () => [
+      tool("automations", {
+        action: "add",
+        job: {
+          name: KEPT_ROUTINE.name,
+          schedule: { kind: "cron", expr: "0 8 * * *" },
+          sessionTarget: "isolated",
+          payload: { kind: "agentTurn", message: KEPT_ROUTINE.message },
+        },
+      }),
+      (ctx) => [say(routineSaid(ctx, "set up"))],
+    ],
+  },
+  {
+    name: "move-routine",
+    phrase: "move my morning reminder",
+    summary: `Moves "${KEPT_ROUTINE.name}" to 9:00 (\`automations\` \`list\`, then \`update\`).`,
+    steps: () => [
+      tool("automations", { action: "list", includeDisabled: true }),
+      routineCall("update", { job: { schedule: { kind: "cron", expr: "0 9 * * *" } } }),
+      (ctx) => [say(routineSaid(ctx, "moved"))],
+    ],
+  },
+  {
+    name: "remove-routine",
+    phrase: "delete my morning reminder",
+    summary: `Deletes "${KEPT_ROUTINE.name}" (\`automations\` \`list\`, then \`remove\`).`,
+    steps: () => [
+      tool("automations", { action: "list", includeDisabled: true }),
+      routineCall("remove", {}),
+      (ctx) => [say(routineSaid(ctx, "deleted"))],
+    ],
+  },
+  {
+    name: "keep-routine-on",
+    phrase: "set up my reminder switched on",
+    summary: `Sets up "${KEPT_ROUTINE.name}" as \`#keep-routine\` does, with \`enabled: true\` written out in the job. Then says whether it is on.`,
+    steps: () => [
+      tool("automations", {
+        action: "add",
+        job: {
+          name: KEPT_ROUTINE.name,
+          enabled: true,
+          schedule: { kind: "cron", expr: "0 8 * * *" },
+          sessionTarget: "isolated",
+          payload: { kind: "agentTurn", message: KEPT_ROUTINE.message },
+        },
+      }),
+      (ctx) => [say(routineSaid(ctx, "set up"))],
+    ],
+  },
+  {
+    name: "run-routine-id",
+    phrase: "run that routine now",
+    summary:
+      "Runs the routine whose id follows the directive (`#run-routine-id <id>`) now, with `run` and `runMode: force`, reading nothing first.",
+    steps: () => [
+      {
+        kind: "tool-from",
+        build: (ctx) =>
+          tool("automations", {
+            action: "run",
+            jobId: /#run-routine-id[ \t]+([\w-]+)/.exec(ctx.prompt ?? "")?.[1] ?? "none",
+            runMode: "force",
+          }),
+      },
+      (ctx) => [say(routineSaid(ctx, "run"))],
+    ],
+  },
+  {
+    name: "notes-set",
+    phrase: "keep this in your notes",
+    summary:
+      "In a routine's own run on 2026.11.10: reads its notes (`automations` `scratch_get`), then replaces them with the text after the directive (`scratch_set` with the revision it read).",
+    steps: () => [
+      tool("automations", { action: "scratch_get" }),
+      {
+        kind: "tool-from",
+        build: (ctx) =>
+          tool("automations", {
+            action: "scratch_set",
+            content: /#notes-set[ \t]+(.+)$/m.exec(ctx.prompt ?? "")?.[1]?.trim() ?? "notes",
+            expectedRevision: Number(lastResult(ctx, "automations")?.currentRevision ?? 0),
+          }),
+      },
+      (ctx) => [say(routineSaid(ctx, "noted"))],
+    ],
+  },
+  {
+    name: "goal",
+    phrase: "make that your goal",
+    summary:
+      'Sets this conversation\'s goal (`create_goal`, "Plan the Saturday route"), which keeps the bot working on it.',
+    steps: () => [
+      tool("create_goal", { objective: "Plan the Saturday route" }),
+      (ctx) => [say(`The goal tool answered: ${(ctx.results.at(-1)?.text ?? "").split("\n")[0]}`)],
+    ],
+  },
+  {
+    name: "rearm",
+    phrase: "check again later",
+    summary:
+      "In a routine's own run: re-arms it to run again in 30 minutes (`automations` `next_check`).",
+    steps: () => [
+      tool("automations", { action: "next_check", in: "30m" }),
+      // The result's own first line: a refusal on 2026.11.10 carries the call's JSON after it.
+      (ctx) => [say(`The scheduler answered: ${(ctx.results.at(-1)?.text ?? "").split("\n")[0]}`)],
+    ],
+  },
+  {
+    name: "run-routine",
+    phrase: "run my morning reminder now",
+    summary: `Runs "${KEPT_ROUTINE.name}" now (\`automations\` \`list\`, then \`run\` with \`runMode: force\`).`,
+    steps: () => [
+      tool("automations", { action: "list", includeDisabled: true }),
+      routineCall("run", { runMode: "force" }),
+      (ctx) => [say(routineSaid(ctx, "run"))],
+    ],
+  },
+  {
+    name: "end-routine-mixed",
+    phrase: "end this routine and another",
+    summary:
+      "In a routine's own run: a remove naming another routine with `job_id` (the id after the directive) and its own with `id`.",
+    steps: () => [
+      {
+        kind: "tool-from",
+        build: (ctx) => {
+          const other = /#end-routine-mixed[ \t]+([\w-]+)/.exec(ctx.prompt ?? "")?.[1] ?? "none";
+          const own = /^agent:[^:]+:cron:([^:]+)/.exec(ctx.sessionKey ?? "")?.[1] ?? "none";
+          return tool("automations", { action: "remove", job_id: other, id: own });
+        },
+      },
+      (ctx) => [say(routineSaid(ctx, "ended"))],
+    ],
+  },
+  {
+    name: "hand-off-snake",
+    phrase: "put this in a task for your partner the other way",
+    bots: "Marlow or Pip",
+    summary: `Starts a task under the other bot of the pair with \`sessions_spawn\`, naming it with \`agent_id\` (snake case, which the tool also reads), labelled "${HAND_OFF_SNAKE.label}".`,
+    steps: () => [
+      {
+        kind: "tool-from",
+        build: (ctx) =>
+          tool("sessions_spawn", { ...HAND_OFF_SNAKE, visible: true, agent_id: partnerOf(ctx) }),
+      },
+      afterSpawn(() => `I started ${HAND_OFF_SNAKE.label}.`),
+    ],
+  },
+  {
+    name: "message-snake",
+    phrase: "message your partner the other way",
+    bots: "Marlow or Pip",
+    summary:
+      "A message to the other bot, naming it with `agent_id`, then one naming its main conversation with `session_key` (snake case, which the tool also reads), then one naming the bot itself as `agentId` beside the other bot's `sessionKey` (the tool takes the session key).",
+    steps: () => [
+      {
+        kind: "tool-from",
+        build: (ctx) =>
+          tool("sessions_send", {
+            agent_id: partnerOf(ctx),
+            message: "#reply Snake one.",
+            timeoutSeconds: 30,
+          }),
+      },
+      {
+        kind: "tool-from",
+        build: (ctx) =>
+          tool("sessions_send", {
+            session_key: `agent:${partnerOf(ctx)}:main`,
+            message: "#reply Snake two.",
+            timeoutSeconds: 30,
+          }),
+      },
+      {
+        kind: "tool-from",
+        build: (ctx) =>
+          tool("sessions_send", {
+            agentId: ctx.agentId,
+            sessionKey: `agent:${partnerOf(ctx)}:main`,
+            message: "#reply Snake three.",
+            timeoutSeconds: 30,
+          }),
+      },
+      say("I sent both."),
+    ],
+  },
+  {
+    name: "edit-path",
+    phrase: "add that to the file at this path",
+    summary: `Adds "${INSTRUCTION_LINE}" after the first line of the file the directive names (\`#edit-path <path>\`): a read, then an edit, both by that path.`,
+    steps: () => [
+      {
+        kind: "tool-from",
+        build: (ctx) => tool("read", { path: editPath(ctx) }),
+      },
+      {
+        kind: "tool-from",
+        build: (ctx) => {
+          const read = [...ctx.results].reverse().find((r) => r.name === "read")?.text ?? "";
+          const first = read.split("\n").find((line) => line.trim().length > 0);
+          if (!first) return say(`I couldn't read ${editPath(ctx)}.`);
+          return tool("edit", {
+            path: editPath(ctx),
+            edits: [{ oldText: first, newText: `${first}\n\n${INSTRUCTION_LINE}` }],
+          });
+        },
+      },
+      (ctx) => [say(answerOf(ctx, "edit", 1) || "I edited it.")],
+    ],
+  },
+  {
+    name: "end-routine",
+    phrase: "end this routine",
+    summary:
+      "In a routine's own run: removes that routine, by the id its session's key names, as a one-off routine does when its work is done; `#end-routine <id>` names another routine instead.",
+    steps: () => [
+      {
+        kind: "tool-from",
+        build: (ctx) => {
+          // A routine's own run is in the session `agent:<bot>:cron:<id>:run:<run>`; an id
+          // after the directive names another routine instead.
+          const named = /#end-routine[ \t]+([\w-]+)/.exec(ctx.prompt ?? "")?.[1];
+          const id = named ?? /^agent:[^:]+:cron:([^:]+)/.exec(ctx.sessionKey ?? "")?.[1];
+          return id
+            ? tool("automations", { action: "remove", jobId: id })
+            : say("This isn't a routine's run.");
+        },
+      },
+      (ctx) => [say(routineSaid(ctx, "ended"))],
+    ],
+  },
+  {
+    name: "change-instructions",
+    phrase: "add that to your instructions",
+    summary: `Adds a line to its own AGENTS.md ("${INSTRUCTION_LINE}"): a read, then an edit of its first line.`,
+    steps: () => [
+      tool("read", { path: "AGENTS.md" }),
+      {
+        kind: "tool-from",
+        build: (ctx) => {
+          const read = [...ctx.results].reverse().find((r) => r.name === "read")?.text ?? "";
+          const first = read.split("\n").find((line) => line.trim().length > 0);
+          if (!first) return say("My instructions file is empty.");
+          return tool("edit", {
+            path: "AGENTS.md",
+            edits: [{ oldText: first, newText: `${first}\n\n${INSTRUCTION_LINE}` }],
+          });
+        },
+      },
+      (ctx) => [say(answerOf(ctx, "edit", 1) || "I added it to my instructions.")],
+    ],
+  },
+  {
     name: "schedule",
     phrase: "schedule a reminder",
     summary:
@@ -1061,6 +1371,14 @@ export const SCENARIOS: Scenario[] = [
     steps: () => message("#here", "Where are you?", 30),
   },
   {
+    name: "message-keep-routine",
+    phrase: "ask your partner to remind me",
+    bots: "Marlow or Pip",
+    summary:
+      "A message to the other bot, which then tries to set up a routine (`#keep-routine`): a routine from a run another bot's message started.",
+    steps: () => message("#keep-routine", "Could you remind them every morning?", 30),
+  },
+  {
     name: "hand-off-same",
     phrase: "put that in a task again",
     bots: "any bot",
@@ -1086,6 +1404,26 @@ export const SCENARIOS: Scenario[] = [
     steps: () => [
       spawn(HAND_OFF_HERE, { visible: true }),
       afterSpawn(() => `I started ${HAND_OFF_HERE.label}.`),
+    ],
+  },
+  {
+    name: "hand-off-hidden-hand-off",
+    phrase: "pass this on from a hidden task",
+    bots: "Marlow or Pip, with clawtrate-bots",
+    summary: `Starts a hidden helper of the bot's own labelled "${HAND_OFF_HIDDEN_ONWARD.label}", whose brief is \`#hand-off-onward\`: a hand-off from a task.`,
+    steps: () => [
+      spawn(HAND_OFF_HIDDEN_ONWARD),
+      afterSpawn(() => `I started ${HAND_OFF_HIDDEN_ONWARD.label}.`),
+    ],
+  },
+  {
+    name: "hand-off-onward",
+    phrase: "pass this on to your partner",
+    bots: "Marlow or Pip",
+    summary: `Starts a task under the other bot of the pair with \`sessions_spawn\` (\`visible: true\`, \`agentId\`), labelled "${HAND_OFF_ONWARD.label}": \`#hand-off-to-partner\` under a label of its own.`,
+    steps: () => [
+      spawn(HAND_OFF_ONWARD, { visible: true, partner: true }),
+      afterSpawn(() => `I started ${HAND_OFF_ONWARD.label}.`),
     ],
   },
   {

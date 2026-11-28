@@ -50,6 +50,7 @@ const PACKED_FILES = [
   "lib/bots.js",
   "lib/canonical.js",
   "lib/here.js",
+  "lib/holds.js",
   "lib/hooks.js",
   "lib/ledger.js",
   "lib/origins.js",

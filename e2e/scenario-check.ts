@@ -414,6 +414,7 @@ async function botsChecks(
     const { passed, failed } = await runBotsChecks({
       clients: clients as Record<BotsClient, OperatorSession>,
       cli: (args) => inst.runner.run(args),
+      stateDir: inst.stateDir,
     });
     console.log(`${passed} of ${passed + failed} bots checks passed`);
     return failed;
