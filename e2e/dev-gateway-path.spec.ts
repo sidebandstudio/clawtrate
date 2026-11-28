@@ -112,9 +112,12 @@ test.beforeAll(async () => {
 test.afterAll(async () => {
   test.setTimeout(180_000);
   try {
-    // Stopped and removed before its home goes with the run's folders.
+    // Stopped and removed while its home is there (a reset takes its lock in the home), then
+    // dropped from the record, so the home goes with the run's folders and nothing is reset twice.
     const { runId } = record.instances[0]!;
     resetInstance(INSTANCE, runId);
+    record.instances = [];
+    saveRecord(RECORDS, record);
     expect(cleanUp(RECORDS, record, resetInstance)).toEqual([]);
   } finally {
     if (savedHome === undefined) delete process.env.HOME;
