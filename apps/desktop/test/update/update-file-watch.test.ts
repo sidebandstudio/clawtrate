@@ -46,7 +46,9 @@ it.each<[string, () => void]>([
   try {
     for (let turn = 0; turn < 2; turn++) await new Promise(setImmediate);
     change();
-    await vi.waitFor(() => expect(changed).toHaveBeenCalledTimes(1), { timeout: 3000 });
+    // Linux's inotify can report one delete or replace as several events; the service withdraws
+    // once, since a withdrawn offer isn't offered any more.
+    await vi.waitFor(() => expect(changed).toHaveBeenCalled(), { timeout: 3000 });
     expect(watch.current()).toBe(false);
   } finally {
     watch.close();
